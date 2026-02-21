@@ -32,6 +32,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 prometheus.workspace = true
 chrono.workspace = true
+rand = "0.8"
 
 # Optional dependencies
 quinn = { version = "0.11", optional = true }

@@ -10,6 +10,10 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub server: ServerConfig,
 
+    /// Security settings.
+    #[serde(default)]
+    pub security: SecurityConfig,
+
     /// Rate limiting settings.
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
@@ -63,6 +67,43 @@ pub struct MetricsConfig {
     pub interval_secs: u64,
 }
 
+/// Security configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Require QUIC registration before accepting data-plane packets.
+    /// When false, any client can send tunnel packets (dev mode).
+    /// MUST be true in production.
+    #[serde(default)]
+    pub require_auth: bool,
+
+    /// Maximum amplification ratio before banning (outbound/inbound).
+    #[serde(default = "default_amplification_ratio")]
+    pub max_amplification_ratio: f64,
+
+    /// Maximum unique destinations per 10-second window per client.
+    #[serde(default = "default_max_destinations")]
+    pub max_destinations_per_window: usize,
+
+    /// Abuse ban duration in seconds.
+    #[serde(default = "default_ban_duration")]
+    pub ban_duration_secs: u64,
+}
+
+fn default_amplification_ratio() -> f64 { 2.0 }
+fn default_max_destinations() -> usize { 10 }
+fn default_ban_duration() -> u64 { 3600 }
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            require_auth: false,
+            max_amplification_ratio: default_amplification_ratio(),
+            max_destinations_per_window: default_max_destinations(),
+            ban_duration_secs: default_ban_duration(),
+        }
+    }
+}
+
 fn default_node_id() -> String { "proxy-001".into() }
 fn default_region() -> String { "unknown".into() }
 fn default_max_clients() -> usize { 100 }
@@ -76,6 +117,7 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             server: ServerConfig::default(),
+            security: SecurityConfig::default(),
             rate_limit: RateLimitConfig::default(),
             metrics: MetricsConfig::default(),
         }

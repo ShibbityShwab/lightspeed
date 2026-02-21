@@ -575,6 +575,7 @@ dependencies = [
  "lightspeed-protocol",
  "prometheus",
  "quinn",
+ "rand 0.8.5",
  "rcgen",
  "rustls",
  "serde",

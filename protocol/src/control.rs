@@ -71,6 +71,9 @@ pub enum ControlMessage {
     RegisterAck {
         /// Session identifier assigned by the proxy.
         session_id: u32,
+        /// Data-plane session token (included in every tunnel header).
+        /// Used for per-packet authentication alongside IP-based auth.
+        session_token: u8,
         /// Proxy node ID.
         node_id: String,
         /// Proxy geographic region.
@@ -141,11 +144,13 @@ impl ControlMessage {
             }
             Self::RegisterAck {
                 session_id,
+                session_token,
                 node_id,
                 region,
             } => {
                 buf.put_u8(MSG_REGISTER_ACK);
                 buf.put_u32(*session_id);
+                buf.put_u8(*session_token);
                 put_short_string(&mut buf, node_id);
                 put_short_string(&mut buf, region);
             }
@@ -214,12 +219,14 @@ impl ControlMessage {
                 })
             }
             MSG_REGISTER_ACK => {
-                ensure_remaining(&buf, 4)?;
+                ensure_remaining(&buf, 5)?;
                 let session_id = buf.get_u32();
+                let session_token = buf.get_u8();
                 let node_id = get_short_string(&mut buf)?;
                 let region = get_short_string(&mut buf)?;
                 Ok(Self::RegisterAck {
                     session_id,
+                    session_token,
                     node_id,
                     region,
                 })
@@ -369,6 +376,7 @@ mod tests {
     fn test_register_ack_roundtrip() {
         let msg = ControlMessage::RegisterAck {
             session_id: 42,
+            session_token: 0xAB,
             node_id: "proxy-sea-001".into(),
             region: "sea".into(),
         };

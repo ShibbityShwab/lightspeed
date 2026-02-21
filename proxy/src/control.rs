@@ -3,13 +3,17 @@
 //! Accepts QUIC connections from clients, handles registration, health probes,
 //! and session management. Runs alongside the UDP data-plane relay.
 //!
+//! ## Security
+//! - Generates random session IDs (unpredictable)
+//! - Generates random session tokens for data-plane auth
+//! - Wires client authorization into the shared Authenticator
+//!
 //! Gated behind `--features quic`.
 
 #[cfg(feature = "quic")]
 mod inner {
     use std::collections::HashMap;
-    use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +24,7 @@ mod inner {
     use lightspeed_protocol::control::{disconnect_reason, ControlMessage};
     use lightspeed_protocol::PROTOCOL_VERSION;
 
+    use crate::auth::Authenticator;
     use crate::config::ProxyConfig;
 
     // ── Types ───────────────────────────────────────────────────────
@@ -27,8 +32,10 @@ mod inner {
     /// A connected client session on the control plane.
     #[derive(Debug, Clone)]
     pub struct ClientSession {
-        /// Session ID assigned at registration.
+        /// Session ID assigned at registration (random).
         pub session_id: u32,
+        /// Data-plane session token (random u8).
+        pub session_token: u8,
         /// Client remote address.
         pub remote_addr: SocketAddr,
         /// Game the client is optimizing.
@@ -43,27 +50,28 @@ mod inner {
     pub struct ControlState {
         /// Active client sessions keyed by session ID.
         pub sessions: RwLock<HashMap<u32, ClientSession>>,
-        /// Next session ID counter.
-        next_session_id: AtomicU32,
         /// Server configuration.
         pub config: ProxyConfig,
+        /// Shared authenticator for data-plane auth.
+        pub authenticator: Arc<RwLock<Authenticator>>,
         /// When the server started.
         pub started_at: Instant,
     }
 
     impl ControlState {
-        pub fn new(config: ProxyConfig) -> Self {
+        pub fn new(config: ProxyConfig, authenticator: Arc<RwLock<Authenticator>>) -> Self {
             Self {
                 sessions: RwLock::new(HashMap::new()),
-                next_session_id: AtomicU32::new(1),
                 config,
+                authenticator,
                 started_at: Instant::now(),
             }
         }
 
-        /// Allocate the next session ID.
-        fn next_id(&self) -> u32 {
-            self.next_session_id.fetch_add(1, Ordering::Relaxed)
+        /// Generate a random, unique session ID.
+        fn generate_session_id(&self) -> u32 {
+            // Use random IDs to prevent prediction/enumeration
+            rand::random::<u32>()
         }
 
         /// Current number of active sessions.
@@ -75,6 +83,9 @@ mod inner {
     // ── TLS ─────────────────────────────────────────────────────────
 
     /// Generate a self-signed certificate for the QUIC server (dev / MVP).
+    ///
+    /// SECURITY: MVP only. Production deployments MUST use proper PKI
+    /// with certificates issued by a trusted CA.
     fn generate_self_signed_cert() -> anyhow::Result<(
         Vec<rustls::pki_types::CertificateDer<'static>>,
         rustls::pki_types::PrivateKeyDer<'static>,
@@ -110,6 +121,23 @@ mod inner {
         Ok(server_config)
     }
 
+    // ── Helpers ─────────────────────────────────────────────────────
+
+    /// Extract IPv4 address from a SocketAddr (for auth binding).
+    fn extract_ipv4(addr: &SocketAddr) -> Option<Ipv4Addr> {
+        match addr {
+            SocketAddr::V4(v4) => Some(*v4.ip()),
+            SocketAddr::V6(v6) => {
+                // Handle IPv4-mapped IPv6 addresses (::ffff:a.b.c.d)
+                if let Some(v4) = v6.ip().to_ipv4_mapped() {
+                    Some(v4)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     // ── Server ──────────────────────────────────────────────────────
 
     /// Run the QUIC control plane server.
@@ -123,8 +151,10 @@ mod inner {
         let endpoint = quinn::Endpoint::server(server_config, bind_addr)?;
 
         info!(
-            "QUIC control plane listening on {} (node={})",
-            bind_addr, state.config.server.node_id
+            "QUIC control plane listening on {} (node={}, auth={})",
+            bind_addr,
+            state.config.server.node_id,
+            if state.config.security.require_auth { "enforced" } else { "disabled" }
         );
 
         while let Some(incoming) = endpoint.accept().await {
@@ -150,8 +180,6 @@ mod inner {
     }
 
     /// Handle a single client QUIC connection.
-    ///
-    /// The client opens a bidirectional stream and exchanges control messages.
     async fn handle_connection(
         conn: quinn::Connection,
         state: Arc<ControlState>,
@@ -171,8 +199,6 @@ mod inner {
                             debug!("Stream handler error for {}: {}", remote, e);
                         }
                     });
-                    // After first stream, session_id may have been set
-                    // but we process streams independently
                 }
                 Err(quinn::ConnectionError::ApplicationClosed(_)) => {
                     info!("Client {} closed connection gracefully", remote);
@@ -185,16 +211,22 @@ mod inner {
             }
         }
 
-        // Clean up session
+        // Clean up session and revoke data-plane auth
         if let Some(sid) = session_id {
             state.sessions.write().await.remove(&sid);
             info!("Removed session {} for {}", sid, remote);
         }
 
+        // Revoke data-plane authorization for this client's IP
+        if let Some(ipv4) = extract_ipv4(&remote) {
+            let mut auth = state.authenticator.write().await;
+            auth.revoke(&ipv4);
+        }
+
         Ok(())
     }
 
-    /// Handle a single bidirectional stream — read messages, send responses.
+    /// Handle a single bidirectional stream.
     async fn handle_stream(
         mut send: quinn::SendStream,
         mut recv: quinn::RecvStream,
@@ -254,9 +286,13 @@ mod inner {
                     });
                 }
 
-                let session_id = state.next_id();
+                // Generate random session ID and token
+                let session_id = state.generate_session_id();
+                let session_token = Authenticator::generate_token();
+
                 let session = ClientSession {
                     session_id,
+                    session_token,
                     remote_addr: remote,
                     game,
                     connected_at: Instant::now(),
@@ -269,13 +305,24 @@ mod inner {
                     .await
                     .insert(session_id, session);
 
-                info!(
-                    "Registered client {} → session {} (game={})",
-                    remote, session_id, game
-                );
+                // Authorize client's IP on the data plane
+                if let Some(ipv4) = extract_ipv4(&remote) {
+                    let mut auth = state.authenticator.write().await;
+                    auth.authorize(ipv4, session_token);
+                    info!(
+                        "Registered client {} → session {} token={} (game={})",
+                        remote, session_id, session_token, game
+                    );
+                } else {
+                    warn!(
+                        "Client {} has non-IPv4 address, data-plane auth skipped",
+                        remote
+                    );
+                }
 
                 Some(ControlMessage::RegisterAck {
                     session_id,
+                    session_token,
                     node_id: state.config.server.node_id.clone(),
                     region: state.config.server.region.clone(),
                 })
@@ -286,7 +333,13 @@ mod inner {
                     "Client {} disconnecting (reason={})",
                     remote, reason
                 );
-                // No response needed — client is leaving
+
+                // Revoke data-plane auth
+                if let Some(ipv4) = extract_ipv4(&remote) {
+                    let mut auth = state.authenticator.write().await;
+                    auth.revoke(&ipv4);
+                }
+
                 None
             }
 

@@ -67,3 +67,25 @@
 - **Deliverables**: `protocol/src/control.rs` (9 unit tests), `proxy/src/control.rs`, `client/src/quic/{mod,discovery,health}.rs`, `proxy/tests/integration_control.rs` (2 integration tests), CLI `--test-control` flag
 - **Status**: ACCEPTED
 - **HANDOFF**: Security (Step 5: review tunnel + control plane for auth/encryption gaps)
+
+---
+
+## DEC-006: Security Review Complete
+- **Date**: 2026-02-21T22:40:00+07:00
+- **Agent**: SecOps, RustDev
+- **Decision**: WF-001 Step 5 (Security Review) is complete. Audited 8 findings (2 Critical, 2 High, 3 Medium, 1 Low), mitigated all Critical/High issues, documented all Medium/Low.
+- **Rationale**: The proxy was an open relay with no authentication. The audit identified and fixed: per-packet token-based auth, destination IP validation (blocks private/internal IPs), abuse detection (amplification + reflection), random session IDs, and configurable security policy.
+- **Key Changes**:
+  - Header `reserved` field repurposed as `session_token` (u8) — no header size change
+  - `RegisterAck` wire format extended with `session_token` field
+  - New `Authenticator` with `(IP, token)` validation shared between QUIC and relay via `Arc<RwLock>`
+  - New `AbuseDetector` with amplification ratio tracking, reflection detection, and temporary bans
+  - `is_public_ipv4()` blocks 11 non-routable IP ranges
+  - `SecurityConfig` added to proxy config with `require_auth`, abuse thresholds
+  - `rand = "0.8"` added for random session ID/token generation
+- **Security Architecture**: Control plane (QUIC/TLS) → Register → Token → Data plane validates (IP + token + rate limit + abuse + dest validation) per-packet
+- **Accepted Risks**: (1) TLS cert verification disabled (MVP only). (2) 8-bit token space (sufficient with IP check). (3) Data plane unencrypted (game packets already cleartext). (4) Auth disabled by default (`require_auth = false`).
+- **Test Coverage**: 34 tests all passing (18 protocol + 13 proxy unit + 3 relay integration)
+- **Deliverables**: `docs/security-audit-mvp.md`, updated `proxy/src/{auth,abuse,relay,control,config,main}.rs`, updated `protocol/src/{header,control}.rs`, updated `client/src/quic/mod.rs`
+- **Status**: ACCEPTED
+- **HANDOFF**: QAEngineer (Step 6: Integration Testing)
