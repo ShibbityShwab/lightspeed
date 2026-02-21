@@ -360,8 +360,9 @@ async fn run_control_test(proxy_addr: SocketAddrV4, config: &config::Config) -> 
         .await
         .map_err(|e| anyhow::anyhow!("QUIC connect failed: {}", e))?;
 
-    info!("   ✓ Connected! session={:?} node={:?} region={:?}",
+    info!("   ✓ Connected! session={:?} token={:?} node={:?} region={:?}",
         client.session_id(),
+        client.session_token(),
         client.node_id(),
         client.region(),
     );

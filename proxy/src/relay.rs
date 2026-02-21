@@ -3,19 +3,13 @@
 //! Core relay engine: receives tunnel packets from clients, strips header,
 //! forwards to game server, receives response, re-wraps, returns to client.
 //!
-//! ## Architecture
+//! ## Security
 //!
-//! The relay uses a single UDP socket for the data plane. When a client sends
-//! a tunnel packet, the relay:
-//! 1. Decodes the LightSpeed header
-//! 2. Creates or updates a session for this client
-//! 3. Forwards the raw game payload to the original destination (game server)
-//!    using a per-session "outbound" socket
-//! 4. When the game server responds, wraps the response in a LightSpeed header
-//!    and sends it back to the client
-//!
-//! Each client session gets its own outbound UDP socket so that game server
-//! responses can be routed back to the correct client.
+//! The relay enforces multiple security layers:
+//! 1. **Authentication**: Validates (IP + session_token) per-packet
+//! 2. **Rate limiting**: Per-client PPS and BPS limits
+//! 3. **Abuse detection**: Amplification and reflection detection
+//! 4. **Destination validation**: Blocks forwarding to private/internal IPs
 
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
@@ -29,6 +23,8 @@ use tracing::{debug, info, trace, warn};
 
 use lightspeed_protocol::TunnelHeader;
 
+use super::abuse::{AbuseCheckResult, AbuseDetector};
+use super::auth::Authenticator;
 use super::metrics::ProxyMetrics;
 use super::rate_limit::{RateLimitResult, RateLimiter};
 
@@ -165,12 +161,14 @@ impl RelayEngine {
 /// Run the main relay loop on the data plane socket.
 ///
 /// This is the hot path — every game packet goes through here.
-/// It receives tunnel packets from clients, strips the header,
-/// and forwards the raw payload to the game server.
+/// It receives tunnel packets from clients, validates auth + abuse checks,
+/// strips the header, and forwards the raw payload to the game server.
 pub async fn run_relay_inbound(
     data_socket: Arc<UdpSocket>,
     engine: Arc<RelayEngine>,
     rate_limiter: Arc<tokio::sync::Mutex<RateLimiter>>,
+    authenticator: Arc<RwLock<Authenticator>>,
+    abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
     metrics: Arc<ProxyMetrics>,
 ) -> anyhow::Result<()> {
     let mut buf = vec![0u8; 2048];
@@ -224,11 +222,26 @@ pub async fn run_relay_inbound(
             }
         };
 
+        // ── Security: Authentication check ──────────────────────────
+        {
+            let auth = authenticator.read().await;
+            if !auth.validate(client_addr.ip(), header.session_token) {
+                debug!(
+                    client = %client_addr,
+                    token = header.session_token,
+                    "Unauthorized: invalid IP or session token"
+                );
+                metrics.record_drop();
+                continue;
+            }
+        }
+
         // Handle control packets
         if header.is_keepalive() {
             trace!(client = %client_addr, seq = header.sequence, "Keepalive received");
-            // Echo keepalive back to client
-            let response = TunnelHeader::keepalive(header.sequence, now_us());
+            // Echo keepalive back to client (preserve session token)
+            let response = TunnelHeader::keepalive(header.sequence, now_us())
+                .with_session_token(header.session_token);
             let response_bytes = response.encode();
             let _ = data_socket.send_to(&response_bytes, client_addr).await;
             continue;
@@ -245,6 +258,38 @@ pub async fn run_relay_inbound(
 
         // Get the original destination (game server) from the header
         let game_server = header.orig_dst_addr();
+
+        // ── Security: Abuse detection (includes destination validation) ──
+        {
+            let mut abuse = abuse_detector.lock().await;
+            match abuse.record_inbound(*client_addr.ip(), game_server, len as u64) {
+                AbuseCheckResult::Allowed => {}
+                AbuseCheckResult::PrivateDestination => {
+                    debug!(
+                        client = %client_addr,
+                        dest = %game_server,
+                        "Blocked: private/internal destination"
+                    );
+                    metrics.record_drop();
+                    continue;
+                }
+                AbuseCheckResult::Banned => {
+                    trace!(client = %client_addr, "Blocked: client is banned");
+                    metrics.record_drop();
+                    continue;
+                }
+                AbuseCheckResult::ReflectionDetected => {
+                    warn!(client = %client_addr, "Blocked: reflection attack detected");
+                    metrics.record_drop();
+                    continue;
+                }
+                AbuseCheckResult::AmplificationDetected => {
+                    warn!(client = %client_addr, "Blocked: amplification detected");
+                    metrics.record_drop();
+                    continue;
+                }
+            }
+        }
 
         // Get or create session for this client
         let session = match engine.get_or_create_session(client_addr, game_server).await {
@@ -267,6 +312,10 @@ pub async fn run_relay_inbound(
                     payload_len = payload.len(),
                     "Forwarded to game server"
                 );
+
+                // Record outbound for abuse tracking
+                let mut abuse = abuse_detector.lock().await;
+                abuse.record_outbound(*client_addr.ip(), sent as u64);
             }
             Err(e) => {
                 debug!(
@@ -342,10 +391,12 @@ pub async fn run_session_response_listener(
     }
 }
 
-/// Periodically clean up expired sessions and start response listeners for new ones.
+/// Periodically clean up expired sessions, stale abuse data, and start
+/// response listeners for new sessions.
 pub async fn run_session_manager(
     engine: Arc<RelayEngine>,
     data_socket: Arc<UdpSocket>,
+    abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
     metrics: Arc<ProxyMetrics>,
 ) {
     let mut known_sessions: HashMap<SocketAddrV4, tokio::task::JoinHandle<()>> = HashMap::new();
@@ -358,6 +409,12 @@ pub async fn run_session_manager(
         let removed = engine.cleanup_expired().await;
         if removed > 0 {
             info!("Cleaned up {} expired sessions", removed);
+        }
+
+        // Clean up abuse detector state
+        {
+            let mut abuse = abuse_detector.lock().await;
+            abuse.cleanup();
         }
 
         // Remove join handles for sessions that no longer exist
@@ -443,7 +500,7 @@ mod tests {
         // Test that we can encode a tunnel packet and decode it
         let src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
         let dst = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
-        let header = TunnelHeader::new(1, now_us(), src, dst);
+        let header = TunnelHeader::new(1, now_us(), src, dst).with_session_token(42);
         let payload = b"game data payload";
 
         let packet = header.encode_with_payload(payload);
@@ -454,6 +511,7 @@ mod tests {
 
         assert_eq!(decoded_header.orig_src_addr(), src);
         assert_eq!(decoded_header.orig_dst_addr(), dst);
+        assert_eq!(decoded_header.session_token, 42);
         assert_eq!(decoded_payload, payload);
     }
 }

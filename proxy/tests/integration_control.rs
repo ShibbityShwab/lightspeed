@@ -111,6 +111,7 @@ async fn serve_one_stream(
             }
             ControlMessage::Register { game, .. } => Some(ControlMessage::RegisterAck {
                 session_id: 42,
+                session_token: 0xAB,
                 node_id: "test-proxy".into(),
                 region: "test-region".into(),
             }),
@@ -173,10 +174,12 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
         match response {
             Some(ControlMessage::RegisterAck {
                 session_id,
+                session_token,
                 node_id,
                 region,
             }) => {
                 assert_eq!(session_id, 42);
+                assert_eq!(session_token, 0xAB);
                 assert_eq!(node_id, "test-proxy");
                 assert_eq!(region, "test-region");
             }
@@ -244,6 +247,7 @@ async fn test_message_roundtrip_encoding() {
         },
         ControlMessage::RegisterAck {
             session_id: 999,
+            session_token: 42,
             node_id: "node-abc".into(),
             region: "us-east".into(),
         },

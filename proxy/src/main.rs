@@ -4,6 +4,12 @@
 //! forwards original packets to game servers, captures responses, re-wraps
 //! them, and returns to the client.
 //!
+//! ## Security
+//! - Token-based authentication (QUIC registration → data-plane auth)
+//! - Destination IP validation (blocks private/internal IPs)
+//! - Abuse detection (amplification + reflection)
+//! - Per-client rate limiting
+//!
 //! Designed to run on Oracle Cloud Always Free ARM instances.
 
 mod config;
@@ -19,6 +25,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use tokio::net::UdpSocket;
+use tokio::sync::RwLock;
 use tracing::info;
 
 /// LightSpeed Proxy — UDP relay node
@@ -71,8 +78,26 @@ async fn main() -> anyhow::Result<()> {
     info!("Node ID: {}", config.server.node_id);
     info!("Region:  {}", config.server.region);
     info!("Max clients: {}", config.server.max_clients);
+    info!(
+        "Auth enforcement: {}",
+        if config.security.require_auth { "ENABLED" } else { "disabled (dev mode)" }
+    );
 
     // Initialize shared state
+    let authenticator = Arc::new(RwLock::new(
+        auth::Authenticator::new(config.security.require_auth),
+    ));
+
+    let abuse_config = abuse::AbuseConfig {
+        max_amplification_ratio: config.security.max_amplification_ratio,
+        max_destinations_per_window: config.security.max_destinations_per_window,
+        ban_duration_secs: config.security.ban_duration_secs,
+        ..Default::default()
+    };
+    let abuse_detector = Arc::new(tokio::sync::Mutex::new(
+        abuse::AbuseDetector::new(abuse_config),
+    ));
+
     let rate_limiter = Arc::new(tokio::sync::Mutex::new(
         rate_limit::RateLimiter::new(config.rate_limit.clone()),
     ));
@@ -88,9 +113,20 @@ async fn main() -> anyhow::Result<()> {
         let data_socket = Arc::clone(&data_socket);
         let engine = Arc::clone(&engine);
         let rate_limiter = Arc::clone(&rate_limiter);
+        let authenticator = Arc::clone(&authenticator);
+        let abuse_detector = Arc::clone(&abuse_detector);
         let metrics = Arc::clone(&metrics);
         tokio::spawn(async move {
-            if let Err(e) = relay::run_relay_inbound(data_socket, engine, rate_limiter, metrics).await {
+            if let Err(e) = relay::run_relay_inbound(
+                data_socket,
+                engine,
+                rate_limiter,
+                authenticator,
+                abuse_detector,
+                metrics,
+            )
+            .await
+            {
                 tracing::error!("Relay inbound loop failed: {}", e);
             }
         })
@@ -100,9 +136,10 @@ async fn main() -> anyhow::Result<()> {
     let manager_handle = {
         let engine = Arc::clone(&engine);
         let data_socket = Arc::clone(&data_socket);
+        let abuse_detector = Arc::clone(&abuse_detector);
         let metrics = Arc::clone(&metrics);
         tokio::spawn(async move {
-            relay::run_session_manager(engine, data_socket, metrics).await;
+            relay::run_session_manager(engine, data_socket, abuse_detector, metrics).await;
         })
     };
 
@@ -110,7 +147,10 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "quic")]
     let control_handle = {
         let control_addr: std::net::SocketAddr = cli.control_bind.parse()?;
-        let control_state = Arc::new(control::ControlState::new(config.clone()));
+        let control_state = Arc::new(control::ControlState::new(
+            config.clone(),
+            Arc::clone(&authenticator),
+        ));
         tokio::spawn(async move {
             if let Err(e) = control::run_control_server(control_addr, control_state).await {
                 tracing::error!("QUIC control plane failed: {}", e);

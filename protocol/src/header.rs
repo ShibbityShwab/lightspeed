@@ -9,7 +9,7 @@
 //!  0                   1                   2                   3
 //!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |  Ver  | Flags |   Reserved    |         Sequence Number       |
+//! |  Ver  | Flags | Session Token |         Sequence Number       |
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //! |                      Timestamp (μs)                           |
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -20,6 +20,13 @@
 //! |   Orig SrcPort  |   Orig DstPort  |
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //! ```
+//!
+//! ## Session Token (Security)
+//!
+//! The session token byte is assigned by the proxy during QUIC registration.
+//! Clients MUST include their assigned token in every data-plane packet.
+//! The proxy validates this per-packet to prevent unauthorized relay usage.
+//! While only 8 bits, it provides defense-in-depth alongside IP-based auth.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -63,8 +70,9 @@ pub struct TunnelHeader {
     pub version: u8,
     /// Header flags (4 bits).
     pub flags: u8,
-    /// Reserved byte (must be 0).
-    pub reserved: u8,
+    /// Session token assigned by proxy during QUIC registration.
+    /// Used for per-packet authentication on the data plane.
+    pub session_token: u8,
     /// Packet sequence number (for ordering and dedup).
     pub sequence: u16,
     /// Timestamp in microseconds (for latency measurement).
@@ -90,7 +98,7 @@ impl TunnelHeader {
         Self {
             version: PROTOCOL_VERSION,
             flags: 0,
-            reserved: 0,
+            session_token: 0,
             sequence,
             timestamp_us,
             orig_src_ip: *src.ip(),
@@ -105,7 +113,7 @@ impl TunnelHeader {
         Self {
             version: PROTOCOL_VERSION,
             flags: flags::KEEPALIVE,
-            reserved: 0,
+            session_token: 0,
             sequence,
             timestamp_us,
             orig_src_ip: Ipv4Addr::UNSPECIFIED,
@@ -115,14 +123,23 @@ impl TunnelHeader {
         }
     }
 
+    /// Set the session token (builder pattern).
+    ///
+    /// The token is assigned by the proxy during QUIC registration
+    /// and must be included in every subsequent data-plane packet.
+    pub fn with_session_token(mut self, token: u8) -> Self {
+        self.session_token = token;
+        self
+    }
+
     /// Encode the header into bytes.
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::with_capacity(HEADER_SIZE);
 
         // Byte 0: version (high nibble) | flags (low nibble)
         buf.put_u8((self.version << 4) | (self.flags & 0x0F));
-        // Byte 1: reserved
-        buf.put_u8(self.reserved);
+        // Byte 1: session token
+        buf.put_u8(self.session_token);
         // Bytes 2-3: sequence number
         buf.put_u16(self.sequence);
         // Bytes 4-7: timestamp
@@ -145,7 +162,7 @@ impl TunnelHeader {
 
         // Encode header
         buf.put_u8((self.version << 4) | (self.flags & 0x0F));
-        buf.put_u8(self.reserved);
+        buf.put_u8(self.session_token);
         buf.put_u16(self.sequence);
         buf.put_u32(self.timestamp_us);
         buf.put_slice(&self.orig_src_ip.octets());
@@ -181,7 +198,7 @@ impl TunnelHeader {
             });
         }
 
-        let reserved = buf.get_u8();
+        let session_token = buf.get_u8();
         let sequence = buf.get_u16();
         let timestamp_us = buf.get_u32();
 
@@ -198,7 +215,7 @@ impl TunnelHeader {
         Ok(Self {
             version,
             flags,
-            reserved,
+            session_token,
             sequence,
             timestamp_us,
             orig_src_ip,
@@ -245,7 +262,7 @@ impl TunnelHeader {
         Self {
             version: PROTOCOL_VERSION,
             flags: 0,
-            reserved: 0,
+            session_token: self.session_token,
             sequence,
             timestamp_us,
             orig_src_ip: self.orig_dst_ip,
@@ -274,6 +291,20 @@ mod tests {
     }
 
     #[test]
+    fn test_header_with_session_token() {
+        let src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let dst = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+        let header = TunnelHeader::new(1, 500_000, src, dst).with_session_token(0xAB);
+
+        assert_eq!(header.session_token, 0xAB);
+
+        let encoded = header.encode();
+        let decoded = TunnelHeader::decode(&encoded).unwrap();
+        assert_eq!(decoded.session_token, 0xAB);
+        assert_eq!(header, decoded);
+    }
+
+    #[test]
     fn test_header_version_check() {
         let mut data = vec![0u8; HEADER_SIZE];
         data[0] = 0xF0; // Version 15 — invalid
@@ -294,6 +325,19 @@ mod tests {
         assert!(header.is_keepalive());
         assert!(!header.is_handshake());
         assert!(!header.is_fin());
+        assert_eq!(header.session_token, 0);
+    }
+
+    #[test]
+    fn test_keepalive_with_token() {
+        let header = TunnelHeader::keepalive(1, 500_000).with_session_token(42);
+        assert!(header.is_keepalive());
+        assert_eq!(header.session_token, 42);
+
+        let encoded = header.encode();
+        let decoded = TunnelHeader::decode(&encoded).unwrap();
+        assert_eq!(decoded.session_token, 42);
+        assert!(decoded.is_keepalive());
     }
 
     #[test]
@@ -328,12 +372,14 @@ mod tests {
     fn test_make_response() {
         let src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
         let dst = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
-        let header = TunnelHeader::new(1, 1000, src, dst);
+        let header = TunnelHeader::new(1, 1000, src, dst).with_session_token(99);
 
         let response = header.make_response(2, 2000);
-        assert_eq!(response.orig_src_ip, dst.ip().clone());
-        assert_eq!(response.orig_dst_ip, src.ip().clone());
+        assert_eq!(response.orig_src_ip, *dst.ip());
+        assert_eq!(response.orig_dst_ip, *src.ip());
         assert_eq!(response.orig_src_port, dst.port());
         assert_eq!(response.orig_dst_port, src.port());
+        // Response should preserve session token
+        assert_eq!(response.session_token, 99);
     }
 }

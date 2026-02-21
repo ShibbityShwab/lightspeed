@@ -106,6 +106,8 @@ mod inner {
         remote_addr: Option<SocketAddr>,
         /// Session ID assigned by the proxy.
         session_id: Option<u32>,
+        /// Data-plane session token (for tunnel header auth).
+        session_token: Option<u8>,
         /// Proxy node ID.
         node_id: Option<String>,
         /// Proxy region.
@@ -125,6 +127,7 @@ mod inner {
                 connection: None,
                 remote_addr: None,
                 session_id: None,
+                session_token: None,
                 node_id: None,
                 region: None,
             })
@@ -167,14 +170,16 @@ mod inner {
             match response {
                 Some(ControlMessage::RegisterAck {
                     session_id,
+                    session_token,
                     node_id,
                     region,
                 }) => {
                     info!(
-                        "Registered with proxy: session={}, node={}, region={}",
-                        session_id, node_id, region
+                        "Registered with proxy: session={}, token={}, node={}, region={}",
+                        session_id, session_token, node_id, region
                     );
                     self.session_id = Some(session_id);
+                    self.session_token = Some(session_token);
                     self.node_id = Some(node_id);
                     self.region = Some(region);
                 }
@@ -268,6 +273,7 @@ mod inner {
             }
             self.remote_addr = None;
             self.session_id = None;
+            self.session_token = None;
             self.node_id = None;
             self.region = None;
             Ok(())
@@ -284,6 +290,11 @@ mod inner {
         /// Get the session ID assigned by the proxy.
         pub fn session_id(&self) -> Option<u32> {
             self.session_id
+        }
+
+        /// Get the data-plane session token (for tunnel header auth).
+        pub fn session_token(&self) -> Option<u8> {
+            self.session_token
         }
 
         /// Get the proxy node ID.
@@ -347,6 +358,10 @@ mod inner {
         }
 
         pub fn session_id(&self) -> Option<u32> {
+            None
+        }
+
+        pub fn session_token(&self) -> Option<u8> {
             None
         }
 
