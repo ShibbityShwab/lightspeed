@@ -13,6 +13,7 @@ mod metrics;
 mod health;
 mod rate_limit;
 mod abuse;
+mod control;
 
 use std::sync::Arc;
 
@@ -105,6 +106,21 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
+    // Spawn QUIC control plane server (if compiled with --features quic)
+    #[cfg(feature = "quic")]
+    let control_handle = {
+        let control_addr: std::net::SocketAddr = cli.control_bind.parse()?;
+        let control_state = Arc::new(control::ControlState::new(config.clone()));
+        tokio::spawn(async move {
+            if let Err(e) = control::run_control_server(control_addr, control_state).await {
+                tracing::error!("QUIC control plane failed: {}", e);
+            }
+        })
+    };
+
+    #[cfg(not(feature = "quic"))]
+    info!("QUIC control plane disabled (compile with --features quic)");
+
     // Spawn periodic stats logger
     let stats_handle = {
         let metrics = Arc::clone(&metrics);
@@ -139,6 +155,8 @@ async fn main() -> anyhow::Result<()> {
     relay_handle.abort();
     manager_handle.abort();
     stats_handle.abort();
+    #[cfg(feature = "quic")]
+    control_handle.abort();
 
     info!("⚡ LightSpeed Proxy shut down cleanly");
     Ok(())

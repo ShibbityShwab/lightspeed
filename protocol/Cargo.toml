@@ -6,6 +6,14 @@ authors.workspace = true
 license.workspace = true
 description = "LightSpeed tunnel protocol — shared between client and proxy"
 
+[features]
+default = []
+# Enable QUIC stream read/write helpers (requires quinn)
+quic = ["dep:quinn"]
+
 [dependencies]
 bytes = { workspace = true }
 thiserror = { workspace = true }
+
+# Optional: QUIC stream helpers
+quinn = { version = "0.11", optional = true }

@@ -13,7 +13,7 @@ path = "src/main.rs"
 [features]
 default = []
 # Enable QUIC control plane (requires C compiler for ring)
-quic = ["dep:quinn", "dep:rustls"]
+quic = ["dep:quinn", "dep:rustls", "dep:rcgen", "lightspeed-protocol/quic"]
 # Enable pcap packet capture (requires Npcap/libpcap)
 pcap-capture = ["dep:pcap"]
 # Enable ML route prediction (requires BLAS)
@@ -39,6 +39,7 @@ chrono.workspace = true
 # Optional dependencies (require C compiler or system libraries)
 quinn = { version = "0.11", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+rcgen = { version = "0.13", optional = true }
 pcap = { version = "2", optional = true }
 linfa = { version = "0.7", optional = true }
 linfa-trees = { version = "0.7", optional = true }
