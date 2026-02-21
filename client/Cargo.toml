@@ -1,0 +1,48 @@
+[package]
+name = "lightspeed-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "LightSpeed game network optimizer — client application"
+
+[[bin]]
+name = "lightspeed"
+path = "src/main.rs"
+
+[features]
+default = []
+# Enable QUIC control plane (requires C compiler for ring)
+quic = ["dep:quinn", "dep:rustls"]
+# Enable pcap packet capture (requires Npcap/libpcap)
+pcap-capture = ["dep:pcap"]
+# Enable ML route prediction (requires BLAS)
+ml = ["dep:linfa", "dep:linfa-trees", "dep:linfa-linear"]
+# Enable all features
+full = ["quic", "pcap-capture", "ml"]
+
+[dependencies]
+lightspeed-protocol.workspace = true
+tokio.workspace = true
+socket2.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+
+# Optional dependencies (require C compiler or system libraries)
+quinn = { version = "0.11", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+pcap = { version = "2", optional = true }
+linfa = { version = "0.7", optional = true }
+linfa-trees = { version = "0.7", optional = true }
+linfa-linear = { version = "0.7", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"

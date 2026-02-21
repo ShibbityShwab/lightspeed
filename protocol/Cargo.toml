@@ -1,0 +1,11 @@
+[package]
+name = "lightspeed-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "LightSpeed tunnel protocol — shared between client and proxy"
+
+[dependencies]
+bytes = { workspace = true }
+thiserror = { workspace = true }
