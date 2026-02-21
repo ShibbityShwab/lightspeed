@@ -1,0 +1,145 @@
+//! # LightSpeed Proxy Server
+//!
+//! Receives tunneled UDP packets from clients, strips the LightSpeed header,
+//! forwards original packets to game servers, captures responses, re-wraps
+//! them, and returns to the client.
+//!
+//! Designed to run on Oracle Cloud Always Free ARM instances.
+
+mod config;
+mod relay;
+mod auth;
+mod metrics;
+mod health;
+mod rate_limit;
+mod abuse;
+
+use std::sync::Arc;
+
+use clap::Parser;
+use tokio::net::UdpSocket;
+use tracing::info;
+
+/// LightSpeed Proxy — UDP relay node
+#[derive(Parser, Debug)]
+#[command(name = "lightspeed-proxy", version, about)]
+struct Cli {
+    /// Path to configuration file
+    #[arg(short, long, default_value = "proxy.toml")]
+    config: String,
+
+    /// UDP data plane bind address
+    #[arg(long, default_value = "0.0.0.0:4434")]
+    data_bind: String,
+
+    /// QUIC control plane bind address
+    #[arg(long, default_value = "0.0.0.0:4433")]
+    control_bind: String,
+
+    /// Health check HTTP bind address
+    #[arg(long, default_value = "0.0.0.0:8080")]
+    health_bind: String,
+
+    /// Enable verbose logging
+    #[arg(short, long, default_value_t = false)]
+    verbose: bool,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    // Initialize tracing
+    let filter = if cli.verbose { "debug" } else { "info" };
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .init();
+
+    info!("⚡ LightSpeed Proxy v{} starting", env!("CARGO_PKG_VERSION"));
+    info!("Data plane:    {}", cli.data_bind);
+    info!("Control plane: {}", cli.control_bind);
+    info!("Health check:  {}", cli.health_bind);
+
+    // Load configuration
+    let config = config::ProxyConfig::load(&cli.config).unwrap_or_else(|e| {
+        tracing::warn!("Config not found ({}), using defaults", e);
+        config::ProxyConfig::default()
+    });
+
+    info!("Node ID: {}", config.server.node_id);
+    info!("Region:  {}", config.server.region);
+    info!("Max clients: {}", config.server.max_clients);
+
+    // Initialize shared state
+    let rate_limiter = Arc::new(tokio::sync::Mutex::new(
+        rate_limit::RateLimiter::new(config.rate_limit.clone()),
+    ));
+    let metrics = Arc::new(metrics::ProxyMetrics::new());
+    let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
+
+    // Bind data plane UDP socket
+    let data_socket = Arc::new(UdpSocket::bind(&cli.data_bind).await?);
+    info!("Data plane socket bound to {}", data_socket.local_addr()?);
+
+    // Spawn the relay inbound loop (client → game server)
+    let relay_handle = {
+        let data_socket = Arc::clone(&data_socket);
+        let engine = Arc::clone(&engine);
+        let rate_limiter = Arc::clone(&rate_limiter);
+        let metrics = Arc::clone(&metrics);
+        tokio::spawn(async move {
+            if let Err(e) = relay::run_relay_inbound(data_socket, engine, rate_limiter, metrics).await {
+                tracing::error!("Relay inbound loop failed: {}", e);
+            }
+        })
+    };
+
+    // Spawn the session manager (handles response listeners + cleanup)
+    let manager_handle = {
+        let engine = Arc::clone(&engine);
+        let data_socket = Arc::clone(&data_socket);
+        let metrics = Arc::clone(&metrics);
+        tokio::spawn(async move {
+            relay::run_session_manager(engine, data_socket, metrics).await;
+        })
+    };
+
+    // Spawn periodic stats logger
+    let stats_handle = {
+        let metrics = Arc::clone(&metrics);
+        let engine = Arc::clone(&engine);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                let sessions = engine.active_sessions().await;
+                let relayed = metrics.packets_relayed.load(std::sync::atomic::Ordering::Relaxed);
+                let dropped = metrics.packets_dropped.load(std::sync::atomic::Ordering::Relaxed);
+                let bytes = metrics.bytes_relayed.load(std::sync::atomic::Ordering::Relaxed);
+                info!(
+                    sessions = sessions,
+                    packets_relayed = relayed,
+                    packets_dropped = dropped,
+                    bytes_relayed = bytes,
+                    avg_latency_us = format!("{:.1}", metrics.avg_latency_us()),
+                    "📊 Proxy stats"
+                );
+            }
+        })
+    };
+
+    info!("⚡ LightSpeed Proxy running — press Ctrl+C to stop");
+
+    // Wait for shutdown signal
+    tokio::signal::ctrl_c().await?;
+    info!("⚡ Shutdown signal received");
+
+    // Abort background tasks
+    relay_handle.abort();
+    manager_handle.abort();
+    stats_handle.abort();
+
+    info!("⚡ LightSpeed Proxy shut down cleanly");
+    Ok(())
+}

@@ -1,0 +1,47 @@
+# Rust build artifacts
+/target/
+client/target/
+proxy/target/
+
+# Cargo lock is included for binaries
+# Cargo.lock  # Keep for reproducible builds
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Environment
+.env
+.env.local
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/.terraform.lock.hcl
+
+# AI/ML models (too large for git)
+ai/models/*.bin
+ai/models/*.onnx
+ai/data/*.csv
+ai/data/*.parquet
+
+# Test results
+tests/results/
+
+# Logs
+*.log
+wat/state/agent-logs/
+
+# Secrets
+*.pem
+*.key
+*.crt
