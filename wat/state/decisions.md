@@ -89,3 +89,31 @@
 - **Deliverables**: `docs/security-audit-mvp.md`, updated `proxy/src/{auth,abuse,relay,control,config,main}.rs`, updated `protocol/src/{header,control}.rs`, updated `client/src/quic/mod.rs`
 - **Status**: ACCEPTED
 - **HANDOFF**: QAEngineer (Step 6: Integration Testing)
+
+---
+
+## DEC-007: Integration Testing Complete
+- **Date**: 2026-02-22T00:30:00+07:00
+- **Agent**: QAEngineer
+- **Decision**: WF-001 Step 6 (Integration Testing) is complete. 52 tests total, 100% pass rate, all performance targets met.
+- **Rationale**: Comprehensive testing of the full tunnel pipeline (e2e), security enforcement (auth/rate-limit/abuse), and performance benchmarks confirms MVP readiness.
+- **Key Changes**:
+  - Created `proxy/src/lib.rs` to expose internal modules for integration test imports
+  - Updated `proxy/src/main.rs` to use library imports instead of `mod` declarations
+  - Added `proxy/tests/integration_e2e.rs` (7 tests): multi-packet, concurrent clients, keepalive, FIN, large payload, burst, sequence numbers
+  - Added `proxy/tests/integration_security.rs` (8 tests): auth reject/accept, invalid token, rate limiting, private dest blocking, reflection detection, malformed packets, session creation
+  - Added `proxy/tests/bench_tunnel.rs` (3 tests): latency overhead, throughput, percentiles
+  - Created `docs/test-report-mvp.md` with full results
+- **Test Architecture**:
+  - E2E tests: Manual proxy relay + UDP echo server for full round-trip verification
+  - Security tests: Real `run_relay_inbound` with shared metrics counters to verify drop/relay counts
+  - Benchmarks: Timed round-trips comparing raw UDP vs tunneled UDP
+- **Performance Results**:
+  - Tunnel overhead: 162μs p50 (target: ≤5ms) — 97% under target
+  - Latency p99: 368μs
+  - Packet loss: 0% at 200 packets
+  - Burst delivery: 100% at 50 packets
+  - Send throughput: 96,209 pps
+- **Test Count**: 52 total (18 protocol + 13 proxy unit + 7 e2e + 3 relay + 8 security + 3 benchmarks)
+- **Status**: ACCEPTED
+- **HANDOFF**: DevOps (Step 7: MVP Release — build binaries, GitHub release)

@@ -12,14 +12,15 @@
 //!
 //! Designed to run on Oracle Cloud Always Free ARM instances.
 
-mod config;
-mod relay;
-mod auth;
-mod metrics;
-mod health;
-mod rate_limit;
-mod abuse;
-mod control;
+use lightspeed_proxy::config;
+use lightspeed_proxy::relay;
+use lightspeed_proxy::auth;
+use lightspeed_proxy::metrics;
+use lightspeed_proxy::rate_limit;
+use lightspeed_proxy::abuse;
+
+#[cfg(feature = "quic")]
+use lightspeed_proxy::control;
 
 use std::sync::Arc;
 
