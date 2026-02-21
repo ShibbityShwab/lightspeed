@@ -13,7 +13,7 @@ path = "src/main.rs"
 [features]
 default = []
 # Enable QUIC control plane (requires C compiler for ring)
-quic = ["dep:quinn", "dep:rustls"]
+quic = ["dep:quinn", "dep:rustls", "dep:rcgen", "lightspeed-protocol/quic"]
 # Enable all features
 full = ["quic"]
 
@@ -36,6 +36,7 @@ chrono.workspace = true
 # Optional dependencies
 quinn = { version = "0.11", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+rcgen = { version = "0.13", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

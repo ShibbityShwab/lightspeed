@@ -50,3 +50,20 @@
 - **Rationale**: All module interfaces defined via traits (PacketCapture, RouteSelector, GameConfig). Both crates compile. 5 unit tests pass for header encode/decode. Protocol specification finalized.
 - **Status**: ACCEPTED
 - **HANDOFF**: RustDev (Step 2a: implement tunnel engine), NetEng (Step 2b: protocol review — already done)
+
+---
+
+## DEC-005: QUIC Control Plane Design
+- **Date**: 2026-02-21T22:10:00+07:00
+- **Agent**: NetEng, RustDev
+- **Decision**: WF-001 Step 4 (QUIC Control Plane) is complete. Implemented binary control message protocol, proxy QUIC server, client QUIC control, and integration tests.
+- **Rationale**: Control plane uses quinn 0.11 + rustls 0.23 with self-signed certs for MVP. Messages use a lightweight binary format (1-byte type tag + binary fields) in the shared protocol crate, with 2-byte length framing on QUIC streams. Client opens separate bi-streams for registration and ping — avoids head-of-line blocking. Server tracks sessions and enforces capacity limits. Feature-gated behind `--features quic` to keep default build dependency-free.
+- **Key Design Choices**:
+  - Binary message format over JSON/protobuf — minimal overhead, no extra deps
+  - Self-signed TLS certs with client-side verification skip — MVP only, must add real PKI before production
+  - Per-stream request/response pattern — each ping/register opens a new bi-stream, cleaner than multiplexing on one stream
+  - Stub fallback when `quic` feature disabled — client compiles and runs without control plane
+- **Alternatives Considered**: (1) WebSocket control plane — adds HTTP dependency, more overhead. (2) Custom UDP control protocol — loses reliability guarantees. (3) gRPC — too heavyweight for this use case.
+- **Deliverables**: `protocol/src/control.rs` (9 unit tests), `proxy/src/control.rs`, `client/src/quic/{mod,discovery,health}.rs`, `proxy/tests/integration_control.rs` (2 integration tests), CLI `--test-control` flag
+- **Status**: ACCEPTED
+- **HANDOFF**: Security (Step 5: review tunnel + control plane for auth/encryption gaps)
