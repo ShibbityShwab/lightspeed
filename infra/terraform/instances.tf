@@ -55,7 +55,7 @@ data "cloudinit_config" "proxy" {
     content_type = "text/cloud-config"
     content = yamlencode({
       package_update  = true
-      package_upgrade = true
+      package_upgrade = false  # Disabled: causes OOM on E2.1.Micro (1GB RAM)
 
       packages = [
         "docker-ce",
