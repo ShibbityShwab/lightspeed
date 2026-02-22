@@ -54,6 +54,14 @@ data "cloudinit_config" "proxy" {
   part {
     content_type = "text/cloud-config"
     content = yamlencode({
+      # Create extra swap BEFORE package installation (bootcmd runs first)
+      bootcmd = [
+        "test -f /swapfile2 || fallocate -l 2G /swapfile2",
+        "chmod 600 /swapfile2",
+        "mkswap /swapfile2 || true",
+        "swapon /swapfile2 || true",
+      ]
+
       package_update  = true
       package_upgrade = false  # Disabled: causes OOM on E2.1.Micro (1GB RAM)
 
@@ -108,6 +116,8 @@ data "cloudinit_config" "proxy" {
       ]
 
       runcmd = [
+        # Make bootcmd swap persistent
+        "grep -q swapfile2 /etc/fstab || echo '/swapfile2 none swap sw 0 0' >> /etc/fstab",
         # Enable and start Docker
         "systemctl enable --now docker",
         # Enable and start fail2ban
