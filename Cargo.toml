@@ -11,7 +11,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["LightSpeed Contributors"]
 license = "MIT"
-repository = "https://github.com/lightspeed-gaming/lightspeed"
+repository = "https://github.com/ShibbityShwab/lightspeed"
 description = "Zero-cost global network optimizer — reduce and stabilize ping for multiplayer games"
 
 [workspace.dependencies]
