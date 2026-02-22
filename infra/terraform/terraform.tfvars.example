@@ -1,0 +1,50 @@
+# ──────────────────────────────────────────────────────────────
+# LightSpeed Proxy — Example Terraform Variables
+#
+# Copy this file to terraform.tfvars and fill in your values:
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# NEVER commit terraform.tfvars to version control!
+# ──────────────────────────────────────────────────────────────
+
+# ── OCI Authentication ───────────────────────────────────────
+# Get these from: OCI Console → Profile → API Keys
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaa..."
+user_ocid        = "ocid1.user.oc1..aaaaaaaa..."
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path = "~/.oci/oci_api_key.pem"
+
+# ── Home Region ──────────────────────────────────────────────
+home_region = "us-ashburn-1"
+
+# ── Proxy Regions (MVP: 3 regions) ───────────────────────────
+# Default covers: NA-East, EU-West, Asia-SE
+# Uncomment and modify to customize:
+#
+# regions = {
+#   us-east = {
+#     oci_region   = "us-ashburn-1"
+#     node_id      = "proxy-us-east"
+#     display_name = "lightspeed-us-east"
+#     shape_ocpus  = 1
+#     shape_memory = 6
+#   }
+#   eu-west = {
+#     oci_region   = "eu-frankfurt-1"
+#     node_id      = "proxy-eu-west"
+#     display_name = "lightspeed-eu-west"
+#     shape_ocpus  = 1
+#     shape_memory = 6
+#   }
+#   asia-se = {
+#     oci_region   = "ap-singapore-1"
+#     node_id      = "proxy-asia-se"
+#     display_name = "lightspeed-asia-se"
+#     shape_ocpus  = 1
+#     shape_memory = 6
+#   }
+# }
+
+# ── SSH Access ───────────────────────────────────────────────
+# Restrict SSH to your IP for security:
+# ssh_allowed_cidrs = ["YOUR.IP.ADDRESS/32"]

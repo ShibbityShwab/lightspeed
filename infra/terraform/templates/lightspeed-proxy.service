@@ -1,0 +1,46 @@
+[Unit]
+Description=LightSpeed Proxy — UDP game latency optimizer
+Documentation=https://github.com/ShibbityShwab/lightspeed
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Run as Docker container with host networking for raw UDP performance
+ExecStartPre=-/usr/bin/docker stop lightspeed-proxy
+ExecStartPre=-/usr/bin/docker rm lightspeed-proxy
+ExecStartPre=/usr/bin/docker pull ghcr.io/shibbityshwab/lightspeed-proxy:latest
+
+ExecStart=/usr/bin/docker run \
+  --name lightspeed-proxy \
+  --network host \
+  --restart unless-stopped \
+  --memory 4g \
+  --cpus 0.9 \
+  -v /etc/lightspeed/proxy.toml:/etc/lightspeed/proxy.toml:ro \
+  ghcr.io/shibbityshwab/lightspeed-proxy:latest \
+    --config /etc/lightspeed/proxy.toml \
+    --data-bind 0.0.0.0:4434 \
+    --control-bind 0.0.0.0:4433 \
+    --health-bind 0.0.0.0:8080
+
+ExecStop=/usr/bin/docker stop lightspeed-proxy
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/lightspeed
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

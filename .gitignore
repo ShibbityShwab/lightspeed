@@ -27,6 +27,10 @@ infra/terraform/.terraform/
 infra/terraform/*.tfstate
 infra/terraform/*.tfstate.backup
 infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfvars
+infra/terraform/*.auto.tfvars
+infra/terraform/lightspeed_deploy_key
+infra/terraform/lightspeed_deploy_key.pub
 
 # AI/ML models (too large for git)
 ai/models/*.bin
