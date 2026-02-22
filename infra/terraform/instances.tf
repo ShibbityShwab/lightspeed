@@ -26,12 +26,15 @@ data "oci_core_images" "oracle_linux" {
 
   filter {
     name   = "display_name"
-    values = ["^Oracle-Linux-9\\..*-aarch64-.*$"]
+    values = [local.is_flex_shape ? "^Oracle-Linux-9\\..*-aarch64-.*$" : "^Oracle-Linux-9\\..*$"]
     regex  = true
   }
 }
 
 locals {
+  # Detect if using a Flex shape (requires shape_config) vs fixed shape
+  is_flex_shape = length(regexall("Flex$", var.instance_shape)) > 0
+
   # Use provided image ID or auto-detect latest per region
   image_ids = {
     for k, v in var.regions : k => (
@@ -145,9 +148,12 @@ resource "oci_core_instance" "proxy" {
   display_name        = each.value.display_name
   shape               = var.instance_shape
 
-  shape_config {
-    ocpus         = each.value.shape_ocpus
-    memory_in_gbs = each.value.shape_memory
+  dynamic "shape_config" {
+    for_each = local.is_flex_shape ? [1] : []
+    content {
+      ocpus         = each.value.shape_ocpus
+      memory_in_gbs = each.value.shape_memory
+    }
   }
 
   source_details {
