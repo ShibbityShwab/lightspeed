@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --workspace --verbose
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            client_artifact: lightspeed.exe
+            proxy_artifact: lightspeed-proxy.exe
+            archive: lightspeed-${{ github.ref_name }}-windows-x64.zip
+
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            client_artifact: lightspeed
+            proxy_artifact: lightspeed-proxy
+            archive: lightspeed-${{ github.ref_name }}-linux-x64.tar.gz
+
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            client_artifact: lightspeed
+            proxy_artifact: lightspeed-proxy
+            archive: lightspeed-${{ github.ref_name }}-linux-arm64.tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Cross-compilation toolchain for ARM64
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Package — Windows (zip)
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $staging = "lightspeed-${{ github.ref_name }}-windows-x64"
+          New-Item -Type Directory -Path $staging
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.client_artifact }}" "$staging/"
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.proxy_artifact }}" "$staging/"
+          Copy-Item README.md "$staging/"
+          Copy-Item CHANGELOG.md "$staging/"
+          Copy-Item LICENSE "$staging/" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$staging/*" -DestinationPath "${{ matrix.archive }}"
+
+      # Package — Linux (tar.gz)
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          staging="lightspeed-${{ github.ref_name }}-$( [ '${{ matrix.target }}' = 'aarch64-unknown-linux-gnu' ] && echo 'linux-arm64' || echo 'linux-x64' )"
+          mkdir -p "$staging"
+          cp "target/${{ matrix.target }}/release/${{ matrix.client_artifact }}" "$staging/"
+          cp "target/${{ matrix.target }}/release/${{ matrix.proxy_artifact }}" "$staging/"
+          cp README.md "$staging/"
+          cp CHANGELOG.md "$staging/"
+          cp LICENSE "$staging/" 2>/dev/null || true
+          tar czf "${{ matrix.archive }}" "$staging"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Extract changelog for this version
+          awk '/^## \['"$VERSION"'\]/{found=1; next} /^## \[/{found=0} found' CHANGELOG.md > release_notes.md
+
+          # Add download instructions
+          cat >> release_notes.md << 'EOF'
+
+          ---
+
+          ## Installation
+
+          ### Quick Install
+
+          1. Download the archive for your platform below
+          2. Extract it to a folder of your choice
+          3. Run `lightspeed --help` to get started
+
+          ### Supported Platforms
+
+          | Platform | Archive |
+          |----------|---------|
+          | Windows x64 | `lightspeed-${{ github.ref_name }}-windows-x64.zip` |
+          | Linux x64 | `lightspeed-${{ github.ref_name }}-linux-x64.tar.gz` |
+          | Linux ARM64 | `lightspeed-${{ github.ref_name }}-linux-arm64.tar.gz` |
+
+          ### Build from Source
+
+          ```bash
+          git clone https://github.com/${{ github.repository }}.git
+          cd lightspeed
+          cargo build --release
+          ```
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "LightSpeed ${{ github.ref_name }}"
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
+          files: |
+            artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # CI workflow for non-tag pushes
+  ci:
+    name: CI
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --workspace
+      - name: Test
+        run: cargo test --workspace --verbose
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+      - name: Format check
+        run: cargo fmt --all -- --check

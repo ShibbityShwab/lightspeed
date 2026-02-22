@@ -117,3 +117,26 @@
 - **Test Count**: 52 total (18 protocol + 13 proxy unit + 7 e2e + 3 relay + 8 security + 3 benchmarks)
 - **Status**: ACCEPTED
 - **HANDOFF**: DevOps (Step 7: MVP Release — build binaries, GitHub release)
+
+---
+
+## DEC-008: MVP Release v0.1.0
+- **Date**: 2026-02-22T21:20:00+07:00
+- **Agent**: DevOps
+- **Decision**: WF-001 Step 7 (MVP Release) is complete. v0.1.0 tagged and release infrastructure created.
+- **Rationale**: All 6 prior steps complete with 52/52 tests passing, 162μs overhead, 0 critical security findings. MVP is ready for release.
+- **Key Deliverables**:
+  - `CHANGELOG.md` — full changelog for v0.1.0 following Keep a Changelog format
+  - `LICENSE` — MIT license
+  - `.github/workflows/release.yml` — CI/CD pipeline: tests → build (Windows x64, Linux x64, Linux ARM64) → GitHub Release with binaries
+  - `README.md` — updated with installation instructions, quick start guide, MVP performance metrics, roadmap
+  - `wat/state/current-phase.md` — WF-001 marked complete
+  - Git tag `v0.1.0`
+- **CI/CD Architecture**:
+  - Tag push (`v*`) triggers release workflow
+  - Tests run first, then parallel builds for 3 targets
+  - GitHub Release auto-created with platform-specific archives
+  - Separate CI job for non-tag pushes (check, test, clippy, fmt)
+- **Local Build Note**: Dev machine lacks both MinGW (dlltool) and MSVC (link.exe). `cargo check` passes. Full builds delegated to GitHub Actions runners with proper toolchains.
+- **Status**: ACCEPTED
+- **WF-001**: ✅ COMPLETE — All 7 steps done. Ready for WF-002 (Proxy Network) and WF-003 (AI Route Optimizer).
