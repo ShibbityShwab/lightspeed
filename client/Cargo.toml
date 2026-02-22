@@ -16,8 +16,8 @@ default = []
 quic = ["dep:quinn", "dep:rustls", "dep:rcgen", "lightspeed-protocol/quic"]
 # Enable pcap packet capture (requires Npcap/libpcap)
 pcap-capture = ["dep:pcap"]
-# Enable ML route prediction (requires BLAS)
-ml = ["dep:linfa", "dep:linfa-trees", "dep:linfa-linear"]
+# Enable ML route prediction
+ml = ["dep:linfa", "dep:linfa-trees", "dep:linfa-linear", "dep:ndarray", "dep:bincode"]
 # Enable all features
 full = ["quic", "pcap-capture", "ml"]
 
@@ -44,6 +44,9 @@ pcap = { version = "2", optional = true }
 linfa = { version = "0.7", optional = true }
 linfa-trees = { version = "0.7", optional = true }
 linfa-linear = { version = "0.7", optional = true }
+ndarray = { version = "0.15", optional = true }
+bincode = { version = "1", optional = true }
+rand = "0.8"
 
 [dev-dependencies]
 tokio-test = "0.4"
