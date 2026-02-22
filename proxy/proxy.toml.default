@@ -1,0 +1,22 @@
+# LightSpeed Proxy — Default Configuration
+# Override by mounting your own proxy.toml or setting CLI flags.
+
+[server]
+node_id     = "proxy-dev"
+region      = "local"
+max_clients = 100
+
+[security]
+require_auth                = false
+max_amplification_ratio     = 2.0
+max_destinations_per_window = 10
+ban_duration_secs           = 3600
+
+[rate_limit]
+max_pps_per_client = 1000
+max_bps_per_client = 1000000
+max_connections    = 200
+
+[metrics]
+enabled       = true
+interval_secs = 10
