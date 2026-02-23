@@ -69,3 +69,17 @@
 | **Traceroute Evidence** | SGP→LA: hop 6 (1ms, SGP local) → hop 7 (173ms, Pacific crossing). No intermediate detour — just raw transoceanic distance. |
 | **Revised Strategy** | (1) FEC multipath: send data on direct path, parity via SGP — recover packet loss without retransmission; (2) Client-side FEC eliminates 200ms+ retransmit penalty; (3) Focus on game integration as core product value |
 | **SGP Node Value** | FEC redundant path, mesh failover, SEA regional coverage |
+
+## D-008: Cloudflare WARP Local Route Optimization — 5-10ms Improvement Confirmed
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | Recommend WARP as free local route optimizer; build WARP-detection into client |
+| **Context** | Testing whether Cloudflare's Bangkok PoP (4ms ICMP) could provide better transit to LA |
+| **Testing Results** | Direct: 202-204ms avg; WARP: 193-197ms avg (**5-10ms improvement**); WARP to OCI: 203ms (was 213ms = **10ms improvement**) |
+| **Traceroute Analysis** | WARP path: You→CF BKK (33ms)→CF backbone→NTT (36ms)→Pacific crossing (166ms)→Vultr LA. Direct path Pacific crossing: 172ms. **CF's NTT peering saves 6ms on Pacific crossing.** |
+| **WARP Mode** | Full "Warp" mode with MASQUE protocol — tunnels ALL traffic including UDP. Game traffic WILL route through WARP. |
+| **Limitation** | WARP adds ~33ms tunnel overhead (encapsulation), partially offsetting the 6ms peering advantage. Net: ~5ms improvement. |
+| **With WARP Minimum** | 193ms — **only 6ms from ExitLag's 187ms!** |
+| **Client Strategy** | (1) Detect WARP availability, recommend enabling for free 5ms savings; (2) Build route probing: test direct, WARP, and relay paths, select fastest; (3) Continuously monitor and auto-switch on degradation |
+| **Combined Strategy** | WARP (193ms base) + FEC (recover lost packets in 3ms vs 400ms retransmit) = potentially **better effective gaming latency than ExitLag** despite 6ms higher base RTT |
