@@ -9,7 +9,26 @@
 //! consistent cross-platform API. Platform-native backends can be
 //! enabled for better performance.
 //!
-//! **Note**: Requires the `pcap-capture` feature to be enabled.
+//! ## Feature Flags
+//!
+//! - `pcap-capture`: Enables the pcap backend (requires Npcap/libpcap)
+//!
+//! ## Usage
+//!
+//! ```no_run
+//! use lightspeed_client::capture;
+//!
+//! // List available interfaces
+//! let interfaces = capture::list_interfaces();
+//! for iface in &interfaces {
+//!     println!("{} [{}] — {}", iface.name,
+//!         if iface.is_up { "UP" } else { "DOWN" },
+//!         iface.description);
+//! }
+//!
+//! // Create a capture backend
+//! let mut cap = capture::create_default_capture().unwrap();
+//! ```
 
 #[cfg(all(target_os = "windows", feature = "pcap-capture"))]
 pub mod windows;
@@ -20,7 +39,6 @@ pub mod linux;
 #[cfg(all(target_os = "macos", feature = "pcap-capture"))]
 pub mod macos;
 
-#[cfg(feature = "pcap-capture")]
 pub mod pcap_backend;
 
 use crate::error::CaptureError;
@@ -32,6 +50,14 @@ pub fn create_default_capture() -> Result<Box<dyn PacketCapture>, CaptureError> 
     Ok(Box::new(pcap_backend::PcapCapture::new()))
 }
 
+/// Create a packet capture backend for a specific network interface.
+#[cfg(feature = "pcap-capture")]
+pub fn create_capture_on(interface: &str) -> Result<Box<dyn PacketCapture>, CaptureError> {
+    Ok(Box::new(
+        pcap_backend::PcapCapture::new().with_interface(interface),
+    ))
+}
+
 /// Stub when pcap-capture feature is not enabled.
 #[cfg(not(feature = "pcap-capture"))]
 pub fn create_default_capture() -> Result<Box<dyn PacketCapture>, CaptureError> {
@@ -40,16 +66,26 @@ pub fn create_default_capture() -> Result<Box<dyn PacketCapture>, CaptureError> 
     ))
 }
 
+/// Stub when pcap-capture feature is not enabled.
+#[cfg(not(feature = "pcap-capture"))]
+pub fn create_capture_on(_interface: &str) -> Result<Box<dyn PacketCapture>, CaptureError> {
+    Err(CaptureError::UnsupportedPlatform(
+        "Packet capture requires the 'pcap-capture' feature. Rebuild with: cargo build --features pcap-capture".into()
+    ))
+}
+
 /// List available network interfaces suitable for capture.
+///
+/// Uses pcap to enumerate interfaces when the `pcap-capture` feature is enabled.
+/// Returns an empty list otherwise.
 pub fn list_interfaces() -> Vec<InterfaceInfo> {
-    // TODO: Use pcap::Device::list() to enumerate interfaces
-    vec![]
+    pcap_backend::list_pcap_interfaces()
 }
 
 /// Information about a network interface.
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
-    /// Interface name (e.g., "eth0", "Ethernet").
+    /// Interface name (e.g., "eth0", "Ethernet", "\\Device\\NPF_{GUID}").
     pub name: String,
     /// Human-readable description.
     pub description: String,
