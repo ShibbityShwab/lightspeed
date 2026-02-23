@@ -89,18 +89,19 @@ impl RelayEngine {
 
     /// Get or create a session for a client.
     ///
-    /// If the client already has an active session, returns it.
-    /// Otherwise, creates a new outbound socket and session.
+    /// If the client already has an active session, returns `(session, false)`.
+    /// Otherwise, creates a new outbound socket and session, returning `(session, true)`.
+    /// The caller should spawn a response listener when `is_new` is true.
     pub async fn get_or_create_session(
         &self,
         client_addr: SocketAddrV4,
         game_server: SocketAddrV4,
-    ) -> anyhow::Result<Arc<ClientSession>> {
+    ) -> anyhow::Result<(Arc<ClientSession>, bool)> {
         // Fast path: check existing session
         {
             let sessions = self.sessions.read().await;
             if let Some(session) = sessions.get(&client_addr) {
-                return Ok(Arc::clone(session));
+                return Ok((Arc::clone(session), false));
             }
         }
 
@@ -134,7 +135,7 @@ impl RelayEngine {
         let mut sessions = self.sessions.write().await;
         sessions.insert(client_addr, Arc::clone(&session));
 
-        Ok(session)
+        Ok((session, true))
     }
 
     /// Get a shared reference to the sessions map (for the response listener).
@@ -292,7 +293,7 @@ pub async fn run_relay_inbound(
         }
 
         // Get or create session for this client
-        let session = match engine.get_or_create_session(client_addr, game_server).await {
+        let (session, is_new) = match engine.get_or_create_session(client_addr, game_server).await {
             Ok(s) => s,
             Err(e) => {
                 warn!(client = %client_addr, error = %e, "Failed to create session");
@@ -300,6 +301,18 @@ pub async fn run_relay_inbound(
                 continue;
             }
         };
+
+        // Immediately spawn response listener for new sessions
+        // (don't wait for the 5s session manager tick)
+        if is_new {
+            let session_clone = Arc::clone(&session);
+            let data_socket_clone = Arc::clone(&data_socket);
+            let metrics_clone = Arc::clone(&metrics);
+            tokio::spawn(async move {
+                run_session_response_listener(session_clone, data_socket_clone, metrics_clone).await;
+            });
+            info!(client = %client_addr, "Response listener spawned immediately");
+        }
 
         // Forward the raw game payload to the game server
         match session.outbound_socket.send_to(payload, game_server).await {
@@ -472,13 +485,15 @@ mod tests {
         let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
         let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
 
-        let session = engine.get_or_create_session(client, server).await.unwrap();
+        let (session, is_new) = engine.get_or_create_session(client, server).await.unwrap();
+        assert!(is_new);
         assert_eq!(session.client_addr, client);
         assert_eq!(session.game_server, server);
         assert_eq!(engine.active_sessions().await, 1);
 
         // Getting same client again should return existing session
-        let session2 = engine.get_or_create_session(client, server).await.unwrap();
+        let (session2, is_new2) = engine.get_or_create_session(client, server).await.unwrap();
+        assert!(!is_new2);
         assert_eq!(engine.active_sessions().await, 1);
         assert_eq!(session.client_addr, session2.client_addr);
     }
