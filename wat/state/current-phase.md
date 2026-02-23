@@ -2,14 +2,14 @@
 
 | Key | Value |
 |-----|-------|
-| **Active Workflow** | WF-006 (Business Launch) — Step 2 (Landing Page) ✅ DONE |
-| **Current Step** | WF-006 Step 2 complete; WF-003 Steps 5-6 + WF-002 Steps 4-6 remain |
-| **Active Agents** | DocWriter, DevOps |
-| **Blocked On** | WF-002 deployment for real data (OCI account needed) |
-| **Last Checkpoint** | 2026-02-23T15:38:00+07:00 |
-| **Next Action** | WF-002: User creates OCI account → terraform apply |
-| **Parallel Workflows** | WF-002 (blocked on OCI account), WF-003 (blocked on real data) |
-| **WAT Version** | 0.3.1 |
+| **Active Workflow** | WF-002 (Proxy Network) Step 4 ✅ DONE + WF-006 Step 2 ✅ DONE |
+| **Current Step** | Proxy deployed (163.192.3.134), cloud-init provisioning |
+| **Active Agents** | InfraDev, DevOps |
+| **Blocked On** | Cloud-init completing Docker setup (~5min) |
+| **Last Checkpoint** | 2026-02-23T15:57:00+07:00 |
+| **Next Action** | Verify health endpoint, then WF-003 Step 5 or WF-004 |
+| **Parallel Workflows** | WF-003 (Steps 5-6 now unblocked), WF-006 (Steps 3-4 available) |
+| **WAT Version** | 0.3.2 |
 
 ## Completed Steps
 

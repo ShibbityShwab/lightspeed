@@ -1,20 +1,29 @@
-# Decision Log
+# Decisions Log
 
-All architecture and process decisions, with rationale and status.
+## D-001: Single-Region Deployment Strategy
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | Deploy single proxy node in OCI us-sanjose-1 (San Jose) |
+| **Context** | OCI Always Free ARM instances restricted to home region. ARM A1.Flex returned "Out of host capacity" error. |
+| **Outcome** | Deploy VM.Standard.E2.1.Micro (AMD, 1 OCPU, 1GB) in us-sanjose-1 for pipeline validation |
+| **Trade-offs** | 1GB RAM limits concurrency; single region means no multi-path routing yet |
+| **Future Plan** | Add Singapore node via Hetzner/Vultr (~$3/mo) for Thailand proximity; retry ARM when capacity opens; consider Fly.io for global free nodes |
 
-| ID | Decision | Rationale | Status | Date |
-|----|----------|-----------|--------|------|
-| DEC-001 | Use Rust for both client and proxy | Performance, safety, single language reduces cognitive load | ACCEPTED | 2026-02-22 |
-| DEC-002 | Unencrypted UDP tunnel | Zero overhead, anti-cheat compatible, IP preservation | ACCEPTED | 2026-02-22 |
-| DEC-003 | Oracle Cloud Always Free for proxy hosting | 4 ARM OCPUs + 24GB RAM + 10TB egress at $0/month | ACCEPTED | 2026-02-22 |
-| DEC-004 | linfa for ML (not Python) | Keep everything in Rust, sub-1ms inference, no FFI overhead | ACCEPTED | 2026-02-22 |
-| DEC-005 | QUIC (quinn) for control plane | Reliable, multiplexed, 0-RTT reconnect, built-in TLS | ACCEPTED | 2026-02-22 |
-| DEC-006 | Token-based auth (QUIC registration → data-plane) | Lightweight, no per-packet crypto, abuse prevention | ACCEPTED | 2026-02-22 |
-| DEC-007 | Destination IP validation (block RFC1918) | Prevent proxy from being used to scan internal networks | ACCEPTED | 2026-02-22 |
-| DEC-008 | MVP Release v0.1.0 — GitHub + CI/CD | Public repo, 3-platform release, GitHub Actions | ACCEPTED | 2026-02-22 |
-| DEC-009 | 3-region MVP: Ashburn, Frankfurt, Singapore | Best coverage for NA/EU/SEA game servers within free tier budget (3 of 4 OCPUs) | ACCEPTED | 2026-02-22 |
-| DEC-010 | ARM Ampere A1 Flex (1 OCPU, 6GB per node) | Optimal split of free tier resources: 3 nodes with headroom for 4th | ACCEPTED | 2026-02-22 |
-| DEC-011 | Docker + host networking for proxy deployment | Host networking eliminates NAT overhead for UDP; Docker for easy updates | ACCEPTED | 2026-02-22 |
-| DEC-012 | Cloud-init for node bootstrapping | Single-touch provisioning: Docker, firewalld, fail2ban, kernel tuning auto-configured | ACCEPTED | 2026-02-22 |
-| DEC-013 | GHCR (GitHub Container Registry) for Docker images | Free for public repos, integrated with GitHub Actions, multi-arch support | ACCEPTED | 2026-02-22 |
-| DEC-014 | Defense-in-depth security: firewalld + fail2ban + app-level rate limiting | Three layers: OS firewall, IP banning, application rate limits | ACCEPTED | 2026-02-22 |
+## D-002: OCI ARM Capacity Workaround
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | Fall back to E2.1.Micro (AMD) after ARM capacity error |
+| **Context** | ARM A1.Flex (4 OCPU, 24GB) failed with 500-InternalError "Out of host capacity" in us-sanjose-1 |
+| **Outcome** | Successfully deployed E2.1.Micro. IP: 163.192.3.134 |
+| **Retry Strategy** | Periodically retry ARM via `terraform apply` with A1.Flex shape; off-peak hours (early morning UTC) have better success |
+
+## D-003: Multi-Region Strategy
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | Plan multi-provider approach instead of single-provider multi-region |
+| **Options Evaluated** | (1) Multiple OCI accounts, (2) Fly.io free tier, (3) Hetzner/Vultr cheap VPS, (4) AWS/GCP/Azure free tiers |
+| **Recommendation** | OCI San Jose (free) + Hetzner Singapore ($3.29/mo) + Fly.io (free, 3 machines) |
+| **Rationale** | User in Thailand needs Asia-SE node; Hetzner Singapore is cheapest; Fly.io adds US-East + EU coverage for free |
