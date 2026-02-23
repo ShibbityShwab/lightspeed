@@ -40,6 +40,7 @@ pub mod linux;
 pub mod macos;
 
 pub mod pcap_backend;
+pub mod injector;
 
 use crate::error::CaptureError;
 use crate::tunnel::capture::PacketCapture;
