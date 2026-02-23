@@ -108,3 +108,65 @@
 | **Why SGP relay loses** | Bypasses HGC detour (good) but adds 31ms BKK→SGP hop (bad). Net: 31+178=209ms > 203ms direct |
 | **Why WARP wins** | Bypasses HGC entirely via NTT backbone. MASQUE overhead (33ms) < HGC detour (29ms) + ISP routing overhead. Net: 193-197ms |
 | **UDP routing** | Confirmed same path as ICMP (UDP 206ms vs ICMP 202ms). BGP routes by destination IP, not protocol. |
+
+## D-011: Meaningful Improvement Paths — Research Summary
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Goal** | Close the 6ms gap (WARP 193ms vs ExitLag 187ms) or leapfrog ExitLag |
+
+### Option A: Cloudflare Spectrum (Enterprise) — ⭐ Best Product Architecture
+| Detail | Value |
+|--------|-------|
+| What | L4 proxy for TCP/UDP through CF anycast. Game traffic auto-routes via BKK PoP → NTT → LA. |
+| Benefit | **No WARP needed on client.** Users connect to CF domain, traffic optimized automatically. + Argo Smart Routing + DDoS protection. |
+| Estimated latency | ~193ms (same as WARP, but transparent to users) |
+| Cost | Enterprise plan required for UDP ($5000+/mo). Pro ($20/mo) = TCP only. |
+| Verdict | **Best for scale** but too expensive for MVP. Revisit at 1000+ users. |
+
+### Option B: Integrate WARP into Client — ⭐ Best Immediate Improvement
+| Detail | Value |
+|--------|-------|
+| What | Build WARP detection/recommendation into LightSpeed client installer. |
+| Benefit | Free 5-10ms improvement. Auto-detect WARP → recommend enabling → one-click setup. |
+| Estimated latency | 193ms (with WARP) vs 203ms (without) |
+| Cost | Free (development effort only) |
+| Verdict | **Do this NOW.** Most practical improvement. |
+
+### Option C: Vultr Bangkok Region — 🏆 Would Beat ExitLag
+| Detail | Value |
+|--------|-------|
+| What | If Vultr adds Bangkok, our proxy there would have direct Vultr backbone to LA. |
+| Estimated latency | **~177ms** (5ms local + 172ms Vultr backbone = beats ExitLag by 10ms!) |
+| Status | Vultr has NO BKK plans announced. Nearest: SGP (31ms). |
+| Action | Monitor Vultr regions API. Feature request via Vultr support. |
+
+### Option D: BKNIX Colocation with NTT Transit
+| Detail | Value |
+|--------|-------|
+| What | Colocate a server at NTT Bangkok1/Bangkok2 (BKNIX present) with NTT transit. |
+| BKNIX stats | 67 peering networks. NTT BKK2 at Chon Buri (near AAG cable landing!). |
+| Benefit | Direct NTT backbone to LA. Estimated **~177ms** from BKK via NTT. |
+| Cost | Colocation: $500-2000+/mo minimum. Enterprise-level. |
+| Verdict | Only viable at significant scale. |
+
+### Option E: Cloudflare Tunnel + Workers (Creative Hack)
+| Detail | Value |
+|--------|-------|
+| What | Use Cloudflare Tunnel (cloudflared) on Vultr LA to expose proxy. Traffic enters via CF BKK PoP. |
+| Limitation | cloudflared only supports TCP/HTTP, NOT raw UDP. Won't work for game traffic. |
+| Verdict | Dead end for UDP gaming. |
+
+### Option F: Alternative ISP Transit
+| Detail | Value |
+|--------|-------|
+| What | User's ISP (True Internet) uses HGC transit with 29ms detour. Other ISPs might use NTT directly. |
+| Tested | True → SBN/AWN → HGC Singapore (with detour) → Pacific → LA = 203ms |
+| WARP bypass | CF BKK → NTT (no detour) → Pacific → LA = 193ms |
+| Verdict | ISP-specific. Can't control for all users. WARP recommendation covers this universally. |
+
+### Recommended Priority
+1. **Option B: WARP integration** — Free, 5-10ms improvement, do NOW
+2. **Option C: Monitor Vultr BKK** — Check quarterly, would be transformative
+3. **Option A: Spectrum Enterprise** — At scale (1000+ users, revenue)
+4. **Option D: BKNIX colo** — At significant scale
