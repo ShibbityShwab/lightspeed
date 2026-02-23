@@ -39,3 +39,33 @@
 | **Benefits** | 350x less RAM than Docker approach; no container runtime dependency; faster startup; better systemd integration |
 | **Trade-offs** | No container isolation (mitigated by systemd sandboxing: DynamicUser, ProtectSystem, NoNewPrivileges, MemoryDenyWriteExecute); manual binary updates instead of `docker pull` |
 | **Future** | Updated deploy.sh supports both modes; CI can publish release binaries alongside Docker images |
+
+## D-005: Vultr LA Primary Proxy
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | Deploy Vultr vc2-1c-1gb in LAX as primary proxy |
+| **Context** | $300 Vultr credit = 60 months free. Vultr LA (197ms ping) has best Asia peering among affordable providers, closest to ExitLag (187ms). |
+| **Outcome** | proxy-lax at 149.28.84.139, 504KB RAM, 206ms ICMP / 206ms UDP from BKK |
+| **Instance** | ID: a31ee716-b807-4dac-9361-4e3e5b466f4f |
+
+## D-006: Singapore Relay Node
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | Deploy Vultr vc2-1c-1gb in Singapore as Asia relay |
+| **Context** | Testing Bangkok relay strategy to potentially close 19ms gap with ExitLag (206ms vs 187ms) |
+| **Outcome** | relay-sgp at 149.28.144.74, 496KB RAM, 31ms from BKK |
+| **Instance** | ID: 310f1dde-03f2-40a3-9e9b-03eb85644d7b |
+
+## D-007: Relay Strategy Analysis — Singapore Does NOT Reduce Latency
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | Abandon relay-for-latency strategy; SGP node repurposed for FEC multipath + redundancy |
+| **Context** | Hypothesis: routing BKK→SGP→LA would skip ISP's suboptimal routing and reduce total latency |
+| **Testing** | BKK→SGP: 31ms, SGP→LA: 178ms, total relay: 209ms vs direct BKK→LA: 206ms |
+| **Root Cause** | Pacific crossing dominates at ~172ms from either origin. Submarine cable physics, not routing, is the bottleneck. ExitLag's 187ms advantage comes from premium BGP transit (PCCW/NTT peering at Equinix LA), not geographic routing. |
+| **Traceroute Evidence** | SGP→LA: hop 6 (1ms, SGP local) → hop 7 (173ms, Pacific crossing). No intermediate detour — just raw transoceanic distance. |
+| **Revised Strategy** | (1) FEC multipath: send data on direct path, parity via SGP — recover packet loss without retransmission; (2) Client-side FEC eliminates 200ms+ retransmit penalty; (3) Focus on game integration as core product value |
+| **SGP Node Value** | FEC redundant path, mesh failover, SEA regional coverage |
