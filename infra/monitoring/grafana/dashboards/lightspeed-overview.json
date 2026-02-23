@@ -1,0 +1,270 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "⚡ Mesh Overview",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "title": "Node Status",
+      "type": "stat",
+      "targets": [{ "expr": "up{job=\"lightspeed-proxy\"}", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "orange", "value": 3600 }, { "color": "green", "value": 86400 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "Uptime",
+      "type": "stat",
+      "targets": [{ "expr": "lightspeed_uptime_seconds", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 80 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "Active Connections",
+      "type": "stat",
+      "targets": [{ "expr": "lightspeed_active_connections", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "Build Version",
+      "type": "stat",
+      "targets": [{ "expr": "lightspeed_build_info", "legendFormat": "{{ node_id }}: v{{ version }}", "refId": "A" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "📊 Traffic",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "gradientMode": "scheme", "spanNulls": false, "showPoints": "never" }, "unit": "pps" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } },
+      "title": "Packets Relayed (rate)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_packets_relayed_total[1m])", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "gradientMode": "scheme", "spanNulls": false, "showPoints": "never" }, "unit": "Bps" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } },
+      "title": "Bytes Relayed (rate)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_bytes_relayed_total[1m])", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" }, "unit": "pps", "color": { "mode": "palette-classic" } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "title": "Packets Dropped (rate)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_packets_dropped_total[1m])", "legendFormat": "{{ node_id }} — dropped", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" }, "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "title": "Active Connections Over Time",
+      "type": "timeseries",
+      "targets": [{ "expr": "lightspeed_active_connections", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 102,
+      "title": "⏱️ Latency",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" }, "unit": "µs" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "id": 20,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } },
+      "title": "Average Relay Latency",
+      "type": "timeseries",
+      "targets": [{ "expr": "lightspeed_relay_latency_avg_us", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 80 }, "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "id": 21,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Latency Distribution (histogram rate)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(lightspeed_relay_latency_us_bucket{le=\"1\"}[5m])", "legendFormat": "{{ node_id }} ≤1ms", "refId": "A" },
+        { "expr": "rate(lightspeed_relay_latency_us_bucket{le=\"10\"}[5m]) - rate(lightspeed_relay_latency_us_bucket{le=\"1\"}[5m])", "legendFormat": "{{ node_id }} 1-10ms", "refId": "B" },
+        { "expr": "rate(lightspeed_relay_latency_us_bucket{le=\"50\"}[5m]) - rate(lightspeed_relay_latency_us_bucket{le=\"10\"}[5m])", "legendFormat": "{{ node_id }} 10-50ms", "refId": "C" },
+        { "expr": "rate(lightspeed_relay_latency_us_bucket{le=\"250\"}[5m]) - rate(lightspeed_relay_latency_us_bucket{le=\"50\"}[5m])", "legendFormat": "{{ node_id }} 50-250ms", "refId": "D" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "id": 103,
+      "title": "🔧 FEC (Forward Error Correction)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" }, "unit": "pps" } },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 32 },
+      "id": 30,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
+      "title": "FEC Parity Packets (rate)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_fec_parity_received_total[5m])", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "spanNulls": false, "showPoints": "always", "pointSize": 5 }, "unit": "pps", "color": { "fixedColor": "green", "mode": "fixed" } } },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 32 },
+      "id": 31,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
+      "title": "FEC Recoveries (rate) 🔧",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_fec_recoveries_total[5m])", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 32 },
+      "id": 32,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "FEC Totals",
+      "type": "stat",
+      "targets": [
+        { "expr": "lightspeed_fec_parity_received_total", "legendFormat": "{{ node_id }} parity rx", "refId": "A" },
+        { "expr": "lightspeed_fec_recoveries_total", "legendFormat": "{{ node_id }} recovered", "refId": "B" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+      "id": 104,
+      "title": "🛡️ Security",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" }, "unit": "pps" } },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 },
+      "id": 40,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "title": "Auth Rejections (rate)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_auth_rejections_total[5m])", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" }, "unit": "pps", "color": { "fixedColor": "red", "mode": "fixed" } } },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 41 },
+      "id": 41,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "title": "Abuse Blocks (rate)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_abuse_blocks_total[5m])", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" }, "unit": "pps" } },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 41 },
+      "id": 42,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "title": "Rate Limit Hits (rate)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_rate_limit_hits_total[5m])", "legendFormat": "{{ node_id }}", "refId": "A" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
+      "id": 105,
+      "title": "📈 Sessions",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never" }, "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 },
+      "id": 50,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi" } },
+      "title": "Sessions Created (rate)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(lightspeed_sessions_created_total[5m])", "legendFormat": "{{ node_id }} created/s", "refId": "A" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
+      "id": 51,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Session Lifetime Totals",
+      "type": "stat",
+      "targets": [
+        { "expr": "lightspeed_sessions_created_total", "legendFormat": "{{ node_id }} created", "refId": "A" },
+        { "expr": "lightspeed_sessions_expired_total", "legendFormat": "{{ node_id }} expired", "refId": "B" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["lightspeed", "proxy", "gaming", "udp"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "⚡ LightSpeed Proxy Mesh",
+  "uid": "lightspeed-overview",
+  "version": 1
+}

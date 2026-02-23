@@ -27,6 +27,7 @@ mod tunnel;
 #[allow(dead_code)]
 mod warp;
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -400,6 +401,41 @@ async fn main() -> anyhow::Result<()> {
         return run_control_test(proxy_addr, &config).await;
     }
 
+    // ── Online Learning ──────────────────────────────────────────
+    //
+    // Initialize the ML online learner to collect live RTT data from
+    // keepalive probes. The learner persists measurements across sessions
+    // and retrains the route model when enough new data accumulates.
+    //
+    // Data flow: keepalive echo RTT → RouteCollector → retrain → RouteModel
+
+    let (proxy_id, proxy_region) = match proxy_addr.ip().octets() {
+        [149, 28, 84, 139] => ("proxy-lax".to_string(), "us-west-lax".to_string()),
+        [149, 28, 144, 74] => ("relay-sgp".to_string(), "asia-sgp".to_string()),
+        _ => (format!("proxy-{}", proxy_addr.ip()), "unknown".to_string()),
+    };
+
+    let online_learner = {
+        let mut learner = ml::online::OnlineLearner::new();
+        match learner.initialize() {
+            Ok(()) => {
+                let summary = learner.summary();
+                info!(
+                    "🧠 Online learning initialized: {} previous measurements, model: {}",
+                    summary.total_measurements, summary.model_version,
+                );
+            }
+            Err(e) => {
+                warn!("🧠 Online learning init failed (non-fatal): {}", e);
+            }
+        }
+        Arc::new(tokio::sync::Mutex::new(learner))
+    };
+
+    // Shared map: keepalive seq → send Instant, used to compute RTT on echo
+    let keepalive_timestamps: Arc<tokio::sync::Mutex<HashMap<u16, std::time::Instant>>> =
+        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
     // ── Redirect mode: local UDP proxy ────────────────────────────
     //
     // When --game-server is specified, run in redirect mode:
@@ -526,12 +562,17 @@ async fn main() -> anyhow::Result<()> {
         //
         // Receives tunnel-wrapped responses from the proxy, decodes them
         // (including FEC recovery), and injects the game payload back to
-        // the game client's local address.
+        // the game client's local address. Also processes keepalive echoes
+        // for online learning RTT measurement.
         let inbound_handle = {
             let tunnel_socket = Arc::clone(&tunnel_socket);
             let game_client_addr = Arc::clone(&game_client_addr);
             let running = Arc::clone(&running);
             let injector_stats_ref = Arc::clone(&injector_stats);
+            let ka_timestamps = Arc::clone(&keepalive_timestamps);
+            let learner_ref = Arc::clone(&online_learner);
+            let cap_proxy_id = proxy_id.clone();
+            let cap_proxy_region = proxy_region.clone();
 
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 2048];
@@ -568,9 +609,28 @@ async fn main() -> anyhow::Result<()> {
                         }
                     };
 
-                    // Skip keepalive echoes
+                    // Process keepalive echoes — compute RTT for online learning
                     if header.is_keepalive() {
-                        tracing::trace!("Keepalive echo received");
+                        let rtt_us = {
+                            let mut ts_map = ka_timestamps.lock().await;
+                            ts_map.remove(&header.sequence)
+                                .map(|send_time| send_time.elapsed().as_micros() as u64)
+                        };
+                        if let Some(rtt) = rtt_us {
+                            let latency_ms = rtt as f64 / 1000.0;
+                            tracing::trace!(
+                                seq = header.sequence,
+                                rtt_ms = latency_ms,
+                                "Keepalive echo: {:.1}ms", latency_ms,
+                            );
+                            let mut learner = learner_ref.lock().await;
+                            learner.record_and_maybe_retrain(
+                                &cap_proxy_id, &cap_proxy_region,
+                                latency_ms, 0.0, 0.0, 0.0,
+                            );
+                        } else {
+                            tracing::trace!("Keepalive echo received (no send timestamp)");
+                        }
                         continue;
                     }
 
@@ -661,10 +721,11 @@ async fn main() -> anyhow::Result<()> {
             })
         };
 
-        // ── Keepalive task ───────────────────────────────────────
+        // ── Keepalive task (with RTT timestamp recording) ────────
         let keepalive_handle = {
             let tunnel_socket = Arc::clone(&tunnel_socket);
             let running = Arc::clone(&running);
+            let ka_timestamps = Arc::clone(&keepalive_timestamps);
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(5));
                 let mut ka_seq: u16 = 60000;
@@ -675,7 +736,12 @@ async fn main() -> anyhow::Result<()> {
                         .unwrap_or_default()
                         .as_micros() as u32;
                     let header = lightspeed_protocol::TunnelHeader::keepalive(ka_seq, ts);
-                    let _ = tunnel_socket.send_to(&header.encode(), proxy_addr).await;
+                    if tunnel_socket.send_to(&header.encode(), proxy_addr).await.is_ok() {
+                        let mut ts_map = ka_timestamps.lock().await;
+                        ts_map.insert(ka_seq, std::time::Instant::now());
+                        // Evict entries older than 30s to prevent unbounded growth
+                        ts_map.retain(|_, t| t.elapsed() < Duration::from_secs(30));
+                    }
                     ka_seq = ka_seq.wrapping_add(1);
                 }
             })
@@ -844,6 +910,16 @@ async fn main() -> anyhow::Result<()> {
             info!("   FEC recovered:   {} packets", fec_recovered_total);
         }
         info!("   Inject errors:   {}", inject_errors);
+
+        // Save online learning state
+        {
+            let learner = online_learner.lock().await;
+            learner.save_state();
+            let summary = learner.summary();
+            info!("🧠 Online learning: {} total measurements, {} retrains",
+                summary.total_measurements, summary.retrain_count);
+        }
+
         return Ok(());
     }
 
@@ -871,10 +947,11 @@ async fn main() -> anyhow::Result<()> {
     info!("   Use --game-server <ip:port> for full redirect mode");
     info!("   (Full packet capture requires --features pcap-capture)");
 
-    // Spawn keepalive sender
+    // Spawn keepalive sender (with RTT timestamp recording for online learning)
     let keepalive_handle = {
         let relay_socket = relay.socket().expect("socket bound");
         let proxy = proxy_addr;
+        let ka_timestamps = Arc::clone(&keepalive_timestamps);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             let mut seq: u16 = 0;
@@ -890,6 +967,10 @@ async fn main() -> anyhow::Result<()> {
                 let packet = header.encode();
                 match relay_socket.send_to(&packet, proxy).await {
                     Ok(_) => {
+                        let mut ts_map = ka_timestamps.lock().await;
+                        ts_map.insert(seq, std::time::Instant::now());
+                        // Evict entries older than 30s
+                        ts_map.retain(|_, t| t.elapsed() < Duration::from_secs(30));
                         tracing::trace!(seq = seq, "Sent keepalive to proxy");
                     }
                     Err(e) => {
@@ -901,10 +982,14 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
-    // Spawn response receiver (logs keepalive echoes and responses)
+    // Spawn response receiver (computes RTT for online learning + logs)
     let recv_handle = {
         let stats = Arc::clone(&stats);
         let relay_socket = relay.socket().expect("socket bound");
+        let ka_timestamps = Arc::clone(&keepalive_timestamps);
+        let learner_ref = Arc::clone(&online_learner);
+        let ka_proxy_id = proxy_id.clone();
+        let ka_proxy_region = proxy_region.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 2048];
             loop {
@@ -918,11 +1003,32 @@ async fn main() -> anyhow::Result<()> {
                                     .fetch_add(len as u64, Ordering::Relaxed);
 
                                 if header.is_keepalive() {
-                                    tracing::trace!(
-                                        seq = header.sequence,
-                                        from = %addr,
-                                        "Keepalive echo received"
-                                    );
+                                    // Compute RTT and feed into online learner
+                                    let rtt_us = {
+                                        let mut ts_map = ka_timestamps.lock().await;
+                                        ts_map.remove(&header.sequence)
+                                            .map(|send_time| send_time.elapsed().as_micros() as u64)
+                                    };
+                                    if let Some(rtt) = rtt_us {
+                                        let latency_ms = rtt as f64 / 1000.0;
+                                        tracing::trace!(
+                                            seq = header.sequence,
+                                            from = %addr,
+                                            rtt_ms = latency_ms,
+                                            "Keepalive echo: {:.1}ms", latency_ms,
+                                        );
+                                        let mut learner = learner_ref.lock().await;
+                                        learner.record_and_maybe_retrain(
+                                            &ka_proxy_id, &ka_proxy_region,
+                                            latency_ms, 0.0, 0.0, 0.0,
+                                        );
+                                    } else {
+                                        tracing::trace!(
+                                            seq = header.sequence,
+                                            from = %addr,
+                                            "Keepalive echo received"
+                                        );
+                                    }
                                 } else {
                                     tracing::debug!(
                                         seq = header.sequence,
@@ -976,6 +1082,15 @@ async fn main() -> anyhow::Result<()> {
     keepalive_handle.abort();
     recv_handle.abort();
     stats_handle.abort();
+
+    // Save online learning state
+    {
+        let learner = online_learner.lock().await;
+        learner.save_state();
+        let summary = learner.summary();
+        info!("🧠 Online learning: {} total measurements, {} retrains",
+            summary.total_measurements, summary.retrain_count);
+    }
 
     info!("⚡ LightSpeed shut down cleanly");
     Ok(())

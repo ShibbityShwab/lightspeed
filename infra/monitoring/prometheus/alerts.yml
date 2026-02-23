@@ -1,0 +1,120 @@
+# ──────────────────────────────────────────────────────────────
+# LightSpeed — Prometheus Alerting Rules
+#
+# Alerts for proxy mesh health, latency, security, and capacity.
+# ──────────────────────────────────────────────────────────────
+
+groups:
+  # ── Node Health ────────────────────────────────────────────
+  - name: lightspeed_node_health
+    rules:
+      - alert: ProxyNodeDown
+        expr: up{job="lightspeed-proxy"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Proxy node {{ $labels.node_id }} is down"
+          description: "Node {{ $labels.node_id }} ({{ $labels.region }}) has been unreachable for 30 seconds. Auto-recovery via systemd should trigger."
+
+      - alert: ProxyNodeRestarted
+        expr: lightspeed_uptime_seconds < 300
+        for: 0s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Proxy node {{ $labels.node_id }} recently restarted"
+          description: "Node {{ $labels.node_id }} uptime is only {{ $value }}s — likely restarted recently."
+
+  # ── Latency ────────────────────────────────────────────────
+  - name: lightspeed_latency
+    rules:
+      - alert: HighRelayLatency
+        expr: lightspeed_relay_latency_avg_us > 100000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High relay latency on {{ $labels.node_id }}"
+          description: "Average relay latency on {{ $labels.node_id }} is {{ $value }}μs (>100ms) for 2+ minutes."
+
+      - alert: CriticalRelayLatency
+        expr: lightspeed_relay_latency_avg_us > 500000
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical relay latency on {{ $labels.node_id }}"
+          description: "Average relay latency on {{ $labels.node_id }} is {{ $value }}μs (>500ms). Investigate immediately."
+
+  # ── Traffic & Capacity ─────────────────────────────────────
+  - name: lightspeed_capacity
+    rules:
+      - alert: HighConnectionCount
+        expr: lightspeed_active_connections > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High connection count on {{ $labels.node_id }}"
+          description: "{{ $labels.node_id }} has {{ $value }} active connections (threshold: 80). Consider scaling."
+
+      - alert: NoTraffic
+        expr: rate(lightspeed_packets_relayed_total[10m]) == 0 and lightspeed_uptime_seconds > 600
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "No traffic on {{ $labels.node_id }}"
+          description: "Node {{ $labels.node_id }} has relayed zero packets in the last 15 minutes."
+
+      - alert: HighPacketDropRate
+        expr: rate(lightspeed_packets_dropped_total[5m]) / (rate(lightspeed_packets_relayed_total[5m]) + rate(lightspeed_packets_dropped_total[5m]) + 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High packet drop rate on {{ $labels.node_id }}"
+          description: "Packet drop rate on {{ $labels.node_id }} is {{ $value | humanizePercentage }} (>5%)."
+
+  # ── Security ───────────────────────────────────────────────
+  - name: lightspeed_security
+    rules:
+      - alert: HighAuthRejections
+        expr: rate(lightspeed_auth_rejections_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Auth rejections spike on {{ $labels.node_id }}"
+          description: "{{ $labels.node_id }} is rejecting {{ $value }}/s auth attempts. Possible scanning or misconfigured client."
+
+      - alert: AbuseDetected
+        expr: rate(lightspeed_abuse_blocks_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Abuse detected on {{ $labels.node_id }}"
+          description: "{{ $labels.node_id }} abuse detector blocking {{ $value }}/s packets. Possible reflection/amplification attack."
+
+      - alert: HighRateLimitHits
+        expr: rate(lightspeed_rate_limit_hits_total[5m]) > 50
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rate limiting active on {{ $labels.node_id }}"
+          description: "{{ $labels.node_id }} rate limiter hitting {{ $value }}/s. Client may need config adjustment or abuse is occurring."
+
+  # ── FEC Health ─────────────────────────────────────────────
+  - name: lightspeed_fec
+    rules:
+      - alert: HighFECRecoveryRate
+        expr: rate(lightspeed_fec_recoveries_total[10m]) > 1
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "FEC recovering packets on {{ $labels.node_id }}"
+          description: "FEC is recovering {{ $value }}/s lost packets on {{ $labels.node_id }}. Network may have packet loss issues."
