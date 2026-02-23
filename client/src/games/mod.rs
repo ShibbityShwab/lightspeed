@@ -6,9 +6,9 @@
 //! - Anti-cheat considerations
 //! - Game-specific packet handling
 
-pub mod fortnite;
 pub mod cs2;
 pub mod dota2;
+pub mod fortnite;
 
 use std::net::Ipv4Addr;
 

@@ -94,10 +94,8 @@ mod inner {
         let cert_params = rcgen::CertificateParams::new(vec!["lightspeed-proxy".into()])?;
         let cert = cert_params.self_signed(&key_pair)?;
         let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
-        let key_der =
-            rustls::pki_types::PrivateKeyDer::try_from(key_pair.serialize_der()).map_err(|e| {
-                anyhow::anyhow!("Failed to serialize private key: {}", e)
-            })?;
+        let key_der = rustls::pki_types::PrivateKeyDer::try_from(key_pair.serialize_der())
+            .map_err(|e| anyhow::anyhow!("Failed to serialize private key: {}", e))?;
         Ok((vec![cert_der], key_der))
     }
 
@@ -154,7 +152,11 @@ mod inner {
             "QUIC control plane listening on {} (node={}, auth={})",
             bind_addr,
             state.config.server.node_id,
-            if state.config.security.require_auth { "enforced" } else { "disabled" }
+            if state.config.security.require_auth {
+                "enforced"
+            } else {
+                "disabled"
+            }
         );
 
         while let Some(incoming) = endpoint.accept().await {
@@ -299,11 +301,7 @@ mod inner {
                     last_seen: Instant::now(),
                 };
 
-                state
-                    .sessions
-                    .write()
-                    .await
-                    .insert(session_id, session);
+                state.sessions.write().await.insert(session_id, session);
 
                 // Authorize client's IP on the data plane
                 if let Some(ipv4) = extract_ipv4(&remote) {
@@ -329,10 +327,7 @@ mod inner {
             }
 
             ControlMessage::Disconnect { reason } => {
-                info!(
-                    "Client {} disconnecting (reason={})",
-                    remote, reason
-                );
+                info!("Client {} disconnecting (reason={})", remote, reason);
 
                 // Revoke data-plane auth
                 if let Some(ipv4) = extract_ipv4(&remote) {
@@ -344,10 +339,7 @@ mod inner {
             }
 
             other => {
-                debug!(
-                    "Unexpected message from {}: {:?}",
-                    remote, other
-                );
+                debug!("Unexpected message from {}: {:?}", remote, other);
                 None
             }
         }

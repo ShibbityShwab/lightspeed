@@ -119,9 +119,9 @@ impl AbuseDetector {
 
     /// Check if a client is currently banned.
     pub fn is_banned(&self, ip: &Ipv4Addr) -> bool {
-        self.banned.get(ip).is_some_and(|banned_at| {
-            banned_at.elapsed().as_secs() < self.config.ban_duration_secs
-        })
+        self.banned
+            .get(ip)
+            .is_some_and(|banned_at| banned_at.elapsed().as_secs() < self.config.ban_duration_secs)
     }
 
     /// Record inbound traffic from a client and check for abuse.
@@ -203,14 +203,12 @@ impl AbuseDetector {
     /// Clean up expired bans and stale tracking data.
     pub fn cleanup(&mut self) {
         let ban_duration = self.config.ban_duration_secs;
-        self.banned.retain(|_, banned_at| {
-            banned_at.elapsed().as_secs() < ban_duration
-        });
+        self.banned
+            .retain(|_, banned_at| banned_at.elapsed().as_secs() < ban_duration);
 
         let window_secs = self.config.window_secs * 3; // Keep trackers for 3 windows
-        self.tracking.retain(|_, tracker| {
-            tracker.window_start.elapsed().as_secs() < window_secs
-        });
+        self.tracking
+            .retain(|_, tracker| tracker.window_start.elapsed().as_secs() < window_secs);
     }
 
     /// Number of currently banned IPs.

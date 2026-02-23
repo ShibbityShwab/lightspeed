@@ -77,9 +77,8 @@ impl RouteModel {
             return Err(MlError::ModelNotFound(path.display().to_string()));
         }
 
-        let bytes = std::fs::read(path).map_err(|e| {
-            MlError::PredictionFailed(format!("Failed to read model file: {}", e))
-        })?;
+        let bytes = std::fs::read(path)
+            .map_err(|e| MlError::PredictionFailed(format!("Failed to read model file: {}", e)))?;
 
         // Validate minimum size (a valid bincode model should be > 100 bytes)
         if bytes.len() < 100 {
@@ -135,11 +134,14 @@ impl RouteModel {
             })?;
         }
 
-        std::fs::write(path, &self.model_bytes).map_err(|e| {
-            MlError::PredictionFailed(format!("Failed to write model file: {}", e))
-        })?;
+        std::fs::write(path, &self.model_bytes)
+            .map_err(|e| MlError::PredictionFailed(format!("Failed to write model file: {}", e)))?;
 
-        tracing::info!("ML model saved to {} ({} bytes)", path, self.model_bytes.len());
+        tracing::info!(
+            "ML model saved to {} ({} bytes)",
+            path,
+            self.model_bytes.len()
+        );
         Ok(())
     }
 
@@ -175,11 +177,7 @@ impl RouteModel {
         );
 
         // Load the best model
-        self.load_from_bytes(
-            rf_bytes,
-            "synthetic-v1",
-            &rf_report.model_type,
-        );
+        self.load_from_bytes(rf_bytes, "synthetic-v1", &rf_report.model_type);
 
         Ok(rf_report)
     }
@@ -212,10 +210,7 @@ mod tests {
     #[test]
     fn test_predict_without_load() {
         let model = RouteModel::new();
-        let features = vec![(
-            "test".into(),
-            features::NetworkFeatures::default(),
-        )];
+        let features = vec![("test".into(), features::NetworkFeatures::default())];
         let result = model.predict(&features);
         assert!(result.is_err());
     }

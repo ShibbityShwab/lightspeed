@@ -77,7 +77,9 @@ struct TestRelay {
 /// Spin up a real relay inbound loop with the given config.
 async fn start_relay(cfg: RelayTestConfig) -> TestRelay {
     let authenticator = Arc::new(RwLock::new(Authenticator::new(cfg.require_auth)));
-    let abuse_detector = Arc::new(tokio::sync::Mutex::new(AbuseDetector::new(cfg.abuse_config)));
+    let abuse_detector = Arc::new(tokio::sync::Mutex::new(AbuseDetector::new(
+        cfg.abuse_config,
+    )));
     let rate_limiter = Arc::new(tokio::sync::Mutex::new(RateLimiter::new(RateLimitConfig {
         max_pps_per_client: cfg.max_pps,
         max_bps_per_client: cfg.max_bps,
@@ -111,28 +113,17 @@ async fn start_relay(cfg: RelayTestConfig) -> TestRelay {
 }
 
 /// Build a tunnel packet targeting a public IP.
-fn make_public_packet(
-    seq: u16,
-    token: u8,
-    src: SocketAddrV4,
-) -> Vec<u8> {
+fn make_public_packet(seq: u16, token: u8, src: SocketAddrV4) -> Vec<u8> {
     // Use a real public IP so abuse detector allows it
     let public_dest = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 34), 80);
-    let header = TunnelHeader::new(seq, now_us(), src, public_dest)
-        .with_session_token(token);
+    let header = TunnelHeader::new(seq, now_us(), src, public_dest).with_session_token(token);
     header.encode_with_payload(b"test_payload").to_vec()
 }
 
 /// Build a tunnel packet targeting a private IP.
-fn make_private_dest_packet(
-    seq: u16,
-    token: u8,
-    src: SocketAddrV4,
-    dest_ip: Ipv4Addr,
-) -> Vec<u8> {
+fn make_private_dest_packet(seq: u16, token: u8, src: SocketAddrV4, dest_ip: Ipv4Addr) -> Vec<u8> {
     let private_dest = SocketAddrV4::new(dest_ip, 22);
-    let header = TunnelHeader::new(seq, now_us(), src, private_dest)
-        .with_session_token(token);
+    let header = TunnelHeader::new(seq, now_us(), src, private_dest).with_session_token(token);
     header.encode_with_payload(b"test_payload").to_vec()
 }
 
@@ -162,7 +153,11 @@ async fn test_auth_rejects_unauthenticated() {
     let relayed = relay.metrics.packets_relayed.load(Ordering::Relaxed);
 
     assert_eq!(relayed, 0, "No packets should be relayed without auth");
-    assert!(dropped >= 5, "All 5 packets should be dropped, got {}", dropped);
+    assert!(
+        dropped >= 5,
+        "All 5 packets should be dropped, got {}",
+        dropped
+    );
 }
 
 #[tokio::test]
@@ -193,9 +188,16 @@ async fn test_auth_accepts_valid_token() {
     let relayed = relay.metrics.packets_relayed.load(Ordering::Relaxed);
     let dropped = relay.metrics.packets_dropped.load(Ordering::Relaxed);
 
-    assert!(relayed >= 3, "All 3 packets should be relayed, got {}", relayed);
+    assert!(
+        relayed >= 3,
+        "All 3 packets should be relayed, got {}",
+        relayed
+    );
     assert_eq!(dropped, 0, "No packets should be dropped");
-    assert!(relay.engine.active_sessions().await >= 1, "Session should be created");
+    assert!(
+        relay.engine.active_sessions().await >= 1,
+        "Session should be created"
+    );
 }
 
 #[tokio::test]
@@ -227,14 +229,18 @@ async fn test_invalid_token_rejected() {
     let relayed = relay.metrics.packets_relayed.load(Ordering::Relaxed);
 
     assert_eq!(relayed, 0, "Wrong-token packets should not be relayed");
-    assert!(dropped >= 3, "All wrong-token packets should be dropped, got {}", dropped);
+    assert!(
+        dropped >= 3,
+        "All wrong-token packets should be dropped, got {}",
+        dropped
+    );
 }
 
 #[tokio::test]
 async fn test_rate_limit_drops_excess() {
     let relay = start_relay(RelayTestConfig {
         require_auth: false,
-        max_pps: 5,      // Very low limit
+        max_pps: 5,       // Very low limit
         max_bps: 100_000, // High enough to not interfere
         ..Default::default()
     })
@@ -255,8 +261,16 @@ async fn test_rate_limit_drops_excess() {
     let relayed = relay.metrics.packets_relayed.load(Ordering::Relaxed);
 
     // At most 5 should be relayed (rate limit window is 1 second)
-    assert!(relayed <= 5, "Should relay at most 5 packets, got {}", relayed);
-    assert!(dropped >= 10, "Should drop at least 10 packets, got {}", dropped);
+    assert!(
+        relayed <= 5,
+        "Should relay at most 5 packets, got {}",
+        relayed
+    );
+    assert!(
+        dropped >= 10,
+        "Should drop at least 10 packets, got {}",
+        dropped
+    );
 }
 
 #[tokio::test]
@@ -272,11 +286,11 @@ async fn test_private_destination_blocked() {
 
     // Test various private destinations
     let private_ips = [
-        Ipv4Addr::new(127, 0, 0, 1),       // Loopback
-        Ipv4Addr::new(10, 0, 0, 1),         // RFC 1918
-        Ipv4Addr::new(192, 168, 1, 1),      // RFC 1918
-        Ipv4Addr::new(172, 16, 0, 1),       // RFC 1918
-        Ipv4Addr::new(169, 254, 1, 1),      // Link-local
+        Ipv4Addr::new(127, 0, 0, 1),   // Loopback
+        Ipv4Addr::new(10, 0, 0, 1),    // RFC 1918
+        Ipv4Addr::new(192, 168, 1, 1), // RFC 1918
+        Ipv4Addr::new(172, 16, 0, 1),  // RFC 1918
+        Ipv4Addr::new(169, 254, 1, 1), // Link-local
     ];
 
     for (i, &ip) in private_ips.iter().enumerate() {
@@ -320,7 +334,10 @@ async fn test_reflection_detection_bans_client() {
         let dest = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, i), 80);
         let header = TunnelHeader::new(i as u16, now_us(), client_addr, dest);
         let packet = header.encode_with_payload(b"reflect_test");
-        client.send_to(&packet.to_vec(), relay.data_addr).await.unwrap();
+        client
+            .send_to(&packet.to_vec(), relay.data_addr)
+            .await
+            .unwrap();
         // Small delay to ensure ordering
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -358,7 +375,11 @@ async fn test_malformed_packet_dropped() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let dropped = relay.metrics.packets_dropped.load(Ordering::Relaxed);
-    assert!(dropped >= 3, "All malformed packets should be dropped, got {}", dropped);
+    assert!(
+        dropped >= 3,
+        "All malformed packets should be dropped, got {}",
+        dropped
+    );
 }
 
 #[tokio::test]
@@ -373,7 +394,11 @@ async fn test_relay_engine_session_creation() {
     let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let client_addr = to_v4(client.local_addr().unwrap());
 
-    assert_eq!(relay.engine.active_sessions().await, 0, "No sessions initially");
+    assert_eq!(
+        relay.engine.active_sessions().await,
+        0,
+        "No sessions initially"
+    );
 
     // Send a packet — should create a session
     let packet = make_public_packet(1, 0, client_addr);

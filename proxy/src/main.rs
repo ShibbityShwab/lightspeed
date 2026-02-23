@@ -12,12 +12,12 @@
 //!
 //! Designed to run on Oracle Cloud Always Free ARM instances.
 
-use lightspeed_proxy::config;
-use lightspeed_proxy::relay;
+use lightspeed_proxy::abuse;
 use lightspeed_proxy::auth;
+use lightspeed_proxy::config;
 use lightspeed_proxy::metrics;
 use lightspeed_proxy::rate_limit;
-use lightspeed_proxy::abuse;
+use lightspeed_proxy::relay;
 
 #[cfg(feature = "quic")]
 use lightspeed_proxy::control;
@@ -65,7 +65,10 @@ async fn main() -> anyhow::Result<()> {
         .with_target(true)
         .init();
 
-    info!("⚡ LightSpeed Proxy v{} starting", env!("CARGO_PKG_VERSION"));
+    info!(
+        "⚡ LightSpeed Proxy v{} starting",
+        env!("CARGO_PKG_VERSION")
+    );
     info!("Data plane:    {}", cli.data_bind);
     info!("Control plane: {}", cli.control_bind);
     info!("Health check:  {}", cli.health_bind);
@@ -81,13 +84,17 @@ async fn main() -> anyhow::Result<()> {
     info!("Max clients: {}", config.server.max_clients);
     info!(
         "Auth enforcement: {}",
-        if config.security.require_auth { "ENABLED" } else { "disabled (dev mode)" }
+        if config.security.require_auth {
+            "ENABLED"
+        } else {
+            "disabled (dev mode)"
+        }
     );
 
     // Initialize shared state
-    let authenticator = Arc::new(RwLock::new(
-        auth::Authenticator::new(config.security.require_auth),
-    ));
+    let authenticator = Arc::new(RwLock::new(auth::Authenticator::new(
+        config.security.require_auth,
+    )));
 
     let abuse_config = abuse::AbuseConfig {
         max_amplification_ratio: config.security.max_amplification_ratio,
@@ -95,13 +102,13 @@ async fn main() -> anyhow::Result<()> {
         ban_duration_secs: config.security.ban_duration_secs,
         ..Default::default()
     };
-    let abuse_detector = Arc::new(tokio::sync::Mutex::new(
-        abuse::AbuseDetector::new(abuse_config),
-    ));
+    let abuse_detector = Arc::new(tokio::sync::Mutex::new(abuse::AbuseDetector::new(
+        abuse_config,
+    )));
 
-    let rate_limiter = Arc::new(tokio::sync::Mutex::new(
-        rate_limit::RateLimiter::new(config.rate_limit.clone()),
-    ));
+    let rate_limiter = Arc::new(tokio::sync::Mutex::new(rate_limit::RateLimiter::new(
+        config.rate_limit.clone(),
+    )));
     let metrics = Arc::new(metrics::ProxyMetrics::new());
     let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
 
@@ -171,9 +178,15 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 interval.tick().await;
                 let sessions = engine.active_sessions().await;
-                let relayed = metrics.packets_relayed.load(std::sync::atomic::Ordering::Relaxed);
-                let dropped = metrics.packets_dropped.load(std::sync::atomic::Ordering::Relaxed);
-                let bytes = metrics.bytes_relayed.load(std::sync::atomic::Ordering::Relaxed);
+                let relayed = metrics
+                    .packets_relayed
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let dropped = metrics
+                    .packets_dropped
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let bytes = metrics
+                    .bytes_relayed
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 info!(
                     sessions = sessions,
                     packets_relayed = relayed,

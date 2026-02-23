@@ -114,7 +114,9 @@ impl UdpRelay {
 
         // Update stats
         self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_sent.fetch_add(sent as u64, Ordering::Relaxed);
+        self.stats
+            .bytes_sent
+            .fetch_add(sent as u64, Ordering::Relaxed);
 
         tracing::trace!(
             seq = seq,
@@ -142,7 +144,9 @@ impl UdpRelay {
     /// Receive a tunnel-wrapped packet from a proxy.
     ///
     /// Returns the decoded header, payload, and the proxy address it came from.
-    pub async fn recv_from_proxy(&self) -> Result<(TunnelHeader, Bytes, SocketAddrV4), TunnelError> {
+    pub async fn recv_from_proxy(
+        &self,
+    ) -> Result<(TunnelHeader, Bytes, SocketAddrV4), TunnelError> {
         let socket = self.socket.as_ref().ok_or(TunnelError::NotConnected)?;
 
         let mut buf = vec![0u8; self.recv_buf_size];
@@ -162,7 +166,9 @@ impl UdpRelay {
 
         // Update stats
         self.stats.packets_received.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
+        self.stats
+            .bytes_received
+            .fetch_add(len as u64, Ordering::Relaxed);
 
         // Measure RTT from timestamp
         let now = now_us();

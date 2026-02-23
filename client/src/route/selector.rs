@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
 
+use super::{ProxyHealth, ProxyNode, RouteSelector, RouteStrategy, SelectedRoute};
 use crate::error::RouteError;
 use crate::ml::features::{extract_features, LatencyTracker, NetworkFeatures};
 use crate::ml::RouteModel;
-use super::{ProxyHealth, ProxyNode, RouteStrategy, SelectedRoute, RouteSelector};
 
 // ── Nearest Selector (MVP Default) ──────────────────────────
 
@@ -151,11 +151,7 @@ impl MlSelector {
             .iter()
             .filter(|p| p.health == ProxyHealth::Healthy || p.health == ProxyHealth::Degraded)
             .map(|proxy| {
-                let meta = self
-                    .proxy_meta
-                    .get(&proxy.id)
-                    .cloned()
-                    .unwrap_or_default();
+                let meta = self.proxy_meta.get(&proxy.id).cloned().unwrap_or_default();
 
                 let tracker = self.trackers.get(&proxy.id);
 

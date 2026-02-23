@@ -40,10 +40,8 @@ impl CaptureFilter {
         let bpf = if server_ips.is_empty() {
             format!("udp portrange {}-{}", port_range.0, port_range.1)
         } else {
-            let ip_filter: Vec<String> = server_ips
-                .iter()
-                .map(|ip| format!("host {}", ip))
-                .collect();
+            let ip_filter: Vec<String> =
+                server_ips.iter().map(|ip| format!("host {}", ip)).collect();
             format!(
                 "udp portrange {}-{} and ({})",
                 port_range.0,

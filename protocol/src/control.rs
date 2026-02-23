@@ -255,7 +255,9 @@ impl ControlMessage {
     ///
     /// Returns `None` if the stream is cleanly finished.
     #[cfg(feature = "quic")]
-    pub async fn read_from(recv: &mut quinn::RecvStream) -> Result<Option<Self>, ControlDecodeError> {
+    pub async fn read_from(
+        recv: &mut quinn::RecvStream,
+    ) -> Result<Option<Self>, ControlDecodeError> {
         // Read 2-byte length prefix
         let mut len_buf = [0u8; 2];
         match recv.read_exact(&mut len_buf).await {
@@ -409,9 +411,7 @@ mod tests {
 
     #[test]
     fn test_framed_encoding() {
-        let msg = ControlMessage::Ping {
-            timestamp_us: 999,
-        };
+        let msg = ControlMessage::Ping { timestamp_us: 999 };
         let framed = msg.encode_framed();
         // 2-byte len + 1-byte type + 8-byte u64 = 11 total
         assert_eq!(framed.len(), 11);

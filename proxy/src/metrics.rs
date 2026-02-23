@@ -47,7 +47,8 @@ impl ProxyMetrics {
 
     /// Record relay latency sample.
     pub fn record_latency(&self, latency_us: u64) {
-        self.relay_latency_sum_us.fetch_add(latency_us, Ordering::Relaxed);
+        self.relay_latency_sum_us
+            .fetch_add(latency_us, Ordering::Relaxed);
         self.relay_latency_count.fetch_add(1, Ordering::Relaxed);
     }
 

@@ -76,18 +76,12 @@ async fn spawn_manual_proxy(echo_addr: SocketAddrV4) -> (SocketAddrV4, JoinHandl
                 continue;
             }
             let mut echo_buf = vec![0u8; 2048];
-            if let Ok(Ok((echo_len, _))) = tokio::time::timeout(
-                Duration::from_secs(2),
-                outbound.recv_from(&mut echo_buf),
-            )
-            .await
+            if let Ok(Ok((echo_len, _))) =
+                tokio::time::timeout(Duration::from_secs(2), outbound.recv_from(&mut echo_buf))
+                    .await
             {
-                let resp = TunnelHeader::new(
-                    header.sequence,
-                    now_us(),
-                    header.orig_dst_addr(),
-                    client_v4,
-                );
+                let resp =
+                    TunnelHeader::new(header.sequence, now_us(), header.orig_dst_addr(), client_v4);
                 let pkt = resp.encode_with_payload(&echo_buf[..echo_len]);
                 let _ = proxy_socket.send_to(&pkt, client_addr).await;
             }
@@ -185,7 +179,11 @@ async fn test_latency_overhead() {
     println!("║ Raw UDP echo p50:    {:>8.0} μs          ║", raw_p50);
     println!("║ Tunneled p50:        {:>8.0} μs          ║", tunnel_p50);
     println!("║ Overhead:            {:>8.0} μs          ║", overhead_us);
-    println!("║ Samples: {} raw, {} tunneled      ║", raw_latencies.len(), tunnel_latencies.len());
+    println!(
+        "║ Samples: {} raw, {} tunneled      ║",
+        raw_latencies.len(),
+        tunnel_latencies.len()
+    );
     println!("╚══════════════════════════════════════════╝\n");
 
     // Overhead should be reasonable (< 5ms = 5000 μs on localhost)
@@ -318,7 +316,10 @@ async fn test_latency_percentiles() {
     println!("\n╔══════════════════════════════════════════╗");
     println!("║     LATENCY PERCENTILES (μs)             ║");
     println!("╠══════════════════════════════════════════╣");
-    println!("║ Samples:  {:>6}                          ║", latencies.len());
+    println!(
+        "║ Samples:  {:>6}                          ║",
+        latencies.len()
+    );
     println!("║ Min:     {:>8.0}                         ║", min);
     println!("║ Avg:     {:>8.0}                         ║", avg);
     println!("║ p50:     {:>8.0}                         ║", p50);
@@ -328,11 +329,7 @@ async fn test_latency_percentiles() {
     println!("╚══════════════════════════════════════════╝\n");
 
     // p99 should be under 10ms on localhost
-    assert!(
-        p99 < 10_000.0,
-        "p99 latency {:.0}μs exceeds 10ms",
-        p99
-    );
+    assert!(p99 < 10_000.0, "p99 latency {:.0}μs exceeds 10ms", p99);
 
     // Should have received most packets
     assert!(

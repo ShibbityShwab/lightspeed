@@ -75,9 +75,8 @@ impl RateLimiter {
     /// Clean up state for disconnected clients.
     pub fn cleanup(&mut self) {
         let timeout = std::time::Duration::from_secs(60);
-        self.clients.retain(|_, state| {
-            state.window_start.elapsed() < timeout
-        });
+        self.clients
+            .retain(|_, state| state.window_start.elapsed() < timeout);
     }
 }
 

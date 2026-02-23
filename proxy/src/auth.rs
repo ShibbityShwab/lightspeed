@@ -70,7 +70,9 @@ impl Authenticator {
         if !self.require_auth {
             return true;
         }
-        self.tokens.get(ip).map_or(false, |&expected| expected == token)
+        self.tokens
+            .get(ip)
+            .map_or(false, |&expected| expected == token)
     }
 
     /// Check if a client IP is authorized (ignoring token).
