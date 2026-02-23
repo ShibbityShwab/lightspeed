@@ -21,6 +21,20 @@ impl GameConfig for Cs2Config {
         (27015, 27050)
     }
 
+    fn redirect_port(&self) -> u16 {
+        27015 // Standard Source engine game port
+    }
+
+    fn redirect_instructions(&self) -> String {
+        "CS2 redirect mode:\n\
+         1. Find your server IP from the CS2 console: `status`\n\
+         2. Start LightSpeed: --game cs2 --game-server <SERVER_IP>:27015\n\
+         3. Connect in CS2 console: `connect 127.0.0.1:27015`\n\
+         4. Anti-cheat: VAC is compatible (unencrypted tunneling)\n\
+         5. Note: CS2 may use Steam Datagram Relay (SDR) for matchmaking"
+            .to_string()
+    }
+
     fn anti_cheat(&self) -> &str {
         "VAC (Valve Anti-Cheat)"
     }
