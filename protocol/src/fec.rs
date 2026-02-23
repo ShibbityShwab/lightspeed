@@ -593,4 +593,172 @@ mod tests {
         assert_eq!(block_id, 0);
         assert_eq!(k, 1);
     }
+
+    /// End-to-end FEC pipeline test simulating a full tunnel session:
+    /// 1. Encode 3 blocks of 4 packets each with FEC headers
+    /// 2. Simulate losing 1 packet per block
+    /// 3. Verify all lost packets are recovered by the decoder
+    #[test]
+    fn test_e2e_fec_pipeline_multi_block() {
+        use crate::header::{TunnelHeader, HEADER_SIZE};
+        use std::net::{Ipv4Addr, SocketAddrV4};
+
+        let k: u8 = 4;
+        let num_blocks: usize = 3;
+        let mut encoder = FecEncoder::new(k);
+        let src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let dst = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+
+        // Generate test game packets (varying sizes)
+        let game_packets: Vec<Vec<u8>> = (0..num_blocks * k as usize)
+            .map(|i| format!("game_packet_{:04}_data_{}", i, "x".repeat(50 + i * 10)).into_bytes())
+            .collect();
+
+        // ── SENDER SIDE ──────────────────────────────────────────
+        // Build wire-format packets: [TunnelHeader v2][FecHeader][payload]
+        let mut wire_packets: Vec<(FecHeader, Vec<u8>)> = Vec::new(); // (fec_hdr, full_wire_packet)
+        let mut parity_packets: Vec<(FecHeader, Vec<u8>)> = Vec::new();
+
+        for (i, payload) in game_packets.iter().enumerate() {
+            let seq = i as u16;
+            let block_id = encoder.block_id();
+            let index = encoder.current_index();
+
+            let tunnel_hdr = TunnelHeader::new_fec(seq, 1000 + i as u32, src, dst);
+            let fec_hdr = FecHeader::data(block_id, index, k);
+
+            // Build wire packet
+            let mut buf = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
+            buf.extend_from_slice(&tunnel_hdr.encode());
+            fec_hdr.encode(&mut buf);
+            buf.extend_from_slice(payload);
+
+            wire_packets.push((fec_hdr, buf.to_vec()));
+
+            // Feed into FEC encoder
+            let parity = encoder.add_packet(payload);
+            if let Some(parity_bytes) = parity {
+                let parity_hdr = FecHeader::parity(block_id, k);
+                let parity_tunnel = TunnelHeader::new_fec(seq + 100, 2000, src, dst);
+                let mut parity_buf = BytesMut::with_capacity(
+                    HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
+                );
+                parity_buf.extend_from_slice(&parity_tunnel.encode());
+                parity_hdr.encode(&mut parity_buf);
+                parity_buf.extend_from_slice(&parity_bytes);
+                parity_packets.push((parity_hdr, parity_buf.to_vec()));
+            }
+        }
+
+        assert_eq!(wire_packets.len(), num_blocks * k as usize);
+        assert_eq!(parity_packets.len(), num_blocks);
+
+        // ── RECEIVER SIDE (simulate packet loss) ─────────────────
+        let mut decoder = FecDecoder::new();
+        let mut recovered_payloads: Vec<(usize, Vec<u8>)> = Vec::new(); // (original_index, data)
+        let mut received_payloads: Vec<(usize, Vec<u8>)> = Vec::new();
+
+        for block_num in 0..num_blocks {
+            let block_start = block_num * k as usize;
+            // Lose packet index 1 in each block (simulate network loss)
+            let lost_index_in_block: usize = 1;
+            let lost_global_index = block_start + lost_index_in_block;
+
+            // Receive data packets (skip the lost one)
+            for i in 0..k as usize {
+                let global_idx = block_start + i;
+                if i == lost_index_in_block {
+                    continue; // Simulate loss
+                }
+
+                let (fec_hdr, wire_pkt) = &wire_packets[global_idx];
+                let game_data = &wire_pkt[HEADER_SIZE + FEC_HEADER_SIZE..];
+                let data_bytes = Bytes::copy_from_slice(game_data);
+                decoder.receive_data(fec_hdr, data_bytes.clone());
+                received_payloads.push((global_idx, game_data.to_vec()));
+            }
+
+            // Receive parity packet → should trigger recovery
+            let (parity_fec, parity_wire) = &parity_packets[block_num];
+            let parity_data = &parity_wire[HEADER_SIZE + FEC_HEADER_SIZE..];
+            let result = decoder.receive_parity(
+                parity_fec,
+                Bytes::copy_from_slice(parity_data),
+            );
+
+            assert!(
+                result.is_some(),
+                "Block {} should recover lost packet",
+                block_num
+            );
+            let (recovered_idx, recovered_data) = result.unwrap();
+            assert_eq!(
+                recovered_idx, lost_index_in_block as u8,
+                "Should recover index {} in block {}",
+                lost_index_in_block, block_num
+            );
+
+            recovered_payloads.push((lost_global_index, recovered_data.to_vec()));
+        }
+
+        // ── VERIFY ALL PAYLOADS RECOVERED CORRECTLY ──────────────
+        assert_eq!(recovered_payloads.len(), num_blocks);
+        for (global_idx, recovered) in &recovered_payloads {
+            assert_eq!(
+                recovered,
+                &game_packets[*global_idx],
+                "Recovered payload at index {} doesn't match original",
+                global_idx
+            );
+        }
+
+        // Verify decoder stats
+        let stats = decoder.stats();
+        assert_eq!(stats.recovered_count, num_blocks as u64);
+        assert_eq!(stats.active_blocks, 0, "All blocks should be cleaned up");
+    }
+
+    /// Test FEC with realistic game packet sizes (Fortnite-like: 50-500 bytes)
+    #[test]
+    fn test_fec_realistic_game_packets() {
+        let k: u8 = 8; // Realistic block size
+        let mut encoder = FecEncoder::new(k);
+
+        // Simulate realistic game packet sizes
+        let packets: Vec<Vec<u8>> = vec![
+            vec![0xAA; 64],   // Position update (small)
+            vec![0xBB; 128],  // Movement input
+            vec![0xCC; 256],  // State sync
+            vec![0xDD; 48],   // Keepalive-like
+            vec![0xEE; 512],  // Large state update
+            vec![0xFF; 96],   // Hit registration
+            vec![0x11; 200],  // Inventory update
+            vec![0x22; 384],  // Player spawn data
+        ];
+
+        let mut parity = None;
+        for pkt in &packets {
+            parity = encoder.add_packet(pkt);
+        }
+        let parity_bytes = parity.expect("Should have parity after K packets");
+
+        // Lose the largest packet (index 4, 512 bytes)
+        let mut decoder = FecDecoder::new();
+        for (i, pkt) in packets.iter().enumerate() {
+            if i == 4 {
+                continue; // Lost!
+            }
+            decoder.receive_data(
+                &FecHeader::data(0, i as u8, k),
+                Bytes::copy_from_slice(pkt),
+            );
+        }
+
+        let result = decoder.receive_parity(&FecHeader::parity(0, k), parity_bytes);
+        assert!(result.is_some(), "Should recover lost 512-byte packet");
+        let (idx, recovered) = result.unwrap();
+        assert_eq!(idx, 4);
+        assert_eq!(recovered.len(), 512);
+        assert!(recovered.iter().all(|&b| b == 0xEE), "All bytes should be 0xEE");
+    }
 }
