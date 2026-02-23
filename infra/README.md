@@ -1,86 +1,122 @@
 # ⚡ LightSpeed Infrastructure
 
-> Deploy a zero-cost proxy mesh on Oracle Cloud Always Free tier.
+> Deploy a lightweight proxy mesh on Vultr Cloud — ~500KB RAM per node.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Oracle Cloud Always Free                      │
-│                                                                 │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐      │
-│  │  US-East       │  │  EU-West       │  │  Asia-SE       │      │
-│  │  (Ashburn)     │  │  (Frankfurt)   │  │  (Singapore)   │      │
-│  │                │  │                │  │                │      │
-│  │  1 OCPU ARM    │  │  1 OCPU ARM    │  │  1 OCPU ARM    │      │
-│  │  6 GB RAM      │  │  6 GB RAM      │  │  6 GB RAM      │      │
-│  │  50 GB disk    │  │  50 GB disk    │  │  50 GB disk    │      │
-│  │                │  │                │  │                │      │
-│  │  UDP :4434     │  │  UDP :4434     │  │  UDP :4434     │      │
-│  │  QUIC :4433    │  │  QUIC :4433    │  │  QUIC :4433    │      │
-│  │  HTTP :8080    │  │  HTTP :8080    │  │  HTTP :8080    │      │
-│  └───────────────┘  └───────────────┘  └───────────────┘      │
-│                                                                 │
-│  Total: 3 OCPUs / 18 GB RAM / 150 GB disk (of 4/24/200 free)  │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         Vultr Cloud                              │
+│                                                                  │
+│  ┌────────────────────┐          ┌────────────────────┐         │
+│  │  proxy-lax          │          │  relay-sgp          │         │
+│  │  149.28.84.139      │          │  149.28.144.74      │         │
+│  │  US-West (LA)       │          │  Asia (Singapore)   │         │
+│  │                     │          │                     │         │
+│  │  vc2-1c-1gb         │          │  vc2-1c-1gb         │         │
+│  │  1 vCPU / 1GB RAM   │          │  1 vCPU / 1GB RAM   │         │
+│  │  25 GB SSD          │          │  25 GB SSD          │         │
+│  │                     │          │                     │         │
+│  │  UDP :4434 (data)   │          │  UDP :4434 (data)   │         │
+│  │  HTTP :8080 (health)│          │  HTTP :8080 (health)│         │
+│  │  504KB actual RAM   │          │  496KB actual RAM   │         │
+│  └────────────────────┘          └────────────────────┘         │
+│                                                                  │
+│  Deployment: Native binary + systemd (no Docker)                 │
+│  Cost: $0/mo ($300 Vultr credit = 60+ months free)               │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Region Selection Rationale
 
-| Region | OCI Identifier | Game Server Coverage | Strategic Value |
-|--------|---------------|---------------------|-----------------|
-| **US-East** | `us-ashburn-1` | Fortnite NA-East, CS2 US-East, Dota 2 US-East | AWS peering (Fortnite), Valve peering |
-| **EU-West** | `eu-frankfurt-1` | All EU game servers, Russia-adjacent | Major IX hub (DE-CIX), broad EU coverage |
-| **Asia-SE** | `ap-singapore-1` | SEA servers, OCE routing, India overflow | Major SEA hub, high latency improvement potential |
+| Region | Provider | Game Server Coverage | Strategic Value |
+|--------|----------|---------------------|-----------------|
+| **US-West (LA)** | Vultr | Fortnite NA-West, CS2 US-West, Dota 2 US-West | Best Asia peering (206ms from BKK), closest to ExitLag speed |
+| **Asia (SGP)** | Vultr | SEA game servers, FEC multipath relay | 31ms from Bangkok, FEC redundant path, SEA regional coverage |
 
-### Free Tier Budget
+### Why Vultr (Not OCI)
 
-| Resource | Limit | Used (3 nodes) | Remaining |
-|----------|-------|-----------------|-----------|
-| ARM OCPUs | 4 | 3 | 1 |
-| RAM | 24 GB | 18 GB | 6 GB |
-| Block Storage | 200 GB | 150 GB | 50 GB |
-| Outbound Data | 10 TB/mo | ~3 TB (est. 1000 users) | ~7 TB |
+| Factor | OCI Always Free | Vultr |
+|--------|----------------|-------|
+| **ARM capacity** | "Out of host capacity" errors | Always available |
+| **Asia peering** | 213ms from BKK (San Jose) | 206ms from BKK (LA) — 7ms better |
+| **Cost** | Free (when capacity available) | $300 credit = 60 months free |
+| **Deployment** | Complex cloud-init | Simple SCP + systemd |
+| **Decision** | Decommissioned (D-001, D-005) | ✅ Primary provider |
+
+### Previous Infrastructure (Decommissioned)
+
+| Node | Provider | Status | Reason |
+|------|----------|--------|--------|
+| proxy-us-west (163.192.3.134) | OCI San Jose | ❌ Dropped | ARM capacity issues, worse peering than Vultr LA |
 
 ## Quick Start
 
 ### Prerequisites
 
-- [Terraform](https://www.terraform.io/downloads) ≥ 1.5
-- [Oracle Cloud account](https://cloud.oracle.com/free) (Always Free tier)
-- OCI API key configured (`~/.oci/config`)
+- SSH access to Vultr instances
+- Compiled `lightspeed-proxy` binary for linux/amd64
 
-### 1. Configure
+### 1. Build the Proxy
 
 ```bash
-cd infra/terraform
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your OCI credentials
+# Cross-compile for Linux (from any platform)
+cargo build --release -p lightspeed-proxy --target x86_64-unknown-linux-gnu
+
+# Or build natively on a Linux machine
+cargo build --release -p lightspeed-proxy
 ```
 
 ### 2. Deploy
 
 ```bash
-terraform init
-terraform plan          # Review what will be created
-terraform apply         # Deploy (type 'yes' to confirm)
+# Copy binary to server
+scp target/release/lightspeed-proxy root@149.28.84.139:/usr/local/bin/
+
+# Copy config
+scp proxy/proxy.toml.default root@149.28.84.139:/etc/lightspeed/proxy.toml
+
+# Install systemd service
+ssh root@149.28.84.139 'cat > /etc/systemd/system/lightspeed-proxy.service' << 'EOF'
+[Unit]
+Description=LightSpeed Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/usr/local/bin/lightspeed-proxy --config /etc/lightspeed/proxy.toml
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
+ssh root@149.28.84.139 'systemctl daemon-reload && systemctl enable --now lightspeed-proxy'
 ```
 
 ### 3. Verify
 
 ```bash
-# Check outputs
-terraform output proxy_nodes
+# Health check
+curl http://149.28.84.139:8080/health
+# Expected: {"status":"ok","node_id":"proxy-lax","region":"us-west-lax",...}
 
 # Health check all nodes
-cd ../scripts
+cd infra/scripts
 bash mesh-health.sh
 ```
 
 ### 4. Update Proxy
 
 ```bash
-# After pushing new proxy code (triggers Docker build via CI):
+# Rolling update via script
 cd infra/scripts
 bash deploy-all.sh
 ```
@@ -89,7 +125,7 @@ bash deploy-all.sh
 
 ```
 infra/
-├── terraform/                  # Infrastructure as Code
+├── terraform/                  # Infrastructure as Code (OCI — legacy)
 │   ├── versions.tf             # Provider requirements
 │   ├── provider.tf             # OCI provider config
 │   ├── variables.tf            # Input variables
@@ -103,75 +139,150 @@ infra/
 │       ├── lightspeed-proxy.service  # Systemd unit
 │       ├── fail2ban-lightspeed.conf  # Abuse protection
 │       └── deploy.sh           # On-node deployment script
-├── docker/                     # Container build
+├── docker/                     # Container build (optional)
 │   ├── Dockerfile              # Multi-stage ARM64/AMD64
 │   └── docker-compose.yml      # Local dev / single node
+├── fly/                        # Fly.io config (future)
+│   └── fly.toml                # Fly.io deployment
 ├── scripts/                    # Operations scripts
 │   ├── mesh-health.sh          # Check all node health
 │   └── deploy-all.sh           # Rolling update all nodes
 └── README.md                   # This file
 ```
 
+## Deployment Options
+
+### Native Binary (Recommended — Production)
+
+Current production deployment. ~500KB RAM, no container overhead.
+
+```bash
+# Binary on server + systemd
+/usr/local/bin/lightspeed-proxy
+# Config at /etc/lightspeed/proxy.toml
+# Systemd: systemctl status lightspeed-proxy
+```
+
+### Docker (Development / Testing)
+
+Available but NOT used in production (adds ~175MB RAM overhead).
+
+```bash
+# Local development
+cd infra/docker
+docker-compose up
+
+# Pull from GHCR
+docker pull ghcr.io/shibbityshwab/lightspeed-proxy:latest
+docker run -p 4434:4434/udp -p 8080:8080 ghcr.io/shibbityshwab/lightspeed-proxy:latest
+```
+
+### Terraform (OCI — Legacy)
+
+Terraform configs exist for OCI Always Free deployment but are no longer the primary path.
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars
+terraform init && terraform plan && terraform apply
+```
+
 ## Security
 
 ### Network
-- Security lists restrict ingress to only required ports
-- SSH restricted by CIDR (configure `ssh_allowed_cidrs`)
-- Stateless UDP rules for minimal overhead
+- UFW/iptables restrict ingress to only required ports (UDP 4434, TCP 8080)
+- SSH restricted by CIDR or key-only
 
 ### Host
-- Docker containers run as non-root user
-- fail2ban protects against SSH brute force and proxy abuse
-- firewalld as secondary firewall layer
-- Kernel tuned for UDP performance
+- systemd sandboxing: `DynamicUser`, `ProtectSystem=strict`, `NoNewPrivileges`, `MemoryDenyWriteExecute`
+- fail2ban for SSH brute force protection
+- SELinux context for binary (`bin_t`)
 
 ### Application
-- Built-in rate limiting (1000 pps, 1 MB/s per client)
+- Built-in rate limiting (1000 pps, 1 MB/s per client default)
 - Abuse detection (amplification + reflection attacks)
-- Destination IP validation (blocks private IP ranges)
-- Session management with automatic cleanup
+- Destination IP validation (blocks private IP ranges, localhost, multicast)
+- Session management with automatic timeout and cleanup (300s default)
 
 ## Scaling
 
-### Phase 2 Regions (after MVP)
+### Current Mesh (2 nodes)
 
-| Region | OCI Identifier | Coverage |
-|--------|---------------|----------|
-| US-West | `us-phoenix-1` | NA-West game servers |
-| Brazil | `sa-saopaulo-1` | South America servers |
+| Node | Role | Cost |
+|------|------|------|
+| proxy-lax | Primary US proxy | $0 (Vultr credit) |
+| relay-sgp | FEC multipath + SEA | $0 (Vultr credit) |
 
-### Phase 3 Regions
+### Future Expansion
 
-| Region | OCI Identifier | Coverage |
-|--------|---------------|----------|
-| Japan | `ap-tokyo-1` | East Asia competitive |
-| India | `ap-mumbai-1` | India/South Asia |
+| Region | Provider | Coverage | Priority |
+|--------|----------|----------|----------|
+| US-East | Vultr | NA-East game servers | P1 |
+| EU-West | Vultr | EU game servers | P1 |
+| Japan | Vultr | East Asia competitive | P2 |
+| Brazil | Vultr | South America | P3 |
+| Bangkok | Vultr (if available) | **Would beat ExitLag by 10ms!** | P0 (monitoring) |
 
-> **Note:** Additional regions require additional Oracle Cloud accounts
-> (each account gets its own Always Free allocation).
+> **Note:** Vultr $300 credit supports ~5 nodes × 60 months. Additional regions are trivially deployable with the same binary + systemd pattern.
+
+## Monitoring
+
+### Health Checks
+
+All nodes expose `GET /health` on port 8080:
+
+```json
+{
+  "status": "ok",
+  "node_id": "proxy-lax",
+  "region": "us-west-lax",
+  "uptime_secs": 86400,
+  "active_sessions": 3,
+  "total_packets_relayed": 1234567
+}
+```
+
+### Prometheus Metrics
+
+Available at `/metrics` (when enabled in config):
+- `lightspeed_connections_active` — current active sessions
+- `lightspeed_packets_total` — total packets relayed
+- `lightspeed_bytes_total` — total bytes relayed
+- `lightspeed_latency_us` — relay latency histogram
 
 ## Troubleshooting
-
-### Instance fails to create
-Oracle Cloud ARM instances are high-demand. If you get "Out of capacity":
-1. Try a different availability domain
-2. Try at off-peak hours (early morning UTC)
-3. Use the OCI Console to retry manually
-
-### Docker image not pulling
-The Docker image is built by GitHub Actions on push to master.
-Ensure the `docker.yml` workflow has run successfully first.
 
 ### Health check failing
 ```bash
 # SSH into the node
-ssh -i lightspeed_deploy_key opc@<ip>
+ssh root@<ip>
 
-# Check container status
-sudo docker ps -a
-sudo docker logs lightspeed-proxy --tail 50
+# Check service status
+systemctl status lightspeed-proxy
+journalctl -u lightspeed-proxy --tail 50
 
 # Check port binding
-sudo ss -ulnp | grep 4434
-sudo ss -tlnp | grep 8080
+ss -ulnp | grep 4434
+ss -tlnp | grep 8080
+```
+
+### Binary not starting
+```bash
+# Check SELinux context
+ls -Z /usr/local/bin/lightspeed-proxy
+# Should be: system_u:object_r:bin_t:s0
+
+# Fix if needed
+chcon -t bin_t /usr/local/bin/lightspeed-proxy
+```
+
+### High latency
+```bash
+# Check from client
+lightspeed --game fortnite --proxy <ip>:4434 --test
+
+# Traceroute to proxy
+traceroute -U -p 4434 <ip>
+
+# Consider enabling WARP for 5-10ms local route improvement
 ```

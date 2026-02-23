@@ -4,15 +4,27 @@
 //! Captures game UDP packets and tunnels them through optimally-selected
 //! proxy nodes to reduce latency via better routing paths.
 
+// Modules marked #[allow(dead_code)] contain scaffolded interfaces
+// for future integration (game capture pipeline, ML routing, etc.)
+#[allow(dead_code)]
 mod capture;
+#[allow(dead_code)]
 mod config;
+#[allow(dead_code)]
 mod error;
+#[allow(dead_code)]
 mod games;
+#[allow(dead_code)]
 mod ml;
+#[allow(dead_code)]
 mod quic;
+#[allow(dead_code)]
 mod redirect;
+#[allow(dead_code)]
 mod route;
+#[allow(dead_code)]
 mod tunnel;
+#[allow(dead_code)]
 mod warp;
 
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -409,7 +421,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Run a tunnel test: send test packets to the proxy and verify round-trip.
-async fn run_tunnel_test(relay: UdpRelay, proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
+async fn run_tunnel_test(mut relay: UdpRelay, proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
     info!("🧪 Running tunnel test to {}", proxy_addr);
 
     let test_src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
