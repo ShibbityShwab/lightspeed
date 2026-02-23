@@ -17,8 +17,10 @@
 //! The full ML pipeline requires `--features ml`. Without it, a heuristic
 //! fallback is used that still provides reasonable route selection.
 
+pub mod collector;
 pub mod data;
 pub mod features;
+pub mod online;
 pub mod predict;
 pub mod trainer;
 
