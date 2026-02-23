@@ -157,7 +157,11 @@ function testProxy(name, proxyHost, proxyPort, gameServerIp, gameServerPort) {
       }, 5000);
     }
 
+    let finished = false;
     function finishTest() {
+      if (finished) return;
+      finished = true;
+
       if (results.rtts.length > 0) {
         const avg = results.rtts.reduce((a,b) => a+b, 0) / results.rtts.length;
         const min = Math.min(...results.rtts);
@@ -172,7 +176,7 @@ function testProxy(name, proxyHost, proxyPort, gameServerIp, gameServerPort) {
         console.log(`\n  ❌ No responses received - relay may not be working`);
       }
 
-      sock.close();
+      try { sock.close(); } catch(e) {}
       resolve(results);
     }
 
