@@ -10,6 +10,7 @@ mod error;
 mod games;
 mod ml;
 mod quic;
+mod redirect;
 mod route;
 mod tunnel;
 
@@ -54,6 +55,15 @@ struct Cli {
     /// Test QUIC control plane — connect, register, ping, disconnect
     #[arg(long, default_value_t = false)]
     test_control: bool,
+
+    /// Game server address (ip:port) — enables redirect mode
+    /// Traffic to this server is tunneled through the proxy
+    #[arg(short = 's', long)]
+    game_server: Option<String>,
+
+    /// Local port for redirect mode (default: same as game server port)
+    #[arg(long)]
+    local_port: Option<u16>,
 }
 
 /// Parse a proxy address string into SocketAddrV4.
@@ -92,28 +102,44 @@ async fn main() -> anyhow::Result<()> {
         config::Config::default()
     });
 
-    // Detect or select game
-    let game = match cli.game.as_deref() {
+    // Detect or select game (optional in redirect mode)
+    let game: Option<Box<dyn games::GameConfig>> = match cli.game.as_deref() {
         Some(name) => {
             info!("Game selected: {}", name);
-            games::detect_game(name)?
+            Some(games::detect_game(name)?)
         }
         None => {
-            info!("Auto-detecting running game...");
-            games::auto_detect()?
+            if cli.game_server.is_some() {
+                // Redirect mode doesn't require game detection
+                info!("Redirect mode — game detection skipped");
+                None
+            } else {
+                info!("Auto-detecting running game...");
+                match games::auto_detect() {
+                    Ok(g) => Some(g),
+                    Err(e) => {
+                        warn!("{}", e);
+                        None
+                    }
+                }
+            }
         }
     };
 
-    info!(
-        "🎮 Targeting game: {} (ports: {:?})",
-        game.name(),
-        game.ports()
-    );
+    if let Some(ref game) = game {
+        info!(
+            "🎮 Targeting game: {} (ports: {:?})",
+            game.name(),
+            game.ports()
+        );
+    }
 
     if cli.dry_run {
         info!("Dry run mode — showing configuration and exiting");
         info!("Config: {:?}", config);
-        info!("Game: {}", game.name());
+        if let Some(ref game) = game {
+            info!("Game: {}", game.name());
+        }
         return Ok(());
     }
 
@@ -145,18 +171,32 @@ async fn main() -> anyhow::Result<()> {
         return run_control_test(proxy_addr, &config).await;
     }
 
-    // ── Main tunnel loop ──────────────────────────────────────────
+    // ── Redirect mode: local UDP proxy ────────────────────────────
     //
-    // For now (without pcap capture), we run in "passthrough" mode:
-    // - Keepalive loop to maintain proxy session
-    // - Stats logging
-    // - Waiting for pcap capture integration (Step 3)
+    // When --game-server is specified, run in redirect mode:
+    //   Game → localhost:port → LightSpeed → Proxy → Game Server
     //
-    // Once capture is wired in, the flow will be:
-    //   CaptureTask → channel → TunnelSendTask → proxy
-    //   proxy → TunnelRecvTask → channel → InjectTask → game
+    // This is the primary game integration mode.
+    if let Some(ref server_str) = cli.game_server {
+        let game_server_addr = parse_proxy_addr(server_str)?;
+        let local_port = cli.local_port.unwrap_or(game_server_addr.port());
+
+        info!("🚀 Starting redirect mode");
+        info!("   Game server: {}", game_server_addr);
+        info!("   Local port:  127.0.0.1:{}", local_port);
+        info!("   Proxy:       {}", proxy_addr);
+
+        let redirect_proxy = redirect::UdpRedirect::new(local_port, game_server_addr, proxy_addr);
+        return redirect_proxy.run().await;
+    }
+
+    // ── Keepalive mode (no game server specified) ─────────────────
+    //
+    // Maintains proxy session with keepalives and logs stats.
+    // Use --game-server to enable full redirect mode.
 
     info!("⚡ LightSpeed tunnel active — keepalive mode");
+    info!("   Use --game-server <ip:port> for full redirect mode");
     info!("   (Full packet capture requires --features pcap-capture)");
 
     // Spawn keepalive sender
