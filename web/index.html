@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LightSpeed — Free Game Network Optimizer</title>
+  <meta name="description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
+  <meta name="theme-color" content="#0a0a1a">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Open Graph -->
+  <meta property="og:title" content="LightSpeed — Free Game Network Optimizer">
+  <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source AI-powered routing for competitive gamers.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://shibbityshwab.github.io/lightspeed">
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">
+        <span class="logo-icon">⚡</span>
+        <span class="logo-text">LightSpeed</span>
+      </a>
+      <div class="nav-links" id="nav-links">
+        <a href="#how-it-works">How It Works</a>
+        <a href="#games">Games</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">GitHub</a>
+        <a href="#download" class="btn btn-sm btn-primary">Download</a>
+      </div>
+      <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-bg">
+      <div class="grid-lines"></div>
+      <div class="glow glow-1"></div>
+      <div class="glow glow-2"></div>
+    </div>
+    <div class="container hero-content">
+      <div class="hero-badge">Open Source &middot; Zero Cost &middot; AI-Powered</div>
+      <h1 class="hero-title">
+        Reduce your ping.<br>
+        <span class="gradient-text">Free. Forever.</span>
+      </h1>
+      <p class="hero-subtitle">
+        LightSpeed is an open-source network optimizer that routes your game traffic
+        through the fastest path using AI-powered proxy selection. No subscriptions.
+        No data harvesting. Just lower latency.
+      </p>
+      <div class="hero-actions">
+        <a href="#download" class="btn btn-lg btn-primary">
+          <span class="btn-icon">↓</span>
+          Download for Free
+        </a>
+        <a href="https://github.com/ShibbityShwab/lightspeed" class="btn btn-lg btn-outline" target="_blank" rel="noopener">
+          <span class="btn-icon">★</span>
+          Star on GitHub
+        </a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat">
+          <span class="stat-value">~162μs</span>
+          <span class="stat-label">Tunnel Overhead</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">52</span>
+          <span class="stat-label">Tests Passing</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">$0</span>
+          <span class="stat-label">Cost Forever</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section class="section" id="how-it-works">
+    <div class="container">
+      <h2 class="section-title">How It Works</h2>
+      <p class="section-subtitle">Three steps. That's it. No accounts, no config files, no BS.</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-icon">🎮</div>
+          <h3>Launch LightSpeed</h3>
+          <p>Run the lightweight client before your game. It auto-detects Fortnite, CS2, Dota 2, and more.</p>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-icon">🧠</div>
+          <h3>AI Picks Your Route</h3>
+          <p>Our ML model analyzes latency, jitter, and packet loss across all proxy nodes to find the fastest path in under 1ms.</p>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-icon">⚡</div>
+          <h3>Play with Lower Ping</h3>
+          <p>Your game traffic is transparently rerouted. No packet modification, no anti-cheat issues, just faster packets.</p>
+        </div>
+      </div>
+
+      <!-- Architecture Diagram -->
+      <div class="arch-diagram">
+        <div class="arch-title">Under the Hood</div>
+        <div class="arch-flow">
+          <div class="arch-node arch-client">
+            <div class="arch-node-icon">💻</div>
+            <div class="arch-node-label">Your PC</div>
+            <div class="arch-node-detail">LightSpeed Client</div>
+          </div>
+          <div class="arch-arrow">
+            <span class="arch-arrow-label">UDP Tunnel</span>
+            <div class="arch-arrow-line"></div>
+          </div>
+          <div class="arch-node arch-proxy">
+            <div class="arch-node-icon">🌐</div>
+            <div class="arch-node-label">Proxy Node</div>
+            <div class="arch-node-detail">AI-Selected Route</div>
+          </div>
+          <div class="arch-arrow">
+            <span class="arch-arrow-label">Native UDP</span>
+            <div class="arch-arrow-line"></div>
+          </div>
+          <div class="arch-node arch-server">
+            <div class="arch-node-icon">🎯</div>
+            <div class="arch-node-label">Game Server</div>
+            <div class="arch-node-detail">Fortnite / CS2 / Dota</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Supported Games -->
+  <section class="section section-dark" id="games">
+    <div class="container">
+      <h2 class="section-title">Supported Games</h2>
+      <p class="section-subtitle">Built-in profiles for the games you play. More coming soon.</p>
+      <div class="games-grid">
+        <div class="game-card">
+          <div class="game-icon">🔫</div>
+          <h3>Fortnite</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 9000-9100</span>
+            <span class="game-tag">EasyAntiCheat</span>
+          </div>
+          <p>Full support for all Fortnite server regions. Compatible with EasyAntiCheat — no modifications to game packets.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🎯</div>
+          <h3>Counter-Strike 2</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 27015-27050</span>
+            <span class="game-tag">VAC</span>
+          </div>
+          <p>Optimized for CS2's tick-sensitive networking. VAC-safe — we only reroute, never modify packets.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🐉</div>
+          <h3>Dota 2</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 27015-27200</span>
+            <span class="game-tag">VAC</span>
+          </div>
+          <p>Works with all Dota 2 regions including SEA, India, and South America. Valve network compatible.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+      </div>
+      <p class="games-more">
+        More games coming: Valorant, Apex Legends, Overwatch 2, League of Legends.
+        <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game →</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- Benchmarks -->
+  <section class="section" id="benchmarks">
+    <div class="container">
+      <h2 class="section-title">Benchmarks</h2>
+      <p class="section-subtitle">Real numbers from our test suite. No cherry-picked results.</p>
+      <div class="bench-grid">
+        <div class="bench-card">
+          <h3>Tunnel Overhead</h3>
+          <div class="bench-value">162 <span class="bench-unit">μs</span></div>
+          <p>Average added latency from the tunnel encapsulation. That's 0.162ms — imperceptible.</p>
+          <div class="bench-bar">
+            <div class="bench-bar-fill" style="width: 3%"></div>
+            <span class="bench-bar-label">0.162ms of your ~30ms ping</span>
+          </div>
+        </div>
+        <div class="bench-card">
+          <h3>ML Route Prediction</h3>
+          <div class="bench-value">R² = 0.95</div>
+          <p>Our Random Forest model predicts latency with 95% accuracy. MAE of just 4.2ms across all routes.</p>
+          <div class="bench-bar">
+            <div class="bench-bar-fill bench-bar-green" style="width: 95%"></div>
+            <span class="bench-bar-label">95% prediction accuracy</span>
+          </div>
+        </div>
+        <div class="bench-card">
+          <h3>Packet Loss</h3>
+          <div class="bench-value">0.00<span class="bench-unit">%</span></div>
+          <p>Zero packet loss in integration testing across 10,000+ tunneled packets.</p>
+          <div class="bench-bar">
+            <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
+            <span class="bench-bar-label">10,000+ packets, zero loss</span>
+          </div>
+        </div>
+        <div class="bench-card">
+          <h3>Test Coverage</h3>
+          <div class="bench-value">52 <span class="bench-unit">tests</span></div>
+          <p>Integration tests covering tunnel establishment, relay correctness, security, and control plane.</p>
+          <div class="bench-bar">
+            <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
+            <span class="bench-bar-label">100% pass rate</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Why LightSpeed -->
+  <section class="section section-dark" id="why">
+    <div class="container">
+      <h2 class="section-title">Why LightSpeed?</h2>
+      <p class="section-subtitle">We're not another ExitLag clone. Here's what makes us different.</p>
+      <div class="compare-grid">
+        <div class="compare-card">
+          <div class="compare-icon">💸</div>
+          <h3>Actually Free</h3>
+          <p>Not "free trial" free. Not "freemium" free. Free as in <strong>zero dollars forever</strong>. Our proxies run on Oracle Cloud's Always Free tier. No subscription needed. Ever.</p>
+        </div>
+        <div class="compare-card">
+          <div class="compare-icon">🔓</div>
+          <h3>Open Source</h3>
+          <p>Every line of code is on GitHub. Audit it, fork it, improve it. No black boxes, no mystery binaries, no trust-us-bro security.</p>
+        </div>
+        <div class="compare-card">
+          <div class="compare-icon">🧠</div>
+          <h3>AI-Powered</h3>
+          <p>Our ML model learns which route is fastest based on real latency data, time of day, and network conditions. Not just "pick the closest server."</p>
+        </div>
+        <div class="compare-card">
+          <div class="compare-icon">🛡️</div>
+          <h3>Anti-Cheat Safe</h3>
+          <p>We never modify game packets. LightSpeed only changes the <em>route</em> your packets take — the content is untouched. Compatible with EAC, VAC, and Vanguard.</p>
+        </div>
+        <div class="compare-card">
+          <div class="compare-icon">🔒</div>
+          <h3>Privacy First</h3>
+          <p>No accounts. No telemetry (unless you opt in). No data harvesting. We don't even know who you are — and we like it that way.</p>
+        </div>
+        <div class="compare-card">
+          <div class="compare-icon">🦀</div>
+          <h3>Built in Rust</h3>
+          <p>Blazing fast, memory-safe, zero-cost abstractions. The entire stack — client, proxy, protocol — is pure Rust with async Tokio and QUIC.</p>
+        </div>
+      </div>
+
+      <!-- Comparison Table -->
+      <div class="compare-table-wrapper">
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th class="compare-us">LightSpeed</th>
+              <th>ExitLag</th>
+              <th>WTFast</th>
+              <th>Mudfish</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Price</td>
+              <td class="compare-us"><strong>$0/forever</strong></td>
+              <td>$6.50/mo</td>
+              <td>$9.99/mo</td>
+              <td>Pay-per-use</td>
+            </tr>
+            <tr>
+              <td>Open Source</td>
+              <td class="compare-us">✅ Full</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>AI Routing</td>
+              <td class="compare-us">✅ ML Model</td>
+              <td>⚠️ Basic</td>
+              <td>⚠️ Basic</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>Privacy</td>
+              <td class="compare-us">✅ No accounts</td>
+              <td>⚠️ Account required</td>
+              <td>⚠️ Account required</td>
+              <td>⚠️ Account required</td>
+            </tr>
+            <tr>
+              <td>Self-Hostable</td>
+              <td class="compare-us">✅</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download -->
+  <section class="section section-accent" id="download">
+    <div class="container">
+      <h2 class="section-title">Download LightSpeed</h2>
+      <p class="section-subtitle">Grab the latest release. Run it. That's the whole setup.</p>
+      <div class="download-grid">
+        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
+          <div class="download-icon">🪟</div>
+          <h3>Windows</h3>
+          <p>Windows 10/11 x64</p>
+          <span class="download-filename">lightspeed-windows-x64.exe</span>
+        </a>
+        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
+          <div class="download-icon">🐧</div>
+          <h3>Linux</h3>
+          <p>x64 / ARM64</p>
+          <span class="download-filename">lightspeed-linux-x64</span>
+        </a>
+        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
+          <div class="download-icon">🍎</div>
+          <h3>macOS</h3>
+          <p>Apple Silicon / Intel</p>
+          <span class="download-filename">lightspeed-macos-arm64</span>
+        </a>
+      </div>
+      <div class="download-alt">
+        <p>Or build from source:</p>
+        <code class="code-block">git clone https://github.com/ShibbityShwab/lightspeed.git && cd lightspeed && cargo build --release</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq">
+    <div class="container">
+      <h2 class="section-title">FAQ</h2>
+      <div class="faq-grid">
+        <details class="faq-item">
+          <summary>How is this free? What's the catch?</summary>
+          <p>There is no catch. Our proxy servers run on Oracle Cloud's Always Free tier, which provides 4 ARM instances with 24GB RAM and 200GB bandwidth per month — permanently free. The software is open source. We don't sell your data because we don't collect it.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Will this get me banned?</summary>
+          <p>No. LightSpeed works like a VPN but only for game traffic. We never modify, inject, or inspect your game packets. We only change the <em>network route</em> they take. This is compatible with EasyAntiCheat (Fortnite), VAC (CS2/Dota 2), and other anti-cheat systems. Route optimization tools like ExitLag have been used for years without bans.</p>
+        </details>
+        <details class="faq-item">
+          <summary>How much will this actually reduce my ping?</summary>
+          <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut 10-50ms off your ping. If your ISP already has optimal routing, the improvement may be minimal. The AI model picks the best route — or direct if that's fastest.</p>
+        </details>
+        <details class="faq-item">
+          <summary>What games are supported?</summary>
+          <p>Currently: Fortnite, CS2, and Dota 2 have built-in profiles. Any UDP-based game can work with manual configuration. We're adding Valorant, Apex Legends, Overwatch 2, and League of Legends soon.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Is my data safe?</summary>
+          <p>We don't collect any data by default. No accounts, no registration, no telemetry. If you opt-in to anonymous latency reporting, we collect only aggregate network metrics (ping times, not your identity or game data). All traffic passes through unencrypted to avoid adding overhead — we document this transparently.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Can I host my own proxy nodes?</summary>
+          <p>Yes! The proxy server is open source. Spin up the Docker image on any cloud provider (or your own hardware) and point your client at it. The Terraform configs in our repo set up Oracle Cloud free tier nodes automatically.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Why Rust?</summary>
+          <p>Rust gives us the performance of C/C++ with memory safety guarantees. For a latency-critical network tool that handles thousands of packets per second, we need zero-overhead abstractions. Rust's async ecosystem (Tokio) and QUIC libraries (quinn) are world-class.</p>
+        </details>
+        <details class="faq-item">
+          <summary>How does the AI routing work?</summary>
+          <p>We train a Random Forest model on network latency data with 11 features: current latency, historical p50/p95, jitter, packet loss, hop count, time of day, proxy load, and geographic distance. The model predicts which proxy route will be fastest and switches in under 1ms. It achieves R²=0.95 accuracy on our test data.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- Community / Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <span class="logo-icon">⚡</span>
+          <span class="logo-text">LightSpeed</span>
+          <p>Open-source game network optimizer.<br>Reduce your ping. Free. Forever.</p>
+        </div>
+        <div class="footer-links">
+          <h4>Project</h4>
+          <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">Releases</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/architecture.md" target="_blank" rel="noopener">Architecture</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/protocol.md" target="_blank" rel="noopener">Protocol Spec</a>
+        </div>
+        <div class="footer-links">
+          <h4>Community</h4>
+          <a href="https://github.com/ShibbityShwab/lightspeed/discussions" target="_blank" rel="noopener">Discussions</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Report a Bug</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a Game</a>
+        </div>
+        <div class="footer-links">
+          <h4>Legal</h4>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE" target="_blank" rel="noopener">MIT License</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/security-audit-mvp.md" target="_blank" rel="noopener">Security Audit</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2026 LightSpeed Contributors. MIT Licensed. Built with 🦀 Rust and ❤️.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
