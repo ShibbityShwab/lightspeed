@@ -68,13 +68,18 @@
       </div>
       <div class="hero-stats">
         <div class="stat">
-          <span class="stat-value">~162μs</span>
-          <span class="stat-label">Tunnel Overhead</span>
+          <span class="stat-value">3</span>
+          <span class="stat-label">Live Proxy Nodes</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
-          <span class="stat-value">52</span>
-          <span class="stat-label">Tests Passing</span>
+          <span class="stat-value">0%</span>
+          <span class="stat-label">Packet Loss (E2E)</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">33ms</span>
+          <span class="stat-label">Best Relay RTT</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
@@ -196,39 +201,57 @@
       <p class="section-subtitle">Real numbers from our test suite. No cherry-picked results.</p>
       <div class="bench-grid">
         <div class="bench-card">
-          <h3>Tunnel Overhead</h3>
+          <h3>🌏 Singapore Relay</h3>
+          <div class="bench-value">33 <span class="bench-unit">ms</span></div>
+          <p>End-to-end relay RTT from Bangkok through Vultr SGP proxy. 0% packet loss, 1.2ms jitter.</p>
+          <div class="bench-bar">
+            <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
+            <span class="bench-bar-label">0% loss &middot; 1.2ms jitter &middot; tested live</span>
+          </div>
+        </div>
+        <div class="bench-card">
+          <h3>🇺🇸 Los Angeles Relay</h3>
+          <div class="bench-value">208 <span class="bench-unit">ms</span></div>
+          <p>Full tunnel relay to US West Coast (Vultr LA). Consistent sub-1ms jitter, zero packet loss.</p>
+          <div class="bench-bar">
+            <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
+            <span class="bench-bar-label">0% loss &middot; 0.7ms jitter &middot; tested live</span>
+          </div>
+        </div>
+        <div class="bench-card">
+          <h3>🔧 FEC Recovery</h3>
+          <div class="bench-value">25<span class="bench-unit">%</span> overhead</div>
+          <p>XOR-based Forward Error Correction recovers lost packets with just 25% bandwidth overhead. ExitLag uses 200-300%.</p>
+          <div class="bench-bar">
+            <div class="bench-bar-fill" style="width: 25%"></div>
+            <span class="bench-bar-label">25% vs ExitLag's 200-300%</span>
+          </div>
+        </div>
+        <div class="bench-card">
+          <h3>🌐 WARP Boost</h3>
+          <div class="bench-value">5-10 <span class="bench-unit">ms</span></div>
+          <p>Optional Cloudflare WARP integration routes through NTT backbone, bypassing ISP routing inefficiencies. Free.</p>
+          <div class="bench-bar">
+            <div class="bench-bar-fill bench-bar-green" style="width: 90%"></div>
+            <span class="bench-bar-label">Auto-detected &middot; MASQUE protocol</span>
+          </div>
+        </div>
+        <div class="bench-card">
+          <h3>⚡ Tunnel Overhead</h3>
           <div class="bench-value">162 <span class="bench-unit">μs</span></div>
-          <p>Average added latency from the tunnel encapsulation. That's 0.162ms — imperceptible.</p>
+          <p>Protocol encapsulation adds just 0.162ms. 20-byte header + optional 4-byte FEC extension.</p>
           <div class="bench-bar">
             <div class="bench-bar-fill" style="width: 3%"></div>
-            <span class="bench-bar-label">0.162ms of your ~30ms ping</span>
+            <span class="bench-bar-label">0.162ms — imperceptible</span>
           </div>
         </div>
         <div class="bench-card">
-          <h3>ML Route Prediction</h3>
-          <div class="bench-value">R² = 0.95</div>
-          <p>Our Random Forest model predicts latency with 95% accuracy. MAE of just 4.2ms across all routes.</p>
-          <div class="bench-bar">
-            <div class="bench-bar-fill bench-bar-green" style="width: 95%"></div>
-            <span class="bench-bar-label">95% prediction accuracy</span>
-          </div>
-        </div>
-        <div class="bench-card">
-          <h3>Packet Loss</h3>
-          <div class="bench-value">0.00<span class="bench-unit">%</span></div>
-          <p>Zero packet loss in integration testing across 10,000+ tunneled packets.</p>
+          <h3>🧪 Test Suite</h3>
+          <div class="bench-value">26+ <span class="bench-unit">tests</span></div>
+          <p>Protocol tests (header, FEC, control), plus E2E relay tests against 3 live proxy nodes.</p>
           <div class="bench-bar">
             <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
-            <span class="bench-bar-label">10,000+ packets, zero loss</span>
-          </div>
-        </div>
-        <div class="bench-card">
-          <h3>Test Coverage</h3>
-          <div class="bench-value">52 <span class="bench-unit">tests</span></div>
-          <p>Integration tests covering tunnel establishment, relay correctness, security, and control plane.</p>
-          <div class="bench-bar">
-            <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
-            <span class="bench-bar-label">100% pass rate</span>
+            <span class="bench-bar-label">100% pass rate &middot; 3 live nodes verified</span>
           </div>
         </div>
       </div>
@@ -317,6 +340,20 @@
             <tr>
               <td>Self-Hostable</td>
               <td class="compare-us">✅</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>Packet Recovery (FEC)</td>
+              <td class="compare-us">✅ 25% overhead</td>
+              <td>⚠️ 200-300% (duplication)</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>WARP Integration</td>
+              <td class="compare-us">✅ Auto-detect</td>
               <td>❌</td>
               <td>❌</td>
               <td>❌</td>
