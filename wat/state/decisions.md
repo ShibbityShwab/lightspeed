@@ -27,3 +27,15 @@
 | **Options Evaluated** | (1) Multiple OCI accounts, (2) Fly.io free tier, (3) Hetzner/Vultr cheap VPS, (4) AWS/GCP/Azure free tiers |
 | **Recommendation** | OCI San Jose (free) + Hetzner Singapore ($3.29/mo) + Fly.io (free, 3 machines) |
 | **Rationale** | User in Thailand needs Asia-SE node; Hetzner Singapore is cheapest; Fly.io adds US-East + EU coverage for free |
+
+## D-004: Native Binary Deployment (No Docker)
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | Deploy proxy as native binary with systemd instead of Docker container |
+| **Context** | E2.1.Micro has only 503MB RAM. Docker CE failed to install via cloud-init (yum repo issue on Oracle Linux 9). Docker daemon alone uses ~100-200MB overhead. |
+| **Outcome** | Proxy running natively: **568KB RAM**, 3 tasks, health endpoint verified from internet |
+| **Method** | Extract linux/amd64 binary from GHCR Docker image → SCP to host → systemd with DynamicUser + SELinux bin_t context |
+| **Benefits** | 350x less RAM than Docker approach; no container runtime dependency; faster startup; better systemd integration |
+| **Trade-offs** | No container isolation (mitigated by systemd sandboxing: DynamicUser, ProtectSystem, NoNewPrivileges, MemoryDenyWriteExecute); manual binary updates instead of `docker pull` |
+| **Future** | Updated deploy.sh supports both modes; CI can publish release binaries alongside Docker images |

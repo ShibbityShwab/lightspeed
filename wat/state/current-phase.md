@@ -2,14 +2,28 @@
 
 | Key | Value |
 |-----|-------|
-| **Active Workflow** | WF-002 (Proxy Network) Step 4 ✅ DONE + WF-006 Step 2 ✅ DONE |
-| **Current Step** | Proxy deployed (163.192.3.134), cloud-init provisioning |
+| **Active Workflow** | WF-002 Step 4 ✅ DONE + WF-006 Step 2 ✅ DONE |
+| **Current Step** | Proxy LIVE at 163.192.3.134 — health endpoint verified |
 | **Active Agents** | InfraDev, DevOps |
-| **Blocked On** | Cloud-init completing Docker setup (~5min) |
-| **Last Checkpoint** | 2026-02-23T15:57:00+07:00 |
-| **Next Action** | Verify health endpoint, then WF-003 Step 5 or WF-004 |
+| **Blocked On** | Nothing — ready for next workflows |
+| **Last Checkpoint** | 2026-02-23T16:50:00+07:00 |
+| **Next Action** | WF-004 Game Integration or WF-006 Step 3 Docs |
 | **Parallel Workflows** | WF-003 (Steps 5-6 now unblocked), WF-006 (Steps 3-4 available) |
-| **WAT Version** | 0.3.2 |
+| **WAT Version** | 0.3.3 |
+
+## Live Infrastructure
+
+| Resource | Value |
+|----------|-------|
+| **Proxy IP** | 163.192.3.134 |
+| **Health URL** | http://163.192.3.134:8080/health |
+| **Data Port** | UDP 4434 |
+| **Control Port** | UDP 4433 (QUIC disabled, needs `--features quic`) |
+| **Region** | us-west (San Jose) |
+| **Node ID** | proxy-us-west |
+| **RAM Usage** | 568 KB (native binary, no Docker) |
+| **Deployment** | Native binary + systemd (DynamicUser) |
+| **Landing Page** | https://shibbityshwab.github.io/lightspeed/ |
 
 ## Completed Steps
 
@@ -17,63 +31,30 @@
 |------|--------|-------|
 | WF-001 Step 1-7 | ✅ DONE | Full MVP: tunnel, proxy, QUIC, security, tests, release v0.1.0 |
 | WF-002 Step 1-3 | ✅ DONE | Terraform IaC, Docker, deployment scripts, security hardening |
-| WF-003 Step 1: Data Collection Pipeline | ✅ DONE | Synthetic data generator: 10k samples, 3 regions, realistic modeling |
-| WF-003 Step 2: Feature Engineering | ✅ DONE | LatencyTracker (sliding window, p50/p95, jitter, loss), 11 features |
-| WF-003 Step 3: Model Training | ✅ DONE | Random Forest ensemble (10 trees), Linear Regression baseline |
-| WF-003 Step 4: Client Integration | ✅ DONE | MlSelector implements RouteSelector, graceful fallback to Nearest |
-| WF-006 Step 2: Landing Page | ✅ DONE | Static site: hero, how-it-works, games, benchmarks, comparison, download, FAQ, footer |
-
-## WF-006 Landing Page Summary
-
-| Component | File | Status |
-|-----------|------|--------|
-| HTML structure (all sections) | `web/index.html` | ✅ |
-| CSS (dark gaming theme, responsive) | `web/styles.css` | ✅ |
-| JavaScript (nav, animations, FAQ) | `web/app.js` | ✅ |
-
-**Sections:** Hero (gradient text, stats) → How It Works (3-step cards) → Architecture Diagram (color-coded flow) → Supported Games (Fortnite/CS2/Dota2) → Benchmarks (animated bars) → Why LightSpeed (6 feature cards + competitor table) → Download (3 platforms + build from source) → FAQ (8 accordion items) → Footer (project/community/legal links)
-
-## WF-003 ML Pipeline Summary
-
-| Component | File | Status |
-|-----------|------|--------|
-| Synthetic data generator | `client/src/ml/data.rs` | ✅ |
-| Feature extraction + LatencyTracker | `client/src/ml/features.rs` | ✅ |
-| Model training (RF + LR) | `client/src/ml/trainer.rs` | ✅ |
-| Inference engine | `client/src/ml/predict.rs` | ✅ |
-| Model lifecycle (load/save/train) | `client/src/ml/mod.rs` | ✅ |
-| MlSelector (RouteSelector impl) | `client/src/route/selector.rs` | ✅ |
-| Online learning | `client/src/ml/online.rs` | ⏳ Needs real data |
-| A/B validation | — | ⏳ Needs proxy mesh |
-
-## WF-001 MVP Summary
-
-| Metric | Target | Result |
-|--------|--------|--------|
-| Tunnel overhead | ≤ 5ms | 162μs ✅ |
-| Test pass rate | 100% | 52/52 ✅ |
-| Security findings | 0 Critical/High | 0 ✅ |
-| Release artifacts | 3 platforms | Windows x64, Linux x64, Linux ARM64 ✅ |
+| WF-002 Step 4 | ✅ DONE | Proxy deployed natively on OCI E2.1.Micro, health verified |
+| WF-003 Step 1-4 | ✅ DONE | ML pipeline: synthetic data, features, RF model, client integration |
+| WF-006 Step 1 | ✅ DONE | CI/CD: GitHub Actions (Rust CI, Docker GHCR, Pages) |
+| WF-006 Step 2 | ✅ DONE | Landing page live on GitHub Pages |
 
 ## Next Steps
 
 | Action | Owner | Priority | Blocked On |
 |--------|-------|----------|------------|
-| Create Oracle Cloud account (Always Free) | User | P0 | — |
-| `terraform init && terraform apply` | User | P0 | OCI account |
-| Deploy landing page to GitHub Pages | Agent | P1 | — |
+| WF-004: Game Integration | Agent | P0 | — (proxy live) |
 | WF-006 Step 3: Documentation Site | Agent | P1 | — |
 | WF-006 Step 4: Community Setup | Agent | P1 | — |
-| WF-003 Step 5: Online Learning | Agent | P1 | Real proxy data |
-| WF-003 Step 6: A/B Validation | Agent | P1 | Proxy mesh running |
-| WF-004: Game Integration | Agent | P0 | WF-002 deployed |
+| WF-003 Step 5: Online Learning | Agent | P1 | Real proxy traffic |
+| WF-003 Step 6: A/B Validation | Agent | P1 | Multiple proxy nodes |
+| WF-005: Scaling & Monitoring | Agent | P2 | Multi-node mesh |
+| Add Singapore node (Hetzner) | User | P1 | ~$3/mo budget |
+| Retry OCI ARM A1.Flex | User | P2 | Capacity availability |
 
 ## Next Workflows Available
 
 | Workflow | Status | Can Start | Notes |
 |----------|--------|-----------|-------|
-| WF-002: Proxy Network Setup | IN_PROGRESS | ⏳ Awaiting OCI creds | IaC complete, needs terraform apply |
-| WF-003: AI Route Optimizer | IN_PROGRESS | ⏳ Steps 5-6 need data | Core ML pipeline complete |
-| WF-004: Game Integration | NOT_STARTED | ⏳ After WF-002 | Needs proxy mesh for real testing |
-| WF-005: Scaling & Monitoring | NOT_STARTED | ⏳ After WF-002+004 | Needs running infrastructure |
-| WF-006: Business Launch | IN_PROGRESS | ✅ Steps 2 done | Landing page built; docs + community next |
+| WF-002: Proxy Network Setup | ✅ DONE (single node) | — | Live in us-west |
+| WF-003: AI Route Optimizer | IN_PROGRESS | ✅ Steps 5-6 | Needs traffic data |
+| WF-004: Game Integration | NOT_STARTED | ✅ Ready | Proxy is live |
+| WF-005: Scaling & Monitoring | NOT_STARTED | ⏳ After multi-node | Needs mesh |
+| WF-006: Business Launch | IN_PROGRESS | ✅ Steps 3-4 | Docs + community |
