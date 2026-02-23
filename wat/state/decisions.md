@@ -83,3 +83,14 @@
 | **With WARP Minimum** | 193ms — **only 6ms from ExitLag's 187ms!** |
 | **Client Strategy** | (1) Detect WARP availability, recommend enabling for free 5ms savings; (2) Build route probing: test direct, WARP, and relay paths, select fastest; (3) Continuously monitor and auto-switch on degradation |
 | **Combined Strategy** | WARP (193ms base) + FEC (recover lost packets in 3ms vs 400ms retransmit) = potentially **better effective gaming latency than ExitLag** despite 6ms higher base RTT |
+
+## D-009: Bangkok VPS Relay — Only Works with Premium Transit
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Decision** | A random Thai VPS does NOT help — transit quality matters more than location |
+| **Testing** | HostAtom BKK (27.254.145.144): 7ms from user, BUT LA→HostAtom = 205ms. Uses ChinaMobile transit (223.120.x.x), same Pacific crossing as ISP. Relay total: ~212ms = WORSE. |
+| **Key Insight** | BKK relay only helps if provider has **premium NTT/PCCW transit**. Cloudflare has this (166ms Pacific via NTT). HostAtom doesn't (205ms via ChinaMobile). Most Thai VPS providers use cheap transit. |
+| **Conclusion** | Cloudflare WARP IS the best Bangkok relay we can get for free. Only ExitLag-level BGP transit agreements ($$$) would do better. |
+| **Theoretical Best** | BKK VPS + NTT transit: ~177ms (beats ExitLag). But no affordable Thai provider offers this. |
+| **Final Strategy** | Use WARP (free, 193ms) + FEC (3ms loss recovery) + multipath (redundancy via SGP) = best achievable setup |
