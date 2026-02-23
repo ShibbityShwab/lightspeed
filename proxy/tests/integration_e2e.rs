@@ -99,20 +99,14 @@ async fn spawn_manual_proxy(echo_addr: SocketAddrV4) -> (SocketAddrV4, JoinHandl
             }
 
             let mut echo_buf = vec![0u8; 2048];
-            let echo_result = tokio::time::timeout(
-                Duration::from_secs(2),
-                outbound.recv_from(&mut echo_buf),
-            )
-            .await;
+            let echo_result =
+                tokio::time::timeout(Duration::from_secs(2), outbound.recv_from(&mut echo_buf))
+                    .await;
 
             if let Ok(Ok((echo_len, _))) = echo_result {
-                let resp_header = TunnelHeader::new(
-                    header.sequence,
-                    now_us(),
-                    header.orig_dst_addr(),
-                    client_v4,
-                )
-                .with_session_token(header.session_token);
+                let resp_header =
+                    TunnelHeader::new(header.sequence, now_us(), header.orig_dst_addr(), client_v4)
+                        .with_session_token(header.session_token);
 
                 let resp_packet = resp_header.encode_with_payload(&echo_buf[..echo_len]);
                 let _ = proxy_socket.send_to(&resp_packet, client_addr).await;
@@ -166,13 +160,18 @@ async fn test_multi_packet_relay() {
     // Send 10 packets, verify all come back correctly
     for seq in 0..10u16 {
         let payload = format!("game_packet_{}", seq);
-        let header = TunnelHeader::new(seq, now_us(), client_addr, game_server)
-            .with_session_token(42);
+        let header =
+            TunnelHeader::new(seq, now_us(), client_addr, game_server).with_session_token(42);
 
         let result = send_and_recv(&client, proxy_addr, &header, payload.as_bytes(), 2000).await;
         let (resp_h, resp_p) = result.unwrap_or_else(|| panic!("No response for packet {}", seq));
 
-        assert_eq!(resp_p, payload.as_bytes(), "Payload mismatch on packet {}", seq);
+        assert_eq!(
+            resp_p,
+            payload.as_bytes(),
+            "Payload mismatch on packet {}",
+            seq
+        );
         assert_eq!(resp_h.sequence, seq, "Sequence mismatch on packet {}", seq);
         assert_eq!(resp_h.session_token, 42, "Token mismatch on packet {}", seq);
     }
@@ -232,11 +231,7 @@ async fn test_keepalive_round_trip() {
         client.send_to(&packet, proxy_addr).await.unwrap();
 
         let mut buf = vec![0u8; 2048];
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            client.recv_from(&mut buf),
-        )
-        .await;
+        let result = tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf)).await;
 
         match result {
             Ok(Ok((len, _))) => {
@@ -303,10 +298,18 @@ async fn test_large_payload_near_mtu() {
         let header = TunnelHeader::new(size as u16, now_us(), client_addr, game_server);
 
         let result = send_and_recv(&client, proxy_addr, &header, &payload, 2000).await;
-        let (_, resp_p) =
-            result.unwrap_or_else(|| panic!("No response for {}-byte payload", size));
-        assert_eq!(resp_p.len(), size, "Payload size mismatch for {}-byte test", size);
-        assert_eq!(resp_p, payload, "Payload content mismatch for {}-byte test", size);
+        let (_, resp_p) = result.unwrap_or_else(|| panic!("No response for {}-byte payload", size));
+        assert_eq!(
+            resp_p.len(),
+            size,
+            "Payload size mismatch for {}-byte test",
+            size
+        );
+        assert_eq!(
+            resp_p, payload,
+            "Payload content mismatch for {}-byte test",
+            size
+        );
     }
 
     echo_h.abort();
@@ -382,8 +385,7 @@ async fn test_sequence_number_preservation() {
     for &seq in &sequences {
         let header = TunnelHeader::new(seq, now_us(), client_addr, game_server);
         let result = send_and_recv(&client, proxy_addr, &header, b"seq_test", 2000).await;
-        let (resp_h, _) =
-            result.unwrap_or_else(|| panic!("No response for seq={}", seq));
+        let (resp_h, _) = result.unwrap_or_else(|| panic!("No response for seq={}", seq));
         assert_eq!(resp_h.sequence, seq, "Sequence not preserved for {}", seq);
     }
 

@@ -78,8 +78,8 @@ mod inner {
             .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
             .with_no_client_auth();
 
-        let quic_crypto = QuicClientConfig::try_from(crypto)
-            .map_err(|e| QuicError::Tls(e.to_string()))?;
+        let quic_crypto =
+            QuicClientConfig::try_from(crypto).map_err(|e| QuicError::Tls(e.to_string()))?;
 
         let mut client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
 

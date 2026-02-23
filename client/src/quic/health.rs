@@ -113,11 +113,7 @@ impl HealthChecker {
     }
 
     /// Perform a standalone health check (creates its own connection).
-    pub async fn check_standalone(
-        &mut self,
-        proxy: &ProxyNode,
-        game: u8,
-    ) -> HealthCheckResult {
+    pub async fn check_standalone(&mut self, proxy: &ProxyNode, game: u8) -> HealthCheckResult {
         let control_addr = SocketAddr::V4(proxy.control_addr);
         let start = Instant::now();
 

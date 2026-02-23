@@ -89,12 +89,7 @@ pub struct TunnelHeader {
 
 impl TunnelHeader {
     /// Create a new tunnel header for a data packet.
-    pub fn new(
-        sequence: u16,
-        timestamp_us: u32,
-        src: SocketAddrV4,
-        dst: SocketAddrV4,
-    ) -> Self {
+    pub fn new(sequence: u16, timestamp_us: u32, src: SocketAddrV4, dst: SocketAddrV4) -> Self {
         Self {
             version: PROTOCOL_VERSION,
             flags: 0,

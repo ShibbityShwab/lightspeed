@@ -6,9 +6,9 @@
 //! - **ML**: AI-powered route prediction using linfa
 //! - **Multipath**: Send on multiple paths, use fastest arrival
 
-pub mod selector;
-pub mod multipath;
 pub mod failover;
+pub mod multipath;
+pub mod selector;
 
 use std::net::SocketAddrV4;
 

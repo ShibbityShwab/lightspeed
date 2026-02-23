@@ -80,10 +80,8 @@ pub fn train_random_forest(
         targets.push(sample.observed_latency_ms);
     }
 
-    let features_matrix =
-        Array2::from_shape_vec((n_train, n_features), features_flat).map_err(|e| {
-            MlError::PredictionFailed(format!("Failed to build feature matrix: {}", e))
-        })?;
+    let features_matrix = Array2::from_shape_vec((n_train, n_features), features_flat)
+        .map_err(|e| MlError::PredictionFailed(format!("Failed to build feature matrix: {}", e)))?;
     let targets_array = Array1::from_vec(targets);
 
     let dataset = Dataset::new(features_matrix, targets_array);
@@ -111,10 +109,8 @@ pub fn train_random_forest(
             boot_targets.push(train_data[idx].observed_latency_ms);
         }
 
-        let boot_matrix =
-            Array2::from_shape_vec((bootstrap_size, n_features), boot_features).map_err(|e| {
-                MlError::PredictionFailed(format!("Bootstrap matrix error: {}", e))
-            })?;
+        let boot_matrix = Array2::from_shape_vec((bootstrap_size, n_features), boot_features)
+            .map_err(|e| MlError::PredictionFailed(format!("Bootstrap matrix error: {}", e)))?;
         let boot_target_arr = Array1::from_vec(boot_targets);
         let boot_dataset = Dataset::new(boot_matrix, boot_target_arr);
 
@@ -139,10 +135,8 @@ pub fn train_random_forest(
         test_targets.push(sample.observed_latency_ms);
     }
 
-    let test_matrix =
-        Array2::from_shape_vec((n_test, n_features), test_features_flat).map_err(|e| {
-            MlError::PredictionFailed(format!("Test matrix error: {}", e))
-        })?;
+    let test_matrix = Array2::from_shape_vec((n_test, n_features), test_features_flat)
+        .map_err(|e| MlError::PredictionFailed(format!("Test matrix error: {}", e)))?;
 
     // Ensemble prediction: average of all trees
     let mut sum_predictions = Array1::zeros(n_test);
@@ -169,7 +163,10 @@ pub fn train_random_forest(
     let rmse = mse.sqrt();
 
     let mean_target = test_targets.iter().sum::<f64>() / n_test as f64;
-    let ss_tot = test_targets.iter().map(|t| (t - mean_target).powi(2)).sum::<f64>();
+    let ss_tot = test_targets
+        .iter()
+        .map(|t| (t - mean_target).powi(2))
+        .sum::<f64>();
     let ss_res = predictions
         .iter()
         .zip(test_targets.iter())
@@ -226,10 +223,8 @@ pub fn train_linear_regression(
         targets.push(sample.observed_latency_ms);
     }
 
-    let features_matrix =
-        Array2::from_shape_vec((n_train, n_features), features_flat).map_err(|e| {
-            MlError::PredictionFailed(format!("Feature matrix error: {}", e))
-        })?;
+    let features_matrix = Array2::from_shape_vec((n_train, n_features), features_flat)
+        .map_err(|e| MlError::PredictionFailed(format!("Feature matrix error: {}", e)))?;
     let targets_array = Array1::from_vec(targets);
     let dataset = Dataset::new(features_matrix, targets_array);
 
@@ -249,10 +244,8 @@ pub fn train_linear_regression(
         test_targets.push(sample.observed_latency_ms);
     }
 
-    let test_matrix =
-        Array2::from_shape_vec((n_test, n_features), test_features_flat).map_err(|e| {
-            MlError::PredictionFailed(format!("Test matrix error: {}", e))
-        })?;
+    let test_matrix = Array2::from_shape_vec((n_test, n_features), test_features_flat)
+        .map_err(|e| MlError::PredictionFailed(format!("Test matrix error: {}", e)))?;
 
     let predictions = model.predict(&test_matrix);
 
@@ -272,7 +265,10 @@ pub fn train_linear_regression(
     let rmse = mse.sqrt();
 
     let mean_target = test_targets.iter().sum::<f64>() / n_test as f64;
-    let ss_tot = test_targets.iter().map(|t| (t - mean_target).powi(2)).sum::<f64>();
+    let ss_tot = test_targets
+        .iter()
+        .map(|t| (t - mean_target).powi(2))
+        .sum::<f64>();
     let ss_res = predictions
         .iter()
         .zip(test_targets.iter())

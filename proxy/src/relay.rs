@@ -363,8 +363,8 @@ pub async fn run_session_response_listener(
         let response_header = TunnelHeader::new(
             seq,
             now_us(),
-            session.game_server,    // game server is now the "source"
-            session.client_addr,    // client's original IP is the "destination"
+            session.game_server, // game server is now the "source"
+            session.client_addr, // client's original IP is the "destination"
         );
 
         let packet = response_header.encode_with_payload(payload);
@@ -506,8 +506,7 @@ mod tests {
         let packet = header.encode_with_payload(payload);
 
         // Simulate what the relay does: decode
-        let (decoded_header, decoded_payload) =
-            TunnelHeader::decode_with_payload(&packet).unwrap();
+        let (decoded_header, decoded_payload) = TunnelHeader::decode_with_payload(&packet).unwrap();
 
         assert_eq!(decoded_header.orig_src_addr(), src);
         assert_eq!(decoded_header.orig_dst_addr(), dst);

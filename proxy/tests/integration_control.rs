@@ -32,8 +32,7 @@ fn make_server_endpoint(bind: SocketAddr) -> anyhow::Result<quinn::Endpoint> {
         .with_no_client_auth()
         .with_single_cert(vec![cert_der], key_der)?;
 
-    let quic_crypto =
-        quinn::crypto::rustls::QuicServerConfig::try_from(rustls_config)?;
+    let quic_crypto = quinn::crypto::rustls::QuicServerConfig::try_from(rustls_config)?;
     let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_crypto));
     let endpoint = quinn::Endpoint::server(server_config, bind)?;
     Ok(endpoint)
@@ -83,8 +82,7 @@ fn make_client_endpoint() -> anyhow::Result<quinn::Endpoint> {
         .with_custom_certificate_verifier(Arc::new(SkipVerify))
         .with_no_client_auth();
 
-    let quic_crypto =
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?;
+    let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?;
     let client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
 
     let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse()?)?;
@@ -157,9 +155,7 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
 
     // --- Client side ---
     let client_ep = make_client_endpoint()?;
-    let conn = client_ep
-        .connect(server_addr, "lightspeed-proxy")?
-        .await?;
+    let conn = client_ep.connect(server_addr, "lightspeed-proxy")?.await?;
 
     // Register
     {
@@ -191,9 +187,7 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
     // Ping (3 times)
     for _ in 0..3 {
         let (mut send, mut recv) = conn.open_bi().await?;
-        let now_us = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_micros() as u64;
+        let now_us = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64;
 
         let ping = ControlMessage::Ping {
             timestamp_us: now_us,

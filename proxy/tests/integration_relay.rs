@@ -84,8 +84,8 @@ async fn test_full_tunnel_round_trip() {
     let response_header = TunnelHeader::new(
         1,
         now_us(),
-        game_server,   // source is now the game server
-        client_addr,   // destination is the original client
+        game_server, // source is now the game server
+        client_addr, // destination is the original client
     );
     let response_packet = response_header.encode_with_payload(echo_payload);
 
@@ -146,8 +146,7 @@ async fn test_udp_relay_with_echo_server() {
                 };
 
                 // 2. Decode header
-                let (header, payload) =
-                    TunnelHeader::decode_with_payload(&buf[..len]).unwrap();
+                let (header, payload) = TunnelHeader::decode_with_payload(&buf[..len]).unwrap();
 
                 if header.is_keepalive() {
                     // Echo keepalive back
@@ -165,12 +164,7 @@ async fn test_udp_relay_with_echo_server() {
                 let (echo_len, _) = outbound.recv_from(&mut buf).await.unwrap();
 
                 // 5. Re-wrap and send back to client
-                let resp_header = TunnelHeader::new(
-                    header.sequence,
-                    now_us(),
-                    game_dest,
-                    from_v4,
-                );
+                let resp_header = TunnelHeader::new(header.sequence, now_us(), game_dest, from_v4);
                 let resp_packet = resp_header.encode_with_payload(&buf[..echo_len]);
                 proxy_socket.send_to(&resp_packet, from_addr).await.unwrap();
             }
@@ -190,11 +184,8 @@ async fn test_udp_relay_with_echo_server() {
 
         // Receive response
         let mut buf = vec![0u8; 2048];
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            client_socket.recv_from(&mut buf),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(Duration::from_secs(2), client_socket.recv_from(&mut buf)).await;
 
         match result {
             Ok(Ok((len, _from))) => {

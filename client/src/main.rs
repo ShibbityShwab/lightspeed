@@ -4,14 +4,14 @@
 //! Captures game UDP packets and tunnels them through optimally-selected
 //! proxy nodes to reduce latency via better routing paths.
 
-mod config;
-mod tunnel;
-mod route;
 mod capture;
-mod quic;
-mod ml;
-mod games;
+mod config;
 mod error;
+mod games;
+mod ml;
+mod quic;
+mod route;
+mod tunnel;
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::Ordering;
@@ -201,7 +201,9 @@ async fn main() -> anyhow::Result<()> {
                         match lightspeed_protocol::TunnelHeader::decode_with_payload(&buf[..len]) {
                             Ok((header, payload)) => {
                                 stats.packets_received.fetch_add(1, Ordering::Relaxed);
-                                stats.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
+                                stats
+                                    .bytes_received
+                                    .fetch_add(len as u64, Ordering::Relaxed);
 
                                 if header.is_keepalive() {
                                     tracing::trace!(
@@ -277,7 +279,10 @@ async fn run_tunnel_test(relay: UdpRelay, proxy_addr: SocketAddrV4) -> anyhow::R
 
     // Send 5 test packets
     for i in 0..5u16 {
-        match relay.send_to_proxy(test_payload, test_src, test_dst, proxy_addr).await {
+        match relay
+            .send_to_proxy(test_payload, test_src, test_dst, proxy_addr)
+            .await
+        {
             Ok(sent) => {
                 info!("  ✓ Sent test packet #{} ({} bytes)", i + 1, sent);
             }
@@ -360,7 +365,8 @@ async fn run_control_test(proxy_addr: SocketAddrV4, config: &config::Config) -> 
         .await
         .map_err(|e| anyhow::anyhow!("QUIC connect failed: {}", e))?;
 
-    info!("   ✓ Connected! session={:?} token={:?} node={:?} region={:?}",
+    info!(
+        "   ✓ Connected! session={:?} token={:?} node={:?} region={:?}",
         client.session_id(),
         client.session_token(),
         client.node_id(),
@@ -373,7 +379,12 @@ async fn run_control_test(proxy_addr: SocketAddrV4, config: &config::Config) -> 
     for i in 0..5 {
         match client.ping().await {
             Ok(rtt_us) => {
-                info!("   ✓ Ping #{}: {}μs ({:.2}ms)", i + 1, rtt_us, rtt_us as f64 / 1000.0);
+                info!(
+                    "   ✓ Ping #{}: {}μs ({:.2}ms)",
+                    i + 1,
+                    rtt_us,
+                    rtt_us as f64 / 1000.0
+                );
                 rtts.push(rtt_us);
             }
             Err(e) => {
@@ -388,14 +399,20 @@ async fn run_control_test(proxy_addr: SocketAddrV4, config: &config::Config) -> 
         let avg = rtts.iter().sum::<u64>() / rtts.len() as u64;
         let min = *rtts.iter().min().unwrap();
         let max = *rtts.iter().max().unwrap();
-        info!("   📊 RTT: avg={}μs min={}μs max={}μs ({} samples)",
-            avg, min, max, rtts.len()
+        info!(
+            "   📊 RTT: avg={}μs min={}μs max={}μs ({} samples)",
+            avg,
+            min,
+            max,
+            rtts.len()
         );
     }
 
     // Disconnect
     info!("   Step 3: Disconnecting...");
-    client.disconnect().await
+    client
+        .disconnect()
+        .await
         .map_err(|e| anyhow::anyhow!("Disconnect failed: {}", e))?;
     info!("   ✓ Disconnected");
 

@@ -89,9 +89,15 @@ pub struct SecurityConfig {
     pub ban_duration_secs: u64,
 }
 
-fn default_amplification_ratio() -> f64 { 2.0 }
-fn default_max_destinations() -> usize { 10 }
-fn default_ban_duration() -> u64 { 3600 }
+fn default_amplification_ratio() -> f64 {
+    2.0
+}
+fn default_max_destinations() -> usize {
+    10
+}
+fn default_ban_duration() -> u64 {
+    3600
+}
 
 impl Default for SecurityConfig {
     fn default() -> Self {
@@ -104,14 +110,30 @@ impl Default for SecurityConfig {
     }
 }
 
-fn default_node_id() -> String { "proxy-001".into() }
-fn default_region() -> String { "unknown".into() }
-fn default_max_clients() -> usize { 100 }
-fn default_pps_limit() -> u64 { 1000 }
-fn default_bps_limit() -> u64 { 1_000_000 } // 1 MB/s
-fn default_max_connections() -> usize { 200 }
-fn default_true() -> bool { true }
-fn default_metrics_interval() -> u64 { 10 }
+fn default_node_id() -> String {
+    "proxy-001".into()
+}
+fn default_region() -> String {
+    "unknown".into()
+}
+fn default_max_clients() -> usize {
+    100
+}
+fn default_pps_limit() -> u64 {
+    1000
+}
+fn default_bps_limit() -> u64 {
+    1_000_000
+} // 1 MB/s
+fn default_max_connections() -> usize {
+    200
+}
+fn default_true() -> bool {
+    true
+}
+fn default_metrics_interval() -> u64 {
+    10
+}
 
 impl Default for ProxyConfig {
     fn default() -> Self {

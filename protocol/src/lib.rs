@@ -4,13 +4,11 @@
 //! Contains the LightSpeed header format, encode/decode logic, protocol constants,
 //! and control-plane message definitions.
 
-pub mod header;
 pub mod control;
+pub mod header;
 
 pub use header::{
     flags, DecodeError, TunnelHeader, HEADER_SIZE, MAX_PAYLOAD_SIZE, PROTOCOL_VERSION,
 };
 
-pub use control::{
-    game_id, disconnect_reason, ControlDecodeError, ControlMessage,
-};
+pub use control::{disconnect_reason, game_id, ControlDecodeError, ControlMessage};

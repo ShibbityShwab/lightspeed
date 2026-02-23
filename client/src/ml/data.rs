@@ -176,10 +176,9 @@ fn generate_sample(rng: &mut impl Rng, profile: &RegionProfile) -> TrainingSampl
         .max(5.0); // Floor at 5ms
 
     // Jitter: correlates with congestion and loss
-    let jitter_ms = (profile.latency_std_ms * 0.5 * peak_factor
-        + rng.gen_range(0.0..3.0)
-        + load_penalty * 0.3)
-        .max(0.5);
+    let jitter_ms =
+        (profile.latency_std_ms * 0.5 * peak_factor + rng.gen_range(0.0..3.0) + load_penalty * 0.3)
+            .max(0.5);
 
     // Historical stats (smoothed versions of current)
     let historical_p50_ms = profile.base_latency_ms * 1.1 + rng.gen_range(-2.0..2.0);

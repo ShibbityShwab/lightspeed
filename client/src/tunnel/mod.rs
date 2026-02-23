@@ -4,14 +4,13 @@
 //! in the LightSpeed header, sends to proxy, receives responses, unwraps,
 //! and delivers back to the game.
 
-pub mod header;
 pub mod capture;
+pub mod header;
 pub mod relay;
 
 use std::net::SocketAddrV4;
 
 use bytes::Bytes;
-
 
 /// A wrapped tunnel packet ready for sending to the proxy.
 #[derive(Debug, Clone)]

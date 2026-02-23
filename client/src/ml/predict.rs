@@ -28,7 +28,11 @@ impl RoutePrediction {
 
     /// Get proxies sorted by predicted latency (lowest first).
     pub fn ranked_proxies(&self) -> Vec<(&str, f64)> {
-        let mut sorted: Vec<_> = self.scores.iter().map(|(id, s)| (id.as_str(), *s)).collect();
+        let mut sorted: Vec<_> = self
+            .scores
+            .iter()
+            .map(|(id, s)| (id.as_str(), *s))
+            .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         sorted
     }
@@ -68,10 +72,8 @@ pub fn predict_route(
         features_flat.extend_from_slice(&features.to_array());
     }
 
-    let feature_matrix =
-        Array2::from_shape_vec((n_proxies, n_features), features_flat).map_err(|e| {
-            MlError::PredictionFailed(format!("Feature matrix error: {}", e))
-        })?;
+    let feature_matrix = Array2::from_shape_vec((n_proxies, n_features), features_flat)
+        .map_err(|e| MlError::PredictionFailed(format!("Feature matrix error: {}", e)))?;
 
     // Ensemble prediction: average of all trees
     let mut sum_predictions = ndarray::Array1::zeros(n_proxies);

@@ -100,9 +100,7 @@ impl ProxyDiscovery {
             // Parse "host:port" or just "host" (use defaults)
             let (host, port) = if let Some(idx) = addr_str.rfind(':') {
                 let h = &addr_str[..idx];
-                let p: u16 = addr_str[idx + 1..]
-                    .parse()
-                    .unwrap_or(self.data_port);
+                let p: u16 = addr_str[idx + 1..].parse().unwrap_or(self.data_port);
                 (h, p)
             } else {
                 (addr_str.as_str(), self.data_port)
