@@ -286,9 +286,21 @@ async fn main() -> anyhow::Result<()> {
     // This is the primary game integration mode.
     if let Some(ref server_str) = cli.game_server {
         let game_server_addr = parse_proxy_addr(server_str)?;
-        let local_port = cli.local_port.unwrap_or(game_server_addr.port());
+
+        // Use game-specific redirect port if available, otherwise match server port
+        let local_port = cli.local_port.unwrap_or_else(|| {
+            if let Some(ref game) = game {
+                game.redirect_port()
+            } else {
+                game_server_addr.port()
+            }
+        });
 
         info!("🚀 Starting redirect mode");
+        if let Some(ref game) = game {
+            info!("   Game:        {} (anti-cheat: {})", game.name(), game.anti_cheat());
+            info!("   Typical PPS: ~{} packets/sec", game.typical_pps());
+        }
         info!("   Game server: {}", game_server_addr);
         info!("   Local port:  127.0.0.1:{}", local_port);
         info!("   Proxy:       {}", proxy_addr);
@@ -299,6 +311,21 @@ async fn main() -> anyhow::Result<()> {
             redirect_proxy = redirect_proxy.with_fec(cli.fec_k);
         }
         return redirect_proxy.run().await;
+    }
+
+    // If a game was specified but no --game-server, show setup instructions
+    if let Some(ref game) = game {
+        info!("📋 {} setup instructions:", game.name());
+        for line in game.redirect_instructions().lines() {
+            info!("   {}", line);
+        }
+        info!("");
+        info!("   Example: lightspeed --game {} --game-server <SERVER_IP>:{} --proxy {}",
+            cli.game.as_deref().unwrap_or("unknown"),
+            game.redirect_port(),
+            proxy_addr,
+        );
+        info!("");
     }
 
     // ── Keepalive mode (no game server specified) ─────────────────

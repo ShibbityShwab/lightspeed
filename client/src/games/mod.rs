@@ -41,6 +41,26 @@ pub trait GameConfig: Send + Sync {
 
     /// Typical packet size range in bytes.
     fn packet_size_range(&self) -> (usize, usize);
+
+    /// Suggested local port for redirect mode.
+    /// This is the port the game client should connect to (127.0.0.1:port).
+    /// Returns the default game server port if applicable.
+    fn redirect_port(&self) -> u16 {
+        self.ports().0
+    }
+
+    /// Setup instructions for configuring the game in redirect mode.
+    fn redirect_instructions(&self) -> String {
+        let (port_lo, port_hi) = self.ports();
+        format!(
+            "Configure {} to connect to 127.0.0.1:{}\n\
+             Game server ports: {}-{}",
+            self.name(),
+            self.redirect_port(),
+            port_lo,
+            port_hi,
+        )
+    }
 }
 
 /// Detect a game by name string.
