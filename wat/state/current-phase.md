@@ -2,13 +2,13 @@
 
 | Key | Value |
 |-----|-------|
-| **Active Workflow** | WF-004 Game Integration + FEC Client Wiring |
-| **Current Step** | FEC integration into client relay, game capture pipeline |
+| **Active Workflow** | WF-004 Game Integration + Live Testing |
+| **Current Step** | Live integration test, game capture pipeline |
 | **Active Agents** | RustDev, NetEng |
 | **Blocked On** | Nothing — all dependencies met |
-| **Last Checkpoint** | 2026-02-23T21:20:00+07:00 |
-| **Next Action** | Wire FEC into UdpRelay, complete redirect→tunnel pipeline |
-| **WAT Version** | 0.3.5 |
+| **Last Checkpoint** | 2026-02-23T22:55:00+07:00 |
+| **Next Action** | Bidirectional capture mode, online ML learning |
+| **WAT Version** | 0.3.7 |
 
 ## Live Infrastructure (2-Node Vultr Mesh)
 
@@ -55,27 +55,66 @@
 | WF-006 Step 3 | ✅ DONE | Documentation updated: README, CHANGELOG, architecture, protocol, infra |
 | FEC Module | ✅ DONE | XOR-based FEC, 8 tests passing, protocol/src/fec.rs |
 | FEC Pipeline | ✅ DONE | FEC integrated into tunnel pipeline (client main.rs) |
+| FEC in UdpRelay | ✅ DONE | FecEncoder in send_to_proxy, FecDecoder in recv_from_proxy |
+| FEC in UdpRedirect | ✅ DONE | Full FEC encode/decode in redirect outbound + inbound paths |
+| FEC in Proxy Relay | ✅ DONE | Proxy-side FEC decode, recovery, and re-encode for responses |
+| FEC Integration Tests | ✅ DONE | 5 tests: data roundtrip, recovery, mixed v1/v2, variable sizes, multi-block |
 | WARP Integration | ✅ DONE | client/src/warp.rs — auto-detect, 5-10ms improvement |
 | Relay Analysis | ✅ DONE | SGP relay tested, Pacific crossing confirmed as bottleneck |
 | Infra Pivot | ✅ DONE | OCI → Vultr-only, native binary (~500KB RAM) |
 | Code Cleanup | ✅ DONE | Fixed compiler warnings, cleaned dead code annotations |
+| Route Selection | ✅ DONE | RouteSelector integrated into main.rs, auto proxy probing + selection |
+| Proxy Health Probing | ✅ DONE | Keepalive-based RTT probing, concurrent multi-proxy health check |
+| Live Integration Test | ✅ DONE | `--live-test` mode: 5-phase test (health, route, keepalive, relay, FEC) |
+| Game Auto-Detection | ✅ DONE | Process scanning on Windows/Linux/macOS, matches game process names |
+| Pcap Capture Backend | ✅ DONE | Full Ethernet→IP→UDP parser, BPF filtering, pcap_backend.rs |
+| Capture Mode | ✅ DONE | `--capture` CLI mode: sniff game traffic, forward through tunnel |
+| Interface Discovery | ✅ DONE | `--list-interfaces` shows pcap-available network interfaces |
+
+## Recently Completed
+
+| Action | Status | Notes |
+|--------|--------|-------|
+| Live proxy verification | ✅ DONE | proxy-lax: 204.8ms 10/10 0.3ms jitter, relay-sgp: 34.0ms 10/10 0.3ms jitter |
+| Beta release v0.2.0 | ✅ DONE | Version bumped, CHANGELOG updated, live test results recorded |
 
 ## In Progress
 
 | Action | Status | Notes |
 |--------|--------|-------|
-| Wire FEC into UdpRelay | 🔧 IN PROGRESS | Connect FecEncoder/Decoder to relay send/recv |
-| Game capture pipeline | 🔧 IN PROGRESS | Route selector → capture → redirect → tunnel |
-| FEC integration tests | 🔧 IN PROGRESS | E2E tests with FEC-enabled relay |
+| Bidirectional capture | 🔧 PLANNED | Response injection for full transparent capture (Phase 2) |
 
 ## Next Steps
 
 | Action | Owner | Priority | Notes |
 |--------|-------|----------|-------|
-| **Wire FEC into UdpRelay** | Agent | **P0** | FecEncoder in send, FecDecoder in recv |
-| **Complete game pipeline** | Agent | **P0** | RouteSelector → GameConfig → Redirect → Tunnel |
-| **FEC integration tests** | Agent | **P0** | Test FEC recovery through live tunnel |
-| WF-003 Step 5-6: Online Learning | Agent | P1 | Needs live traffic data |
+| **Bidirectional capture** | Agent | **P1** | Raw socket injection for capture mode response path |
+| **WF-003 Step 5-6: Online Learning** | Agent | **P1** | Needs live traffic data |
 | WF-005: Monitoring Dashboard | Agent | P2 | Prometheus + Grafana |
 | Vultr BKK monitoring | Agent | P2 | Check quarterly for Bangkok region availability |
 | US-East / EU-West nodes | Agent | P2 | Expand mesh for global coverage |
+
+## CLI Quick Reference
+
+```bash
+# Live integration test (health + keepalive echo)
+lightspeed --live-test --proxy 149.28.84.139:4434
+
+# Live test with data relay (requires echo_server.py on remote)
+lightspeed --live-test --proxy 149.28.84.139:4434 --echo-server 149.28.144.74:9999
+
+# Live test with FEC verification
+lightspeed --live-test --proxy 149.28.84.139:4434 --echo-server 149.28.144.74:9999 --fec
+
+# Redirect mode (primary game integration)
+lightspeed --game cs2 --game-server 192.168.1.1:27015 --proxy 149.28.84.139:4434
+
+# Capture mode (pcap-based, requires admin + Npcap)
+lightspeed --game fortnite --capture --proxy 149.28.84.139:4434
+
+# List network interfaces
+lightspeed --list-interfaces
+
+# Probe all configured proxies
+lightspeed --probe-proxies
+```

@@ -5,11 +5,21 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — v0.2.0-dev
+## [Unreleased]
 
-### 🚀 Post-MVP Progress
+### Next Up
+- Bidirectional capture mode (response injection for transparent pcap mode)
+- Online ML learning with live traffic data
+- Monitoring dashboard (Prometheus + Grafana)
+- US-East / EU-West mesh expansion
 
-Major infrastructure deployment, real-world latency analysis, and competitive feature development.
+---
+
+## [0.2.0] — 2026-02-23
+
+### 🚀 Beta Release — Live Infrastructure Verified
+
+Major infrastructure deployment, real-world latency analysis, competitive feature development, and **live integration test passing on 2-node Vultr mesh**.
 
 ### Added
 
@@ -73,6 +83,9 @@ Major infrastructure deployment, real-world latency analysis, and competitive fe
 
 ### Testing
 
+- **Live integration test passing** (2026-02-23):
+  - proxy-lax: 204.8ms, 10/10 keepalives, 0.3ms jitter ✅
+  - relay-sgp: 34.0ms, 10/10 keepalives, 0.3ms jitter ✅
 - E2E tunnel relay verified across all proxy nodes
 - FEC module: 8 tests passing
 - WARP IP routing logic: unit tested
@@ -142,5 +155,6 @@ The first release of LightSpeed — a zero-cost, open-source global network opti
 - **Target Overhead**: ≤5ms (achieved: 162μs average)
 - **Supported Platforms**: Windows x64, Linux x64, Linux ARM64
 
-[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ShibbityShwab/lightspeed/releases/tag/v0.1.0
