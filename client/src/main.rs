@@ -489,19 +489,24 @@ async fn main() -> anyhow::Result<()> {
             game_ref.name(), game_ref.ports());
         info!("   Captured packets will be forwarded through proxy {}", proxy_addr);
 
-        // Create tunnel socket
+        // Create tunnel socket (shared between outbound capture and inbound injection)
         let tunnel_socket = Arc::new(tokio::net::UdpSocket::bind("0.0.0.0:0").await?);
         let fec_enabled = cli.fec;
         let fec_k = cli.fec_k;
-        let mut seq: u16 = 0;
-        let mut packets_captured: u64 = 0;
-        let mut bytes_captured: u64 = 0;
-        let start_time = std::time::Instant::now();
+
+        // Create packet injector for bidirectional response delivery
+        let injector = capture::injector::PacketInjector::new().await?;
+        let injector_stats = Arc::clone(&injector.stats);
+        let injector_socket = injector.socket();
+
+        // Track the game client's source address (learned from first outbound packet)
+        let game_client_addr: Arc<tokio::sync::RwLock<Option<SocketAddrV4>>> =
+            Arc::new(tokio::sync::RwLock::new(None));
 
         if fec_enabled {
-            info!("   FEC: enabled (K={}, ~{}% overhead)", fec_k, 100 / fec_k as u32);
+            info!("   FEC:       enabled (K={}, ~{}% overhead)", fec_k, 100 / fec_k as u32);
         }
-
+        info!("   Mode:      bidirectional (capture + inject)");
         info!("   Press Ctrl+C to stop\n");
 
         // Set up Ctrl+C handler
@@ -512,56 +517,295 @@ async fn main() -> anyhow::Result<()> {
             running_flag.store(false, Ordering::Relaxed);
         });
 
-        // Capture loop — read packets and forward through tunnel
-        // Note: Full bidirectional capture (with response injection) requires
-        // raw socket support and is planned for Phase 2. Currently this mode
-        // captures and forwards outbound game traffic for analysis and testing.
+        // ── Outbound capture stats (shared with capture loop) ────
+        let outbound_packets = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let outbound_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let start_time = std::time::Instant::now();
+
+        // ── Inbound task: Proxy → Injector → Game ────────────────
+        //
+        // Receives tunnel-wrapped responses from the proxy, decodes them
+        // (including FEC recovery), and injects the game payload back to
+        // the game client's local address.
+        let inbound_handle = {
+            let tunnel_socket = Arc::clone(&tunnel_socket);
+            let game_client_addr = Arc::clone(&game_client_addr);
+            let running = Arc::clone(&running);
+            let injector_stats_ref = Arc::clone(&injector_stats);
+
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 2048];
+                let mut fec_decoder = if fec_enabled {
+                    Some(lightspeed_protocol::FecDecoder::new())
+                } else {
+                    None
+                };
+                let mut gc_counter: u32 = 0;
+
+                while running.load(Ordering::Relaxed) {
+                    let recv_result = tokio::time::timeout(
+                        Duration::from_millis(100),
+                        tunnel_socket.recv_from(&mut buf),
+                    ).await;
+
+                    let (len, _from) = match recv_result {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
+                            tracing::debug!("Tunnel recv error: {}", e);
+                            continue;
+                        }
+                        Err(_) => continue, // Timeout — check running flag
+                    };
+
+                    injector_stats_ref.packets_from_proxy.fetch_add(1, Ordering::Relaxed);
+
+                    // Decode tunnel header
+                    let (header, payload) = match lightspeed_protocol::TunnelHeader::decode_with_payload(&buf[..len]) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::debug!("Invalid tunnel response: {}", e);
+                            continue;
+                        }
+                    };
+
+                    // Skip keepalive echoes
+                    if header.is_keepalive() {
+                        tracing::trace!("Keepalive echo received");
+                        continue;
+                    }
+
+                    // Get the game client's address (learned from outbound capture)
+                    let game_addr = {
+                        let addr = game_client_addr.read().await;
+                        *addr
+                    };
+                    let game_addr = match game_addr {
+                        Some(addr) => addr,
+                        None => {
+                            tracing::debug!("Response received but no game client captured yet");
+                            continue;
+                        }
+                    };
+
+                    // Handle FEC if enabled
+                    let game_payload: Option<bytes::Bytes> = if header.has_fec() && fec_decoder.is_some() {
+                        if payload.len() < lightspeed_protocol::FEC_HEADER_SIZE {
+                            tracing::debug!("FEC packet too short");
+                            continue;
+                        }
+
+                        let mut fec_slice: &[u8] = &payload[..lightspeed_protocol::FEC_HEADER_SIZE];
+                        let fec_hdr = match lightspeed_protocol::FecHeader::decode(&mut fec_slice) {
+                            Some(h) => h,
+                            None => {
+                                tracing::debug!("Invalid FEC header in response");
+                                continue;
+                            }
+                        };
+
+                        let game_data = &payload[lightspeed_protocol::FEC_HEADER_SIZE..];
+                        let decoder = fec_decoder.as_mut().unwrap();
+
+                        if fec_hdr.is_parity() {
+                            let parity_data = bytes::Bytes::copy_from_slice(game_data);
+                            if let Some((_idx, recovered)) = decoder.receive_parity(&fec_hdr, parity_data) {
+                                injector_stats_ref.fec_recovered.fetch_add(1, Ordering::Relaxed);
+                                tracing::info!(
+                                    block = fec_hdr.block_id,
+                                    recovered_len = recovered.len(),
+                                    "🔧 FEC recovered lost packet"
+                                );
+                                Some(recovered)
+                            } else {
+                                None // Parity consumed, no recovery needed
+                            }
+                        } else {
+                            let data_bytes = bytes::Bytes::copy_from_slice(game_data);
+                            decoder.receive_data(&fec_hdr, data_bytes.clone());
+                            Some(data_bytes)
+                        }
+                    } else {
+                        // Non-FEC: payload is the game data directly
+                        Some(bytes::Bytes::copy_from_slice(payload))
+                    };
+
+                    // Inject the response back to the game
+                    if let Some(data) = game_payload {
+                        if !data.is_empty() {
+                            match injector_socket.send_to(&data, game_addr).await {
+                                Ok(sent) => {
+                                    injector_stats_ref.packets_injected.fetch_add(1, Ordering::Relaxed);
+                                    injector_stats_ref.bytes_injected.fetch_add(sent as u64, Ordering::Relaxed);
+                                    tracing::trace!(
+                                        payload_len = data.len(),
+                                        dst = %game_addr,
+                                        "Proxy → Game (injected)"
+                                    );
+                                }
+                                Err(e) => {
+                                    injector_stats_ref.inject_errors.fetch_add(1, Ordering::Relaxed);
+                                    tracing::warn!("Inject to game failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+
+                    // Periodic FEC GC
+                    gc_counter += 1;
+                    if gc_counter % 100 == 0 {
+                        if let Some(ref mut dec) = fec_decoder {
+                            dec.gc();
+                        }
+                    }
+                }
+            })
+        };
+
+        // ── Keepalive task ───────────────────────────────────────
+        let keepalive_handle = {
+            let tunnel_socket = Arc::clone(&tunnel_socket);
+            let running = Arc::clone(&running);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                let mut ka_seq: u16 = 60000;
+                while running.load(Ordering::Relaxed) {
+                    interval.tick().await;
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros() as u32;
+                    let header = lightspeed_protocol::TunnelHeader::keepalive(ka_seq, ts);
+                    let _ = tunnel_socket.send_to(&header.encode(), proxy_addr).await;
+                    ka_seq = ka_seq.wrapping_add(1);
+                }
+            })
+        };
+
+        // ── Stats logger task ────────────────────────────────────
+        let stats_handle = {
+            let out_pkts = Arc::clone(&outbound_packets);
+            let out_bytes = Arc::clone(&outbound_bytes);
+            let inj_stats = Arc::clone(&injector_stats);
+            let running = Arc::clone(&running);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(10));
+                while running.load(Ordering::Relaxed) {
+                    interval.tick().await;
+                    let cap = out_pkts.load(Ordering::Relaxed);
+                    let cap_b = out_bytes.load(Ordering::Relaxed);
+                    let inj = inj_stats.packets_injected.load(Ordering::Relaxed);
+                    let inj_b = inj_stats.bytes_injected.load(Ordering::Relaxed);
+                    let from_proxy = inj_stats.packets_from_proxy.load(Ordering::Relaxed);
+                    let recovered = inj_stats.fec_recovered.load(Ordering::Relaxed);
+                    let errors = inj_stats.inject_errors.load(Ordering::Relaxed);
+
+                    if cap > 0 || from_proxy > 0 {
+                        if fec_enabled {
+                            info!(
+                                "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | FEC recovered: {} | Errors: {}",
+                                cap, cap_b, from_proxy, inj, inj_b, recovered, errors
+                            );
+                        } else {
+                            info!(
+                                "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | Errors: {}",
+                                cap, cap_b, from_proxy, inj, inj_b, errors
+                            );
+                        }
+                    }
+                }
+            })
+        };
+
+        // ── Outbound capture loop: Game → pcap → Tunnel → Proxy ──
+        //
+        // Captures game packets from the network interface, wraps them
+        // in LightSpeed headers (with optional FEC), and forwards to proxy.
+        let mut seq: u16 = 0;
+        let mut fec_encoder = if fec_enabled {
+            Some(lightspeed_protocol::FecEncoder::new(fec_k))
+        } else {
+            None
+        };
+
         while running.load(Ordering::Relaxed) {
             match cap_backend.next_packet() {
                 Ok(pkt) => {
-                    packets_captured += 1;
-                    bytes_captured += pkt.payload.len() as u64;
+                    outbound_packets.fetch_add(1, Ordering::Relaxed);
+                    outbound_bytes.fetch_add(pkt.payload.len() as u64, Ordering::Relaxed);
 
-                    // Build tunnel header and forward to proxy
+                    // Learn the game client's source address
+                    {
+                        let mut addr = game_client_addr.write().await;
+                        if addr.is_none() {
+                            info!("🎮 Game client detected at {} → {}", pkt.src, pkt.dst);
+                        }
+                        *addr = Some(pkt.src);
+                    }
+
                     let ts = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_micros() as u32;
 
-                    let header = lightspeed_protocol::TunnelHeader::new(
-                        seq, ts, pkt.src, pkt.dst,
-                    );
-                    let packet = header.encode_with_payload(&pkt.payload);
+                    if let Some(ref mut encoder) = fec_encoder {
+                        // FEC mode: wrap with FEC header
+                        use bytes::BytesMut;
+                        use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
 
-                    match tunnel_socket.send_to(&packet, proxy_addr).await {
-                        Ok(_) => {
-                            tracing::trace!(
-                                seq = seq,
-                                src = %pkt.src,
-                                dst = %pkt.dst,
-                                payload_len = pkt.payload.len(),
-                                "Captured → Proxy"
+                        let block_id = encoder.block_id();
+                        let index = encoder.current_index();
+
+                        let header = lightspeed_protocol::TunnelHeader::new_fec(
+                            seq, ts, pkt.src, pkt.dst,
+                        );
+                        let fec_hdr = FecHeader::data(block_id, index, fec_k);
+
+                        let mut pkt_buf = BytesMut::with_capacity(
+                            HEADER_SIZE + FEC_HEADER_SIZE + pkt.payload.len(),
+                        );
+                        pkt_buf.extend_from_slice(&header.encode());
+                        fec_hdr.encode(&mut pkt_buf);
+                        pkt_buf.extend_from_slice(&pkt.payload);
+
+                        let parity = encoder.add_packet(&pkt.payload);
+                        let _ = tunnel_socket.send_to(&pkt_buf, proxy_addr).await;
+
+                        // Send parity when block completes
+                        if let Some(parity_bytes) = parity {
+                            let parity_seq = seq.wrapping_add(1);
+                            let parity_header = lightspeed_protocol::TunnelHeader::new_fec(
+                                parity_seq, ts, pkt.src, pkt.dst,
                             );
+                            let parity_fec = FecHeader::parity(block_id, fec_k);
+                            let mut parity_buf = BytesMut::with_capacity(
+                                HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
+                            );
+                            parity_buf.extend_from_slice(&parity_header.encode());
+                            parity_fec.encode(&mut parity_buf);
+                            parity_buf.extend_from_slice(&parity_bytes);
+                            let _ = tunnel_socket.send_to(&parity_buf, proxy_addr).await;
+                            seq = seq.wrapping_add(1); // Extra seq for parity
                         }
-                        Err(e) => {
-                            tracing::warn!("Forward to proxy failed: {}", e);
-                        }
+                    } else {
+                        // Non-FEC: simple tunnel header + payload
+                        let header = lightspeed_protocol::TunnelHeader::new(
+                            seq, ts, pkt.src, pkt.dst,
+                        );
+                        let packet = header.encode_with_payload(&pkt.payload);
+                        let _ = tunnel_socket.send_to(&packet, proxy_addr).await;
                     }
+
+                    tracing::trace!(
+                        seq = seq,
+                        src = %pkt.src,
+                        dst = %pkt.dst,
+                        payload_len = pkt.payload.len(),
+                        "Captured → Proxy"
+                    );
 
                     seq = seq.wrapping_add(1);
-
-                    // Periodic stats
-                    if packets_captured % 100 == 0 {
-                        let elapsed = start_time.elapsed().as_secs_f64();
-                        let pps = packets_captured as f64 / elapsed.max(0.001);
-                        info!(
-                            "📊 Captured: {} packets, {} bytes, {:.0} pps",
-                            packets_captured, bytes_captured, pps
-                        );
-                    }
                 }
                 Err(e) => {
-                    // Timeout errors are normal (pcap returns them on read timeout)
                     let err_str = format!("{}", e);
                     if !err_str.contains("Timeout") && !err_str.contains("timeout") {
                         tracing::debug!("Capture error: {}", e);
@@ -570,17 +814,36 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        // Shutdown
+        // ── Shutdown ─────────────────────────────────────────────
         let _ = cap_backend.stop();
+        inbound_handle.abort();
+        keepalive_handle.abort();
+        stats_handle.abort();
+
         let elapsed = start_time.elapsed();
+        let out_total = outbound_packets.load(Ordering::Relaxed);
+        let out_bytes_total = outbound_bytes.load(Ordering::Relaxed);
+        let inj_total = injector_stats.packets_injected.load(Ordering::Relaxed);
+        let inj_bytes_total = injector_stats.bytes_injected.load(Ordering::Relaxed);
+        let from_proxy_total = injector_stats.packets_from_proxy.load(Ordering::Relaxed);
+        let fec_recovered_total = injector_stats.fec_recovered.load(Ordering::Relaxed);
+        let inject_errors = injector_stats.inject_errors.load(Ordering::Relaxed);
+
         info!("\n⚡ Capture stopped");
         info!("📊 Final stats:");
-        info!("   Duration:  {:.1}s", elapsed.as_secs_f64());
-        info!("   Packets:   {}", packets_captured);
-        info!("   Bytes:     {}", bytes_captured);
-        if elapsed.as_secs() > 0 {
-            info!("   Avg PPS:   {:.0}", packets_captured as f64 / elapsed.as_secs_f64());
+        info!("   Duration:        {:.1}s", elapsed.as_secs_f64());
+        info!("   ── Outbound (Game → Proxy) ──");
+        info!("   Captured:        {} packets, {} bytes", out_total, out_bytes_total);
+        if elapsed.as_secs() > 0 && out_total > 0 {
+            info!("   Avg PPS:         {:.0}", out_total as f64 / elapsed.as_secs_f64());
         }
+        info!("   ── Inbound (Proxy → Game) ──");
+        info!("   From proxy:      {} packets", from_proxy_total);
+        info!("   Injected:        {} packets, {} bytes", inj_total, inj_bytes_total);
+        if fec_enabled {
+            info!("   FEC recovered:   {} packets", fec_recovered_total);
+        }
+        info!("   Inject errors:   {}", inject_errors);
         return Ok(());
     }
 
