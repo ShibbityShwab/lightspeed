@@ -94,3 +94,17 @@
 | **Conclusion** | Cloudflare WARP IS the best Bangkok relay we can get for free. Only ExitLag-level BGP transit agreements ($$$) would do better. |
 | **Theoretical Best** | BKK VPS + NTT transit: ~177ms (beats ExitLag). But no affordable Thai provider offers this. |
 | **Final Strategy** | Use WARP (free, 193ms) + FEC (3ms loss recovery) + multipath (redundancy via SGP) = best achievable setup |
+
+## D-010: ISP Path Analysis — HGC Singapore Detour Identified as Root Cause
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-02-23 |
+| **Discovery** | Traffic goes BKK → Singapore (NOT Hong Kong as previously assumed!) |
+| **Path** | True ISP (2ms) → SBN/AWN SGP (33ms) → HGC Global SGP (36ms) → HGC internal detour (65ms, +29ms!) → HGC Pacific (215ms, 150ms cable) → Vultr LA (203ms) |
+| **ASN Evidence** | Hop 9: AS45430 SBN/AWN = Singapore; Hop 10: AS9304 HGC = Singapore; Hop 14: AS9304 HGC = Los Angeles |
+| **Bottleneck** | Hop 12 (10.165.171.1): HGC internal router adds 29ms BEFORE Pacific crossing. Without it: 36ms + 150ms = 186ms = ExitLag speed! |
+| **Vultr BKK** | Does NOT exist. Nearest Vultr Asia: SGP (31ms), Tokyo (107ms), Seoul, Osaka. No HK either. |
+| **If Vultr had BKK** | ~5ms access + 172ms Vultr backbone = **177ms — beats ExitLag by 10ms!** |
+| **Why SGP relay loses** | Bypasses HGC detour (good) but adds 31ms BKK→SGP hop (bad). Net: 31+178=209ms > 203ms direct |
+| **Why WARP wins** | Bypasses HGC entirely via NTT backbone. MASQUE overhead (33ms) < HGC detour (29ms) + ISP routing overhead. Net: 193-197ms |
+| **UDP routing** | Confirmed same path as ICMP (UDP 206ms vs ICMP 202ms). BGP routes by destination IP, not protocol. |
