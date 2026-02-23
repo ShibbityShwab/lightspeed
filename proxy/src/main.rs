@@ -15,6 +15,7 @@
 use lightspeed_proxy::abuse;
 use lightspeed_proxy::auth;
 use lightspeed_proxy::config;
+use lightspeed_proxy::health;
 use lightspeed_proxy::metrics;
 use lightspeed_proxy::rate_limit;
 use lightspeed_proxy::relay;
@@ -169,6 +170,24 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "quic"))]
     info!("QUIC control plane disabled (compile with --features quic)");
 
+    // Spawn health check HTTP server
+    let health_handle = {
+        let metrics = Arc::clone(&metrics);
+        let engine = Arc::clone(&engine);
+        let region = config.server.region.clone();
+        let node_id = config.server.node_id.clone();
+        let health_bind = cli.health_bind.clone();
+        let start_time = std::time::Instant::now();
+        tokio::spawn(async move {
+            if let Err(e) =
+                health::run_health_server(health_bind, metrics, engine, region, node_id, start_time)
+                    .await
+            {
+                tracing::error!("Health check server failed: {}", e);
+            }
+        })
+    };
+
     // Spawn periodic stats logger
     let stats_handle = {
         let metrics = Arc::clone(&metrics);
@@ -208,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
     // Abort background tasks
     relay_handle.abort();
     manager_handle.abort();
+    health_handle.abort();
     stats_handle.abort();
     #[cfg(feature = "quic")]
     control_handle.abort();
