@@ -3,7 +3,7 @@
 LightSpeed E2E Tunnel Test
 
 Tests the full data path:
-  Client (BKK) → Proxy (LA/OCI) → Game Server (SGP echo) → Proxy → Client
+  Client (BKK) → Proxy (LA/SGP) → Game Server (SGP echo) → Proxy → Client
 
 Encodes LightSpeed tunnel headers matching protocol/src/header.rs format.
 """
@@ -168,7 +168,6 @@ def main():
     # Configuration
     proxies = [
         ("Vultr LA",    ("149.28.84.139", 4434)),
-        ("OCI San Jose", ("163.192.3.134", 4434)),
         ("Vultr SGP",   ("149.28.144.74", 4434)),
     ]
     game_server_ip = "149.28.144.74"  # SGP echo server

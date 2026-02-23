@@ -3,7 +3,7 @@
  * LightSpeed E2E Tunnel Test (Node.js)
  *
  * Tests the full data path:
- *   Client (BKK) → Proxy (LA/OCI/SGP) → Game Server (SGP echo) → Proxy → Client
+ *   Client (BKK) → Proxy (LA/SGP) → Game Server (SGP echo) → Proxy → Client
  *
  * Encodes LightSpeed tunnel headers matching protocol/src/header.rs format.
  */
@@ -218,7 +218,6 @@ async function main() {
 
   const proxies = [
     ['Vultr LA',     '149.28.84.139',  4434],
-    ['OCI San Jose', '163.192.3.134',  4434],
     ['Vultr SGP',    '149.28.144.74',  4434],
   ];
   const gameServerIp = '149.28.144.74';
