@@ -191,17 +191,17 @@ impl ControlMessage {
             return Err(ControlDecodeError::BufferTooSmall { got: 0, need: 1 });
         }
 
-        let mut buf = &data[..];
+        let mut buf = data;
         let msg_type = buf.get_u8();
 
         match msg_type {
             MSG_PING => {
-                ensure_remaining(&buf, 8)?;
+                ensure_remaining(buf, 8)?;
                 let timestamp_us = buf.get_u64();
                 Ok(Self::Ping { timestamp_us })
             }
             MSG_PONG => {
-                ensure_remaining(&buf, 16)?;
+                ensure_remaining(buf, 16)?;
                 let client_timestamp_us = buf.get_u64();
                 let server_timestamp_us = buf.get_u64();
                 Ok(Self::Pong {
@@ -210,7 +210,7 @@ impl ControlMessage {
                 })
             }
             MSG_REGISTER => {
-                ensure_remaining(&buf, 2)?;
+                ensure_remaining(buf, 2)?;
                 let protocol_version = buf.get_u8();
                 let game = buf.get_u8();
                 Ok(Self::Register {
@@ -219,7 +219,7 @@ impl ControlMessage {
                 })
             }
             MSG_REGISTER_ACK => {
-                ensure_remaining(&buf, 5)?;
+                ensure_remaining(buf, 5)?;
                 let session_id = buf.get_u32();
                 let session_token = buf.get_u8();
                 let node_id = get_short_string(&mut buf)?;
@@ -232,12 +232,12 @@ impl ControlMessage {
                 })
             }
             MSG_DISCONNECT => {
-                ensure_remaining(&buf, 1)?;
+                ensure_remaining(buf, 1)?;
                 let reason = buf.get_u8();
                 Ok(Self::Disconnect { reason })
             }
             MSG_SERVER_INFO => {
-                ensure_remaining(&buf, 9)?;
+                ensure_remaining(buf, 9)?;
                 let load_pct = buf.get_u8();
                 let active_clients = buf.get_u32();
                 let capacity = buf.get_u32();
