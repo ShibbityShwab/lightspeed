@@ -193,7 +193,6 @@ async fn main() -> anyhow::Result<()> {
             let proxy_ips = vec![
                 Ipv4Addr::new(149, 28, 84, 139),   // Vultr LA
                 Ipv4Addr::new(149, 28, 144, 74),    // Vultr SGP
-                Ipv4Addr::new(163, 192, 3, 134),    // OCI San Jose
             ];
             warp_manager.print_summary(&proxy_ips);
 
