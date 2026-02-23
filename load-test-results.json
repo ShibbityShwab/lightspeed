@@ -1,0 +1,28 @@
+[
+  {
+    "target": "149.28.84.139",
+    "duration_secs": 31.014312744140625,
+    "num_clients": 10,
+    "total_sent": 994,
+    "total_received": 994,
+    "loss_pct": 0.0,
+    "throughput_pps": 32.0,
+    "latency_p50_ms": 201.55,
+    "latency_p95_ms": 206.26,
+    "latency_p99_ms": 207.33,
+    "latency_avg_ms": 201.5
+  },
+  {
+    "target": "149.28.144.74",
+    "duration_secs": 31.010850191116333,
+    "num_clients": 10,
+    "total_sent": 2285,
+    "total_received": 2285,
+    "loss_pct": 0.0,
+    "throughput_pps": 73.7,
+    "latency_p50_ms": 30.38,
+    "latency_p95_ms": 32.88,
+    "latency_p99_ms": 33.73,
+    "latency_avg_ms": 30.49
+  }
+]
