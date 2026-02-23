@@ -66,6 +66,17 @@ struct Cli {
     #[arg(long)]
     local_port: Option<u16>,
 
+    /// Enable Forward Error Correction (FEC) for packet loss recovery.
+    /// Adds ~25% bandwidth overhead but can recover any single lost packet
+    /// per block of K. Much more efficient than ExitLag's packet duplication.
+    #[arg(long, default_value_t = false)]
+    fec: bool,
+
+    /// FEC block size: number of data packets per parity packet (2-16, default 4).
+    /// Lower K = more redundancy but more overhead. K=4 means 25% overhead.
+    #[arg(long, default_value_t = 4)]
+    fec_k: u8,
+
     /// Enable Cloudflare WARP for improved routing (5-10ms savings)
     /// Automatically connects WARP on startup and restores on shutdown
     #[arg(short = 'w', long, default_value_t = false)]
@@ -271,7 +282,11 @@ async fn main() -> anyhow::Result<()> {
         info!("   Local port:  127.0.0.1:{}", local_port);
         info!("   Proxy:       {}", proxy_addr);
 
-        let redirect_proxy = redirect::UdpRedirect::new(local_port, game_server_addr, proxy_addr);
+        let mut redirect_proxy = redirect::UdpRedirect::new(local_port, game_server_addr, proxy_addr);
+        if cli.fec {
+            info!("   FEC:         enabled (K={}, ~{}% overhead)", cli.fec_k, 100 / cli.fec_k as u32);
+            redirect_proxy = redirect_proxy.with_fec(cli.fec_k);
+        }
         return redirect_proxy.run().await;
     }
 

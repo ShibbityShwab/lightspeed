@@ -10,6 +10,7 @@ pub mod header;
 
 pub use header::{
     flags, DecodeError, TunnelHeader, HEADER_SIZE, MAX_PAYLOAD_SIZE, PROTOCOL_VERSION,
+    PROTOCOL_VERSION_FEC,
 };
 
 pub use fec::{

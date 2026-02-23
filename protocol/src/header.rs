@@ -35,6 +35,11 @@ use thiserror::Error;
 /// Current protocol version.
 pub const PROTOCOL_VERSION: u8 = 1;
 
+/// Protocol version indicating FEC header follows the tunnel header.
+/// When a packet uses version 2, a 4-byte FEC header is present
+/// immediately after the 20-byte tunnel header.
+pub const PROTOCOL_VERSION_FEC: u8 = 2;
+
 /// Header size in bytes.
 pub const HEADER_SIZE: usize = 20;
 
@@ -95,6 +100,22 @@ impl TunnelHeader {
     pub fn new(sequence: u16, timestamp_us: u32, src: SocketAddrV4, dst: SocketAddrV4) -> Self {
         Self {
             version: PROTOCOL_VERSION,
+            flags: 0,
+            session_token: 0,
+            sequence,
+            timestamp_us,
+            orig_src_ip: *src.ip(),
+            orig_dst_ip: *dst.ip(),
+            orig_src_port: src.port(),
+            orig_dst_port: dst.port(),
+        }
+    }
+
+    /// Create a new tunnel header with FEC enabled (version 2).
+    /// The caller must append a 4-byte FEC header after the tunnel header.
+    pub fn new_fec(sequence: u16, timestamp_us: u32, src: SocketAddrV4, dst: SocketAddrV4) -> Self {
+        Self {
+            version: PROTOCOL_VERSION_FEC,
             flags: 0,
             session_token: 0,
             sequence,
@@ -189,7 +210,7 @@ impl TunnelHeader {
         let version = ver_flags >> 4;
         let flags = ver_flags & 0x0F;
 
-        if version != PROTOCOL_VERSION {
+        if version != PROTOCOL_VERSION && version != PROTOCOL_VERSION_FEC {
             return Err(DecodeError::UnsupportedVersion {
                 version,
                 expected: PROTOCOL_VERSION,
@@ -245,6 +266,11 @@ impl TunnelHeader {
         self.flags & flags::FIN != 0
     }
 
+    /// Check if this packet has an FEC header extension (version 2).
+    pub fn has_fec(&self) -> bool {
+        self.version == PROTOCOL_VERSION_FEC
+    }
+
     /// Get the original source socket address.
     pub fn orig_src_addr(&self) -> SocketAddrV4 {
         SocketAddrV4::new(self.orig_src_ip, self.orig_src_port)
@@ -256,9 +282,10 @@ impl TunnelHeader {
     }
 
     /// Create a response header by swapping source and destination.
+    /// Preserves the protocol version (v1 or v2/FEC).
     pub fn make_response(&self, sequence: u16, timestamp_us: u32) -> Self {
         Self {
-            version: PROTOCOL_VERSION,
+            version: self.version,
             flags: 0,
             session_token: self.session_token,
             sequence,
