@@ -1,0 +1,47 @@
+# LightSpeed Proxy — Fly.io Configuration
+# Deploy to LAX for optimal Thailand ↔ California latency
+# Uses Fly.io's anycast network with Equinix peering
+
+app = "lightspeed-proxy"
+primary_region = "lax"
+
+[build]
+  dockerfile = "../../infra/docker/Dockerfile"
+
+# UDP game data plane — requires dedicated IPv4
+[[services]]
+  internal_port = 4434
+  protocol = "udp"
+
+  [[services.ports]]
+    port = 4434
+
+# TCP health check endpoint
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 8080
+    handlers = ["http"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 100
+
+  [[services.http_checks]]
+    interval = 10000
+    grace_period = "5s"
+    method = "get"
+    path = "/health"
+    protocol = "http"
+    timeout = 2000
+
+[vm]
+  memory = "256mb"
+  cpus = 1
+  cpu_kind = "shared"
+
+[env]
+  RUST_LOG = "info"

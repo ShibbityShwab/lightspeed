@@ -51,6 +51,9 @@ pub mod flags {
     pub const FIN: u8 = 0b0000_0100;
     /// Fragment — packet is part of a fragmented message.
     pub const FRAGMENT: u8 = 0b0000_1000;
+    // NOTE: Bits 4-7 are reserved for future use. FEC uses a separate
+    // header extension signaled via the version/type field, not flags,
+    // to maintain backward compatibility with v1 proxies.
 }
 
 /// Errors from decoding a tunnel header.
