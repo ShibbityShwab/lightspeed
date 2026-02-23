@@ -13,24 +13,33 @@
 //! 5. Game server responds → proxy wraps response → sent back here
 //! 6. Response is unwrapped and delivered to the game on the local socket
 //!
+//! ## FEC Mode (--fec)
+//!
+//! When FEC is enabled, packets are grouped into blocks of K. For each block,
+//! an XOR parity packet is generated and sent alongside data. If any single
+//! packet in a block is lost in transit, it can be recovered from the parity.
+//! This adds ~25% bandwidth overhead (K=4) vs ExitLag's 200-300%.
+//!
 //! ## Usage
 //!
 //! ```
 //! lightspeed --game cs2 --proxy 149.28.84.139:4434 --game-server 192.168.1.1:27015
+//! lightspeed --fec --proxy 149.28.84.139:4434 --game-server 192.168.1.1:27015
 //! ```
-//!
-//! Then configure the game to connect to `127.0.0.1:27015` (same port).
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use bytes::BytesMut;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 
-use lightspeed_protocol::TunnelHeader;
+use lightspeed_protocol::{
+    FecDecoder, FecEncoder, FecHeader, TunnelHeader, FEC_HEADER_SIZE, HEADER_SIZE,
+};
 
 /// Get current timestamp in microseconds.
 fn now_us() -> u32 {
@@ -50,6 +59,8 @@ pub struct RedirectStats {
     pub packets_to_game: AtomicU64,
     pub packets_from_game: AtomicU64,
     pub errors: AtomicU64,
+    pub fec_parity_sent: AtomicU64,
+    pub fec_recovered: AtomicU64,
 }
 
 impl RedirectStats {
@@ -62,6 +73,8 @@ impl RedirectStats {
             packets_to_game: AtomicU64::new(0),
             packets_from_game: AtomicU64::new(0),
             errors: AtomicU64::new(0),
+            fec_parity_sent: AtomicU64::new(0),
+            fec_recovered: AtomicU64::new(0),
         }
     }
 }
@@ -78,6 +91,10 @@ pub struct UdpRedirect {
     proxy_addr: SocketAddrV4,
     /// Sequence counter for LightSpeed headers.
     sequence: AtomicU16,
+    /// FEC enabled.
+    fec_enabled: bool,
+    /// FEC block size (K data packets per parity).
+    fec_k: u8,
     /// Stats.
     pub stats: Arc<RedirectStats>,
 }
@@ -90,8 +107,17 @@ impl UdpRedirect {
             game_server,
             proxy_addr,
             sequence: AtomicU16::new(0),
+            fec_enabled: false,
+            fec_k: 4,
             stats: Arc::new(RedirectStats::new()),
         }
+    }
+
+    /// Enable FEC with the given block size.
+    pub fn with_fec(mut self, k_size: u8) -> Self {
+        self.fec_enabled = true;
+        self.fec_k = k_size.max(2).min(16);
+        self
     }
 
     fn next_seq(&self) -> u16 {
@@ -120,15 +146,24 @@ impl UdpRedirect {
         let game_server = self.game_server;
         let proxy_addr = self.proxy_addr;
         let stats = Arc::clone(&self.stats);
+        let fec_enabled = self.fec_enabled;
+        let fec_k = self.fec_k;
 
         // Track the game client's address (set on first packet received)
         let game_client_addr: Arc<RwLock<Option<std::net::SocketAddr>>> =
             Arc::new(RwLock::new(None));
 
-        info!(
-            "⚡ Redirect active: Game → 127.0.0.1:{} → Proxy {} → Server {}",
-            self.local_port, proxy_addr, game_server
-        );
+        if fec_enabled {
+            info!(
+                "⚡ Redirect active (FEC K={}): Game → 127.0.0.1:{} → Proxy {} → Server {}",
+                fec_k, self.local_port, proxy_addr, game_server
+            );
+        } else {
+            info!(
+                "⚡ Redirect active: Game → 127.0.0.1:{} → Proxy {} → Server {}",
+                self.local_port, proxy_addr, game_server
+            );
+        }
 
         // ── Outbound task: Game → Proxy ─────────────────────────────
         let outbound_handle = {
@@ -136,14 +171,19 @@ impl UdpRedirect {
             let tunnel_socket = Arc::clone(&tunnel_socket);
             let game_client_addr = Arc::clone(&game_client_addr);
             let stats = Arc::clone(&stats);
-            let _sequence = &self.sequence;
 
-            // We need to move the atomicu16 ref — use a shared counter
             let seq_counter = Arc::new(AtomicU16::new(0));
-
             let seq = Arc::clone(&seq_counter);
+
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 2048];
+
+                // FEC encoder (only if enabled)
+                let mut fec_encoder = if fec_enabled {
+                    Some(FecEncoder::new(fec_k))
+                } else {
+                    None
+                };
 
                 loop {
                     // Receive from the game client
@@ -158,7 +198,7 @@ impl UdpRedirect {
 
                     let payload = &buf[..len];
 
-                    // Remember the game client's address (for sending responses back)
+                    // Remember the game client's address
                     {
                         let mut addr = game_client_addr.write().await;
                         if addr.is_none() {
@@ -169,36 +209,91 @@ impl UdpRedirect {
 
                     stats.packets_from_game.fetch_add(1, Ordering::Relaxed);
 
-                    // Build the LightSpeed tunnel header
                     let seq_num = seq.fetch_add(1, Ordering::Relaxed);
 
-                    // Construct the original source (game client) and destination (game server)
                     let orig_src = match from_addr {
                         std::net::SocketAddr::V4(v4) => v4,
                         _ => SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
                     };
 
-                    let header =
-                        TunnelHeader::new(seq_num, now_us(), orig_src, game_server);
+                    if let Some(ref mut encoder) = fec_encoder {
+                        // ── FEC mode: encode with FEC header ────────────
+                        let block_id = encoder.block_id();
+                        let index = encoder.current_index();
 
-                    let packet = header.encode_with_payload(payload);
+                        // Build FEC data packet:
+                        // [TunnelHeader v2 20B][FecHeader 4B][game_payload]
+                        let header = TunnelHeader::new_fec(seq_num, now_us(), orig_src, game_server);
+                        let fec_hdr = FecHeader::data(block_id, index, fec_k);
 
-                    // Send to proxy
-                    match tunnel_socket.send_to(&packet, proxy_addr).await {
-                        Ok(sent) => {
-                            stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
-                            stats
-                                .bytes_to_proxy
-                                .fetch_add(sent as u64, Ordering::Relaxed);
-                            trace!(
-                                seq = seq_num,
-                                payload_len = len,
-                                "Game → Proxy"
-                            );
+                        let mut pkt_buf = BytesMut::with_capacity(
+                            HEADER_SIZE + FEC_HEADER_SIZE + payload.len(),
+                        );
+                        // Encode tunnel header inline
+                        pkt_buf.extend_from_slice(&header.encode());
+                        fec_hdr.encode(&mut pkt_buf);
+                        pkt_buf.extend_from_slice(payload);
+
+                        // Feed payload into FEC encoder (XOR accumulation)
+                        let parity = encoder.add_packet(payload);
+
+                        // Send the data packet
+                        match tunnel_socket.send_to(&pkt_buf, proxy_addr).await {
+                            Ok(sent) => {
+                                stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
+                                stats.bytes_to_proxy.fetch_add(sent as u64, Ordering::Relaxed);
+                                trace!(seq = seq_num, fec_block = block_id, fec_idx = index, "Game → Proxy (FEC data)");
+                            }
+                            Err(e) => {
+                                warn!("Tunnel send error: {}", e);
+                                stats.errors.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
-                        Err(e) => {
-                            warn!("Tunnel send error: {}", e);
-                            stats.errors.fetch_add(1, Ordering::Relaxed);
+
+                        // If block is complete, send parity packet
+                        if let Some(parity_bytes) = parity {
+                            let parity_seq = seq.fetch_add(1, Ordering::Relaxed);
+                            // block_id was incremented by add_packet, so use block_id (captured before)
+                            let parity_header = TunnelHeader::new_fec(
+                                parity_seq, now_us(), orig_src, game_server,
+                            );
+                            let parity_fec = FecHeader::parity(block_id, fec_k);
+
+                            let mut parity_buf = BytesMut::with_capacity(
+                                HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
+                            );
+                            parity_buf.extend_from_slice(&parity_header.encode());
+                            parity_fec.encode(&mut parity_buf);
+                            parity_buf.extend_from_slice(&parity_bytes);
+
+                            match tunnel_socket.send_to(&parity_buf, proxy_addr).await {
+                                Ok(sent) => {
+                                    stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
+                                    stats.bytes_to_proxy.fetch_add(sent as u64, Ordering::Relaxed);
+                                    stats.fec_parity_sent.fetch_add(1, Ordering::Relaxed);
+                                    trace!(seq = parity_seq, fec_block = block_id, "Parity sent");
+                                }
+                                Err(e) => {
+                                    warn!("Parity send error: {}", e);
+                                    stats.errors.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                    } else {
+                        // ── Non-FEC mode: original behavior ─────────────
+                        let header = TunnelHeader::new(seq_num, now_us(), orig_src, game_server);
+                        let packet = header.encode_with_payload(payload);
+
+                        match tunnel_socket.send_to(&packet, proxy_addr).await {
+                            Ok(sent) => {
+                                stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
+                                stats.bytes_to_proxy.fetch_add(sent as u64, Ordering::Relaxed);
+                                trace!(seq = seq_num, payload_len = len, "Game → Proxy");
+                            }
+                            Err(e) => {
+                                warn!("Tunnel send error: {}", e);
+                                stats.errors.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                 }
@@ -215,6 +310,15 @@ impl UdpRedirect {
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 2048];
 
+                // FEC decoder (only if enabled)
+                let mut fec_decoder = if fec_enabled {
+                    Some(FecDecoder::new())
+                } else {
+                    None
+                };
+
+                let mut gc_counter: u32 = 0;
+
                 loop {
                     // Receive from the proxy
                     let (len, _from_addr) = match tunnel_socket.recv_from(&mut buf).await {
@@ -227,9 +331,10 @@ impl UdpRedirect {
                     };
 
                     stats.packets_from_proxy.fetch_add(1, Ordering::Relaxed);
+                    stats.bytes_from_proxy.fetch_add(len as u64, Ordering::Relaxed);
 
                     // Decode the LightSpeed header
-                    let (_header, payload) =
+                    let (header, payload) =
                         match TunnelHeader::decode_with_payload(&buf[..len]) {
                             Ok(r) => r,
                             Err(e) => {
@@ -239,32 +344,98 @@ impl UdpRedirect {
                             }
                         };
 
-                    stats
-                        .bytes_from_proxy
-                        .fetch_add(len as u64, Ordering::Relaxed);
-
-                    // Forward the raw game data back to the game client
+                    // Get the game client address
                     let game_addr = {
                         let addr = game_client_addr.read().await;
                         *addr
                     };
 
-                    if let Some(game_addr) = game_addr {
+                    let game_addr = match game_addr {
+                        Some(addr) => addr,
+                        None => {
+                            debug!("Response received but no game client connected yet");
+                            continue;
+                        }
+                    };
+
+                    if header.has_fec() && fec_decoder.is_some() {
+                        // ── FEC mode: decode FEC header from payload ────
+                        if payload.len() < FEC_HEADER_SIZE {
+                            debug!("FEC packet too short");
+                            stats.errors.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+
+                        let mut fec_slice: &[u8] = &payload[..FEC_HEADER_SIZE];
+                        let fec_hdr = match FecHeader::decode(&mut fec_slice) {
+                            Some(h) => h,
+                            None => {
+                                debug!("Invalid FEC header in response");
+                                stats.errors.fetch_add(1, Ordering::Relaxed);
+                                continue;
+                            }
+                        };
+
+                        let game_data = &payload[FEC_HEADER_SIZE..];
+                        let decoder = fec_decoder.as_mut().unwrap();
+
+                        if fec_hdr.is_parity() {
+                            // Parity packet — try to recover a lost data packet
+                            let parity_data = bytes::Bytes::copy_from_slice(game_data);
+                            if let Some((_idx, recovered)) =
+                                decoder.receive_parity(&fec_hdr, parity_data)
+                            {
+                                // Recovered a lost packet! Forward to game
+                                stats.fec_recovered.fetch_add(1, Ordering::Relaxed);
+                                info!(
+                                    block = fec_hdr.block_id,
+                                    recovered_len = recovered.len(),
+                                    "🔧 FEC recovered lost packet!"
+                                );
+                                match local_socket.send_to(&recovered, game_addr).await {
+                                    Ok(_) => {
+                                        stats.packets_to_game.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    Err(e) => {
+                                        warn!("Local socket send error: {}", e);
+                                        stats.errors.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                        } else {
+                            // Data packet — forward to game and track for FEC
+                            let data_bytes = bytes::Bytes::copy_from_slice(game_data);
+                            decoder.receive_data(&fec_hdr, data_bytes);
+
+                            match local_socket.send_to(game_data, game_addr).await {
+                                Ok(_) => {
+                                    stats.packets_to_game.fetch_add(1, Ordering::Relaxed);
+                                    trace!(payload_len = game_data.len(), "Proxy → Game (FEC data)");
+                                }
+                                Err(e) => {
+                                    warn!("Local socket send error: {}", e);
+                                    stats.errors.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                        }
+
+                        // Periodic GC of expired FEC blocks
+                        gc_counter += 1;
+                        if gc_counter % 100 == 0 {
+                            decoder.gc();
+                        }
+                    } else {
+                        // ── Non-FEC mode: forward payload directly ──────
                         match local_socket.send_to(payload, game_addr).await {
                             Ok(_) => {
                                 stats.packets_to_game.fetch_add(1, Ordering::Relaxed);
-                                trace!(
-                                    payload_len = payload.len(),
-                                    "Proxy → Game"
-                                );
+                                trace!(payload_len = payload.len(), "Proxy → Game");
                             }
                             Err(e) => {
                                 warn!("Local socket send error: {}", e);
                                 stats.errors.fetch_add(1, Ordering::Relaxed);
                             }
                         }
-                    } else {
-                        debug!("Response received but no game client connected yet");
                     }
                 }
             })
@@ -289,6 +460,7 @@ impl UdpRedirect {
         // ── Stats logger ────────────────────────────────────────────
         let stats_handle = {
             let stats = Arc::clone(&self.stats);
+            let fec_enabled = self.fec_enabled;
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(10));
                 loop {
@@ -302,10 +474,19 @@ impl UdpRedirect {
                     let errors = stats.errors.load(Ordering::Relaxed);
 
                     if from_game > 0 || from_proxy > 0 {
-                        info!(
-                            "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | Errors: {}",
-                            to_proxy, bytes_out, to_game, bytes_in, errors
-                        );
+                        if fec_enabled {
+                            let parity = stats.fec_parity_sent.load(Ordering::Relaxed);
+                            let recovered = stats.fec_recovered.load(Ordering::Relaxed);
+                            info!(
+                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | FEC: {} parity sent, {} recovered | Errors: {}",
+                                to_proxy, bytes_out, to_game, bytes_in, parity, recovered, errors
+                            );
+                        } else {
+                            info!(
+                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | Errors: {}",
+                                to_proxy, bytes_out, to_game, bytes_in, errors
+                            );
+                        }
                     }
                 }
             })
@@ -338,6 +519,13 @@ impl UdpRedirect {
             stats.packets_to_game.load(Ordering::Relaxed),
             stats.bytes_from_proxy.load(Ordering::Relaxed)
         );
+        if self.fec_enabled {
+            info!(
+                "   FEC: {} parity sent, {} packets recovered",
+                stats.fec_parity_sent.load(Ordering::Relaxed),
+                stats.fec_recovered.load(Ordering::Relaxed),
+            );
+        }
         info!(
             "   Errors: {}",
             stats.errors.load(Ordering::Relaxed)
@@ -359,6 +547,17 @@ mod tests {
 
         assert_eq!(redirect.game_server, game_server);
         assert_eq!(redirect.proxy_addr, proxy);
+        assert!(!redirect.fec_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_redirect_with_fec() {
+        let game_server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+        let proxy = SocketAddrV4::new(Ipv4Addr::new(149, 28, 84, 139), 4434);
+        let redirect = UdpRedirect::new(0, game_server, proxy).with_fec(4);
+
+        assert!(redirect.fec_enabled);
+        assert_eq!(redirect.fec_k, 4);
     }
 
     #[tokio::test]
