@@ -1,0 +1,82 @@
+# ──────────────────────────────────────────────────────────────
+# LightSpeed — Monitoring Stack (Prometheus + Grafana)
+#
+# Scrapes metrics from all proxy nodes and provides dashboards.
+# Run from any machine with Docker — can be local or on a VPS.
+#
+# Usage:
+#   docker compose up -d                    # Start monitoring
+#   docker compose logs -f                  # View logs
+#   docker compose down                     # Stop monitoring
+#   docker compose down -v                  # Stop + wipe data
+#
+# Access:
+#   Prometheus:  http://localhost:9090
+#   Grafana:     http://localhost:3000  (admin / lightspeed)
+#
+# Requirements:
+#   - Docker + Docker Compose
+#   - Network access to proxy nodes on port 8080
+# ──────────────────────────────────────────────────────────────
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: lightspeed-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=1GB"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: lightspeed-grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=lightspeed
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/lightspeed-overview.json
+      # Lightweight: disable unnecessary features
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_NEWS_NEWS_FEED_ENABLED=false
+      - GF_EXPLORE_ENABLED=true
+      - GF_ALERTING_ENABLED=true
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

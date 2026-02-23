@@ -2,13 +2,58 @@
 
 | Key | Value |
 |-----|-------|
-| **Active Workflow** | WF-004 Game Integration + Live Testing |
-| **Current Step** | Live integration test, game capture pipeline |
-| **Active Agents** | RustDev, NetEng |
-| **Blocked On** | Nothing — all dependencies met |
-| **Last Checkpoint** | 2026-02-23T23:42:00+07:00 |
-| **Next Action** | Monitoring dashboard (WF-005), mesh expansion |
-| **WAT Version** | 0.3.7 |
+| **Active Workflow** | WF-005 Scaling & Monitoring |
+| **Current Step** | Steps 1-3 complete. Load test tool ready. Deploy updated binary → run load tests → mesh expansion. |
+| **Active Agents** | DevOps, InfraDev |
+| **Blocked On** | Deploy updated binary to live nodes (needs SSH key for Vultr) |
+| **Last Checkpoint** | 2026-02-24T01:59:00+07:00 |
+| **Next Action** | 1) `deploy-vultr.sh` to push new binary, 2) `docker compose up` monitoring, 3) `load_test.py --all-nodes`, 4) mesh expansion |
+| **WAT Version** | 0.3.9 |
+
+## WF-005 Progress
+
+| Step | Name | Status |
+|------|------|--------|
+| Step 1 | Monitoring Stack (Prometheus + Grafana) | ✅ Complete |
+| Step 2 | Alerting Rules | ✅ Complete |
+| Step 3 | Auto-Recovery (systemd verified) | ✅ Complete |
+| Step 4 | Load Testing | 🔲 Not Started |
+
+### What Was Built (WF-005 Steps 1-3)
+
+1. **Enhanced Prometheus metrics** (`proxy/src/metrics.rs`)
+   - 20+ metrics: relay counters, latency histogram (11 buckets), FEC stats, security counters, session lifecycle, build info, uptime
+   - All metrics labeled with `region` + `node_id`
+
+2. **Route-aware HTTP server** (`proxy/src/health.rs`)
+   - `GET /health` → JSON health response
+   - `GET /metrics` → Prometheus exposition format
+   - 404 for unknown paths
+
+3. **Metrics wired into relay** (`proxy/src/relay.rs`)
+   - Auth rejections, abuse blocks, rate limit hits tracked
+   - FEC parity/recovery/data packet counters
+   - Session created/expired lifecycle tracking
+
+4. **Prometheus configuration** (`infra/monitoring/prometheus/`)
+   - Scrape targets for proxy-lax (149.28.84.139) and relay-sgp (149.28.144.74)
+   - 10s scrape interval, 30d retention, 1GB max storage
+
+5. **Alerting rules** (`infra/monitoring/prometheus/alerts.yml`)
+   - 10 rules across 5 groups: node health, latency, capacity, security, FEC
+
+6. **Grafana dashboard** (`infra/monitoring/grafana/dashboards/lightspeed-overview.json`)
+   - 6 sections, 20 panels: Overview, Traffic, Latency, FEC, Security, Sessions
+   - Auto-provisioned datasource + dashboard
+
+7. **Docker Compose** (`infra/monitoring/docker-compose.yml`)
+   - One-command deploy: `docker compose up -d`
+   - Prometheus + Grafana with persistent volumes and health checks
+
+8. **Enhanced mesh-health.sh** (`infra/scripts/mesh-health.sh`)
+   - Built-in Vultr node list (no Terraform required)
+   - `--metrics` flag for Prometheus scraping
+   - `--json` flag for machine-readable output
 
 ## Live Infrastructure (2-Node Vultr Mesh)
 
@@ -20,9 +65,11 @@
 | Resource | Value |
 |----------|-------|
 | **Health URLs** | :8080/health on all nodes |
+| **Metrics URLs** | :8080/metrics on all nodes (Prometheus format) |
 | **Data Port** | UDP 4434 |
 | **Control Port** | UDP 4433 (QUIC disabled) |
 | **Landing Page** | https://shibbityshwab.github.io/lightspeed/ |
+| **Monitoring** | Prometheus + Grafana (docker compose) |
 | **Deployment** | Native binary + systemd (no Docker) |
 | **Provider** | Vultr ($300 credit, 60+ months free) |
 
@@ -30,92 +77,4 @@
 
 | Node | IP | Provider | Reason |
 |------|----|----------|--------|
-| proxy-us-west | 163.192.3.134 | OCI San Jose | ARM capacity issues, 7ms worse peering than Vultr LA |
-
-## With WARP Optimization
-
-| Path | Latency | Notes |
-|------|---------|-------|
-| BKK → Vultr LA (direct) | **206ms** | Best direct path |
-| BKK → Vultr LA (WARP) | **193ms** | 5-10ms improvement via CF NTT backbone |
-| ExitLag (reference) | **187ms** | Premium transit peering |
-| **Gap to ExitLag** | **6ms** | Closes to ~0ms with FEC loss recovery advantage |
-
-## Completed Steps
-
-| Step | Status | Notes |
-|------|--------|-------|
-| WF-001 Step 1-7 | ✅ DONE | Full MVP: tunnel, proxy, QUIC, security, tests, release v0.1.0 |
-| WF-002 Step 1-3 | ✅ DONE | Terraform IaC, Docker, deployment scripts, security hardening |
-| WF-002 Step 4 | ✅ DONE | Vultr mesh: proxy-lax + relay-sgp (OCI SJ decommissioned) |
-| WF-003 Step 1-4 | ✅ DONE | ML pipeline: synthetic data, features, RF model, client integration |
-| WF-004 Step 1 | ✅ DONE | UDP redirect mode (client/src/redirect.rs) |
-| WF-006 Step 1 | ✅ DONE | CI/CD: GitHub Actions (Rust CI, Docker GHCR, Pages) |
-| WF-006 Step 2 | ✅ DONE | Landing page live on GitHub Pages |
-| WF-006 Step 3 | ✅ DONE | Documentation updated: README, CHANGELOG, architecture, protocol, infra |
-| FEC Module | ✅ DONE | XOR-based FEC, 8 tests passing, protocol/src/fec.rs |
-| FEC Pipeline | ✅ DONE | FEC integrated into tunnel pipeline (client main.rs) |
-| FEC in UdpRelay | ✅ DONE | FecEncoder in send_to_proxy, FecDecoder in recv_from_proxy |
-| FEC in UdpRedirect | ✅ DONE | Full FEC encode/decode in redirect outbound + inbound paths |
-| FEC in Proxy Relay | ✅ DONE | Proxy-side FEC decode, recovery, and re-encode for responses |
-| FEC Integration Tests | ✅ DONE | 5 tests: data roundtrip, recovery, mixed v1/v2, variable sizes, multi-block |
-| WARP Integration | ✅ DONE | client/src/warp.rs — auto-detect, 5-10ms improvement |
-| Relay Analysis | ✅ DONE | SGP relay tested, Pacific crossing confirmed as bottleneck |
-| Infra Pivot | ✅ DONE | OCI → Vultr-only, native binary (~500KB RAM) |
-| Code Cleanup | ✅ DONE | Fixed compiler warnings, cleaned dead code annotations |
-| Route Selection | ✅ DONE | RouteSelector integrated into main.rs, auto proxy probing + selection |
-| Proxy Health Probing | ✅ DONE | Keepalive-based RTT probing, concurrent multi-proxy health check |
-| Live Integration Test | ✅ DONE | `--live-test` mode: 5-phase test (health, route, keepalive, relay, FEC) |
-| Game Auto-Detection | ✅ DONE | Process scanning on Windows/Linux/macOS, matches game process names |
-| Pcap Capture Backend | ✅ DONE | Full Ethernet→IP→UDP parser, BPF filtering, pcap_backend.rs |
-| Capture Mode | ✅ DONE | `--capture` CLI mode: sniff game traffic, forward through tunnel |
-| Interface Discovery | ✅ DONE | `--list-interfaces` shows pcap-available network interfaces |
-
-## Recently Completed
-
-| Action | Status | Notes |
-|--------|--------|-------|
-| Live proxy verification | ✅ DONE | proxy-lax: 204.8ms 10/10 0.3ms jitter, relay-sgp: 34.0ms 10/10 0.3ms jitter |
-| Beta release v0.2.0 | ✅ DONE | Version bumped, CHANGELOG updated, GitHub release created |
-| Bidirectional capture | ✅ DONE | PacketInjector + inbound receive loop + FEC decode on capture path |
-| WF-003 Step 5-6: Online Learning | ✅ DONE | RouteCollector + OnlineLearner: collect → retrain → swap model loop |
-
-## In Progress
-
-| Action | Status | Notes |
-|--------|--------|-------|
-| (none) | — | All P1 items complete; next priorities are P2 |
-
-## Next Steps
-
-| Action | Owner | Priority | Notes |
-|--------|-------|----------|-------|
-| WF-005: Monitoring Dashboard | Agent | P2 | Prometheus + Grafana |
-| US-East / EU-West nodes | Agent | P2 | Expand mesh for global coverage |
-| Vultr BKK monitoring | Agent | P2 | Check quarterly for Bangkok region availability |
-| Wire OnlineLearner into main.rs | Agent | P2 | Feed keepalive probes into collector during game sessions |
-
-## CLI Quick Reference
-
-```bash
-# Live integration test (health + keepalive echo)
-lightspeed --live-test --proxy 149.28.84.139:4434
-
-# Live test with data relay (requires echo_server.py on remote)
-lightspeed --live-test --proxy 149.28.84.139:4434 --echo-server 149.28.144.74:9999
-
-# Live test with FEC verification
-lightspeed --live-test --proxy 149.28.84.139:4434 --echo-server 149.28.144.74:9999 --fec
-
-# Redirect mode (primary game integration)
-lightspeed --game cs2 --game-server 192.168.1.1:27015 --proxy 149.28.84.139:4434
-
-# Capture mode (pcap-based, requires admin + Npcap)
-lightspeed --game fortnite --capture --proxy 149.28.84.139:4434
-
-# List network interfaces
-lightspeed --list-interfaces
-
-# Probe all configured proxies
-lightspeed --probe-proxies
-```
+| proxy-sanjose | 163.192.3.134 | OCI | E2.1.Micro too limited, moved to Vultr |

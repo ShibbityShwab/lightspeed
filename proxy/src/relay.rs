@@ -225,11 +225,13 @@ pub async fn run_relay_inbound(
                 RateLimitResult::PacketRateExceeded => {
                     trace!(client = %client_addr, "Rate limited (PPS)");
                     metrics.record_drop();
+                    metrics.record_rate_limit();
                     continue;
                 }
                 RateLimitResult::BandwidthExceeded => {
                     trace!(client = %client_addr, "Rate limited (BPS)");
                     metrics.record_drop();
+                    metrics.record_rate_limit();
                     continue;
                 }
             }
@@ -255,6 +257,7 @@ pub async fn run_relay_inbound(
                     "Unauthorized: invalid IP or session token"
                 );
                 metrics.record_drop();
+                metrics.record_auth_rejection();
                 continue;
             }
         }
@@ -293,21 +296,25 @@ pub async fn run_relay_inbound(
                         "Blocked: private/internal destination"
                     );
                     metrics.record_drop();
+                    metrics.record_abuse_block();
                     continue;
                 }
                 AbuseCheckResult::Banned => {
                     trace!(client = %client_addr, "Blocked: client is banned");
                     metrics.record_drop();
+                    metrics.record_abuse_block();
                     continue;
                 }
                 AbuseCheckResult::ReflectionDetected => {
                     warn!(client = %client_addr, "Blocked: reflection attack detected");
                     metrics.record_drop();
+                    metrics.record_abuse_block();
                     continue;
                 }
                 AbuseCheckResult::AmplificationDetected => {
                     warn!(client = %client_addr, "Blocked: amplification detected");
                     metrics.record_drop();
+                    metrics.record_abuse_block();
                     continue;
                 }
             }
@@ -351,6 +358,7 @@ pub async fn run_relay_inbound(
 
         // Immediately spawn response listener for new sessions
         if is_new {
+            metrics.record_session_created();
             let session_clone = Arc::clone(&session);
             let data_socket_clone = Arc::clone(&data_socket);
             let metrics_clone = Arc::clone(&metrics);
@@ -366,10 +374,12 @@ pub async fn run_relay_inbound(
             if fh.is_parity() {
                 // Parity packet: do NOT forward to game server.
                 // Feed into FEC decoder for potential recovery.
+                metrics.record_fec_parity();
                 let parity_data = bytes::Bytes::copy_from_slice(game_payload);
                 let mut decoder = session.fec_decoder.lock().await;
                 if let Some((_idx, recovered)) = decoder.receive_parity(fh, parity_data) {
                     // Recovered a lost packet — forward to game server
+                    metrics.record_fec_recovery();
                     info!(
                         client = %client_addr,
                         block = fh.block_id,
@@ -593,6 +603,7 @@ pub async fn run_session_manager(
         // Clean up expired sessions
         let removed = engine.cleanup_expired().await;
         if removed > 0 {
+            metrics.record_session_expired(removed as u64);
             info!("Cleaned up {} expired sessions", removed);
         }
 
