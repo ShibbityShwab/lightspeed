@@ -13,6 +13,7 @@ mod quic;
 mod redirect;
 mod route;
 mod tunnel;
+mod warp;
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::Ordering;
@@ -64,6 +65,19 @@ struct Cli {
     /// Local port for redirect mode (default: same as game server port)
     #[arg(long)]
     local_port: Option<u16>,
+
+    /// Enable Cloudflare WARP for improved routing (5-10ms savings)
+    /// Automatically connects WARP on startup and restores on shutdown
+    #[arg(short = 'w', long, default_value_t = false)]
+    warp: bool,
+
+    /// Disable WARP even if previously enabled
+    #[arg(long, default_value_t = false)]
+    no_warp: bool,
+
+    /// Show WARP status and exit
+    #[arg(long, default_value_t = false)]
+    warp_status: bool,
 }
 
 /// Parse a proxy address string into SocketAddrV4.
@@ -141,6 +155,77 @@ async fn main() -> anyhow::Result<()> {
             info!("Game: {}", game.name());
         }
         return Ok(());
+    }
+
+    // ── Cloudflare WARP integration ───────────────────────────────
+    //
+    // WARP routes traffic through Cloudflare's NTT backbone, bypassing
+    // ISP routing inefficiencies. Free 5-10ms improvement on most paths.
+    //
+    // Usage: lightspeed --warp --proxy 149.28.84.139:4434 --game-server ...
+
+    let mut warp_manager = warp::WarpManager::new();
+
+    // --warp-status: show WARP status and exit
+    if cli.warp_status {
+        if !warp_manager.is_installed() {
+            info!("🌐 Cloudflare WARP: Not installed");
+            info!("   Install: {}", warp::install_instructions());
+        } else {
+            let warp_info = warp_manager.info();
+            info!("🌐 Cloudflare WARP Status");
+            info!("   Status:   {}", warp_info.status);
+            info!("   Protocol: {}", warp_info.protocol.unwrap_or_else(|| "unknown".into()));
+            info!("   Mode:     {}", warp_info.mode.unwrap_or_else(|| "unknown".into()));
+
+            // Check routing for known proxy IPs
+            let proxy_ips = vec![
+                Ipv4Addr::new(149, 28, 84, 139),   // Vultr LA
+                Ipv4Addr::new(149, 28, 144, 74),    // Vultr SGP
+                Ipv4Addr::new(163, 192, 3, 134),    // OCI San Jose
+            ];
+            warp_manager.print_summary(&proxy_ips);
+
+            if let Some(stats) = warp_manager.tunnel_stats() {
+                info!("   Tunnel stats:\n{}", stats);
+            }
+        }
+        return Ok(());
+    }
+
+    // --warp: enable WARP for improved routing
+    if cli.warp && !cli.no_warp {
+        if !warp_manager.is_installed() {
+            warn!("🌐 WARP requested but not installed!");
+            warn!("   Install Cloudflare WARP for 5-10ms latency improvement:");
+            warn!("   {}", warp::install_instructions());
+            warn!("   Continuing without WARP...");
+        } else {
+            match warp_manager.connect() {
+                Ok(()) => {
+                    info!("🌐 WARP enabled — traffic routed through Cloudflare NTT backbone");
+                }
+                Err(e) => {
+                    warn!("🌐 WARP connection failed: {}", e);
+                    warn!("   Continuing without WARP...");
+                }
+            }
+        }
+    } else if !cli.no_warp {
+        // Auto-detect WARP (don't connect, just report status)
+        let status = warp_manager.status();
+        match status {
+            warp::WarpStatus::Connected => {
+                info!("🌐 WARP detected and connected — traffic uses NTT backbone");
+            }
+            warp::WarpStatus::Disconnected => {
+                info!("🌐 WARP installed but disconnected. Use --warp to enable (saves 5-10ms)");
+            }
+            warp::WarpStatus::NotInstalled => {
+                // Silent — don't nag about WARP if not installed
+            }
+            _ => {}
+        }
     }
 
     // Determine proxy address
