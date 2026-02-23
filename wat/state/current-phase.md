@@ -6,8 +6,8 @@
 | **Current Step** | Live integration test, game capture pipeline |
 | **Active Agents** | RustDev, NetEng |
 | **Blocked On** | Nothing — all dependencies met |
-| **Last Checkpoint** | 2026-02-23T22:55:00+07:00 |
-| **Next Action** | Bidirectional capture mode, online ML learning |
+| **Last Checkpoint** | 2026-02-23T23:42:00+07:00 |
+| **Next Action** | Monitoring dashboard (WF-005), mesh expansion |
 | **WAT Version** | 0.3.7 |
 
 ## Live Infrastructure (2-Node Vultr Mesh)
@@ -76,23 +76,24 @@
 | Action | Status | Notes |
 |--------|--------|-------|
 | Live proxy verification | ✅ DONE | proxy-lax: 204.8ms 10/10 0.3ms jitter, relay-sgp: 34.0ms 10/10 0.3ms jitter |
-| Beta release v0.2.0 | ✅ DONE | Version bumped, CHANGELOG updated, live test results recorded |
+| Beta release v0.2.0 | ✅ DONE | Version bumped, CHANGELOG updated, GitHub release created |
+| Bidirectional capture | ✅ DONE | PacketInjector + inbound receive loop + FEC decode on capture path |
+| WF-003 Step 5-6: Online Learning | ✅ DONE | RouteCollector + OnlineLearner: collect → retrain → swap model loop |
 
 ## In Progress
 
 | Action | Status | Notes |
 |--------|--------|-------|
-| Bidirectional capture | 🔧 PLANNED | Response injection for full transparent capture (Phase 2) |
+| (none) | — | All P1 items complete; next priorities are P2 |
 
 ## Next Steps
 
 | Action | Owner | Priority | Notes |
 |--------|-------|----------|-------|
-| **Bidirectional capture** | Agent | **P1** | Raw socket injection for capture mode response path |
-| **WF-003 Step 5-6: Online Learning** | Agent | **P1** | Needs live traffic data |
 | WF-005: Monitoring Dashboard | Agent | P2 | Prometheus + Grafana |
-| Vultr BKK monitoring | Agent | P2 | Check quarterly for Bangkok region availability |
 | US-East / EU-West nodes | Agent | P2 | Expand mesh for global coverage |
+| Vultr BKK monitoring | Agent | P2 | Check quarterly for Bangkok region availability |
+| Wire OnlineLearner into main.rs | Agent | P2 | Feed keepalive probes into collector during game sessions |
 
 ## CLI Quick Reference
 
