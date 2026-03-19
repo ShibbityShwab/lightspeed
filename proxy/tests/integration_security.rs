@@ -117,14 +117,14 @@ fn make_public_packet(seq: u16, token: u8, src: SocketAddrV4) -> Vec<u8> {
     // Use a real public IP so abuse detector allows it
     let public_dest = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 34), 80);
     let header = TunnelHeader::new(seq, now_us(), src, public_dest).with_session_token(token);
-    header.encode_with_payload(b"test_payload").to_vec()
+    header.encode_with_payload(b"test_payload")
 }
 
 /// Build a tunnel packet targeting a private IP.
 fn make_private_dest_packet(seq: u16, token: u8, src: SocketAddrV4, dest_ip: Ipv4Addr) -> Vec<u8> {
     let private_dest = SocketAddrV4::new(dest_ip, 22);
     let header = TunnelHeader::new(seq, now_us(), src, private_dest).with_session_token(token);
-    header.encode_with_payload(b"test_payload").to_vec()
+    header.encode_with_payload(b"test_payload")
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -335,7 +335,7 @@ async fn test_reflection_detection_bans_client() {
         let header = TunnelHeader::new(i as u16, now_us(), client_addr, dest);
         let packet = header.encode_with_payload(b"reflect_test");
         client
-            .send_to(&packet.to_vec(), relay.data_addr)
+            .send_to(&packet, relay.data_addr)
             .await
             .unwrap();
         // Small delay to ensure ordering
