@@ -6,7 +6,6 @@
 //! Uses a local UDP echo server to simulate a game server.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -107,11 +106,6 @@ async fn test_udp_relay_with_echo_server() {
 
     let proxy_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let proxy_addr = proxy_socket.local_addr().unwrap();
-    let proxy_addr_v4 = match proxy_addr {
-        std::net::SocketAddr::V4(v4) => v4,
-        _ => panic!("Expected IPv4"),
-    };
-
     let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let client_addr = client_socket.local_addr().unwrap();
     let client_addr_v4 = match client_addr {
