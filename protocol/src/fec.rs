@@ -138,7 +138,7 @@ pub struct FecEncoder {
 impl FecEncoder {
     /// Create a new FEC encoder with the given block size.
     pub fn new(k_size: u8) -> Self {
-        let k = k_size.min(MAX_BLOCK_SIZE).max(2);
+        let k = k_size.clamp(2, MAX_BLOCK_SIZE);
         Self {
             block_id: 0,
             k_size: k,
@@ -164,8 +164,8 @@ impl FecEncoder {
     pub fn add_packet(&mut self, payload: &[u8]) -> Option<Bytes> {
         // XOR payload into running parity
         let len = payload.len().min(FEC_MAX_PAYLOAD);
-        for i in 0..len {
-            self.parity[i] ^= payload[i];
+        for (p, &b) in self.parity[..len].iter_mut().zip(payload.iter()) {
+            *p ^= b;
         }
         // Also XOR the length (2 bytes, big-endian) at a fixed position
         // so we can recover the original packet length
@@ -279,8 +279,8 @@ impl BlockState {
             }
             if let Some(data) = slot {
                 let len = data.len().min(FEC_MAX_PAYLOAD);
-                for j in 0..len {
-                    recovered[j] ^= data[j];
+                for (r, &b) in recovered[..len].iter_mut().zip(data.iter()) {
+                    *r ^= b;
                 }
                 // Also XOR the length
                 let len_bytes = (data.len() as u16).to_be_bytes();
