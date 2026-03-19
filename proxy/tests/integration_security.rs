@@ -334,10 +334,7 @@ async fn test_reflection_detection_bans_client() {
         let dest = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, i), 80);
         let header = TunnelHeader::new(i as u16, now_us(), client_addr, dest);
         let packet = header.encode_with_payload(b"reflect_test");
-        client
-            .send_to(&packet, relay.data_addr)
-            .await
-            .unwrap();
+        client.send_to(&packet, relay.data_addr).await.unwrap();
         // Small delay to ensure ordering
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
