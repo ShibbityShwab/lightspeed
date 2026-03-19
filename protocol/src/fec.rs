@@ -662,7 +662,7 @@ mod tests {
         let mut recovered_payloads: Vec<(usize, Vec<u8>)> = Vec::new(); // (original_index, data)
         let mut received_payloads: Vec<(usize, Vec<u8>)> = Vec::new();
 
-        for block_num in 0..num_blocks {
+        for (block_num, (parity_fec, parity_wire)) in parity_packets.iter().enumerate() {
             let block_start = block_num * k as usize;
             // Lose packet index 1 in each block (simulate network loss)
             let lost_index_in_block: usize = 1;
@@ -683,7 +683,6 @@ mod tests {
             }
 
             // Receive parity packet → should trigger recovery
-            let (parity_fec, parity_wire) = &parity_packets[block_num];
             let parity_data = &parity_wire[HEADER_SIZE + FEC_HEADER_SIZE..];
             let result = decoder.receive_parity(parity_fec, Bytes::copy_from_slice(parity_data));
 
