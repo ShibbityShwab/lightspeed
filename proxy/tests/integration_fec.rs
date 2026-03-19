@@ -44,13 +44,8 @@ async fn spawn_echo_server() -> (SocketAddrV4, JoinHandle<()>) {
     let addr = to_v4(socket.local_addr().unwrap());
     let handle = tokio::spawn(async move {
         let mut buf = vec![0u8; 2048];
-        loop {
-            match socket.recv_from(&mut buf).await {
-                Ok((len, from)) => {
-                    let _ = socket.send_to(&buf[..len], from).await;
-                }
-                Err(_) => break,
-            }
+        while let Ok((len, from)) = socket.recv_from(&mut buf).await {
+            let _ = socket.send_to(&buf[..len], from).await;
         }
     });
     (addr, handle)
@@ -76,12 +71,7 @@ async fn spawn_fec_proxy(echo_addr: SocketAddrV4) -> (SocketAddrV4, JoinHandle<(
         let mut buf = vec![0u8; 2048];
         let mut response_seq: u16 = 0;
 
-        loop {
-            let (len, client_addr) = match proxy_socket.recv_from(&mut buf).await {
-                Ok(r) => r,
-                Err(_) => break,
-            };
-
+        while let Ok((len, client_addr)) = proxy_socket.recv_from(&mut buf).await {
             let client_v4 = to_v4(client_addr);
 
             let (header, payload) = match TunnelHeader::decode_with_payload(&buf[..len]) {

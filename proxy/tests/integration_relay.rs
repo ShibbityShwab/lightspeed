@@ -16,13 +16,8 @@ use tokio::net::UdpSocket;
 /// A simple UDP echo server that sends back whatever it receives.
 async fn run_echo_server(socket: Arc<UdpSocket>) {
     let mut buf = vec![0u8; 2048];
-    loop {
-        match socket.recv_from(&mut buf).await {
-            Ok((len, addr)) => {
-                let _ = socket.send_to(&buf[..len], addr).await;
-            }
-            Err(_) => break,
-        }
+    while let Ok((len, addr)) = socket.recv_from(&mut buf).await {
+        let _ = socket.send_to(&buf[..len], addr).await;
     }
 }
 
