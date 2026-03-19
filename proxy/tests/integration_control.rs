@@ -107,7 +107,7 @@ async fn serve_one_stream(
                     server_timestamp_us: now_us,
                 })
             }
-            ControlMessage::Register { game, .. } => Some(ControlMessage::RegisterAck {
+            ControlMessage::Register { .. } => Some(ControlMessage::RegisterAck {
                 session_id: 42,
                 session_token: 0xAB,
                 node_id: "test-proxy".into(),
@@ -137,15 +137,10 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
         if let Some(incoming) = server.accept().await {
             let conn = incoming.await.unwrap();
             // Accept streams until connection closes
-            loop {
-                match conn.accept_bi().await {
-                    Ok((send, recv)) => {
-                        tokio::spawn(async move {
-                            let _ = serve_one_stream(send, recv).await;
-                        });
-                    }
-                    Err(_) => break,
-                }
+            while let Ok((send, recv)) = conn.accept_bi().await {
+                tokio::spawn(async move {
+                    let _ = serve_one_stream(send, recv).await;
+                });
             }
         }
     });

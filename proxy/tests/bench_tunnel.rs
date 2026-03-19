@@ -37,13 +37,8 @@ async fn spawn_echo_server() -> (SocketAddrV4, JoinHandle<()>) {
     let addr = to_v4(socket.local_addr().unwrap());
     let handle = tokio::spawn(async move {
         let mut buf = vec![0u8; 2048];
-        loop {
-            match socket.recv_from(&mut buf).await {
-                Ok((len, from)) => {
-                    let _ = socket.send_to(&buf[..len], from).await;
-                }
-                Err(_) => break,
-            }
+        while let Ok((len, from)) = socket.recv_from(&mut buf).await {
+            let _ = socket.send_to(&buf[..len], from).await;
         }
     });
     (addr, handle)
@@ -296,11 +291,10 @@ async fn test_latency_percentiles() {
         let start = Instant::now();
         client.send_to(&pkt, proxy_addr).await.unwrap();
         let mut buf = [0u8; 256];
-        match tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf)).await {
-            Ok(Ok(_)) => {
-                latencies.push(start.elapsed().as_micros() as f64);
-            }
-            _ => {} // Skip timeouts
+        if let Ok(Ok(_)) =
+            tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf)).await
+        {
+            latencies.push(start.elapsed().as_micros() as f64);
         }
     }
 
