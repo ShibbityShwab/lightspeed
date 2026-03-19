@@ -70,6 +70,12 @@ pub struct ProxyMetrics {
     pub start_time: Instant,
 }
 
+impl Default for ProxyMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProxyMetrics {
     /// Create a new metrics collector.
     pub fn new() -> Self {

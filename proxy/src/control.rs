@@ -127,11 +127,7 @@ mod inner {
             SocketAddr::V4(v4) => Some(*v4.ip()),
             SocketAddr::V6(v6) => {
                 // Handle IPv4-mapped IPv6 addresses (::ffff:a.b.c.d)
-                if let Some(v4) = v6.ip().to_ipv4_mapped() {
-                    Some(v4)
-                } else {
-                    None
-                }
+                v6.ip().to_ipv4_mapped()
             }
         }
     }
@@ -187,7 +183,7 @@ mod inner {
         state: Arc<ControlState>,
     ) -> anyhow::Result<()> {
         let remote = conn.remote_address();
-        let mut session_id: Option<u32> = None;
+        let session_id: Option<u32> = None;
 
         // Accept bidirectional streams from the client
         loop {
@@ -195,7 +191,6 @@ mod inner {
                 Ok((send, recv)) => {
                     let sid = session_id;
                     let state = Arc::clone(&state);
-                    let remote = remote;
                     tokio::spawn(async move {
                         if let Err(e) = handle_stream(send, recv, remote, sid, state).await {
                             debug!("Stream handler error for {}: {}", remote, e);

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Top-level proxy configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProxyConfig {
     /// Server identity.
     #[serde(default)]
@@ -133,17 +133,6 @@ fn default_true() -> bool {
 }
 fn default_metrics_interval() -> u64 {
     10
-}
-
-impl Default for ProxyConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            security: SecurityConfig::default(),
-            rate_limit: RateLimitConfig::default(),
-            metrics: MetricsConfig::default(),
-        }
-    }
 }
 
 impl Default for ServerConfig {
