@@ -1,0 +1,42 @@
+name: Deploy Proxy to Vultr
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'proxy/**'
+      - 'protocol/**'
+      - 'infra/scripts/deploy-vultr.sh'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libpcap-dev
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VULTR_SSH_KEY }}" > ~/.ssh/lightspeed_vultr
+          chmod 600 ~/.ssh/lightspeed_vultr
+          # Add Vultr node IPs to known_hosts to prevent strict host key checking prompts
+          ssh-keyscan -H [redacted] >> ~/.ssh/known_hosts
+          ssh-keyscan -H [redacted] >> ~/.ssh/known_hosts
+
+      - name: Build and Deploy Proxy
+        run: |
+          chmod +x infra/scripts/deploy-vultr.sh
+          # The deploy script automatically builds the release binary and scp's it to the nodes
+          ./infra/scripts/deploy-vultr.sh

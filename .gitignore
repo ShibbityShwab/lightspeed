@@ -45,6 +45,10 @@ tests/results/
 *.log
 wat/state/agent-logs/
 
+# Node.js
+node_modules/
+tools/vultr-mcp/node_modules/
+
 # Secrets
 *.pem
 *.key

@@ -1,13 +1,31 @@
-MIT License
+LightSpeed Non-Commercial & Attribution License
 
 Copyright (c) 2026 LightSpeed Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+in the Software without restriction, subject to the following conditions:
+
+1. NON-COMMERCIAL USE ONLY
+   This Software is provided exclusively for personal, educational, and 
+   non-commercial use. You may not use this Software, or any derivative works, 
+   for any commercial purposes. This includes, but is not limited to:
+   - Selling the Software or derivative works.
+   - Integrating the Software into a commercial product or proprietary system.
+   - Offering the Software as a paid service (e.g., SaaS).
+   - Using the Software to generate revenue directly or indirectly.
+
+2. ATTRIBUTION REQUIRED
+   You must give appropriate credit and attribution to the original authors 
+   for the technical discoveries, routing optimizations, and implementations 
+   contained herein. If you distribute this Software, publish research based 
+   on it, or create derivative works for non-commercial use, you must retain 
+   this copyright notice and clearly indicate the original source repository.
+
+3. COMMERCIAL LICENSING
+   If you wish to use this Software, its architecture, or its underlying 
+   technologies for any commercial purpose, you are legally required to 
+   contact the original authors to negotiate and purchase a commercial license.
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.

@@ -3,7 +3,7 @@
 **Reduce your ping. Free. Forever.**
 
 [![Release](https://img.shields.io/github/v/release/ShibbityShwab/lightspeed?style=flat-square)](https://github.com/ShibbityShwab/lightspeed/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+[![License: Non-Commercial](https://img.shields.io/badge/License-Non--Commercial-blue.svg?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg?style=flat-square)](https://www.rust-lang.org/)
 [![Landing Page](https://img.shields.io/badge/web-live-brightgreen?style=flat-square)](https://shibbityshwab.github.io/lightspeed/)
 
@@ -262,9 +262,16 @@ cargo clippy --workspace
 
 LightSpeed is community-driven. Contributions welcome — open an issue or submit a PR.
 
-## License
+## License & Commercial Use
 
-MIT — see [LICENSE](LICENSE) for details.
+This project uses a dual-licensing model to protect its technical discoveries and implementations:
+
+1. **Free for Non-Commercial & Personal Use:** You can use, study, and modify this project for personal or educational purposes, provided you give **explicit credit and attribution** to the original authors.
+2. **Paid for Commercial Use:** You are strictly prohibited from using this software, its architecture, or its underlying technologies to generate revenue, offer SaaS products, or integrate into proprietary systems without permission. 
+
+**If you wish to use this technology commercially, you must contact the author to negotiate and purchase a commercial license.**
+
+See [LICENSE](LICENSE) for full details.
 
 ---
 
