@@ -36,8 +36,8 @@ use std::time::Duration;
 use clap::Parser;
 use tracing::{info, warn};
 
-use route::{ProxyHealth, ProxyNode, RouteSelector, SelectedRoute};
 use route::selector::NearestSelector;
+use route::{ProxyHealth, ProxyNode, RouteSelector, SelectedRoute};
 use tunnel::relay::UdpRelay;
 
 /// LightSpeed — Reduce your ping. Free. Forever.
@@ -218,7 +218,10 @@ async fn main() -> anyhow::Result<()> {
             for iface in &interfaces {
                 let status = if iface.is_up { "UP" } else { "DOWN" };
                 let kind = if iface.is_loopback { " (loopback)" } else { "" };
-                info!("   • {} [{}]{} — {}", iface.name, status, kind, iface.description);
+                info!(
+                    "   • {} [{}]{} — {}",
+                    iface.name, status, kind, iface.description
+                );
             }
         }
         return Ok(());
@@ -251,13 +254,19 @@ async fn main() -> anyhow::Result<()> {
             let warp_info = warp_manager.info();
             info!("🌐 Cloudflare WARP Status");
             info!("   Status:   {}", warp_info.status);
-            info!("   Protocol: {}", warp_info.protocol.unwrap_or_else(|| "unknown".into()));
-            info!("   Mode:     {}", warp_info.mode.unwrap_or_else(|| "unknown".into()));
+            info!(
+                "   Protocol: {}",
+                warp_info.protocol.unwrap_or_else(|| "unknown".into())
+            );
+            info!(
+                "   Mode:     {}",
+                warp_info.mode.unwrap_or_else(|| "unknown".into())
+            );
 
             // Check routing for known proxy IPs
             let proxy_ips = vec![
-                Ipv4Addr::new(149, 28, 84, 139),   // Vultr LA
-                Ipv4Addr::new(149, 28, 144, 74),    // Vultr SGP
+                Ipv4Addr::new(149, 28, 84, 139), // Vultr LA
+                Ipv4Addr::new(149, 28, 144, 74), // Vultr SGP
             ];
             warp_manager.print_summary(&proxy_ips);
 
@@ -317,12 +326,20 @@ async fn main() -> anyhow::Result<()> {
         addr
     } else if !config.proxy.servers.is_empty() {
         // Multiple proxies configured — probe and select best
-        let strategy = cli.route_strategy.as_deref()
+        let strategy = cli
+            .route_strategy
+            .as_deref()
             .unwrap_or(config.route.strategy.as_str());
 
-        info!("🔍 Probing {} configured proxies (strategy: {})...", config.proxy.servers.len(), strategy);
+        info!(
+            "🔍 Probing {} configured proxies (strategy: {})...",
+            config.proxy.servers.len(),
+            strategy
+        );
 
-        let game_server_addr = cli.game_server.as_ref()
+        let game_server_addr = cli
+            .game_server
+            .as_ref()
             .and_then(|s| parse_proxy_addr(s).ok())
             .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
 
@@ -331,18 +348,27 @@ async fn main() -> anyhow::Result<()> {
             config.proxy.data_port,
             game_server_addr,
             strategy,
-        ).await?;
+        )
+        .await?;
 
-        info!("🌐 Proxy (auto-selected): {} [{}] — {:.1}ms latency, strategy: {:?}",
+        info!(
+            "🌐 Proxy (auto-selected): {} [{}] — {:.1}ms latency, strategy: {:?}",
             selected.primary.data_addr,
             selected.primary.id,
             selected.primary.latency_us.unwrap_or(0) as f64 / 1000.0,
             selected.strategy,
         );
         if !selected.backups.is_empty() {
-            info!("   Backups: {}",
-                selected.backups.iter()
-                    .map(|p| format!("{} ({:.1}ms)", p.id, p.latency_us.unwrap_or(0) as f64 / 1000.0))
+            info!(
+                "   Backups: {}",
+                selected
+                    .backups
+                    .iter()
+                    .map(|p| format!(
+                        "{} ({:.1}ms)",
+                        p.id,
+                        p.latency_us.unwrap_or(0) as f64 / 1000.0
+                    ))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
@@ -371,10 +397,14 @@ async fn main() -> anyhow::Result<()> {
                     ProxyHealth::Unhealthy => "❌",
                     ProxyHealth::Unknown => "❓",
                 };
-                let latency = node.latency_us
+                let latency = node
+                    .latency_us
                     .map(|us| format!("{:.1}ms", us as f64 / 1000.0))
                     .unwrap_or_else(|| "timeout".into());
-                info!("   {} {} ({}) — {}", status, node.id, node.data_addr, latency);
+                info!(
+                    "   {} {} ({}) — {}",
+                    status, node.id, node.data_addr, latency
+                );
             }
         }
         return Ok(());
@@ -382,7 +412,9 @@ async fn main() -> anyhow::Result<()> {
 
     // --live-test: comprehensive integration test against live proxies
     if cli.live_test {
-        let echo_server = cli.echo_server.as_ref()
+        let echo_server = cli
+            .echo_server
+            .as_ref()
             .and_then(|s| parse_proxy_addr(s).ok());
         return run_live_test(&config, Some(proxy_addr), echo_server, cli.fec, cli.fec_k).await;
     }
@@ -456,16 +488,25 @@ async fn main() -> anyhow::Result<()> {
 
         info!("🚀 Starting redirect mode");
         if let Some(ref game) = game {
-            info!("   Game:        {} (anti-cheat: {})", game.name(), game.anti_cheat());
+            info!(
+                "   Game:        {} (anti-cheat: {})",
+                game.name(),
+                game.anti_cheat()
+            );
             info!("   Typical PPS: ~{} packets/sec", game.typical_pps());
         }
         info!("   Game server: {}", game_server_addr);
         info!("   Local port:  127.0.0.1:{}", local_port);
         info!("   Proxy:       {}", proxy_addr);
 
-        let mut redirect_proxy = redirect::UdpRedirect::new(local_port, game_server_addr, proxy_addr);
+        let mut redirect_proxy =
+            redirect::UdpRedirect::new(local_port, game_server_addr, proxy_addr);
         if cli.fec {
-            info!("   FEC:         enabled (K={}, ~{}% overhead)", cli.fec_k, 100 / cli.fec_k as u32);
+            info!(
+                "   FEC:         enabled (K={}, ~{}% overhead)",
+                cli.fec_k,
+                100 / cli.fec_k as u32
+            );
             redirect_proxy = redirect_proxy.with_fec(cli.fec_k);
         }
         return redirect_proxy.run().await;
@@ -481,11 +522,17 @@ async fn main() -> anyhow::Result<()> {
     //   3. Npcap (Windows) or libpcap (Linux/macOS)
     if cli.capture {
         let game_ref = game.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Capture mode requires a game. Use --game <name> or ensure a game is running.")
+            anyhow::anyhow!(
+                "Capture mode requires a game. Use --game <name> or ensure a game is running."
+            )
         })?;
 
         info!("🔍 Starting capture mode");
-        info!("   Game:      {} (anti-cheat: {})", game_ref.name(), game_ref.anti_cheat());
+        info!(
+            "   Game:      {} (anti-cheat: {})",
+            game_ref.name(),
+            game_ref.anti_cheat()
+        );
         info!("   Ports:     {:?}", game_ref.ports());
         info!("   Proxy:     {}", proxy_addr);
         if let Some(ref iface) = cli.interface {
@@ -517,13 +564,22 @@ async fn main() -> anyhow::Result<()> {
 
         // Start capture
         cap_backend.start(&filter).map_err(|e| {
-            anyhow::anyhow!("Capture start failed: {}\n   \
-                You may need to run with elevated privileges (admin/root).", e)
+            anyhow::anyhow!(
+                "Capture start failed: {}\n   \
+                You may need to run with elevated privileges (admin/root).",
+                e
+            )
         })?;
 
-        info!("⚡ Capture active — sniffing {} traffic on ports {:?}",
-            game_ref.name(), game_ref.ports());
-        info!("   Captured packets will be forwarded through proxy {}", proxy_addr);
+        info!(
+            "⚡ Capture active — sniffing {} traffic on ports {:?}",
+            game_ref.name(),
+            game_ref.ports()
+        );
+        info!(
+            "   Captured packets will be forwarded through proxy {}",
+            proxy_addr
+        );
 
         // Create tunnel socket (shared between outbound capture and inbound injection)
         let tunnel_socket = Arc::new(tokio::net::UdpSocket::bind("0.0.0.0:0").await?);
@@ -540,7 +596,11 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(tokio::sync::RwLock::new(None));
 
         if fec_enabled {
-            info!("   FEC:       enabled (K={}, ~{}% overhead)", fec_k, 100 / fec_k as u32);
+            info!(
+                "   FEC:       enabled (K={}, ~{}% overhead)",
+                fec_k,
+                100 / fec_k as u32
+            );
         }
         info!("   Mode:      bidirectional (capture + inject)");
         info!("   Press Ctrl+C to stop\n");
@@ -587,7 +647,8 @@ async fn main() -> anyhow::Result<()> {
                     let recv_result = tokio::time::timeout(
                         Duration::from_millis(100),
                         tunnel_socket.recv_from(&mut buf),
-                    ).await;
+                    )
+                    .await;
 
                     let (len, _from) = match recv_result {
                         Ok(Ok(r)) => r,
@@ -598,22 +659,26 @@ async fn main() -> anyhow::Result<()> {
                         Err(_) => continue, // Timeout — check running flag
                     };
 
-                    injector_stats_ref.packets_from_proxy.fetch_add(1, Ordering::Relaxed);
+                    injector_stats_ref
+                        .packets_from_proxy
+                        .fetch_add(1, Ordering::Relaxed);
 
                     // Decode tunnel header
-                    let (header, payload) = match lightspeed_protocol::TunnelHeader::decode_with_payload(&buf[..len]) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::debug!("Invalid tunnel response: {}", e);
-                            continue;
-                        }
-                    };
+                    let (header, payload) =
+                        match lightspeed_protocol::TunnelHeader::decode_with_payload(&buf[..len]) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                tracing::debug!("Invalid tunnel response: {}", e);
+                                continue;
+                            }
+                        };
 
                     // Process keepalive echoes — compute RTT for online learning
                     if header.is_keepalive() {
                         let rtt_us = {
                             let mut ts_map = ka_timestamps.lock().await;
-                            ts_map.remove(&header.sequence)
+                            ts_map
+                                .remove(&header.sequence)
                                 .map(|send_time| send_time.elapsed().as_micros() as u64)
                         };
                         if let Some(rtt) = rtt_us {
@@ -621,12 +686,17 @@ async fn main() -> anyhow::Result<()> {
                             tracing::trace!(
                                 seq = header.sequence,
                                 rtt_ms = latency_ms,
-                                "Keepalive echo: {:.1}ms", latency_ms,
+                                "Keepalive echo: {:.1}ms",
+                                latency_ms,
                             );
                             let mut learner = learner_ref.lock().await;
                             learner.record_and_maybe_retrain(
-                                &cap_proxy_id, &cap_proxy_region,
-                                latency_ms, 0.0, 0.0, 0.0,
+                                &cap_proxy_id,
+                                &cap_proxy_region,
+                                latency_ms,
+                                0.0,
+                                0.0,
+                                0.0,
                             );
                         } else {
                             tracing::trace!("Keepalive echo received (no send timestamp)");
@@ -648,7 +718,9 @@ async fn main() -> anyhow::Result<()> {
                     };
 
                     // Handle FEC if enabled
-                    let game_payload: Option<bytes::Bytes> = if header.has_fec() && fec_decoder.is_some() {
+                    let game_payload: Option<bytes::Bytes> = if header.has_fec()
+                        && fec_decoder.is_some()
+                    {
                         if payload.len() < lightspeed_protocol::FEC_HEADER_SIZE {
                             tracing::debug!("FEC packet too short");
                             continue;
@@ -668,8 +740,12 @@ async fn main() -> anyhow::Result<()> {
 
                         if fec_hdr.is_parity() {
                             let parity_data = bytes::Bytes::copy_from_slice(game_data);
-                            if let Some((_idx, recovered)) = decoder.receive_parity(&fec_hdr, parity_data) {
-                                injector_stats_ref.fec_recovered.fetch_add(1, Ordering::Relaxed);
+                            if let Some((_idx, recovered)) =
+                                decoder.receive_parity(&fec_hdr, parity_data)
+                            {
+                                injector_stats_ref
+                                    .fec_recovered
+                                    .fetch_add(1, Ordering::Relaxed);
                                 tracing::info!(
                                     block = fec_hdr.block_id,
                                     recovered_len = recovered.len(),
@@ -694,8 +770,12 @@ async fn main() -> anyhow::Result<()> {
                         if !data.is_empty() {
                             match injector_socket.send_to(&data, game_addr).await {
                                 Ok(sent) => {
-                                    injector_stats_ref.packets_injected.fetch_add(1, Ordering::Relaxed);
-                                    injector_stats_ref.bytes_injected.fetch_add(sent as u64, Ordering::Relaxed);
+                                    injector_stats_ref
+                                        .packets_injected
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    injector_stats_ref
+                                        .bytes_injected
+                                        .fetch_add(sent as u64, Ordering::Relaxed);
                                     tracing::trace!(
                                         payload_len = data.len(),
                                         dst = %game_addr,
@@ -703,7 +783,9 @@ async fn main() -> anyhow::Result<()> {
                                     );
                                 }
                                 Err(e) => {
-                                    injector_stats_ref.inject_errors.fetch_add(1, Ordering::Relaxed);
+                                    injector_stats_ref
+                                        .inject_errors
+                                        .fetch_add(1, Ordering::Relaxed);
                                     tracing::warn!("Inject to game failed: {}", e);
                                 }
                             }
@@ -736,7 +818,11 @@ async fn main() -> anyhow::Result<()> {
                         .unwrap_or_default()
                         .as_micros() as u32;
                     let header = lightspeed_protocol::TunnelHeader::keepalive(ka_seq, ts);
-                    if tunnel_socket.send_to(&header.encode(), proxy_addr).await.is_ok() {
+                    if tunnel_socket
+                        .send_to(&header.encode(), proxy_addr)
+                        .await
+                        .is_ok()
+                    {
                         let mut ts_map = ka_timestamps.lock().await;
                         ts_map.insert(ka_seq, std::time::Instant::now());
                         // Evict entries older than 30s to prevent unbounded growth
@@ -821,9 +907,8 @@ async fn main() -> anyhow::Result<()> {
                         let block_id = encoder.block_id();
                         let index = encoder.current_index();
 
-                        let header = lightspeed_protocol::TunnelHeader::new_fec(
-                            seq, ts, pkt.src, pkt.dst,
-                        );
+                        let header =
+                            lightspeed_protocol::TunnelHeader::new_fec(seq, ts, pkt.src, pkt.dst);
                         let fec_hdr = FecHeader::data(block_id, index, fec_k);
 
                         let mut pkt_buf = BytesMut::with_capacity(
@@ -854,9 +939,8 @@ async fn main() -> anyhow::Result<()> {
                         }
                     } else {
                         // Non-FEC: simple tunnel header + payload
-                        let header = lightspeed_protocol::TunnelHeader::new(
-                            seq, ts, pkt.src, pkt.dst,
-                        );
+                        let header =
+                            lightspeed_protocol::TunnelHeader::new(seq, ts, pkt.src, pkt.dst);
                         let packet = header.encode_with_payload(&pkt.payload);
                         let _ = tunnel_socket.send_to(&packet, proxy_addr).await;
                     }
@@ -899,13 +983,22 @@ async fn main() -> anyhow::Result<()> {
         info!("📊 Final stats:");
         info!("   Duration:        {:.1}s", elapsed.as_secs_f64());
         info!("   ── Outbound (Game → Proxy) ──");
-        info!("   Captured:        {} packets, {} bytes", out_total, out_bytes_total);
+        info!(
+            "   Captured:        {} packets, {} bytes",
+            out_total, out_bytes_total
+        );
         if elapsed.as_secs() > 0 && out_total > 0 {
-            info!("   Avg PPS:         {:.0}", out_total as f64 / elapsed.as_secs_f64());
+            info!(
+                "   Avg PPS:         {:.0}",
+                out_total as f64 / elapsed.as_secs_f64()
+            );
         }
         info!("   ── Inbound (Proxy → Game) ──");
         info!("   From proxy:      {} packets", from_proxy_total);
-        info!("   Injected:        {} packets, {} bytes", inj_total, inj_bytes_total);
+        info!(
+            "   Injected:        {} packets, {} bytes",
+            inj_total, inj_bytes_total
+        );
         if fec_enabled {
             info!("   FEC recovered:   {} packets", fec_recovered_total);
         }
@@ -916,8 +1009,10 @@ async fn main() -> anyhow::Result<()> {
             let learner = online_learner.lock().await;
             learner.save_state();
             let summary = learner.summary();
-            info!("🧠 Online learning: {} total measurements, {} retrains",
-                summary.total_measurements, summary.retrain_count);
+            info!(
+                "🧠 Online learning: {} total measurements, {} retrains",
+                summary.total_measurements, summary.retrain_count
+            );
         }
 
         return Ok(());
@@ -930,7 +1025,8 @@ async fn main() -> anyhow::Result<()> {
             info!("   {}", line);
         }
         info!("");
-        info!("   Example: lightspeed --game {} --game-server <SERVER_IP>:{} --proxy {}",
+        info!(
+            "   Example: lightspeed --game {} --game-server <SERVER_IP>:{} --proxy {}",
             cli.game.as_deref().unwrap_or("unknown"),
             game.redirect_port(),
             proxy_addr,
@@ -1006,7 +1102,8 @@ async fn main() -> anyhow::Result<()> {
                                     // Compute RTT and feed into online learner
                                     let rtt_us = {
                                         let mut ts_map = ka_timestamps.lock().await;
-                                        ts_map.remove(&header.sequence)
+                                        ts_map
+                                            .remove(&header.sequence)
                                             .map(|send_time| send_time.elapsed().as_micros() as u64)
                                     };
                                     if let Some(rtt) = rtt_us {
@@ -1019,8 +1116,12 @@ async fn main() -> anyhow::Result<()> {
                                         );
                                         let mut learner = learner_ref.lock().await;
                                         learner.record_and_maybe_retrain(
-                                            &ka_proxy_id, &ka_proxy_region,
-                                            latency_ms, 0.0, 0.0, 0.0,
+                                            &ka_proxy_id,
+                                            &ka_proxy_region,
+                                            latency_ms,
+                                            0.0,
+                                            0.0,
+                                            0.0,
                                         );
                                     } else {
                                         tracing::trace!(
@@ -1088,8 +1189,10 @@ async fn main() -> anyhow::Result<()> {
         let learner = online_learner.lock().await;
         learner.save_state();
         let summary = learner.summary();
-        info!("🧠 Online learning: {} total measurements, {} retrains",
-            summary.total_measurements, summary.retrain_count);
+        info!(
+            "🧠 Online learning: {} total measurements, {} retrains",
+            summary.total_measurements, summary.retrain_count
+        );
     }
 
     info!("⚡ LightSpeed shut down cleanly");
@@ -1102,11 +1205,7 @@ async fn main() -> anyhow::Result<()> {
 ///
 /// Sends `num_pings` keepalive packets and returns the median RTT in microseconds.
 /// Returns `None` if the proxy doesn't respond within the timeout.
-async fn probe_single_proxy(
-    addr: SocketAddrV4,
-    num_pings: usize,
-    timeout_ms: u64,
-) -> Option<u64> {
+async fn probe_single_proxy(addr: SocketAddrV4, num_pings: usize, timeout_ms: u64) -> Option<u64> {
     use lightspeed_protocol::TunnelHeader;
     use tokio::net::UdpSocket;
 
@@ -1189,9 +1288,9 @@ async fn probe_all_proxies(servers: &[String], data_port: u16) -> Vec<ProxyNode>
     for handle in handles {
         if let Ok((id, addr, _server_str, latency)) = handle.await {
             let health = match latency {
-                Some(us) if us < 500_000 => ProxyHealth::Healthy,    // < 500ms
-                Some(_) => ProxyHealth::Degraded,                      // > 500ms
-                None => ProxyHealth::Unhealthy,                        // No response
+                Some(us) if us < 500_000 => ProxyHealth::Healthy, // < 500ms
+                Some(_) => ProxyHealth::Degraded,                 // > 500ms
+                None => ProxyHealth::Unhealthy,                   // No response
             };
 
             nodes.push(ProxyNode {
@@ -1224,31 +1323,31 @@ async fn select_best_proxy(
         anyhow::bail!("No proxy servers could be resolved");
     }
 
-    let healthy_count = nodes.iter().filter(|n| n.health == ProxyHealth::Healthy).count();
+    let healthy_count = nodes
+        .iter()
+        .filter(|n| n.health == ProxyHealth::Healthy)
+        .count();
     if healthy_count == 0 {
         warn!("⚠️  No healthy proxies found, trying degraded nodes...");
     }
 
     // Select route using the configured strategy
     let selector: Box<dyn RouteSelector> = match strategy {
-        "ml" => {
-            match route::selector::MlSelector::with_synthetic_training(100) {
-                Ok(ml) => {
-                    info!("   Using ML route selector");
-                    Box::new(ml)
-                }
-                Err(e) => {
-                    warn!("   ML selector failed ({}), falling back to nearest", e);
-                    Box::new(NearestSelector::new())
-                }
+        "ml" => match route::selector::MlSelector::with_synthetic_training(100) {
+            Ok(ml) => {
+                info!("   Using ML route selector");
+                Box::new(ml)
             }
-        }
-        _ => {
-            Box::new(NearestSelector::new())
-        }
+            Err(e) => {
+                warn!("   ML selector failed ({}), falling back to nearest", e);
+                Box::new(NearestSelector::new())
+            }
+        },
+        _ => Box::new(NearestSelector::new()),
     };
 
-    selector.select(game_server, &nodes)
+    selector
+        .select(game_server, &nodes)
         .map_err(|e| anyhow::anyhow!("Route selection failed: {}", e))
 }
 
@@ -1439,16 +1538,20 @@ async fn run_live_test(
 
     // Build list of proxies to test
     let proxy_addrs: Vec<(String, SocketAddrV4)> = if !servers.is_empty() {
-        servers.iter().enumerate().filter_map(|(i, s)| {
-            parse_proxy_addr(s).ok().map(|addr| {
-                let addr = if !s.contains(':') {
-                    SocketAddrV4::new(*addr.ip(), data_port)
-                } else {
-                    addr
-                };
-                (format!("proxy-{}", i), addr)
+        servers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                parse_proxy_addr(s).ok().map(|addr| {
+                    let addr = if !s.contains(':') {
+                        SocketAddrV4::new(*addr.ip(), data_port)
+                    } else {
+                        addr
+                    };
+                    (format!("proxy-{}", i), addr)
+                })
             })
-        }).collect()
+            .collect()
     } else if let Some(addr) = explicit_proxy {
         vec![("proxy-0".into(), addr)]
     } else {
@@ -1468,23 +1571,37 @@ async fn run_live_test(
     info!("──────────────────────────────────────────────────────");
 
     let nodes = probe_all_proxies(
-        &proxy_addrs.iter().map(|(_, a)| a.to_string()).collect::<Vec<_>>(),
+        &proxy_addrs
+            .iter()
+            .map(|(_, a)| a.to_string())
+            .collect::<Vec<_>>(),
         data_port,
-    ).await;
+    )
+    .await;
 
     let mut healthy_nodes: Vec<&ProxyNode> = Vec::new();
     for (i, node) in nodes.iter().enumerate() {
-        let label = if i < proxy_addrs.len() { &proxy_addrs[i].0 } else { &node.id };
+        let label = if i < proxy_addrs.len() {
+            &proxy_addrs[i].0
+        } else {
+            &node.id
+        };
         match node.health {
             ProxyHealth::Healthy => {
                 let ms = node.latency_us.unwrap_or(0) as f64 / 1000.0;
-                info!("  ✅ {} ({}) — {:.1}ms [Healthy]", label, node.data_addr, ms);
+                info!(
+                    "  ✅ {} ({}) — {:.1}ms [Healthy]",
+                    label, node.data_addr, ms
+                );
                 healthy_nodes.push(node);
                 total_pass += 1;
             }
             ProxyHealth::Degraded => {
                 let ms = node.latency_us.unwrap_or(0) as f64 / 1000.0;
-                warn!("  ⚠️  {} ({}) — {:.1}ms [Degraded]", label, node.data_addr, ms);
+                warn!(
+                    "  ⚠️  {} ({}) — {:.1}ms [Degraded]",
+                    label, node.data_addr, ms
+                );
                 healthy_nodes.push(node);
                 total_pass += 1;
             }
@@ -1514,8 +1631,16 @@ async fn run_live_test(
                 info!("  Strategy:  {:?}", route.strategy);
                 info!("  Selected:  {} ({:.1}ms)", route.primary.id, ms);
                 if !route.backups.is_empty() {
-                    let backups: Vec<String> = route.backups.iter()
-                        .map(|b| format!("{} ({:.1}ms)", b.id, b.latency_us.unwrap_or(0) as f64 / 1000.0))
+                    let backups: Vec<String> = route
+                        .backups
+                        .iter()
+                        .map(|b| {
+                            format!(
+                                "{} ({:.1}ms)",
+                                b.id,
+                                b.latency_us.unwrap_or(0) as f64 / 1000.0
+                            )
+                        })
                         .collect();
                     info!("  Backups:   {}", backups.join(", "));
                 }
@@ -1564,10 +1689,9 @@ async fn run_live_test(
             }
 
             let mut buf = vec![0u8; 128];
-            match tokio::time::timeout(
-                Duration::from_millis(3000),
-                socket.recv_from(&mut buf),
-            ).await {
+            match tokio::time::timeout(Duration::from_millis(3000), socket.recv_from(&mut buf))
+                .await
+            {
                 Ok(Ok((len, _))) => {
                     if TunnelHeader::decode(&buf[..len]).is_ok() {
                         rtts.push(send_time.elapsed().as_micros() as u64);
@@ -1588,7 +1712,8 @@ async fn run_live_test(
             let min = *rtts.first().unwrap() as f64 / 1000.0;
             let max = *rtts.last().unwrap() as f64 / 1000.0;
             let jitter = if rtts.len() > 1 {
-                let diffs: Vec<f64> = rtts.windows(2)
+                let diffs: Vec<f64> = rtts
+                    .windows(2)
                     .map(|w| (w[1] as f64 - w[0] as f64).abs() / 1000.0)
                     .collect();
                 diffs.iter().sum::<f64>() / diffs.len() as f64
@@ -1598,7 +1723,13 @@ async fn run_live_test(
 
             info!(
                 "  ✅ {}: {}/{} received, avg={:.1}ms, min={:.1}ms, max={:.1}ms, jitter={:.1}ms",
-                label, rtts.len(), num_pings, avg, min, max, jitter
+                label,
+                rtts.len(),
+                num_pings,
+                avg,
+                min,
+                max,
+                jitter
             );
             total_pass += 1;
         }
@@ -1640,10 +1771,9 @@ async fn run_live_test(
                 }
 
                 let mut buf = vec![0u8; 2048];
-                match tokio::time::timeout(
-                    Duration::from_millis(5000),
-                    socket.recv_from(&mut buf),
-                ).await {
+                match tokio::time::timeout(Duration::from_millis(5000), socket.recv_from(&mut buf))
+                    .await
+                {
                     Ok(Ok((len, _))) => {
                         let rtt = send_time.elapsed().as_micros() as u64;
                         rtts.push(rtt);
@@ -1664,13 +1794,20 @@ async fn run_live_test(
             }
 
             if rtts.is_empty() {
-                warn!("  ❌ {} → echo({}): 0/{} responses", label, echo_addr, num_packets);
+                warn!(
+                    "  ❌ {} → echo({}): 0/{} responses",
+                    label, echo_addr, num_packets
+                );
                 total_fail += 1;
             } else {
                 let avg = rtts.iter().sum::<u64>() as f64 / rtts.len() as f64 / 1000.0;
                 let min = *rtts.iter().min().unwrap() as f64 / 1000.0;
                 let max = *rtts.iter().max().unwrap() as f64 / 1000.0;
-                let status = if payload_matches == rtts.len() as u32 { "✅" } else { "⚠️" };
+                let status = if payload_matches == rtts.len() as u32 {
+                    "✅"
+                } else {
+                    "⚠️"
+                };
                 info!(
                     "  {} {} → echo({}): {}/{} received, {}/{} payload match, avg={:.1}ms min={:.1}ms max={:.1}ms",
                     status, label, echo_addr, rtts.len(), num_packets,
@@ -1696,8 +1833,8 @@ async fn run_live_test(
 
     if let Some(echo_addr) = echo_server {
         if fec_enabled {
-            use lightspeed_protocol::{FecEncoder, FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
             use bytes::BytesMut;
+            use lightspeed_protocol::{FecEncoder, FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
 
             for (label, proxy) in &proxy_addrs {
                 let socket = match UdpSocket::bind("0.0.0.0:0").await {
@@ -1727,7 +1864,8 @@ async fn run_live_test(
                     let header = TunnelHeader::new_fec(seq, ts, local_addr, echo_addr);
                     let fec_hdr = FecHeader::data(block_id, index, fec_k);
 
-                    let mut pkt = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
+                    let mut pkt =
+                        BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
                     pkt.extend_from_slice(&header.encode());
                     fec_hdr.encode(&mut pkt);
                     pkt.extend_from_slice(payload.as_bytes());
@@ -1738,9 +1876,8 @@ async fn run_live_test(
 
                     // Send parity when block completes
                     if let Some(parity_bytes) = parity {
-                        let parity_header = TunnelHeader::new_fec(
-                            seq + 1000, ts, local_addr, echo_addr,
-                        );
+                        let parity_header =
+                            TunnelHeader::new_fec(seq + 1000, ts, local_addr, echo_addr);
                         let parity_fec = FecHeader::parity(block_id, fec_k);
                         let mut parity_pkt = BytesMut::with_capacity(
                             HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
@@ -1761,7 +1898,9 @@ async fn run_live_test(
                     match tokio::time::timeout(
                         Duration::from_millis(500),
                         socket.recv_from(&mut buf),
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(Ok((len, _))) => {
                             if TunnelHeader::decode(&buf[..len]).is_ok() {
                                 responses += 1;
@@ -1801,9 +1940,21 @@ async fn run_live_test(
     info!("📊 Live Integration Test Summary");
     info!("──────────────────────────────────────────────────────");
     info!("  Proxies tested:     {}", proxy_addrs.len());
-    info!("  Healthy:            {}/{}", healthy_nodes.len(), nodes.len());
-    if let Some(best) = nodes.iter().filter(|n| n.latency_us.is_some()).min_by_key(|n| n.latency_us) {
-        info!("  Best latency:       {:.1}ms ({})", best.latency_us.unwrap() as f64 / 1000.0, best.id);
+    info!(
+        "  Healthy:            {}/{}",
+        healthy_nodes.len(),
+        nodes.len()
+    );
+    if let Some(best) = nodes
+        .iter()
+        .filter(|n| n.latency_us.is_some())
+        .min_by_key(|n| n.latency_us)
+    {
+        info!(
+            "  Best latency:       {:.1}ms ({})",
+            best.latency_us.unwrap() as f64 / 1000.0,
+            best.id
+        );
     }
     info!("  ────────────────────────────────────────────");
     info!("  ✅ Passed:  {}", total_pass);

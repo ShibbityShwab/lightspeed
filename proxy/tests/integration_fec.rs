@@ -121,9 +121,8 @@ async fn spawn_fec_proxy(echo_addr: SocketAddrV4) -> (SocketAddrV4, JoinHandle<(
                     );
                     response_seq = response_seq.wrapping_add(1);
 
-                    let mut resp_buf = BytesMut::with_capacity(
-                        HEADER_SIZE + FEC_HEADER_SIZE + game_data.len(),
-                    );
+                    let mut resp_buf =
+                        BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + game_data.len());
                     resp_buf.extend_from_slice(&resp_header.encode());
                     fec_hdr.encode(&mut resp_buf);
                     resp_buf.extend_from_slice(game_data);
@@ -139,11 +138,9 @@ async fn spawn_fec_proxy(echo_addr: SocketAddrV4) -> (SocketAddrV4, JoinHandle<(
                 }
 
                 let mut echo_buf = vec![0u8; 2048];
-                let echo_result = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    outbound.recv_from(&mut echo_buf),
-                )
-                .await;
+                let echo_result =
+                    tokio::time::timeout(Duration::from_secs(2), outbound.recv_from(&mut echo_buf))
+                        .await;
 
                 if let Ok(Ok((echo_len, _))) = echo_result {
                     // Re-wrap with FEC header
@@ -155,9 +152,8 @@ async fn spawn_fec_proxy(echo_addr: SocketAddrV4) -> (SocketAddrV4, JoinHandle<(
                     );
                     response_seq = response_seq.wrapping_add(1);
 
-                    let mut resp_buf = BytesMut::with_capacity(
-                        HEADER_SIZE + FEC_HEADER_SIZE + echo_len,
-                    );
+                    let mut resp_buf =
+                        BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + echo_len);
                     resp_buf.extend_from_slice(&resp_header.encode());
                     fec_hdr.encode(&mut resp_buf);
                     resp_buf.extend_from_slice(&echo_buf[..echo_len]);
@@ -172,11 +168,9 @@ async fn spawn_fec_proxy(echo_addr: SocketAddrV4) -> (SocketAddrV4, JoinHandle<(
                 }
 
                 let mut echo_buf = vec![0u8; 2048];
-                let echo_result = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    outbound.recv_from(&mut echo_buf),
-                )
-                .await;
+                let echo_result =
+                    tokio::time::timeout(Duration::from_secs(2), outbound.recv_from(&mut echo_buf))
+                        .await;
 
                 if let Ok(Ok((echo_len, _))) = echo_result {
                     let resp_header = TunnelHeader::new(
@@ -308,7 +302,11 @@ async fn test_fec_data_roundtrip() {
         }
     }
 
-    assert_eq!(received, k as usize, "All {} data packets should round-trip", k);
+    assert_eq!(
+        received, k as usize,
+        "All {} data packets should round-trip",
+        k
+    );
 
     echo_h.abort();
     proxy_h.abort();
@@ -356,7 +354,8 @@ async fn test_fec_recovery_through_proxy() {
     // Send parity packet
     let parity = parity_bytes.expect("Should have parity after K packets");
     let parity_fec = FecHeader::parity(0, k);
-    let parity_packet = build_fec_parity_packet(seq, client_addr, game_server, &parity_fec, &parity);
+    let parity_packet =
+        build_fec_parity_packet(seq, client_addr, game_server, &parity_fec, &parity);
     client.send_to(&parity_packet, proxy_addr).await.unwrap();
 
     // Collect all responses
@@ -466,10 +465,10 @@ async fn test_fec_variable_payload_sizes() {
 
     // Realistic game packet sizes
     let payloads: Vec<Vec<u8>> = vec![
-        vec![0xAA; 48],   // Small position update
-        vec![0xBB; 256],  // Medium state sync
-        vec![0xCC; 512],  // Large inventory update
-        vec![0xDD; 96],   // Hit registration
+        vec![0xAA; 48],  // Small position update
+        vec![0xBB; 256], // Medium state sync
+        vec![0xCC; 512], // Large inventory update
+        vec![0xDD; 96],  // Hit registration
     ];
 
     for (i, payload) in payloads.iter().enumerate() {

@@ -106,7 +106,10 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
     if processes.is_empty() {
         tracing::debug!("Process list empty — may need elevated privileges");
     } else {
-        tracing::debug!("Scanning {} running processes for known games", processes.len());
+        tracing::debug!(
+            "Scanning {} running processes for known games",
+            processes.len()
+        );
     }
 
     // Check each supported game
@@ -118,7 +121,10 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     for game in all_games {
         for process_name in game.process_names() {
-            if processes.iter().any(|p| p.eq_ignore_ascii_case(process_name)) {
+            if processes
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(process_name))
+            {
                 tracing::info!(
                     "🎮 Auto-detected game: {} (matched process: {})",
                     game.name(),
@@ -130,11 +136,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
     }
 
     // No game found — provide helpful diagnostic
-    let known_procs: Vec<&str> = vec![
-        "FortniteClient-Win64-Shipping.exe",
-        "cs2.exe",
-        "dota2.exe",
-    ];
+    let known_procs: Vec<&str> = vec!["FortniteClient-Win64-Shipping.exe", "cs2.exe", "dota2.exe"];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
         known_procs.join(", ")

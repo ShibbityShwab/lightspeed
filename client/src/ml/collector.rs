@@ -117,7 +117,12 @@ impl RouteCollector {
 
         let now_chrono = chrono::Local::now();
         let time_of_day: u8 = now_chrono.format("%H").to_string().parse().unwrap_or(12);
-        let day_of_week: u8 = now_chrono.format("%u").to_string().parse::<u8>().unwrap_or(1) - 1;
+        let day_of_week: u8 = now_chrono
+            .format("%u")
+            .to_string()
+            .parse::<u8>()
+            .unwrap_or(1)
+            - 1;
 
         let measurement = LiveMeasurement {
             proxy_id: proxy_id.to_string(),
@@ -132,14 +137,16 @@ impl RouteCollector {
         };
 
         // Update latency tracker
-        let tracker = self.trackers
+        let tracker = self
+            .trackers
             .entry(proxy_id.to_string())
             .or_insert_with(|| LatencyTracker::new(200));
         tracker.record(latency_ms);
         tracker.record_send(); // For loss tracking
 
         // Store measurement
-        let proxy_measurements = self.measurements
+        let proxy_measurements = self
+            .measurements
             .entry(proxy_id.to_string())
             .or_insert_with(Vec::new);
 
@@ -184,7 +191,8 @@ impl RouteCollector {
 
     /// Get measurements count per proxy.
     pub fn per_proxy_counts(&self) -> HashMap<String, usize> {
-        self.measurements.iter()
+        self.measurements
+            .iter()
             .map(|(k, v)| (k.clone(), v.len()))
             .collect()
     }
@@ -216,13 +224,13 @@ impl RouteCollector {
                     historical_p50_ms: tracker.map(|t| t.p50()).unwrap_or(m.latency_ms),
                     historical_p95_ms: tracker.map(|t| t.p95()).unwrap_or(m.latency_ms * 1.5),
                     jitter_ms: m.jitter_ms,
-                    hop_count: 0,  // Not available from live probes
+                    hop_count: 0, // Not available from live probes
                     time_of_day: m.time_of_day,
                     day_of_week: m.day_of_week,
-                    bgp_as_path_len: 0,  // Not available from live probes
+                    bgp_as_path_len: 0, // Not available from live probes
                     packet_loss_pct: m.packet_loss_pct,
                     proxy_load: m.proxy_load,
-                    geographic_distance_km: 0.0,  // Could be estimated from region
+                    geographic_distance_km: 0.0, // Could be estimated from region
                 };
 
                 let sample = TrainingSample {
@@ -249,10 +257,8 @@ impl RouteCollector {
 
     /// Save collected measurements to a JSON file for persistence.
     pub fn save_to_file(&self, path: &str) -> Result<(), std::io::Error> {
-        let all_measurements: Vec<&LiveMeasurement> = self.measurements
-            .values()
-            .flat_map(|v| v.iter())
-            .collect();
+        let all_measurements: Vec<&LiveMeasurement> =
+            self.measurements.values().flat_map(|v| v.iter()).collect();
 
         let json = serde_json::to_string_pretty(&all_measurements)?;
 
@@ -277,13 +283,15 @@ impl RouteCollector {
 
         for m in measurements {
             // Update tracker
-            let tracker = self.trackers
+            let tracker = self
+                .trackers
                 .entry(m.proxy_id.clone())
                 .or_insert_with(|| LatencyTracker::new(200));
             tracker.record(m.latency_ms);
 
             // Store measurement
-            let proxy_measurements = self.measurements
+            let proxy_measurements = self
+                .measurements
                 .entry(m.proxy_id.clone())
                 .or_insert_with(Vec::new);
             proxy_measurements.push(m);
@@ -317,7 +325,14 @@ mod tests {
         assert!(!collector.should_retrain());
 
         for i in 0..5 {
-            collector.record_measurement("proxy-lax", "us-west-lax", 200.0 + i as f64, 0.3, 0.0, 0.2);
+            collector.record_measurement(
+                "proxy-lax",
+                "us-west-lax",
+                200.0 + i as f64,
+                0.3,
+                0.0,
+                0.2,
+            );
         }
         assert!(collector.should_retrain());
 
@@ -330,8 +345,12 @@ mod tests {
         let mut collector = RouteCollector::new(100);
         for i in 0..10 {
             collector.record_measurement(
-                "proxy-lax", "us-west-lax",
-                200.0 + i as f64, 0.3, 0.0, 0.2,
+                "proxy-lax",
+                "us-west-lax",
+                200.0 + i as f64,
+                0.3,
+                0.0,
+                0.2,
             );
         }
 
@@ -349,8 +368,12 @@ mod tests {
         let mut collector = RouteCollector::new(5);
         for i in 0..10 {
             collector.record_measurement(
-                "proxy-lax", "us-west-lax",
-                200.0 + i as f64, 0.3, 0.0, 0.2,
+                "proxy-lax",
+                "us-west-lax",
+                200.0 + i as f64,
+                0.3,
+                0.0,
+                0.2,
             );
         }
 

@@ -138,10 +138,7 @@ impl UdpRedirect {
         // Bind the tunnel socket for proxy communication
         let tunnel_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
         let tunnel_socket = Arc::new(UdpSocket::bind(tunnel_addr).await?);
-        info!(
-            "🌐 Tunnel socket bound to {}",
-            tunnel_socket.local_addr()?
-        );
+        info!("🌐 Tunnel socket bound to {}", tunnel_socket.local_addr()?);
 
         let game_server = self.game_server;
         let proxy_addr = self.proxy_addr;
@@ -223,12 +220,12 @@ impl UdpRedirect {
 
                         // Build FEC data packet:
                         // [TunnelHeader v2 20B][FecHeader 4B][game_payload]
-                        let header = TunnelHeader::new_fec(seq_num, now_us(), orig_src, game_server);
+                        let header =
+                            TunnelHeader::new_fec(seq_num, now_us(), orig_src, game_server);
                         let fec_hdr = FecHeader::data(block_id, index, fec_k);
 
-                        let mut pkt_buf = BytesMut::with_capacity(
-                            HEADER_SIZE + FEC_HEADER_SIZE + payload.len(),
-                        );
+                        let mut pkt_buf =
+                            BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
                         // Encode tunnel header inline
                         pkt_buf.extend_from_slice(&header.encode());
                         fec_hdr.encode(&mut pkt_buf);
@@ -241,8 +238,15 @@ impl UdpRedirect {
                         match tunnel_socket.send_to(&pkt_buf, proxy_addr).await {
                             Ok(sent) => {
                                 stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
-                                stats.bytes_to_proxy.fetch_add(sent as u64, Ordering::Relaxed);
-                                trace!(seq = seq_num, fec_block = block_id, fec_idx = index, "Game → Proxy (FEC data)");
+                                stats
+                                    .bytes_to_proxy
+                                    .fetch_add(sent as u64, Ordering::Relaxed);
+                                trace!(
+                                    seq = seq_num,
+                                    fec_block = block_id,
+                                    fec_idx = index,
+                                    "Game → Proxy (FEC data)"
+                                );
                             }
                             Err(e) => {
                                 warn!("Tunnel send error: {}", e);
@@ -254,9 +258,8 @@ impl UdpRedirect {
                         if let Some(parity_bytes) = parity {
                             let parity_seq = seq.fetch_add(1, Ordering::Relaxed);
                             // block_id was incremented by add_packet, so use block_id (captured before)
-                            let parity_header = TunnelHeader::new_fec(
-                                parity_seq, now_us(), orig_src, game_server,
-                            );
+                            let parity_header =
+                                TunnelHeader::new_fec(parity_seq, now_us(), orig_src, game_server);
                             let parity_fec = FecHeader::parity(block_id, fec_k);
 
                             let mut parity_buf = BytesMut::with_capacity(
@@ -269,7 +272,9 @@ impl UdpRedirect {
                             match tunnel_socket.send_to(&parity_buf, proxy_addr).await {
                                 Ok(sent) => {
                                     stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
-                                    stats.bytes_to_proxy.fetch_add(sent as u64, Ordering::Relaxed);
+                                    stats
+                                        .bytes_to_proxy
+                                        .fetch_add(sent as u64, Ordering::Relaxed);
                                     stats.fec_parity_sent.fetch_add(1, Ordering::Relaxed);
                                     trace!(seq = parity_seq, fec_block = block_id, "Parity sent");
                                 }
@@ -287,7 +292,9 @@ impl UdpRedirect {
                         match tunnel_socket.send_to(&packet, proxy_addr).await {
                             Ok(sent) => {
                                 stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
-                                stats.bytes_to_proxy.fetch_add(sent as u64, Ordering::Relaxed);
+                                stats
+                                    .bytes_to_proxy
+                                    .fetch_add(sent as u64, Ordering::Relaxed);
                                 trace!(seq = seq_num, payload_len = len, "Game → Proxy");
                             }
                             Err(e) => {
@@ -331,18 +338,19 @@ impl UdpRedirect {
                     };
 
                     stats.packets_from_proxy.fetch_add(1, Ordering::Relaxed);
-                    stats.bytes_from_proxy.fetch_add(len as u64, Ordering::Relaxed);
+                    stats
+                        .bytes_from_proxy
+                        .fetch_add(len as u64, Ordering::Relaxed);
 
                     // Decode the LightSpeed header
-                    let (header, payload) =
-                        match TunnelHeader::decode_with_payload(&buf[..len]) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                debug!("Invalid tunnel response: {}", e);
-                                stats.errors.fetch_add(1, Ordering::Relaxed);
-                                continue;
-                            }
-                        };
+                    let (header, payload) = match TunnelHeader::decode_with_payload(&buf[..len]) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            debug!("Invalid tunnel response: {}", e);
+                            stats.errors.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                    };
 
                     // Get the game client address
                     let game_addr = {
@@ -410,7 +418,10 @@ impl UdpRedirect {
                             match local_socket.send_to(game_data, game_addr).await {
                                 Ok(_) => {
                                     stats.packets_to_game.fetch_add(1, Ordering::Relaxed);
-                                    trace!(payload_len = game_data.len(), "Proxy → Game (FEC data)");
+                                    trace!(
+                                        payload_len = game_data.len(),
+                                        "Proxy → Game (FEC data)"
+                                    );
                                 }
                                 Err(e) => {
                                     warn!("Local socket send error: {}", e);
@@ -526,10 +537,7 @@ impl UdpRedirect {
                 stats.fec_recovered.load(Ordering::Relaxed),
             );
         }
-        info!(
-            "   Errors: {}",
-            stats.errors.load(Ordering::Relaxed)
-        );
+        info!("   Errors: {}", stats.errors.load(Ordering::Relaxed));
 
         Ok(())
     }

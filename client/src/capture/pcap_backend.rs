@@ -17,7 +17,7 @@
 //! - **macOS**: libpcap (included with Xcode Command Line Tools)
 
 #[cfg(feature = "pcap-capture")]
-use pcap::{Capture, Active, Device};
+use pcap::{Active, Capture, Device};
 
 #[cfg(feature = "pcap-capture")]
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -100,7 +100,8 @@ impl PacketCapture for PcapCapture {
                 .ok_or(CaptureError::NoInterface)?
         };
 
-        tracing::info!("Capturing on interface: {} ({})",
+        tracing::info!(
+            "Capturing on interface: {} ({})",
             device.name,
             device.desc.as_deref().unwrap_or("no description")
         );
@@ -108,9 +109,9 @@ impl PacketCapture for PcapCapture {
         // Open the capture handle
         let mut cap = Capture::from_device(device)
             .map_err(|e| CaptureError::Pcap(format!("Failed to open device: {}", e)))?
-            .promisc(false)      // Don't need promiscuous mode for our own traffic
-            .snaplen(65535)      // Capture full packets
-            .timeout(100)        // 100ms read timeout for non-blocking behavior
+            .promisc(false) // Don't need promiscuous mode for our own traffic
+            .snaplen(65535) // Capture full packets
+            .timeout(100) // 100ms read timeout for non-blocking behavior
             .immediate_mode(true) // Low-latency capture (important for games!)
             .open()
             .map_err(|e| {
@@ -122,8 +123,9 @@ impl PacketCapture for PcapCapture {
             })?;
 
         // Apply the BPF filter
-        cap.filter(&filter.bpf, true)
-            .map_err(|e| CaptureError::Pcap(format!("Failed to set BPF filter '{}': {}", filter.bpf, e)))?;
+        cap.filter(&filter.bpf, true).map_err(|e| {
+            CaptureError::Pcap(format!("Failed to set BPF filter '{}': {}", filter.bpf, e))
+        })?;
 
         tracing::info!("Pcap capture started successfully");
         self.capture = Some(cap);
@@ -139,11 +141,14 @@ impl PacketCapture for PcapCapture {
     }
 
     fn next_packet(&mut self) -> Result<CapturedPacket, CaptureError> {
-        let cap = self.capture.as_mut()
+        let cap = self
+            .capture
+            .as_mut()
             .ok_or_else(|| CaptureError::Pcap("Capture not active".into()))?;
 
         loop {
-            let raw_packet = cap.next_packet()
+            let raw_packet = cap
+                .next_packet()
                 .map_err(|e| CaptureError::Pcap(format!("Capture read error: {}", e)))?;
 
             let data = raw_packet.data;
@@ -198,7 +203,8 @@ impl PacketCapture for PcapCapture {
 
             let src_port = u16::from_be_bytes([data[udp_start], data[udp_start + 1]]);
             let dst_port = u16::from_be_bytes([data[udp_start + 2], data[udp_start + 3]]);
-            let udp_length = u16::from_be_bytes([data[udp_start + 4], data[udp_start + 5]]) as usize;
+            let udp_length =
+                u16::from_be_bytes([data[udp_start + 4], data[udp_start + 5]]) as usize;
 
             // ── Extract UDP payload ─────────────────────────────
             let payload_start = udp_start + UDP_HEADER_LEN;
@@ -243,7 +249,9 @@ impl PacketCapture for PcapCapture {
     }
 
     fn next_packet(&mut self) -> Result<CapturedPacket, CaptureError> {
-        Err(CaptureError::Pcap("Not implemented — pcap-capture feature not enabled".into()))
+        Err(CaptureError::Pcap(
+            "Not implemented — pcap-capture feature not enabled".into(),
+        ))
     }
 
     fn is_active(&self) -> bool {
@@ -257,16 +265,15 @@ impl PacketCapture for PcapCapture {
 #[cfg(feature = "pcap-capture")]
 pub fn list_pcap_interfaces() -> Vec<super::InterfaceInfo> {
     match Device::list() {
-        Ok(devices) => {
-            devices.into_iter().map(|d| {
-                super::InterfaceInfo {
-                    name: d.name,
-                    description: d.desc.unwrap_or_default(),
-                    is_up: d.flags.is_up(),
-                    is_loopback: d.flags.is_loopback(),
-                }
-            }).collect()
-        }
+        Ok(devices) => devices
+            .into_iter()
+            .map(|d| super::InterfaceInfo {
+                name: d.name,
+                description: d.desc.unwrap_or_default(),
+                is_up: d.flags.is_up(),
+                is_loopback: d.flags.is_loopback(),
+            })
+            .collect(),
         Err(e) => {
             tracing::warn!("Failed to list pcap devices: {}", e);
             vec![]

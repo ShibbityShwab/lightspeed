@@ -64,15 +64,21 @@ impl Default for OnlineLearningConfig {
 fn dirs_data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        std::env::var("APPDATA").ok().map(|p| PathBuf::from(p).join("lightspeed"))
+        std::env::var("APPDATA")
+            .ok()
+            .map(|p| PathBuf::from(p).join("lightspeed"))
     }
     #[cfg(target_os = "linux")]
     {
-        std::env::var("HOME").ok().map(|p| PathBuf::from(p).join(".lightspeed"))
+        std::env::var("HOME")
+            .ok()
+            .map(|p| PathBuf::from(p).join(".lightspeed"))
     }
     #[cfg(target_os = "macos")]
     {
-        std::env::var("HOME").ok().map(|p| PathBuf::from(p).join(".lightspeed"))
+        std::env::var("HOME")
+            .ok()
+            .map(|p| PathBuf::from(p).join(".lightspeed"))
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
@@ -129,7 +135,10 @@ impl OnlineLearner {
         // Load previous measurements
         let measurements_path = self.measurements_path();
         if measurements_path.exists() {
-            match self.collector.load_from_file(measurements_path.to_str().unwrap_or("")) {
+            match self
+                .collector
+                .load_from_file(measurements_path.to_str().unwrap_or(""))
+            {
                 Ok(count) => {
                     tracing::info!("Loaded {} previous measurements", count);
                 }
@@ -176,7 +185,12 @@ impl OnlineLearner {
         proxy_load: f64,
     ) -> bool {
         self.collector.record_measurement(
-            proxy_id, proxy_region, latency_ms, jitter_ms, packet_loss_pct, proxy_load,
+            proxy_id,
+            proxy_region,
+            latency_ms,
+            jitter_ms,
+            packet_loss_pct,
+            proxy_load,
         );
 
         if self.collector.should_retrain() {
@@ -210,7 +224,9 @@ impl OnlineLearner {
         let mut samples = self.collector.training_samples();
 
         if samples.is_empty() {
-            return Err(MlError::PredictionFailed("No training data available".into()));
+            return Err(MlError::PredictionFailed(
+                "No training data available".into(),
+            ));
         }
 
         // Optionally mix in synthetic data for robustness
@@ -237,7 +253,8 @@ impl OnlineLearner {
 
         // Load new model
         let version = format!("online-v{}", self.retrain_count + 1);
-        self.model.load_from_bytes(model_bytes, &version, &report.model_type);
+        self.model
+            .load_from_bytes(model_bytes, &version, &report.model_type);
 
         // Save model and measurements
         self.save_state();
@@ -260,7 +277,10 @@ impl OnlineLearner {
 
         // Save measurements
         let measurements_path = self.measurements_path();
-        if let Err(e) = self.collector.save_to_file(measurements_path.to_str().unwrap_or("")) {
+        if let Err(e) = self
+            .collector
+            .save_to_file(measurements_path.to_str().unwrap_or(""))
+        {
             tracing::warn!("Failed to save measurements: {}", e);
         }
     }
@@ -303,12 +323,19 @@ impl OnlineLearner {
 
         if live_samples.len() >= 30 {
             // Enough live data — train primarily on that
-            tracing::info!("Training initial model from {} live samples", live_samples.len());
+            tracing::info!(
+                "Training initial model from {} live samples",
+                live_samples.len()
+            );
             let (model_bytes, report) = super::trainer::train_random_forest(&live_samples, 0.2)?;
-            self.model.load_from_bytes(model_bytes, "live-initial", &report.model_type);
+            self.model
+                .load_from_bytes(model_bytes, "live-initial", &report.model_type);
         } else {
             // Not enough live data — use synthetic + whatever live we have
-            tracing::info!("Training initial model with synthetic data + {} live samples", live_samples.len());
+            tracing::info!(
+                "Training initial model with synthetic data + {} live samples",
+                live_samples.len()
+            );
             let report = self.model.train_and_load()?;
             tracing::info!(
                 "Initial model trained: MAE={:.2}ms, R²={:.4}",
@@ -390,8 +417,12 @@ mod tests {
 
         for i in 0..3 {
             learner.collector.record_measurement(
-                "proxy-lax", "us-west-lax",
-                200.0 + i as f64, 0.3, 0.0, 0.2,
+                "proxy-lax",
+                "us-west-lax",
+                200.0 + i as f64,
+                0.3,
+                0.0,
+                0.2,
             );
         }
 
@@ -401,9 +432,9 @@ mod tests {
     #[test]
     fn test_summary() {
         let mut learner = OnlineLearner::with_config(test_config());
-        learner.collector.record_measurement(
-            "proxy-lax", "us-west-lax", 204.8, 0.3, 0.0, 0.2,
-        );
+        learner
+            .collector
+            .record_measurement("proxy-lax", "us-west-lax", 204.8, 0.3, 0.0, 0.2);
 
         let summary = learner.summary();
         assert!(!summary.initialized);
@@ -420,7 +451,10 @@ mod tests {
     fn test_data_dir_creation() {
         let config = test_config();
         let learner = OnlineLearner::with_config(config.clone());
-        assert_eq!(learner.measurements_path(), config.data_dir.join("measurements.json"));
+        assert_eq!(
+            learner.measurements_path(),
+            config.data_dir.join("measurements.json")
+        );
         assert_eq!(learner.model_path(), config.data_dir.join("model.bin"));
 
         // Cleanup

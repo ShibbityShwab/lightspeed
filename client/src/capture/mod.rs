@@ -39,8 +39,8 @@ pub mod linux;
 #[cfg(all(target_os = "macos", feature = "pcap-capture"))]
 pub mod macos;
 
-pub mod pcap_backend;
 pub mod injector;
+pub mod pcap_backend;
 
 use crate::error::CaptureError;
 use crate::tunnel::capture::PacketCapture;

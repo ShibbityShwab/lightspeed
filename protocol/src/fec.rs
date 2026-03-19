@@ -263,11 +263,7 @@ impl BlockState {
         let parity = self.parity.as_ref()?;
 
         // Find the missing index
-        let missing_idx = self
-            .received
-            .iter()
-            .position(|p| p.is_none())
-            .unwrap();
+        let missing_idx = self.received.iter().position(|p| p.is_none()).unwrap();
 
         // XOR all received data packets + parity to recover the missing one
         let mut recovered = vec![0u8; FEC_MAX_PAYLOAD];
@@ -303,7 +299,10 @@ impl BlockState {
             return None; // Invalid length, recovery failed
         }
 
-        Some((missing_idx as u8, Bytes::copy_from_slice(&recovered[..orig_len])))
+        Some((
+            missing_idx as u8,
+            Bytes::copy_from_slice(&recovered[..orig_len]),
+        ))
     }
 }
 
@@ -505,7 +504,10 @@ mod tests {
         decoder.receive_data(&FecHeader::data(0, 0, 2), Bytes::from_static(p1));
         decoder.receive_data(&FecHeader::data(0, 1, 2), Bytes::from_static(p2));
         let result = decoder.receive_parity(&FecHeader::parity(0, 2), parity);
-        assert!(result.is_none(), "No recovery needed when all data received");
+        assert!(
+            result.is_none(),
+            "No recovery needed when all data received"
+        );
     }
 
     #[test]
@@ -531,7 +533,10 @@ mod tests {
             Bytes::copy_from_slice(&packets[2]),
         );
         let result = decoder.receive_parity(&FecHeader::parity(0, 4), parity_bytes);
-        assert!(result.is_none(), "Cannot recover 2 lost packets with 1 parity");
+        assert!(
+            result.is_none(),
+            "Cannot recover 2 lost packets with 1 parity"
+        );
     }
 
     #[test]
@@ -539,9 +544,9 @@ mod tests {
         let mut encoder = FecEncoder::new(3);
 
         let packets: Vec<Vec<u8>> = vec![
-            vec![1, 2, 3],                             // 3 bytes
-            vec![10, 20, 30, 40, 50],                  // 5 bytes
-            vec![100, 200],                             // 2 bytes
+            vec![1, 2, 3],            // 3 bytes
+            vec![10, 20, 30, 40, 50], // 5 bytes
+            vec![100, 200],           // 2 bytes
         ];
 
         let mut parity = None;
@@ -640,9 +645,8 @@ mod tests {
             if let Some(parity_bytes) = parity {
                 let parity_hdr = FecHeader::parity(block_id, k);
                 let parity_tunnel = TunnelHeader::new_fec(seq + 100, 2000, src, dst);
-                let mut parity_buf = BytesMut::with_capacity(
-                    HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
-                );
+                let mut parity_buf =
+                    BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len());
                 parity_buf.extend_from_slice(&parity_tunnel.encode());
                 parity_hdr.encode(&mut parity_buf);
                 parity_buf.extend_from_slice(&parity_bytes);
@@ -681,10 +685,7 @@ mod tests {
             // Receive parity packet → should trigger recovery
             let (parity_fec, parity_wire) = &parity_packets[block_num];
             let parity_data = &parity_wire[HEADER_SIZE + FEC_HEADER_SIZE..];
-            let result = decoder.receive_parity(
-                parity_fec,
-                Bytes::copy_from_slice(parity_data),
-            );
+            let result = decoder.receive_parity(parity_fec, Bytes::copy_from_slice(parity_data));
 
             assert!(
                 result.is_some(),
@@ -705,8 +706,7 @@ mod tests {
         assert_eq!(recovered_payloads.len(), num_blocks);
         for (global_idx, recovered) in &recovered_payloads {
             assert_eq!(
-                recovered,
-                &game_packets[*global_idx],
+                recovered, &game_packets[*global_idx],
                 "Recovered payload at index {} doesn't match original",
                 global_idx
             );
@@ -726,14 +726,14 @@ mod tests {
 
         // Simulate realistic game packet sizes
         let packets: Vec<Vec<u8>> = vec![
-            vec![0xAA; 64],   // Position update (small)
-            vec![0xBB; 128],  // Movement input
-            vec![0xCC; 256],  // State sync
-            vec![0xDD; 48],   // Keepalive-like
-            vec![0xEE; 512],  // Large state update
-            vec![0xFF; 96],   // Hit registration
-            vec![0x11; 200],  // Inventory update
-            vec![0x22; 384],  // Player spawn data
+            vec![0xAA; 64],  // Position update (small)
+            vec![0xBB; 128], // Movement input
+            vec![0xCC; 256], // State sync
+            vec![0xDD; 48],  // Keepalive-like
+            vec![0xEE; 512], // Large state update
+            vec![0xFF; 96],  // Hit registration
+            vec![0x11; 200], // Inventory update
+            vec![0x22; 384], // Player spawn data
         ];
 
         let mut parity = None;
@@ -748,10 +748,7 @@ mod tests {
             if i == 4 {
                 continue; // Lost!
             }
-            decoder.receive_data(
-                &FecHeader::data(0, i as u8, k),
-                Bytes::copy_from_slice(pkt),
-            );
+            decoder.receive_data(&FecHeader::data(0, i as u8, k), Bytes::copy_from_slice(pkt));
         }
 
         let result = decoder.receive_parity(&FecHeader::parity(0, k), parity_bytes);
@@ -759,6 +756,9 @@ mod tests {
         let (idx, recovered) = result.unwrap();
         assert_eq!(idx, 4);
         assert_eq!(recovered.len(), 512);
-        assert!(recovered.iter().all(|&b| b == 0xEE), "All bytes should be 0xEE");
+        assert!(
+            recovered.iter().all(|&b| b == 0xEE),
+            "All bytes should be 0xEE"
+        );
     }
 }

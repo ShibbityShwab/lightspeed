@@ -32,8 +32,8 @@
 //! 4. The game receives it on its listening port
 
 use std::net::SocketAddrV4;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use tokio::net::UdpSocket;
 
@@ -123,10 +123,16 @@ impl PacketInjector {
     ///
     /// Sends the payload to the game client's address so the game
     /// receives it as a normal UDP packet.
-    pub async fn inject(&self, payload: &[u8], game_client: SocketAddrV4) -> Result<usize, std::io::Error> {
+    pub async fn inject(
+        &self,
+        payload: &[u8],
+        game_client: SocketAddrV4,
+    ) -> Result<usize, std::io::Error> {
         let sent = self.socket.send_to(payload, game_client).await?;
         self.stats.packets_injected.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_injected.fetch_add(sent as u64, Ordering::Relaxed);
+        self.stats
+            .bytes_injected
+            .fetch_add(sent as u64, Ordering::Relaxed);
         Ok(sent)
     }
 

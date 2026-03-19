@@ -386,7 +386,11 @@ pub async fn run_relay_inbound(
                         recovered_len = recovered.len(),
                         "🔧 FEC recovered lost packet on proxy"
                     );
-                    match session.outbound_socket.send_to(&recovered, game_server).await {
+                    match session
+                        .outbound_socket
+                        .send_to(&recovered, game_server)
+                        .await
+                    {
                         Ok(sent) => {
                             metrics.record_relay(sent as u64);
                         }
@@ -407,7 +411,11 @@ pub async fn run_relay_inbound(
         }
 
         // Forward the raw game payload to the game server
-        match session.outbound_socket.send_to(game_payload, game_server).await {
+        match session
+            .outbound_socket
+            .send_to(game_payload, game_server)
+            .await
+        {
             Ok(sent) => {
                 metrics.record_relay(sent as u64);
                 trace!(
@@ -479,12 +487,8 @@ pub async fn run_session_response_listener(
             let index = encoder.current_index();
 
             // Build: [TunnelHeader v2][FecHeader data][game_response]
-            let response_header = TunnelHeader::new_fec(
-                seq,
-                now_us(),
-                session.game_server,
-                session.client_addr,
-            );
+            let response_header =
+                TunnelHeader::new_fec(seq, now_us(), session.game_server, session.client_addr);
             let fec_hdr = FecHeader::data(block_id, index, session.fec_k);
 
             let mut pkt_buf =
@@ -555,12 +559,8 @@ pub async fn run_session_response_listener(
             }
         } else {
             // ── Non-FEC mode: original behavior ─────────────────────
-            let response_header = TunnelHeader::new(
-                seq,
-                now_us(),
-                session.game_server,
-                session.client_addr,
-            );
+            let response_header =
+                TunnelHeader::new(seq, now_us(), session.game_server, session.client_addr);
 
             let packet = response_header.encode_with_payload(payload);
 

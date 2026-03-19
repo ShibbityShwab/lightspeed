@@ -160,7 +160,10 @@ impl WarpManager {
 
         if !output.status.success() && !stdout.is_empty() {
             // Some commands return non-zero but still have useful output
-            debug!("warp-cli {:?} exited with {}: {}", args, output.status, stderr);
+            debug!(
+                "warp-cli {:?} exited with {}: {}",
+                args, output.status, stderr
+            );
         }
 
         Ok(stdout.trim().to_string())
@@ -250,7 +253,10 @@ impl WarpManager {
             match status {
                 WarpStatus::Connected => {
                     self.connected_by_us = true;
-                    info!("🌐 WARP connected successfully ({:.1}s)", start.elapsed().as_secs_f64());
+                    info!(
+                        "🌐 WARP connected successfully ({:.1}s)",
+                        start.elapsed().as_secs_f64()
+                    );
                     return Ok(());
                 }
                 WarpStatus::Connecting => {
@@ -421,7 +427,7 @@ mod tests {
         assert!(manager.is_ip_routed(Ipv4Addr::new(149, 28, 84, 139))); // Vultr LA
         assert!(manager.is_ip_routed(Ipv4Addr::new(149, 28, 144, 74))); // Vultr SGP
         assert!(manager.is_ip_routed(Ipv4Addr::new(163, 192, 3, 134))); // OCI SJ
-        assert!(manager.is_ip_routed(Ipv4Addr::new(8, 8, 8, 8)));       // Google DNS
+        assert!(manager.is_ip_routed(Ipv4Addr::new(8, 8, 8, 8))); // Google DNS
 
         // Private IPs should NOT be routed through WARP
         assert!(!manager.is_ip_routed(Ipv4Addr::new(10, 0, 0, 1)));

@@ -11,16 +11,16 @@ use std::time::Instant;
 
 /// Latency histogram bucket boundaries (microseconds).
 const LATENCY_BUCKETS_US: &[u64] = &[
-    100,     // 0.1ms
-    500,     // 0.5ms
-    1_000,   // 1ms
-    5_000,   // 5ms
-    10_000,  // 10ms
-    25_000,  // 25ms
-    50_000,  // 50ms
-    100_000, // 100ms
-    250_000, // 250ms
-    500_000, // 500ms
+    100,       // 0.1ms
+    500,       // 0.5ms
+    1_000,     // 1ms
+    5_000,     // 5ms
+    10_000,    // 10ms
+    25_000,    // 25ms
+    50_000,    // 50ms
+    100_000,   // 100ms
+    250_000,   // 250ms
+    500_000,   // 500ms
     1_000_000, // 1s
 ];
 
@@ -201,9 +201,7 @@ impl ProxyMetrics {
         ));
 
         // ── Gauges ──────────────────────────────────────────────
-        out.push_str(
-            "# HELP lightspeed_active_connections Current active client connections\n",
-        );
+        out.push_str("# HELP lightspeed_active_connections Current active client connections\n");
         out.push_str("# TYPE lightspeed_active_connections gauge\n");
         out.push_str(&format!(
             "lightspeed_active_connections{{{}}} {}\n",
@@ -268,9 +266,7 @@ impl ProxyMetrics {
             self.fec_parity_received.load(Ordering::Relaxed)
         ));
 
-        out.push_str(
-            "# HELP lightspeed_fec_recoveries_total Packets recovered via FEC\n",
-        );
+        out.push_str("# HELP lightspeed_fec_recoveries_total Packets recovered via FEC\n");
         out.push_str("# TYPE lightspeed_fec_recoveries_total counter\n");
         out.push_str(&format!(
             "lightspeed_fec_recoveries_total{{{}}} {}\n",

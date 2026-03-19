@@ -178,13 +178,11 @@ impl UdpRelay {
             // If block is complete, send parity packet
             if let Some(parity_bytes) = parity {
                 let parity_seq = self.next_sequence();
-                let parity_header =
-                    TunnelHeader::new_fec(parity_seq, now_us(), orig_src, orig_dst);
+                let parity_header = TunnelHeader::new_fec(parity_seq, now_us(), orig_src, orig_dst);
                 let parity_fec = FecHeader::parity(block_id, k_size);
 
-                let mut parity_buf = BytesMut::with_capacity(
-                    HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
-                );
+                let mut parity_buf =
+                    BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len());
                 parity_buf.extend_from_slice(&parity_header.encode());
                 parity_fec.encode(&mut parity_buf);
                 parity_buf.extend_from_slice(&parity_bytes);
@@ -341,9 +339,8 @@ impl UdpRelay {
                 let header = TunnelHeader::new_fec(seq, now_us(), dummy_addr, dummy_addr);
                 let fec_hdr = FecHeader::parity(block_id, 0);
 
-                let mut buf = BytesMut::with_capacity(
-                    HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
-                );
+                let mut buf =
+                    BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len());
                 buf.extend_from_slice(&header.encode());
                 fec_hdr.encode(&mut buf);
                 buf.extend_from_slice(&parity_bytes);

@@ -121,7 +121,8 @@ pub async fn run_health_server(
                     )
                 }
                 _ => {
-                    let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let not_found =
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                     let _ = stream.write_all(not_found.as_bytes()).await;
                     let _ = stream.shutdown().await;
                     return;
@@ -151,10 +152,7 @@ mod tests {
             parse_request_path(b"GET /health HTTP/1.1\r\nHost: localhost\r\n"),
             "/health"
         );
-        assert_eq!(
-            parse_request_path(b"GET /metrics HTTP/1.1\r\n"),
-            "/metrics"
-        );
+        assert_eq!(parse_request_path(b"GET /metrics HTTP/1.1\r\n"), "/metrics");
         assert_eq!(parse_request_path(b"GET / HTTP/1.1\r\n"), "/");
         assert_eq!(parse_request_path(b""), "/");
         assert_eq!(parse_request_path(b"garbage"), "/");
