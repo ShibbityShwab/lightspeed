@@ -251,16 +251,10 @@ cargo clippy --workspace
 ## Roadmap
 
 - [x] **v0.1.0** — MVP: UDP tunnel, proxy server, QUIC control, security hardening, 52 tests
-- [x] **v0.1.x** — Infrastructure: 3-node Vultr mesh, native binary deployment (~500KB RAM)
-- [x] **v0.1.x** — FEC: XOR-based forward error correction, protocol v2
-- [x] **v0.1.x** — WARP: Cloudflare integration for 5-10ms local route optimization
-- [x] **v0.1.x** — Game integration: UDP redirect mode, per-game profiles
-- [x] **v0.1.x** — ML: Synthetic training data, feature extraction, Random Forest model
-- [x] **v0.1.x** — CI/CD: GitHub Actions (Rust CI, Docker GHCR, Pages)
-- [ ] **v0.2.0** — FEC wired into client relay, game capture pipeline complete
-- [ ] **v0.3.0** — Online ML learning from live traffic, auto route switching
-- [ ] **v0.4.0** — Monitoring dashboard, auto-recovery, load testing
-- [ ] **v1.0.0** — Public beta launch
+- [x] **v0.2.0** — FEC (XOR parity), Cloudflare WARP integration, UDP redirect mode, live Vultr mesh, protocol v2
+- [x] **v0.3.0** — Prometheus + Grafana monitoring, 10 alerting rules, CI/CD pipeline, pre-built binaries, load tested at 0.00% packet loss, online ML learning
+- [ ] **v0.4.0** — US-East node, EU-West node, Discord community, installer wizard
+- [ ] **v1.0.0** — Public stable release: polished UX, full game support matrix, community proxy network
 
 ## Contributing
 

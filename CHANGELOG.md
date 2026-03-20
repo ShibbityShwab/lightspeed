@@ -7,38 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Next Up
+- US-East / EU-West mesh expansion
+- Discord community server
+- v1.0.0 public stable release
+
+---
+
+## [0.3.0] — 2026-03-20
+
+### 🚀 Production-Validated Release — Monitoring, Load Testing & CI/CD
+
+First fully load-tested, monitoring-equipped release. Both proxy nodes validated at **0.00% packet loss** under sustained load. Pre-built binaries now ship with every release via automated CI/CD.
+
 ### Added
+
+#### Online Learning
 - **Online learning wired into main.rs** — keepalive probe RTTs now feed into `OnlineLearner`
   during both keepalive mode and capture mode, with automatic model retraining and
   cross-session persistence to `~/.lightspeed/measurements.json`
-- **WF-005: Monitoring & Observability Stack** (Prometheus + Grafana)
-  - **Enhanced Prometheus metrics** — 20+ metrics including latency histograms (11 buckets),
-    FEC recovery counters, auth/abuse/rate-limit security metrics, session lifecycle tracking,
-    build info, and uptime gauges. All exported with `region` + `node_id` labels.
-  - **Route-aware health server** — `/health` returns JSON, `/metrics` returns Prometheus
-    exposition format. Proper HTTP routing with 404 for unknown paths.
-  - **Prometheus config** — scrape targets for both Vultr nodes (proxy-lax + relay-sgp),
-    10s scrape interval, 30d retention.
-  - **Alerting rules** — 10 alert rules across 5 groups: node health (down/restart),
-    latency (warning at 100ms, critical at 500ms), capacity (connections, drops, no traffic),
-    security (auth rejections, abuse, rate limits), and FEC health.
-  - **Pre-built Grafana dashboard** — 6 sections (Overview, Traffic, Latency, FEC, Security,
-    Sessions) with 20 panels including stat, timeseries, and histogram visualizations.
-    Auto-provisioned on startup.
-  - **Docker Compose monitoring stack** — one-command `docker compose up -d` deploys
-    Prometheus + Grafana with persistent volumes, health checks, and auto-provisioning.
-  - **Enhanced mesh-health.sh** — built-in node list, `--metrics` flag for Prometheus
-    output, `--json` flag for machine-readable output, FEC recovery display.
-  - **Load testing tool** (`tools/load_test.py`) — multi-client concurrent UDP stress
-    test with ramp-up, per-node and `--all-nodes` modes, latency percentiles (p50/p95/p99),
-    packet loss measurement, pre/post health checks, and JSON export.
-  - **Vultr deploy script** (`infra/scripts/deploy-vultr.sh`) — cross-compile, SCP upload,
-    rolling restart via systemd with pre/post health verification.
 
-### Next Up
-- Deploy updated proxy binary to live nodes
-- Run load tests (WF-005 Step 4)
-- US-East / EU-West mesh expansion
+#### Monitoring & Observability (WF-005)
+- **Enhanced Prometheus metrics** — 20+ metrics including latency histograms (11 buckets),
+  FEC recovery counters, auth/abuse/rate-limit security metrics, session lifecycle tracking,
+  build info, and uptime gauges. All exported with `region` + `node_id` labels.
+- **Route-aware health server** — `/health` returns JSON, `/metrics` returns Prometheus
+  exposition format. Proper HTTP routing with 404 for unknown paths.
+- **Prometheus config** — scrape targets for both Vultr nodes (proxy-lax + relay-sgp),
+  10s scrape interval, 30d retention.
+- **Alerting rules** — 10 alert rules across 5 groups: node health (down/restart),
+  latency (warning at 100ms, critical at 500ms), capacity (connections, drops, no traffic),
+  security (auth rejections, abuse, rate limits), and FEC health.
+- **Pre-built Grafana dashboard** — 6 sections (Overview, Traffic, Latency, FEC, Security,
+  Sessions) with 20 panels including stat, timeseries, and histogram visualizations.
+  Auto-provisioned on startup.
+- **Docker Compose monitoring stack** — one-command `docker compose up -d` deploys
+  Prometheus + Grafana with persistent volumes, health checks, and auto-provisioning.
+- **Enhanced mesh-health.sh** — built-in node list, `--metrics` flag for Prometheus
+  output, `--json` flag for machine-readable output, FEC recovery display.
+- **Load testing tool** (`tools/load_test.py`) — multi-client concurrent UDP stress
+  test with ramp-up, per-node and `--all-nodes` modes, latency percentiles (p50/p95/p99),
+  packet loss measurement, pre/post health checks, and JSON export.
+- **Vultr deploy script** (`infra/scripts/deploy-vultr.sh`) — cross-compile, SCP upload,
+  rolling restart via systemd with pre/post health verification.
+
+#### CI/CD & Release Infrastructure
+- **GitHub Actions CI pipeline** — test → fmt → clippy → cross-compile (Windows x64, Linux x64, Linux ARM64) → auto-release on tag push
+- **Pre-built binaries** — all three platform binaries attached to every GitHub Release automatically
+- **Issue templates** — Bug Report, Game Request, Feature Request
+- **CONTRIBUTING.md** — full dev setup guide, game support guide, proxy hosting guide
+- **GitHub Discussions** — community Q&A and announcements enabled
+- **12 repo topics** — rust, gaming, network-optimizer, ping-reducer, multiplayer, proxy, fortnite, cs2, dota2, open-source, udp, latency
+
+### Load Test Results
+
+| Node | Region | Packets Sent | Packets Recv | Loss | p50 | p95 | Throughput |
+|------|--------|-------------|-------------|------|-----|-----|-----------|
+| proxy-lax | US-West (LA) | 9,131 | 9,131 | **0.00%** | 214ms | 282ms | 129 pps |
+| relay-sgp | Singapore | 22,742 | 22,742 | **0.00%** | 31ms | 35ms | 320 pps |
+
+Estimated capacity: **500–1,000+ concurrent clients per node**. Free tier headroom: >99.9%.
+
+### Fixed
+- 20 Clippy lints across workspace
+- 2 failing warp integration tests
 
 ---
 
@@ -182,6 +214,7 @@ The first release of LightSpeed — a zero-cost, open-source global network opti
 - **Target Overhead**: ≤5ms (achieved: 162μs average)
 - **Supported Platforms**: Windows x64, Linux x64, Linux ARM64
 
-[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ShibbityShwab/lightspeed/releases/tag/v0.1.0
