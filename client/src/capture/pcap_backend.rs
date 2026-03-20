@@ -71,6 +71,12 @@ impl PcapCapture {
     }
 }
 
+// SAFETY: All mutable pcap access is through `&mut self` (exclusive access).
+// The `pcap::Capture<Active>` raw-pointer handle is Send but not Sync by default;
+// wrapping it here is safe because no shared `&self` code path touches `self.capture`.
+#[cfg(feature = "pcap-capture")]
+unsafe impl Sync for PcapCapture {}
+
 #[cfg(feature = "pcap-capture")]
 impl PacketCapture for PcapCapture {
     fn start(&mut self, filter: &CaptureFilter) -> Result<(), CaptureError> {
