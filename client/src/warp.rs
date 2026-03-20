@@ -199,7 +199,7 @@ impl WarpManager {
         let protocol = self.run_cli(&["settings", "list"]).ok().and_then(|output| {
             for line in output.lines() {
                 if line.contains("tunnel protocol") {
-                    return Some(line.split(':').last()?.trim().to_string());
+                    return Some(line.split(':').next_back()?.trim().to_string());
                 }
             }
             None
@@ -208,7 +208,7 @@ impl WarpManager {
         let mode = self.run_cli(&["settings", "list"]).ok().and_then(|output| {
             for line in output.lines() {
                 if line.contains("Mode:") {
-                    return Some(line.split(':').last()?.trim().to_string());
+                    return Some(line.split(':').next_back()?.trim().to_string());
                 }
             }
             None

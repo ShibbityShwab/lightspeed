@@ -137,12 +137,10 @@ impl UdpRelay {
     ) -> Result<usize, TunnelError> {
         let socket = self.socket.as_ref().ok_or(TunnelError::NotConnected)?;
 
-        if self.fec_encoder.is_some() {
+        // Get sequence numbers upfront to avoid borrow conflicts
+        let seq = self.next_sequence();
+        if let Some(encoder) = self.fec_encoder.as_mut() {
             // ── FEC mode: encode with FEC header ────────────────
-            // Get sequence numbers upfront to avoid borrow conflicts
-            let seq = self.next_sequence();
-
-            let encoder = self.fec_encoder.as_mut().unwrap();
             let block_id = encoder.block_id();
             let index = encoder.current_index();
             let k_size = index.max(2); // k_size for FEC header
@@ -204,7 +202,6 @@ impl UdpRelay {
             Ok(sent)
         } else {
             // ── Non-FEC mode: original behavior ─────────────────
-            let seq = self.next_sequence();
             let header = TunnelHeader::new(seq, now_us(), orig_src, orig_dst);
             let packet = header.encode_with_payload(payload);
 

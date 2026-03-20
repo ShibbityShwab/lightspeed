@@ -100,10 +100,7 @@ impl HealthChecker {
         };
 
         // Store result
-        let history = self
-            .results
-            .entry(proxy.id.clone())
-            .or_insert_with(Vec::new);
+        let history = self.results.entry(proxy.id.clone()).or_default();
         history.push(check.clone());
         if history.len() > self.max_history {
             history.remove(0);
@@ -158,10 +155,7 @@ impl HealthChecker {
             checked_at: Instant::now(),
         };
 
-        let history = self
-            .results
-            .entry(proxy.id.clone())
-            .or_insert_with(Vec::new);
+        let history = self.results.entry(proxy.id.clone()).or_default();
         history.push(check.clone());
         if history.len() > self.max_history {
             history.remove(0);

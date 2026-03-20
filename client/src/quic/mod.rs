@@ -283,7 +283,7 @@ mod inner {
         pub fn is_connected(&self) -> bool {
             self.connection
                 .as_ref()
-                .map(|c| !c.close_reason().is_some())
+                .map(|c| c.close_reason().is_none())
                 .unwrap_or(false)
         }
 

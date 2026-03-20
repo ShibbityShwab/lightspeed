@@ -116,7 +116,7 @@ impl UdpRedirect {
     /// Enable FEC with the given block size.
     pub fn with_fec(mut self, k_size: u8) -> Self {
         self.fec_enabled = true;
-        self.fec_k = k_size.max(2).min(16);
+        self.fec_k = k_size.clamp(2, 16);
         self
     }
 
@@ -366,7 +366,7 @@ impl UdpRedirect {
                         }
                     };
 
-                    if header.has_fec() && fec_decoder.is_some() {
+                    if header.has_fec() {
                         // ── FEC mode: decode FEC header from payload ────
                         if payload.len() < FEC_HEADER_SIZE {
                             debug!("FEC packet too short");
@@ -385,24 +385,42 @@ impl UdpRedirect {
                         };
 
                         let game_data = &payload[FEC_HEADER_SIZE..];
-                        let decoder = fec_decoder.as_mut().unwrap();
+                        if let Some(decoder) = fec_decoder.as_mut() {
+                            if fec_hdr.is_parity() {
+                                // Parity packet — try to recover a lost data packet
+                                let parity_data = bytes::Bytes::copy_from_slice(game_data);
+                                if let Some((_idx, recovered)) =
+                                    decoder.receive_parity(&fec_hdr, parity_data)
+                                {
+                                    // Recovered a lost packet! Forward to game
+                                    stats.fec_recovered.fetch_add(1, Ordering::Relaxed);
+                                    info!(
+                                        block = fec_hdr.block_id,
+                                        recovered_len = recovered.len(),
+                                        "🔧 FEC recovered lost packet!"
+                                    );
+                                    match local_socket.send_to(&recovered, game_addr).await {
+                                        Ok(_) => {
+                                            stats.packets_to_game.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                        Err(e) => {
+                                            warn!("Local socket send error: {}", e);
+                                            stats.errors.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Data packet — forward to game and track for FEC
+                                let data_bytes = bytes::Bytes::copy_from_slice(game_data);
+                                decoder.receive_data(&fec_hdr, data_bytes);
 
-                        if fec_hdr.is_parity() {
-                            // Parity packet — try to recover a lost data packet
-                            let parity_data = bytes::Bytes::copy_from_slice(game_data);
-                            if let Some((_idx, recovered)) =
-                                decoder.receive_parity(&fec_hdr, parity_data)
-                            {
-                                // Recovered a lost packet! Forward to game
-                                stats.fec_recovered.fetch_add(1, Ordering::Relaxed);
-                                info!(
-                                    block = fec_hdr.block_id,
-                                    recovered_len = recovered.len(),
-                                    "🔧 FEC recovered lost packet!"
-                                );
-                                match local_socket.send_to(&recovered, game_addr).await {
+                                match local_socket.send_to(game_data, game_addr).await {
                                     Ok(_) => {
                                         stats.packets_to_game.fetch_add(1, Ordering::Relaxed);
+                                        trace!(
+                                            payload_len = game_data.len(),
+                                            "Proxy → Game (FEC data)"
+                                        );
                                     }
                                     Err(e) => {
                                         warn!("Local socket send error: {}", e);
@@ -410,31 +428,13 @@ impl UdpRedirect {
                                     }
                                 }
                             }
-                        } else {
-                            // Data packet — forward to game and track for FEC
-                            let data_bytes = bytes::Bytes::copy_from_slice(game_data);
-                            decoder.receive_data(&fec_hdr, data_bytes);
 
-                            match local_socket.send_to(game_data, game_addr).await {
-                                Ok(_) => {
-                                    stats.packets_to_game.fetch_add(1, Ordering::Relaxed);
-                                    trace!(
-                                        payload_len = game_data.len(),
-                                        "Proxy → Game (FEC data)"
-                                    );
-                                }
-                                Err(e) => {
-                                    warn!("Local socket send error: {}", e);
-                                    stats.errors.fetch_add(1, Ordering::Relaxed);
-                                }
+                            // Periodic GC of expired FEC blocks
+                            gc_counter += 1;
+                            if gc_counter.is_multiple_of(100) {
+                                decoder.gc();
                             }
-                        }
-
-                        // Periodic GC of expired FEC blocks
-                        gc_counter += 1;
-                        if gc_counter % 100 == 0 {
-                            decoder.gc();
-                        }
+                        } // end if let Some(decoder)
                     } else {
                         // ── Non-FEC mode: forward payload directly ──────
                         match local_socket.send_to(payload, game_addr).await {

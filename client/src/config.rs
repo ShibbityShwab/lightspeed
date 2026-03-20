@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Top-level client configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// General settings.
     #[serde(default)]
@@ -153,18 +153,6 @@ fn default_max_failover() -> usize {
 
 fn default_min_samples() -> usize {
     50
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            tunnel: TunnelConfig::default(),
-            proxy: ProxyConfig::default(),
-            route: RouteConfig::default(),
-            ml: MlConfig::default(),
-        }
-    }
 }
 
 impl Default for GeneralConfig {

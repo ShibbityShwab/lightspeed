@@ -90,7 +90,7 @@ pub fn predict_route(
         let max = scores.iter().map(|s| s.1).fold(f64::MIN, f64::max);
         let spread = max - min;
         // High spread = clear winner = high confidence
-        (spread / (min + 1.0)).min(1.0).max(0.1)
+        (spread / (min + 1.0)).clamp(0.1, 1.0)
     } else {
         0.5
     };

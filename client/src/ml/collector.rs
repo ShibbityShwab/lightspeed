@@ -140,15 +140,12 @@ impl RouteCollector {
         let tracker = self
             .trackers
             .entry(proxy_id.to_string())
-            .or_insert_with(|| LatencyTracker::new(200));
+            .or_insert_with(|| LatencyTracker::new(200)); // can't use or_default: requires args
         tracker.record(latency_ms);
         tracker.record_send(); // For loss tracking
 
         // Store measurement
-        let proxy_measurements = self
-            .measurements
-            .entry(proxy_id.to_string())
-            .or_insert_with(Vec::new);
+        let proxy_measurements = self.measurements.entry(proxy_id.to_string()).or_default();
 
         proxy_measurements.push(measurement);
 
@@ -286,14 +283,11 @@ impl RouteCollector {
             let tracker = self
                 .trackers
                 .entry(m.proxy_id.clone())
-                .or_insert_with(|| LatencyTracker::new(200));
+                .or_insert_with(|| LatencyTracker::new(200)); // can't use or_default: requires args
             tracker.record(m.latency_ms);
 
             // Store measurement
-            let proxy_measurements = self
-                .measurements
-                .entry(m.proxy_id.clone())
-                .or_insert_with(Vec::new);
+            let proxy_measurements = self.measurements.entry(m.proxy_id.clone()).or_default();
             proxy_measurements.push(m);
         }
 

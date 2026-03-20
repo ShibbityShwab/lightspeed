@@ -718,9 +718,7 @@ async fn main() -> anyhow::Result<()> {
                     };
 
                     // Handle FEC if enabled
-                    let game_payload: Option<bytes::Bytes> = if header.has_fec()
-                        && fec_decoder.is_some()
-                    {
+                    let game_payload: Option<bytes::Bytes> = if header.has_fec() {
                         if payload.len() < lightspeed_protocol::FEC_HEADER_SIZE {
                             tracing::debug!("FEC packet too short");
                             continue;
@@ -736,30 +734,33 @@ async fn main() -> anyhow::Result<()> {
                         };
 
                         let game_data = &payload[lightspeed_protocol::FEC_HEADER_SIZE..];
-                        let decoder = fec_decoder.as_mut().unwrap();
 
-                        if fec_hdr.is_parity() {
-                            let parity_data = bytes::Bytes::copy_from_slice(game_data);
-                            if let Some((_idx, recovered)) =
-                                decoder.receive_parity(&fec_hdr, parity_data)
-                            {
-                                injector_stats_ref
-                                    .fec_recovered
-                                    .fetch_add(1, Ordering::Relaxed);
-                                tracing::info!(
-                                    block = fec_hdr.block_id,
-                                    recovered_len = recovered.len(),
-                                    "🔧 FEC recovered lost packet"
-                                );
-                                Some(recovered)
+                        if let Some(decoder) = fec_decoder.as_mut() {
+                            if fec_hdr.is_parity() {
+                                let parity_data = bytes::Bytes::copy_from_slice(game_data);
+                                if let Some((_idx, recovered)) =
+                                    decoder.receive_parity(&fec_hdr, parity_data)
+                                {
+                                    injector_stats_ref
+                                        .fec_recovered
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    tracing::info!(
+                                        block = fec_hdr.block_id,
+                                        recovered_len = recovered.len(),
+                                        "🔧 FEC recovered lost packet"
+                                    );
+                                    Some(recovered)
+                                } else {
+                                    None // Parity consumed, no recovery needed
+                                }
                             } else {
-                                None // Parity consumed, no recovery needed
+                                let data_bytes = bytes::Bytes::copy_from_slice(game_data);
+                                decoder.receive_data(&fec_hdr, data_bytes.clone());
+                                Some(data_bytes)
                             }
                         } else {
-                            let data_bytes = bytes::Bytes::copy_from_slice(game_data);
-                            decoder.receive_data(&fec_hdr, data_bytes.clone());
-                            Some(data_bytes)
-                        }
+                            None
+                        } // if let Some(decoder)
                     } else {
                         // Non-FEC: payload is the game data directly
                         Some(bytes::Bytes::copy_from_slice(payload))
@@ -794,7 +795,7 @@ async fn main() -> anyhow::Result<()> {
 
                     // Periodic FEC GC
                     gc_counter += 1;
-                    if gc_counter % 100 == 0 {
+                    if gc_counter.is_multiple_of(100) {
                         if let Some(ref mut dec) = fec_decoder {
                             dec.gc();
                         }
@@ -1227,19 +1228,16 @@ async fn probe_single_proxy(addr: SocketAddrV4, num_pings: usize, timeout_ms: u6
         }
 
         let mut buf = vec![0u8; 128];
-        match tokio::time::timeout(
+        if let Ok(Ok((len, _))) = tokio::time::timeout(
             Duration::from_millis(timeout_ms),
             socket.recv_from(&mut buf),
         )
         .await
         {
-            Ok(Ok((len, _))) => {
-                if TunnelHeader::decode(&buf[..len]).is_ok() {
-                    let rtt = send_time.elapsed().as_micros() as u64;
-                    rtts.push(rtt);
-                }
+            if TunnelHeader::decode(&buf[..len]).is_ok() {
+                let rtt = send_time.elapsed().as_micros() as u64;
+                rtts.push(rtt);
             }
-            _ => {} // Timeout or error — skip this ping
         }
 
         // Small delay between pings
@@ -1661,7 +1659,7 @@ async fn run_live_test(
     info!("\n💓 Phase 3: Keepalive Echo (10 packets each)");
     info!("──────────────────────────────────────────────────────");
 
-    for (_i, (label, addr)) in proxy_addrs.iter().enumerate() {
+    for (label, addr) in proxy_addrs.iter() {
         let socket = match UdpSocket::bind("0.0.0.0:0").await {
             Ok(s) => s,
             Err(e) => {
@@ -1689,15 +1687,12 @@ async fn run_live_test(
             }
 
             let mut buf = vec![0u8; 128];
-            match tokio::time::timeout(Duration::from_millis(3000), socket.recv_from(&mut buf))
-                .await
+            if let Ok(Ok((len, _))) =
+                tokio::time::timeout(Duration::from_millis(3000), socket.recv_from(&mut buf)).await
             {
-                Ok(Ok((len, _))) => {
-                    if TunnelHeader::decode(&buf[..len]).is_ok() {
-                        rtts.push(send_time.elapsed().as_micros() as u64);
-                    }
+                if TunnelHeader::decode(&buf[..len]).is_ok() {
+                    rtts.push(send_time.elapsed().as_micros() as u64);
                 }
-                _ => {}
             }
 
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1771,23 +1766,19 @@ async fn run_live_test(
                 }
 
                 let mut buf = vec![0u8; 2048];
-                match tokio::time::timeout(Duration::from_millis(5000), socket.recv_from(&mut buf))
-                    .await
+                if let Ok(Ok((len, _))) =
+                    tokio::time::timeout(Duration::from_millis(5000), socket.recv_from(&mut buf))
+                        .await
                 {
-                    Ok(Ok((len, _))) => {
-                        let rtt = send_time.elapsed().as_micros() as u64;
-                        rtts.push(rtt);
+                    let rtt = send_time.elapsed().as_micros() as u64;
+                    rtts.push(rtt);
 
-                        match TunnelHeader::decode_with_payload(&buf[..len]) {
-                            Ok((_hdr, resp_payload)) => {
-                                if resp_payload == payload.as_bytes() {
-                                    payload_matches += 1;
-                                }
-                            }
-                            Err(_) => {}
+                    if let Ok((_hdr, resp_payload)) = TunnelHeader::decode_with_payload(&buf[..len])
+                    {
+                        if resp_payload == payload.as_bytes() {
+                            payload_matches += 1;
                         }
                     }
-                    _ => {}
                 }
 
                 tokio::time::sleep(Duration::from_millis(100)).await;
