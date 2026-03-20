@@ -15,27 +15,29 @@ rule_files:
   - "alerts.yml"
 
 # Scrape targets — each proxy node exposes :8080/metrics
+# Add your own node IPs here. Run setup-new-node.sh to provision a node,
+# then add it below following the same pattern.
 scrape_configs:
   # ── Proxy Nodes ────────────────────────────────────────────
   - job_name: "lightspeed-proxy"
     metrics_path: "/metrics"
     scrape_interval: 10s
     static_configs:
-      # US-West LAX (primary)
-      - targets: ["[redacted]:8080"]
-        labels:
-          node_id: "proxy-lax"
-          region: "us-west-lax"
-          provider: "vultr"
-          role: "primary"
+      # Example — replace with your own node IP(s)
+      # - targets: ["YOUR_NODE_IP:8080"]
+      #   labels:
+      #     node_id: "proxy-us-west"
+      #     region: "us-west-lax"
+      #     provider: "vultr"
+      #     role: "primary"
 
-      # Asia Singapore (SEA relay)
-      - targets: ["[redacted]:8080"]
-        labels:
-          node_id: "relay-sgp"
-          region: "asia-sgp"
-          provider: "vultr"
-          role: "relay"
+      # Example second node
+      # - targets: ["YOUR_NODE_IP_2:8080"]
+      #   labels:
+      #     node_id: "proxy-asia-se"
+      #     region: "asia-sgp"
+      #     provider: "vultr"
+      #     role: "relay"
 
   # ── Prometheus self-monitoring ─────────────────────────────
   - job_name: "prometheus"

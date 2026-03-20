@@ -37,22 +37,26 @@ for arg in "$@"; do
     esac
 done
 
-# ── Built-in node list (Vultr mesh) ─────────────────────────
-# Fallback when no Terraform or env var is available.
-BUILTIN_NODES='{
-  "us-west-lax": {
-    "health_url": "http://[redacted]:8080/health",
-    "metrics_url": "http://[redacted]:8080/metrics",
-    "node_id": "proxy-lax",
-    "region": "us-west-lax"
-  },
-  "asia-sgp": {
-    "health_url": "http://[redacted]:8080/health",
-    "metrics_url": "http://[redacted]:8080/metrics",
-    "node_id": "relay-sgp",
-    "region": "asia-sgp"
-  }
-}'
+# ── Built-in node list ───────────────────────────────────────
+# Set LIGHTSPEED_NODES env var with your node IPs, or edit this fallback.
+# Format: JSON object keyed by region name.
+# Run setup-new-node.sh to provision a node; it will print the JSON to add here.
+BUILTIN_NODES='{}'
+# Example (replace with your own IPs):
+# BUILTIN_NODES='{
+#   "us-west-lax": {
+#     "health_url": "http://YOUR_NODE_IP_1:8080/health",
+#     "metrics_url": "http://YOUR_NODE_IP_1:8080/metrics",
+#     "node_id": "proxy-us-west",
+#     "region": "us-west-lax"
+#   },
+#   "asia-sgp": {
+#     "health_url": "http://YOUR_NODE_IP_2:8080/health",
+#     "metrics_url": "http://YOUR_NODE_IP_2:8080/metrics",
+#     "node_id": "relay-asia-se",
+#     "region": "asia-sgp"
+#   }
+# }'
 
 # ── Resolve node list ───────────────────────────────────────
 if [ -n "${LIGHTSPEED_NODES:-}" ]; then

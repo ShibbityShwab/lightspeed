@@ -40,7 +40,7 @@ cargo run --bin lightspeed-proxy -- --config proxy/proxy.toml.default
 Open a [GitHub Issue](https://github.com/ShibbityShwab/lightspeed/issues) with:
 - Your OS and version
 - Which game you were playing
-- Your proxy node (LA or SGP)
+- Your proxy node region (e.g. US-West, Asia-SE)
 - What happened vs. what you expected
 - Logs if available (run with `RUST_LOG=debug`)
 
@@ -57,11 +57,15 @@ Use [GitHub Discussions](https://github.com/ShibbityShwab/lightspeed/discussions
 - Benchmark sharing
 - "Introduce yourself" posts
 
-### 🌐 Proxy Node Hosting
-High-impact! If you have a VPS in an underserved region, you can run a LightSpeed proxy node:
-1. See `infra/scripts/setup-new-node.sh` for automated setup
-2. Requires: Linux VPS, port 4433/4434 UDP open, 1GB RAM minimum
-3. Open a Discussion to coordinate with us
+### 🌐 Run Your Own Proxy Node
+LightSpeed is **self-hosted** — there is no shared network. You run your own proxy on a VPS near the game servers you play on. This is the core model.
+
+1. Get a Linux VPS ($5-6/mo on Vultr, or free with Oracle Cloud Always Free)
+2. Follow the setup guide in [`infra/README.md`](infra/README.md)
+3. Use `infra/scripts/setup-new-node.sh` for automated setup
+4. Requires: Linux VPS, UDP ports 4433/4434 open, 512MB RAM minimum
+
+> **Managed cloud nodes** (where we host for you) are planned for a future release. For now, hosting your own is the way to go.
 
 ### 💻 Code Contributions
 See [Development Setup](#development-setup) below.
@@ -106,11 +110,11 @@ lightspeed/
 # Unit + integration tests
 cargo test --workspace
 
-# E2E test against live nodes (requires network)
+# E2E test against your proxy node (requires YOUR_PROXY_IP to be running)
 node tools/e2e_test.js
 
-# Load test
-py -m tools.load_test --hosts [redacted] [redacted] --duration 60
+# Load test against your own node
+python tools/load_test.py YOUR_PROXY_IP --duration 60
 ```
 
 ### Building for Linux (from Windows)
@@ -125,7 +129,7 @@ cargo build --release --bin lightspeed-proxy --target x86_64-unknown-linux-gnu
 
 ## Proxy Hosting
 
-Running a proxy node is one of the highest-impact contributions you can make. Each node serves hundreds of players in its region.
+Self-hosting a proxy is how LightSpeed works. See [`infra/README.md`](infra/README.md) for the full guide.
 
 ### Requirements
 - Linux VPS (Ubuntu 22.04+ recommended)
@@ -136,8 +140,10 @@ Running a proxy node is one of the highest-impact contributions you can make. Ea
 
 ### Setup (Automated)
 ```bash
-# On your VPS:
-curl -sL https://raw.githubusercontent.com/ShibbityShwab/lightspeed/master/infra/scripts/setup-new-node.sh | bash
+# Download the setup script and review it first
+wget https://raw.githubusercontent.com/ShibbityShwab/lightspeed/master/infra/scripts/setup-new-node.sh
+# Review the script, then run:
+bash setup-new-node.sh YOUR_VPS_IP your-node-id your-region
 ```
 
 ### Supported Cloud Providers (Free Tier Available)
@@ -161,7 +167,7 @@ curl -sL https://raw.githubusercontent.com/ShibbityShwab/lightspeed/master/infra
 - [ ] Tests pass (`cargo test --workspace`)
 - [ ] No clippy warnings (`cargo clippy --workspace`)
 - [ ] Docs updated if needed
-- [ ] No new infrastructure costs introduced (`[COST_STUB]` rule)
+- [ ] No new infrastructure costs introduced
 
 ---
 

@@ -20,7 +20,7 @@
 
 ---
 
-## Results: proxy-lax ([redacted] — US-West LAX)
+## Results: proxy-lax (US-West LAX)
 
 | Metric | Value |
 |--------|-------|
@@ -43,7 +43,7 @@
 
 ---
 
-## Results: relay-sgp ([redacted] — Asia SGP)
+## Results: relay-sgp (Asia SGP)
 
 | Metric | Value |
 |--------|-------|

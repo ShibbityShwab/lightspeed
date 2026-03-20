@@ -6,12 +6,12 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                         Vultr Cloud                              │
+│                         Your Cloud VPS                           │
 │                                                                  │
 │  ┌────────────────────┐          ┌────────────────────┐         │
-│  │  proxy-lax          │          │  relay-sgp          │         │
-│  │  [redacted]      │          │  [redacted]      │         │
-│  │  US-West (LA)       │          │  Asia (Singapore)   │         │
+│  │  proxy-node-1       │          │  proxy-node-2       │         │
+│  │  <your-ip-1>        │          │  <your-ip-2>        │         │
+│  │  Region A           │          │  Region B           │         │
 │  │                     │          │                     │         │
 │  │  vc2-1c-1gb         │          │  vc2-1c-1gb         │         │
 │  │  1 vCPU / 1GB RAM   │          │  1 vCPU / 1GB RAM   │         │
@@ -19,13 +19,15 @@
 │  │                     │          │                     │         │
 │  │  UDP :4434 (data)   │          │  UDP :4434 (data)   │         │
 │  │  HTTP :8080 (health)│          │  HTTP :8080 (health)│         │
-│  │  504KB actual RAM   │          │  496KB actual RAM   │         │
+│  │  ~500KB actual RAM  │          │  ~500KB actual RAM  │         │
 │  └────────────────────┘          └────────────────────┘         │
 │                                                                  │
 │  Deployment: Native binary + systemd (no Docker)                 │
-│  Cost: $0/mo ($300 Vultr credit = 60+ months free)               │
+│  Cost: $0/mo (Vultr $300 credit = 60+ months free per node)      │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+> **Self-Hosted Model**: Each user runs their own proxy node(s). There is no shared "LightSpeed network" — you own and control your own infrastructure. See [Quick Start](#quick-start) below.
 
 ## Region Selection Rationale
 
@@ -48,7 +50,7 @@
 
 | Node | Provider | Status | Reason |
 |------|----------|--------|--------|
-| proxy-us-west ([redacted]) | OCI San Jose | ❌ Dropped | ARM capacity issues, worse peering than Vultr LA |
+| proxy-us-west (OCI San Jose) | OCI | ❌ Dropped | ARM capacity issues, worse peering than Vultr LA |
 
 ## Quick Start
 
@@ -70,14 +72,14 @@ cargo build --release -p lightspeed-proxy
 ### 2. Deploy
 
 ```bash
-# Copy binary to server
-scp target/release/lightspeed-proxy root@[redacted]:/usr/local/bin/
+# Copy binary to server (replace YOUR_NODE_IP with your VPS IP)
+scp target/release/lightspeed-proxy root@YOUR_NODE_IP:/usr/local/bin/
 
 # Copy config
-scp proxy/proxy.toml.default root@[redacted]:/etc/lightspeed/proxy.toml
+scp proxy/proxy.toml.default root@YOUR_NODE_IP:/etc/lightspeed/proxy.toml
 
 # Install systemd service
-ssh root@[redacted] 'cat > /etc/systemd/system/lightspeed-proxy.service' << 'EOF'
+ssh root@YOUR_NODE_IP 'cat > /etc/systemd/system/lightspeed-proxy.service' << 'EOF'
 [Unit]
 Description=LightSpeed Proxy
 After=network-online.target
@@ -98,15 +100,15 @@ WantedBy=multi-user.target
 EOF
 
 # Enable and start
-ssh root@[redacted] 'systemctl daemon-reload && systemctl enable --now lightspeed-proxy'
+ssh root@YOUR_NODE_IP 'systemctl daemon-reload && systemctl enable --now lightspeed-proxy'
 ```
 
 ### 3. Verify
 
 ```bash
 # Health check
-curl http://[redacted]:8080/health
-# Expected: {"status":"ok","node_id":"proxy-lax","region":"us-west-lax",...}
+curl http://YOUR_NODE_IP:8080/health
+# Expected: {"status":"ok","node_id":"proxy-node-1","region":"us-west-lax",...}
 
 # Health check all nodes
 cd infra/scripts
@@ -206,12 +208,12 @@ terraform init && terraform plan && terraform apply
 
 ## Scaling
 
-### Current Mesh (2 nodes)
+### Example Mesh (2 nodes)
 
 | Node | Role | Cost |
 |------|------|------|
-| proxy-lax | Primary US proxy | $0 (Vultr credit) |
-| relay-sgp | FEC multipath + SEA | $0 (Vultr credit) |
+| US-West node | Primary proxy | $0 (Vultr credit) |
+| Asia-SE node | FEC multipath + SEA relay | $0 (Vultr credit) |
 
 ### Future Expansion
 

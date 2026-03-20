@@ -118,7 +118,7 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     live_test: bool,
 
-    /// Echo server address for live data relay testing (e.g., [redacted]:9999).
+    /// Echo server address for live data relay testing (e.g., YOUR_PROXY_IP:9999).
     /// Required for data relay and FEC phases of --live-test.
     #[arg(long)]
     echo_server: Option<String>,
@@ -241,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
     // WARP routes traffic through Cloudflare's NTT backbone, bypassing
     // ISP routing inefficiencies. Free 5-10ms improvement on most paths.
     //
-    // Usage: lightspeed --warp --proxy [redacted]:4434 --game-server ...
+    // Usage: lightspeed --warp --proxy YOUR_PROXY_IP:4434 --game-server ...
 
     let mut warp_manager = warp::WarpManager::new();
 

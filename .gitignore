@@ -53,3 +53,13 @@ tools/vultr-mcp/node_modules/
 *.pem
 *.key
 *.crt
+
+# Internal WAT (Workflows, Agents, Tools) system — private AI operating system
+# Not for public consumption — contains internal prompts, rules, state, and IPs
+wat/
+
+# Internal developer tooling (not part of the open-source project)
+tools/vultr-mcp/src/
+tools/vultr-mcp/build/
+tools/build_gemini_context.js
+tools/build_gemini_context.py

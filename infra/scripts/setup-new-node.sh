@@ -107,7 +107,7 @@ region      = "$REGION"
 max_clients = 100
 
 [security]
-require_auth                = false
+require_auth                = true
 max_amplification_ratio     = 2.0
 max_destinations_per_window = 10
 ban_duration_secs           = 3600

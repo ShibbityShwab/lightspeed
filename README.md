@@ -47,14 +47,16 @@ Your PC  ──UDP Tunnel──▶  Proxy Node   ──Direct UDP──▶  Game
 | Proxy RAM usage | < 10MB | **~500KB** ✅ |
 | WARP improvement | — | **5-10ms** ✅ |
 
-### Live Infrastructure
+### Benchmark Results (Self-Hosted on Vultr vc2-1c-1gb)
 
-| Node | Region | Latency (BKK) | Role |
-|------|--------|----------------|------|
-| **proxy-lax** | US-West (Los Angeles) | 206ms | Primary proxy |
-| **relay-sgp** | Asia (Singapore) | 31ms | FEC multipath / SEA relay |
+| Node Region | Latency (from Bangkok) | Role |
+|-------------|----------------------|------|
+| US-West (Los Angeles) | 206ms | Primary proxy |
+| Asia (Singapore) | 31ms | FEC multipath / SEA relay |
 
-> **With WARP**: 193ms to LA — only 6ms from ExitLag's premium 187ms!
+> **With WARP enabled**: 193ms to LA — only 6ms off ExitLag's premium 187ms — at zero cost.
+
+Every user runs **their own proxy node**. Set one up on any VPS in under 5 minutes — see [Running the Proxy Server](#running-the-proxy-server) and [infra/README.md](infra/README.md).
 
 ## Supported Games
 
@@ -103,18 +105,20 @@ cargo build --release
 
 ### Running the Client
 
+You need a proxy node to connect to. Either [run your own](#running-the-proxy-server) on any Linux VPS, or join the community to find nodes near you.
+
 ```bash
 # Redirect mode — recommended for game integration
-lightspeed --game fortnite --redirect --proxy [redacted]:4434
+lightspeed --game fortnite --redirect --proxy YOUR_PROXY_IP:4434
 
 # With FEC enabled (recovers packet loss)
-lightspeed --game fortnite --redirect --proxy [redacted]:4434 --fec
+lightspeed --game fortnite --redirect --proxy YOUR_PROXY_IP:4434 --fec
 
 # With WARP optimization (install Cloudflare WARP first)
-lightspeed --game cs2 --redirect --proxy [redacted]:4434 --warp
+lightspeed --game cs2 --redirect --proxy YOUR_PROXY_IP:4434 --warp
 
 # Test tunnel connectivity
-lightspeed --game fortnite --proxy [redacted]:4434 --test
+lightspeed --game fortnite --proxy YOUR_PROXY_IP:4434 --test
 
 # Verbose logging
 lightspeed --game dota2 --verbose
@@ -148,7 +152,7 @@ game = "fortnite"
 log_level = "info"
 
 [proxy]
-address = "[redacted]:4434"
+address = "YOUR_PROXY_IP:4434"   # IP of your own proxy node
 control_port = 4433
 
 [tunnel]

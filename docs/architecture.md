@@ -29,20 +29,22 @@
 
 ---
 
-## Live Infrastructure (2-Node Mesh)
+## Example Infrastructure (2-Node Self-Hosted Mesh)
+
+Each user runs their own proxy nodes. This is an example of a 2-node Vultr setup:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                         Vultr Cloud                              │
+│                         Your Cloud VPS                           │
 │                                                                  │
 │  ┌────────────────────┐          ┌────────────────────┐         │
-│  │  proxy-lax          │          │  relay-sgp          │         │
-│  │  [redacted]      │◄────────▶│  [redacted]      │         │
-│  │  US-West (LA)       │  178ms   │  Asia (Singapore)   │         │
+│  │  proxy-us-west      │          │  relay-asia-se      │         │
+│  │  <your-ip-1>        │◄────────▶│  <your-ip-2>        │         │
+│  │  US-West (LA)       │          │  Asia (Singapore)   │         │
 │  │                     │          │                     │         │
 │  │  UDP :4434 (data)   │          │  UDP :4434 (data)   │         │
 │  │  HTTP :8080 (health)│          │  HTTP :8080 (health)│         │
-│  │  504KB RAM          │          │  496KB RAM          │         │
+│  │  ~500KB RAM         │          │  ~500KB RAM         │         │
 │  │                     │          │                     │         │
 │  │  Role: Primary      │          │  Role: FEC multipath│         │
 │  │  proxy for US games │          │  + SEA relay        │         │
@@ -51,9 +53,10 @@
 │  Deployment: Native binary + systemd (no Docker overhead)        │
 └──────────────────────────────────────────────────────────────────┘
 
-User (Bangkok) ─── 206ms direct ──▶ proxy-lax
-User (Bangkok) ─── 31ms ──────────▶ relay-sgp ─── 178ms ──▶ proxy-lax
-User (Bangkok) + WARP ── 193ms ──▶ proxy-lax  (5-10ms improvement via CF NTT backbone)
+Example benchmark (Bangkok → US-West Vultr LA):
+  Direct route:   ~206ms
+  Via SGP relay:  ~31ms + 178ms = ~209ms (relay adds latency here)
+  With WARP:      ~193ms (5-10ms improvement via Cloudflare NTT backbone)
 ```
 
 ---

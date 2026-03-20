@@ -18,8 +18,8 @@ The dashboard auto-loads on first visit — no manual import needed.
 
 ```
 ┌─────────────────────┐     scrape :8080/metrics
-│  Prometheus (9090)   │──────────────────────────▶  proxy-lax  ([redacted])
-│  15s scrape, 30d ret │──────────────────────────▶  relay-sgp  ([redacted])
+│  Prometheus (9090)   │──────────────────────────▶  node-1  (<your-node-ip-1>)
+│  15s scrape, 30d ret │──────────────────────────▶  node-2  (<your-node-ip-2>)
 └──────────┬──────────┘
            │ query
 ┌──────────▼──────────┐
@@ -90,11 +90,6 @@ All metrics include `region` and `node_id` labels.
        node_id: "proxy-new"
        region: "new-region"
        provider: "vultr"
-   ```
-
-2. Reload Prometheus:
-   ```bash
-   curl -X POST http://localhost:9090/-/reload
    ```
 
 The dashboard automatically picks up new nodes via label queries.

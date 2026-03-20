@@ -23,8 +23,8 @@
 //! ## Usage
 //!
 //! ```
-//! lightspeed --game cs2 --proxy [redacted]:4434 --game-server 192.168.1.1:27015
-//! lightspeed --fec --proxy [redacted]:4434 --game-server 192.168.1.1:27015
+//! lightspeed --game cs2 --proxy YOUR_PROXY_IP:4434 --game-server 192.168.1.1:27015
+//! lightspeed --fec --proxy YOUR_PROXY_IP:4434 --game-server 192.168.1.1:27015
 //! ```
 
 use std::net::{Ipv4Addr, SocketAddrV4};

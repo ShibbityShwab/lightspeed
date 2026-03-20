@@ -167,10 +167,11 @@ def main():
 
     # Configuration
     proxies = [
-        ("Vultr LA",    ("[redacted]", 4434)),
-        ("Vultr SGP",   ("[redacted]", 4434)),
+        # Add your own proxy node IPs here — run setup-new-node.sh to provision them
+        # ("My US Node",   ("YOUR_NODE_IP_1", 4434)),
+        # ("My Asia Node", ("YOUR_NODE_IP_2", 4434)),
     ]
-    game_server_ip = "[redacted]"  # SGP echo server
+    game_server_ip = proxies[0][1][0] if proxies else "127.0.0.1"  # Use first proxy or localhost
     game_server_port = 9999
 
     for name, proxy_addr in proxies:

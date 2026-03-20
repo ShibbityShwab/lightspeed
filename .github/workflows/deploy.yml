@@ -31,9 +31,9 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.VULTR_SSH_KEY }}" > ~/.ssh/lightspeed_vultr
           chmod 600 ~/.ssh/lightspeed_vultr
-          # Add Vultr node IPs to known_hosts to prevent strict host key checking prompts
-          ssh-keyscan -H [redacted] >> ~/.ssh/known_hosts
-          ssh-keyscan -H [redacted] >> ~/.ssh/known_hosts
+          # Note: deploy-vultr.sh uses StrictHostKeyChecking=no, so no ssh-keyscan needed.
+          # To add known_hosts for your own nodes, add their IPs to a DEPLOY_KNOWN_HOSTS secret
+          # and uncomment: echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
 
       - name: Build and Deploy Proxy
         run: |

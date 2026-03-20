@@ -14,10 +14,10 @@ Usage:
   python load_test.py <proxy_ip> [options]
 
 Examples:
-  python load_test.py [redacted]                  # Quick test (10 clients, 30s)
-  python load_test.py [redacted] -c 50 -d 60      # 50 clients, 60 seconds
-  python load_test.py [redacted] -c 100 --ramp 10  # Ramp from 1→100 over 10s
-  python load_test.py [redacted] --all-nodes        # Test all mesh nodes
+  python load_test.py YOUR_PROXY_IP                  # Quick test (10 clients, 30s)
+  python load_test.py YOUR_PROXY_IP -c 50 -d 60      # 50 clients, 60 seconds
+  python load_test.py YOUR_PROXY_IP -c 100 --ramp 10  # Ramp from 1→100 over 10s
+  python load_test.py YOUR_PROXY_IP --all-nodes        # Test all mesh nodes
 
 Requires: Python 3.8+
 """
@@ -52,8 +52,9 @@ ECHO_TARGETS = [
 
 # Built-in mesh nodes
 MESH_NODES = {
-    "proxy-lax":  "[redacted]",
-    "relay-sgp":  "[redacted]",
+    # Add your own node IPs here — run setup-new-node.sh to provision them
+    # "proxy-us-west":  "YOUR_NODE_IP_1",
+    # "relay-asia-se":  "YOUR_NODE_IP_2",
 }
 
 
@@ -379,9 +380,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python load_test.py [redacted]                    # Quick 10-client test
-  python load_test.py [redacted] -c 50 -d 60       # 50 clients, 60s
-  python load_test.py [redacted] -c 100 --ramp 10  # Ramp 1→100 over 10s
+  python load_test.py YOUR_PROXY_IP                    # Quick 10-client test
+  python load_test.py YOUR_PROXY_IP -c 50 -d 60       # 50 clients, 60s
+  python load_test.py YOUR_PROXY_IP -c 100 --ramp 10  # Ramp 1→100 over 10s
   python load_test.py --all-nodes -c 25 -d 30          # All mesh nodes
         """,
     )

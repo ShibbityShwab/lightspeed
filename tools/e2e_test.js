@@ -217,10 +217,11 @@ async function main() {
   console.log('='.repeat(60));
 
   const proxies = [
-    ['Vultr LA',     '[redacted]',  4434],
-    ['Vultr SGP',    '[redacted]',  4434],
+    // Add your own proxy node IPs here — run setup-new-node.sh to provision them
+    // ['My US Node',  'YOUR_NODE_IP_1', 4434],
+    // ['My Asia Node','YOUR_NODE_IP_2', 4434],
   ];
-  const gameServerIp = '[redacted]';
+  const gameServerIp = proxies.length > 0 ? proxies[0][1] : '127.0.0.1';
   const gameServerPort = 9999;
 
   for (const [name, host, port] of proxies) {

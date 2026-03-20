@@ -68,18 +68,18 @@
       </div>
       <div class="hero-stats">
         <div class="stat">
-          <span class="stat-value">2</span>
-          <span class="stat-label">Live Proxy Nodes</span>
+          <span class="stat-value">Self</span>
+          <span class="stat-label">Hosted — You Control It</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
           <span class="stat-value">0%</span>
-          <span class="stat-label">Packet Loss (E2E)</span>
+          <span class="stat-label">Packet Loss (E2E Tests)</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
           <span class="stat-value">33ms</span>
-          <span class="stat-label">Best Relay RTT</span>
+          <span class="stat-label">Best Relay RTT (SEA)</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
@@ -267,7 +267,7 @@
         <div class="compare-card">
           <div class="compare-icon">💸</div>
           <h3>Actually Free</h3>
-          <p>Not "free trial" free. Not "freemium" free. Free as in <strong>zero dollars forever</strong>. Our proxies run on cloud credits and community donations. No subscription needed. Ever.</p>
+          <p>Not "free trial" free. Not "freemium" free. Free as in <strong>zero dollars forever</strong>. You run your own proxy on free-tier cloud VPS credits — no middleman, no subscription, no hidden cost. Ever.</p>
         </div>
         <div class="compare-card">
           <div class="compare-icon">🔓</div>
@@ -403,7 +403,7 @@
       <div class="faq-grid">
         <details class="faq-item">
           <summary>How is this free? What's the catch?</summary>
-          <p>There is no catch. Our proxy servers run on affordable cloud VPS instances funded by Vultr credits. The software is open source and self-hostable — run your own nodes on any cloud provider. We don't sell your data because we don't collect it.</p>
+          <p>There is no catch. LightSpeed is <strong>self-hosted</strong> — you run the proxy software on your own VPS (Vultr gives new accounts $300 free credit, Oracle Cloud has a free tier forever). The software is fully open source. We don't sell your data because we don't collect it. In the future, we plan to offer a managed cloud option for those who don't want to self-host.</p>
         </details>
         <details class="faq-item">
           <summary>Will this get me banned?</summary>
@@ -422,8 +422,8 @@
           <p>We don't collect any data by default. No accounts, no registration, no telemetry. If you opt-in to anonymous latency reporting, we collect only aggregate network metrics (ping times, not your identity or game data). All traffic passes through unencrypted to avoid adding overhead — we document this transparently.</p>
         </details>
         <details class="faq-item">
-          <summary>Can I host my own proxy nodes?</summary>
-          <p>Yes! The proxy server is open source. Spin up the Docker image on any cloud provider (or your own hardware) and point your client at it. The Terraform configs in our repo set up Oracle Cloud free tier nodes automatically.</p>
+          <summary>How do I get a proxy node?</summary>
+          <p>You host your own — that's the whole idea. Spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
         </details>
         <details class="faq-item">
           <summary>Why Rust?</summary>

@@ -25,10 +25,12 @@ BINARY_NAME="lightspeed-proxy"
 REMOTE_BINARY="/usr/local/bin/${BINARY_NAME}"
 SERVICE_NAME="lightspeed-proxy"
 
-# Vultr mesh nodes
+# Vultr mesh nodes — add your own node IPs here.
+# Run setup-new-node.sh to provision a node, then add it below.
+# Format: NODES["node-name"]="IP_ADDRESS"
 declare -A NODES
-NODES["proxy-lax"]="[redacted]"
-NODES["relay-sgp"]="[redacted]"
+# NODES["proxy-us-west"]="YOUR_NODE_IP_1"
+# NODES["relay-asia-se"]="YOUR_NODE_IP_2"
 
 # Colors
 GREEN='\033[0;32m'
