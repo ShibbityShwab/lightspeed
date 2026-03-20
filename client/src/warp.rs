@@ -299,16 +299,13 @@ impl WarpManager {
         Ok(())
     }
 
-    /// Check if a specific IP is routed through WARP.
+    /// Check if a specific IP would be routed through WARP.
     ///
     /// In exclude mode (default), everything goes through WARP except
     /// the excluded ranges. We check that the proxy IP is NOT in the
-    /// excluded ranges.
+    /// excluded ranges. This is pure subnet math and does not require
+    /// WARP to be installed.
     pub fn is_ip_routed(&self, ip: Ipv4Addr) -> bool {
-        if !self.is_installed() {
-            return false;
-        }
-
         // Check if IP is in the excluded ranges
         let excluded_ranges: Vec<(Ipv4Addr, u8)> = vec![
             (Ipv4Addr::new(10, 0, 0, 0), 8),
