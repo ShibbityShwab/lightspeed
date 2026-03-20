@@ -49,14 +49,17 @@ pub fn train_test_split(
 
 /// Train a Random Forest model and return serialized bytes + report.
 ///
-/// This is the primary model for route prediction.
+/// Implemented as a bootstrap-aggregated (bagging) ensemble of linear
+/// regression models. Each model is trained on an 80% bootstrap subsample.
+/// Serialised as `Vec<(intercept: f64, weights: Vec<f64>)>` — fully
+/// compatible with `bincode` without any linfa serde dependency.
 #[cfg(feature = "ml")]
 pub fn train_random_forest(
     data: &[TrainingSample],
     test_ratio: f64,
 ) -> Result<(Vec<u8>, TrainingReport), MlError> {
     use linfa::prelude::*;
-    use linfa_trees::DecisionTree;
+    use linfa_linear::LinearRegression;
     use ndarray::{Array1, Array2};
     use std::time::Instant;
 
@@ -68,43 +71,26 @@ pub fn train_random_forest(
         test_data.len()
     );
 
-    // Build feature matrix and target vector for training
     let n_train = train_data.len();
     let n_features = NetworkFeatures::FEATURE_COUNT;
 
-    let mut features_flat = Vec::with_capacity(n_train * n_features);
-    let mut targets = Vec::with_capacity(n_train);
-
-    for sample in &train_data {
-        features_flat.extend_from_slice(&sample.features.to_array());
-        targets.push(sample.observed_latency_ms);
-    }
-
-    let features_matrix = Array2::from_shape_vec((n_train, n_features), features_flat)
-        .map_err(|e| MlError::PredictionFailed(format!("Failed to build feature matrix: {}", e)))?;
-    let targets_array = Array1::from_vec(targets);
-
-    let dataset = Dataset::new(features_matrix, targets_array);
-
-    // Train a Decision Tree (linfa-trees provides single tree; we ensemble manually)
-    // Using max_depth to prevent overfitting
+    // Train an ensemble of linear regressors with bootstrap sampling.
+    // Model is serialised as Vec<(intercept, weights)> — no linfa serde needed.
     let start = Instant::now();
 
-    // Train an ensemble of decision trees (poor man's random forest)
-    // Each tree sees a different subset via bootstrap
-    let n_trees = 10;
-    let mut trees = Vec::with_capacity(n_trees);
+    let n_models = 10;
+    // Each entry: (intercept, feature_weights)
+    let mut ensemble: Vec<(f64, Vec<f64>)> = Vec::with_capacity(n_models);
 
-    for i in 0..n_trees {
-        // Create a bootstrap sample by cycling through data with offset
-        let offset = i * train_data.len() / n_trees;
-        let bootstrap_size = train_data.len() * 8 / 10; // 80% of data per tree
+    for i in 0..n_models {
+        let offset = i * n_train / n_models;
+        let bootstrap_size = (n_train * 8 / 10).max(1); // 80% of data per model
 
         let mut boot_features = Vec::with_capacity(bootstrap_size * n_features);
-        let mut boot_targets = Vec::with_capacity(bootstrap_size);
+        let mut boot_targets: Vec<f64> = Vec::with_capacity(bootstrap_size);
 
         for j in 0..bootstrap_size {
-            let idx = (offset + j * 7 + i * 13) % train_data.len(); // Pseudo-random sampling
+            let idx = (offset + j * 7 + i * 13) % n_train; // Pseudo-random sampling
             boot_features.extend_from_slice(&train_data[idx].features.to_array());
             boot_targets.push(train_data[idx].observed_latency_ms);
         }
@@ -114,37 +100,45 @@ pub fn train_random_forest(
         let boot_target_arr = Array1::from_vec(boot_targets);
         let boot_dataset = Dataset::new(boot_matrix, boot_target_arr);
 
-        let tree = DecisionTree::params()
-            .max_depth(Some(8))
-            .min_weight_split(10.0)
+        let model = LinearRegression::default()
             .fit(&boot_dataset)
-            .map_err(|e| MlError::PredictionFailed(format!("Tree {} training failed: {}", i, e)))?;
+            .map_err(|e| {
+                MlError::PredictionFailed(format!("Model {} training failed: {}", i, e))
+            })?;
 
-        trees.push(tree);
+        ensemble.push((model.intercept(), model.params().to_vec()));
     }
 
     let training_time = start.elapsed();
 
     // Evaluate on test set
     let n_test = test_data.len();
-    let mut test_features_flat = Vec::with_capacity(n_test * n_features);
-    let mut test_targets = Vec::with_capacity(n_test);
+    let mut test_features_flat: Vec<f64> = Vec::with_capacity(n_test * n_features);
+    let mut test_targets: Vec<f64> = Vec::with_capacity(n_test);
 
     for sample in &test_data {
         test_features_flat.extend_from_slice(&sample.features.to_array());
         test_targets.push(sample.observed_latency_ms);
     }
 
-    let test_matrix = Array2::from_shape_vec((n_test, n_features), test_features_flat)
-        .map_err(|e| MlError::PredictionFailed(format!("Test matrix error: {}", e)))?;
-
-    // Ensemble prediction: average of all trees
-    let mut sum_predictions = Array1::zeros(n_test);
-    for tree in &trees {
-        let preds = tree.predict(&test_matrix);
-        sum_predictions = sum_predictions + &preds;
-    }
-    let predictions = sum_predictions / n_trees as f64;
+    // Ensemble prediction: average over all models
+    let predictions: Vec<f64> = (0..n_test)
+        .map(|j| {
+            let row = &test_features_flat[j * n_features..(j + 1) * n_features];
+            let sum: f64 = ensemble
+                .iter()
+                .map(|(intercept, weights)| {
+                    intercept
+                        + weights
+                            .iter()
+                            .zip(row.iter())
+                            .map(|(w, f)| w * f)
+                            .sum::<f64>()
+                })
+                .sum::<f64>();
+            sum / ensemble.len() as f64
+        })
+        .collect();
 
     // Calculate metrics
     let mae = predictions
@@ -172,7 +166,11 @@ pub fn train_random_forest(
         .zip(test_targets.iter())
         .map(|(p, t)| (p - t).powi(2))
         .sum::<f64>();
-    let r_squared = 1.0 - ss_res / ss_tot;
+    let r_squared = if ss_tot > 0.0 {
+        1.0 - ss_res / ss_tot
+    } else {
+        0.0
+    };
 
     tracing::info!(
         "Random Forest trained: MAE={:.2}ms, RMSE={:.2}ms, R²={:.4}, time={:.1}ms",
@@ -182,8 +180,8 @@ pub fn train_random_forest(
         training_time.as_secs_f64() * 1000.0
     );
 
-    // Serialize the ensemble
-    let model_bytes = bincode::serialize(&trees)
+    // Serialize as Vec<(intercept, weights)> — bincode-compatible
+    let model_bytes = bincode::serialize(&ensemble)
         .map_err(|e| MlError::PredictionFailed(format!("Serialization failed: {}", e)))?;
 
     let report = TrainingReport {
@@ -283,7 +281,8 @@ pub fn train_linear_regression(
         r_squared
     );
 
-    let model_bytes = bincode::serialize(&model)
+    // Serialise as (intercept, weights) — linfa models don't impl serde::Serialize
+    let model_bytes = bincode::serialize(&(model.intercept(), model.params().to_vec()))
         .map_err(|e| MlError::PredictionFailed(format!("Serialization failed: {}", e)))?;
 
     let report = TrainingReport {

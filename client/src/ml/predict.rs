@@ -38,56 +38,50 @@ impl RoutePrediction {
     }
 }
 
-/// Predict route latencies using the loaded Random Forest ensemble.
+/// Predict route latencies using the loaded ensemble model.
 ///
 /// For each proxy, takes its NetworkFeatures and predicts the expected
 /// latency through that proxy. Returns predictions for all proxies
 /// so the selector can choose the best one.
+///
+/// Model bytes are a bincode-serialised `Vec<(f64, Vec<f64>)>` — one entry
+/// per ensemble member, containing `(intercept, feature_weights)`.
 #[cfg(feature = "ml")]
 pub fn predict_route(
     features_per_proxy: &[(String, NetworkFeatures)],
     model_bytes: &[u8],
 ) -> Result<RoutePrediction, MlError> {
-    use linfa::prelude::*;
-    use linfa_trees::DecisionTree;
-    use ndarray::Array2;
     use std::time::Instant;
 
     let start = Instant::now();
 
-    // Deserialize the ensemble
-    let trees: Vec<DecisionTree<f64, f64>> = bincode::deserialize(model_bytes)
+    // Deserialize the ensemble: Vec<(intercept, weights)>
+    let ensemble: Vec<(f64, Vec<f64>)> = bincode::deserialize(model_bytes)
         .map_err(|e| MlError::PredictionFailed(format!("Model deserialization failed: {}", e)))?;
 
-    if trees.is_empty() {
+    if ensemble.is_empty() {
         return Err(MlError::PredictionFailed("Empty model ensemble".into()));
     }
 
-    let n_proxies = features_per_proxy.len();
-    let n_features = NetworkFeatures::FEATURE_COUNT;
-
-    // Build feature matrix for all proxies at once
-    let mut features_flat = Vec::with_capacity(n_proxies * n_features);
-    for (_, features) in features_per_proxy {
-        features_flat.extend_from_slice(&features.to_array());
-    }
-
-    let feature_matrix = Array2::from_shape_vec((n_proxies, n_features), features_flat)
-        .map_err(|e| MlError::PredictionFailed(format!("Feature matrix error: {}", e)))?;
-
-    // Ensemble prediction: average of all trees
-    let mut sum_predictions = ndarray::Array1::zeros(n_proxies);
-    for tree in &trees {
-        let preds = tree.predict(&feature_matrix);
-        sum_predictions = sum_predictions + &preds;
-    }
-    let predictions = sum_predictions / trees.len() as f64;
-
-    // Build result
+    // Predict for each proxy using ensemble average
     let scores: Vec<(String, f64)> = features_per_proxy
         .iter()
-        .zip(predictions.iter())
-        .map(|((proxy_id, _), &pred)| (proxy_id.clone(), pred.max(0.0)))
+        .map(|(proxy_id, features)| {
+            let feature_row = features.to_array();
+            let sum: f64 = ensemble
+                .iter()
+                .map(|(intercept, weights)| {
+                    intercept
+                        + weights
+                            .iter()
+                            .zip(feature_row.iter())
+                            .map(|(w, f)| w * f)
+                            .sum::<f64>()
+                })
+                .sum::<f64>();
+            let pred = (sum / ensemble.len() as f64).max(0.0);
+            (proxy_id.clone(), pred)
+        })
         .collect();
 
     // Confidence based on prediction spread (lower spread = higher confidence)
