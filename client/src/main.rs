@@ -587,12 +587,19 @@ async fn main() -> anyhow::Result<()> {
         let fec_k = cli.fec_k;
 
         // Create packet injector for bidirectional response delivery
-        let injector = capture::injector::PacketInjector::new().await?;
+        let injector = if let Some(iface) = cap_backend.interface_name() {
+            #[cfg(feature = "pcap-capture")]
+            { capture::injector::PacketInjector::with_interface(iface).await? }
+            #[cfg(not(feature = "pcap-capture"))]
+            { capture::injector::PacketInjector::new().await? }
+        } else {
+            capture::injector::PacketInjector::new().await?
+        };
+        let injector = Arc::new(injector);
         let injector_stats = Arc::clone(&injector.stats);
-        let injector_socket = injector.socket();
 
-        // Track the game client's source address (learned from first outbound packet)
-        let game_client_addr: Arc<tokio::sync::RwLock<Option<SocketAddrV4>>> =
+        // Track the game client's source address, server address, and MACs
+        let capture_meta: Arc<tokio::sync::RwLock<Option<(SocketAddrV4, SocketAddrV4, [u8; 6], [u8; 6])>>> =
             Arc::new(tokio::sync::RwLock::new(None));
 
         if fec_enabled {
@@ -626,8 +633,9 @@ async fn main() -> anyhow::Result<()> {
         // for online learning RTT measurement.
         let inbound_handle = {
             let tunnel_socket = Arc::clone(&tunnel_socket);
-            let game_client_addr = Arc::clone(&game_client_addr);
+            let capture_meta = Arc::clone(&capture_meta);
             let running = Arc::clone(&running);
+            let injector = Arc::clone(&injector);
             let injector_stats_ref = Arc::clone(&injector_stats);
             let ka_timestamps = Arc::clone(&keepalive_timestamps);
             let learner_ref = Arc::clone(&online_learner);
@@ -704,13 +712,13 @@ async fn main() -> anyhow::Result<()> {
                         continue;
                     }
 
-                    // Get the game client's address (learned from outbound capture)
-                    let game_addr = {
-                        let addr = game_client_addr.read().await;
-                        *addr
+                    // Get the game client's metadata (learned from outbound capture)
+                    let meta = {
+                        let meta = capture_meta.read().await;
+                        *meta
                     };
-                    let game_addr = match game_addr {
-                        Some(addr) => addr,
+                    let (game_client, server_addr, mac_dst, mac_src) = match meta {
+                        Some((c, s, ms, md)) => (c, s, md, ms), // Note: swap macs for injection
                         None => {
                             tracing::debug!("Response received but no game client captured yet");
                             continue;
@@ -769,24 +777,15 @@ async fn main() -> anyhow::Result<()> {
                     // Inject the response back to the game
                     if let Some(data) = game_payload {
                         if !data.is_empty() {
-                            match injector_socket.send_to(&data, game_addr).await {
+                            match injector.inject(&data, game_client, server_addr, mac_src, mac_dst).await {
                                 Ok(sent) => {
-                                    injector_stats_ref
-                                        .packets_injected
-                                        .fetch_add(1, Ordering::Relaxed);
-                                    injector_stats_ref
-                                        .bytes_injected
-                                        .fetch_add(sent as u64, Ordering::Relaxed);
                                     tracing::trace!(
                                         payload_len = data.len(),
-                                        dst = %game_addr,
+                                        dst = %game_client,
                                         "Proxy → Game (injected)"
                                     );
                                 }
                                 Err(e) => {
-                                    injector_stats_ref
-                                        .inject_errors
-                                        .fetch_add(1, Ordering::Relaxed);
                                     tracing::warn!("Inject to game failed: {}", e);
                                 }
                             }
@@ -888,11 +887,11 @@ async fn main() -> anyhow::Result<()> {
 
                     // Learn the game client's source address
                     {
-                        let mut addr = game_client_addr.write().await;
-                        if addr.is_none() {
+                        let mut meta = capture_meta.write().await;
+                        if meta.is_none() {
                             info!("🎮 Game client detected at {} → {}", pkt.src, pkt.dst);
                         }
-                        *addr = Some(pkt.src);
+                        *meta = Some((pkt.src, pkt.dst, pkt.mac_src, pkt.mac_dst));
                     }
 
                     let ts = std::time::SystemTime::now()

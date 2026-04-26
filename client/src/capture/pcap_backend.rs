@@ -226,17 +226,29 @@ impl PacketCapture for PcapCapture {
             let timestamp_us = raw_packet.header.ts.tv_sec as u64 * 1_000_000
                 + raw_packet.header.ts.tv_usec as u64;
 
+            // Extract MAC addresses (Destination first, then Source in Ethernet II)
+            let mut mac_dst = [0u8; 6];
+            mac_dst.copy_from_slice(&data[0..6]);
+            let mut mac_src = [0u8; 6];
+            mac_src.copy_from_slice(&data[6..12]);
+
             return Ok(CapturedPacket {
                 payload: Bytes::copy_from_slice(payload),
                 src: SocketAddrV4::new(src_ip, src_port),
                 dst: SocketAddrV4::new(dst_ip, dst_port),
                 timestamp_us,
+                mac_src,
+                mac_dst,
             });
         }
     }
 
     fn is_active(&self) -> bool {
         self.active
+    }
+
+    fn interface_name(&self) -> Option<&str> {
+        self.interface.as_deref()
     }
 }
 
@@ -262,6 +274,10 @@ impl PacketCapture for PcapCapture {
 
     fn is_active(&self) -> bool {
         self.active
+    }
+
+    fn interface_name(&self) -> Option<&str> {
+        self.interface.as_deref()
     }
 }
 

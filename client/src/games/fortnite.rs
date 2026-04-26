@@ -18,8 +18,8 @@ impl GameConfig for FortniteConfig {
 
     fn ports(&self) -> (u16, u16) {
         // Fortnite uses ephemeral UDP ports (game client) to connect to
-        // AWS-hosted game servers. Server ports are typically 7000-9000.
-        (7000, 9000)
+        // AWS-hosted game servers. Server ports can be anywhere in the high range.
+        (1024, 65535)
     }
 
     fn redirect_port(&self) -> u16 {

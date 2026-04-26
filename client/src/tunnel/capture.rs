@@ -20,6 +20,10 @@ pub struct CapturedPacket {
     pub dst: SocketAddrV4,
     /// Capture timestamp in microseconds since epoch.
     pub timestamp_us: u64,
+    /// Source MAC address (from Ethernet frame).
+    pub mac_src: [u8; 6],
+    /// Destination MAC address (from Ethernet frame).
+    pub mac_dst: [u8; 6],
 }
 
 /// Filter for selecting which packets to capture.
@@ -71,4 +75,7 @@ pub trait PacketCapture: Send + Sync {
 
     /// Check if capture is active.
     fn is_active(&self) -> bool;
+
+    /// Get the name of the active interface, if any.
+    fn interface_name(&self) -> Option<&str>;
 }
