@@ -595,7 +595,7 @@ async fn main() -> anyhow::Result<()> {
         };
         #[cfg(not(feature = "pcap-capture"))]
         let injector = capture::injector::PacketInjector::new().await?;
-        
+
         let injector = Arc::new(injector);
         let injector_stats = Arc::clone(&injector.stats);
 
@@ -778,7 +778,10 @@ async fn main() -> anyhow::Result<()> {
                     // Inject the response back to the game
                     if let Some(data) = game_payload {
                         if !data.is_empty() {
-                            match injector.inject(&data, game_client, server_addr, mac_src, mac_dst).await {
+                            match injector
+                                .inject(&data, game_client, server_addr, mac_src, mac_dst)
+                                .await
+                            {
                                 Ok(sent) => {
                                     tracing::trace!(
                                         payload_len = data.len(),

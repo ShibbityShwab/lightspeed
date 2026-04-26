@@ -81,10 +81,10 @@ impl PacketInjector {
     #[cfg(feature = "pcap-capture")]
     pub async fn with_interface(interface_name: &str) -> std::io::Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
-        
+
         let devices = Device::list()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        
+
         let device = devices
             .into_iter()
             .find(|d| d.name == interface_name)
@@ -128,11 +128,12 @@ impl PacketInjector {
     ) -> Result<usize, std::io::Error> {
         #[cfg(feature = "pcap-capture")]
         if let Some(ref handle) = self.pcap_handle {
-            let raw_packet = Self::build_raw_packet(payload, game_client, server_addr, mac_src, mac_dst);
+            let raw_packet =
+                Self::build_raw_packet(payload, game_client, server_addr, mac_src, mac_dst);
             let mut cap = handle.lock().unwrap();
             cap.sendpacket(&raw_packet)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-            
+
             self.stats.packets_injected.fetch_add(1, Ordering::Relaxed);
             self.stats.bytes_injected.fetch_add(payload.len() as u64, Ordering::Relaxed);
             return Ok(payload.len());
