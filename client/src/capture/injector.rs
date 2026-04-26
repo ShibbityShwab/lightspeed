@@ -128,8 +128,8 @@ impl PacketInjector {
     ) -> Result<usize, std::io::Error> {
         #[cfg(feature = "pcap-capture")]
         if let Some(ref handle) = self.pcap_handle {
-            let raw_packet =
-                Self::build_raw_packet(payload, game_client, server_addr, mac_src, mac_dst);
+            #[rustfmt::skip]
+            let raw_packet = Self::build_raw_packet(payload, game_client, server_addr, mac_src, mac_dst);
             let mut cap = handle.lock().unwrap();
             cap.sendpacket(&raw_packet)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
