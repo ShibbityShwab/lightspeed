@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Maintenance (2026-04-27)
+- **Fixed** unused-variable warning `sent` → `_sent` in `client/src/main.rs:786`
+- **Updated** `proxy/src/main.rs` doc-comment: OCI → Vultr
+- **Updated** `docs/security-audit-mvp.md` threat model: OCI → Vultr infrastructure
+- **Added** `infra/terraform/LEGACY-OCI.md` — explains OCI decommission context
+- **Updated** `infra/README.md` — `infra/fly/` and `infra/docker/` labeled as not-pursued/legacy
+- **Added** `infra/terraform/versions.tf` — LEGACY header with Vultr redirect
+- **Added** `.geminirules`, `.antigravityrules`, `.agents/workflows/wat-loop.md` to repo (AI tool config, same pattern as `.clinerules`)
+- **Pruned** stale git remote tracking refs (`origin/main`, `origin/redesign-2026` — belonged to a previous site, no longer exist on GitHub)
+
 ### Next Up
 - US-East / EU-West mesh expansion
 - Discord community server
