@@ -600,8 +600,9 @@ async fn main() -> anyhow::Result<()> {
         let injector_stats = Arc::clone(&injector.stats);
 
         // Track the game client's source address, server address, and MACs
-        let capture_meta: Arc<tokio::sync::RwLock<Option<(SocketAddrV4, SocketAddrV4, [u8; 6], [u8; 6])>>> =
-            Arc::new(tokio::sync::RwLock::new(None));
+        let capture_meta: Arc<
+            tokio::sync::RwLock<Option<(SocketAddrV4, SocketAddrV4, [u8; 6], [u8; 6])>>,
+        > = Arc::new(tokio::sync::RwLock::new(None));
 
         if fec_enabled {
             info!(
