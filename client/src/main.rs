@@ -587,14 +587,15 @@ async fn main() -> anyhow::Result<()> {
         let fec_k = cli.fec_k;
 
         // Create packet injector for bidirectional response delivery
+        #[cfg(feature = "pcap-capture")]
         let injector = if let Some(iface) = cap_backend.interface_name() {
-            #[cfg(feature = "pcap-capture")]
-            { capture::injector::PacketInjector::with_interface(iface).await? }
-            #[cfg(not(feature = "pcap-capture"))]
-            { capture::injector::PacketInjector::new().await? }
+            capture::injector::PacketInjector::with_interface(iface).await?
         } else {
             capture::injector::PacketInjector::new().await?
         };
+        #[cfg(not(feature = "pcap-capture"))]
+        let injector = capture::injector::PacketInjector::new().await?;
+        
         let injector = Arc::new(injector);
         let injector_stats = Arc::clone(&injector.stats);
 

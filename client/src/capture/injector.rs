@@ -117,6 +117,7 @@ impl PacketInjector {
     /// If pcap is enabled and configured, it will construct a raw Ethernet frame
     /// to accurately spoof the source IP and port (the game server's address).
     /// Otherwise, it falls back to a standard UDP socket.
+    #[allow(unused_variables)]
     pub async fn inject(
         &self,
         payload: &[u8],
