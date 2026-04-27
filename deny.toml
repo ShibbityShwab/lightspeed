@@ -7,11 +7,11 @@
 # Deny crates with known security vulnerabilities.
 vulnerability   = "deny"
 # Ignore unmaintained crates (not hard-fail; many are safe transitive deps).
-unmaintained    = "none"
+unmaintained    = "allow"
 # Ignore yanked warnings (handled by cargo audit separately).
-yanked          = "none"
+yanked          = "allow"
 # Ignore unsound warnings (not hard-fail).
-unsound         = "none"
+unsound         = "allow"
 
 # Known advisories we acknowledge and accept risk for pending upgrades.
 # Each entry is justified below.
