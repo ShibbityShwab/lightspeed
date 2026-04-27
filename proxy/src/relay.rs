@@ -256,22 +256,22 @@ impl BatchState {
             // SAFETY: zero-init is valid for iovec.
             unsafe { std::mem::zeroed() };
 
+        // iovecs[i] and saddrs[i] live for the full duration of this function
+        // (and therefore across the recvmmsg call below).
+        #[allow(clippy::needless_range_loop)]
         for i in 0..BATCH {
             iovecs[i].iov_base = self.bufs[i].as_mut_ptr() as *mut libc::c_void;
             iovecs[i].iov_len = BUF_SIZE;
 
-            // SAFETY: iovecs[i] and saddrs[i] live for the full duration of
-            // this function (and therefore across the recvmmsg call below).
-            unsafe {
-                let hdr = &mut self.msgs[i].msg_hdr;
-                hdr.msg_iov = &mut iovecs[i] as *mut libc::iovec;
-                hdr.msg_iovlen = 1;
-                hdr.msg_name = &mut self.saddrs[i] as *mut libc::sockaddr_in as *mut libc::c_void;
-                hdr.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
-                hdr.msg_control = std::ptr::null_mut();
-                hdr.msg_controllen = 0;
-                hdr.msg_flags = 0;
-            }
+            let hdr = &mut self.msgs[i].msg_hdr;
+            hdr.msg_iov = &mut iovecs[i] as *mut libc::iovec;
+            hdr.msg_iovlen = 1;
+            hdr.msg_name = &mut self.saddrs[i] as *mut libc::sockaddr_in as *mut libc::c_void;
+            hdr.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+            hdr.msg_control = std::ptr::null_mut();
+            hdr.msg_controllen = 0;
+            hdr.msg_flags = 0;
+
             self.msgs[i].msg_len = 0;
         }
 
@@ -330,6 +330,7 @@ async fn recv_batch_async(sock: &UdpSocket, batch: &mut BatchState) -> std::io::
 /// auth, keepalive/FIN handling, abuse check, FEC, session management, and
 /// game-server forwarding.  Extracted so it can be called from both the
 /// Linux batched receive loop and the non-Linux single-recv loop.
+#[allow(clippy::too_many_arguments)]
 async fn process_inbound_packet(
     buf: &[u8],
     client_addr: SocketAddrV4,
