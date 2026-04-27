@@ -29,6 +29,8 @@ pub mod game_id {
     pub const FORTNITE: u8 = 1;
     pub const CS2: u8 = 2;
     pub const DOTA2: u8 = 3;
+    /// Facepunch's Rust (the survival game, not the language).
+    pub const RUST: u8 = 4;
 }
 
 /// Disconnect reason codes.

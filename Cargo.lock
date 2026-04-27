@@ -508,7 +508,7 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "lightspeed-client"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-protocol"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "quinn",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-proxy"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytes",

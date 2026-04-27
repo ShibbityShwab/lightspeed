@@ -15,7 +15,7 @@
 | Proxy relay capacity | UDP relay bandwidth & compute | High — can be weaponized |
 | Client game traffic | Player's game packets in transit | Medium — cleartext UDP |
 | Control plane session | QUIC connection state | Medium — session hijacking |
-| Proxy infrastructure | Oracle Cloud free-tier instances | High — abuse = account ban |
+| Proxy infrastructure | Vultr cloud instances (vc2-1c-1gb) | High — abuse = bandwidth bill |
 
 ### Threat Actors
 | Actor | Capability | Motivation |

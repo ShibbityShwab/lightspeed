@@ -32,7 +32,7 @@ Your PC  ──UDP Tunnel──▶  Proxy Node   ──Direct UDP──▶  Game
 | 🛡️ **FEC Protection** | XOR-based Forward Error Correction — recover lost packets without retransmission |
 | 🌐 **WARP Boost** | Optional Cloudflare WARP integration for 5-10ms local route optimization |
 | 🤖 **AI-Powered** | ML route selection via linfa Random Forest (11 network features) |
-| 🎮 **Game Support** | Fortnite, CS2, Dota 2 (and growing) |
+| 🎮 **Game Support** | Fortnite, CS2, Dota 2, Rust (and growing) |
 | 🌍 **Global Mesh** | Proxy nodes in US-West (LA) and Asia (Singapore) |
 | 🦀 **Rust** | High-performance async runtime with Tokio, ~500KB RAM per proxy |
 | 📖 **Open Source** | Full transparency, community-driven development |

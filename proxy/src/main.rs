@@ -10,7 +10,7 @@
 //! - Abuse detection (amplification + reflection)
 //! - Per-client rate limiting
 //!
-//! Designed to run on Oracle Cloud Always Free ARM instances.
+//! Designed to run on any small Linux VPS — current mesh uses Vultr vc2-1c-1gb (~500KB RAM).
 
 use lightspeed_proxy::abuse;
 use lightspeed_proxy::auth;

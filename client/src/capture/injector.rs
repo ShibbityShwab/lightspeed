@@ -131,7 +131,7 @@ impl PacketInjector {
             #[rustfmt::skip]
             let raw_packet = Self::build_raw_packet(payload, game_client, server_addr, mac_src, mac_dst);
             let mut cap = handle.lock().unwrap();
-            cap.sendpacket(&raw_packet)
+            cap.sendpacket(raw_packet)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
             self.stats.packets_injected.fetch_add(1, Ordering::Relaxed);
@@ -190,7 +190,7 @@ impl PacketInjector {
 
         // ── UDP Header (8 bytes) ──────────────────────
         let udp_len = (8 + payload.len()) as u16;
-        let mut udp = vec![
+        let udp = vec![
             (src_addr.port() >> 8) as u8, (src_addr.port() & 0xFF) as u8,
             (dst_addr.port() >> 8) as u8, (dst_addr.port() & 0xFF) as u8,
             (udp_len >> 8) as u8, (udp_len & 0xFF) as u8,

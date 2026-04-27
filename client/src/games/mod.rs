@@ -13,6 +13,7 @@
 //! - **Fortnite**: `FortniteClient-Win64-Shipping.exe`
 //! - **CS2**: `cs2.exe`
 //! - **Dota 2**: `dota2.exe`
+//! - **Rust** (Facepunch): `RustClient.exe`
 //!
 //! ## Capture Filters
 //!
@@ -22,6 +23,7 @@
 pub mod cs2;
 pub mod dota2;
 pub mod fortnite;
+pub mod rust;
 
 use std::net::Ipv4Addr;
 
@@ -92,7 +94,8 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "fortnite" => Ok(Box::new(fortnite::FortniteConfig)),
         "cs2" | "counter-strike" | "counterstrike" => Ok(Box::new(cs2::Cs2Config)),
         "dota2" | "dota" => Ok(Box::new(dota2::Dota2Config)),
-        _ => anyhow::bail!("Unknown game: '{}'. Supported: fortnite, cs2, dota2", name),
+        "rust" | "rustgame" => Ok(Box::new(rust::RustConfig)),
+        _ => anyhow::bail!("Unknown game: '{}'. Supported: fortnite, cs2, dota2, rust", name),
     }
 }
 
@@ -117,6 +120,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         Box::new(fortnite::FortniteConfig),
         Box::new(cs2::Cs2Config),
         Box::new(dota2::Dota2Config),
+        Box::new(rust::RustConfig),
     ];
 
     for game in all_games {
@@ -136,7 +140,12 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
     }
 
     // No game found — provide helpful diagnostic
-    let known_procs: Vec<&str> = vec!["FortniteClient-Win64-Shipping.exe", "cs2.exe", "dota2.exe"];
+    let known_procs: Vec<&str> = vec![
+        "FortniteClient-Win64-Shipping.exe",
+        "cs2.exe",
+        "dota2.exe",
+        "RustClient.exe",
+    ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
         known_procs.join(", ")
@@ -144,7 +153,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported games: fortnite, cs2, dota2"
+         Supported games: fortnite, cs2, dota2, rust"
     )
 }
 
@@ -250,6 +259,8 @@ mod tests {
         assert!(detect_game("counter-strike").is_ok());
         assert!(detect_game("dota2").is_ok());
         assert!(detect_game("dota").is_ok());
+        assert!(detect_game("rust").is_ok());
+        assert!(detect_game("rustgame").is_ok());
     }
 
     #[test]
@@ -272,6 +283,13 @@ mod tests {
 
         let dota = dota2::Dota2Config;
         assert_eq!(dota.name(), "Dota 2");
+
+        let rust_game = rust::RustConfig;
+        assert_eq!(rust_game.name(), "Rust");
+        assert!(rust_game.process_names().contains(&"RustClient.exe"));
+        assert_eq!(rust_game.redirect_port(), 28015);
+        assert!(!rust_game.uses_sdr());
+        assert!(rust_game.typical_pps() > 0);
     }
 
     #[test]

@@ -48,7 +48,7 @@ struct Cli {
     #[arg(short, long, default_value = "lightspeed.toml")]
     config: String,
 
-    /// Game to optimize (fortnite, cs2, dota2)
+    /// Game to optimize (fortnite, cs2, dota2, rust)
     #[arg(short, long)]
     game: Option<String>,
 
@@ -783,7 +783,7 @@ async fn main() -> anyhow::Result<()> {
                                 .inject(&data, game_client, server_addr, mac_src, mac_dst)
                                 .await
                             {
-                                Ok(sent) => {
+                                Ok(_sent) => {
                                     tracing::trace!(
                                         payload_len = data.len(),
                                         dst = %game_client,

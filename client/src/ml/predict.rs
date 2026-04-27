@@ -55,6 +55,25 @@ pub fn predict_route(
 
     let start = Instant::now();
 
+    // No model bytes yet (first run, model not yet trained) — fall back to heuristic.
+    if model_bytes.is_empty() {
+        let scores: Vec<(String, f64)> = features_per_proxy
+            .iter()
+            .map(|(proxy_id, f)| {
+                let score = f.current_latency_ms * 0.6
+                    + f.historical_p50_ms * 0.2
+                    + f.jitter_ms * 10.0 * 0.1
+                    + f.proxy_load * 50.0 * 0.1;
+                (proxy_id.clone(), score)
+            })
+            .collect();
+        return Ok(RoutePrediction {
+            scores,
+            confidence: 0.3, // Low confidence for heuristic fallback
+            inference_time_us: start.elapsed().as_micros() as u64,
+        });
+    }
+
     // Deserialize the ensemble: Vec<(intercept, weights)>
     let ensemble: Vec<(f64, Vec<f64>)> = bincode::deserialize(model_bytes)
         .map_err(|e| MlError::PredictionFailed(format!("Model deserialization failed: {}", e)))?;

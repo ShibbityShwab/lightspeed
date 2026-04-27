@@ -141,11 +141,11 @@ infra/
 │       ├── lightspeed-proxy.service  # Systemd unit
 │       ├── fail2ban-lightspeed.conf  # Abuse protection
 │       └── deploy.sh           # On-node deployment script
-├── docker/                     # Container build (optional)
-│   ├── Dockerfile              # Multi-stage ARM64/AMD64
-│   └── docker-compose.yml      # Local dev / single node
-├── fly/                        # Fly.io config (future)
-│   └── fly.toml                # Fly.io deployment
+├── docker/                     # Container build (legacy — not used in production)
+│   ├── Dockerfile              # Multi-stage ARM64/AMD64 (see Deployment Options below)
+│   └── docker-compose.yml      # Local dev only
+├── fly/                        # Fly.io config (❌ not pursued — kept as reference)
+│   └── fly.toml                # Fly.io deployment (never deployed)
 ├── scripts/                    # Operations scripts
 │   ├── mesh-health.sh          # Check all node health
 │   └── deploy-all.sh           # Rolling update all nodes

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2026-04-27)
+- **Rust (Facepunch) game profile** — `RustConfig` in `client/src/games/rust.rs`
+  - Auto-detects `RustClient.exe`, port range 28015–28017, EAC + Facepunch Anti-Hack
+  - CLI: `--game rust` (also accepts `--game rustgame`)
+  - No Steam Datagram Relay — direct UDP, ideal for LightSpeed proxying
+  - Added `game_id::RUST = 4` to `protocol/src/control.rs`
+
+### Fixed (2026-04-27)
+- **`capture/injector.rs`**: `sendpacket` API break on `pcap` v2.4.0 — `&raw_packet` → `raw_packet` (type now requires `Borrow<[u8]>` not `&Borrow<[u8]>`)
+- **`capture/injector.rs`**: Spurious `unused_mut` warning on local `udp` vec
+- **`ml/predict.rs`**: `predict_route` (ml feature path) now gracefully falls back to weighted heuristic when `model_bytes` is empty (first run before model is trained), instead of returning `Err`
+
 ### Maintenance (2026-04-27)
 - **Fixed** unused-variable warning `sent` → `_sent` in `client/src/main.rs:786`
 - **Updated** `proxy/src/main.rs` doc-comment: OCI → Vultr
