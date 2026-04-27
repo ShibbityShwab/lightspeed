@@ -212,11 +212,6 @@ impl WarpManager {
             WarpStatus::Connecting
         } else if lower.contains("connected") {
             WarpStatus::Connected
-        } else if lower.contains("unable to connect to daemon")
-            || lower.contains("error")
-            || lower.contains("not registered")
-        {
-            WarpStatus::Unknown(output.lines().next().unwrap_or(output).to_string())
         } else {
             WarpStatus::Unknown(output.lines().next().unwrap_or(output).to_string())
         }
@@ -256,7 +251,7 @@ impl WarpManager {
                     }
                     // "Mode:" — match exact word to avoid "Mode-switch-allowed:" etc.
                     if mode.is_none() && {
-                        let after_tab = line.split('\t').last().unwrap_or(line);
+                        let after_tab = line.split('\t').next_back().unwrap_or(line);
                         after_tab.trim_start().starts_with("Mode:")
                     } {
                         mode = line.split(':').next_back().map(|s| s.trim().to_string());
@@ -381,9 +376,7 @@ impl WarpManager {
                 }
                 // Strip any leading status prefix (e.g., "Split Tunnel")
                 let cidr_part = trimmed.split_whitespace().last()?;
-                let mut parts = cidr_part.splitn(2, '/');
-                let ip_str = parts.next()?;
-                let prefix_str = parts.next()?;
+                let (ip_str, prefix_str) = cidr_part.split_once('/')?;
                 let ip: Ipv4Addr = ip_str.parse().ok()?;
                 let prefix: u8 = prefix_str.parse().ok()?;
                 Some((ip, prefix))
