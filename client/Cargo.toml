@@ -10,6 +10,10 @@ description = "LightSpeed game network optimizer — client application"
 name = "lightspeed"
 path = "src/main.rs"
 
+[lib]
+name = "lightspeed_client"
+path = "src/lib.rs"
+
 [features]
 default = []
 # Enable QUIC control plane (requires C compiler for ring)

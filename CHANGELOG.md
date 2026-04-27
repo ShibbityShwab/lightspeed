@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0-dev] — Unreleased
 
+### Added (2026-04-27) — Item H: Windows GUI / tray app
+
+Native Windows GUI client: system-tray icon + egui status window.
+
+- **`client-gui/`** — new `lightspeed-gui` workspace crate (Windows-only binary).
+- **`client/src/engine.rs`** — `LightSpeedEngine` / `EngineStatus`: background
+  async keepalive loop driven from a non-Tokio GUI thread via a `Handle`.  Sends
+  keepalives every 5 s, measures RTT, maintains rolling 120-sample history.
+- **`client/src/lib.rs`** — `lightspeed_client` library target; re-exports
+  `LightSpeedEngine` and `EngineStatus` for GUI consumption.
+- **`client-gui/src/main.rs`** — builds a dedicated multi-thread Tokio runtime,
+  auto-connects to the LAX proxy, launches eframe.  On non-Windows platforms
+  prints a message and exits 1.
+- **`client-gui/src/app.rs`** — `LightSpeedApp` implements `eframe::App`:
+  - Yellow 16×16 tray icon via `tray-icon 0.17`; menu: Show / Connect /
+    Disconnect / Quit.
+  - Double-click tray icon → restore window; close button → hide to tray.
+  - RTT sparkline (last 120 keepalives) via `egui_plot`; traffic-light
+    colour (green < 60 ms, yellow < 120 ms, red ≥ 120 ms).
+  - Connect dialog with editable proxy `ip:port` field.
+  - Repaints at 1 Hz to avoid CPU spin.
+- **`Cargo.toml`** (workspace) — added `"client-gui"` member.
+- **`.github/workflows/ci.yml`** — all Linux/macOS `cargo` commands now carry
+  `--exclude lightspeed-gui` (tray-icon requires native display libraries absent
+  on headless CI runners); macOS smoke-test job likewise excluded.
+
 ### Added (2026-04-27) — Item G: Opt-in latency telemetry
 
 Anonymous, aggregated network-quality reporting — **off by default**, enabled

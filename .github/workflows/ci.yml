@@ -25,13 +25,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features
+        run: cargo clippy --workspace --all-targets --all-features --exclude lightspeed-gui
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --workspace --exclude lightspeed-gui
 
       - name: Test
-        run: cargo test --all
+        run: cargo test --workspace --all --exclude lightspeed-gui
 
   macos-smoke:
     name: macOS Smoke Test
@@ -42,7 +42,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build (release)
-        run: cargo build --release --workspace
+        run: cargo build --release --workspace --exclude lightspeed-gui
 
       - name: Lib tests
-        run: cargo test --workspace --lib
+        run: cargo test --workspace --lib --exclude lightspeed-gui

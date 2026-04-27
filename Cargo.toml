@@ -4,6 +4,7 @@ members = [
     "protocol",
     "client",
     "proxy",
+    "client-gui",
 ]
 
 [workspace.package]
