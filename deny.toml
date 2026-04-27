@@ -1,20 +1,11 @@
-# cargo-deny configuration for LightSpeed
+# cargo-deny v2 configuration for LightSpeed
 # https://embarkstudios.github.io/cargo-deny/
+# Migration from v1: https://github.com/EmbarkStudios/cargo-deny/pull/611
 
 # ── Advisories ────────────────────────────────────────────────────────────────
-# Check the RustSec Advisory Database for known vulnerabilities.
+# In cargo-deny v2 the per-category severity keys (vulnerability/unmaintained/
+# yanked/unsound) have been removed.  Acknowledged advisories go in `ignore`.
 [advisories]
-# Deny crates with known security vulnerabilities.
-vulnerability   = "deny"
-# Ignore unmaintained crates (not hard-fail; many are safe transitive deps).
-unmaintained    = "none"
-# Ignore yanked warnings (handled by cargo audit separately).
-yanked          = "allow"
-# Ignore unsound warnings (not hard-fail).
-unsound         = "none"
-
-# Known advisories we acknowledge and accept risk for pending upgrades.
-# Each entry is justified below.
 ignore = [
   # protobuf 2.x recursion crash — transitive via prometheus monitoring only;
   # no user-controlled protobuf parsing in our attack surface.
@@ -34,11 +25,9 @@ ignore = [
 
 # ── Licenses ──────────────────────────────────────────────────────────────────
 # Only allow permissive open-source licenses appropriate for a free tool.
+# In cargo-deny v2, `unlicensed` and `copyleft` top-level keys are removed;
+# use the `allow` list to enforce acceptable licenses.
 [licenses]
-# Fail on any license not in the allow list.
-unlicensed      = "deny"
-# Deny copyleft licenses that would affect distribution.
-copyleft        = "deny"
 allow = [
   "MIT",
   "Apache-2.0",
@@ -52,27 +41,17 @@ allow = [
   "Zlib",
   "OpenSSL",
 ]
-# Some crates use AND/OR expressions; evaluate strictly.
-unused-allowed-license = "warn"
 
 # ── Bans ──────────────────────────────────────────────────────────────────────
-# Detect problematic duplicate dependencies and banned crates.
 [bans]
-# Warn on multiple versions of the same crate (common in Rust, hard to fully
-# deny, but worth surfacing for review).
 multiple-versions = "warn"
-# Deny crates with known-unsafe or problematic characteristics.
-wildcards         = "allow"   # workspace = dev, fine
-
-# Explicitly denied crates (none currently, kept for future use).
+wildcards         = "allow"
 deny = []
 
 # Skip duplicate-version warnings for crates where two versions commonly
 # coexist in the Rust ecosystem and upgrading isn't directly actionable.
 skip = [
-  # syn 1.x and 2.x both pulled in by proc-macro crates
   { name = "syn" },
-  # windows-sys crate family has many coexisting versions
   { name = "windows-sys" },
   { name = "windows-targets" },
   { name = "windows_x86_64_msvc" },
@@ -80,14 +59,11 @@ skip = [
   { name = "windows_aarch64_msvc" },
   { name = "windows_i686_msvc" },
   { name = "windows_i686_gnu" },
-  # hashbrown 0.12 + 0.14 from indexmap / hashbrown upgrades
   { name = "hashbrown" },
-  # redox_syscall 0.3 + 0.4 from tempfile / parking_lot
   { name = "redox_syscall" },
 ]
 
 # ── Sources ───────────────────────────────────────────────────────────────────
-# Only allow crates from crates.io (no git dependencies in production).
 [sources]
 unknown-registry = "deny"
 unknown-git      = "deny"
