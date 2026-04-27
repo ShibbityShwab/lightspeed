@@ -71,6 +71,34 @@ Both Vultr nodes updated to v0.4.0-dev code in a coordinated cutover (CI run 249
 - **Added** `.geminirules`, `.antigravityrules`, `.agents/workflows/wat-loop.md` to repo (AI tool config, same pattern as `.clinerules`)
 - **Pruned** stale git remote tracking refs (`origin/main`, `origin/redesign-2026` — belonged to a previous site, no longer exist on GitHub)
 
+### Added (2026-04-27) — WF-007 sprint: 9-game support + macOS CI (commits `077c81f`, this commit)
+
+- **Overwatch 2 game profile** — `Ow2Config` in `client/src/games/ow2.rs`
+  - CLI: `--game ow2` (aliases: `overwatch2`, `overwatch-2`, `overwatch`)
+  - Ports: 3478–6250 (covers STUN/SIP/Battle.net/game-data range)
+  - Auto-detects `Overwatch.exe` / `Overwatch_retail.exe`
+  - Anti-cheat: Blizzard Warden (server-side — fully compatible with transparent UDP forwarding)
+  - `game_id::OVERWATCH2 = 7` in `protocol/src/control.rs`
+- **League of Legends game profile** — `LolConfig` in `client/src/games/lol.rs`
+  - CLI: `--game lol` (aliases: `leagueoflegends`, `league-of-legends`, `league`)
+  - Ports: 5000–5500 (direct UDP to Riot regional servers)
+  - Auto-detects `League of Legends.exe` / `LeagueOfLegends.exe`
+  - Anti-cheat: Riot Vanguard (kernel-mode, rolling out globally 2024+)
+  - `game_id::LOL = 8` in `protocol/src/control.rs`
+- **PUBG: Battlegrounds game profile** — `PubgConfig` in `client/src/games/pubg.rs`
+  - CLI: `--game pubg` (alias: `battlegrounds`)
+  - Ports: 7000–17999 (intra-region 7000–7999 + cross-region 17000–17999)
+  - Auto-detects `TslGame.exe` / `PUBG.exe`
+  - Anti-cheat: BattlEye (kernel-mode — transparent UDP forwarding compatible)
+  - `game_id::PUBG = 9` in `protocol/src/control.rs`
+- **README Supported Games table** — expanded from 6 to 9 games; now includes CLI flag,
+  auto-detect process name, and anti-cheat columns. `ALL_GAME_KEYS` drift-guard expanded
+  to 22 entries covering all canonical keys + aliases.
+- **macOS CI smoke test job** — new `macos-smoke` job in `.github/workflows/ci.yml`
+  - `runs-on: macos-latest`, `cargo build --release --workspace` + `cargo test --workspace --lib`
+  - Catches macOS-specific compilation failures (darwin syscalls, target-arch differences)
+  - Runs in parallel with the existing `ubuntu-latest` check job
+
 ### Next Up
 - US-East / EU-West mesh expansion
 - Discord community server

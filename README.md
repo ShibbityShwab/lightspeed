@@ -32,7 +32,7 @@ Your PC  ──UDP Tunnel──▶  Proxy Node   ──Direct UDP──▶  Game
 | 🛡️ **FEC Protection** | XOR-based Forward Error Correction — recover lost packets without retransmission |
 | 🌐 **WARP Boost** | Optional Cloudflare WARP integration for 5-10ms local route optimization |
 | 🤖 **AI-Powered** | ML route selection via linfa Random Forest (11 network features) |
-| 🎮 **Game Support** | Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends (and growing) |
+| 🎮 **Game Support** | Fortnite, CS2, Dota 2, Rust, Valorant, Apex, OW2, LoL, PUBG (9 games) |
 | 🌍 **Global Mesh** | Proxy nodes in US-West (LA) and Asia (Singapore) |
 | 🦀 **Rust** | High-performance async runtime with Tokio, ~500KB RAM per proxy |
 | 📖 **Open Source** | Full transparency, community-driven development |
@@ -60,14 +60,17 @@ Every user runs **their own proxy node**. Set one up on any VPS in under 5 minut
 
 ## Supported Games
 
-| Game | Anti-Cheat | UDP Ports | Status |
-|------|-----------|-----------|--------|
-| Fortnite | EasyAntiCheat | 7000-9000 | ✅ Redirect mode ready |
-| Counter-Strike 2 | VAC | 27015-27050 | ✅ Redirect mode ready |
-| Dota 2 | VAC | 27015-27050 | ✅ Redirect mode ready |
-| Rust (Facepunch) | EAC + Facepunch Anti-Hack | 28015-28017 | ✅ Redirect mode ready |
-| Valorant | Riot Vanguard | 7000-7500 | ✅ Redirect mode ready |
-| Apex Legends | EasyAntiCheat | 37000-37050 | ✅ Redirect mode ready |
+| Game | CLI Flag | Anti-Cheat | UDP Ports | Auto-detect Process | Status |
+|------|----------|-----------|-----------|---------------------|--------|
+| Fortnite | `--game fortnite` | EasyAntiCheat | 7000–9000 | `FortniteClient-Win64-Shipping.exe` | ✅ Ready |
+| Counter-Strike 2 | `--game cs2` | VAC | 27015–27050 | `cs2.exe` | ✅ Ready |
+| Dota 2 | `--game dota2` | VAC | 27015–27050 | `dota2.exe` | ✅ Ready |
+| Rust (Facepunch) | `--game rust` | EAC + Facepunch | 28015–28017 | `RustClient.exe` | ✅ Ready |
+| Valorant | `--game valorant` | Riot Vanguard | 7000–7500 | `VALORANT-Win64-Shipping.exe` | ✅ Ready |
+| Apex Legends | `--game apex` | EasyAntiCheat | 37000–37050 | `r5apex.exe` | ✅ Ready |
+| Overwatch 2 | `--game ow2` | Blizzard Warden | 3478–6250 | `Overwatch.exe` | ✅ Ready |
+| League of Legends | `--game lol` | Riot Vanguard | 5000–5500 | `League of Legends.exe` | ✅ Ready |
+| PUBG: Battlegrounds | `--game pubg` | BattlEye | 7000–17999 | `TslGame.exe` | ✅ Ready |
 
 ## Installation
 
@@ -184,7 +187,7 @@ lightspeed/
 │       ├── route/       # Route selection, multipath, failover
 │       ├── capture/     # Cross-platform packet capture
 │       ├── ml/          # ML model: features, training, prediction
-│       └── games/       # Per-game configurations (Fortnite, CS2, Dota 2)
+│       └── games/       # Per-game configurations (9 games: Fortnite, CS2, Dota 2, Rust, Valorant, Apex, OW2, LoL, PUBG)
 ├── proxy/           # Rust proxy server — UDP relay, auth, metrics
 │   └── src/
 │       ├── relay.rs         # Session-based packet relay loop

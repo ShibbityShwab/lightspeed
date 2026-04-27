@@ -32,3 +32,17 @@ jobs:
 
       - name: Test
         run: cargo test --all
+
+  macos-smoke:
+    name: macOS Smoke Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release --workspace
+
+      - name: Lib tests
+        run: cargo test --workspace --lib
