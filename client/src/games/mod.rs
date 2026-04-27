@@ -14,16 +14,20 @@
 //! - **CS2**: `cs2.exe`
 //! - **Dota 2**: `dota2.exe`
 //! - **Rust** (Facepunch): `RustClient.exe`
+//! - **Valorant**: `VALORANT-Win64-Shipping.exe`
+//! - **Apex Legends**: `r5apex.exe`
 //!
 //! ## Capture Filters
 //!
 //! Each game provides a `CaptureFilter` via `build_capture_filter()` that
 //! generates an appropriate BPF filter for pcap capture mode.
 
+pub mod apex;
 pub mod cs2;
 pub mod dota2;
 pub mod fortnite;
 pub mod rust;
+pub mod valorant;
 
 use std::net::Ipv4Addr;
 
@@ -95,7 +99,12 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "cs2" | "counter-strike" | "counterstrike" => Ok(Box::new(cs2::Cs2Config)),
         "dota2" | "dota" => Ok(Box::new(dota2::Dota2Config)),
         "rust" | "rustgame" => Ok(Box::new(rust::RustConfig)),
-        _ => anyhow::bail!("Unknown game: '{}'. Supported: fortnite, cs2, dota2, rust", name),
+        "valorant" => Ok(Box::new(valorant::ValorantConfig)),
+        "apex" | "apexlegends" | "apex-legends" => Ok(Box::new(apex::ApexConfig)),
+        _ => anyhow::bail!(
+            "Unknown game: '{}'. Supported: fortnite, cs2, dota2, rust, valorant, apex",
+            name
+        ),
     }
 }
 
@@ -121,6 +130,8 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         Box::new(cs2::Cs2Config),
         Box::new(dota2::Dota2Config),
         Box::new(rust::RustConfig),
+        Box::new(valorant::ValorantConfig),
+        Box::new(apex::ApexConfig),
     ];
 
     for game in all_games {
@@ -145,6 +156,8 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         "cs2.exe",
         "dota2.exe",
         "RustClient.exe",
+        "VALORANT-Win64-Shipping.exe",
+        "r5apex.exe",
     ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
@@ -153,7 +166,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported games: fortnite, cs2, dota2, rust"
+         Supported games: fortnite, cs2, dota2, rust, valorant, apex"
     )
 }
 
@@ -252,20 +265,43 @@ fn list_processes_unix() -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// Canonical names and aliases for every supported game.
+    /// Adding a new game without updating this list will cause
+    /// `test_all_registered_games_are_detectable` to fail — this is
+    /// intentional drift-prevention.
+    const ALL_GAME_KEYS: &[&str] = &[
+        "fortnite",
+        "cs2",
+        "counter-strike",
+        "counterstrike",
+        "dota2",
+        "dota",
+        "rust",
+        "rustgame",
+        "valorant",
+        "apex",
+        "apexlegends",
+        "apex-legends",
+    ];
+
     #[test]
-    fn test_detect_known_games() {
-        assert!(detect_game("fortnite").is_ok());
-        assert!(detect_game("cs2").is_ok());
-        assert!(detect_game("counter-strike").is_ok());
-        assert!(detect_game("dota2").is_ok());
-        assert!(detect_game("dota").is_ok());
-        assert!(detect_game("rust").is_ok());
-        assert!(detect_game("rustgame").is_ok());
+    fn test_all_registered_games_are_detectable() {
+        // Regression guard: every entry in ALL_GAME_KEYS must resolve via
+        // detect_game without error.  If you add a game profile, add its
+        // CLI key(s) to ALL_GAME_KEYS above.
+        for key in ALL_GAME_KEYS {
+            assert!(
+                detect_game(key).is_ok(),
+                "detect_game(\"{key}\") returned Err — did you forget to add it to detect_game()?"
+            );
+        }
     }
 
     #[test]
     fn test_detect_unknown_game() {
         assert!(detect_game("minecraft").is_err());
+        assert!(detect_game("overwatch").is_err());
+        assert!(detect_game("").is_err());
     }
 
     #[test]
@@ -276,6 +312,8 @@ mod tests {
         assert_eq!(cs2.ports(), (27015, 27050));
         assert_eq!(cs2.redirect_port(), 27015);
         assert!(cs2.typical_pps() > 0);
+        let (lo, hi) = cs2.packet_size_range();
+        assert!(lo < hi, "packet_size_range lo must be < hi");
 
         let fortnite = fortnite::FortniteConfig;
         assert_eq!(fortnite.name(), "Fortnite");
@@ -290,6 +328,26 @@ mod tests {
         assert_eq!(rust_game.redirect_port(), 28015);
         assert!(!rust_game.uses_sdr());
         assert!(rust_game.typical_pps() > 0);
+
+        let valorant = valorant::ValorantConfig;
+        assert_eq!(valorant.name(), "Valorant");
+        assert!(valorant
+            .process_names()
+            .contains(&"VALORANT-Win64-Shipping.exe"));
+        assert_eq!(valorant.ports(), (7000, 7500));
+        assert_eq!(valorant.redirect_port(), 7000);
+        assert!(!valorant.uses_sdr());
+        assert!(valorant.typical_pps() > 0);
+        assert_eq!(valorant.anti_cheat(), "Riot Vanguard (kernel-mode)");
+
+        let apex = apex::ApexConfig;
+        assert_eq!(apex.name(), "Apex Legends");
+        assert!(apex.process_names().contains(&"r5apex.exe"));
+        assert_eq!(apex.ports(), (37000, 37050));
+        assert_eq!(apex.redirect_port(), 37015);
+        assert!(!apex.uses_sdr());
+        assert!(apex.typical_pps() > 0);
+        assert_eq!(apex.anti_cheat(), "Easy Anti-Cheat (EAC)");
     }
 
     #[test]
@@ -299,14 +357,26 @@ mod tests {
         assert!(filter.bpf.contains("udp"));
         assert!(filter.bpf.contains("27015"));
         assert_eq!(filter.port_range, (27015, 27050));
+
+        let valorant = valorant::ValorantConfig;
+        let vf = valorant.build_capture_filter();
+        assert!(vf.bpf.contains("udp"));
+        assert!(vf.bpf.contains("7000"));
+        assert_eq!(vf.port_range, (7000, 7500));
+
+        let apex = apex::ApexConfig;
+        let af = apex.build_capture_filter();
+        assert!(af.bpf.contains("udp"));
+        assert!(af.bpf.contains("37000"));
+        assert_eq!(af.port_range, (37000, 37050));
     }
 
     #[test]
     fn test_list_processes_doesnt_panic() {
         // Just verify it doesn't crash — may return empty on CI
         let procs = list_running_processes();
-        // On a real system, there should be at least some processes
-        // But in CI/containers this could be empty
+        // On a real system there should be some processes, but CI containers
+        // may return empty — that's fine.
         let _ = procs;
     }
 }

@@ -161,8 +161,8 @@ These items are pre-seeded based on likely demand from the launch announcements:
 |---|---|---|---|
 | EU proxy node | node-request | Community demand | P2 |
 | India proxy node | node-request | Community demand | P2 |
-| Valorant game profile | game-profile | High search volume | P2 |
-| Apex Legends game profile | game-profile | High search volume | P2 |
+| Valorant game profile | game-profile | High search volume | ✅ Done (v0.4.0-dev) |
+| Apex Legends game profile | game-profile | High search volume | ✅ Done (v0.4.0-dev) |
 | Windows GUI / tray app | feature | Barrier to adoption | P2 |
 | Opt-in latency telemetry | feature | ML model improvement | P2 |
 | macOS binary in release | feature | r/rust feedback expected | ✅ Done (release.yml updated) |

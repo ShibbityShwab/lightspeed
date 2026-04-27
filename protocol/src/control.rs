@@ -31,6 +31,10 @@ pub mod game_id {
     pub const DOTA2: u8 = 3;
     /// Facepunch's Rust (the survival game, not the language).
     pub const RUST: u8 = 4;
+    /// Riot Games' Valorant (5v5 tactical shooter).
+    pub const VALORANT: u8 = 5;
+    /// Respawn / EA's Apex Legends (battle-royale).
+    pub const APEX: u8 = 6;
 }
 
 /// Disconnect reason codes.

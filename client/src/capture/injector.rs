@@ -83,7 +83,7 @@ impl PacketInjector {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
 
         let devices = Device::list()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         let device = devices
             .into_iter()
@@ -96,12 +96,12 @@ impl PacketInjector {
             })?;
 
         let cap = Capture::from_device(device)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| std::io::Error::other(e.to_string()))?
             .promisc(false)
             .snaplen(65535)
             .immediate_mode(true)
             .open()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         tracing::info!("Pcap injector bound to interface: {}", interface_name);
 
@@ -132,17 +132,21 @@ impl PacketInjector {
             let raw_packet = Self::build_raw_packet(payload, game_client, server_addr, mac_src, mac_dst);
             let mut cap = handle.lock().unwrap();
             cap.sendpacket(raw_packet)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
 
             self.stats.packets_injected.fetch_add(1, Ordering::Relaxed);
-            self.stats.bytes_injected.fetch_add(payload.len() as u64, Ordering::Relaxed);
+            self.stats
+                .bytes_injected
+                .fetch_add(payload.len() as u64, Ordering::Relaxed);
             return Ok(payload.len());
         }
 
         // Fallback to standard UDP socket
         let sent = self.socket.send_to(payload, game_client).await?;
         self.stats.packets_injected.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_injected.fetch_add(sent as u64, Ordering::Relaxed);
+        self.stats
+            .bytes_injected
+            .fetch_add(sent as u64, Ordering::Relaxed);
         Ok(sent)
     }
 
@@ -165,12 +169,18 @@ impl PacketInjector {
         // ── IPv4 Header (20 bytes) ────────────────────
         let ip_len = (20 + 8 + payload.len()) as u16;
         let mut ipv4 = vec![
-            0x45, 0x00, // Version, IHL, TOS
-            (ip_len >> 8) as u8, (ip_len & 0xFF) as u8, // Total Length
-            0x00, 0x00, // Identification
-            0x00, 0x00, // Flags, Fragment Offset
-            64, 17, // TTL, Protocol (UDP)
-            0x00, 0x00, // Checksum (placeholder)
+            0x45,
+            0x00, // Version, IHL, TOS
+            (ip_len >> 8) as u8,
+            (ip_len & 0xFF) as u8, // Total Length
+            0x00,
+            0x00, // Identification
+            0x00,
+            0x00, // Flags, Fragment Offset
+            64,
+            17, // TTL, Protocol (UDP)
+            0x00,
+            0x00, // Checksum (placeholder)
         ];
         ipv4.extend_from_slice(&src_addr.ip().octets());
         ipv4.extend_from_slice(&dst_addr.ip().octets());
@@ -191,10 +201,14 @@ impl PacketInjector {
         // ── UDP Header (8 bytes) ──────────────────────
         let udp_len = (8 + payload.len()) as u16;
         let udp = vec![
-            (src_addr.port() >> 8) as u8, (src_addr.port() & 0xFF) as u8,
-            (dst_addr.port() >> 8) as u8, (dst_addr.port() & 0xFF) as u8,
-            (udp_len >> 8) as u8, (udp_len & 0xFF) as u8,
-            0x00, 0x00, // Checksum (optional in IPv4, leaving 0)
+            (src_addr.port() >> 8) as u8,
+            (src_addr.port() & 0xFF) as u8,
+            (dst_addr.port() >> 8) as u8,
+            (dst_addr.port() & 0xFF) as u8,
+            (udp_len >> 8) as u8,
+            (udp_len & 0xFF) as u8,
+            0x00,
+            0x00, // Checksum (optional in IPv4, leaving 0)
         ];
         packet.extend_from_slice(&udp);
 

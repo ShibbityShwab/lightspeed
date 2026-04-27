@@ -100,7 +100,7 @@
           <div class="step-number">1</div>
           <div class="step-icon">🎮</div>
           <h3>Launch LightSpeed</h3>
-          <p>Run the lightweight client before your game. It auto-detects Fortnite, CS2, Dota 2, Rust, and more.</p>
+          <p>Run the lightweight client before your game. It auto-detects Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, and more.</p>
         </div>
         <div class="step-arrow">→</div>
         <div class="step">
@@ -186,9 +186,39 @@
           <p>Works with all Dota 2 regions including SEA, India, and South America. Valve network compatible.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
+        <div class="game-card">
+          <div class="game-icon">🔥</div>
+          <h3>Rust</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 28015-28017</span>
+            <span class="game-tag">EAC + Facepunch</span>
+          </div>
+          <p>Direct UDP to community and official servers — no Steam Datagram Relay, ideal for LightSpeed proxying. Compatible with EAC and Facepunch Anti-Hack.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">⚔️</div>
+          <h3>Valorant</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 7000-7500</span>
+            <span class="game-tag">Riot Vanguard</span>
+          </div>
+          <p>Direct UDP to Riot's regional servers worldwide. LightSpeed only reroutes packets transparently — fully compatible with Riot Vanguard's kernel-level anti-cheat.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🎽</div>
+          <h3>Apex Legends</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 37000-37050</span>
+            <span class="game-tag">EasyAntiCheat</span>
+          </div>
+          <p>Direct UDP to EA's data-centre servers across NA, EU, Asia, and OCE. No Steam relay layer — straightforward to proxy. EAC-safe transparent routing.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
       </div>
       <p class="games-more">
-        More games coming: Valorant, Apex Legends, Overwatch 2, League of Legends.
+        More games coming: Overwatch 2, League of Legends, PUBG, and more.
         <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game →</a>
       </p>
     </div>
@@ -415,7 +445,7 @@
         </details>
         <details class="faq-item">
           <summary>What games are supported?</summary>
-          <p>Currently: Fortnite, CS2, and Dota 2 have built-in profiles. Any UDP-based game can work with manual configuration. We're adding Valorant, Apex Legends, Overwatch 2, and League of Legends soon.</p>
+          <p>Currently: Fortnite, CS2, Dota 2, Rust, Valorant, and Apex Legends all have built-in profiles — just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration. We're adding Overwatch 2, League of Legends, and PUBG next.</p>
         </details>
         <details class="faq-item">
           <summary>Is my data safe?</summary>

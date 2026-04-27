@@ -5,9 +5,20 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0-dev] — Unreleased
 
 ### Added (2026-04-27)
+- **Valorant game profile** — `ValorantConfig` in `client/src/games/valorant.rs`
+  - Auto-detects `VALORANT-Win64-Shipping.exe`, port range 7000–7500, Riot Vanguard anti-cheat
+  - CLI: `--game valorant` — no SDR, direct UDP to Riot servers
+  - `game_id::VALORANT = 5` in `protocol/src/control.rs`
+- **Apex Legends game profile** — `ApexConfig` in `client/src/games/apex.rs`
+  - Auto-detects `r5apex.exe` / `r5apex_dx12.exe`, port range 37000–37050, EAC anti-cheat
+  - CLI: `--game apex` (also: `apexlegends`, `apex-legends`) — direct UDP to EA servers
+  - `game_id::APEX = 6` in `protocol/src/control.rs`
+- **Game-registry regression test** — `test_all_registered_games_are_detectable` in `games/mod.rs`
+  - `ALL_GAME_KEYS` const documents every CLI alias; fails CI if a new profile is added to
+    `detect_game()` without also updating the constant. Prevents doc drift.
 - **Rust (Facepunch) game profile** — `RustConfig` in `client/src/games/rust.rs`
   - Auto-detects `RustClient.exe`, port range 28015–28017, EAC + Facepunch Anti-Hack
   - CLI: `--game rust` (also accepts `--game rustgame`)

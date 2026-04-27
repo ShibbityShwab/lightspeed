@@ -32,7 +32,7 @@ Your PC  ──UDP Tunnel──▶  Proxy Node   ──Direct UDP──▶  Game
 | 🛡️ **FEC Protection** | XOR-based Forward Error Correction — recover lost packets without retransmission |
 | 🌐 **WARP Boost** | Optional Cloudflare WARP integration for 5-10ms local route optimization |
 | 🤖 **AI-Powered** | ML route selection via linfa Random Forest (11 network features) |
-| 🎮 **Game Support** | Fortnite, CS2, Dota 2, Rust (and growing) |
+| 🎮 **Game Support** | Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends (and growing) |
 | 🌍 **Global Mesh** | Proxy nodes in US-West (LA) and Asia (Singapore) |
 | 🦀 **Rust** | High-performance async runtime with Tokio, ~500KB RAM per proxy |
 | 📖 **Open Source** | Full transparency, community-driven development |
@@ -65,6 +65,9 @@ Every user runs **their own proxy node**. Set one up on any VPS in under 5 minut
 | Fortnite | EasyAntiCheat | 7000-9000 | ✅ Redirect mode ready |
 | Counter-Strike 2 | VAC | 27015-27050 | ✅ Redirect mode ready |
 | Dota 2 | VAC | 27015-27050 | ✅ Redirect mode ready |
+| Rust (Facepunch) | EAC + Facepunch Anti-Hack | 28015-28017 | ✅ Redirect mode ready |
+| Valorant | Riot Vanguard | 7000-7500 | ✅ Redirect mode ready |
+| Apex Legends | EasyAntiCheat | 37000-37050 | ✅ Redirect mode ready |
 
 ## Installation
 
