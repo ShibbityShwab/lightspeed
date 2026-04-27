@@ -34,7 +34,7 @@
 | Region | Provider | Game Server Coverage | Strategic Value |
 |--------|----------|---------------------|-----------------|
 | **US-West (LA)** | Vultr | Fortnite NA-West, CS2 US-West, Dota 2 US-West | Best Asia peering (206ms from BKK), closest to ExitLag speed |
-| **Asia (SGP)** | Vultr | SEA game servers, FEC multipath relay | 31ms from Bangkok, FEC redundant path, SEA regional coverage |
+| **Asia (SGP)** | Vultr | SEA game servers, FEC multipath path | 31ms from Bangkok, FEC redundant path, SEA regional coverage |
 
 ### Why Vultr (Not OCI)
 
@@ -210,10 +210,10 @@ terraform init && terraform plan && terraform apply
 
 ### Example Mesh (2 nodes)
 
-| Node | Role | Cost |
-|------|------|------|
-| US-West node | Primary proxy | $0 (Vultr credit) |
-| Asia-SE node | FEC multipath + SEA relay | $0 (Vultr credit) |
+| Node | Topology Role | Cost |
+|------|---------------|------|
+| US-West node | Primary US proxy | $0 (Vultr credit) |
+| Asia-SE node | FEC multipath path + SEA coverage | $0 (Vultr credit) |
 
 ### Future Expansion
 

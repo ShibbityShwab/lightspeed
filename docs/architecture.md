@@ -33,12 +33,16 @@
 
 Each user runs their own proxy nodes. This is an example of a 2-node Vultr setup:
 
+> **All nodes are identical.** Both boxes run the same `lightspeed-proxy` binary. The words
+> "primary" and "relay" below are *topology role labels* — not separate node types or
+> products. Any node can serve both roles simultaneously.
+
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                         Your Cloud VPS                           │
 │                                                                  │
 │  ┌────────────────────┐          ┌────────────────────┐         │
-│  │  proxy-us-west      │          │  relay-asia-se      │         │
+│  │  proxy-us-west      │          │  proxy-asia-se      │         │
 │  │  <your-ip-1>        │◄────────▶│  <your-ip-2>        │         │
 │  │  US-West (LA)       │          │  Asia (Singapore)   │         │
 │  │                     │          │                     │         │
@@ -46,8 +50,9 @@ Each user runs their own proxy nodes. This is an example of a 2-node Vultr setup
 │  │  HTTP :8080 (health)│          │  HTTP :8080 (health)│         │
 │  │  ~500KB RAM         │          │  ~500KB RAM         │         │
 │  │                     │          │                     │         │
-│  │  Role: Primary      │          │  Role: FEC multipath│         │
-│  │  proxy for US games │          │  + SEA relay        │         │
+│  │  Topology role:     │          │  Topology role:     │         │
+│  │  primary US proxy   │          │  FEC multipath path │         │
+│  │  (same binary)      │          │  + SEA coverage     │         │
 │  └────────────────────┘          └────────────────────┘         │
 │                                                                  │
 │  Deployment: Native binary + systemd (no Docker overhead)        │

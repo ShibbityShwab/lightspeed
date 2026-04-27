@@ -9,12 +9,12 @@
 
 | Key | Value |
 |-----|-------|
-| **Active Workflow** | WF-007 Refinement & Hardening — CI Hardening Pass |
-| **Current Step** | ✅ ALL ITEMS COMPLETE — A through K + CI fully green |
+| **Active Workflow** | WF-007 Refinement & Hardening — ✅ COMPLETE + v0.4.0 RELEASED ✅ |
+| **Current Step** | ✅ v0.4.0 GitHub Release published — 5 platform archives live |
 | **Active Agents** | RustDev, QAEngineer |
 | **Blocked On** | Nothing |
-| **Last Checkpoint** | 2026-04-27T16:26:00+07:00 |
-| **Next Action** | All CI workflows green on HEAD `da29304`. Awaiting maintainer direction for next sprint/workflow. |
+| **Last Checkpoint** | 2026-04-27T17:01:00+07:00 |
+| **Next Action** | Docs-only cleanup complete (D-020). All nodes confirmed as single `lightspeed-proxy` binary. Next sprint: WF-008 (US-East / EU-West mesh expansion) or maintainer-directed refinement. |
 | **WAT Version** | 0.3.9 |
 
 ---
@@ -93,10 +93,13 @@
 
 ## Live Infrastructure (2-Node Vultr Mesh)
 
-| Node | IP | Region | Latency (BKK) | Code | Role |
-|------|----|--------|----------------|------|------|
-| **proxy-lax** | 149.28.84.139 | us-west-lax | 206ms | v0.4.0-dev | Primary proxy |
-| **relay-sgp** | 149.28.144.74 | asia-sgp | 31ms | v0.4.0-dev | FEC multipath / SEA relay |
+> Both nodes run the **same `lightspeed-proxy` binary**. "Topology Role" is an informational
+> label only — it describes how the node is used in the mesh, not a separate product or binary.
+
+| Node | IP | Region | Latency (BKK) | Code | Topology Role |
+|------|----|--------|----------------|------|---------------|
+| **proxy-lax** | 149.28.84.139 | us-west-lax | 206ms | v0.4.0 | Primary US proxy |
+| **proxy-sgp** | 149.28.144.74 | asia-sgp | 31ms | v0.4.0 | FEC multipath path / SEA coverage |
 
 | Resource | Value |
 |----------|-------|
