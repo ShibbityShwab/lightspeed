@@ -33,6 +33,9 @@ pub struct EngineStatus {
     pub packets_sent: u64,
     /// Total keepalive echo packets received this session.
     pub packets_received: u64,
+    /// Generation counter — incremented each time `connect()` is called.
+    /// Used to prevent old tasks from overwriting status after reconnect.
+    pub keepalive_generation: u64,
 
     // ── Redirect / game routing ───────────────────────────────────
     /// Whether a game redirect is actively running.
@@ -90,17 +93,19 @@ impl LightSpeedEngine {
         self.disconnect();
         let (tx, rx) = oneshot::channel();
         self.shutdown_tx = Some(tx);
-        {
+        let generation = {
             let mut s = self.status.lock().unwrap();
+            s.keepalive_generation = s.keepalive_generation.wrapping_add(1);
             s.connected = true;
             s.proxy_addr = proxy_addr.to_string();
             s.packets_sent = 0;
             s.packets_received = 0;
             s.rtt_history.clear();
             s.latest_rtt_ms = 0.0;
-        }
+            s.keepalive_generation
+        };
         let status = Arc::clone(&self.status);
-        self.rt.spawn(run_keepalive(proxy_addr, status, rx));
+        self.rt.spawn(run_keepalive(proxy_addr, status, rx, generation));
     }
 
     /// Stop the keepalive loop.
@@ -215,14 +220,22 @@ impl Drop for LightSpeedEngine {
 
 // ── Background keepalive task ─────────────────────────────────────────────
 
-async fn run_keepalive(proxy: SocketAddrV4, status: Shared, mut rx: oneshot::Receiver<()>) {
+async fn run_keepalive(
+    proxy: SocketAddrV4,
+    status: Shared,
+    mut rx: oneshot::Receiver<()>,
+    generation: u64,
+) {
     let bind = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
     let socket = match UdpSocket::bind(bind).await {
         Ok(s) => Arc::new(s),
         Err(e) => {
             tracing::error!("GUI engine: socket bind failed: {}", e);
+            // Only mark disconnected if we're still the current generation.
             if let Ok(mut s) = status.lock() {
-                s.connected = false;
+                if s.keepalive_generation == generation {
+                    s.connected = false;
+                }
             }
             return;
         }
@@ -278,7 +291,12 @@ async fn run_keepalive(proxy: SocketAddrV4, status: Shared, mut rx: oneshot::Rec
         }
     }
 
+    // Only clear connected status if we are still the active generation.
+    // If connect() was called again while we were running, new gen already
+    // set connected=true and we must not clobber it.
     if let Ok(mut s) = status.lock() {
-        s.connected = false;
+        if s.keepalive_generation == generation {
+            s.connected = false;
+        }
     }
 }

@@ -21,3 +21,4 @@ anyhow = { workspace = true }
 tray-icon = "0.17"
 eframe = { version = "0.29", features = ["default"] }
 egui_plot = "0.29"
+webbrowser = "1"

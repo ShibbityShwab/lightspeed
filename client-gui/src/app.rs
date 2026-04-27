@@ -3,6 +3,7 @@
 //! This module is only compiled on Windows (`#[cfg(windows)]` in main.rs).
 
 use std::net::SocketAddrV4;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,9 +17,18 @@ use tray_icon::{
 
 // ── Proxy nodes ────────────────────────────────────────────────────────────
 
-const PROXIES: &[(&str, &str)] = &[
-    ("149.28.84.139:4434", "LAX — US West (206ms)"),
-    ("149.28.144.74:4434", "SGP — Singapore (31ms)"),
+/// (addr, label, recommended-for hint)
+const PROXIES: &[(&str, &str, &str)] = &[
+    (
+        "149.28.84.139:4434",
+        "LAX — US West",
+        "Best for NA/EU servers (you are 206ms away)",
+    ),
+    (
+        "149.28.144.74:4434",
+        "SGP — Singapore",
+        "Best for SEA/AU servers (you are 31ms away)",
+    ),
 ];
 
 // ── Game list ──────────────────────────────────────────────────────────────
@@ -50,6 +60,21 @@ pub struct LightSpeedApp {
     status: EngineStatus,
     _tray: TrayIcon,
 
+    // ── Tray event wakeup flags (set from tray callbacks, read in update) ─
+    // These allow tray events to wake the hidden egui window.
+    pending_show: Arc<AtomicBool>,
+    pending_connect: Arc<AtomicBool>,
+    pending_disconnect: Arc<AtomicBool>,
+    pending_quit: Arc<AtomicBool>,
+    pending_tray_dblclick: Arc<AtomicBool>,
+    handlers_registered: bool,
+
+    // ── Tray menu IDs (needed to identify events in handler) ─────────────
+    id_show: tray_icon::menu::MenuId,
+    id_connect: tray_icon::menu::MenuId,
+    id_disconnect: tray_icon::menu::MenuId,
+    id_quit: tray_icon::menu::MenuId,
+
     // ── Proxy connection ─────────────────────────────────────────
     selected_proxy_idx: usize,
     show_connect_dialog: bool,
@@ -61,11 +86,8 @@ pub struct LightSpeedApp {
     fec_enabled: bool,
     auto_detected_game: Option<String>,
 
-    // ── Tray menu IDs ────────────────────────────────────────────
-    id_show: tray_icon::menu::MenuId,
-    id_connect: tray_icon::menu::MenuId,
-    id_disconnect: tray_icon::menu::MenuId,
-    id_quit: tray_icon::menu::MenuId,
+    // ── System state ─────────────────────────────────────────────
+    npcap_installed: bool,
 }
 
 impl LightSpeedApp {
@@ -75,20 +97,27 @@ impl LightSpeedApp {
 
         // Try to auto-detect a running game at startup.
         let auto_detected_game = try_auto_detect_game();
-        // Select matching game in the list if detected.
         let selected_game_idx = auto_detected_game
             .as_deref()
-            .and_then(|name| {
-                GAMES.iter().position(|(key, _, _)| {
-                    key.eq_ignore_ascii_case(name)
-                })
-            })
-            .unwrap_or(0); // default to Rust
+            .and_then(|name| GAMES.iter().position(|(key, _, _)| key.eq_ignore_ascii_case(name)))
+            .unwrap_or(0);
+
+        let npcap_installed = check_npcap();
 
         Self {
             engine,
             status,
             _tray: tray,
+            pending_show: Arc::new(AtomicBool::new(false)),
+            pending_connect: Arc::new(AtomicBool::new(false)),
+            pending_disconnect: Arc::new(AtomicBool::new(false)),
+            pending_quit: Arc::new(AtomicBool::new(false)),
+            pending_tray_dblclick: Arc::new(AtomicBool::new(false)),
+            handlers_registered: false,
+            id_show,
+            id_connect,
+            id_disconnect,
+            id_quit,
             selected_proxy_idx: 0,
             show_connect_dialog: false,
             custom_proxy_input: String::new(),
@@ -96,10 +125,7 @@ impl LightSpeedApp {
             server_input: String::new(),
             fec_enabled: false,
             auto_detected_game,
-            id_show,
-            id_connect,
-            id_disconnect,
-            id_quit,
+            npcap_installed,
         }
     }
 
@@ -108,6 +134,45 @@ impl LightSpeedApp {
             .0
             .parse()
             .expect("proxy addr is always valid")
+    }
+
+    /// Register tray event handlers that wake the event loop.
+    /// Must be called inside `update()` the first time we have a `ctx`.
+    fn register_tray_handlers(&mut self, ctx: &egui::Context) {
+        // ── Menu events ──────────────────────────────────────────────────
+        let show_flag = Arc::clone(&self.pending_show);
+        let connect_flag = Arc::clone(&self.pending_connect);
+        let disconnect_flag = Arc::clone(&self.pending_disconnect);
+        let quit_flag = Arc::clone(&self.pending_quit);
+        let id_show = self.id_show.clone();
+        let id_connect = self.id_connect.clone();
+        let id_disconnect = self.id_disconnect.clone();
+        let id_quit = self.id_quit.clone();
+        let ctx1 = ctx.clone();
+
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            if event.id == id_show {
+                show_flag.store(true, Ordering::Relaxed);
+            } else if event.id == id_connect {
+                connect_flag.store(true, Ordering::Relaxed);
+            } else if event.id == id_disconnect {
+                disconnect_flag.store(true, Ordering::Relaxed);
+            } else if event.id == id_quit {
+                quit_flag.store(true, Ordering::Relaxed);
+            }
+            // Wake the event loop so update() runs immediately.
+            ctx1.request_repaint();
+        }));
+
+        // ── Tray icon double-click ────────────────────────────────────────
+        let dbl_flag = Arc::clone(&self.pending_tray_dblclick);
+        let ctx2 = ctx.clone();
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            if matches!(event, TrayIconEvent::DoubleClick { .. }) {
+                dbl_flag.store(true, Ordering::Relaxed);
+            }
+            ctx2.request_repaint();
+        }));
     }
 }
 
@@ -167,28 +232,31 @@ fn solid_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
 
 impl eframe::App for LightSpeedApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // ── Poll tray icon events ─────────────────────────────────────────
-        if let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            if matches!(event, TrayIconEvent::DoubleClick { .. }) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
+        // ── Register tray event handlers on first frame ───────────────────
+        // Must happen here (not new()) because we need ctx.
+        if !self.handlers_registered {
+            self.handlers_registered = true;
+            self.register_tray_handlers(ctx);
         }
 
-        // ── Poll tray menu events ─────────────────────────────────────────
-        if let Ok(event) = MenuEvent::receiver().try_recv() {
-            let id = &event.id;
-            if id == &self.id_show {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            } else if id == &self.id_connect {
-                let proxy = self.selected_proxy_addr();
-                self.engine.lock().unwrap().connect(proxy);
-            } else if id == &self.id_disconnect {
-                self.engine.lock().unwrap().disconnect();
-            } else if id == &self.id_quit {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+        // ── Drain tray/menu pending events ────────────────────────────────
+        // These flags are set by background callbacks that also call request_repaint(),
+        // so update() is guaranteed to run after each event.
+        if self.pending_tray_dblclick.swap(false, Ordering::Relaxed)
+            || self.pending_show.swap(false, Ordering::Relaxed)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        if self.pending_connect.swap(false, Ordering::Relaxed) {
+            let proxy = self.selected_proxy_addr();
+            self.engine.lock().unwrap().connect(proxy);
+        }
+        if self.pending_disconnect.swap(false, Ordering::Relaxed) {
+            self.engine.lock().unwrap().disconnect();
+        }
+        if self.pending_quit.swap(false, Ordering::Relaxed) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
         // ── Intercept close → hide to tray ───────────────────────────────
@@ -220,30 +288,33 @@ impl eframe::App for LightSpeedApp {
 
             // ── Proxy selector ────────────────────────────────────────────
             ui.horizontal(|ui| {
-                ui.label("Proxy:");
+                ui.label("Proxy node:");
                 let prev = self.selected_proxy_idx;
-                for (i, (_, label)) in PROXIES.iter().enumerate() {
-                    ui.selectable_value(&mut self.selected_proxy_idx, i, *label);
+                for (i, (_, label, hint)) in PROXIES.iter().enumerate() {
+                    let btn = ui.selectable_value(&mut self.selected_proxy_idx, i, *label);
+                    btn.on_hover_text(*hint);
                 }
                 if self.selected_proxy_idx != prev {
-                    // Reconnect keepalive to new proxy
+                    // Reconnect keepalive to new proxy (generation counter prevents race).
                     let proxy = self.selected_proxy_addr();
                     self.engine.lock().unwrap().connect(proxy);
                 }
             });
 
-            // ── RTT + stats ───────────────────────────────────────────────
+            // Selected proxy RTT
             ui.horizontal(|ui| {
                 ui.label("Proxy RTT:");
                 if self.status.connected && self.status.latest_rtt_ms > 0.0 {
                     let rtt = self.status.latest_rtt_ms;
                     ui.colored_label(rtt_colour(rtt), format!("{:.1} ms", rtt));
-                } else {
+                } else if self.status.connected {
                     ui.weak("measuring…");
+                } else {
+                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "offline");
                 }
                 ui.separator();
                 ui.label(format!(
-                    "KA packets: {} / {}",
+                    "KA: {} ↑ / {} ↓",
                     self.status.packets_sent, self.status.packets_received
                 ));
             });
@@ -261,15 +332,14 @@ impl eframe::App for LightSpeedApp {
                     .color(egui::Color32::from_rgb(100, 180, 255))
                     .name("RTT (ms)");
                 Plot::new("rtt_plot")
-                    .height(100.0)
+                    .height(80.0)
                     .allow_drag(false)
                     .allow_zoom(false)
                     .allow_scroll(false)
                     .show_axes([false, true])
                     .show(ui, |plot_ui| plot_ui.line(line));
             } else {
-                ui.weak("Waiting for first keepalive echo…");
-                ui.add_space(100.0);
+                ui.add_space(80.0);
             }
 
             ui.separator();
@@ -281,14 +351,10 @@ impl eframe::App for LightSpeedApp {
             if self.status.redirect_active {
                 // ── ACTIVE state ──────────────────────────────────────────
                 ui.horizontal(|ui| {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(80, 200, 120),
-                        "● ACTIVE",
-                    );
+                    ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "● ACTIVE");
                     ui.label(format!(
                         " — {} → 127.0.0.1:{}",
-                        self.status.redirect_game,
-                        self.status.redirect_local_port,
+                        self.status.redirect_game, self.status.redirect_local_port,
                     ));
                 });
                 ui.label(format!("Server:  {}", self.status.redirect_server));
@@ -312,18 +378,15 @@ impl eframe::App for LightSpeedApp {
 
                 if self.status.redirect_fec {
                     ui.label(format!(
-                        "FEC — parity sent: {}  recovered: {}",
-                        self.status.redirect_fec_parity,
-                        self.status.redirect_fec_recovered,
+                        "FEC — parity: {}  recovered: {}",
+                        self.status.redirect_fec_parity, self.status.redirect_fec_recovered,
                     ));
                 }
 
-                // Show the connect instruction for the game
+                // In-game connect instruction
                 ui.add_space(4.0);
-                let instruction = connect_instruction(
-                    self.selected_game_idx,
-                    self.status.redirect_local_port,
-                );
+                let instruction =
+                    connect_instruction(self.selected_game_idx, self.status.redirect_local_port);
                 egui::Frame::none()
                     .fill(egui::Color32::from_rgb(30, 50, 30))
                     .rounding(4.0)
@@ -334,15 +397,15 @@ impl eframe::App for LightSpeedApp {
 
                 ui.add_space(6.0);
                 if ui
-                    .add(egui::Button::new("■  Stop optimizing").fill(
-                        egui::Color32::from_rgb(180, 50, 50),
-                    ))
+                    .add(
+                        egui::Button::new("■  Stop optimizing")
+                            .fill(egui::Color32::from_rgb(180, 50, 50)),
+                    )
                     .clicked()
                 {
                     self.engine.lock().unwrap().stop_redirect();
                 }
 
-                // Show error if any
                 if let Some(ref err) = self.status.redirect_error {
                     ui.add_space(4.0);
                     ui.colored_label(
@@ -356,10 +419,7 @@ impl eframe::App for LightSpeedApp {
                 // Auto-detect banner
                 if let Some(ref detected) = self.auto_detected_game {
                     ui.horizontal(|ui| {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(80, 200, 120),
-                            "🟢 Auto-detected:",
-                        );
+                        ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "🟢 Auto-detected:");
                         ui.label(detected);
                     });
                 } else {
@@ -368,9 +428,9 @@ impl eframe::App for LightSpeedApp {
                         if ui.small_button("🔄 Rescan").clicked() {
                             self.auto_detected_game = try_auto_detect_game();
                             if let Some(ref name) = self.auto_detected_game {
-                                if let Some(idx) = GAMES.iter().position(|(k, _, _)| {
-                                    k.eq_ignore_ascii_case(name)
-                                }) {
+                                if let Some(idx) =
+                                    GAMES.iter().position(|(k, _, _)| k.eq_ignore_ascii_case(name))
+                                {
                                     self.selected_game_idx = idx;
                                 }
                             }
@@ -386,16 +446,12 @@ impl eframe::App for LightSpeedApp {
                         .width(200.0)
                         .show_ui(ui, |ui| {
                             for (i, (_, display, _)) in GAMES.iter().enumerate() {
-                                ui.selectable_value(
-                                    &mut self.selected_game_idx,
-                                    i,
-                                    *display,
-                                );
+                                ui.selectable_value(&mut self.selected_game_idx, i, *display);
                             }
                         });
                 });
 
-                // Server IP input
+                // Server IP input + Npcap notice
                 ui.horizontal(|ui| {
                     ui.label("Server:");
                     let default_port = GAMES[self.selected_game_idx].2;
@@ -406,26 +462,46 @@ impl eframe::App for LightSpeedApp {
                     );
                 });
 
+                // Npcap banner — explain why server IP is needed and offer install
+                if !self.npcap_installed {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 160, 50),
+                            "ℹ Server IP required.",
+                        );
+                        ui.weak("Install Npcap for auto-capture mode (no IP needed).")
+                            .on_hover_text(
+                                "Without Npcap, LightSpeed can't transparently intercept packets.\n\
+                                 With Npcap installed (free), you can use --capture mode and just \
+                                 play normally — no server IP or console command required.",
+                            );
+                        if ui.small_button("Get Npcap ↗").clicked() {
+                            let _ = webbrowser::open("https://npcap.com/#download");
+                        }
+                    });
+                }
+
                 // FEC toggle
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.fec_enabled, "FEC (packet loss recovery, +25% bandwidth)");
+                    ui.checkbox(
+                        &mut self.fec_enabled,
+                        "FEC (packet loss recovery, +25% bandwidth)",
+                    );
                 });
 
                 ui.add_space(8.0);
 
                 // Start button
                 let server_valid = parse_server_addr(&self.server_input).is_some();
-                let btn = egui::Button::new("▶  Start optimizing")
-                    .fill(if server_valid {
-                        egui::Color32::from_rgb(40, 120, 60)
-                    } else {
-                        egui::Color32::from_rgb(60, 60, 60)
-                    });
+                let btn = egui::Button::new("▶  Start optimizing").fill(if server_valid {
+                    egui::Color32::from_rgb(40, 120, 60)
+                } else {
+                    egui::Color32::from_rgb(60, 60, 60)
+                });
 
                 if ui.add_enabled(server_valid, btn).clicked() {
                     if let Some(server_addr) = parse_server_addr(&self.server_input) {
-                        let (game_key, game_display, default_port) =
-                            GAMES[self.selected_game_idx];
+                        let (game_key, game_display, default_port) = GAMES[self.selected_game_idx];
                         let local_port = server_addr.port().max(default_port);
                         let proxy = self.selected_proxy_addr();
                         self.engine.lock().unwrap().start_redirect(
@@ -465,7 +541,6 @@ impl eframe::App for LightSpeedApp {
                     let proxy = self.selected_proxy_addr();
                     self.engine.lock().unwrap().connect(proxy);
                 }
-
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("Hide to tray").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -486,9 +561,7 @@ impl eframe::App for LightSpeedApp {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         if ui.button("Connect").clicked() {
-                            if let Ok(addr) =
-                                self.custom_proxy_input.parse::<SocketAddrV4>()
-                            {
+                            if let Ok(addr) = self.custom_proxy_input.parse::<SocketAddrV4>() {
                                 self.engine.lock().unwrap().connect(addr);
                                 self.show_connect_dialog = false;
                             }
@@ -500,7 +573,8 @@ impl eframe::App for LightSpeedApp {
                 });
         }
 
-        // Repaint at ~2 Hz while redirect is active (for live counters), 1 Hz otherwise.
+        // Repaint at ~2 Hz while redirect is active for live counters; 1 Hz otherwise.
+        // (Tray events still trigger immediate repaint via request_repaint() in handlers.)
         let repaint_interval = if self.status.redirect_active {
             Duration::from_millis(500)
         } else {
@@ -522,54 +596,29 @@ fn rtt_colour(rtt_ms: f64) -> egui::Color32 {
     }
 }
 
-/// Parse a "host:port" or "ip:port" string into a SocketAddrV4.
 fn parse_server_addr(s: &str) -> Option<SocketAddrV4> {
     if s.is_empty() {
         return None;
     }
-    // Try direct parse first (ip:port).
-    if let Ok(addr) = s.parse::<SocketAddrV4>() {
-        return Some(addr);
-    }
-    // If missing port, try appending the default.
-    None
+    s.parse::<SocketAddrV4>().ok()
 }
 
-/// Returns the in-game connect instruction for the active game.
 fn connect_instruction(game_idx: usize, local_port: u16) -> String {
     let (key, _, _) = GAMES[game_idx];
     match key {
-        "rust" => format!(
-            "In Rust  F1 console:  client.connect 127.0.0.1:{}",
-            local_port
-        ),
-        "cs2" => format!(
-            "In CS2 console:  connect 127.0.0.1:{}",
-            local_port
-        ),
-        "dota2" => format!(
-            "In Dota 2 console:  connect 127.0.0.1:{}",
-            local_port
-        ),
-        _ => format!(
-            "Direct your game to connect to:  127.0.0.1:{}",
-            local_port
-        ),
+        "rust" => format!("In Rust  F1 console:  client.connect 127.0.0.1:{}", local_port),
+        "cs2" => format!("In CS2 console:  connect 127.0.0.1:{}", local_port),
+        "dota2" => format!("In Dota 2 console:  connect 127.0.0.1:{}", local_port),
+        _ => format!("Connect your game to:  127.0.0.1:{}", local_port),
     }
 }
 
-/// Try to auto-detect a running supported game.
-/// Returns the game key (e.g. "rust") or None.
 fn try_auto_detect_game() -> Option<String> {
-    // Use the same detection logic as the CLI.
     match lightspeed_client::games::auto_detect() {
         Ok(game) => {
-            // Map display name back to key for our GAMES list.
             let name_lower = game.name().to_lowercase();
             let key = GAMES.iter().find_map(|(k, display, _)| {
-                if display.to_lowercase().contains(&name_lower)
-                    || name_lower.contains(k)
-                {
+                if display.to_lowercase().contains(&name_lower) || name_lower.contains(k) {
                     Some(*k)
                 } else {
                     None
@@ -579,4 +628,15 @@ fn try_auto_detect_game() -> Option<String> {
         }
         Err(_) => None,
     }
+}
+
+/// Check if Npcap is installed on this Windows system.
+fn check_npcap() -> bool {
+    // Npcap registers itself as a Windows service. If the service exists, it's installed.
+    use std::process::Command;
+    Command::new("sc")
+        .args(["query", "npcap"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
