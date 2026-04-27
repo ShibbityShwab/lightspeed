@@ -83,6 +83,64 @@ async fn main() -> anyhow::Result<()> {
         config::Config::default()
     });
 
+    // ── Cloudflare WARP manager (used by several early-exit paths) ─
+    let mut warp_manager = warp::WarpManager::new();
+
+    // ── --warp-status: show WARP info and exit ────────────────────
+    //
+    // Must run BEFORE game auto-detection to avoid a spurious
+    // "No supported game detected" warning and the ~300 ms tasklist scan.
+    if cli.warp_status {
+        if !warp_manager.is_installed() {
+            info!("🌐 Cloudflare WARP: Not installed");
+            info!("   Install: {}", warp::install_instructions());
+        } else {
+            let warp_info = warp_manager.info();
+            info!("🌐 Cloudflare WARP Status");
+            info!("   Status:   {}", warp_info.status);
+            info!(
+                "   Protocol: {}",
+                warp_info.protocol.unwrap_or_else(|| "unknown".into())
+            );
+            info!(
+                "   Mode:     {}",
+                warp_info.mode.unwrap_or_else(|| "unknown".into())
+            );
+            let proxy_ips = vec![
+                Ipv4Addr::new(149, 28, 84, 139), // Vultr LA
+                Ipv4Addr::new(149, 28, 144, 74), // Vultr SGP
+            ];
+            warp_manager.print_summary(&proxy_ips);
+            if let Some(stats) = warp_manager.tunnel_stats() {
+                info!("   Tunnel stats:\n{}", stats);
+            }
+        }
+        return Ok(());
+    }
+
+    // ── --list-interfaces ─────────────────────────────────────────
+    //
+    // Also runs before game detection — no point scanning processes
+    // when the user only wants to list NICs.
+    if cli.list_interfaces {
+        info!("🔌 Available network interfaces:");
+        let interfaces = capture::list_interfaces();
+        if interfaces.is_empty() {
+            info!("   (none found — pcap-capture feature may not be enabled)");
+            info!("   Rebuild with: cargo build --features pcap-capture");
+        } else {
+            for iface in &interfaces {
+                let status = if iface.is_up { "UP" } else { "DOWN" };
+                let kind = if iface.is_loopback { " (loopback)" } else { "" };
+                info!(
+                    "   • {} [{}]{} — {}",
+                    iface.name, status, kind, iface.description
+                );
+            }
+        }
+        return Ok(());
+    }
+
     // ── Game detection ────────────────────────────────────────────
     let game: Option<Box<dyn games::GameConfig>> = match cli.game.as_deref() {
         Some(name) => {
@@ -114,26 +172,6 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // ── --list-interfaces ─────────────────────────────────────────
-    if cli.list_interfaces {
-        info!("🔌 Available network interfaces:");
-        let interfaces = capture::list_interfaces();
-        if interfaces.is_empty() {
-            info!("   (none found — pcap-capture feature may not be enabled)");
-            info!("   Rebuild with: cargo build --features pcap-capture");
-        } else {
-            for iface in &interfaces {
-                let status = if iface.is_up { "UP" } else { "DOWN" };
-                let kind = if iface.is_loopback { " (loopback)" } else { "" };
-                info!(
-                    "   • {} [{}]{} — {}",
-                    iface.name, status, kind, iface.description
-                );
-            }
-        }
-        return Ok(());
-    }
-
     // ── --dry-run ─────────────────────────────────────────────────
     if cli.dry_run {
         info!("Dry run mode — showing configuration and exiting");
@@ -148,36 +186,6 @@ async fn main() -> anyhow::Result<()> {
     //
     // WARP routes traffic through Cloudflare's NTT backbone, bypassing
     // ISP routing inefficiencies. Free 5-10 ms improvement on most paths.
-    let mut warp_manager = warp::WarpManager::new();
-
-    // --warp-status: show WARP info and exit
-    if cli.warp_status {
-        if !warp_manager.is_installed() {
-            info!("🌐 Cloudflare WARP: Not installed");
-            info!("   Install: {}", warp::install_instructions());
-        } else {
-            let warp_info = warp_manager.info();
-            info!("🌐 Cloudflare WARP Status");
-            info!("   Status:   {}", warp_info.status);
-            info!(
-                "   Protocol: {}",
-                warp_info.protocol.unwrap_or_else(|| "unknown".into())
-            );
-            info!(
-                "   Mode:     {}",
-                warp_info.mode.unwrap_or_else(|| "unknown".into())
-            );
-            let proxy_ips = vec![
-                Ipv4Addr::new(149, 28, 84, 139), // Vultr LA
-                Ipv4Addr::new(149, 28, 144, 74), // Vultr SGP
-            ];
-            warp_manager.print_summary(&proxy_ips);
-            if let Some(stats) = warp_manager.tunnel_stats() {
-                info!("   Tunnel stats:\n{}", stats);
-            }
-        }
-        return Ok(());
-    }
 
     if cli.warp && !cli.no_warp {
         if !warp_manager.is_installed() {

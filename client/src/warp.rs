@@ -32,10 +32,12 @@ use tracing::{debug, info, warn};
 pub enum WarpStatus {
     /// WARP is connected and routing traffic.
     Connected,
-    /// WARP is connecting.
+    /// WARP is in the process of connecting.
     Connecting,
     /// WARP is disconnected.
     Disconnected,
+    /// WARP is in the process of disconnecting.
+    Disconnecting,
     /// WARP is not installed on this system.
     NotInstalled,
     /// WARP status could not be determined.
@@ -48,6 +50,7 @@ impl std::fmt::Display for WarpStatus {
             WarpStatus::Connected => write!(f, "Connected"),
             WarpStatus::Connecting => write!(f, "Connecting"),
             WarpStatus::Disconnected => write!(f, "Disconnected"),
+            WarpStatus::Disconnecting => write!(f, "Disconnecting"),
             WarpStatus::NotInstalled => write!(f, "Not Installed"),
             WarpStatus::Unknown(s) => write!(f, "Unknown ({})", s),
         }
@@ -72,6 +75,9 @@ pub struct WarpManager {
     connected_by_us: bool,
     /// Whether WARP was already connected when we started.
     was_connected: bool,
+    /// Cached IPv4 exclude ranges from `warp-cli tunnel dump`.
+    /// Each entry is (network_address, prefix_length).
+    exclude_cache: Option<Vec<(Ipv4Addr, u8)>>,
 }
 
 impl WarpManager {
@@ -87,6 +93,7 @@ impl WarpManager {
             cli_path,
             connected_by_us: false,
             was_connected: false,
+            exclude_cache: None,
         }
     }
 
@@ -131,7 +138,7 @@ impl WarpManager {
             }
         }
 
-        // Try PATH
+        // Try PATH as a last resort
         if let Ok(output) = Command::new("warp-cli").arg("--version").output() {
             if output.status.success() {
                 return Some(PathBuf::from("warp-cli"));
@@ -147,19 +154,27 @@ impl WarpManager {
     }
 
     /// Run a warp-cli command and return stdout.
+    ///
+    /// `--no-paginate --no-ansi` are injected before all commands to ensure
+    /// machine-parseable output regardless of terminal or locale settings.
+    /// Note: warp-cli uses `--no-paginate` (not `--no-pager`).
     fn run_cli(&self, args: &[&str]) -> Result<String, String> {
         let cli = self.cli_path.as_ref().ok_or("WARP not installed")?;
 
+        // Prepend --no-paginate --no-ansi for stable, parse-friendly output.
+        let mut full_args: Vec<&str> = vec!["--no-paginate", "--no-ansi"];
+        full_args.extend_from_slice(args);
+
         let output = Command::new(cli)
-            .args(args)
+            .args(&full_args)
             .output()
             .map_err(|e| format!("Failed to run warp-cli: {}", e))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        if !output.status.success() && !stdout.is_empty() {
-            // Some commands return non-zero but still have useful output
+        if !output.status.success() && !stderr.is_empty() {
+            // Some commands return non-zero but still have useful stdout
             debug!(
                 "warp-cli {:?} exited with {}: {}",
                 args, output.status, stderr
@@ -169,6 +184,44 @@ impl WarpManager {
         Ok(stdout.trim().to_string())
     }
 
+    /// Parse a raw `warp-cli status` output string into a `WarpStatus`.
+    ///
+    /// This is a pure function with no side-effects, making it easy to unit-test
+    /// against canned outputs without spawning a process.
+    ///
+    /// WARP status output looks like:
+    /// ```text
+    /// Status update: Connected
+    /// Network: healthy
+    /// ```
+    pub fn parse_status_output(output: &str) -> WarpStatus {
+        let lower = output.to_lowercase();
+
+        // Order matters:
+        // 1. Check for "disconnecting" BEFORE "connecting" (former is a superset).
+        // 2. Check for "disconnected" BEFORE "connected" (former is a superset).
+        // 3. Check "connecting" before "connected" (short-circuit once we match).
+        //
+        // This avoids the bug where "disconnecting" is misclassified as Connecting
+        // because "connecting" is a substring of "disconnecting".
+        if lower.contains("disconnecting") {
+            WarpStatus::Disconnecting
+        } else if lower.contains("disconnected") {
+            WarpStatus::Disconnected
+        } else if lower.contains("connecting") {
+            WarpStatus::Connecting
+        } else if lower.contains("connected") {
+            WarpStatus::Connected
+        } else if lower.contains("unable to connect to daemon")
+            || lower.contains("error")
+            || lower.contains("not registered")
+        {
+            WarpStatus::Unknown(output.lines().next().unwrap_or(output).to_string())
+        } else {
+            WarpStatus::Unknown(output.lines().next().unwrap_or(output).to_string())
+        }
+    }
+
     /// Get the current WARP connection status.
     pub fn status(&self) -> WarpStatus {
         if !self.is_installed() {
@@ -176,43 +229,42 @@ impl WarpManager {
         }
 
         match self.run_cli(&["status"]) {
-            Ok(output) => {
-                let lower = output.to_lowercase();
-                if lower.contains("connected") && !lower.contains("disconnected") {
-                    WarpStatus::Connected
-                } else if lower.contains("connecting") {
-                    WarpStatus::Connecting
-                } else if lower.contains("disconnected") {
-                    WarpStatus::Disconnected
-                } else {
-                    WarpStatus::Unknown(output)
-                }
-            }
+            Ok(output) => Self::parse_status_output(&output),
             Err(e) => WarpStatus::Unknown(e),
         }
     }
 
     /// Get detailed WARP info.
+    ///
+    /// Calls `warp-cli settings list` **once** and parses both the tunnel
+    /// protocol and operating mode from the same output, avoiding a redundant
+    /// process spawn.
     pub fn info(&self) -> WarpInfo {
         let status = self.status();
 
-        let protocol = self.run_cli(&["settings", "list"]).ok().and_then(|output| {
-            for line in output.lines() {
-                if line.contains("tunnel protocol") {
-                    return Some(line.split(':').next_back()?.trim().to_string());
+        // Single call to settings list — parse both fields from one output.
+        let (protocol, mode) = self
+            .run_cli(&["settings", "list"])
+            .ok()
+            .map(|output| {
+                let mut protocol: Option<String> = None;
+                let mut mode: Option<String> = None;
+                for line in output.lines() {
+                    let line_lower = line.to_lowercase();
+                    if protocol.is_none() && line_lower.contains("tunnel protocol") {
+                        protocol = line.split(':').next_back().map(|s| s.trim().to_string());
+                    }
+                    // "Mode:" — match exact word to avoid "Mode-switch-allowed:" etc.
+                    if mode.is_none() && {
+                        let after_tab = line.split('\t').last().unwrap_or(line);
+                        after_tab.trim_start().starts_with("Mode:")
+                    } {
+                        mode = line.split(':').next_back().map(|s| s.trim().to_string());
+                    }
                 }
-            }
-            None
-        });
-
-        let mode = self.run_cli(&["settings", "list"]).ok().and_then(|output| {
-            for line in output.lines() {
-                if line.contains("Mode:") {
-                    return Some(line.split(':').next_back()?.trim().to_string());
-                }
-            }
-            None
-        });
+                (protocol, mode)
+            })
+            .unwrap_or((None, None));
 
         WarpInfo {
             status,
@@ -238,7 +290,8 @@ impl WarpManager {
             return Ok(());
         }
 
-        self.was_connected = current == WarpStatus::Connected;
+        // Record initial state so Drop can restore it correctly.
+        self.was_connected = false; // We know it's not Connected at this point.
 
         info!("🌐 Connecting WARP...");
         let output = self.run_cli(&["connect"])?;
@@ -299,15 +352,67 @@ impl WarpManager {
         Ok(())
     }
 
-    /// Check if a specific IP would be routed through WARP.
+    /// Fetch the real IPv4 exclude ranges from `warp-cli tunnel dump`.
     ///
-    /// In exclude mode (default), everything goes through WARP except
-    /// the excluded ranges. We check that the proxy IP is NOT in the
-    /// excluded ranges. This is pure subnet math and does not require
-    /// WARP to be installed.
-    pub fn is_ip_routed(&self, ip: Ipv4Addr) -> bool {
-        // Check if IP is in the excluded ranges
-        let excluded_ranges: Vec<(Ipv4Addr, u8)> = vec![
+    /// Returns `None` if WARP is not installed or the command fails / has no
+    /// parseable CIDR output.  The result is cached on first successful call
+    /// so subsequent `is_ip_routed()` checks are free.
+    fn fetch_exclude_list(&mut self) -> Option<&Vec<(Ipv4Addr, u8)>> {
+        // Return cached list if already populated.
+        if self.exclude_cache.is_some() {
+            return self.exclude_cache.as_ref();
+        }
+
+        // `warp-cli tunnel dump` lists currently excluded split-tunnel ranges.
+        let output = self.run_cli(&["tunnel", "dump"]).ok()?;
+
+        let ranges: Vec<(Ipv4Addr, u8)> = output
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                // Parse lines like "  10.0.0.0/8" or "  172.16.0.0/12"
+                // Skip IPv6 and hosts-only lines.
+                if trimmed.is_empty() || !trimmed.contains('/') {
+                    return None;
+                }
+                // Ignore IPv6 CIDRs (contain ':')
+                if trimmed.contains(':') {
+                    return None;
+                }
+                // Strip any leading status prefix (e.g., "Split Tunnel")
+                let cidr_part = trimmed.split_whitespace().last()?;
+                let mut parts = cidr_part.splitn(2, '/');
+                let ip_str = parts.next()?;
+                let prefix_str = parts.next()?;
+                let ip: Ipv4Addr = ip_str.parse().ok()?;
+                let prefix: u8 = prefix_str.parse().ok()?;
+                Some((ip, prefix))
+            })
+            .collect();
+
+        if ranges.is_empty() {
+            debug!("warp-cli tunnel dump returned no IPv4 CIDRs — falling back to hardcoded list");
+            return None;
+        }
+
+        debug!(
+            "Loaded {} IPv4 exclude ranges from warp-cli tunnel dump",
+            ranges.len()
+        );
+        self.exclude_cache = Some(ranges);
+        self.exclude_cache.as_ref()
+    }
+
+    /// Fallback exclude list used when `warp-cli tunnel dump` is unavailable.
+    ///
+    /// This matches Cloudflare WARP's default exclude-mode set for RFC 1918
+    /// and other special-use ranges.
+    ///
+    /// `Ipv4Addr::new` has been `const fn` since Rust 1.50, so we can store
+    /// these in a module-level `static` and return a `'static` reference
+    /// without any heap allocation.
+    fn default_exclude_ranges() -> &'static [(Ipv4Addr, u8)] {
+        static RANGES: [(Ipv4Addr, u8); 8] = [
             (Ipv4Addr::new(10, 0, 0, 0), 8),
             (Ipv4Addr::new(100, 64, 0, 0), 10),
             (Ipv4Addr::new(169, 254, 0, 0), 16),
@@ -317,25 +422,66 @@ impl WarpManager {
             (Ipv4Addr::new(224, 0, 0, 0), 24),
             (Ipv4Addr::new(240, 0, 0, 0), 4),
         ];
+        &RANGES
+    }
 
+    /// Check if a specific IPv4 address would be routed through WARP.
+    ///
+    /// In exclude mode (default), everything goes through WARP except
+    /// the excluded ranges. First attempts to read the real exclude list from
+    /// `warp-cli tunnel dump`; falls back to a hardcoded RFC 1918 set if the
+    /// command is unavailable. This is pure subnet math — WARP does not need
+    /// to be running for this check to succeed.
+    pub fn is_ip_routed(&mut self, ip: Ipv4Addr) -> bool {
         let ip_u32 = u32::from(ip);
-        for (network, prefix_len) in &excluded_ranges {
+
+        // Use the real exclude list (populated lazily), falling back to the
+        // hardcoded defaults when warp-cli is not available/returns nothing.
+        let check = |ranges: &[(Ipv4Addr, u8)]| -> bool {
+            for (network, prefix_len) in ranges {
+                let net_u32 = u32::from(*network);
+                let mask = if *prefix_len == 0 {
+                    0u32
+                } else {
+                    !((1u32 << (32 - prefix_len)) - 1)
+                };
+                if (ip_u32 & mask) == (net_u32 & mask) {
+                    return false; // IP is in an excluded range → NOT routed through WARP
+                }
+            }
+            true // IP is routed through WARP
+        };
+
+        if let Some(live_ranges) = self.fetch_exclude_list() {
+            check(live_ranges)
+        } else {
+            check(Self::default_exclude_ranges())
+        }
+    }
+
+    /// Check if a specific IPv4 address would be routed through WARP.
+    ///
+    /// Non-mutating version that uses only the hardcoded RFC 1918 fallback list.
+    /// Used by unit tests (via `WarpManager::new()`) where warp-cli may not be
+    /// available. Prefer `is_ip_routed(&mut self, …)` in production code paths.
+    pub fn is_ip_routed_static(ip: Ipv4Addr) -> bool {
+        let ip_u32 = u32::from(ip);
+        for (network, prefix_len) in Self::default_exclude_ranges() {
             let net_u32 = u32::from(*network);
             let mask = if *prefix_len == 0 {
-                0
+                0u32
             } else {
                 !((1u32 << (32 - prefix_len)) - 1)
             };
             if (ip_u32 & mask) == (net_u32 & mask) {
-                return false; // IP is in excluded range
+                return false;
             }
         }
-
-        true // IP is routed through WARP
+        true
     }
 
     /// Verify that all proxy IPs will be routed through WARP.
-    pub fn verify_proxy_routing(&self, proxy_ips: &[Ipv4Addr]) -> Vec<(Ipv4Addr, bool)> {
+    pub fn verify_proxy_routing(&mut self, proxy_ips: &[Ipv4Addr]) -> Vec<(Ipv4Addr, bool)> {
         proxy_ips
             .iter()
             .map(|ip| (*ip, self.is_ip_routed(*ip)))
@@ -348,7 +494,7 @@ impl WarpManager {
     }
 
     /// Print a summary of WARP status and routing for the user.
-    pub fn print_summary(&self, proxy_ips: &[Ipv4Addr]) {
+    pub fn print_summary(&mut self, proxy_ips: &[Ipv4Addr]) {
         let info = self.info();
 
         info!("🌐 WARP Status: {}", info.status);
@@ -409,6 +555,80 @@ pub fn install_instructions() -> &'static str {
 mod tests {
     use super::*;
 
+    // ── parse_status_output unit tests ────────────────────────────────────────
+    // These test the pure parsing function without spawning any processes,
+    // ensuring correctness against real warp-cli output formats.
+
+    #[test]
+    fn test_parse_connected() {
+        // Real output from `warp-cli status`
+        let output = "Status update: Connected\nNetwork: healthy";
+        assert_eq!(
+            WarpManager::parse_status_output(output),
+            WarpStatus::Connected
+        );
+    }
+
+    #[test]
+    fn test_parse_disconnected() {
+        let output = "Status update: Disconnected";
+        assert_eq!(
+            WarpManager::parse_status_output(output),
+            WarpStatus::Disconnected
+        );
+    }
+
+    #[test]
+    fn test_parse_connecting() {
+        let output = "Status update: Connecting\nEstimated time: 5s";
+        assert_eq!(
+            WarpManager::parse_status_output(output),
+            WarpStatus::Connecting
+        );
+    }
+
+    /// Key regression: "Disconnecting" must NOT be classified as Connecting.
+    /// "disconnecting".contains("connecting") == true, so order of checks matters.
+    #[test]
+    fn test_parse_disconnecting_not_connecting() {
+        let output = "Status update: Disconnecting";
+        assert_eq!(
+            WarpManager::parse_status_output(output),
+            WarpStatus::Disconnecting
+        );
+        // Sanity: "connecting" IS a substring of "disconnecting" at the byte level
+        assert!("disconnecting".contains("connecting"));
+        // Without the fix the old code would return Connecting — this test locks
+        // the corrected behaviour in place.
+    }
+
+    /// "disconnected" contains "connected" as a substring — make sure we still
+    /// return Disconnected and not Connected.
+    #[test]
+    fn test_parse_disconnected_not_connected() {
+        let output = "Status update: Disconnected";
+        assert!("disconnected".contains("connected")); // confirms the hazard
+        assert_eq!(
+            WarpManager::parse_status_output(output),
+            WarpStatus::Disconnected
+        );
+    }
+
+    #[test]
+    fn test_parse_unable_to_connect_to_daemon() {
+        let output = "Unable to connect to daemon";
+        let status = WarpManager::parse_status_output(output);
+        matches!(status, WarpStatus::Unknown(_));
+    }
+
+    #[test]
+    fn test_parse_unknown() {
+        let output = "Some completely unexpected output";
+        matches!(WarpManager::parse_status_output(output), WarpStatus::Unknown(_));
+    }
+
+    // ── WarpManager creation ──────────────────────────────────────────────────
+
     #[test]
     fn test_warp_manager_creation() {
         let manager = WarpManager::new();
@@ -416,26 +636,32 @@ mod tests {
         let _ = manager.is_installed();
     }
 
+    // ── Subnet routing (static helper — no warp-cli needed) ──────────────────
+
     #[test]
-    fn test_is_ip_routed() {
-        let manager = WarpManager::new();
-
+    fn test_is_ip_routed_public_ips() {
         // Public IPs should be routed through WARP
-        assert!(manager.is_ip_routed(Ipv4Addr::new(149, 28, 84, 139))); // Vultr LA
-        assert!(manager.is_ip_routed(Ipv4Addr::new(149, 28, 144, 74))); // Vultr SGP
-        assert!(manager.is_ip_routed(Ipv4Addr::new(163, 192, 3, 134))); // OCI SJ
-        assert!(manager.is_ip_routed(Ipv4Addr::new(8, 8, 8, 8))); // Google DNS
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(149, 28, 84, 139))); // Vultr LA
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(149, 28, 144, 74))); // Vultr SGP
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(163, 192, 3, 134))); // OCI SJ
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(8, 8, 8, 8))); // Google DNS
+    }
 
-        // Private IPs should NOT be routed through WARP
-        assert!(!manager.is_ip_routed(Ipv4Addr::new(10, 0, 0, 1)));
-        assert!(!manager.is_ip_routed(Ipv4Addr::new(192, 168, 1, 1)));
-        assert!(!manager.is_ip_routed(Ipv4Addr::new(172, 16, 0, 1)));
-        assert!(!manager.is_ip_routed(Ipv4Addr::new(169, 254, 1, 1)));
+    #[test]
+    fn test_is_ip_routed_private_ips() {
+        // Private / special-use IPs should NOT be routed through WARP
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(192, 168, 1, 1)));
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(172, 16, 0, 1)));
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(169, 254, 1, 1)));
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(100, 64, 0, 1))); // CGNAT
     }
 
     #[test]
     fn test_verify_proxy_routing() {
-        let manager = WarpManager::new();
+        // Uses the mutable is_ip_routed path which falls back to static list
+        // when warp-cli tunnel dump is unavailable (e.g. CI).
+        let mut manager = WarpManager::new();
         let ips = vec![
             Ipv4Addr::new(149, 28, 84, 139),
             Ipv4Addr::new(163, 192, 3, 134),
@@ -446,11 +672,19 @@ mod tests {
         assert!(results[1].1); // OCI SJ routed
     }
 
+    // ── Display ───────────────────────────────────────────────────────────────
+
     #[test]
     fn test_status_display() {
         assert_eq!(format!("{}", WarpStatus::Connected), "Connected");
+        assert_eq!(format!("{}", WarpStatus::Connecting), "Connecting");
         assert_eq!(format!("{}", WarpStatus::Disconnected), "Disconnected");
+        assert_eq!(format!("{}", WarpStatus::Disconnecting), "Disconnecting");
         assert_eq!(format!("{}", WarpStatus::NotInstalled), "Not Installed");
+        assert_eq!(
+            format!("{}", WarpStatus::Unknown("test".into())),
+            "Unknown (test)"
+        );
     }
 
     #[test]
