@@ -400,10 +400,7 @@ impl BlockState {
         let k = self.k_size as usize;
 
         // Find the missing index (within 0..k_size)
-        let missing_idx = self.received[..k]
-            .iter()
-            .position(|p| p.is_none())
-            .unwrap();
+        let missing_idx = self.received[..k].iter().position(|p| p.is_none()).unwrap();
 
         // Start length accumulator with the lengths_xor from parity
         let mut lengths_xor =
@@ -810,7 +807,10 @@ mod tests {
         // Test output via zero-alloc path
         let mut enc_zalloc = FecEncoder::new(2);
         let complete_a = enc_zalloc.add_packet_inplace(payload_a);
-        assert!(!complete_a, "Block should not be complete after first packet");
+        assert!(
+            !complete_a,
+            "Block should not be complete after first packet"
+        );
         let complete_b = enc_zalloc.add_packet_inplace(payload_b);
         assert!(complete_b, "Block should be complete after second packet");
 

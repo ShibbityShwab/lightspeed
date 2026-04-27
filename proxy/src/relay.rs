@@ -797,8 +797,7 @@ pub async fn run_session_response_listener(
                 // Write parity packet headers (overwrites the earlier data headers —
                 // safe because the data packet was sent above).
                 pkt_buf[..HEADER_SIZE].copy_from_slice(&parity_header.encode_to_array());
-                pkt_buf[HEADER_SIZE..parity_offset]
-                    .copy_from_slice(&parity_fec.encode_to_array());
+                pkt_buf[HEADER_SIZE..parity_offset].copy_from_slice(&parity_fec.encode_to_array());
 
                 match data_socket
                     .send_to(&pkt_buf[..par_end], session.client_addr)

@@ -624,7 +624,10 @@ mod tests {
     #[test]
     fn test_parse_unknown() {
         let output = "Some completely unexpected output";
-        matches!(WarpManager::parse_status_output(output), WarpStatus::Unknown(_));
+        matches!(
+            WarpManager::parse_status_output(output),
+            WarpStatus::Unknown(_)
+        );
     }
 
     // ── WarpManager creation ──────────────────────────────────────────────────
@@ -641,20 +644,36 @@ mod tests {
     #[test]
     fn test_is_ip_routed_public_ips() {
         // Public IPs should be routed through WARP
-        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(149, 28, 84, 139))); // Vultr LA
-        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(149, 28, 144, 74))); // Vultr SGP
-        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(163, 192, 3, 134))); // OCI SJ
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(
+            149, 28, 84, 139
+        ))); // Vultr LA
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(
+            149, 28, 144, 74
+        ))); // Vultr SGP
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(
+            163, 192, 3, 134
+        ))); // OCI SJ
         assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(8, 8, 8, 8))); // Google DNS
     }
 
     #[test]
     fn test_is_ip_routed_private_ips() {
         // Private / special-use IPs should NOT be routed through WARP
-        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(10, 0, 0, 1)));
-        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(192, 168, 1, 1)));
-        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(172, 16, 0, 1)));
-        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(169, 254, 1, 1)));
-        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(100, 64, 0, 1))); // CGNAT
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(
+            10, 0, 0, 1
+        )));
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(
+            192, 168, 1, 1
+        )));
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(
+            172, 16, 0, 1
+        )));
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(
+            169, 254, 1, 1
+        )));
+        assert!(!WarpManager::is_ip_routed_static(Ipv4Addr::new(
+            100, 64, 0, 1
+        ))); // CGNAT
     }
 
     #[test]

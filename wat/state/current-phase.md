@@ -9,12 +9,12 @@
 
 | Key | Value |
 |-----|-------|
-| **Active Workflow** | WF-008 Hardening Pass v2 — ✅ COMPLETE |
-| **Current Step** | All items (L + N + O) shipped; commit e5b616d pushed; deploy workflow triggered |
+| **Active Workflow** | WF-008 Hardening Pass v2 — ✅ COMPLETE (CI + Deploy fixed) |
+| **Current Step** | All issues resolved; CI green (c7b2f35); both nodes healthy v0.4.0 |
 | **Active Agents** | — |
 | **Blocked On** | Nothing |
-| **Last Checkpoint** | 2026-04-27T17:59:30+07:00 |
-| **Next Action** | Monitor CI (coverage + check + deploy jobs); review WF-009 backlog for next sprint |
+| **Last Checkpoint** | 2026-04-27T18:24:00+07:00 |
+| **Next Action** | CI run 24992080413 completing (in_progress); review WF-009 backlog for next sprint |
 | **WAT Version** | 0.3.9 |
 
 ---
@@ -64,6 +64,14 @@
   - proxy-lax: ✅ healthy, uptime 44s post-deploy
   - relay-sgp: ✅ healthy, uptime 31s post-deploy
 - Commits: `82509fa` (3B code), `bd5da23` (deploy script), `e3a7e61` (CHANGELOG)
+
+### 2026-04-27 — WF-008 CI + Deploy hotfix (D-024)
+- **CI fix:** Added `libpcap-dev` apt step to `check` and `coverage` jobs in `ci.yml` — `pcap-capture` feature requires native libpcap for `clippy --all-features` and `cargo-llvm-cov --all-features`. Commit `c7b2f35`. ✅
+- **Deploy fix:** Added `concurrency: group: deploy-vultr-production` to `deploy.yml` to serialise concurrent deploy runs and prevent ETXTBSY race. Commit `9c42f9e`. ✅
+- **relay-sgp recovery:** Service was left inactive (dead) after ETXTBSY failure + systemd restart being SIGTERM'd by second concurrent deploy. Restarted via `systemctl start lightspeed-proxy`. Both nodes confirmed healthy. ✅
+- **proxy-lax:** healthy, v0.4.0, uptime ~1273s ✅
+- **relay-sgp:** healthy, v0.4.0, uptime ~2s (post-restart) ✅
+- Decision logged: D-024
 
 ### 2026-04-27 — WF-008 Hardening Pass v2 (Items L + N + O)
 - **Item L:** `FecEncoder` zero-alloc API — `add_packet_inplace`, `emit_parity_to`, `next_block` ✅

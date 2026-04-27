@@ -78,7 +78,7 @@ jobs:
             --output-path lcov.info
 
       - name: Print coverage summary
-        run: cargo llvm-cov report --workspace --exclude lightspeed-gui --all-features
+        run: cargo llvm-cov report --workspace --exclude lightspeed-gui
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
