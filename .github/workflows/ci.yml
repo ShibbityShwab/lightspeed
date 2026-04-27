@@ -74,6 +74,7 @@ jobs:
             --workspace \
             --exclude lightspeed-gui \
             --all-features \
+            --no-clean \
             --lcov \
             --output-path lcov.info
 
