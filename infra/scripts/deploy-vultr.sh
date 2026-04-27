@@ -25,12 +25,12 @@ BINARY_NAME="lightspeed-proxy"
 REMOTE_BINARY="/usr/local/bin/${BINARY_NAME}"
 SERVICE_NAME="lightspeed-proxy"
 
-# Vultr mesh nodes — add your own node IPs here.
-# Run setup-new-node.sh to provision a node, then add it below.
+# Vultr mesh nodes — production 2-node mesh (BKK sourced).
+# Run setup-new-node.sh to provision a new node, then add it below.
 # Format: NODES["node-name"]="IP_ADDRESS"
 declare -A NODES
-# NODES["proxy-us-west"]="YOUR_NODE_IP_1"
-# NODES["relay-asia-se"]="YOUR_NODE_IP_2"
+NODES["proxy-lax"]="149.28.84.139"    # us-west-lax  — primary proxy, 206 ms from BKK
+NODES["relay-sgp"]="149.28.144.74"    # asia-sgp     — FEC multipath / SEA relay, 31 ms from BKK
 
 # Colors
 GREEN='\033[0;32m'
