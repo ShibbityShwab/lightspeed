@@ -70,6 +70,10 @@ pub struct ProxyMetrics {
     /// `inbound_packets_received / inbound_batches_total` = avg batch size.
     pub inbound_packets_received: AtomicU64,
 
+    // ── Telemetry ────────────────────────────────────────────────
+    /// Total opt-in anonymous telemetry reports received from clients.
+    pub telemetry_reports_total: AtomicU64,
+
     // ── Latency histogram buckets ───────────────────────────────
     /// Counts per bucket for relay latency (cumulative).
     latency_buckets: [AtomicU64; 11],
@@ -105,6 +109,7 @@ impl ProxyMetrics {
             sessions_expired: AtomicU64::new(0),
             inbound_batches_total: AtomicU64::new(0),
             inbound_packets_received: AtomicU64::new(0),
+            telemetry_reports_total: AtomicU64::new(0),
             latency_buckets: Default::default(),
             start_time: Instant::now(),
         }
@@ -163,6 +168,11 @@ impl ProxyMetrics {
     /// Record rate limit hit.
     pub fn record_rate_limit(&self) {
         self.rate_limit_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record an anonymous opt-in telemetry report received from a client.
+    pub fn record_telemetry_report(&self) {
+        self.telemetry_reports_total.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record one inbound receive batch containing `n` packets.
@@ -376,6 +386,17 @@ impl ProxyMetrics {
             self.inbound_packets_received.load(Ordering::Relaxed)
         ));
 
+        // ── Telemetry counter ───────────────────────────────────
+        out.push_str(
+            "# HELP lightspeed_telemetry_reports_total Anonymous client telemetry reports received\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_reports_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_telemetry_reports_total{{{}}} {}\n",
+            labels,
+            self.telemetry_reports_total.load(Ordering::Relaxed)
+        ));
+
         // ── Build info ──────────────────────────────────────────
         out.push_str("# HELP lightspeed_build_info Build information\n");
         out.push_str("# TYPE lightspeed_build_info gauge\n");
@@ -424,6 +445,7 @@ mod tests {
         assert!(output.contains("lightspeed_inbound_batches_total"));
         assert!(output.contains("lightspeed_inbound_packets_received_total"));
         assert!(output.contains("lightspeed_relay_latency_us_bucket"));
+        assert!(output.contains("lightspeed_telemetry_reports_total"));
         assert!(output.contains("region=\"us-west-lax\""));
         assert!(output.contains("node_id=\"proxy-lax\""));
     }

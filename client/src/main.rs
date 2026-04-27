@@ -25,6 +25,8 @@ mod redirect;
 #[allow(dead_code)]
 mod route;
 #[allow(dead_code)]
+mod telemetry;
+#[allow(dead_code)]
 mod tunnel;
 #[allow(dead_code)]
 mod warp;
@@ -35,6 +37,8 @@ use std::sync::Arc;
 
 use clap::Parser;
 use tracing::{info, warn};
+
+use telemetry::TelemetryCollector;
 
 use cli::{parse_proxy_addr, Cli};
 use modes::{
@@ -60,6 +64,18 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     info!("⚡ LightSpeed v{} starting", env!("CARGO_PKG_VERSION"));
+
+    // ── Telemetry (opt-in) ────────────────────────────────────────
+    //
+    // --telemetry enables anonymous aggregated RTT/FEC stats reporting.
+    // No PII is ever collected. See docs/privacy.md for full details.
+    let telemetry_collector: Option<Arc<TelemetryCollector>> =
+        if cli.telemetry && !cli.no_telemetry {
+            telemetry::print_disclosure();
+            Some(Arc::new(TelemetryCollector::new()))
+        } else {
+            None
+        };
 
     // ── Configuration ─────────────────────────────────────────────
     let config = config::Config::load(&cli.config).unwrap_or_else(|e| {
@@ -152,8 +168,8 @@ async fn main() -> anyhow::Result<()> {
                 warp_info.mode.unwrap_or_else(|| "unknown".into())
             );
             let proxy_ips = vec![
-                Ipv4Addr::new(149, 28, 84, 139),  // Vultr LA
-                Ipv4Addr::new(149, 28, 144, 74),  // Vultr SGP
+                Ipv4Addr::new(149, 28, 84, 139), // Vultr LA
+                Ipv4Addr::new(149, 28, 144, 74), // Vultr SGP
             ];
             warp_manager.print_summary(&proxy_ips);
             if let Some(stats) = warp_manager.tunnel_stats() {
@@ -315,10 +331,7 @@ async fn main() -> anyhow::Result<()> {
     let (proxy_id, proxy_region) = match proxy_addr.ip().octets() {
         [149, 28, 84, 139] => ("proxy-lax".to_string(), "us-west-lax".to_string()),
         [149, 28, 144, 74] => ("relay-sgp".to_string(), "asia-sgp".to_string()),
-        _ => (
-            format!("proxy-{}", proxy_addr.ip()),
-            "unknown".to_string(),
-        ),
+        _ => (format!("proxy-{}", proxy_addr.ip()), "unknown".to_string()),
     };
 
     let online_learner = {
@@ -415,6 +428,13 @@ async fn main() -> anyhow::Result<()> {
         info!("");
     }
 
+    // ── Spawn periodic telemetry flush (every 15 min) ─────────────
+    if let Some(ref tc) = telemetry_collector {
+        let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
+        // TelemetryCollector is Arc-backed; .clone() shares the same ring buffer.
+        telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, 0, "".to_string());
+    }
+
     // ── Keepalive mode ────────────────────────────────────────────
     run_keepalive_mode(
         relay,
@@ -423,6 +443,7 @@ async fn main() -> anyhow::Result<()> {
         proxy_region,
         online_learner,
         keepalive_timestamps,
+        telemetry_collector,
     )
     .await
 }

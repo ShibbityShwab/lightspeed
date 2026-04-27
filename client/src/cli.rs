@@ -101,6 +101,16 @@ pub struct Cli {
     /// If omitted, uses the system default interface.
     #[arg(long)]
     pub interface: Option<String>,
+
+    /// Enable opt-in anonymous telemetry.
+    /// Sends aggregated latency stats (p50/p95/p99, jitter, FEC) to the proxy
+    /// every 15 min. No IP address or PII is ever sent. See docs/privacy.md.
+    #[arg(long, default_value_t = false)]
+    pub telemetry: bool,
+
+    /// Disable telemetry even if enabled in the config file.
+    #[arg(long, default_value_t = false)]
+    pub no_telemetry: bool,
 }
 
 /// Parse a proxy address string into `SocketAddrV4`.

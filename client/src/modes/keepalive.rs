@@ -13,11 +13,15 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::ml;
+use crate::telemetry::TelemetryCollector;
 use crate::tunnel::relay::UdpRelay;
 
 /// Run the keepalive (idle) mode.
 ///
 /// Blocks until Ctrl+C, then saves the online-learning state and returns.
+///
+/// `telemetry` — if `Some`, RTT samples from keepalive echoes are recorded
+/// and flushed to the proxy on shutdown (opt-in, no PII).
 pub async fn run_keepalive_mode(
     relay: UdpRelay,
     proxy_addr: SocketAddrV4,
@@ -25,6 +29,7 @@ pub async fn run_keepalive_mode(
     proxy_region: String,
     online_learner: Arc<tokio::sync::Mutex<ml::online::OnlineLearner>>,
     keepalive_timestamps: Arc<tokio::sync::Mutex<HashMap<u16, std::time::Instant>>>,
+    telemetry: Option<Arc<TelemetryCollector>>,
 ) -> anyhow::Result<()> {
     let stats = Arc::clone(&relay.stats);
 
@@ -72,6 +77,7 @@ pub async fn run_keepalive_mode(
         let learner_ref = Arc::clone(&online_learner);
         let ka_proxy_id = proxy_id.clone();
         let ka_proxy_region = proxy_region.clone();
+        let telemetry_recv = telemetry.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 2048];
             loop {
@@ -80,14 +86,16 @@ pub async fn run_keepalive_mode(
                         match lightspeed_protocol::TunnelHeader::decode_with_payload(&buf[..len]) {
                             Ok((header, payload)) => {
                                 stats.packets_received.fetch_add(1, Ordering::Relaxed);
-                                stats.bytes_received.fetch_add(len as u64, Ordering::Relaxed);
+                                stats
+                                    .bytes_received
+                                    .fetch_add(len as u64, Ordering::Relaxed);
 
                                 if header.is_keepalive() {
                                     let rtt_us = {
                                         let mut ts_map = ka_timestamps.lock().await;
-                                        ts_map.remove(&header.sequence).map(|send_time| {
-                                            send_time.elapsed().as_micros() as u64
-                                        })
+                                        ts_map
+                                            .remove(&header.sequence)
+                                            .map(|send_time| send_time.elapsed().as_micros() as u64)
                                     };
                                     if let Some(rtt) = rtt_us {
                                         let latency_ms = rtt as f64 / 1000.0;
@@ -98,6 +106,10 @@ pub async fn run_keepalive_mode(
                                             "Keepalive echo: {:.1}ms",
                                             latency_ms,
                                         );
+                                        // Record into opt-in telemetry (if enabled)
+                                        if let Some(ref tc) = telemetry_recv {
+                                            tc.record_rtt(latency_ms).await;
+                                        }
                                         let mut learner = learner_ref.lock().await;
                                         learner.record_and_maybe_retrain(
                                             &ka_proxy_id,
@@ -161,6 +173,13 @@ pub async fn run_keepalive_mode(
     keepalive_handle.abort();
     recv_handle.abort();
     stats_handle.abort();
+
+    // ── Final telemetry flush ─────────────────────────────────────
+    if let Some(ref tc) = telemetry {
+        let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
+        tc.flush(&proxy_host, 0, "").await;
+        info!("📡 Telemetry flushed");
+    }
 
     // Save online learning state
     {

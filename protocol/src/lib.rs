@@ -7,6 +7,7 @@
 pub mod control;
 pub mod fec;
 pub mod header;
+pub mod telemetry;
 
 pub use header::{
     flags, DecodeError, TunnelHeader, HEADER_SIZE, MAX_PAYLOAD_SIZE, PROTOCOL_VERSION,
@@ -19,3 +20,4 @@ pub use fec::{
 };
 
 pub use control::{disconnect_reason, game_id, ControlDecodeError, ControlMessage};
+pub use telemetry::TelemetryReport;

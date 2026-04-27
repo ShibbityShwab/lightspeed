@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0-dev] — Unreleased
 
+### Added (2026-04-27) — Item G: Opt-in latency telemetry
+
+Anonymous, aggregated network-quality reporting — **off by default**, enabled
+with `--telemetry`.  No PII is ever transmitted.  See `docs/privacy.md`.
+
+- **`protocol/src/telemetry.rs`** — new `TelemetryReport` struct (serde JSON):
+  `game_id`, `client_country` (OS locale only), `p50_ms`, `p95_ms`, `p99_ms`,
+  `jitter_ms`, `sample_count`, `fec_recoveries`, `fec_losses`, `client_version`.
+  Includes `validate()` and a compile-time PII regression test
+  (`test_no_pii_fields_in_json`) that will fail if an IP, user-id, session-token,
+  or other identifying field is accidentally added to the JSON output.
+- **`client/src/telemetry.rs`** — `TelemetryCollector` (ring-buffer, 1024 RTT
+  samples).  `record_rtt()`, `record_fec_recovery()`, `record_fec_loss()`.
+  `flush()` — hand-rolled HTTP/1.0 POST over Tokio TCP with a 5 s timeout, best-
+  effort (errors silently swallowed).  `spawn_periodic_flush()` — Tokio task that
+  fires every 15 minutes.  `print_disclosure()` — ASCII banner printed on first
+  enable.
+- **`proxy/src/health.rs`** — new `POST /telemetry` handler on `:8080` (same
+  HTTP server as `/health` and `/metrics`).  Body size-capped at 2 048 bytes;
+  deserialises and validates report; calls `metrics.record_telemetry_report()`.
+- **`proxy/src/metrics.rs`** — `telemetry_reports_total` counter + Prometheus
+  output line (`lightspeed_telemetry_reports_total`).
+- **`client/src/cli.rs`** — `--telemetry` / `--no-telemetry` flags.
+- **`client/src/main.rs`** — creates `TelemetryCollector` when `--telemetry` is
+  set, spawns periodic flush task, passes collector into keepalive mode for per-
+  echo RTT recording, performs a final flush on Ctrl+C shutdown.
+- **`client/src/modes/keepalive.rs`** — accepts `Option<Arc<TelemetryCollector>>`;
+  calls `tc.record_rtt(latency_ms)` on each keepalive echo; final flush on exit.
+- **`docs/privacy.md`** — full privacy disclosure covering schema, what is NOT
+  collected, data flow, and how to audit the implementation.
+
 ### Deployed (2026-04-27) — v0.4.0-dev promoted to production (commit `bd5da23`)
 
 Both Vultr nodes updated to v0.4.0-dev code in a coordinated cutover (CI run 24981406005, 1m37s):
