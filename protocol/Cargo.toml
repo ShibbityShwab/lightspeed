@@ -17,3 +17,14 @@ thiserror = { workspace = true }
 
 # Optional: QUIC stream helpers
 quinn = { version = "0.11", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "header_bench"
+harness = false
+
+[[bench]]
+name = "fec_bench"
+harness = false
