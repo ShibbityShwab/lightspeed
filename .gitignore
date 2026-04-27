@@ -3,6 +3,10 @@
 client/target/
 proxy/target/
 
+# Local Cargo config — contains machine-specific paths (e.g. Npcap lib path on Windows)
+# See .cargo/config.toml.example for setup instructions
+.cargo/config.toml
+
 # Cargo lock is included for binaries
 # Cargo.lock  # Keep for reproducible builds
 

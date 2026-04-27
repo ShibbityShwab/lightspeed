@@ -1,0 +1,30 @@
+# .cargo/config.toml — Local build configuration for LightSpeed
+#
+# Copy this file to .cargo/config.toml and adjust paths for your system.
+# This file is gitignored because it contains machine-specific paths.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# pcap-capture feature (Windows with Npcap)
+# ────────────────────────────────────────────────────────────────────────────
+#
+# Required only if you build with --features lightspeed-client/pcap-capture.
+# The pcap crate needs wpcap.dll's MinGW import library (libwpcap.a).
+#
+# Setup (one-time):
+#   1. Install Npcap:  https://npcap.com/#download
+#      (Check "WinPcap API-compatible Mode" during install)
+#   2. Generate the import library:
+#      gendef C:\Windows\System32\Npcap\wpcap.dll
+#      dlltool -d wpcap.def -l libwpcap.a
+#      mkdir C:\pcap-lib
+#      move libwpcap.a C:\pcap-lib\
+#   3. Copy this file to .cargo/config.toml (this directory)
+#
+# Then build with:
+#   cargo build --release --features lightspeed-client/pcap-capture
+
+[env]
+PCAP_LIB_PATH = "C:\\pcap-lib"
+
+[build]
+rustflags = ["-L", "native=C:\\pcap-lib"]
