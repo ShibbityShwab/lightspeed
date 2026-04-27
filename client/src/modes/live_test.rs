@@ -175,7 +175,7 @@ pub async fn run_live_test(
                 .as_micros() as u32;
 
             let header = TunnelHeader::keepalive(seq, ts);
-            let packet = header.encode();
+            let packet = header.encode_to_array();
 
             if socket.send_to(&packet, addr).await.is_err() {
                 continue;
@@ -356,7 +356,7 @@ pub async fn run_live_test(
                     let mut pkt = BytesMut::with_capacity(
                         HEADER_SIZE + FEC_HEADER_SIZE + payload.len(),
                     );
-                    pkt.extend_from_slice(&header.encode());
+                    pkt.extend_from_slice(&header.encode_to_array());
                     fec_hdr.encode(&mut pkt);
                     pkt.extend_from_slice(payload.as_bytes());
 
@@ -371,7 +371,7 @@ pub async fn run_live_test(
                         let mut parity_pkt = BytesMut::with_capacity(
                             HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
                         );
-                        parity_pkt.extend_from_slice(&parity_header.encode());
+                        parity_pkt.extend_from_slice(&parity_header.encode_to_array());
                         parity_fec.encode(&mut parity_pkt);
                         parity_pkt.extend_from_slice(&parity_bytes);
                         let _ = socket.send_to(&parity_pkt, proxy).await;

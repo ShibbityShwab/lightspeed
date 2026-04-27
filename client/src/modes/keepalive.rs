@@ -48,7 +48,7 @@ pub async fn run_keepalive_mode(
                         .unwrap_or_default()
                         .as_micros() as u32,
                 );
-                let packet = header.encode();
+                let packet = header.encode_to_array();
                 match relay_socket.send_to(&packet, proxy_addr).await {
                     Ok(_) => {
                         let mut ts_map = ka_timestamps.lock().await;

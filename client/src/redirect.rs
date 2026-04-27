@@ -227,7 +227,7 @@ impl UdpRedirect {
                         let mut pkt_buf =
                             BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
                         // Encode tunnel header inline
-                        pkt_buf.extend_from_slice(&header.encode());
+                        pkt_buf.extend_from_slice(&header.encode_to_array());
                         fec_hdr.encode(&mut pkt_buf);
                         pkt_buf.extend_from_slice(payload);
 
@@ -265,7 +265,7 @@ impl UdpRedirect {
                             let mut parity_buf = BytesMut::with_capacity(
                                 HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
                             );
-                            parity_buf.extend_from_slice(&parity_header.encode());
+                            parity_buf.extend_from_slice(&parity_header.encode_to_array());
                             parity_fec.encode(&mut parity_buf);
                             parity_buf.extend_from_slice(&parity_bytes);
 

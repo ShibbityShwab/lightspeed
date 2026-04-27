@@ -330,7 +330,7 @@ pub async fn run_capture_mode(
                     .as_micros() as u32;
                 let header = lightspeed_protocol::TunnelHeader::keepalive(ka_seq, ts);
                 if tunnel_socket
-                    .send_to(&header.encode(), proxy_addr)
+                    .send_to(&header.encode_to_array(), proxy_addr)
                     .await
                     .is_ok()
                 {
@@ -420,7 +420,7 @@ pub async fn run_capture_mode(
                     let mut pkt_buf = BytesMut::with_capacity(
                         HEADER_SIZE + FEC_HEADER_SIZE + pkt.payload.len(),
                     );
-                    pkt_buf.extend_from_slice(&header.encode());
+                    pkt_buf.extend_from_slice(&header.encode_to_array());
                     fec_hdr.encode(&mut pkt_buf);
                     pkt_buf.extend_from_slice(&pkt.payload);
 
@@ -437,7 +437,7 @@ pub async fn run_capture_mode(
                         let mut parity_buf = BytesMut::with_capacity(
                             HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len(),
                         );
-                        parity_buf.extend_from_slice(&parity_header.encode());
+                        parity_buf.extend_from_slice(&parity_header.encode_to_array());
                         parity_fec.encode(&mut parity_buf);
                         parity_buf.extend_from_slice(&parity_bytes);
                         let _ = tunnel_socket.send_to(&parity_buf, proxy_addr).await;

@@ -29,6 +29,7 @@
 //! While only 8 bits, it provides defense-in-depth alongside IP-based auth.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+// Note: BufMut import kept for encode_with_payload; Buf for decode.
 use std::net::{Ipv4Addr, SocketAddrV4};
 use thiserror::Error;
 
@@ -151,47 +152,77 @@ impl TunnelHeader {
         self
     }
 
-    /// Encode the header into bytes.
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::with_capacity(HEADER_SIZE);
-
+    /// Encode the header into a stack-allocated `[u8; 20]` array — **zero heap allocation**.
+    ///
+    /// This is the hot-path encoding method. Use it whenever you are about to
+    /// extend a `BytesMut` with the header bytes:
+    ///
+    /// ```ignore
+    /// buf.extend_from_slice(&header.encode_to_array());
+    /// ```
+    ///
+    /// For direct `socket.send_to` of a header-only packet (e.g., keepalive),
+    /// the array coerces directly to `&[u8]`:
+    ///
+    /// ```ignore
+    /// socket.send_to(&header.encode_to_array(), addr).await?;
+    /// ```
+    #[inline]
+    pub fn encode_to_array(&self) -> [u8; HEADER_SIZE] {
+        let mut buf = [0u8; HEADER_SIZE];
         // Byte 0: version (high nibble) | flags (low nibble)
-        buf.put_u8((self.version << 4) | (self.flags & 0x0F));
+        buf[0] = (self.version << 4) | (self.flags & 0x0F);
         // Byte 1: session token
-        buf.put_u8(self.session_token);
-        // Bytes 2-3: sequence number
-        buf.put_u16(self.sequence);
-        // Bytes 4-7: timestamp
-        buf.put_u32(self.timestamp_us);
+        buf[1] = self.session_token;
+        // Bytes 2-3: sequence number (big-endian)
+        let seq = self.sequence.to_be_bytes();
+        buf[2] = seq[0];
+        buf[3] = seq[1];
+        // Bytes 4-7: timestamp (big-endian)
+        let ts = self.timestamp_us.to_be_bytes();
+        buf[4] = ts[0];
+        buf[5] = ts[1];
+        buf[6] = ts[2];
+        buf[7] = ts[3];
         // Bytes 8-11: original source IP
-        buf.put_slice(&self.orig_src_ip.octets());
+        let src = self.orig_src_ip.octets();
+        buf[8]  = src[0];
+        buf[9]  = src[1];
+        buf[10] = src[2];
+        buf[11] = src[3];
         // Bytes 12-15: original dest IP
-        buf.put_slice(&self.orig_dst_ip.octets());
-        // Bytes 16-17: original source port
-        buf.put_u16(self.orig_src_port);
-        // Bytes 18-19: original dest port
-        buf.put_u16(self.orig_dst_port);
-
-        buf.freeze()
+        let dst = self.orig_dst_ip.octets();
+        buf[12] = dst[0];
+        buf[13] = dst[1];
+        buf[14] = dst[2];
+        buf[15] = dst[3];
+        // Bytes 16-17: original source port (big-endian)
+        let sp = self.orig_src_port.to_be_bytes();
+        buf[16] = sp[0];
+        buf[17] = sp[1];
+        // Bytes 18-19: original dest port (big-endian)
+        let dp = self.orig_dst_port.to_be_bytes();
+        buf[18] = dp[0];
+        buf[19] = dp[1];
+        buf
     }
 
-    /// Encode the header + payload into a single buffer.
+    /// Encode the header into a heap-allocated `Bytes`.
+    ///
+    /// **Prefer `encode_to_array()`** in hot paths — it avoids the allocation.
+    /// This method is kept for callers that need a `Bytes` return type (e.g.,
+    /// legacy code, tests, or cases where `Bytes` is required by an API).
+    pub fn encode(&self) -> Bytes {
+        Bytes::copy_from_slice(&self.encode_to_array())
+    }
+
+    /// Encode the header + payload into a single heap-allocated buffer.
+    ///
+    /// Performs exactly **one allocation** of `HEADER_SIZE + payload.len()` bytes.
     pub fn encode_with_payload(&self, payload: &[u8]) -> Bytes {
         let mut buf = BytesMut::with_capacity(HEADER_SIZE + payload.len());
-
-        // Encode header
-        buf.put_u8((self.version << 4) | (self.flags & 0x0F));
-        buf.put_u8(self.session_token);
-        buf.put_u16(self.sequence);
-        buf.put_u32(self.timestamp_us);
-        buf.put_slice(&self.orig_src_ip.octets());
-        buf.put_slice(&self.orig_dst_ip.octets());
-        buf.put_u16(self.orig_src_port);
-        buf.put_u16(self.orig_dst_port);
-
-        // Append payload
+        buf.put_slice(&self.encode_to_array());
         buf.put_slice(payload);
-
         buf.freeze()
     }
 

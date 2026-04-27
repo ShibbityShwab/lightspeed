@@ -267,7 +267,7 @@ pub async fn run_relay_inbound(
             trace!(client = %client_addr, seq = header.sequence, "Keepalive received");
             let response = TunnelHeader::keepalive(header.sequence, now_us())
                 .with_session_token(header.session_token);
-            let response_bytes = response.encode();
+            let response_bytes = response.encode_to_array();
             let _ = data_socket.send_to(&response_bytes, client_addr).await;
             continue;
         }
@@ -493,7 +493,7 @@ pub async fn run_session_response_listener(
 
             let mut pkt_buf =
                 BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
-            pkt_buf.extend_from_slice(&response_header.encode());
+            pkt_buf.extend_from_slice(&response_header.encode_to_array());
             fec_hdr.encode(&mut pkt_buf);
             pkt_buf.extend_from_slice(payload);
 
@@ -534,7 +534,7 @@ pub async fn run_session_response_listener(
 
                 let mut parity_buf =
                     BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len());
-                parity_buf.extend_from_slice(&parity_header.encode());
+                parity_buf.extend_from_slice(&parity_header.encode_to_array());
                 parity_fec.encode(&mut parity_buf);
                 parity_buf.extend_from_slice(&parity_bytes);
 

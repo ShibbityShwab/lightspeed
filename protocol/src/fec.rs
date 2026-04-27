@@ -51,8 +51,16 @@ pub const DEFAULT_BLOCK_SIZE: u8 = 4;
 pub const MAX_BLOCK_SIZE: u8 = 16;
 
 /// Maximum packet payload size for FEC (MTU - headers).
-/// Parity is computed over fixed-size buffers, padded with zeros.
+/// The internal parity scratch-buffer uses this size; the **emitted** parity
+/// packet is always smaller — only `max_payload_len_in_block + 2` bytes —
+/// because we track the maximum actual payload length and only XOR that prefix.
 pub const FEC_MAX_PAYLOAD: usize = 1400;
+
+/// Ring-buffer capacity for the FEC decoder.
+/// Must be large enough that two live blocks never share the same slot
+/// (i.e., block IDs never differ by exactly `RING_CAPACITY` simultaneously).
+/// 64 slots covers ~256 ms of block IDs at 250 blocks/sec.
+const DECODER_RING_CAPACITY: usize = 64;
 
 /// FEC header extension, present when FLAG_FEC is set in TunnelHeader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +131,18 @@ impl FecHeader {
 // ────────────────────────────────────────────────────────────
 
 /// FEC encoder: accumulates data packets and generates parity.
+///
+/// ## Parity wire format
+///
+/// ```text
+/// [ XOR of payload bytes (max_payload_len bytes) ][ lengths_xor (2 bytes, BE) ]
+/// ```
+///
+/// `max_payload_len` is the maximum payload size seen across all K packets in
+/// the current block.  The decoder reads `parity.len() - 2` to find how many
+/// data bytes are present, and the last two bytes to recover the original
+/// packet length.  This allows parity packets to be as small as the largest
+/// game packet + 2 bytes (often 64–768 B) instead of always 1400 B.
 #[derive(Debug)]
 pub struct FecEncoder {
     /// Current block ID.
@@ -131,8 +151,13 @@ pub struct FecEncoder {
     k_size: u8,
     /// Accumulated data packets in current block.
     data_packets: Vec<Bytes>,
-    /// Running XOR parity (computed incrementally).
+    /// Running XOR parity scratch buffer (always FEC_MAX_PAYLOAD bytes).
     parity: Vec<u8>,
+    /// Maximum payload length seen in the current block — determines emit length.
+    parity_len: usize,
+    /// Running XOR of all packet lengths (stored separately so we know the
+    /// emit length before writing it into the parity content bytes).
+    lengths_xor: u16,
 }
 
 impl FecEncoder {
@@ -144,6 +169,8 @@ impl FecEncoder {
             k_size: k,
             data_packets: Vec::with_capacity(k as usize),
             parity: vec![0u8; FEC_MAX_PAYLOAD],
+            parity_len: 0,
+            lengths_xor: 0,
         }
     }
 
@@ -157,28 +184,45 @@ impl FecEncoder {
         self.data_packets.len() as u8
     }
 
+    /// Emit the parity for the current block state.
+    ///
+    /// Format: `parity[..parity_len] || lengths_xor as 2 BE bytes`
+    fn emit_parity(&self) -> Bytes {
+        let emit_len = self.parity_len + 2;
+        let mut out = BytesMut::with_capacity(emit_len);
+        out.put_slice(&self.parity[..self.parity_len]);
+        out.put_u16(self.lengths_xor);
+        out.freeze()
+    }
+
     /// Add a data packet to the current block and XOR into parity.
     ///
     /// Returns `Some(parity_bytes)` when the block is complete (K packets received),
     /// or `None` if the block is still accumulating.
+    ///
+    /// The returned parity is `max_payload_len + 2` bytes — much smaller than
+    /// the old fixed 1400-byte buffer for typical game packets (64–512 B).
     pub fn add_packet(&mut self, payload: &[u8]) -> Option<Bytes> {
-        // XOR payload into running parity
         let len = payload.len().min(FEC_MAX_PAYLOAD);
+
+        // XOR payload into running parity (only the actual payload bytes)
         for (p, &b) in self.parity[..len].iter_mut().zip(payload.iter()) {
             *p ^= b;
         }
-        // Also XOR the length (2 bytes, big-endian) at a fixed position
-        // so we can recover the original packet length
-        let len_bytes = (payload.len() as u16).to_be_bytes();
-        let len_offset = FEC_MAX_PAYLOAD - 2;
-        self.parity[len_offset] ^= len_bytes[0];
-        self.parity[len_offset + 1] ^= len_bytes[1];
+
+        // Track the maximum payload length seen in this block
+        if len > self.parity_len {
+            self.parity_len = len;
+        }
+
+        // XOR this packet's length into the lengths accumulator
+        self.lengths_xor ^= payload.len() as u16;
 
         self.data_packets.push(Bytes::copy_from_slice(payload));
 
         if self.data_packets.len() >= self.k_size as usize {
-            // Block complete — emit parity and reset
-            let parity = Bytes::copy_from_slice(&self.parity);
+            // Block complete — emit compact parity and reset
+            let parity = self.emit_parity();
             self.reset_block();
             Some(parity)
         } else {
@@ -194,7 +238,7 @@ impl FecEncoder {
         }
         let block_id = self.block_id;
         let actual_k = self.data_packets.len() as u8;
-        let parity = Bytes::copy_from_slice(&self.parity);
+        let parity = self.emit_parity();
         self.reset_block();
         Some((block_id, actual_k, parity))
     }
@@ -203,6 +247,8 @@ impl FecEncoder {
         self.block_id = self.block_id.wrapping_add(1);
         self.data_packets.clear();
         self.parity.fill(0);
+        self.parity_len = 0;
+        self.lengths_xor = 0;
     }
 }
 
@@ -213,11 +259,13 @@ impl FecEncoder {
 /// Tracks received packets for a single FEC block.
 #[derive(Debug)]
 struct BlockState {
+    /// Block ID — used to validate ring-buffer slot ownership.
+    block_id: u16,
     /// Which data packet indices have been received.
     received: Vec<Option<Bytes>>,
     /// Parity packet (if received).
     parity: Option<Bytes>,
-    /// Block size (K). Used in debug output.
+    /// Block size (K). Retained for debugging.
     #[allow(dead_code)]
     k_size: u8,
     /// Creation time for expiry.
@@ -225,8 +273,9 @@ struct BlockState {
 }
 
 impl BlockState {
-    fn new(k_size: u8) -> Self {
+    fn new(block_id: u16, k_size: u8) -> Self {
         Self {
+            block_id,
             received: vec![None; k_size as usize],
             parity: None,
             k_size,
@@ -253,8 +302,11 @@ impl BlockState {
 
     /// Try to recover a single missing data packet using parity.
     ///
-    /// Returns `Some((index, recovered_bytes))` if exactly one packet
-    /// was missing and parity was available.
+    /// Expects the new compact parity format:
+    /// `[ XOR content (parity_content_len bytes) ][ lengths_xor (2 BE bytes) ]`
+    ///
+    /// Returns `Some((index, recovered_bytes))` if exactly one packet was
+    /// missing and parity was available.
     fn try_recover(&self) -> Option<(u8, Bytes)> {
         // Can only recover if exactly 1 packet is missing and we have parity
         if self.missing_count() != 1 {
@@ -262,15 +314,24 @@ impl BlockState {
         }
         let parity = self.parity.as_ref()?;
 
+        // Parity must be at least 2 bytes (lengths_xor trailer)
+        if parity.len() < 2 {
+            return None;
+        }
+
+        // The last 2 bytes are the XOR of all packet lengths
+        let parity_content_len = parity.len() - 2;
+
         // Find the missing index
         let missing_idx = self.received.iter().position(|p| p.is_none()).unwrap();
 
-        // XOR all received data packets + parity to recover the missing one
-        let mut recovered = vec![0u8; FEC_MAX_PAYLOAD];
+        // Start length accumulator with the lengths_xor from parity
+        let mut lengths_xor =
+            u16::from_be_bytes([parity[parity_content_len], parity[parity_content_len + 1]]);
 
-        // Start with parity
-        let parity_len = parity.len().min(FEC_MAX_PAYLOAD);
-        recovered[..parity_len].copy_from_slice(&parity[..parity_len]);
+        // Build recovery buffer sized to the parity content
+        let mut recovered = vec![0u8; parity_content_len];
+        recovered.copy_from_slice(&parity[..parity_content_len]);
 
         // XOR in all received data packets
         for (i, slot) in self.received.iter().enumerate() {
@@ -278,25 +339,19 @@ impl BlockState {
                 continue;
             }
             if let Some(data) = slot {
-                let len = data.len().min(FEC_MAX_PAYLOAD);
-                for (r, &b) in recovered[..len].iter_mut().zip(data.iter()) {
+                let xor_len = data.len().min(parity_content_len);
+                for (r, &b) in recovered[..xor_len].iter_mut().zip(data.iter()) {
                     *r ^= b;
                 }
-                // Also XOR the length
-                let len_bytes = (data.len() as u16).to_be_bytes();
-                let len_offset = FEC_MAX_PAYLOAD - 2;
-                recovered[len_offset] ^= len_bytes[0];
-                recovered[len_offset + 1] ^= len_bytes[1];
+                // XOR this packet's length into the accumulator
+                lengths_xor ^= data.len() as u16;
             }
         }
 
-        // Extract original length from recovered data
-        let len_offset = FEC_MAX_PAYLOAD - 2;
-        let orig_len =
-            u16::from_be_bytes([recovered[len_offset], recovered[len_offset + 1]]) as usize;
-
-        if orig_len > FEC_MAX_PAYLOAD - 2 {
-            return None; // Invalid length, recovery failed
+        // lengths_xor now holds the original length of the missing packet
+        let orig_len = lengths_xor as usize;
+        if orig_len > parity_content_len {
+            return None; // Invalid length — recovery failed
         }
 
         Some((
@@ -307,10 +362,16 @@ impl BlockState {
 }
 
 /// FEC decoder: tracks incoming packets and recovers lost data.
+///
+/// Uses a fixed-size ring buffer (indexed by `block_id % DECODER_RING_CAPACITY`)
+/// instead of a `HashMap`, eliminating hash overhead in the hot path.
+/// Typical game sessions run at well under `DECODER_RING_CAPACITY` concurrent
+/// blocks, so slot collisions are essentially impossible.
 #[derive(Debug)]
 pub struct FecDecoder {
-    /// Active FEC blocks, keyed by block_id.
-    blocks: std::collections::HashMap<u16, BlockState>,
+    /// Ring buffer of active FEC blocks.
+    /// Indexed by `block_id % DECODER_RING_CAPACITY`.
+    ring: Vec<Option<BlockState>>,
     /// Maximum age of a block before it's discarded (ms).
     max_age_ms: u64,
     /// Stats: packets recovered via FEC.
@@ -323,20 +384,36 @@ impl FecDecoder {
     /// Create a new FEC decoder.
     pub fn new() -> Self {
         Self {
-            blocks: std::collections::HashMap::new(),
-            max_age_ms: 500, // 500ms max block age
+            ring: (0..DECODER_RING_CAPACITY).map(|_| None).collect(),
+            max_age_ms: 500, // 500 ms max block age
             recovered_count: 0,
             recovery_failures: 0,
         }
     }
 
+    /// Get the ring index for a given `block_id`.
+    #[inline]
+    fn ring_idx(block_id: u16) -> usize {
+        (block_id as usize) % DECODER_RING_CAPACITY
+    }
+
+    /// Ensure the ring slot for `block_id` holds a fresh `BlockState`,
+    /// evicting any stale block that happens to share the slot.
+    fn ensure_block(&mut self, block_id: u16, k_size: u8) -> &mut BlockState {
+        let idx = Self::ring_idx(block_id);
+        match &mut self.ring[idx] {
+            Some(b) if b.block_id == block_id => {}
+            slot => {
+                *slot = Some(BlockState::new(block_id, k_size));
+            }
+        }
+        self.ring[idx].as_mut().unwrap()
+    }
+
     /// Process an incoming data packet. Returns the payload as-is.
     /// Internally tracks the packet for potential future recovery.
     pub fn receive_data(&mut self, fec: &FecHeader, payload: Bytes) -> Bytes {
-        let block = self
-            .blocks
-            .entry(fec.block_id)
-            .or_insert_with(|| BlockState::new(fec.k_size));
+        let block = self.ensure_block(fec.block_id, fec.k_size);
         block.receive_data(fec.index, payload.clone());
         payload
     }
@@ -347,23 +424,36 @@ impl FecDecoder {
     ///
     /// Returns `Some((index, recovered_payload))` if a packet was recovered.
     pub fn receive_parity(&mut self, fec: &FecHeader, payload: Bytes) -> Option<(u8, Bytes)> {
-        let block = self
-            .blocks
-            .entry(fec.block_id)
-            .or_insert_with(|| BlockState::new(fec.k_size));
-        block.receive_parity(payload);
+        let idx = Self::ring_idx(fec.block_id);
 
-        match block.try_recover() {
-            Some(result) => {
+        // Ensure the slot holds the correct block, then store parity
+        match &mut self.ring[idx] {
+            Some(b) if b.block_id == fec.block_id => {
+                b.receive_parity(payload);
+            }
+            slot => {
+                let mut b = BlockState::new(fec.block_id, fec.k_size);
+                b.receive_parity(payload);
+                *slot = Some(b);
+            }
+        }
+
+        // Try recovery — result is fully owned (no borrow from self.ring)
+        let result = self.ring[idx].as_ref().and_then(|b| b.try_recover());
+
+        match result {
+            Some(r) => {
                 self.recovered_count += 1;
-                // Clean up the block
-                self.blocks.remove(&fec.block_id);
-                Some(result)
+                self.ring[idx] = None;
+                Some(r)
             }
             None => {
-                if block.missing_count() == 0 {
-                    // All packets received, no recovery needed — clean up
-                    self.blocks.remove(&fec.block_id);
+                let all_received = self.ring[idx]
+                    .as_ref()
+                    .map(|b| b.missing_count() == 0)
+                    .unwrap_or(false);
+                if all_received {
+                    self.ring[idx] = None;
                 }
                 None
             }
@@ -373,12 +463,17 @@ impl FecDecoder {
     /// Check if a specific data packet was lost and can be recovered
     /// now that we have enough information.
     pub fn try_recover_block(&mut self, block_id: u16) -> Option<(u8, Bytes)> {
-        let block = self.blocks.get(&block_id)?;
-        match block.try_recover() {
-            Some(result) => {
+        let idx = Self::ring_idx(block_id);
+        // Only attempt if the slot holds the right block
+        if self.ring[idx].as_ref().map(|b| b.block_id) != Some(block_id) {
+            return None;
+        }
+        let result = self.ring[idx].as_ref().and_then(|b| b.try_recover());
+        match result {
+            Some(r) => {
                 self.recovered_count += 1;
-                self.blocks.remove(&block_id);
-                Some(result)
+                self.ring[idx] = None;
+                Some(r)
             }
             None => {
                 self.recovery_failures += 1;
@@ -391,14 +486,19 @@ impl FecDecoder {
     pub fn gc(&mut self) {
         let now = std::time::Instant::now();
         let max_age = std::time::Duration::from_millis(self.max_age_ms);
-        self.blocks
-            .retain(|_, block| now.duration_since(block.created) < max_age);
+        for slot in &mut self.ring {
+            if let Some(ref block) = slot {
+                if now.duration_since(block.created) >= max_age {
+                    *slot = None;
+                }
+            }
+        }
     }
 
     /// Get recovery statistics.
     pub fn stats(&self) -> FecStats {
         FecStats {
-            active_blocks: self.blocks.len(),
+            active_blocks: self.ring.iter().filter(|s| s.is_some()).count(),
             recovered_count: self.recovered_count,
             recovery_failures: self.recovery_failures,
         }

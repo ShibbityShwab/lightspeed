@@ -151,7 +151,7 @@ impl UdpRelay {
 
             let mut pkt_buf =
                 BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
-            pkt_buf.extend_from_slice(&header.encode());
+            pkt_buf.extend_from_slice(&header.encode_to_array());
             fec_hdr.encode(&mut pkt_buf);
             pkt_buf.extend_from_slice(payload);
 
@@ -181,7 +181,7 @@ impl UdpRelay {
 
                 let mut parity_buf =
                     BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len());
-                parity_buf.extend_from_slice(&parity_header.encode());
+                parity_buf.extend_from_slice(&parity_header.encode_to_array());
                 parity_fec.encode(&mut parity_buf);
                 parity_buf.extend_from_slice(&parity_bytes);
 
@@ -229,7 +229,7 @@ impl UdpRelay {
 
         let seq = self.next_sequence();
         let header = TunnelHeader::keepalive(seq, now_us());
-        let packet = header.encode();
+        let packet = header.encode_to_array();
 
         socket.send_to(&packet, proxy_addr).await?;
         tracing::trace!(seq = seq, "Sent keepalive");
@@ -338,7 +338,7 @@ impl UdpRelay {
 
                 let mut buf =
                     BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len());
-                buf.extend_from_slice(&header.encode());
+                buf.extend_from_slice(&header.encode_to_array());
                 fec_hdr.encode(&mut buf);
                 buf.extend_from_slice(&parity_bytes);
 

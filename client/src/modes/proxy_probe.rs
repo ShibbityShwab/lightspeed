@@ -36,7 +36,7 @@ pub async fn probe_single_proxy(
             .as_micros() as u32;
 
         let header = TunnelHeader::keepalive(seq, ts);
-        let packet = header.encode();
+        let packet = header.encode_to_array();
 
         if socket.send_to(&packet, addr).await.is_err() {
             continue;
