@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0-dev] — Unreleased
 
+### Deployed (2026-04-27) — v0.4.0-dev promoted to production (commit `bd5da23`)
+
+Both Vultr nodes updated to v0.4.0-dev code in a coordinated cutover (CI run 24981406005, 1m37s):
+- **proxy-lax** (us-west-lax): restarted, ✅ healthy at uptime 44s
+- **relay-sgp** (asia-sgp): restarted, ✅ healthy at uptime 31s
+
+> ⚠️ **FEC parity wire-format break** — both nodes now run compact parity format.
+> Any client still using v0.3.x binaries that sends FEC will have parity silently
+> ignored (data packets still relay fine; no crash). FEC recovery requires matching
+> client build.
+
 ### Performance (2026-04-27) — Tier 1 hot-path optimizations (commit `6d065ff`)
 
 > ⚠️ **Breaking FEC parity wire-format change** — see `docs/protocol.md` §FEC Algorithm.
