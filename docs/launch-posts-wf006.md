@@ -170,7 +170,7 @@ Game (UDP) → Client (pcap capture) → LightSpeed Tunnel → Proxy Node → Ga
 - `hop_count`, `bgp_as_path_len`, `geographic_distance_km`
 - `time_of_day`, `day_of_week`
 
-Still building the online-learning component (incremental model updates from real latency feedback).
+The online learning loop is fully implemented: every 50 new probe samples the model retrains on live RTT data + a synthetic mix, saves the new model to disk, and swaps it in — no restart required. The first session uses a synthetic bootstrap model; subsequent sessions load the saved one.
 
 **Infrastructure:**
 2 live Vultr nodes (LA + Singapore), native binary + systemd (no Docker), Terraform for provisioning, Prometheus + Grafana for monitoring. Total ongoing cost: **$0** (Vultr credits, 60+ months of runway).

@@ -165,8 +165,7 @@ These items are pre-seeded based on likely demand from the launch announcements:
 | Apex Legends game profile | game-profile | High search volume | P2 |
 | Windows GUI / tray app | feature | Barrier to adoption | P2 |
 | Opt-in latency telemetry | feature | ML model improvement | P2 |
-| macOS binary in release | feature | r/rust feedback expected | P3 |
-| Online ML model updates | feature | v0.3.0 stub in code | P3 |
+| macOS binary in release | feature | r/rust feedback expected | ✅ Done (release.yml updated) |
 
 ---
 
