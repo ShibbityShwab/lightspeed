@@ -105,7 +105,16 @@ impl FecHeader {
         self.index >= self.k_size
     }
 
-    /// Encode to bytes (4 bytes).
+    /// Encode to a fixed-size byte array — zero-alloc hot-path variant.
+    ///
+    /// Returns exactly `[block_id_hi, block_id_lo, index, k_size]` (4 bytes).
+    #[inline]
+    pub fn encode_to_array(&self) -> [u8; FEC_HEADER_SIZE] {
+        let [hi, lo] = self.block_id.to_be_bytes();
+        [hi, lo, self.index, self.k_size]
+    }
+
+    /// Encode to bytes (4 bytes) — appends to an existing BytesMut.
     pub fn encode(&self, buf: &mut BytesMut) {
         buf.put_u16(self.block_id);
         buf.put_u8(self.index);

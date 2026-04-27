@@ -24,7 +24,6 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use bytes::BytesMut;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
@@ -32,6 +31,12 @@ use tracing::{debug, info, trace, warn};
 use lightspeed_protocol::{
     FecDecoder, FecEncoder, FecHeader, TunnelHeader, FEC_HEADER_SIZE, HEADER_SIZE,
 };
+
+/// Maximum size for a single outbound relay packet:
+/// TunnelHeader (20 B) + FecHeader (4 B) + receive buffer (2048 B).
+/// Declared as a module-level constant so the stack array in the response
+/// listener task is sized at compile time.
+const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
@@ -457,6 +462,11 @@ pub async fn run_session_response_listener(
 ) {
     let mut buf = vec![0u8; 2048];
 
+    // Single stack-allocated output buffer reused for every outbound packet.
+    // Lives in the task state (heap-allocated by Tokio) — zero per-packet alloc.
+    // Size: TunnelHeader(20) + FecHeader(4) + max recv buf(2048) = MAX_RELAY_PKT.
+    let mut pkt_buf = [0u8; MAX_RELAY_PKT];
+
     // Create FEC encoder if client supports FEC
     let mut fec_encoder = if session.fec_enabled {
         Some(FecEncoder::new(session.fec_k))
@@ -491,17 +501,18 @@ pub async fn run_session_response_listener(
                 TunnelHeader::new_fec(seq, now_us(), session.game_server, session.client_addr);
             let fec_hdr = FecHeader::data(block_id, index, session.fec_k);
 
-            let mut pkt_buf =
-                BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
-            pkt_buf.extend_from_slice(&response_header.encode_to_array());
-            fec_hdr.encode(&mut pkt_buf);
-            pkt_buf.extend_from_slice(payload);
+            // Zero-alloc: write FEC data packet directly into the pre-allocated task buffer.
+            let data_end = HEADER_SIZE + FEC_HEADER_SIZE + payload.len();
+            pkt_buf[..HEADER_SIZE].copy_from_slice(&response_header.encode_to_array());
+            pkt_buf[HEADER_SIZE..HEADER_SIZE + FEC_HEADER_SIZE]
+                .copy_from_slice(&fec_hdr.encode_to_array());
+            pkt_buf[HEADER_SIZE + FEC_HEADER_SIZE..data_end].copy_from_slice(payload);
 
             // Feed into FEC encoder
             let parity = encoder.add_packet(payload);
 
-            // Send data packet to client
-            match data_socket.send_to(&pkt_buf, session.client_addr).await {
+            // Send data packet to client (zero heap allocation)
+            match data_socket.send_to(&pkt_buf[..data_end], session.client_addr).await {
                 Ok(sent) => {
                     metrics.record_relay(sent as u64);
                     trace!(
@@ -532,13 +543,15 @@ pub async fn run_session_response_listener(
                 );
                 let parity_fec = FecHeader::parity(block_id, session.fec_k);
 
-                let mut parity_buf =
-                    BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len());
-                parity_buf.extend_from_slice(&parity_header.encode_to_array());
-                parity_fec.encode(&mut parity_buf);
-                parity_buf.extend_from_slice(&parity_bytes);
+                // Zero-alloc: reuse the same task-stack buffer for parity.
+                let par_end = HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len();
+                pkt_buf[..HEADER_SIZE].copy_from_slice(&parity_header.encode_to_array());
+                pkt_buf[HEADER_SIZE..HEADER_SIZE + FEC_HEADER_SIZE]
+                    .copy_from_slice(&parity_fec.encode_to_array());
+                pkt_buf[HEADER_SIZE + FEC_HEADER_SIZE..par_end]
+                    .copy_from_slice(&parity_bytes);
 
-                match data_socket.send_to(&parity_buf, session.client_addr).await {
+                match data_socket.send_to(&pkt_buf[..par_end], session.client_addr).await {
                     Ok(sent) => {
                         metrics.record_relay(sent as u64);
                         trace!(
@@ -558,13 +571,16 @@ pub async fn run_session_response_listener(
                 }
             }
         } else {
-            // ── Non-FEC mode: original behavior ─────────────────────
+            // ── Non-FEC mode: zero-alloc response ────────────────────
             let response_header =
                 TunnelHeader::new(seq, now_us(), session.game_server, session.client_addr);
 
-            let packet = response_header.encode_with_payload(payload);
+            // Write header + payload directly into the pre-allocated task buffer.
+            pkt_buf[..HEADER_SIZE].copy_from_slice(&response_header.encode_to_array());
+            pkt_buf[HEADER_SIZE..HEADER_SIZE + payload.len()].copy_from_slice(payload);
+            let pkt_end = HEADER_SIZE + payload.len();
 
-            match data_socket.send_to(&packet, session.client_addr).await {
+            match data_socket.send_to(&pkt_buf[..pkt_end], session.client_addr).await {
                 Ok(sent) => {
                     metrics.record_relay(sent as u64);
                     trace!(
@@ -656,6 +672,7 @@ pub async fn run_session_manager(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::BytesMut;
     use std::net::Ipv4Addr;
 
     #[tokio::test]
