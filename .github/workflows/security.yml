@@ -1,0 +1,52 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Run weekly to catch newly-published advisories even without code changes
+  schedule:
+    - cron: "0 6 * * 1"   # Monday 06:00 UTC
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── cargo audit ─────────────────────────────────────────────────────────────
+  # Checks every dependency against the RustSec Advisory Database.
+  # Fails the build on any known security vulnerability (CVE / RUSTSEC-*).
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        run: cargo audit
+        # Treat any advisory as a hard failure (default behaviour)
+
+  # ── cargo deny ──────────────────────────────────────────────────────────────
+  # Enforces license compliance, bans known-bad crates, and detects duplicate
+  # dependency versions.  Configuration lives in deny.toml at repo root.
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # Run all checks defined in deny.toml
+          command: check
+          # Use the deny.toml at the workspace root
+          manifest-path: Cargo.toml
+          # Surface all issues rather than stopping at first failure
+          arguments: --all-features
