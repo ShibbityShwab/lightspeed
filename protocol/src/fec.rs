@@ -159,14 +159,29 @@ impl FecHeader {
 /// data bytes are present, and the last two bytes to recover the original
 /// packet length.  This allows parity packets to be as small as the largest
 /// game packet + 2 bytes (often 64–768 B) instead of always 1400 B.
+///
+/// ## Zero-alloc hot path (WF-008 Item L)
+///
+/// For the relay outbound hot path, use the three-phase zero-alloc API:
+/// 1. [`add_packet_inplace`] — XOR payload into accumulator, returns `bool`
+/// 2. [`emit_parity_to`]    — write parity into caller's buffer (no heap alloc)
+/// 3. [`next_block`]        — advance block ID and reset accumulator
+///
+/// [`add_packet`] wraps this three-phase flow and returns a heap-allocated
+/// [`Bytes`] for callers that don't control their output buffer.
 #[derive(Debug)]
 pub struct FecEncoder {
     /// Current block ID.
     block_id: u16,
     /// Block size (K data packets per block).
     k_size: u8,
-    /// Accumulated data packets in current block.
-    data_packets: Vec<Bytes>,
+    /// Number of data packets accumulated in the current block.
+    ///
+    /// Replaces the old `data_packets: Vec<Bytes>` (WF-008 Item L):
+    /// We only needed the count for block-complete detection and `flush()`.
+    /// Eliminating the Vec removes one `Bytes::copy_from_slice` heap allocation
+    /// per data packet on the encoder hot path.
+    data_count: u8,
     /// Running XOR parity scratch buffer (always FEC_MAX_PAYLOAD bytes).
     parity: Vec<u8>,
     /// Maximum payload length seen in the current block — determines emit length.
@@ -183,7 +198,7 @@ impl FecEncoder {
         Self {
             block_id: 0,
             k_size: k,
-            data_packets: Vec::with_capacity(k as usize),
+            data_count: 0,
             parity: vec![0u8; FEC_MAX_PAYLOAD],
             parity_len: 0,
             lengths_xor: 0,
@@ -195,12 +210,88 @@ impl FecEncoder {
         self.block_id
     }
 
-    /// Get the current index within the block.
+    /// Get the current index within the block (= number of packets so far).
     pub fn current_index(&self) -> u8 {
-        self.data_packets.len() as u8
+        self.data_count
     }
 
-    /// Emit the parity for the current block state.
+    // ── New zero-alloc API (WF-008 Item L) ───────────────────────────────────
+
+    /// Zero-alloc hot-path: XOR `payload` into the parity accumulator.
+    ///
+    /// Returns `true` if the block is now complete and parity is ready to emit.
+    /// When `true` is returned, call [`emit_parity_to`] then [`next_block`].
+    ///
+    /// Unlike [`add_packet`], this method never allocates.
+    #[inline]
+    pub fn add_packet_inplace(&mut self, payload: &[u8]) -> bool {
+        let len = payload.len().min(FEC_MAX_PAYLOAD);
+        for (p, &b) in self.parity[..len].iter_mut().zip(payload.iter()) {
+            *p ^= b;
+        }
+        if len > self.parity_len {
+            self.parity_len = len;
+        }
+        self.lengths_xor ^= payload.len() as u16;
+        self.data_count += 1;
+        self.data_count >= self.k_size
+    }
+
+    /// Zero-alloc hot-path: write parity content for the complete block into `out`.
+    ///
+    /// Returns the number of bytes written (`max_payload_in_block + 2`).
+    /// `out` must be at least `parity_len + 2` bytes long (max `FEC_MAX_PAYLOAD + 2 = 1402`).
+    ///
+    /// **Precondition**: [`add_packet_inplace`] must have returned `true`.
+    /// After calling this, call [`next_block`] to reset the accumulator.
+    #[inline]
+    pub fn emit_parity_to(&self, out: &mut [u8]) -> usize {
+        let emit_len = self.parity_len + 2;
+        debug_assert!(
+            out.len() >= emit_len,
+            "emit_parity_to: buffer too small ({} < {})",
+            out.len(),
+            emit_len
+        );
+        out[..self.parity_len].copy_from_slice(&self.parity[..self.parity_len]);
+        out[self.parity_len..emit_len].copy_from_slice(&self.lengths_xor.to_be_bytes());
+        emit_len
+    }
+
+    /// Zero-alloc hot-path: advance to the next FEC block.
+    ///
+    /// Resets the parity accumulator, data counter, and length tracking.
+    /// Must be called after [`emit_parity_to`] once the caller has
+    /// consumed / transmitted the parity content.
+    #[inline]
+    pub fn next_block(&mut self) {
+        self.block_id = self.block_id.wrapping_add(1);
+        self.parity.fill(0);
+        self.parity_len = 0;
+        self.lengths_xor = 0;
+        self.data_count = 0;
+    }
+
+    // ── Allocating API (convenience / non-hot-path callers) ──────────────────
+
+    /// Add a data packet and return parity [`Bytes`] if the block is complete.
+    ///
+    /// Internally uses [`add_packet_inplace`] + [`emit_parity`] + [`next_block`].
+    /// Allocates a `Bytes` once per completed block.
+    ///
+    /// For the relay hot path, prefer the zero-alloc three-phase API:
+    /// [`add_packet_inplace`] → [`emit_parity_to`] → [`next_block`].
+    pub fn add_packet(&mut self, payload: &[u8]) -> Option<Bytes> {
+        if self.add_packet_inplace(payload) {
+            let parity = self.emit_parity();
+            self.next_block();
+            Some(parity)
+        } else {
+            None
+        }
+    }
+
+    /// Emit the current block's parity as a heap-allocated [`Bytes`].
     ///
     /// Format: `parity[..parity_len] || lengths_xor as 2 BE bytes`
     fn emit_parity(&self) -> Bytes {
@@ -211,60 +302,17 @@ impl FecEncoder {
         out.freeze()
     }
 
-    /// Add a data packet to the current block and XOR into parity.
-    ///
-    /// Returns `Some(parity_bytes)` when the block is complete (K packets received),
-    /// or `None` if the block is still accumulating.
-    ///
-    /// The returned parity is `max_payload_len + 2` bytes — much smaller than
-    /// the old fixed 1400-byte buffer for typical game packets (64–512 B).
-    pub fn add_packet(&mut self, payload: &[u8]) -> Option<Bytes> {
-        let len = payload.len().min(FEC_MAX_PAYLOAD);
-
-        // XOR payload into running parity (only the actual payload bytes)
-        for (p, &b) in self.parity[..len].iter_mut().zip(payload.iter()) {
-            *p ^= b;
-        }
-
-        // Track the maximum payload length seen in this block
-        if len > self.parity_len {
-            self.parity_len = len;
-        }
-
-        // XOR this packet's length into the lengths accumulator
-        self.lengths_xor ^= payload.len() as u16;
-
-        self.data_packets.push(Bytes::copy_from_slice(payload));
-
-        if self.data_packets.len() >= self.k_size as usize {
-            // Block complete — emit compact parity and reset
-            let parity = self.emit_parity();
-            self.reset_block();
-            Some(parity)
-        } else {
-            None
-        }
-    }
-
     /// Force-flush an incomplete block (e.g., on timeout).
     /// Returns parity for the partial block if any packets were accumulated.
     pub fn flush(&mut self) -> Option<(u16, u8, Bytes)> {
-        if self.data_packets.is_empty() {
+        if self.data_count == 0 {
             return None;
         }
         let block_id = self.block_id;
-        let actual_k = self.data_packets.len() as u8;
+        let actual_k = self.data_count;
         let parity = self.emit_parity();
-        self.reset_block();
+        self.next_block();
         Some((block_id, actual_k, parity))
-    }
-
-    fn reset_block(&mut self) {
-        self.block_id = self.block_id.wrapping_add(1);
-        self.data_packets.clear();
-        self.parity.fill(0);
-        self.parity_len = 0;
-        self.lengths_xor = 0;
     }
 }
 
@@ -273,26 +321,37 @@ impl FecEncoder {
 // ────────────────────────────────────────────────────────────
 
 /// Tracks received packets for a single FEC block.
+///
+/// ## WF-008 Item N — Inline received-packet array
+///
+/// `received` was previously `Vec<Option<Bytes>>`, which allocated `k_size × sizeof(Option<Bytes>)`
+/// bytes on the heap every time a new block was created.  Replacing it with a fixed
+/// `[Option<Bytes>; MAX_BLOCK_SIZE as usize]` (16 elements) stores the array directly in
+/// the ring-buffer slot, eliminating one heap allocation per new FEC block with zero
+/// functionality change.
 #[derive(Debug)]
 struct BlockState {
     /// Block ID — used to validate ring-buffer slot ownership.
     block_id: u16,
-    /// Which data packet indices have been received.
-    received: Vec<Option<Bytes>>,
+    /// Received data packets indexed by their position in the block (0..k_size-1).
+    ///
+    /// Fixed-size inline array — no heap allocation on block creation.
+    /// Only indices 0..k_size are logically valid; the rest are always `None`.
+    received: [Option<Bytes>; MAX_BLOCK_SIZE as usize],
     /// Parity packet (if received).
     parity: Option<Bytes>,
-    /// Block size (K). Retained for debugging.
-    #[allow(dead_code)]
+    /// Block size (K). Used to bound iteration over `received`.
     k_size: u8,
     // NOTE: no `created: Instant` — age is tracked via block_id watermark in FecDecoder,
-    // eliminating the ~150 ns Windows QPC syscall from the hot path.
+    // eliminating the ~150 ns Windows QPC syscall from the hot path (Item J).
 }
 
 impl BlockState {
     fn new(block_id: u16, k_size: u8) -> Self {
         Self {
             block_id,
-            received: vec![None; k_size as usize],
+            // [Option<Bytes>; 16]: Default gives [None; 16] — no heap alloc.
+            received: Default::default(),
             parity: None,
             k_size,
         }
@@ -300,7 +359,7 @@ impl BlockState {
 
     /// Record a received data packet.
     fn receive_data(&mut self, index: u8, payload: Bytes) {
-        if (index as usize) < self.received.len() {
+        if (index as usize) < self.k_size as usize {
             self.received[index as usize] = Some(payload);
         }
     }
@@ -310,9 +369,12 @@ impl BlockState {
         self.parity = Some(payload);
     }
 
-    /// Count how many data packets are missing.
+    /// Count how many data packets are missing (only in 0..k_size range).
     fn missing_count(&self) -> usize {
-        self.received.iter().filter(|p| p.is_none()).count()
+        self.received[..self.k_size as usize]
+            .iter()
+            .filter(|p| p.is_none())
+            .count()
     }
 
     /// Try to recover a single missing data packet using parity.
@@ -334,11 +396,14 @@ impl BlockState {
             return None;
         }
 
-        // The last 2 bytes are the XOR of all packet lengths
         let parity_content_len = parity.len() - 2;
+        let k = self.k_size as usize;
 
-        // Find the missing index
-        let missing_idx = self.received.iter().position(|p| p.is_none()).unwrap();
+        // Find the missing index (within 0..k_size)
+        let missing_idx = self.received[..k]
+            .iter()
+            .position(|p| p.is_none())
+            .unwrap();
 
         // Start length accumulator with the lengths_xor from parity
         let mut lengths_xor =
@@ -348,8 +413,8 @@ impl BlockState {
         let mut recovered = vec![0u8; parity_content_len];
         recovered.copy_from_slice(&parity[..parity_content_len]);
 
-        // XOR in all received data packets
-        for (i, slot) in self.received.iter().enumerate() {
+        // XOR in all received data packets (within 0..k_size)
+        for (i, slot) in self.received[..k].iter().enumerate() {
             if i == missing_idx {
                 continue;
             }
@@ -414,10 +479,6 @@ impl FecDecoder {
     }
 
     /// Advance the block-ID watermark used for GC.
-    ///
-    /// Uses wrapping comparison so the watermark advances correctly across
-    /// the u16 rollover boundary.  A block_id is "newer" if
-    /// `(id - max) as i16 > 0`.
     #[inline]
     fn update_watermark(&mut self, block_id: u16) {
         if (block_id.wrapping_sub(self.max_seen_block_id) as i16) > 0 {
@@ -732,6 +793,76 @@ mod tests {
         assert_eq!(k, 1);
     }
 
+    // ── Zero-alloc API tests (WF-008 Item L) ─────────────────────────────────
+
+    /// Verify that the three-phase zero-alloc API produces the same parity
+    /// as the single-call `add_packet` path.
+    #[test]
+    fn test_add_packet_inplace_matches_add_packet() {
+        let payload_a = b"game_packet_alpha_data";
+        let payload_b = b"game_packet_beta_data_longer";
+
+        // Reference output via add_packet (allocating path)
+        let mut enc_ref = FecEncoder::new(2);
+        enc_ref.add_packet(payload_a);
+        let ref_parity = enc_ref.add_packet(payload_b).unwrap();
+
+        // Test output via zero-alloc path
+        let mut enc_zalloc = FecEncoder::new(2);
+        let complete_a = enc_zalloc.add_packet_inplace(payload_a);
+        assert!(!complete_a, "Block should not be complete after first packet");
+        let complete_b = enc_zalloc.add_packet_inplace(payload_b);
+        assert!(complete_b, "Block should be complete after second packet");
+
+        let mut parity_buf = [0u8; FEC_MAX_PAYLOAD + 2];
+        let parity_len = enc_zalloc.emit_parity_to(&mut parity_buf);
+        enc_zalloc.next_block();
+
+        assert_eq!(&parity_buf[..parity_len], &ref_parity[..]);
+    }
+
+    /// Verify that next_block advances the block ID correctly.
+    #[test]
+    fn test_next_block_advances_id() {
+        let mut enc = FecEncoder::new(2);
+        assert_eq!(enc.block_id(), 0);
+        enc.add_packet_inplace(b"a");
+        enc.add_packet_inplace(b"b");
+        let mut buf = [0u8; 16];
+        enc.emit_parity_to(&mut buf);
+        enc.next_block();
+        assert_eq!(enc.block_id(), 1);
+        assert_eq!(enc.current_index(), 0);
+    }
+
+    /// Full zero-alloc round-trip: encoder uses inplace API, decoder recovers.
+    #[test]
+    fn test_zero_alloc_end_to_end_recovery() {
+        let packets = [b"alpha packet data" as &[u8], b"beta_pkt_data!!!!"];
+        let mut encoder = FecEncoder::new(2);
+
+        let _ = encoder.add_packet_inplace(packets[0]);
+        let complete = encoder.add_packet_inplace(packets[1]);
+        assert!(complete);
+
+        let mut parity_buf = [0u8; FEC_MAX_PAYLOAD + 2];
+        let parity_len = encoder.emit_parity_to(&mut parity_buf);
+        let parity_bytes = Bytes::copy_from_slice(&parity_buf[..parity_len]);
+        encoder.next_block();
+
+        // Decode: lose packet 0
+        let mut decoder = FecDecoder::new();
+        decoder.receive_data(
+            &FecHeader::data(0, 1, 2),
+            Bytes::copy_from_slice(packets[1]),
+        );
+        let result = decoder.receive_parity(&FecHeader::parity(0, 2), parity_bytes);
+        assert!(result.is_some());
+        let (idx, recovered) = result.unwrap();
+        assert_eq!(idx, 0);
+        assert_eq!(&recovered[..], packets[0]);
+    }
+
     /// End-to-end FEC pipeline test simulating a full tunnel session:
     /// 1. Encode 3 blocks of 4 packets each with FEC headers
     /// 2. Simulate losing 1 packet per block
@@ -753,8 +884,7 @@ mod tests {
             .collect();
 
         // ── SENDER SIDE ──────────────────────────────────────────
-        // Build wire-format packets: [TunnelHeader v2][FecHeader][payload]
-        let mut wire_packets: Vec<(FecHeader, Vec<u8>)> = Vec::new(); // (fec_hdr, full_wire_packet)
+        let mut wire_packets: Vec<(FecHeader, Vec<u8>)> = Vec::new();
         let mut parity_packets: Vec<(FecHeader, Vec<u8>)> = Vec::new();
 
         for (i, payload) in game_packets.iter().enumerate() {
@@ -765,7 +895,6 @@ mod tests {
             let tunnel_hdr = TunnelHeader::new_fec(seq, 1000 + i as u32, src, dst);
             let fec_hdr = FecHeader::data(block_id, index, k);
 
-            // Build wire packet
             let mut buf = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
             buf.extend_from_slice(&tunnel_hdr.encode());
             fec_hdr.encode(&mut buf);
@@ -773,7 +902,6 @@ mod tests {
 
             wire_packets.push((fec_hdr, buf.to_vec()));
 
-            // Feed into FEC encoder
             let parity = encoder.add_packet(payload);
             if let Some(parity_bytes) = parity {
                 let parity_hdr = FecHeader::parity(block_id, k);
@@ -792,30 +920,23 @@ mod tests {
 
         // ── RECEIVER SIDE (simulate packet loss) ─────────────────
         let mut decoder = FecDecoder::new();
-        let mut recovered_payloads: Vec<(usize, Vec<u8>)> = Vec::new(); // (original_index, data)
-        let mut received_payloads: Vec<(usize, Vec<u8>)> = Vec::new();
+        let mut recovered_payloads: Vec<(usize, Vec<u8>)> = Vec::new();
 
         for (block_num, (parity_fec, parity_wire)) in parity_packets.iter().enumerate() {
             let block_start = block_num * k as usize;
-            // Lose packet index 1 in each block (simulate network loss)
             let lost_index_in_block: usize = 1;
             let lost_global_index = block_start + lost_index_in_block;
 
-            // Receive data packets (skip the lost one)
             for i in 0..k as usize {
                 let global_idx = block_start + i;
                 if i == lost_index_in_block {
-                    continue; // Simulate loss
+                    continue;
                 }
-
                 let (fec_hdr, wire_pkt) = &wire_packets[global_idx];
                 let game_data = &wire_pkt[HEADER_SIZE + FEC_HEADER_SIZE..];
-                let data_bytes = Bytes::copy_from_slice(game_data);
-                decoder.receive_data(fec_hdr, data_bytes.clone());
-                received_payloads.push((global_idx, game_data.to_vec()));
+                decoder.receive_data(fec_hdr, Bytes::copy_from_slice(game_data));
             }
 
-            // Receive parity packet → should trigger recovery
             let parity_data = &parity_wire[HEADER_SIZE + FEC_HEADER_SIZE..];
             let result = decoder.receive_parity(parity_fec, Bytes::copy_from_slice(parity_data));
 
@@ -830,11 +951,9 @@ mod tests {
                 "Should recover index {} in block {}",
                 lost_index_in_block, block_num
             );
-
             recovered_payloads.push((lost_global_index, recovered_data.to_vec()));
         }
 
-        // ── VERIFY ALL PAYLOADS RECOVERED CORRECTLY ──────────────
         assert_eq!(recovered_payloads.len(), num_blocks);
         for (global_idx, recovered) in &recovered_payloads {
             assert_eq!(
@@ -844,7 +963,6 @@ mod tests {
             );
         }
 
-        // Verify decoder stats
         let stats = decoder.stats();
         assert_eq!(stats.recovered_count, num_blocks as u64);
         assert_eq!(stats.active_blocks, 0, "All blocks should be cleaned up");
@@ -853,19 +971,18 @@ mod tests {
     /// Test FEC with realistic game packet sizes (Fortnite-like: 50-500 bytes)
     #[test]
     fn test_fec_realistic_game_packets() {
-        let k: u8 = 8; // Realistic block size
+        let k: u8 = 8;
         let mut encoder = FecEncoder::new(k);
 
-        // Simulate realistic game packet sizes
         let packets: Vec<Vec<u8>> = vec![
-            vec![0xAA; 64],  // Position update (small)
-            vec![0xBB; 128], // Movement input
-            vec![0xCC; 256], // State sync
-            vec![0xDD; 48],  // Keepalive-like
-            vec![0xEE; 512], // Large state update
-            vec![0xFF; 96],  // Hit registration
-            vec![0x11; 200], // Inventory update
-            vec![0x22; 384], // Player spawn data
+            vec![0xAA; 64],
+            vec![0xBB; 128],
+            vec![0xCC; 256],
+            vec![0xDD; 48],
+            vec![0xEE; 512],
+            vec![0xFF; 96],
+            vec![0x11; 200],
+            vec![0x22; 384],
         ];
 
         let mut parity = None;
@@ -878,7 +995,7 @@ mod tests {
         let mut decoder = FecDecoder::new();
         for (i, pkt) in packets.iter().enumerate() {
             if i == 4 {
-                continue; // Lost!
+                continue;
             }
             decoder.receive_data(&FecHeader::data(0, i as u8, k), Bytes::copy_from_slice(pkt));
         }

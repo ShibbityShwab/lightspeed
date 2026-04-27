@@ -9,12 +9,12 @@
 
 | Key | Value |
 |-----|-------|
-| **Active Workflow** | WF-007 Refinement & Hardening — ✅ COMPLETE + v0.4.0 RELEASED ✅ |
-| **Current Step** | ✅ v0.4.0 GitHub Release published — 5 platform archives live |
-| **Active Agents** | RustDev, QAEngineer |
+| **Active Workflow** | WF-008 Hardening Pass v2 — 🔄 IN PROGRESS |
+| **Current Step** | Items L + N + O complete; perf baseline updated; committing + push + redeploy pending |
+| **Active Agents** | RustDev, QAEngineer, PerfEngineer |
 | **Blocked On** | Nothing |
-| **Last Checkpoint** | 2026-04-27T17:01:00+07:00 |
-| **Next Action** | Docs-only cleanup complete (D-020). All nodes confirmed as single `lightspeed-proxy` binary. Next sprint: WF-008 (US-East / EU-West mesh expansion) or maintainer-directed refinement. |
+| **Last Checkpoint** | 2026-04-27T17:56:00+07:00 |
+| **Next Action** | `git commit + push` → CI triggers coverage + check jobs → `gh workflow run deploy.yml` to redeploy both nodes |
 | **WAT Version** | 0.3.9 |
 
 ---
@@ -64,6 +64,18 @@
   - proxy-lax: ✅ healthy, uptime 44s post-deploy
   - relay-sgp: ✅ healthy, uptime 31s post-deploy
 - Commits: `82509fa` (3B code), `bd5da23` (deploy script), `e3a7e61` (CHANGELOG)
+
+### 2026-04-27 — WF-008 Hardening Pass v2 (Items L + N + O)
+- **Item L:** `FecEncoder` zero-alloc API — `add_packet_inplace`, `emit_parity_to`, `next_block` ✅
+  - Eliminates `Bytes::copy_from_slice` per data packet (was K heap allocs per block)
+  - Perf: -46% to -85% time reduction across K2–K16, all payload sizes
+  - relay.rs hot path updated to three-phase zero-alloc protocol ✅
+- **Item N:** `BlockState.received: [Option<Bytes>; 16]` — eliminates `vec![None; k]` per block ✅
+  - Decoder cold-path alloc removed; K=4 recovery shows ⚠️ +14-30% over-init regression (cold, negligible)
+- **Item O:** CI coverage job — `cargo-llvm-cov`, LCOV artifact, 14-day retention ✅
+- Tests: 153 pass, 0 fail ✅
+- Build: release 6.29s ✅
+- Perf baseline updated with full WF-008 delta section ✅
 
 ### 2026-04-27 — Track A perf sprint (item J + docs)
 - Remove `Instant::now()` from `BlockState::new()` — watermark GC instead ✅

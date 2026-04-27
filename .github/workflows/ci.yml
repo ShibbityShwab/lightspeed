@@ -46,3 +46,37 @@ jobs:
 
       - name: Lib tests
         run: cargo test --workspace --lib --exclude lightspeed-gui
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov \
+            --workspace \
+            --exclude lightspeed-gui \
+            --all-features \
+            --lcov \
+            --output-path lcov.info
+
+      - name: Print coverage summary
+        run: cargo llvm-cov report --workspace --exclude lightspeed-gui --all-features
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          retention-days: 14

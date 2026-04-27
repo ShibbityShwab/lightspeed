@@ -725,7 +725,16 @@ pub async fn run_session_response_listener(
         let seq = session.response_seq.fetch_add(1, Ordering::Relaxed);
 
         if let Some(ref mut encoder) = fec_encoder {
-            // ── FEC mode: wrap with FEC header ──────────────────────
+            // ── FEC mode: zero-alloc data + parity path (WF-008 Item L) ──────
+            //
+            // Three-phase zero-alloc protocol:
+            //   1. add_packet_inplace  — XOR into parity accumulator (no alloc)
+            //   2. emit_parity_to      — write parity directly into pkt_buf (no alloc)
+            //   3. next_block          — reset accumulator for the next block
+            //
+            // This eliminates both the per-data-packet `Bytes::copy_from_slice`
+            // that `add_packet` used to perform and the `BytesMut::with_capacity`
+            // that `emit_parity` allocated once per completed block.
             let block_id = encoder.block_id();
             let index = encoder.current_index();
 
@@ -735,14 +744,14 @@ pub async fn run_session_response_listener(
             let fec_hdr = FecHeader::data(block_id, index, session.fec_k);
 
             // Zero-alloc: write FEC data packet directly into the pre-allocated task buffer.
-            let data_end = HEADER_SIZE + FEC_HEADER_SIZE + payload.len();
+            let parity_offset = HEADER_SIZE + FEC_HEADER_SIZE;
+            let data_end = parity_offset + payload.len();
             pkt_buf[..HEADER_SIZE].copy_from_slice(&response_header.encode_to_array());
-            pkt_buf[HEADER_SIZE..HEADER_SIZE + FEC_HEADER_SIZE]
-                .copy_from_slice(&fec_hdr.encode_to_array());
-            pkt_buf[HEADER_SIZE + FEC_HEADER_SIZE..data_end].copy_from_slice(payload);
+            pkt_buf[HEADER_SIZE..parity_offset].copy_from_slice(&fec_hdr.encode_to_array());
+            pkt_buf[parity_offset..data_end].copy_from_slice(payload);
 
-            // Feed into FEC encoder
-            let parity = encoder.add_packet(payload);
+            // Phase 1: XOR payload into parity accumulator — no allocation.
+            let block_complete = encoder.add_packet_inplace(payload);
 
             // Send data packet to client (zero heap allocation)
             match data_socket
@@ -768,8 +777,9 @@ pub async fn run_session_response_listener(
                 }
             }
 
-            // If block complete, send parity packet
-            if let Some(parity_bytes) = parity {
+            // Phase 2 + 3: if block complete, emit parity directly into pkt_buf
+            // and send — still zero heap allocation.
+            if block_complete {
                 let parity_seq = session.response_seq.fetch_add(1, Ordering::Relaxed);
                 let parity_header = TunnelHeader::new_fec(
                     parity_seq,
@@ -779,12 +789,16 @@ pub async fn run_session_response_listener(
                 );
                 let parity_fec = FecHeader::parity(block_id, session.fec_k);
 
-                // Zero-alloc: reuse the same task-stack buffer for parity.
-                let par_end = HEADER_SIZE + FEC_HEADER_SIZE + parity_bytes.len();
+                // Phase 2: write parity content directly into the pre-allocated buffer.
+                // pkt_buf[parity_offset..] is free — the data packet was already sent.
+                let parity_len = encoder.emit_parity_to(&mut pkt_buf[parity_offset..]);
+                let par_end = parity_offset + parity_len;
+
+                // Write parity packet headers (overwrites the earlier data headers —
+                // safe because the data packet was sent above).
                 pkt_buf[..HEADER_SIZE].copy_from_slice(&parity_header.encode_to_array());
-                pkt_buf[HEADER_SIZE..HEADER_SIZE + FEC_HEADER_SIZE]
+                pkt_buf[HEADER_SIZE..parity_offset]
                     .copy_from_slice(&parity_fec.encode_to_array());
-                pkt_buf[HEADER_SIZE + FEC_HEADER_SIZE..par_end].copy_from_slice(&parity_bytes);
 
                 match data_socket
                     .send_to(&pkt_buf[..par_end], session.client_addr)
@@ -796,7 +810,7 @@ pub async fn run_session_response_listener(
                             client = %session.client_addr,
                             seq = parity_seq,
                             fec_block = block_id,
-                            "Sent parity to client"
+                            "Sent parity to client (zero-alloc)"
                         );
                     }
                     Err(e) => {
@@ -807,6 +821,9 @@ pub async fn run_session_response_listener(
                         );
                     }
                 }
+
+                // Phase 3: advance to the next block.
+                encoder.next_block();
             }
         } else {
             // ── Non-FEC mode: zero-alloc response ────────────────────
