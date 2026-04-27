@@ -9,12 +9,12 @@
 
 | Key | Value |
 |-----|-------|
-| **Active Workflow** | WF-008 Hardening Pass v2 — 🔄 IN PROGRESS |
-| **Current Step** | Items L + N + O complete; perf baseline updated; committing + push + redeploy pending |
-| **Active Agents** | RustDev, QAEngineer, PerfEngineer |
+| **Active Workflow** | WF-008 Hardening Pass v2 — ✅ COMPLETE |
+| **Current Step** | All items (L + N + O) shipped; commit e5b616d pushed; deploy workflow triggered |
+| **Active Agents** | — |
 | **Blocked On** | Nothing |
-| **Last Checkpoint** | 2026-04-27T17:56:00+07:00 |
-| **Next Action** | `git commit + push` → CI triggers coverage + check jobs → `gh workflow run deploy.yml` to redeploy both nodes |
+| **Last Checkpoint** | 2026-04-27T17:59:30+07:00 |
+| **Next Action** | Monitor CI (coverage + check + deploy jobs); review WF-009 backlog for next sprint |
 | **WAT Version** | 0.3.9 |
 
 ---

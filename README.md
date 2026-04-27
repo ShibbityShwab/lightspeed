@@ -42,7 +42,7 @@ Your PC  ──UDP Tunnel──▶  Proxy Node   ──Direct UDP──▶  Game
 | Metric | Target | Achieved |
 |--------|--------|----------|
 | Tunnel overhead | ≤ 5ms | **162μs** ✅ |
-| Test pass rate | 100% | **~110 tests (100%)** ✅ |
+| Test pass rate | 100% | **153 tests (100%)** ✅ |
 | Security findings | 0 Critical/High | **0** ✅ |
 | Proxy RAM usage | < 10MB | **~500KB** ✅ |
 | WARP improvement | — | **5-10ms** ✅ |
@@ -267,7 +267,7 @@ cargo clippy --workspace
 - [x] **v0.1.0** — MVP: UDP tunnel, proxy server, QUIC control, security hardening, 52 tests
 - [x] **v0.2.0** — FEC (XOR parity), Cloudflare WARP integration, UDP redirect mode, live Vultr mesh, protocol v2
 - [x] **v0.3.0** — Prometheus + Grafana monitoring, 10 alerting rules, CI/CD pipeline, pre-built binaries, load tested at 0.00% packet loss, online ML learning
-- [x] **v0.4.0** — 9-game support (OW2, LoL, PUBG added), session telemetry (`--telemetry`), Windows GUI tray app, recvmmsg batched I/O, ~110 tests across 4 crates, security hardening
+- [x] **v0.4.0** — 9-game support (OW2, LoL, PUBG added), session telemetry (`--telemetry`), Windows GUI tray app, recvmmsg batched I/O, zero-alloc FEC hot path (-57% encode time), 153 tests across 4 crates, CI coverage job
 - [ ] **v1.0.0** — Public stable release: polished UX, installer wizard, community proxy network
 
 ## Contributing

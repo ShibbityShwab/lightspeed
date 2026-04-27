@@ -75,6 +75,36 @@ Both Vultr nodes updated to v0.4.0-dev code in a coordinated cutover (CI run 249
 > ignored (data packets still relay fine; no crash). FEC recovery requires matching
 > client build.
 
+### Performance (2026-04-27) — WF-008 Hardening Pass v2: zero-alloc FEC + CI coverage (commit `e5b616d`)
+
+- **Item L: `FecEncoder` zero-alloc API** — new `add_packet_inplace(&[u8]) -> bool` XORs directly into
+  the encoder's internal parity buffer (no `Bytes::copy_from_slice`, no intermediate allocation).
+  `emit_parity_to(&mut [u8]) -> usize` writes the parity block into a caller-supplied buffer.
+  `next_block()` resets the block counter, closing the per-block lifecycle without any heap touch.
+  The `relay.rs` response-listener hot path updated to the three-phase zero-alloc protocol:
+  `add_packet_inplace` → accumulate → `emit_parity_to` → write into task-stack send buffer.
+  Eliminates K heap allocations per FEC block (was `Bytes::copy_from_slice` × K per block).
+  **Perf improvements (Criterion, release build):**
+  - `fec/encoder/add_packet K=2` — 46% faster
+  - `fec/encoder/add_packet K=4` — 52% faster
+  - `fec/encoder/add_packet K=8` — 72% faster
+  - `fec/encoder/add_packet K=16` — 85% faster
+  - Full block K=4/256B: 207.7 ns → 88.3 ns (−57%)
+  - Full block K=8/256B: 464.8 ns → 111.3 ns (−76%)
+  - Relay outbound 64B:  −33%, 256B: −25%, 512B: −30%, 1024B: −27%
+  - Header encode:       −24%; `encode_to_array`: −14%; decode: −12%
+
+- **Item N: `BlockState.received` fixed-size array** — changed
+  `received: Vec<Option<Bytes>>` to `received: [Option<Bytes>; MAX_BLOCK_SIZE as usize]` (= 16 slots).
+  Eliminates the `vec![None; k]` heap allocation on every new FEC block (fires once per K data packets
+  at normal loss rates — ~1.5× per second at 1% loss). Known trade-off: K=4 FEC recovery cold path
+  shows +14-30% regression (over-initialization of 16 slots for K=4 blocks; negligible in practice).
+
+- **Item O: CI coverage job** — added `coverage` job to `.github/workflows/ci.yml` using
+  `cargo-llvm-cov --workspace --lcov`. LCOV report uploaded as artifact with 14-day retention.
+
+- **Tests:** 153 pass, 0 fail (+5 new FEC tests for the inplace encoder API)
+
 ### Performance (2026-04-27) — Tier 1 hot-path optimizations (commit `6d065ff`)
 
 > ⚠️ **Breaking FEC parity wire-format change** — see `docs/protocol.md` §FEC Algorithm.
