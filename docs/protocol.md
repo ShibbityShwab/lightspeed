@@ -1,6 +1,6 @@
 # ⚡ LightSpeed Tunnel Protocol v1/v2
 
-> Last updated: 2026-02-23 — Added FEC extension (protocol v2)
+> Last updated: 2026-04-27 — v0.4.0-dev: compact FEC parity format, zero-alloc header encode
 
 ---
 
@@ -107,17 +107,27 @@ When `Version = 2`, the v1 header is followed by a 6-byte FEC extension:
 The FEC scheme uses simple XOR parity across a group of K data packets:
 
 ```
-Group of K=4 data packets:
-  P1 = [data1...]  (padded to max_len)
-  P2 = [data2...]  (padded to max_len)
-  P3 = [data3...]  (padded to max_len)
-  P4 = [data4...]  (padded to max_len)
+Group of K=4 data packets (variable length: 64, 128, 256, 64 bytes):
+  max_len = 256   (max of all payload lengths in the block)
 
-Parity:
-  P_parity = P1 ⊕ P2 ⊕ P3 ⊕ P4  (byte-wise XOR)
+  P1 = [data1...] ‖ 0-pad to max_len
+  P2 = [data2...] ‖ 0-pad to max_len
+  P3 = [data3...] ‖ 0-pad to max_len
+  P4 = [data4...] ‖ 0-pad to max_len
+
+Parity content (max_len bytes):
+  XOR  = P1 ⊕ P2 ⊕ P3 ⊕ P4  (byte-wise XOR, only first max_len bytes)
+
+lengths_xor (2 bytes, big-endian):
+  LX   = len(P1) ⊕ len(P2) ⊕ len(P3) ⊕ len(P4)  (cumulative XOR of lengths as u16)
+
+Parity packet payload (v0.4.0-dev+):
+  [XOR (max_len bytes)][LX (2 bytes BE)]  ← compact format, total = max_len + 2
 
 Recovery (if P2 lost):
-  P2 = P1 ⊕ P3 ⊕ P4 ⊕ P_parity
+  xor_buf  = XOR ⊕ P1 ⊕ P3 ⊕ P4          (XOR in all received, missing region is P2)
+  orig_len = LX  ⊕ len(P1) ⊕ len(P3) ⊕ len(P4)   (recover P2 exact length)
+  P2       = xor_buf[..orig_len]
 ```
 
 **Properties**:
@@ -125,7 +135,19 @@ Recovery (if P2 lost):
 - Overhead: 1 extra packet per K data packets (e.g., K=8 → 12.5% overhead)
 - Parity computation: ~3μs (negligible latency impact)
 - Recovery: ~3ms (vs 400ms+ for TCP-style retransmission)
-- All data packets are padded to the maximum payload length in the group for XOR alignment
+- Parity packet is `max_payload_len_in_block + 2` bytes — much smaller than old fixed 1400 B
+  for typical game traffic (64–512 B), saving ~10× parity bandwidth
+
+### ⚠️ FEC Parity Wire-Format Compatibility
+
+| Release | Parity payload format |
+|---------|-----------------------|
+| ≤ v0.3.x | Fixed 1400 B XOR buffer (zero-padded to FEC_MAX_PAYLOAD) |
+| ≥ v0.4.0-dev | Compact: `[XOR content (max_len B)][lengths_xor (2 B BE)]` |
+
+**Proxy and client must be on the same release for FEC recovery to work.**  
+Mixed v0.3.x ↔ v0.4.0-dev deployments: parity packets are silently ignored (no crash,
+but no recovery). Perform a coordinated rolling upgrade of all proxy nodes and clients.
 
 ### FEC Statistics (`FecStats`)
 
@@ -253,6 +275,9 @@ Messages are length-prefixed with a 2-byte big-endian length field:
 | 1 | Fortnite |
 | 2 | CS2 |
 | 3 | Dota 2 |
+| 4 | Rust (Facepunch) |
+| 5 | Valorant |
+| 6 | Apex Legends |
 
 ### Disconnect Reason Codes
 
@@ -362,21 +387,32 @@ Decoded:
 - `TunnelHeader::keepalive()` — create keepalive header
 - `TunnelHeader::with_session_token()` — builder for auth token
 - `TunnelHeader::make_response()` — swap src/dst for proxy reply
-- `TunnelHeader::encode()` → `Bytes` — serialize to wire format
+- `TunnelHeader::encode_to_array()` → `[u8; 20]` — **zero-alloc** stack encode _(v0.4.0-dev+, hot path)_
+- `TunnelHeader::encode()` → `Bytes` — serialize to wire format (delegates to `encode_to_array`)
+- `TunnelHeader::encode_with_payload(&[u8])` → `Bytes` — header + payload in one allocation
 - `TunnelHeader::decode(&[u8])` → `Result<TunnelHeader>` — parse from wire format
+- `TunnelHeader::decode_with_payload(&[u8])` → `Result<(TunnelHeader, &[u8])>` — parse header + slice payload
 
 ### FEC (`protocol/src/fec.rs`)
-- `FecEncoder::new(group_size)` — create encoder with K data packets per group
-- `FecEncoder::add_packet(&[u8])` → `Option<Vec<u8>>` — add data, returns parity when group full
-- `FecDecoder::new(group_size)` — create decoder
-- `FecDecoder::add_packet(index, &[u8])` — feed received packet
-- `FecDecoder::add_parity(&[u8])` — feed parity packet
-- `FecDecoder::try_recover()` → `Option<(usize, Vec<u8>)>` — attempt recovery
-- `FecDecoder::is_complete()` — check if all K packets received
+- `FecEncoder::new(k_size: u8)` — create encoder with K data packets per block
+- `FecEncoder::add_packet(&[u8])` → `Option<Bytes>` — XOR into parity; returns compact parity when block full
+- `FecEncoder::flush()` → `Option<(block_id, actual_k, Bytes)>` — force-emit partial block parity
+- `FecEncoder::block_id()` → `u16` — current block ID
+- `FecEncoder::current_index()` → `u8` — packets accumulated in current block
+- `FecHeader::data(block_id, index, k_size)` — create FEC extension header for data packet
+- `FecHeader::parity(block_id, k_size)` — create FEC extension header for parity packet
+- `FecHeader::encode(&mut BytesMut)` — append 4-byte FEC header to buffer
+- `FecHeader::decode(&mut &[u8])` → `Option<FecHeader>` — parse 4-byte FEC header
+- `FecDecoder::new()` — create decoder (64-slot ring buffer, 500ms block expiry)
+- `FecDecoder::receive_data(&FecHeader, Bytes)` → `Bytes` — track data packet; return payload
+- `FecDecoder::receive_parity(&FecHeader, Bytes)` → `Option<(u8, Bytes)>` — store parity; attempt recovery
+- `FecDecoder::try_recover_block(block_id)` → `Option<(u8, Bytes)>` — explicit recovery attempt
+- `FecDecoder::gc()` — discard blocks older than `max_age_ms`
+- `FecDecoder::stats()` → `FecStats` — `active_blocks`, `recovered_count`, `recovery_failures`
 
 ### Control (`protocol/src/control.rs`)
 - `ControlMessage::read_from(stream)` — async QUIC message read
 - `ControlMessage::write_to(stream)` — async QUIC message write
 - `ControlMessage::encode()` / `decode()` — binary serialization
 
-All encode/decode covered by unit tests (header: 5 tests, FEC: 8 tests, control: 6 tests).
+All encode/decode covered by unit tests (header: 8 tests, FEC: 10 tests + 6 proptests, control: 6 tests).

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0-dev] — Unreleased
 
+### Performance (2026-04-27) — Tier 1 hot-path optimizations (commit `6d065ff`)
+
+> ⚠️ **Breaking FEC parity wire-format change** — see `docs/protocol.md` §FEC Algorithm.
+> Proxy and client **must be on the same version**. Mixed v0.3.x ↔ v0.4.0-dev deployments
+> will silently misinterpret FEC parity packets and skip recovery. Deploy both nodes
+> (proxy-lax, relay-sgp) and the client binary together.
+
+- **`TunnelHeader::encode_to_array()`** — new zero-alloc stack-based header encode returning `[u8; 20]`
+  without any heap allocation. `encode()` now delegates to it; all 8 hot-path call sites in
+  `proxy/src/relay.rs` and `client/src/` updated to call `encode_to_array()` directly.
+  Expected: ~7× faster (~5 ns vs ~38 ns per packet).
+- **Compact FEC parity emission** — `FecEncoder` now emits `(max_payload_len + 2)` bytes instead of a
+  fixed 1400 B buffer. Wire format: `[XOR content (max_payload_len bytes)][lengths_xor (2 BE bytes)]`.
+  `FecDecoder::try_recover` updated to read the compact format and recover the exact missing-packet
+  length from `lengths_xor`. Expected: ~10× smaller parity packets for typical 64–256 B game traffic.
+- **FEC decoder ring buffer** — replaced `HashMap<u16, BlockState>` with a 64-slot
+  `Vec<Option<BlockState>>` indexed by `block_id % 64`, eliminating per-packet hash overhead
+  (~115 ns/packet). Blocks are implicitly evicted when their slot is reused.
+- **Benchmark** — `header/encode_to_array` group added to `protocol/benches/header_bench.rs`.
+
 ### Added (2026-04-27)
 - **Valorant game profile** — `ValorantConfig` in `client/src/games/valorant.rs`
   - Auto-detects `VALORANT-Win64-Shipping.exe`, port range 7000–7500, Riot Vanguard anti-cheat
