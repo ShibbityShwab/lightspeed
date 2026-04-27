@@ -43,7 +43,7 @@ proptest! {
     #[test]
     fn prop_no_loss_no_recovery(
         _k in k_strategy(),
-        payloads in k_strategy().prop_flat_map(|k| payloads_strategy(k)),
+        payloads in k_strategy().prop_flat_map(payloads_strategy),
     ) {
         // Use the k from payloads length (the flat_map fixes k for both)
         let k = payloads.len() as u8;
@@ -88,7 +88,7 @@ proptest! {
     #[test]
     fn prop_single_loss_recovery(
         _k in k_strategy(),
-        payloads in k_strategy().prop_flat_map(|k| payloads_strategy(k)),
+        payloads in k_strategy().prop_flat_map(payloads_strategy),
         lost_idx_frac in 0.0f64..1.0,
     ) {
         let k = payloads.len() as u8;
@@ -147,7 +147,7 @@ proptest! {
     #[test]
     fn prop_two_losses_unrecoverable(
         _k in 3u8..=MAX_BLOCK_SIZE,
-        payloads in (3u8..=MAX_BLOCK_SIZE).prop_flat_map(|k| payloads_strategy(k)),
+        payloads in (3u8..=MAX_BLOCK_SIZE).prop_flat_map(payloads_strategy),
         lost_a_frac in 0.0f64..1.0,
         lost_b_frac in 0.0f64..1.0,
     ) {
@@ -211,7 +211,7 @@ proptest! {
     #[test]
     fn prop_arbitrary_block_id(
         _k in k_strategy(),
-        payloads in k_strategy().prop_flat_map(|k| payloads_strategy(k)),
+        payloads in k_strategy().prop_flat_map(payloads_strategy),
         block_id in any::<u16>(),
         lost_idx_frac in 0.0f64..1.0,
     ) {
@@ -313,7 +313,7 @@ proptest! {
     #[test]
     fn prop_parity_before_data_recovery(
         _k in k_strategy(),
-        payloads in k_strategy().prop_flat_map(|k| payloads_strategy(k)),
+        payloads in k_strategy().prop_flat_map(payloads_strategy),
         lost_idx_frac in 0.0f64..1.0,
     ) {
         let k = payloads.len() as u8;
