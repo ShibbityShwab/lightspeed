@@ -3,6 +3,14 @@
 //! Core relay engine: receives tunnel packets from clients, strips header,
 //! forwards to game server, receives response, re-wraps, returns to client.
 //!
+//! ## Linux recvmmsg batched I/O (Item K)
+//!
+//! On Linux the inbound receive path uses `recvmmsg(2)` to drain up to 32
+//! packets per syscall, reducing per-packet syscall overhead by ~10–30× at
+//! high packet rates.  A [`BatchState`] struct holds the kernel-facing buffers
+//! and is re-initialised on every call to avoid self-referential pointer
+//! issues.  The non-Linux path falls back to a single `recv_from` per packet.
+//!
 //! ## FEC Support
 //!
 //! When a client sends version-2 packets, FEC is active:
@@ -31,6 +39,10 @@ use tracing::{debug, info, trace, warn};
 use lightspeed_protocol::{
     FecDecoder, FecEncoder, FecHeader, TunnelHeader, FEC_HEADER_SIZE, HEADER_SIZE,
 };
+
+// Linux-only: Ipv4Addr needed to reconstruct address from sockaddr_in
+#[cfg(target_os = "linux")]
+use std::net::Ipv4Addr;
 
 /// Maximum size for a single outbound relay packet:
 /// TunnelHeader (20 B) + FecHeader (4 B) + receive buffer (2048 B).
@@ -186,11 +198,442 @@ impl RelayEngine {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Linux recvmmsg batch state
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum packets to drain in one `recvmmsg` syscall (Linux only).
+#[cfg(target_os = "linux")]
+const BATCH: usize = 32;
+
+/// Per-slot receive-buffer size.
+#[cfg(target_os = "linux")]
+const BUF_SIZE: usize = 2048;
+
+/// Heap-allocated kernel-facing state for one `recvmmsg` call.
+///
+/// `bufs` — raw receive buffers (32 × 2048 B = 64 KiB, on the task heap).
+/// `msgs` — `mmsghdr` array handed to the kernel.
+/// `saddrs` — `sockaddr_in` source-address slots, one per message.
+///
+/// `iovec` entries are rebuilt inside [`BatchState::do_recv`] on every call so
+/// the struct is not self-referential and does not require `Pin`.
+#[cfg(target_os = "linux")]
+struct BatchState {
+    bufs: [[u8; BUF_SIZE]; BATCH],
+    msgs: [libc::mmsghdr; BATCH],
+    saddrs: [libc::sockaddr_in; BATCH],
+}
+
+// SAFETY: `BatchState` is only ever accessed from one Tokio task at a time.
+// The raw pointer fields inside `libc::mmsghdr` are implementation details of
+// the recvmmsg call; they are re-initialised on every `do_recv` invocation and
+// are never observed across an async suspension point.
+#[cfg(target_os = "linux")]
+unsafe impl Send for BatchState {}
+
+#[cfg(target_os = "linux")]
+impl BatchState {
+    fn new() -> Self {
+        // SAFETY: zero-initialising C POD structs is always valid.
+        unsafe {
+            Self {
+                bufs: [[0u8; BUF_SIZE]; BATCH],
+                msgs: std::mem::zeroed(),
+                saddrs: std::mem::zeroed(),
+            }
+        }
+    }
+
+    /// Non-blocking `recvmmsg` call.
+    ///
+    /// Rebuilds iovecs on the stack before every call so the struct is not
+    /// self-referential.  Returns `Ok(n)` where `n >= 1`, or
+    /// `Err(WouldBlock)` when the socket has no pending data.
+    fn do_recv(&mut self, fd: libc::c_int) -> std::io::Result<usize> {
+        // Build iovecs on the stack.  They only need to live during this call.
+        let mut iovecs: [libc::iovec; BATCH] =
+            // SAFETY: zero-init is valid for iovec.
+            unsafe { std::mem::zeroed() };
+
+        for i in 0..BATCH {
+            iovecs[i].iov_base = self.bufs[i].as_mut_ptr() as *mut libc::c_void;
+            iovecs[i].iov_len = BUF_SIZE;
+
+            // SAFETY: iovecs[i] and saddrs[i] live for the full duration of
+            // this function (and therefore across the recvmmsg call below).
+            unsafe {
+                let hdr = &mut self.msgs[i].msg_hdr;
+                hdr.msg_iov = &mut iovecs[i] as *mut libc::iovec;
+                hdr.msg_iovlen = 1;
+                hdr.msg_name = &mut self.saddrs[i] as *mut libc::sockaddr_in as *mut libc::c_void;
+                hdr.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+                hdr.msg_control = std::ptr::null_mut();
+                hdr.msg_controllen = 0;
+                hdr.msg_flags = 0;
+            }
+            self.msgs[i].msg_len = 0;
+        }
+
+        // SAFETY: `fd` is valid (live UdpSocket), arrays fully initialised above.
+        let n = unsafe {
+            libc::recvmmsg(
+                fd,
+                self.msgs.as_mut_ptr(),
+                BATCH as libc::c_uint,
+                libc::MSG_DONTWAIT,
+                std::ptr::null_mut(),
+            )
+        };
+
+        if n < 0 {
+            // Includes EAGAIN → mapped to WouldBlock by the OS abstraction layer.
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(n as usize)
+    }
+}
+
+/// Wait for `sock` to become readable, then drain up to `BATCH` datagrams in
+/// one `recvmmsg` syscall.
+///
+/// Uses `try_io` to properly arm/disarm Tokio's epoll interest:
+/// - On success the readiness flag stays set (there may be more data).
+/// - On `WouldBlock` the flag is cleared so `readable()` actually waits.
+#[cfg(target_os = "linux")]
+async fn recv_batch_async(sock: &UdpSocket, batch: &mut BatchState) -> std::io::Result<usize> {
+    use std::os::unix::io::AsRawFd;
+    let fd = sock.as_raw_fd();
+    loop {
+        // Block until epoll says data is available.
+        sock.readable().await?;
+        // try_io is synchronous — no Send requirement on the closure.
+        match sock.try_io(tokio::io::Interest::READABLE, || batch.do_recv(fd)) {
+            Ok(n) if n > 0 => return Ok(n),
+            Ok(_) => continue, // shouldn't happen — re-arm just in case
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // try_io already cleared the readiness bit; loop to readable().
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Per-packet inbound processing (shared between all platforms)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Process a single received inbound packet.
+///
+/// Contains the full hot-path per-packet logic: rate-limit, header decode,
+/// auth, keepalive/FIN handling, abuse check, FEC, session management, and
+/// game-server forwarding.  Extracted so it can be called from both the
+/// Linux batched receive loop and the non-Linux single-recv loop.
+async fn process_inbound_packet(
+    buf: &[u8],
+    client_addr: SocketAddrV4,
+    data_socket: &Arc<UdpSocket>,
+    engine: &Arc<RelayEngine>,
+    rate_limiter: &Arc<tokio::sync::Mutex<RateLimiter>>,
+    authenticator: &Arc<RwLock<Authenticator>>,
+    abuse_detector: &Arc<tokio::sync::Mutex<AbuseDetector>>,
+    metrics: &Arc<ProxyMetrics>,
+) {
+    let len = buf.len();
+
+    // ── Rate limit check ────────────────────────────────────────
+    {
+        let mut rl = rate_limiter.lock().await;
+        match rl.check(client_addr, len as u64) {
+            RateLimitResult::Allowed => {}
+            RateLimitResult::PacketRateExceeded => {
+                trace!(client = %client_addr, "Rate limited (PPS)");
+                metrics.record_drop();
+                metrics.record_rate_limit();
+                return;
+            }
+            RateLimitResult::BandwidthExceeded => {
+                trace!(client = %client_addr, "Rate limited (BPS)");
+                metrics.record_drop();
+                metrics.record_rate_limit();
+                return;
+            }
+        }
+    }
+
+    // ── Decode tunnel header ────────────────────────────────────
+    let (header, payload) = match TunnelHeader::decode_with_payload(buf) {
+        Ok(result) => result,
+        Err(e) => {
+            debug!(client = %client_addr, error = %e, "Invalid tunnel packet");
+            metrics.record_drop();
+            return;
+        }
+    };
+
+    // ── Security: Authentication check ──────────────────────────
+    {
+        let auth = authenticator.read().await;
+        if !auth.validate(client_addr.ip(), header.session_token) {
+            debug!(
+                client = %client_addr,
+                token = header.session_token,
+                "Unauthorized: invalid IP or session token"
+            );
+            metrics.record_drop();
+            metrics.record_auth_rejection();
+            return;
+        }
+    }
+
+    // ── Control packets ─────────────────────────────────────────
+    if header.is_keepalive() {
+        trace!(client = %client_addr, seq = header.sequence, "Keepalive received");
+        let response = TunnelHeader::keepalive(header.sequence, now_us())
+            .with_session_token(header.session_token);
+        let response_bytes = response.encode_to_array();
+        let _ = data_socket.send_to(&response_bytes, client_addr).await;
+        return;
+    }
+
+    if header.is_fin() {
+        info!(client = %client_addr, "Client sent FIN — closing session");
+        let sessions_lock = engine.sessions();
+        let mut sessions = sessions_lock.write().await;
+        sessions.remove(&client_addr);
+        return;
+    }
+
+    // Get the original destination (game server) from the header
+    let game_server = header.orig_dst_addr();
+    let is_fec = header.has_fec();
+
+    // ── Security: Abuse detection (includes destination validation) ──
+    {
+        let mut abuse = abuse_detector.lock().await;
+        match abuse.record_inbound(*client_addr.ip(), game_server, len as u64) {
+            AbuseCheckResult::Allowed => {}
+            AbuseCheckResult::PrivateDestination => {
+                debug!(
+                    client = %client_addr,
+                    dest = %game_server,
+                    "Blocked: private/internal destination"
+                );
+                metrics.record_drop();
+                metrics.record_abuse_block();
+                return;
+            }
+            AbuseCheckResult::Banned => {
+                trace!(client = %client_addr, "Blocked: client is banned");
+                metrics.record_drop();
+                metrics.record_abuse_block();
+                return;
+            }
+            AbuseCheckResult::ReflectionDetected => {
+                warn!(client = %client_addr, "Blocked: reflection attack detected");
+                metrics.record_drop();
+                metrics.record_abuse_block();
+                return;
+            }
+            AbuseCheckResult::AmplificationDetected => {
+                warn!(client = %client_addr, "Blocked: amplification detected");
+                metrics.record_drop();
+                metrics.record_abuse_block();
+                return;
+            }
+        }
+    }
+
+    // ── FEC: Parse FEC header if version 2 ──────────────────────
+    let (fec_hdr, game_payload) = if is_fec {
+        if payload.len() < FEC_HEADER_SIZE {
+            debug!(client = %client_addr, "FEC packet too short");
+            metrics.record_drop();
+            return;
+        }
+        let mut fec_slice: &[u8] = &payload[..FEC_HEADER_SIZE];
+        match FecHeader::decode(&mut fec_slice) {
+            Some(fh) => (Some(fh), &payload[FEC_HEADER_SIZE..]),
+            None => {
+                debug!(client = %client_addr, "Invalid FEC header");
+                metrics.record_drop();
+                return;
+            }
+        }
+    } else {
+        (None, payload)
+    };
+
+    // Determine FEC k_size for session creation
+    let fec_k = fec_hdr.as_ref().map(|h| h.k_size).unwrap_or(4);
+
+    // ── Session: get or create ───────────────────────────────────
+    let (session, is_new) = match engine
+        .get_or_create_session(client_addr, game_server, is_fec, fec_k)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(client = %client_addr, error = %e, "Failed to create session");
+            metrics.record_drop();
+            return;
+        }
+    };
+
+    // Immediately spawn response listener for new sessions
+    if is_new {
+        metrics.record_session_created();
+        let session_clone = Arc::clone(&session);
+        let data_socket_clone = Arc::clone(data_socket);
+        let metrics_clone = Arc::clone(metrics);
+        tokio::spawn(async move {
+            run_session_response_listener(session_clone, data_socket_clone, metrics_clone).await;
+        });
+        info!(client = %client_addr, fec = is_fec, "Response listener spawned immediately");
+    }
+
+    // ── Handle FEC parity packets ───────────────────────────────
+    if let Some(ref fh) = fec_hdr {
+        if fh.is_parity() {
+            // Parity packet: do NOT forward to game server.
+            // Feed into FEC decoder for potential recovery.
+            metrics.record_fec_parity();
+            let parity_data = bytes::Bytes::copy_from_slice(game_payload);
+            let mut decoder = session.fec_decoder.lock().await;
+            if let Some((_idx, recovered)) = decoder.receive_parity(fh, parity_data) {
+                // Recovered a lost packet — forward to game server
+                metrics.record_fec_recovery();
+                info!(
+                    client = %client_addr,
+                    block = fh.block_id,
+                    recovered_len = recovered.len(),
+                    "🔧 FEC recovered lost packet on proxy"
+                );
+                match session
+                    .outbound_socket
+                    .send_to(&recovered, game_server)
+                    .await
+                {
+                    Ok(sent) => {
+                        metrics.record_relay(sent as u64);
+                    }
+                    Err(e) => {
+                        debug!(client = %client_addr, error = %e, "Failed to forward recovered packet");
+                    }
+                }
+            }
+            // Periodic GC
+            decoder.gc();
+            return; // Don't forward parity to game server
+        } else {
+            // Data packet with FEC: track in decoder, then forward game_payload
+            let data_bytes = bytes::Bytes::copy_from_slice(game_payload);
+            let mut decoder = session.fec_decoder.lock().await;
+            decoder.receive_data(fh, data_bytes);
+        }
+    }
+
+    // ── Forward the raw game payload to the game server ─────────
+    match session
+        .outbound_socket
+        .send_to(game_payload, game_server)
+        .await
+    {
+        Ok(sent) => {
+            metrics.record_relay(sent as u64);
+            trace!(
+                client = %client_addr,
+                game_server = %game_server,
+                seq = header.sequence,
+                payload_len = game_payload.len(),
+                fec = is_fec,
+                "Forwarded to game server"
+            );
+
+            let mut abuse = abuse_detector.lock().await;
+            abuse.record_outbound(*client_addr.ip(), sent as u64);
+        }
+        Err(e) => {
+            debug!(
+                client = %client_addr,
+                game_server = %game_server,
+                error = %e,
+                "Failed to forward to game server"
+            );
+            metrics.record_drop();
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Public entry point — dispatches to the platform-appropriate loop
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Run the main relay loop on the data plane socket.
 ///
+/// **Linux**: drains up to `BATCH` (32) packets per `recvmmsg` syscall.
+/// **Other platforms**: falls back to one `recv_from` per packet.
+///
 /// This is the hot path — every game packet goes through here.
-/// It receives tunnel packets from clients, validates auth + abuse checks,
-/// strips the header, and forwards the raw payload to the game server.
+#[cfg(target_os = "linux")]
+pub async fn run_relay_inbound(
+    data_socket: Arc<UdpSocket>,
+    engine: Arc<RelayEngine>,
+    rate_limiter: Arc<tokio::sync::Mutex<RateLimiter>>,
+    authenticator: Arc<RwLock<Authenticator>>,
+    abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
+    metrics: Arc<ProxyMetrics>,
+) -> anyhow::Result<()> {
+    let mut batch = BatchState::new();
+    info!(
+        "Relay inbound loop started (Linux recvmmsg, batch={})",
+        BATCH
+    );
+
+    loop {
+        let n = match recv_batch_async(&data_socket, &mut batch).await {
+            Ok(n) => n,
+            Err(e) => {
+                warn!("Data socket recvmmsg error: {}", e);
+                continue;
+            }
+        };
+
+        // Record batch size for observability (avg batch size = received/batches).
+        metrics.record_inbound_batch(n);
+
+        for i in 0..n {
+            let pkt_len = batch.msgs[i].msg_len as usize;
+            let sin = &batch.saddrs[i];
+
+            // Our socket is AF_INET only; this check is defensive.
+            if sin.sin_family as libc::c_int != libc::AF_INET {
+                trace!("Ignoring non-AF_INET packet in batch slot {}", i);
+                continue;
+            }
+
+            let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+            let port = u16::from_be(sin.sin_port);
+            let client_addr = SocketAddrV4::new(ip, port);
+
+            process_inbound_packet(
+                &batch.bufs[i][..pkt_len],
+                client_addr,
+                &data_socket,
+                &engine,
+                &rate_limiter,
+                &authenticator,
+                &abuse_detector,
+                &metrics,
+            )
+            .await;
+        }
+    }
+}
+
+/// Non-Linux fallback: one `recv_from` per packet.
+#[cfg(not(target_os = "linux"))]
 pub async fn run_relay_inbound(
     data_socket: Arc<UdpSocket>,
     engine: Arc<RelayEngine>,
@@ -200,11 +643,9 @@ pub async fn run_relay_inbound(
     metrics: Arc<ProxyMetrics>,
 ) -> anyhow::Result<()> {
     let mut buf = vec![0u8; 2048];
-
     info!("Relay inbound loop started");
 
     loop {
-        // Receive next packet from a client
         let (len, addr) = match data_socket.recv_from(&mut buf).await {
             Ok(result) => result,
             Err(e) => {
@@ -222,229 +663,20 @@ pub async fn run_relay_inbound(
             }
         };
 
-        // Rate limit check
-        {
-            let mut rl = rate_limiter.lock().await;
-            match rl.check(client_addr, len as u64) {
-                RateLimitResult::Allowed => {}
-                RateLimitResult::PacketRateExceeded => {
-                    trace!(client = %client_addr, "Rate limited (PPS)");
-                    metrics.record_drop();
-                    metrics.record_rate_limit();
-                    continue;
-                }
-                RateLimitResult::BandwidthExceeded => {
-                    trace!(client = %client_addr, "Rate limited (BPS)");
-                    metrics.record_drop();
-                    metrics.record_rate_limit();
-                    continue;
-                }
-            }
-        }
+        // Record 1 recv_from = 1 batch of 1 packet (for metric consistency).
+        metrics.record_inbound_batch(1);
 
-        // Decode tunnel header
-        let (header, payload) = match TunnelHeader::decode_with_payload(&buf[..len]) {
-            Ok(result) => result,
-            Err(e) => {
-                debug!(client = %client_addr, error = %e, "Invalid tunnel packet");
-                metrics.record_drop();
-                continue;
-            }
-        };
-
-        // ── Security: Authentication check ──────────────────────────
-        {
-            let auth = authenticator.read().await;
-            if !auth.validate(client_addr.ip(), header.session_token) {
-                debug!(
-                    client = %client_addr,
-                    token = header.session_token,
-                    "Unauthorized: invalid IP or session token"
-                );
-                metrics.record_drop();
-                metrics.record_auth_rejection();
-                continue;
-            }
-        }
-
-        // Handle control packets (keepalive always uses v1)
-        if header.is_keepalive() {
-            trace!(client = %client_addr, seq = header.sequence, "Keepalive received");
-            let response = TunnelHeader::keepalive(header.sequence, now_us())
-                .with_session_token(header.session_token);
-            let response_bytes = response.encode_to_array();
-            let _ = data_socket.send_to(&response_bytes, client_addr).await;
-            continue;
-        }
-
-        if header.is_fin() {
-            info!(client = %client_addr, "Client sent FIN — closing session");
-            let sessions_lock = engine.sessions();
-            let mut sessions = sessions_lock.write().await;
-            sessions.remove(&client_addr);
-            continue;
-        }
-
-        // Get the original destination (game server) from the header
-        let game_server = header.orig_dst_addr();
-        let is_fec = header.has_fec();
-
-        // ── Security: Abuse detection (includes destination validation) ──
-        {
-            let mut abuse = abuse_detector.lock().await;
-            match abuse.record_inbound(*client_addr.ip(), game_server, len as u64) {
-                AbuseCheckResult::Allowed => {}
-                AbuseCheckResult::PrivateDestination => {
-                    debug!(
-                        client = %client_addr,
-                        dest = %game_server,
-                        "Blocked: private/internal destination"
-                    );
-                    metrics.record_drop();
-                    metrics.record_abuse_block();
-                    continue;
-                }
-                AbuseCheckResult::Banned => {
-                    trace!(client = %client_addr, "Blocked: client is banned");
-                    metrics.record_drop();
-                    metrics.record_abuse_block();
-                    continue;
-                }
-                AbuseCheckResult::ReflectionDetected => {
-                    warn!(client = %client_addr, "Blocked: reflection attack detected");
-                    metrics.record_drop();
-                    metrics.record_abuse_block();
-                    continue;
-                }
-                AbuseCheckResult::AmplificationDetected => {
-                    warn!(client = %client_addr, "Blocked: amplification detected");
-                    metrics.record_drop();
-                    metrics.record_abuse_block();
-                    continue;
-                }
-            }
-        }
-
-        // ── FEC: Parse FEC header if version 2 ──────────────────────
-        let (fec_hdr, game_payload) = if is_fec {
-            if payload.len() < FEC_HEADER_SIZE {
-                debug!(client = %client_addr, "FEC packet too short");
-                metrics.record_drop();
-                continue;
-            }
-            let mut fec_slice: &[u8] = &payload[..FEC_HEADER_SIZE];
-            match FecHeader::decode(&mut fec_slice) {
-                Some(fh) => (Some(fh), &payload[FEC_HEADER_SIZE..]),
-                None => {
-                    debug!(client = %client_addr, "Invalid FEC header");
-                    metrics.record_drop();
-                    continue;
-                }
-            }
-        } else {
-            (None, payload)
-        };
-
-        // Determine FEC k_size for session creation
-        let fec_k = fec_hdr.as_ref().map(|h| h.k_size).unwrap_or(4);
-
-        // Get or create session for this client
-        let (session, is_new) = match engine
-            .get_or_create_session(client_addr, game_server, is_fec, fec_k)
-            .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(client = %client_addr, error = %e, "Failed to create session");
-                metrics.record_drop();
-                continue;
-            }
-        };
-
-        // Immediately spawn response listener for new sessions
-        if is_new {
-            metrics.record_session_created();
-            let session_clone = Arc::clone(&session);
-            let data_socket_clone = Arc::clone(&data_socket);
-            let metrics_clone = Arc::clone(&metrics);
-            tokio::spawn(async move {
-                run_session_response_listener(session_clone, data_socket_clone, metrics_clone)
-                    .await;
-            });
-            info!(client = %client_addr, fec = is_fec, "Response listener spawned immediately");
-        }
-
-        // ── Handle FEC parity packets ───────────────────────────────
-        if let Some(ref fh) = fec_hdr {
-            if fh.is_parity() {
-                // Parity packet: do NOT forward to game server.
-                // Feed into FEC decoder for potential recovery.
-                metrics.record_fec_parity();
-                let parity_data = bytes::Bytes::copy_from_slice(game_payload);
-                let mut decoder = session.fec_decoder.lock().await;
-                if let Some((_idx, recovered)) = decoder.receive_parity(fh, parity_data) {
-                    // Recovered a lost packet — forward to game server
-                    metrics.record_fec_recovery();
-                    info!(
-                        client = %client_addr,
-                        block = fh.block_id,
-                        recovered_len = recovered.len(),
-                        "🔧 FEC recovered lost packet on proxy"
-                    );
-                    match session
-                        .outbound_socket
-                        .send_to(&recovered, game_server)
-                        .await
-                    {
-                        Ok(sent) => {
-                            metrics.record_relay(sent as u64);
-                        }
-                        Err(e) => {
-                            debug!(client = %client_addr, error = %e, "Failed to forward recovered packet");
-                        }
-                    }
-                }
-                // Periodic GC
-                decoder.gc();
-                continue; // Don't forward parity to game server
-            } else {
-                // Data packet with FEC: track in decoder, then forward game_payload
-                let data_bytes = bytes::Bytes::copy_from_slice(game_payload);
-                let mut decoder = session.fec_decoder.lock().await;
-                decoder.receive_data(fh, data_bytes);
-            }
-        }
-
-        // Forward the raw game payload to the game server
-        match session
-            .outbound_socket
-            .send_to(game_payload, game_server)
-            .await
-        {
-            Ok(sent) => {
-                metrics.record_relay(sent as u64);
-                trace!(
-                    client = %client_addr,
-                    game_server = %game_server,
-                    seq = header.sequence,
-                    payload_len = game_payload.len(),
-                    fec = is_fec,
-                    "Forwarded to game server"
-                );
-
-                let mut abuse = abuse_detector.lock().await;
-                abuse.record_outbound(*client_addr.ip(), sent as u64);
-            }
-            Err(e) => {
-                debug!(
-                    client = %client_addr,
-                    game_server = %game_server,
-                    error = %e,
-                    "Failed to forward to game server"
-                );
-                metrics.record_drop();
-            }
-        }
+        process_inbound_packet(
+            &buf[..len],
+            client_addr,
+            &data_socket,
+            &engine,
+            &rate_limiter,
+            &authenticator,
+            &abuse_detector,
+            &metrics,
+        )
+        .await;
     }
 }
 
@@ -512,7 +744,10 @@ pub async fn run_session_response_listener(
             let parity = encoder.add_packet(payload);
 
             // Send data packet to client (zero heap allocation)
-            match data_socket.send_to(&pkt_buf[..data_end], session.client_addr).await {
+            match data_socket
+                .send_to(&pkt_buf[..data_end], session.client_addr)
+                .await
+            {
                 Ok(sent) => {
                     metrics.record_relay(sent as u64);
                     trace!(
@@ -548,10 +783,12 @@ pub async fn run_session_response_listener(
                 pkt_buf[..HEADER_SIZE].copy_from_slice(&parity_header.encode_to_array());
                 pkt_buf[HEADER_SIZE..HEADER_SIZE + FEC_HEADER_SIZE]
                     .copy_from_slice(&parity_fec.encode_to_array());
-                pkt_buf[HEADER_SIZE + FEC_HEADER_SIZE..par_end]
-                    .copy_from_slice(&parity_bytes);
+                pkt_buf[HEADER_SIZE + FEC_HEADER_SIZE..par_end].copy_from_slice(&parity_bytes);
 
-                match data_socket.send_to(&pkt_buf[..par_end], session.client_addr).await {
+                match data_socket
+                    .send_to(&pkt_buf[..par_end], session.client_addr)
+                    .await
+                {
                     Ok(sent) => {
                         metrics.record_relay(sent as u64);
                         trace!(
@@ -580,7 +817,10 @@ pub async fn run_session_response_listener(
             pkt_buf[HEADER_SIZE..HEADER_SIZE + payload.len()].copy_from_slice(payload);
             let pkt_end = HEADER_SIZE + payload.len();
 
-            match data_socket.send_to(&pkt_buf[..pkt_end], session.client_addr).await {
+            match data_socket
+                .send_to(&pkt_buf[..pkt_end], session.client_addr)
+                .await
+            {
                 Ok(sent) => {
                     metrics.record_relay(sent as u64);
                     trace!(
@@ -788,5 +1028,62 @@ mod tests {
 
         let decoded_game_data = &payload[FEC_HEADER_SIZE..];
         assert_eq!(decoded_game_data, game_data);
+    }
+
+    /// Verify that the Linux recvmmsg helper correctly receives data.
+    ///
+    /// Sends several packets to a loopback socket and asserts that
+    /// `recv_batch_async` collects them all in (at most) a few calls.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn test_linux_batch_recv_collects_packets() {
+        use tokio::net::UdpSocket;
+
+        let recv_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let recv_addr = recv_sock.local_addr().unwrap();
+
+        let send_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+
+        const N: usize = 10;
+        // Send N packets before we attempt to receive, so they buffer up.
+        for i in 0u8..N as u8 {
+            send_sock.send_to(&[i; 64], recv_addr).await.unwrap();
+        }
+
+        // Let the kernel queue all N packets.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let mut batch = BatchState::new();
+        let mut received = 0usize;
+
+        // Drain with a reasonable timeout — should empty in 1–2 calls.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        while received < N {
+            if tokio::time::Instant::now() > deadline {
+                break;
+            }
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                recv_batch_async(&recv_sock, &mut batch),
+            )
+            .await
+            {
+                Ok(Ok(n)) => {
+                    received += n;
+                    // Verify lengths look right
+                    for i in 0..n {
+                        assert_eq!(batch.msgs[i].msg_len as usize, 64);
+                    }
+                }
+                Ok(Err(e)) => panic!("recv_batch_async error: {}", e),
+                Err(_timeout) => break,
+            }
+        }
+
+        assert_eq!(
+            received, N,
+            "Expected {} packets via recvmmsg, got {}",
+            N, received
+        );
     }
 }

@@ -99,6 +99,27 @@ Both Vultr nodes updated to v0.4.0-dev code in a coordinated cutover (CI run 249
   - Catches macOS-specific compilation failures (darwin syscalls, target-arch differences)
   - Runs in parallel with the existing `ubuntu-latest` check job
 
+### Performance (2026-04-27) — recvmmsg batched inbound I/O (Item K)
+
+- **`recvmmsg` batched inbound loop** (`proxy/src/relay.rs`, Linux only) — drains up to 32
+  UDP datagrams per `recvmmsg(2)` syscall instead of one `recv_from` per packet.
+  Expected: ~5–10× pps improvement per vCPU at sustained packet rates (eliminates the
+  dominant per-packet syscall overhead). Non-Linux path unchanged (`recv_from` fallback).
+- **`BatchState`** — 64 KiB heap-allocated kernel-facing slab (`32 × 2048 B` receive buffers +
+  `mmsghdr`/`sockaddr_in` arrays). Iovecs are rebuilt on the stack inside `do_recv` on every
+  call so the struct is never self-referential and does not require `Pin`.
+- **`recv_batch_async`** — uses `tokio::net::UdpSocket::try_io(Interest::READABLE, …)` to
+  correctly arm/disarm Tokio's epoll interest bit. On `WouldBlock` the readiness flag is
+  cleared so `readable().await` genuinely blocks instead of spinning.
+- **`process_inbound_packet`** extracted — per-packet hot-path logic shared between the Linux
+  batch loop and the non-Linux single-recv loop; zero code duplication across platforms.
+- **New metrics** — `inbound_batches_total` + `inbound_packets_received` counters in
+  `ProxyMetrics`; Grafana average batch size = `received / batches`.
+  `record_inbound_batch(n)` called after every syscall (both paths) for consistent telemetry.
+- **Linux unit test** — `test_linux_batch_recv_collects_packets` sends 10 packets to a loopback
+  socket, drains via `recv_batch_async`, asserts all 10 received with correct 64-byte lengths.
+- **`libc = "0.2"`** added as a Linux-only target dependency in `proxy/Cargo.toml`.
+
 ### Next Up
 - US-East / EU-West mesh expansion
 - Discord community server

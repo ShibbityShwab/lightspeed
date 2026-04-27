@@ -61,6 +61,15 @@ pub struct ProxyMetrics {
     /// Total sessions expired (lifetime).
     pub sessions_expired: AtomicU64,
 
+    // ── Inbound batch metrics (recvmmsg effectiveness) ───────────
+    /// Number of inbound receive syscalls (batches).  On Linux with recvmmsg
+    /// this is the number of `recvmmsg` calls; on other platforms it equals
+    /// `inbound_packets_received` (one call per packet).
+    pub inbound_batches_total: AtomicU64,
+    /// Total packets received at the inbound socket before any filtering.
+    /// `inbound_packets_received / inbound_batches_total` = avg batch size.
+    pub inbound_packets_received: AtomicU64,
+
     // ── Latency histogram buckets ───────────────────────────────
     /// Counts per bucket for relay latency (cumulative).
     latency_buckets: [AtomicU64; 11],
@@ -94,6 +103,8 @@ impl ProxyMetrics {
             rate_limit_hits: AtomicU64::new(0),
             sessions_created: AtomicU64::new(0),
             sessions_expired: AtomicU64::new(0),
+            inbound_batches_total: AtomicU64::new(0),
+            inbound_packets_received: AtomicU64::new(0),
             latency_buckets: Default::default(),
             start_time: Instant::now(),
         }
@@ -152,6 +163,16 @@ impl ProxyMetrics {
     /// Record rate limit hit.
     pub fn record_rate_limit(&self) {
         self.rate_limit_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record one inbound receive batch containing `n` packets.
+    ///
+    /// On Linux with `recvmmsg` this is called once per `recvmmsg` syscall.
+    /// On other platforms it is called once per `recv_from` call with `n = 1`.
+    pub fn record_inbound_batch(&self, n: usize) {
+        self.inbound_batches_total.fetch_add(1, Ordering::Relaxed);
+        self.inbound_packets_received
+            .fetch_add(n as u64, Ordering::Relaxed);
     }
 
     /// Record a new session created.
@@ -334,6 +355,27 @@ impl ProxyMetrics {
             self.sessions_expired.load(Ordering::Relaxed)
         ));
 
+        // ── Inbound batch metrics ───────────────────────────────
+        out.push_str(
+            "# HELP lightspeed_inbound_batches_total Inbound receive syscalls (recvmmsg batches)\n",
+        );
+        out.push_str("# TYPE lightspeed_inbound_batches_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_inbound_batches_total{{{}}} {}\n",
+            labels,
+            self.inbound_batches_total.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_inbound_packets_received_total Packets received at inbound socket (pre-filter)\n",
+        );
+        out.push_str("# TYPE lightspeed_inbound_packets_received_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_inbound_packets_received_total{{{}}} {}\n",
+            labels,
+            self.inbound_packets_received.load(Ordering::Relaxed)
+        ));
+
         // ── Build info ──────────────────────────────────────────
         out.push_str("# HELP lightspeed_build_info Build information\n");
         out.push_str("# TYPE lightspeed_build_info gauge\n");
@@ -368,6 +410,8 @@ mod tests {
         m.record_session_created();
         m.record_session_expired(1);
 
+        m.record_inbound_batch(4);
+
         let output = m.to_prometheus("us-west-lax", "proxy-lax");
 
         assert!(output.contains("lightspeed_packets_relayed_total"));
@@ -377,6 +421,8 @@ mod tests {
         assert!(output.contains("lightspeed_fec_recoveries_total"));
         assert!(output.contains("lightspeed_auth_rejections_total"));
         assert!(output.contains("lightspeed_build_info"));
+        assert!(output.contains("lightspeed_inbound_batches_total"));
+        assert!(output.contains("lightspeed_inbound_packets_received_total"));
         assert!(output.contains("lightspeed_relay_latency_us_bucket"));
         assert!(output.contains("region=\"us-west-lax\""));
         assert!(output.contains("node_id=\"proxy-lax\""));
