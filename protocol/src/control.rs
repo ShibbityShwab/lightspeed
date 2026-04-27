@@ -35,6 +35,12 @@ pub mod game_id {
     pub const VALORANT: u8 = 5;
     /// Respawn / EA's Apex Legends (battle-royale).
     pub const APEX: u8 = 6;
+    /// Blizzard Entertainment's Overwatch 2 (5v5 hero shooter).
+    pub const OVERWATCH2: u8 = 7;
+    /// Riot Games' League of Legends (team MOBA).
+    pub const LOL: u8 = 8;
+    /// Krafton's PUBG: Battlegrounds (battle-royale).
+    pub const PUBG: u8 = 9;
 }
 
 /// Disconnect reason codes.

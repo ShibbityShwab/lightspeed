@@ -16,6 +16,9 @@
 //! - **Rust** (Facepunch): `RustClient.exe`
 //! - **Valorant**: `VALORANT-Win64-Shipping.exe`
 //! - **Apex Legends**: `r5apex.exe`
+//! - **Overwatch 2**: `Overwatch.exe`
+//! - **League of Legends**: `League of Legends.exe`
+//! - **PUBG: Battlegrounds**: `TslGame.exe`
 //!
 //! ## Capture Filters
 //!
@@ -26,6 +29,9 @@ pub mod apex;
 pub mod cs2;
 pub mod dota2;
 pub mod fortnite;
+pub mod lol;
+pub mod ow2;
+pub mod pubg;
 pub mod rust;
 pub mod valorant;
 
@@ -101,8 +107,11 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "rust" | "rustgame" => Ok(Box::new(rust::RustConfig)),
         "valorant" => Ok(Box::new(valorant::ValorantConfig)),
         "apex" | "apexlegends" | "apex-legends" => Ok(Box::new(apex::ApexConfig)),
+        "ow2" | "overwatch2" | "overwatch-2" | "overwatch" => Ok(Box::new(ow2::Ow2Config)),
+        "lol" | "leagueoflegends" | "league-of-legends" | "league" => Ok(Box::new(lol::LolConfig)),
+        "pubg" | "battlegrounds" => Ok(Box::new(pubg::PubgConfig)),
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, dota2, rust, valorant, apex",
+            "Unknown game: '{}'. Supported: fortnite, cs2, dota2, rust, valorant, apex, ow2, lol, pubg",
             name
         ),
     }
@@ -132,6 +141,9 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         Box::new(rust::RustConfig),
         Box::new(valorant::ValorantConfig),
         Box::new(apex::ApexConfig),
+        Box::new(ow2::Ow2Config),
+        Box::new(lol::LolConfig),
+        Box::new(pubg::PubgConfig),
     ];
 
     for game in all_games {
@@ -158,6 +170,9 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         "RustClient.exe",
         "VALORANT-Win64-Shipping.exe",
         "r5apex.exe",
+        "Overwatch.exe",
+        "League of Legends.exe",
+        "TslGame.exe",
     ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
@@ -166,7 +181,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported games: fortnite, cs2, dota2, rust, valorant, apex"
+         Supported: fortnite, cs2, dota2, rust, valorant, apex, ow2, lol, pubg"
     )
 }
 
@@ -270,6 +285,7 @@ mod tests {
     /// `test_all_registered_games_are_detectable` to fail — this is
     /// intentional drift-prevention.
     const ALL_GAME_KEYS: &[&str] = &[
+        // Original 6 games
         "fortnite",
         "cs2",
         "counter-strike",
@@ -282,6 +298,17 @@ mod tests {
         "apex",
         "apexlegends",
         "apex-legends",
+        // New games (v0.4.0-dev)
+        "ow2",
+        "overwatch2",
+        "overwatch-2",
+        "overwatch",
+        "lol",
+        "leagueoflegends",
+        "league-of-legends",
+        "league",
+        "pubg",
+        "battlegrounds",
     ];
 
     #[test]
@@ -300,7 +327,8 @@ mod tests {
     #[test]
     fn test_detect_unknown_game() {
         assert!(detect_game("minecraft").is_err());
-        assert!(detect_game("overwatch").is_err());
+        // Note: "overwatch" is now a valid alias for Overwatch 2
+        assert!(detect_game("warzone").is_err());
         assert!(detect_game("").is_err());
     }
 
@@ -348,6 +376,31 @@ mod tests {
         assert!(!apex.uses_sdr());
         assert!(apex.typical_pps() > 0);
         assert_eq!(apex.anti_cheat(), "Easy Anti-Cheat (EAC)");
+
+        let ow2 = ow2::Ow2Config;
+        assert_eq!(ow2.name(), "Overwatch 2");
+        assert!(ow2.process_names().contains(&"Overwatch.exe"));
+        let (ow2_lo, ow2_hi) = ow2.ports();
+        assert!(ow2_lo < ow2_hi);
+        assert!(!ow2.uses_sdr());
+        assert!(ow2.typical_pps() > 0);
+
+        let lol = lol::LolConfig;
+        assert_eq!(lol.name(), "League of Legends");
+        assert!(lol.process_names().contains(&"League of Legends.exe"));
+        assert_eq!(lol.ports(), (5000, 5500));
+        assert_eq!(lol.redirect_port(), 5000);
+        assert!(!lol.uses_sdr());
+        assert!(lol.typical_pps() > 0);
+
+        let pubg = pubg::PubgConfig;
+        assert_eq!(pubg.name(), "PUBG: Battlegrounds");
+        assert!(pubg.process_names().contains(&"TslGame.exe"));
+        let (pu_lo, pu_hi) = pubg.ports();
+        assert!(pu_lo < pu_hi);
+        assert!(!pubg.uses_sdr());
+        assert!(pubg.typical_pps() > 0);
+        assert_eq!(pubg.anti_cheat(), "BattlEye (kernel-mode)");
     }
 
     #[test]
