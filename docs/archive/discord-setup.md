@@ -1,3 +1,8 @@
+> **ARCHIVED 2026-04-27** — Launch initiative paused indefinitely per maintainer request.
+> Do not reference, suggest, or surface this content unless explicitly asked by the maintainer.
+
+---
+
 # LightSpeed Discord Server — Setup Guide
 
 This is a ready-to-execute template for standing up a Discord community server. When ready to launch, create the server and replicate the channel/role structure below. Estimated time: ~10 minutes.

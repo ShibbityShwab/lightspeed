@@ -1,3 +1,8 @@
+> **ARCHIVED 2026-04-27** — Launch initiative paused indefinitely per maintainer request.
+> Do not reference, suggest, or surface this content unless explicitly asked by the maintainer.
+
+---
+
 # WF-006 Step 5 — Launch Announcement Posts
 
 Ready-to-post copy for Reddit and Hacker News. Copy-paste the relevant section.
