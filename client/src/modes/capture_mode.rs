@@ -27,6 +27,7 @@ use crate::ml;
 /// * `fec_enabled` — whether to wrap packets with FEC headers
 /// * `fec_k`       — FEC block size (data packets per parity packet)
 /// * `interface`   — optional NIC name to capture on (auto-detect if `None`)
+#[allow(clippy::too_many_arguments)]
 pub async fn run_capture_mode(
     game: &dyn GameConfig,
     proxy_addr: SocketAddrV4,
