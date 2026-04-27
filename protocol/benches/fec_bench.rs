@@ -79,19 +79,15 @@ fn bench_fec_decoder_receive_data(c: &mut Criterion) {
         let data = bytes::Bytes::copy_from_slice(&payload);
 
         group.throughput(Throughput::Bytes(payload_size as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("K{k}")),
-            &k,
-            |b, &k| {
-                b.iter_with_setup(
-                    || FecDecoder::new(),
-                    |mut dec| {
-                        let fec = FecHeader::data(0, 0, k);
-                        black_box(dec.receive_data(black_box(&fec), data.clone()))
-                    },
-                )
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(format!("K{k}")), &k, |b, &k| {
+            b.iter_with_setup(
+                || FecDecoder::new(),
+                |mut dec| {
+                    let fec = FecHeader::data(0, 0, k);
+                    black_box(dec.receive_data(black_box(&fec), data.clone()))
+                },
+            )
+        });
     }
 
     group.finish();

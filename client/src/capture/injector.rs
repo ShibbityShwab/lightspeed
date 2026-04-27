@@ -82,8 +82,7 @@ impl PacketInjector {
     pub async fn with_interface(interface_name: &str) -> std::io::Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
 
-        let devices = Device::list()
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let devices = Device::list().map_err(|e| std::io::Error::other(e.to_string()))?;
 
         let device = devices
             .into_iter()

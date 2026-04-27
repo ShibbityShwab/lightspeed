@@ -186,8 +186,8 @@ impl TunnelHeader {
         buf[7] = ts[3];
         // Bytes 8-11: original source IP
         let src = self.orig_src_ip.octets();
-        buf[8]  = src[0];
-        buf[9]  = src[1];
+        buf[8] = src[0];
+        buf[9] = src[1];
         buf[10] = src[2];
         buf[11] = src[3];
         // Bytes 12-15: original dest IP

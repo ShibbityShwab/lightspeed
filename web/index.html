@@ -100,7 +100,7 @@
           <div class="step-number">1</div>
           <div class="step-icon">🎮</div>
           <h3>Launch LightSpeed</h3>
-          <p>Run the lightweight client before your game. It auto-detects Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, and more.</p>
+          <p>Run the lightweight client before your game. It auto-detects Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, and more.</p>
         </div>
         <div class="step-arrow">→</div>
         <div class="step">
@@ -154,7 +154,7 @@
   <section class="section section-dark" id="games">
     <div class="container">
       <h2 class="section-title">Supported Games</h2>
-      <p class="section-subtitle">Built-in profiles for the games you play. More coming soon.</p>
+      <p class="section-subtitle">Built-in profiles for 9 games. Drop-in and play.</p>
       <div class="games-grid">
         <div class="game-card">
           <div class="game-icon">🔫</div>
@@ -216,9 +216,39 @@
           <p>Direct UDP to EA's data-centre servers across NA, EU, Asia, and OCE. No Steam relay layer — straightforward to proxy. EAC-safe transparent routing.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
+        <div class="game-card">
+          <div class="game-icon">🦸</div>
+          <h3>Overwatch 2</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 5060-5062</span>
+            <span class="game-tag">Warden</span>
+          </div>
+          <p>Supports all Blizzard regional servers. Blizzard's game traffic uses direct UDP — transparent rerouting works seamlessly alongside Warden anti-cheat.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🏆</div>
+          <h3>League of Legends</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 5500</span>
+            <span class="game-tag">Riot Vanguard</span>
+          </div>
+          <p>Works across all Riot regional servers (NA, EUW, EUNE, KR, etc.). Fully compatible with Riot Vanguard — we only change the route, never the payload.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🪖</div>
+          <h3>PUBG</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 7777</span>
+            <span class="game-tag">BattlEye</span>
+          </div>
+          <p>Supports all PUBG server regions. Direct UDP to Krafton servers — no relay layers. Transparent tunneling is fully compatible with BattlEye.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
       </div>
       <p class="games-more">
-        More games coming: Overwatch 2, League of Legends, PUBG, and more.
+        Don't see your game?
         <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game →</a>
       </p>
     </div>
@@ -277,8 +307,8 @@
         </div>
         <div class="bench-card">
           <h3>🧪 Test Suite</h3>
-          <div class="bench-value">26+ <span class="bench-unit">tests</span></div>
-          <p>Protocol tests (header, FEC, control), plus E2E relay tests against 2 live proxy nodes.</p>
+          <div class="bench-value">110+ <span class="bench-unit">tests</span></div>
+          <p>Protocol tests (header, FEC, telemetry), integration tests across all 4 crates, plus E2E relay tests against 2 live proxy nodes.</p>
           <div class="bench-bar">
             <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
             <span class="bench-bar-label">100% pass rate &middot; 2 live nodes verified</span>
@@ -412,12 +442,6 @@
           <p>x64 / ARM64</p>
           <span class="download-filename">lightspeed-linux-x64</span>
         </a>
-        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
-          <div class="download-icon">🍎</div>
-          <h3>macOS</h3>
-          <p>Apple Silicon / Intel</p>
-          <span class="download-filename">lightspeed-macos-arm64</span>
-        </a>
       </div>
       <div class="download-alt">
         <p>Or build from source:</p>
@@ -445,7 +469,7 @@
         </details>
         <details class="faq-item">
           <summary>What games are supported?</summary>
-          <p>Currently: Fortnite, CS2, Dota 2, Rust, Valorant, and Apex Legends all have built-in profiles — just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration. We're adding Overwatch 2, League of Legends, and PUBG next.</p>
+          <p>Currently: Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, and PUBG all have built-in profiles — just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
         </details>
         <details class="faq-item">
           <summary>Is my data safe?</summary>

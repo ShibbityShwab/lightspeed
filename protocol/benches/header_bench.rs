@@ -14,9 +14,7 @@ fn bench_header_encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("header");
     group.throughput(Throughput::Elements(1));
 
-    group.bench_function("encode", |b| {
-        b.iter(|| black_box(header.encode()))
-    });
+    group.bench_function("encode", |b| b.iter(|| black_box(header.encode())));
 
     // Zero-alloc stack variant — avoids Bytes heap allocation entirely.
     // Expected: ~7× faster than encode() (~5 ns vs ~38 ns).
@@ -78,7 +76,9 @@ fn bench_header_decode_with_payload(c: &mut Criterion) {
         group.bench_with_input(
             format!("decode+payload_{payload_size}B"),
             &packet,
-            |b, pkt| b.iter(|| black_box(TunnelHeader::decode_with_payload(black_box(pkt)).unwrap())),
+            |b, pkt| {
+                b.iter(|| black_box(TunnelHeader::decode_with_payload(black_box(pkt)).unwrap()))
+            },
         );
     }
 

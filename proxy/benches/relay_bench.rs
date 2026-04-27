@@ -9,9 +9,7 @@
 /// We isolate these steps so we know exactly where cycles are spent.
 use bytes::{Bytes, BytesMut};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use lightspeed_protocol::{
-    FecEncoder, FecHeader, TunnelHeader, FEC_HEADER_SIZE, HEADER_SIZE,
-};
+use lightspeed_protocol::{FecEncoder, FecHeader, TunnelHeader, FEC_HEADER_SIZE, HEADER_SIZE};
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 fn make_src() -> SocketAddrV4 {
@@ -29,8 +27,8 @@ fn bench_inbound_v1_decode(c: &mut Criterion) {
 
     for &payload_size in &[64usize, 256, 512, 1024] {
         // Pre-build a wire-format v1 packet: [TunnelHeader][payload]
-        let header = TunnelHeader::new(1, 1_000_000, make_src(), make_dst())
-            .with_session_token(0x42);
+        let header =
+            TunnelHeader::new(1, 1_000_000, make_src(), make_dst()).with_session_token(0x42);
         let payload = vec![0xAAu8; payload_size];
         let wire_packet = header.encode_with_payload(&payload);
 
@@ -102,9 +100,7 @@ fn bench_outbound_v1_encode(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::from_parameter(format!("{payload_size}B")),
             &payload,
-            |b, p| {
-                b.iter(|| black_box(header.encode_with_payload(black_box(p))))
-            },
+            |b, p| b.iter(|| black_box(header.encode_with_payload(black_box(p)))),
         );
     }
 
@@ -123,7 +119,9 @@ fn bench_outbound_fec_encode(c: &mut Criterion) {
         for &payload_size in &[64usize, 256, 512] {
             let payload = vec![0xDDu8; payload_size];
 
-            group.throughput(Throughput::Bytes((HEADER_SIZE + FEC_HEADER_SIZE + payload_size) as u64));
+            group.throughput(Throughput::Bytes(
+                (HEADER_SIZE + FEC_HEADER_SIZE + payload_size) as u64,
+            ));
             group.bench_with_input(
                 BenchmarkId::new(format!("K{k}"), format!("{payload_size}B")),
                 &(k, &payload),
@@ -139,9 +137,8 @@ fn bench_outbound_fec_encode(c: &mut Criterion) {
                                 TunnelHeader::new_fec(1, 1_000_000, make_dst(), make_src());
                             let fec_hdr = FecHeader::data(block_id, index, k);
 
-                            let mut buf = BytesMut::with_capacity(
-                                HEADER_SIZE + FEC_HEADER_SIZE + p.len(),
-                            );
+                            let mut buf =
+                                BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + p.len());
                             buf.extend_from_slice(&response_hdr.encode());
                             fec_hdr.encode(&mut buf);
                             buf.extend_from_slice(p);
@@ -167,8 +164,8 @@ fn bench_relay_round_trip_v1(c: &mut Criterion) {
 
     for &payload_size in &[64usize, 256, 512, 1024] {
         // Build: inbound wire packet from client
-        let inbound_header = TunnelHeader::new(1, 1_000_000, make_src(), make_dst())
-            .with_session_token(0x42);
+        let inbound_header =
+            TunnelHeader::new(1, 1_000_000, make_src(), make_dst()).with_session_token(0x42);
         let game_payload = vec![0xEEu8; payload_size];
         let inbound_wire = inbound_header.encode_with_payload(&game_payload);
 
@@ -183,8 +180,7 @@ fn bench_relay_round_trip_v1(c: &mut Criterion) {
                         TunnelHeader::decode_with_payload(black_box(wire)).unwrap();
 
                     // OUTBOUND: wrap game server response back to client
-                    let response_hdr =
-                        TunnelHeader::new(2, 2_000_000, make_dst(), make_src());
+                    let response_hdr = TunnelHeader::new(2, 2_000_000, make_dst(), make_src());
                     black_box(response_hdr.encode_with_payload(payload))
                 })
             },

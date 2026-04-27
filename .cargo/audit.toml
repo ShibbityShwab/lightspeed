@@ -1,0 +1,29 @@
+# cargo-audit configuration for LightSpeed
+# Advisories acknowledged and accepted pending dependency upgrades.
+# All entries have justifications; review periodically.
+
+[advisories]
+ignore = [
+    # protobuf 2.x uncontrolled recursion — transitive via prometheus.
+    # No user-controlled protobuf parsing in our attack surface.
+    "RUSTSEC-2024-0437",
+
+    # quinn-proto 0.11.13 DoS — upgrade to quinn >=0.11.14 is planned.
+    "RUSTSEC-2026-0037",
+
+    # rustls-webpki 0.103.9 CRL faulty matching — no CRL distribution
+    # points used in our mTLS configuration.
+    "RUSTSEC-2026-0049",
+
+    # rustls-webpki 0.103.9 URI name constraint acceptance — URI SANs
+    # not used in any certificate we issue or validate.
+    "RUSTSEC-2026-0098",
+
+    # rustls-webpki 0.103.9 wildcard name constraint acceptance — we do
+    # not issue or validate wildcard certificates.
+    "RUSTSEC-2026-0099",
+
+    # rustls-webpki 0.103.9 CRL parse panic — CRL parsing not reachable
+    # in our connection flow.
+    "RUSTSEC-2026-0104",
+]

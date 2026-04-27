@@ -88,13 +88,19 @@ pub async fn run_live_test(
         match node.health {
             ProxyHealth::Healthy => {
                 let ms = node.latency_us.unwrap_or(0) as f64 / 1000.0;
-                info!("  ✅ {} ({}) — {:.1}ms [Healthy]", label, node.data_addr, ms);
+                info!(
+                    "  ✅ {} ({}) — {:.1}ms [Healthy]",
+                    label, node.data_addr, ms
+                );
                 healthy_nodes.push(node);
                 total_pass += 1;
             }
             ProxyHealth::Degraded => {
                 let ms = node.latency_us.unwrap_or(0) as f64 / 1000.0;
-                warn!("  ⚠️  {} ({}) — {:.1}ms [Degraded]", label, node.data_addr, ms);
+                warn!(
+                    "  ⚠️  {} ({}) — {:.1}ms [Degraded]",
+                    label, node.data_addr, ms
+                );
                 healthy_nodes.push(node);
                 total_pass += 1;
             }
@@ -182,11 +188,8 @@ pub async fn run_live_test(
             }
 
             let mut buf = vec![0u8; 128];
-            if let Ok(Ok((len, _))) = tokio::time::timeout(
-                Duration::from_millis(3000),
-                socket.recv_from(&mut buf),
-            )
-            .await
+            if let Ok(Ok((len, _))) =
+                tokio::time::timeout(Duration::from_millis(3000), socket.recv_from(&mut buf)).await
             {
                 if TunnelHeader::decode(&buf[..len]).is_ok() {
                     rtts.push(send_time.elapsed().as_micros() as u64);
@@ -263,17 +266,14 @@ pub async fn run_live_test(
                 }
 
                 let mut buf = vec![0u8; 2048];
-                if let Ok(Ok((len, _))) = tokio::time::timeout(
-                    Duration::from_millis(5000),
-                    socket.recv_from(&mut buf),
-                )
-                .await
+                if let Ok(Ok((len, _))) =
+                    tokio::time::timeout(Duration::from_millis(5000), socket.recv_from(&mut buf))
+                        .await
                 {
                     let rtt = send_time.elapsed().as_micros() as u64;
                     rtts.push(rtt);
 
-                    if let Ok((_hdr, resp_payload)) =
-                        TunnelHeader::decode_with_payload(&buf[..len])
+                    if let Ok((_hdr, resp_payload)) = TunnelHeader::decode_with_payload(&buf[..len])
                     {
                         if resp_payload == payload.as_bytes() {
                             payload_matches += 1;
@@ -294,7 +294,11 @@ pub async fn run_live_test(
                 let avg = rtts.iter().sum::<u64>() as f64 / rtts.len() as f64 / 1000.0;
                 let min = *rtts.iter().min().unwrap() as f64 / 1000.0;
                 let max = *rtts.iter().max().unwrap() as f64 / 1000.0;
-                let status = if payload_matches == rtts.len() as u32 { "✅" } else { "⚠️" };
+                let status = if payload_matches == rtts.len() as u32 {
+                    "✅"
+                } else {
+                    "⚠️"
+                };
                 info!(
                     "  {} {} → echo({}): {}/{} received, {}/{} payload match, avg={:.1}ms min={:.1}ms max={:.1}ms",
                     status, label, echo_addr,
@@ -353,9 +357,8 @@ pub async fn run_live_test(
                     let header = TunnelHeader::new_fec(seq, ts, local_addr, echo_addr);
                     let fec_hdr = FecHeader::data(block_id, index, fec_k);
 
-                    let mut pkt = BytesMut::with_capacity(
-                        HEADER_SIZE + FEC_HEADER_SIZE + payload.len(),
-                    );
+                    let mut pkt =
+                        BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
                     pkt.extend_from_slice(&header.encode_to_array());
                     fec_hdr.encode(&mut pkt);
                     pkt.extend_from_slice(payload.as_bytes());
@@ -429,7 +432,11 @@ pub async fn run_live_test(
     info!("📊 Live Integration Test Summary");
     info!("──────────────────────────────────────────────────────");
     info!("  Proxies tested:     {}", proxy_addrs.len());
-    info!("  Healthy:            {}/{}", healthy_nodes.len(), nodes.len());
+    info!(
+        "  Healthy:            {}/{}",
+        healthy_nodes.len(),
+        nodes.len()
+    );
     if let Some(best) = nodes
         .iter()
         .filter(|n| n.latency_us.is_some())

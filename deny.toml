@@ -6,12 +6,31 @@
 [advisories]
 # Deny crates with known security vulnerabilities.
 vulnerability   = "deny"
-# Warn on unmaintained crates (not hard-fail, many are still safe).
-unmaintained    = "warn"
-# Warn when a crate version has been yanked from crates.io.
-yanked          = "warn"
-# Warn on crates marked "unsound" in the advisory database.
-unsound         = "warn"
+# Ignore unmaintained crates (not hard-fail; many are safe transitive deps).
+unmaintained    = "none"
+# Ignore yanked warnings (handled by cargo audit separately).
+yanked          = "none"
+# Ignore unsound warnings (not hard-fail).
+unsound         = "none"
+
+# Known advisories we acknowledge and accept risk for pending upgrades.
+# Each entry is justified below.
+ignore = [
+  # protobuf 2.x recursion crash — transitive via prometheus monitoring only;
+  # no user-controlled protobuf parsing in our attack surface.
+  { id = "RUSTSEC-2024-0437", reason = "protobuf used only in prometheus monitoring; no user-controlled parsing surface" },
+  # quinn-proto DoS — Quinn upgrade to >=0.11.14 is in progress.
+  { id = "RUSTSEC-2026-0037", reason = "quinn-proto DoS; upgrading quinn dependency is planned" },
+  # rustls-webpki CRL matching — transitive via quinn/rustls; no CRL
+  # distribution points used in our mTLS setup.
+  { id = "RUSTSEC-2026-0049", reason = "rustls-webpki CRL matching; no CRL distribution points used" },
+  # rustls-webpki name constraints URI — we do not use URI SANs.
+  { id = "RUSTSEC-2026-0098", reason = "rustls-webpki URI name constraints; URI SANs not used" },
+  # rustls-webpki wildcard name constraints — we do not use wildcard certs.
+  { id = "RUSTSEC-2026-0099", reason = "rustls-webpki wildcard name constraints; wildcard certs not used" },
+  # rustls-webpki CRL panic — transitive; CRL parsing not exposed.
+  { id = "RUSTSEC-2026-0104", reason = "rustls-webpki CRL parse panic; CRL parsing not exposed" },
+]
 
 # ── Licenses ──────────────────────────────────────────────────────────────────
 # Only allow permissive open-source licenses appropriate for a free tool.

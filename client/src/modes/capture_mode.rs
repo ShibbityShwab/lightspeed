@@ -412,14 +412,12 @@ pub async fn run_capture_mode(
                     let block_id = encoder.block_id();
                     let index = encoder.current_index();
 
-                    let header = lightspeed_protocol::TunnelHeader::new_fec(
-                        seq, ts, pkt.src, pkt.dst,
-                    );
+                    let header =
+                        lightspeed_protocol::TunnelHeader::new_fec(seq, ts, pkt.src, pkt.dst);
                     let fec_hdr = FecHeader::data(block_id, index, fec_k);
 
-                    let mut pkt_buf = BytesMut::with_capacity(
-                        HEADER_SIZE + FEC_HEADER_SIZE + pkt.payload.len(),
-                    );
+                    let mut pkt_buf =
+                        BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + pkt.payload.len());
                     pkt_buf.extend_from_slice(&header.encode_to_array());
                     fec_hdr.encode(&mut pkt_buf);
                     pkt_buf.extend_from_slice(&pkt.payload);
@@ -445,8 +443,7 @@ pub async fn run_capture_mode(
                     }
                 } else {
                     // Non-FEC: simple tunnel header + payload
-                    let header =
-                        lightspeed_protocol::TunnelHeader::new(seq, ts, pkt.src, pkt.dst);
+                    let header = lightspeed_protocol::TunnelHeader::new(seq, ts, pkt.src, pkt.dst);
                     let packet = header.encode_with_payload(&pkt.payload);
                     let _ = tunnel_socket.send_to(&packet, proxy_addr).await;
                 }

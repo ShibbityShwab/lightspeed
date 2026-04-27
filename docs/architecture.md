@@ -1,6 +1,6 @@
 # ⚡ LightSpeed Architecture
 
-> Last updated: 2026-02-23 — Reflects FEC, WARP, redirect mode, and Vultr mesh deployment
+> Last updated: 2026-04-27 — Reflects FEC, WARP, redirect mode, Vultr mesh deployment, session telemetry, recvmmsg batched I/O, Windows GUI tray app, 9-game support
 
 ---
 
@@ -103,11 +103,35 @@ main.rs ────────────────────────
   │   ├── predict.rs                 ← Inference: linfa RF or heuristic fallback
   │   └── trainer.rs                 ← Model training pipeline (Random Forest)
   │
+│
+  ├── telemetry.rs                   ← Session telemetry: collector, TelemetryEvent, report
+  ├── cli.rs                         ← CLI flag definitions (clap derive)
+  ├── modes/                         ← Run-mode handlers
+  │   ├── capture_mode.rs            ← pcap capture + tunnel pipeline
+  │   ├── tunnel_test.rs             ← Connectivity / RTT test
+  │   ├── live_test.rs               ← Live session test with stats
+  │   └── proxy_probe.rs             ← Proxy health probe
+  │
   └── games/                         ← Game-specific configuration
-      ├── mod.rs                     ← GameConfig trait, detect_game(), auto_detect()
-      ├── fortnite.rs                ← Fortnite: EAC, ports 7000-9000
-      ├── cs2.rs                     ← CS2: VAC, ports 27015-27050, SDR
-      └── dota2.rs                   ← Dota 2: VAC, ports 27015-27050, SDR
+        ├── mod.rs                     ← GameConfig trait, detect_game(), auto_detect()
+        ├── fortnite.rs                ← Fortnite: EAC, ports 7000-9000
+        ├── cs2.rs                     ← CS2: VAC, ports 27015-27050, SDR
+        ├── dota2.rs                   ← Dota 2: VAC, ports 27015-27050, SDR
+        ├── rust_game.rs               ← Rust (Facepunch): EAC, ports 28015-28017
+        ├── valorant.rs                ← Valorant: Riot Vanguard, ports 7000-7500
+        ├── apex.rs                    ← Apex Legends: EAC, ports 37000-37050
+        ├── ow2.rs                     ← Overwatch 2: Blizzard Warden, ports 3478-6250
+        ├── lol.rs                     ← League of Legends: Vanguard, ports 5000-5500
+        └── pubg.rs                    ← PUBG: BattlEye, ports 7000-17999
+```
+
+### Client GUI (`lightspeed-gui`)
+
+```
+main.rs ──────────────────────────── Windows system-tray app (tray-item, WinAPI)
+  ├── Tray icon: Connect / Disconnect / Quit menu items
+  ├── Spawns lightspeed-client child process
+  └── Displays connection status in taskbar tooltip
 ```
 
 ### Proxy (`lightspeed-proxy`)
@@ -130,7 +154,8 @@ main.rs ────────────────────────
 lib.rs ──────────────────────────── Crate root, re-exports
   ├── header.rs                      ← TunnelHeader: 20-byte binary, v1/v2, encode/decode
   ├── control.rs                     ← ControlMessage: binary QUIC messages
-  └── fec.rs                         ← FecEncoder/FecDecoder: XOR parity, FecHeader, FecStats
+  ├── fec.rs                         ← FecEncoder/FecDecoder: XOR parity, FecHeader, FecStats
+  └── telemetry.rs                   ← TelemetryEvent schema, POST /telemetry JSON payload
 ```
 
 ---

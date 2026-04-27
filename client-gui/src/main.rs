@@ -13,8 +13,8 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(windows)]
 fn windows_main() -> anyhow::Result<()> {
-    use std::sync::{Arc, Mutex};
     use eframe::egui;
+    use std::sync::{Arc, Mutex};
 
     tracing_subscriber::fmt()
         .with_target(false)
@@ -29,9 +29,9 @@ fn windows_main() -> anyhow::Result<()> {
         .thread_name("ls-engine")
         .build()?;
 
-    let engine = Arc::new(Mutex::new(
-        lightspeed_client::LightSpeedEngine::new(rt.handle().clone()),
-    ));
+    let engine = Arc::new(Mutex::new(lightspeed_client::LightSpeedEngine::new(
+        rt.handle().clone(),
+    )));
 
     // Auto-connect to the default proxy (LAX).
     let proxy: std::net::SocketAddrV4 = "149.28.84.139:4434".parse().unwrap();
@@ -49,7 +49,11 @@ fn windows_main() -> anyhow::Result<()> {
     eframe::run_native(
         "⚡ LightSpeed",
         native_options,
-        Box::new(move |_cc| Ok(Box::new(app::LightSpeedApp::new(Arc::clone(&engine_for_closure))))),
+        Box::new(move |_cc| {
+            Ok(Box::new(app::LightSpeedApp::new(Arc::clone(
+                &engine_for_closure,
+            ))))
+        }),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {}", e))?;
 

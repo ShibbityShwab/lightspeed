@@ -102,8 +102,8 @@ pub async fn probe_all_proxies(servers: &[String], data_port: u16) -> Vec<ProxyN
         if let Ok((id, addr, _server_str, latency)) = handle.await {
             let health = match latency {
                 Some(us) if us < 500_000 => ProxyHealth::Healthy, // < 500 ms
-                Some(_) => ProxyHealth::Degraded,                  // ≥ 500 ms
-                None => ProxyHealth::Unhealthy,                    // No response
+                Some(_) => ProxyHealth::Degraded,                 // ≥ 500 ms
+                None => ProxyHealth::Unhealthy,                   // No response
             };
 
             nodes.push(ProxyNode {

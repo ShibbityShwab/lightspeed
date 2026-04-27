@@ -146,7 +146,8 @@ pub async fn run_health_server(
                                 samples = report.sample_count,
                                 "Telemetry report ingested"
                             );
-                            let resp = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            let resp =
+                                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                             let _ = stream.write_all(resp.as_bytes()).await;
                         }
                     }

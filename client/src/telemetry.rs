@@ -113,10 +113,7 @@ impl TelemetryCollector {
 
         // Jitter = mean of consecutive absolute deltas.
         let jitter = if sorted.len() >= 2 {
-            let deltas: f32 = sorted
-                .windows(2)
-                .map(|w| (w[1] - w[0]).abs())
-                .sum::<f32>();
+            let deltas: f32 = sorted.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>();
             deltas / (sorted.len() - 1) as f32
         } else {
             0.0

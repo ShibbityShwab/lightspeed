@@ -184,9 +184,21 @@ mod tests {
             client_version: "0.4.0".to_string(),
         };
         let json = serde_json::to_string(&report).unwrap();
-        assert!(!json.contains("ip"), "IP address must not appear in telemetry JSON");
-        assert!(!json.contains("user"), "User ID must not appear in telemetry JSON");
-        assert!(!json.contains("session"), "Session ID must not appear in telemetry JSON");
-        assert!(!json.contains("host"), "Hostname must not appear in telemetry JSON");
+        assert!(
+            !json.contains("ip"),
+            "IP address must not appear in telemetry JSON"
+        );
+        assert!(
+            !json.contains("user"),
+            "User ID must not appear in telemetry JSON"
+        );
+        assert!(
+            !json.contains("session"),
+            "Session ID must not appear in telemetry JSON"
+        );
+        assert!(
+            !json.contains("host"),
+            "Hostname must not appear in telemetry JSON"
+        );
     }
 }

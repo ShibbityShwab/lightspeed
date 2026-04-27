@@ -42,7 +42,7 @@ Your PC  ──UDP Tunnel──▶  Proxy Node   ──Direct UDP──▶  Game
 | Metric | Target | Achieved |
 |--------|--------|----------|
 | Tunnel overhead | ≤ 5ms | **162μs** ✅ |
-| Test pass rate | 100% | **52/52 + 8 FEC (100%)** ✅ |
+| Test pass rate | 100% | **~110 tests (100%)** ✅ |
 | Security findings | 0 Critical/High | **0** ✅ |
 | Proxy RAM usage | < 10MB | **~500KB** ✅ |
 | WARP improvement | — | **5-10ms** ✅ |
@@ -128,6 +128,9 @@ lightspeed --game fortnite --proxy YOUR_PROXY_IP:4434 --test
 
 # Verbose logging
 lightspeed --game dota2 --verbose
+
+# Collect and report session telemetry
+lightspeed --game fortnite --proxy YOUR_PROXY_IP:4434 --telemetry
 ```
 
 ### Running the Proxy Server
@@ -177,17 +180,21 @@ strategy = "nearest"
 lightspeed/
 ├── client/          # Rust client — packet capture, tunnel, ML routing
 │   └── src/
-│       ├── main.rs      # CLI, test modes, WARP/FEC/redirect orchestration
+│       ├── main.rs      # Entry point — arg parsing, mode dispatch
+│       ├── cli.rs       # CLI flag definitions (clap)
 │       ├── config.rs    # TOML configuration
 │       ├── error.rs     # Centralized error types
 │       ├── warp.rs      # Cloudflare WARP integration
 │       ├── redirect.rs  # UDP redirect proxy (game integration)
+│       ├── telemetry.rs # Session telemetry collection + report
+│       ├── modes/       # Run-mode handlers (capture, tunnel_test, live_test, proxy_probe)
 │       ├── tunnel/      # UDP tunnel engine, header codec, relay
 │       ├── quic/        # QUIC control plane (discovery, health)
 │       ├── route/       # Route selection, multipath, failover
 │       ├── capture/     # Cross-platform packet capture
 │       ├── ml/          # ML model: features, training, prediction
 │       └── games/       # Per-game configurations (9 games: Fortnite, CS2, Dota 2, Rust, Valorant, Apex, OW2, LoL, PUBG)
+├── client-gui/      # Windows system-tray GUI (WinAPI, tray-item)
 ├── proxy/           # Rust proxy server — UDP relay, auth, metrics
 │   └── src/
 │       ├── relay.rs         # Session-based packet relay loop
@@ -201,7 +208,8 @@ lightspeed/
 │   └── src/
 │       ├── header.rs    # 20-byte tunnel header (v1 plain, v2 FEC)
 │       ├── control.rs   # Binary control messages
-│       └── fec.rs       # XOR Forward Error Correction
+│       ├── fec.rs       # XOR Forward Error Correction
+│       └── telemetry.rs # Telemetry event schema + POST /telemetry payload
 ├── docs/            # Architecture, protocol spec, security audit
 ├── infra/           # Terraform, Docker, deployment scripts
 ├── tools/           # E2E test scripts, echo server
@@ -259,8 +267,8 @@ cargo clippy --workspace
 - [x] **v0.1.0** — MVP: UDP tunnel, proxy server, QUIC control, security hardening, 52 tests
 - [x] **v0.2.0** — FEC (XOR parity), Cloudflare WARP integration, UDP redirect mode, live Vultr mesh, protocol v2
 - [x] **v0.3.0** — Prometheus + Grafana monitoring, 10 alerting rules, CI/CD pipeline, pre-built binaries, load tested at 0.00% packet loss, online ML learning
-- [ ] **v0.4.0** — US-East node, EU-West node, Discord community, installer wizard
-- [ ] **v1.0.0** — Public stable release: polished UX, full game support matrix, community proxy network
+- [x] **v0.4.0-dev** — 9-game support (OW2, LoL, PUBG added), session telemetry (`--telemetry`), Windows GUI tray app, recvmmsg batched I/O, ~110 tests across 4 crates, security hardening
+- [ ] **v1.0.0** — Public stable release: polished UX, installer wizard, community proxy network
 
 ## Contributing
 

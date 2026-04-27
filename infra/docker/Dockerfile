@@ -15,13 +15,16 @@ COPY Cargo.toml Cargo.lock ./
 COPY protocol/Cargo.toml protocol/Cargo.toml
 COPY client/Cargo.toml client/Cargo.toml
 COPY proxy/Cargo.toml proxy/Cargo.toml
+# client-gui is Windows-only but must be present for workspace resolution
+COPY client-gui/Cargo.toml client-gui/Cargo.toml
 
 # Create dummy source files to cache dependency compilation
-RUN mkdir -p protocol/src client/src proxy/src && \
+RUN mkdir -p protocol/src client/src proxy/src client-gui/src && \
     echo "pub fn lib() {}" > protocol/src/lib.rs && \
     echo "fn main() {}" > client/src/main.rs && \
     echo "fn main() {}" > proxy/src/main.rs && \
-    echo "" > proxy/src/lib.rs
+    echo "" > proxy/src/lib.rs && \
+    echo "fn main() {}" > client-gui/src/main.rs
 
 # Build dependencies only (cached layer)
 RUN cargo build --release --bin lightspeed-proxy 2>/dev/null || true

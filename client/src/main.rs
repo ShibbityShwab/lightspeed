@@ -69,13 +69,13 @@ async fn main() -> anyhow::Result<()> {
     //
     // --telemetry enables anonymous aggregated RTT/FEC stats reporting.
     // No PII is ever collected. See docs/privacy.md for full details.
-    let telemetry_collector: Option<Arc<TelemetryCollector>> =
-        if cli.telemetry && !cli.no_telemetry {
-            telemetry::print_disclosure();
-            Some(Arc::new(TelemetryCollector::new()))
-        } else {
-            None
-        };
+    let telemetry_collector: Option<Arc<TelemetryCollector>> = if cli.telemetry && !cli.no_telemetry
+    {
+        telemetry::print_disclosure();
+        Some(Arc::new(TelemetryCollector::new()))
+    } else {
+        None
+    };
 
     // ── Configuration ─────────────────────────────────────────────
     let config = config::Config::load(&cli.config).unwrap_or_else(|e| {

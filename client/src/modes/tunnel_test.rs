@@ -10,10 +10,7 @@ use crate::error;
 use crate::tunnel::relay::UdpRelay;
 
 /// Run a tunnel test: send 5 test packets to `proxy_addr` and report results.
-pub async fn run_tunnel_test(
-    mut relay: UdpRelay,
-    proxy_addr: SocketAddrV4,
-) -> anyhow::Result<()> {
+pub async fn run_tunnel_test(mut relay: UdpRelay, proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
     info!("🧪 Running tunnel test to {}", proxy_addr);
 
     let test_src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
