@@ -124,12 +124,30 @@ impl UdpRedirect {
         self.sequence.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Run the redirect proxy with an external shutdown signal.
+    ///
+    /// Identical to [`run`] but terminates when `shutdown` fires instead
+    /// of waiting for Ctrl-C.  Used by the GUI engine.
+    pub async fn run_with_shutdown(
+        &self,
+        shutdown: tokio::sync::oneshot::Receiver<()>,
+    ) -> anyhow::Result<()> {
+        self.run_inner(Some(shutdown)).await
+    }
+
     /// Run the redirect proxy. This is the main event loop.
     ///
     /// Spawns two tasks:
     /// - **Outbound**: Game → Local Socket → Tunnel → Proxy → Game Server
     /// - **Inbound**: Game Server → Proxy → Tunnel → Local Socket → Game
     pub async fn run(&self) -> anyhow::Result<()> {
+        self.run_inner(None).await
+    }
+
+    async fn run_inner(
+        &self,
+        shutdown: Option<tokio::sync::oneshot::Receiver<()>>,
+    ) -> anyhow::Result<()> {
         // Bind the local socket where the game will send traffic
         let local_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, self.local_port);
         let local_socket = Arc::new(UdpSocket::bind(local_addr).await?);
@@ -509,9 +527,17 @@ impl UdpRedirect {
             self.local_port
         );
 
-        // Wait for shutdown
-        tokio::signal::ctrl_c().await?;
-        info!("⚡ Shutdown signal received");
+        // Wait for shutdown — either GUI oneshot or Ctrl-C
+        match shutdown {
+            Some(rx) => {
+                let _ = rx.await;
+                info!("⚡ Redirect shutdown requested");
+            }
+            None => {
+                tokio::signal::ctrl_c().await?;
+                info!("⚡ Shutdown signal received");
+            }
+        }
 
         outbound_handle.abort();
         inbound_handle.abort();
