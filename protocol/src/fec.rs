@@ -62,6 +62,13 @@ pub const FEC_MAX_PAYLOAD: usize = 1400;
 /// 64 slots covers ~256 ms of block IDs at 250 blocks/sec.
 const DECODER_RING_CAPACITY: usize = 64;
 
+/// Number of blocks that must have elapsed before a ring slot is considered stale.
+/// If `max_seen_block_id.wrapping_sub(block.block_id) > STALE_BLOCK_THRESHOLD`,
+/// the block is evicted by `gc()`.  Setting this to `RING_CAPACITY` means
+/// any block that is more than 64 blocks behind the watermark is stale —
+/// at that point the ring has almost certainly rotated past its natural eviction.
+const STALE_BLOCK_THRESHOLD: u16 = DECODER_RING_CAPACITY as u16;
+
 /// FEC header extension, present when FLAG_FEC is set in TunnelHeader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FecHeader {
@@ -268,8 +275,8 @@ struct BlockState {
     /// Block size (K). Retained for debugging.
     #[allow(dead_code)]
     k_size: u8,
-    /// Creation time for expiry.
-    created: std::time::Instant,
+    // NOTE: no `created: Instant` — age is tracked via block_id watermark in FecDecoder,
+    // eliminating the ~150 ns Windows QPC syscall from the hot path.
 }
 
 impl BlockState {
@@ -279,7 +286,6 @@ impl BlockState {
             received: vec![None; k_size as usize],
             parity: None,
             k_size,
-            created: std::time::Instant::now(),
         }
     }
 
@@ -365,15 +371,16 @@ impl BlockState {
 ///
 /// Uses a fixed-size ring buffer (indexed by `block_id % DECODER_RING_CAPACITY`)
 /// instead of a `HashMap`, eliminating hash overhead in the hot path.
-/// Typical game sessions run at well under `DECODER_RING_CAPACITY` concurrent
-/// blocks, so slot collisions are essentially impossible.
+/// GC uses a block-ID watermark instead of `Instant::now()`, eliminating the
+/// Windows QPC syscall (~150 ns) from both `BlockState::new()` and `gc()`.
 #[derive(Debug)]
 pub struct FecDecoder {
     /// Ring buffer of active FEC blocks.
     /// Indexed by `block_id % DECODER_RING_CAPACITY`.
     ring: Vec<Option<BlockState>>,
-    /// Maximum age of a block before it's discarded (ms).
-    max_age_ms: u64,
+    /// Highest block_id seen so far (wrapping).  Used by `gc()` to determine
+    /// whether a slot is stale without calling `Instant::now()`.
+    max_seen_block_id: u16,
     /// Stats: packets recovered via FEC.
     pub recovered_count: u64,
     /// Stats: recovery attempts that failed.
@@ -385,7 +392,7 @@ impl FecDecoder {
     pub fn new() -> Self {
         Self {
             ring: (0..DECODER_RING_CAPACITY).map(|_| None).collect(),
-            max_age_ms: 500, // 500 ms max block age
+            max_seen_block_id: 0,
             recovered_count: 0,
             recovery_failures: 0,
         }
@@ -395,6 +402,18 @@ impl FecDecoder {
     #[inline]
     fn ring_idx(block_id: u16) -> usize {
         (block_id as usize) % DECODER_RING_CAPACITY
+    }
+
+    /// Advance the block-ID watermark used for GC.
+    ///
+    /// Uses wrapping comparison so the watermark advances correctly across
+    /// the u16 rollover boundary.  A block_id is "newer" if
+    /// `(id - max) as i16 > 0`.
+    #[inline]
+    fn update_watermark(&mut self, block_id: u16) {
+        if (block_id.wrapping_sub(self.max_seen_block_id) as i16) > 0 {
+            self.max_seen_block_id = block_id;
+        }
     }
 
     /// Ensure the ring slot for `block_id` holds a fresh `BlockState`,
@@ -413,6 +432,7 @@ impl FecDecoder {
     /// Process an incoming data packet. Returns the payload as-is.
     /// Internally tracks the packet for potential future recovery.
     pub fn receive_data(&mut self, fec: &FecHeader, payload: Bytes) -> Bytes {
+        self.update_watermark(fec.block_id);
         let block = self.ensure_block(fec.block_id, fec.k_size);
         block.receive_data(fec.index, payload.clone());
         payload
@@ -424,6 +444,7 @@ impl FecDecoder {
     ///
     /// Returns `Some((index, recovered_payload))` if a packet was recovered.
     pub fn receive_parity(&mut self, fec: &FecHeader, payload: Bytes) -> Option<(u8, Bytes)> {
+        self.update_watermark(fec.block_id);
         let idx = Self::ring_idx(fec.block_id);
 
         // Ensure the slot holds the correct block, then store parity
@@ -482,13 +503,16 @@ impl FecDecoder {
         }
     }
 
-    /// Garbage-collect expired blocks.
+    /// Garbage-collect stale blocks.
+    ///
+    /// A block is considered stale when `max_seen_block_id - block.block_id > STALE_BLOCK_THRESHOLD`
+    /// (wrapping-safe). This is O(DECODER_RING_CAPACITY) with pure integer arithmetic —
+    /// no `Instant::now()` / syscall overhead.
     pub fn gc(&mut self) {
-        let now = std::time::Instant::now();
-        let max_age = std::time::Duration::from_millis(self.max_age_ms);
+        let watermark = self.max_seen_block_id;
         for slot in &mut self.ring {
             if let Some(ref block) = slot {
-                if now.duration_since(block.created) >= max_age {
+                if watermark.wrapping_sub(block.block_id) > STALE_BLOCK_THRESHOLD {
                     *slot = None;
                 }
             }
