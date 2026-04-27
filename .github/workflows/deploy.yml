@@ -9,6 +9,14 @@ on:
       - 'infra/scripts/deploy-vultr.sh'
   workflow_dispatch: # Allows manual trigger from GitHub UI
 
+# Prevent concurrent deploys: if a new deploy is queued while one is running,
+# the running deploy completes first (cancel-in-progress: false).
+# This prevents the ETXTBSY race where two concurrent deploys both try to
+# mv/overwrite the binary on the same node at the same time.
+concurrency:
+  group: deploy-vultr-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Build & Deploy
