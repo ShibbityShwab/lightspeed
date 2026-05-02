@@ -164,7 +164,7 @@ pub struct WinDivertConfig {
 mod inner {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
     use tokio::net::UdpSocket;

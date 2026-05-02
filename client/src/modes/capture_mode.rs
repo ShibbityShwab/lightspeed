@@ -68,6 +68,7 @@ fn is_private_ipv4(ip: Ipv4Addr) -> bool {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Name used for the temporary Windows Firewall inbound allow rule.
+#[cfg(target_os = "windows")]
 const FIREWALL_RULE_NAME: &str = "LightSpeed Tunnel Inbound";
 
 /// Add a Windows Firewall inbound UDP allow rule for this process.
