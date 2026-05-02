@@ -111,6 +111,7 @@ impl GameConfig for RustConfig {
 /// Steam services (voice, matchmaking, streaming, etc.).  We skip these
 /// when building the capture filter so we don't flood the tunnel with
 /// Steam traffic.
+#[cfg(target_os = "windows")]
 const STEAM_SERVICE_PORTS: &[u16] = &[
     3478, 4379, 4380,  // Steam NAT punch / relay
     27005, // Steam client source / game server UDP

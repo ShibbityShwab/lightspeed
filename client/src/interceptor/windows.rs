@@ -717,6 +717,8 @@ fn remove_fw_rule(port: u16) {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 fn add_fw_rule(_port: u16) {}
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 fn remove_fw_rule(_port: u16) {}

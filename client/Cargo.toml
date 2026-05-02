@@ -47,7 +47,7 @@ quinn = { version = "0.11", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
 rcgen = { version = "0.13", optional = true }
 pcap = { version = "2", optional = true }
-windivert = { version = "0.6", optional = true, features = ["vendored"] }
+windivert = { version = "0.6", optional = true, features = ["vendored"], target = "cfg(windows)" }
 linfa = { version = "0.7", optional = true }
 linfa-linear = { version = "0.7", optional = true }
 ndarray = { version = "0.15", optional = true }
