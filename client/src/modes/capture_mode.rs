@@ -137,9 +137,12 @@ fn remove_firewall_rule() {}
 /// * `fec_enabled` — whether to wrap packets with FEC headers
 /// * `fec_k`       — FEC block size (data packets per parity packet)
 /// * `interface`   — optional NIC name to capture on (auto-detect if `None`)
-
+///
 /// Live stat handles filled by the capture task once it is running.
 /// Engine holds a `Arc<Mutex<Option<CaptureStatHandles>>>` slot; the task fills it.
+///
+/// Fields are read from `engine.rs` (bin target), so suppress dead_code in lib target.
+#[allow(dead_code)]
 pub struct CaptureStatHandles {
     /// Game → Proxy captured packets.
     pub outbound_packets: Arc<std::sync::atomic::AtomicU64>,
@@ -174,6 +177,9 @@ pub async fn run_capture_mode(
 /// Like [`run_capture_mode`] but accepts an external shutdown oneshot for GUI-driven stop,
 /// an optional slot the function fills with live stat handles once running,
 /// and an optional pre-built BPF filter string (avoids re-running netstat inside the task).
+///
+/// Used from `engine.rs` (bin target), so suppress dead_code in lib target.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub async fn run_capture_mode_with_shutdown(
     game: &dyn GameConfig,

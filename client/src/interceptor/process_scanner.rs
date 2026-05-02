@@ -67,8 +67,7 @@ pub fn scan_for_games(process_names: &[&str]) -> Vec<ProcessInfo> {
 ///
 /// Helper that flattens `scan_for_games` to the first matching process.
 pub fn find_game_process(process_names: &[&str]) -> Option<ProcessInfo> {
-    let mut results = scan_for_games(process_names);
-    results.retain(|p| !p.routes.is_empty() || true); // keep all; caller filters
+    let results = scan_for_games(process_names);
     results.into_iter().next()
 }
 

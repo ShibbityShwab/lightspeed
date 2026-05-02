@@ -12,12 +12,18 @@ use crate::capture::windivert_redirect::{WinDivertConfig, WinDivertStats};
 
 /// Slot type passed into `run_windivert_mode_with_shutdown` so the engine
 /// can read live WinDivert counters via `snapshot()`.
+///
+/// Used from `engine.rs` (bin target), so suppress dead_code in lib target.
+#[allow(dead_code)]
 pub type WinDivertStatSlot = Arc<std::sync::Mutex<Option<Arc<WinDivertStats>>>>;
 
 /// Run WinDivert redirect mode with an external shutdown oneshot and an
 /// optional stat-slot that is filled once the redirect task initialises.
 ///
 /// This is the primary entry point used by [`LightSpeedEngine::start_windivert`].
+///
+/// Used from `engine.rs` (bin target), so suppress dead_code in lib target.
+#[allow(dead_code)]
 pub async fn run_windivert_mode_with_shutdown(
     cfg: WinDivertConfig,
     shutdown_rx: oneshot::Receiver<()>,

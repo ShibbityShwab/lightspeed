@@ -292,7 +292,7 @@ impl LightSpeedEngine {
         // Build the interface display string for the status panel.
         let iface_desc = interface_opt
             .as_deref()
-            .map(|n| crate::capture::interface_description(n))
+            .map(crate::capture::interface_description)
             .unwrap_or_else(|| {
                 crate::capture::pick_best_interface()
                     .map(|n| crate::capture::interface_description(&n))
@@ -309,7 +309,7 @@ impl LightSpeedEngine {
         // Resolve the best capture interface now (before spawning) so the
         // pcap backend uses our scored pick instead of "first device in list".
         let resolved_interface = interface_opt
-            .or_else(|| crate::capture::pick_best_interface());
+            .or_else(crate::capture::pick_best_interface);
         tracing::info!(
             "🖧 Capture interface: {}",
             resolved_interface.as_deref().unwrap_or("(none found)")
@@ -615,9 +615,7 @@ impl LightSpeedEngine {
 
         let interceptor = crate::interceptor::create_interceptor();
 
-        if let Err(e) = interceptor.check_availability() {
-            return Err(e);
-        }
+        interceptor.check_availability()?;
 
         let game_name = game_box.name().to_string();
         let initial_server = config

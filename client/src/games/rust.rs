@@ -207,10 +207,9 @@ fn rust_udp_all_ports(pid: u32) -> Vec<u16> {
                 if port >= 1024
                     && port != 4434
                     && !STEAM_SERVICE_PORTS.contains(&port)
+                    && !ports.contains(&port)
                 {
-                    if !ports.contains(&port) {
-                        ports.push(port);
-                    }
+                    ports.push(port);
                 }
             }
         }
