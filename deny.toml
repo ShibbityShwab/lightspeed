@@ -1,14 +1,6 @@
 # cargo-deny v2 configuration for LightSpeed
 [advisories]
 ignore = [
-  # ── rustls-webpki / quinn advisories (no affected surface used) ──────────
-  { id = "RUSTSEC-2026-0037", reason = "quinn-proto DoS; upgrading quinn is planned" },
-  { id = "RUSTSEC-2026-0049", reason = "rustls-webpki CRL matching; no CRL distribution points used" },
-  { id = "RUSTSEC-2026-0098", reason = "rustls-webpki URI name constraints; URI SANs not used" },
-  { id = "RUSTSEC-2026-0099", reason = "rustls-webpki wildcard name constraints; wildcard certs not used" },
-  { id = "RUSTSEC-2026-0104", reason = "rustls-webpki CRL parse panic; CRL parsing not exposed" },
-  # ── protobuf (Prometheus metrics only, no user-controlled parsing) ────────
-  { id = "RUSTSEC-2024-0437", reason = "protobuf used only in prometheus monitoring; no user-controlled parsing surface" },
   # ── unmaintained GTK3 bindings (lightspeed-gui tray-icon transitive dep) ─
   { id = "RUSTSEC-2024-0412", reason = "gdk unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
   { id = "RUSTSEC-2024-0413", reason = "atk unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
@@ -19,9 +11,9 @@ ignore = [
   { id = "RUSTSEC-2024-0420", reason = "gtk-sys unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
   # ── other unmaintained utility crates pulled in by GUI / proptest stack ───
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; build-time proc-macro only, no runtime impact" },
-  { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; newer deps use web-time instead, acceptable transitional" },
   { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; macro-only crate, zero runtime security impact" },
-  { id = "RUSTSEC-2025-0141", reason = "bincode 1.x unmaintained; used only in GUI serialisation, not in proxy core" },
+  # ── protobuf (Prometheus metrics only, no user-controlled parsing) ────────
+  { id = "RUSTSEC-2024-0437", reason = "protobuf used only in prometheus monitoring; no user-controlled parsing surface" },
   # ── rand 0.8 seed entropy in debug/warn log (not a runtime vuln in release) ─
   { id = "RUSTSEC-2026-0097", reason = "rand 0.8 logs seed in debug/warn mode; trace logging disabled in release builds" },
 ]
@@ -29,14 +21,16 @@ ignore = [
 [licenses]
 allow = [
   "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
-  "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-DFS-2016",
-  "Unicode-3.0", "CC0-1.0", "Zlib", "OpenSSL",
+  "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
+  # Unicode / ICU — idna/url/webbrowser chain (GUI only)
+  "Unicode-3.0",         # icu_collections, icu_locale_core, icu_normalizer, etc.
   # GUI crate additional licenses:
   "BSL-1.0",             # clipboard-win, error-code (arboard → egui-winit chain)
   "OFL-1.1",             # epaint_default_fonts (egui embedded fonts)
   "LicenseRef-UFL-1.0",  # epaint_default_fonts Ubuntu Font License (non-SPDX)
   "MPL-2.0",             # option-ext (dirs → tray-icon chain)
-  "CDLA-Permissive-2.0", # webpki-root-certs (Mozilla CA bundle)
+  # WinDivert (kernel-level packet filter) — LGPL-3.0, used only in lightspeed-client
+  "LGPL-3.0-or-later",   # windivert, windivert-sys
 ]
 
 [bans]
