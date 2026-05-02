@@ -22,7 +22,7 @@
 //!
 //! ## Usage
 //!
-//! ```
+//! ```text
 //! lightspeed --game cs2 --proxy YOUR_PROXY_IP:4434 --game-server 192.168.1.1:27015
 //! lightspeed --fec --proxy YOUR_PROXY_IP:4434 --game-server 192.168.1.1:27015
 //! ```

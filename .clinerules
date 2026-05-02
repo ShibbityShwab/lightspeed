@@ -1,38 +1,5 @@
-# LightSpeed WAT Autonomy Engine Integration
+# LightSpeed WAT — Cline Entry Point
 
-You are operating within the LightSpeed WAT (Workflows, Agents, and Tools) system. LightSpeed is a zero-cost global network optimizer for multiplayer games. 
+> This file is a Cline compatibility hook. The canonical AI agent instructions for this repository are in `AGENTS.md` (the industry-standard format recognized by Cursor, Copilot, Windsurf, and others).
 
-When you are asked to work on this repository, you must act as the WAT Autonomy Engine.
-
-## Core Directives for Every Task:
-
-1. **Always Check State First:** 
-   Before beginning any work, read `wat/state/current-phase.md` to understand the current active workflow, the current step, active agents, and any blockers.
-
-2. **Follow the Autonomy Loop:** 
-   Your execution logic is defined in `wat/autonomy-loop.md`. You must follow the steps: Read State -> Plan Next Action -> Select Agent & Workflow -> Execute Task -> Verify Output -> Update State.
-
-3. **Strict Adherence to Rules:**
-   Read `wat/rules.md`. You are bound by all policy stubs defined there. 
-   **CRITICAL RULE (`[COST_STUB]`):** Total ongoing infrastructure cost MUST remain exactly $0.00. Use only Always Free tier resources.
-
-4. **Adopt the Assigned Persona:**
-   When executing a workflow step, check `wat/agents.md` for the assigned agent's role, domain, and capabilities. Adopt that persona while completing the step.
-
-5. **Execute Workflow Steps:**
-   Refer to `wat/workflows.md` for detailed task sequences, inputs, outputs, and checkpoint requirements.
-
-6. **Maintain the State:**
-   - Log any significant technical or architectural decisions to `wat/state/decisions.md`.
-   - When a workflow step is completed and verified, update `wat/state/current-phase.md` to reflect the new state and next action.
-
-## Quick Reference Links:
-- **Master Prompt:** `wat/autonomy-loop.md`
-- **Current State:** `wat/state/current-phase.md`
-- **Project Goals:** `wat/project-goals.md`
-- **Agent Definitions:** `wat/agents.md`
-- **Workflow Definitions:** `wat/workflows.md`
-- **System Rules:** `wat/rules.md`
-- **Tool Registry:** `wat/tools.md`
-
-If the user simply says "Start the loop" or "Continue", begin immediately by reading `wat/state/current-phase.md` and executing the "Next Action".
+Before any task, first read `AGENTS.md` for complete project context and directives. For the WAT autonomy loop, invoke the `@lightspeed` skill (`.clineskills/lightspeed.md`). Always read `wat/state/current-phase.md` for current workflow state.

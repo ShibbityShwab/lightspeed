@@ -16,9 +16,18 @@ fn windows_main() -> anyhow::Result<()> {
     use eframe::egui;
     use std::sync::{Arc, Mutex};
 
+    // Redirect tracing to a file since GUI apps have no console.
+    // Use a simple file appender for straightforward single-file logging.
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("C:\\Users\\User\\ls-gui-trace.log")
+        .expect("Failed to open log file");
+    let file_appender = std::sync::Mutex::new(file);
     tracing_subscriber::fmt()
         .with_target(false)
         .compact()
+        .with_writer(file_appender)
         .init();
 
     tracing::info!("LightSpeed GUI starting");

@@ -414,7 +414,32 @@ The first release of LightSpeed — a zero-cost, open-source global network opti
 - **Target Overhead**: ≤5ms (achieved: 162μs average)
 - **Supported Platforms**: Windows x64, Linux x64, Linux ARM64
 
-[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.0...HEAD
+## [0.4.1] — 2026-05-02
+
+### WAT Modernization
+- **AGENTS.md**: Created as industry-standard canonical AI agent instructions file (recognized by Cursor, Copilot, Windsurf, etc.)
+- **`.clinerules`**: Slimmed to Cline compatibility hook that delegates to AGENTS.md
+- **`.clineskills/`**: Created `@lightspeed` autonomy loop skill and `@debug` iterative test-fix loop skill
+- **`wat/`**: Archived 7 static reference files to `wat/archive/` (agents.md, workflows.md, tools.md, autonomy-loop.md, workspace.md, mcp-integration.md, project-goals.md)
+- **`wat/TASK.md`**: Created structured task definition template with success criteria, test commands, and rollback
+- **`wat/rules.md`**: Added AGENTIC VERIFICATION section — must pass tests+clippy before claiming completion, 3-attempt escalation rule
+- **Deleted model-specific stubs**: `.geminirules`, `.antigravityrules`, `wat/run-gemini.txt`, `.agents/` directory
+
+### CI Improvements
+- **Security audit**: Added `cargo-audit --deny warnings` job to CI pipeline
+- **Windows build/test**: Added `windows-latest` job for full build + test coverage on primary target
+- **Benchmark baseline**: Added `cargo bench` job with criterion baseline capture + artifact upload
+
+### Documentation
+- **Gamer docs**: Added `docs/glossary.md`, `docs/user-guide.md`, `docs/faq.md`, `docs/troubleshooting.md`, `docs/supported-games.md`
+- **Capture mode**: Added `docs/capture-mode-limitations.md` documenting architectural limitations
+
+### Chores & Maintenance
+- Initial `proxy/proxy.toml` configuration file
+- E2E test tool: `tools/echo28015.py`, `tools/rust_traffic_sim.ps1`, `tools/start_echo.sh`
+
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.1.0...v0.2.0

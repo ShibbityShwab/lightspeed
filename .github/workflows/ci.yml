@@ -87,3 +87,57 @@ jobs:
           name: coverage-lcov
           path: lcov.info
           retention-days: 14
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run cargo-audit
+        run: cargo audit --deny warnings
+
+  windows-test:
+    name: Windows Build & Test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release --workspace --exclude lightspeed-gui
+
+      - name: Test
+        run: cargo test --workspace --lib --exclude lightspeed-gui
+
+  benchmarks:
+    name: Benchmark Regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Install critcmp
+        uses: taiki-e/install-action@v2
+        with:
+          tool: critcmp
+
+      - name: Run benchmarks (report only)
+        run: cargo bench --workspace --exclude lightspeed-gui -- --save-baseline current
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: target/criterion/
+          retention-days: 7
+          if-no-files-found: warn

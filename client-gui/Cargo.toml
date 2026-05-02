@@ -11,10 +11,11 @@ name = "lightspeed-gui"
 path = "src/main.rs"
 
 [dependencies]
-lightspeed-client = { path = "../client" }
+lightspeed-client = { path = "../client", features = ["pcap-capture", "windivert-redirect"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = "0.2"
 anyhow = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

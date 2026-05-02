@@ -3,9 +3,35 @@
 //! Captures game UDP packets from the network interface, tunnels them through
 //! the LightSpeed proxy (with optional FEC), and injects proxy responses back
 //! to the game client at the raw-socket level.
+//!
+//! ## Known Limitations
+//!
+//! ### Why pcap captures bidirectional traffic (and why we filter it)
+//! pcap's BPF filter matches on port numbers regardless of direction.
+//! A filter like `udp port 28015` will match both:
+//!   - OUTBOUND: `src=192.168.x.x:GAME_PORT → dst=SERVER:28015`  (we want this)
+//!   - INBOUND:  `src=SERVER:28015 → dst=192.168.x.x:GAME_PORT`  (we DON'T want this)
+//!
+//! If the inbound packets are tunneled, the proxy receives them with
+//! `orig_dst_addr = 192.168.x.x` (a private/RFC1918 IP) and drops them via
+//! the PrivateDestination abuse check — causing ~50% of all tunneled packets
+//! to be silently dropped at the proxy. We filter them out here first.
+//!
+//! ### Windows Firewall and tunnel inbound
+//! The tunnel socket binds to an ephemeral port (0.0.0.0:0). Windows Defender
+//! Firewall blocks unsolicited inbound UDP on ephemeral ports by default, even
+//! when the application sent an outbound packet first (NAT hole punch). We add
+//! a temporary inbound rule for the process while capture is active.
+//!
+//! ### pcap is passive — it cannot redirect traffic
+//! pcap observes a copy of each packet. The original packet still travels the
+//! direct path (client → game server). The tunnel creates a *parallel* path
+//! that the game client never uses for its active session. Actual ping
+//! optimisation requires WinDivert (Windows) or nftables/iptables redirect
+//! (Linux) to intercept and drop the original packet.
 
 use std::collections::HashMap;
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +40,90 @@ use tracing::info;
 
 use crate::games::GameConfig;
 use crate::ml;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `true` for RFC1918 private ranges, loopback, and link-local.
+///
+/// Used to filter out the *inbound* half of pcap captures: pcap BPF filters
+/// match on port regardless of direction, so both outbound (src=local,
+/// dst=server) and inbound (src=server, dst=local private IP) packets are
+/// captured. Only outbound packets should be tunneled; inbound packets would
+/// arrive at the proxy with `orig_dst = 192.168.x.x` and be dropped by the
+/// PrivateDestination abuse check anyway.
+#[inline]
+fn is_private_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    ip.is_loopback()                          // 127.0.0.0/8
+        || ip.is_link_local()                 // 169.254.0.0/16
+        || a == 10                            // 10.0.0.0/8
+        || (a == 172 && (16..=31).contains(&b)) // 172.16.0.0/12
+        || (a == 192 && b == 168)             // 192.168.0.0/16
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Windows Firewall helpers (no-ops on non-Windows)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Name used for the temporary Windows Firewall inbound allow rule.
+const FIREWALL_RULE_NAME: &str = "LightSpeed Tunnel Inbound";
+
+/// Add a Windows Firewall inbound UDP allow rule for this process.
+///
+/// The tunnel socket binds to an ephemeral port. Windows Defender Firewall
+/// blocks unsolicited inbound UDP even when a NAT hole-punch exists, so
+/// proxy responses never reach the tunnel socket. This rule lets them through
+/// while capture is active. The rule is removed in `remove_firewall_rule`.
+///
+/// Requires the process to be running as Administrator.
+#[cfg(target_os = "windows")]
+fn add_firewall_rule() {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let exe_str = exe.to_string_lossy();
+    let output = std::process::Command::new("netsh")
+        .args([
+            "advfirewall", "firewall", "add", "rule",
+            &format!("name={}", FIREWALL_RULE_NAME),
+            "protocol=UDP",
+            "dir=in",
+            "action=allow",
+            &format!("program={}", exe_str),
+        ])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            tracing::info!("🔓 Windows Firewall: added inbound UDP allow rule for LightSpeed");
+        }
+        Ok(o) => {
+            tracing::warn!(
+                "Windows Firewall rule add may have failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Failed to run netsh (need Administrator?): {}", e);
+        }
+    }
+}
+
+/// Remove the Windows Firewall rule added by [`add_firewall_rule`].
+#[cfg(target_os = "windows")]
+fn remove_firewall_rule() {
+    let _ = std::process::Command::new("netsh")
+        .args([
+            "advfirewall", "firewall", "delete", "rule",
+            &format!("name={}", FIREWALL_RULE_NAME),
+        ])
+        .output();
+    tracing::info!("🔒 Windows Firewall: removed LightSpeed inbound rule");
+}
+
+#[cfg(not(target_os = "windows"))]
+fn add_firewall_rule() {}
+#[cfg(not(target_os = "windows"))]
+fn remove_firewall_rule() {}
 
 /// Run the pcap capture mode.
 ///
@@ -27,6 +137,21 @@ use crate::ml;
 /// * `fec_enabled` — whether to wrap packets with FEC headers
 /// * `fec_k`       — FEC block size (data packets per parity packet)
 /// * `interface`   — optional NIC name to capture on (auto-detect if `None`)
+
+/// Live stat handles filled by the capture task once it is running.
+/// Engine holds a `Arc<Mutex<Option<CaptureStatHandles>>>` slot; the task fills it.
+pub struct CaptureStatHandles {
+    /// Game → Proxy captured packets.
+    pub outbound_packets: Arc<std::sync::atomic::AtomicU64>,
+    /// Game → Proxy captured bytes.
+    pub outbound_bytes: Arc<std::sync::atomic::AtomicU64>,
+    /// Injector stats (from_proxy, injected, errors, fec_recovered).
+    pub injector_stats: Arc<crate::capture::injector::InjectorStats>,
+}
+
+/// Slot type passed into `run_capture_mode_with_shutdown` so the engine can read live stats.
+pub type CaptureStatSlot = Arc<std::sync::Mutex<Option<CaptureStatHandles>>>;
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_capture_mode(
     game: &dyn GameConfig,
@@ -38,6 +163,51 @@ pub async fn run_capture_mode(
     fec_enabled: bool,
     fec_k: u8,
     interface: Option<String>,
+) -> anyhow::Result<()> {
+    run_capture_mode_inner(
+        game, proxy_addr, proxy_id, proxy_region,
+        online_learner, keepalive_timestamps,
+        fec_enabled, fec_k, interface, None, None,
+    ).await
+}
+
+/// Like [`run_capture_mode`] but accepts an external shutdown oneshot for GUI-driven stop,
+/// an optional slot the function fills with live stat handles once running,
+/// and an optional pre-built BPF filter string (avoids re-running netstat inside the task).
+#[allow(clippy::too_many_arguments)]
+pub async fn run_capture_mode_with_shutdown(
+    game: &dyn GameConfig,
+    proxy_addr: SocketAddrV4,
+    proxy_id: String,
+    proxy_region: String,
+    online_learner: Arc<tokio::sync::Mutex<ml::online::OnlineLearner>>,
+    keepalive_timestamps: Arc<tokio::sync::Mutex<HashMap<u16, std::time::Instant>>>,
+    fec_enabled: bool,
+    fec_k: u8,
+    interface: Option<String>,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    stat_slot: Option<CaptureStatSlot>,
+) -> anyhow::Result<()> {
+    run_capture_mode_inner(
+        game, proxy_addr, proxy_id, proxy_region,
+        online_learner, keepalive_timestamps,
+        fec_enabled, fec_k, interface, Some(shutdown_rx), stat_slot,
+    ).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_capture_mode_inner(
+    game: &dyn GameConfig,
+    proxy_addr: SocketAddrV4,
+    proxy_id: String,
+    proxy_region: String,
+    online_learner: Arc<tokio::sync::Mutex<ml::online::OnlineLearner>>,
+    keepalive_timestamps: Arc<tokio::sync::Mutex<HashMap<u16, std::time::Instant>>>,
+    fec_enabled: bool,
+    fec_k: u8,
+    interface: Option<String>,
+    shutdown_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    stat_slot: Option<CaptureStatSlot>,
 ) -> anyhow::Result<()> {
     use bytes::BytesMut;
     use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
@@ -85,6 +255,11 @@ pub async fn run_capture_mode(
         )
     })?;
 
+    // Add Windows Firewall inbound allow rule so proxy responses reach the
+    // tunnel socket. Without this, Windows Defender Firewall drops inbound
+    // UDP on ephemeral ports even when the app sent an outbound packet first.
+    add_firewall_rule();
+
     info!(
         "⚡ Capture active — sniffing {} traffic on ports {:?}",
         game.name(),
@@ -126,18 +301,39 @@ pub async fn run_capture_mode(
     info!("   Mode:      bidirectional (capture + inject)");
     info!("   Press Ctrl+C to stop\n");
 
-    // Ctrl+C flag
+    // Ctrl+C / external shutdown flag
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let running_flag = Arc::clone(&running);
-    tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        running_flag.store(false, Ordering::Relaxed);
-    });
+    {
+        let running_ctrl = Arc::clone(&running);
+        tokio::spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            running_ctrl.store(false, Ordering::Relaxed);
+        });
+    }
+    // Also respond to GUI-driven shutdown (engine calls stop_capture).
+    if let Some(rx) = shutdown_rx {
+        let running_gui = Arc::clone(&running);
+        tokio::spawn(async move {
+            let _ = rx.await;
+            running_gui.store(false, Ordering::Relaxed);
+        });
+    }
 
     // Shared outbound counters
     let outbound_packets = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let outbound_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let start_time = std::time::Instant::now();
+
+    // Fill the engine's stat slot so it can poll live counters via snapshot().
+    if let Some(ref slot) = stat_slot {
+        if let Ok(mut guard) = slot.lock() {
+            *guard = Some(CaptureStatHandles {
+                outbound_packets: Arc::clone(&outbound_packets),
+                outbound_bytes: Arc::clone(&outbound_bytes),
+                injector_stats: Arc::clone(&injector_stats),
+            });
+        }
+    }
 
     // ── Inbound task: Proxy → Injector → Game ────────────────────
     let inbound_handle = {
@@ -391,6 +587,14 @@ pub async fn run_capture_mode(
     while running.load(Ordering::Relaxed) {
         match cap_backend.next_packet() {
             Ok(pkt) => {
+                // Skip inbound game-server→client packets captured by pcap's
+                // bidirectional BPF match. Their dst is a private/RFC1918 IP;
+                // the proxy would drop them via PrivateDestination anyway and
+                // counting them would inflate outbound_packets by ~50%.
+                if is_private_ipv4(*pkt.dst.ip()) {
+                    continue;
+                }
+
                 outbound_packets.fetch_add(1, Ordering::Relaxed);
                 outbound_bytes.fetch_add(pkt.payload.len() as u64, Ordering::Relaxed);
 
@@ -470,6 +674,8 @@ pub async fn run_capture_mode(
 
     // ── Shutdown ──────────────────────────────────────────────────
     let _ = cap_backend.stop();
+    // Clean up the temporary Windows Firewall rule added at startup.
+    remove_firewall_rule();
     inbound_handle.abort();
     keepalive_handle.abort();
     stats_handle.abort();

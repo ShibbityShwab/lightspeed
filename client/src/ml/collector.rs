@@ -13,7 +13,7 @@
 //!
 //! ## Usage
 //!
-//! ```no_run
+//! ```ignore
 //! use lightspeed_client::ml::collector::RouteCollector;
 //!
 //! let mut collector = RouteCollector::new(100);

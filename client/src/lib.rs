@@ -10,6 +10,7 @@
 
 pub mod engine;
 pub mod games;
+pub mod interceptor;
 
 pub use engine::{EngineStatus, LightSpeedEngine};
 
@@ -20,11 +21,17 @@ pub use engine::{EngineStatus, LightSpeedEngine};
 #[allow(dead_code)]
 pub(crate) mod capture;
 #[allow(dead_code)]
+pub(crate) mod cli;
+#[allow(dead_code)]
 pub(crate) mod config;
 #[allow(dead_code)]
 pub(crate) mod error;
 #[allow(dead_code)]
 pub(crate) mod ml;
+#[allow(dead_code)]
+pub(crate) mod modes;
+#[allow(dead_code)]
+pub(crate) mod quic;
 #[allow(dead_code)]
 pub(crate) mod redirect;
 #[allow(dead_code)]
