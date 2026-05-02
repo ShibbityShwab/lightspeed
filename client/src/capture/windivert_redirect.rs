@@ -34,10 +34,8 @@
 //! network drivers in the same way that ExitLag, WTFast, and NoPing work.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use std::time::Duration;
-
 use tokio::sync::oneshot;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,7 +164,8 @@ pub struct WinDivertConfig {
 mod inner {
     use super::*;
     use std::collections::HashMap;
-    use std::time::Instant;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
 
     use tokio::net::UdpSocket;
 
