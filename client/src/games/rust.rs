@@ -23,8 +23,8 @@
 //! LightSpeed operates as a transparent UDP forwarder with no code injection
 //! or memory modification, so it is compatible with both systems.
 
-use crate::tunnel::capture::CaptureFilter;
 use super::GameConfig;
+use crate::tunnel::capture::CaptureFilter;
 
 /// Rust (Facepunch) game configuration.
 pub struct RustConfig;
@@ -112,12 +112,12 @@ impl GameConfig for RustConfig {
 /// when building the capture filter so we don't flood the tunnel with
 /// Steam traffic.
 const STEAM_SERVICE_PORTS: &[u16] = &[
-    3478, 4379, 4380,   // Steam NAT punch / relay
-    27005,              // Steam client source / game server UDP
-    27015,              // Steam SRCDS / query
-    27020,              // Steam TV
-    27036,              // Steam remote play
-    27037,              // Steam remote play
+    3478, 4379, 4380,  // Steam NAT punch / relay
+    27005, // Steam client source / game server UDP
+    27015, // Steam SRCDS / query
+    27020, // Steam TV
+    27036, // Steam remote play
+    27037, // Steam remote play
 ];
 
 /// Return ALL local UDP ports that `RustClient.exe` currently has open,
@@ -202,7 +202,7 @@ fn rust_udp_all_ports(pid: u32) -> Vec<u16> {
         // Extract port from "addr:port" — use rsplit to handle IPv6 addresses.
         if let Some(port_str) = parts[1].rsplit(':').next() {
             if let Ok(port) = port_str.parse::<u16>() {
-                // Skip port 0, well-known ports, LightSpeed proxy port, 
+                // Skip port 0, well-known ports, LightSpeed proxy port,
                 // and known Steam service ports.
                 if port >= 1024
                     && port != 4434

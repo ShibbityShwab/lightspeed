@@ -25,6 +25,10 @@ use super::traits::{InterceptorConfig, InterceptorHandle, TrafficInterceptor};
 
 // Imports only needed when WinDivert is actually compiled in:
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use super::traits::InterceptorCounters;
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_udp};
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use std::net::SocketAddrV4;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,10 +36,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use std::time::Duration;
-#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use super::traits::InterceptorCounters;
-#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_udp};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Struct
@@ -85,29 +85,25 @@ impl TrafficInterceptor for WinDivertInterceptor {
             ));
         }
         if !dll.exists() {
-            return Err(format!(
-                "WinDivert.dll not found at {}", dll.display()
-            ));
+            return Err(format!("WinDivert.dll not found at {}", dll.display()));
         }
         Ok(())
     }
 
     fn start(&self, config: InterceptorConfig) -> anyhow::Result<InterceptorHandle> {
-        use windivert::prelude::{WinDivert, WinDivertFlags, WinDivertPacket};
-        use windivert::address::WinDivertAddress;
-        use windivert::layer::NetworkLayer;
         use bytes::BytesMut;
         use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
-        use std::time::Instant;
         use std::collections::HashMap;
+        use std::time::Instant;
         use tokio::net::UdpSocket;
+        use windivert::address::WinDivertAddress;
+        use windivert::layer::NetworkLayer;
+        use windivert::prelude::{WinDivert, WinDivertFlags, WinDivertPacket};
 
         let (port_lo, port_hi) = config.port_range;
         let proxy_addr = config.proxy_addr;
-        let pre_known_server: Option<SocketAddrV4> = config
-            .initial_routes
-            .first()
-            .map(|r| r.remote);
+        let pre_known_server: Option<SocketAddrV4> =
+            config.initial_routes.first().map(|r| r.remote);
 
         // ── Build the WinDivert outbound filter ───────────────────────────
         //
@@ -128,7 +124,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 };
                 tracing::info!(
                     "🔒 WinDivert filter: PID {} (network layer, port range {}-{})",
-                    pid, port_lo, port_hi
+                    pid,
+                    port_lo,
+                    port_hi
                 );
                 format!("outbound and udp and {}", port_clause)
             }
@@ -144,7 +142,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 None => {
                     tracing::info!(
                         "🔒 WinDivert filter: port range {}-{} (auto-detect mode)",
-                        port_lo, port_hi
+                        port_lo,
+                        port_hi
                     );
                     if port_lo == port_hi {
                         format!("udp and outbound and udp.DstPort == {port_lo}")
@@ -168,7 +167,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
             }
             Err(e) => {
                 tracing::error!("❌ WinDivert intercept open failed: {}", e);
-                return Err(anyhow::anyhow!("WinDivert open failed (need Admin + WinDivert64.sys loaded): {e}"));
+                return Err(anyhow::anyhow!(
+                    "WinDivert open failed (need Admin + WinDivert64.sys loaded): {e}"
+                ));
             }
         };
 
@@ -260,7 +261,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 let mut recv_buf = vec![0u8; 65535];
 
                 loop {
-                    if !running_ic.load(Ordering::Relaxed) { break; }
+                    if !running_ic.load(Ordering::Relaxed) {
+                        break;
+                    }
 
                     match wd_ic.recv(Some(&mut recv_buf)) {
                         Ok(pkt) => {
@@ -290,9 +293,16 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                         let now = Instant::now();
                                         if game_dst == server {
                                             last_server_pkt = Some(now);
-                                            counters_ic.packets_intercepted.fetch_add(1, Ordering::Relaxed);
-                                            counters_ic.bytes_intercepted.fetch_add(payload.len() as u64, Ordering::Relaxed);
-                                            if itx.blocking_send((game_src, game_dst, payload)).is_err() {
+                                            counters_ic
+                                                .packets_intercepted
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            counters_ic
+                                                .bytes_intercepted
+                                                .fetch_add(payload.len() as u64, Ordering::Relaxed);
+                                            if itx
+                                                .blocking_send((game_src, game_dst, payload))
+                                                .is_err()
+                                            {
                                                 break;
                                             }
                                             continue;
@@ -300,13 +310,17 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                                         // Different destination — check staleness
                                         let is_stale = last_server_pkt
-                                            .map(|t| now.duration_since(t) > Duration::from_secs(STALE_SECS))
+                                            .map(|t| {
+                                                now.duration_since(t)
+                                                    > Duration::from_secs(STALE_SECS)
+                                            })
                                             .unwrap_or(false);
 
                                         if is_stale {
                                             tracing::info!(
                                                 "🔄 Server {} stale ({}s) — re-detecting",
-                                                server, STALE_SECS
+                                                server,
+                                                STALE_SECS
                                             );
                                             learned_server = None;
                                             last_server_pkt = None;
@@ -336,11 +350,13 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     });
 
                                     let mut committed = false;
-                                    if let Some(entry) = candidates.iter_mut()
-                                        .find(|(addr, _, _)| *addr == game_dst)
+                                    if let Some(entry) =
+                                        candidates.iter_mut().find(|(addr, _, _)| *addr == game_dst)
                                     {
                                         entry.1 += 1;
-                                        if entry.1 >= DETECT_PKTS { committed = true; }
+                                        if entry.1 >= DETECT_PKTS {
+                                            committed = true;
+                                        }
                                     } else {
                                         candidates.push((game_dst, 1, now));
                                     }
@@ -349,7 +365,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                         learned_server = Some(game_dst);
                                         tracing::info!(
                                             "🔍 Auto-detected server: {} ({} pkts in ≤{}ms)",
-                                            game_dst, DETECT_PKTS, DETECT_WINDOW_MS
+                                            game_dst,
+                                            DETECT_PKTS,
+                                            DETECT_WINDOW_MS
                                         );
                                         if let Ok(mut g) = counters_ic.detected_server.lock() {
                                             *g = Some(game_dst);
@@ -394,9 +412,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 let guard = if_cache_inj.lock().unwrap();
                                 match guard.as_ref() {
                                     Some(a) => a.clone(),
-                                    None => unsafe {
-                                        WinDivertAddress::<NetworkLayer>::new()
-                                    },
+                                    None => unsafe { WinDivertAddress::<NetworkLayer>::new() },
                                 }
                             };
                             let pkt = WinDivertPacket {
@@ -405,7 +421,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             };
                             match wd_inj.send(&pkt) {
                                 Ok(_) => {
-                                    counters_inj.packets_injected.fetch_add(1, Ordering::Relaxed);
+                                    counters_inj
+                                        .packets_injected
+                                        .fetch_add(1, Ordering::Relaxed);
                                 }
                                 Err(e) => {
                                     tracing::warn!("WinDivert inject error: {e}");
@@ -414,7 +432,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             }
                         }
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                            if !running_inj.load(Ordering::Relaxed) { break; }
+                            if !running_inj.load(Ordering::Relaxed) {
+                                break;
+                            }
                         }
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
@@ -437,8 +457,10 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     .map_err(|e| anyhow::anyhow!("Tunnel socket bind failed: {e}"))?,
             );
             tracing::info!("✅ Tunnel UDP socket created");
-            let tunnel_port = tunnel_socket.local_addr()
-                .map_err(|e| anyhow::anyhow!("Cannot get tunnel port: {e}"))?.port();
+            let tunnel_port = tunnel_socket
+                .local_addr()
+                .map_err(|e| anyhow::anyhow!("Cannot get tunnel port: {e}"))?
+                .port();
             tracing::info!("🔌 Tunnel socket bound to port {}", tunnel_port);
 
             // Add Windows Firewall rule so proxy responses reach our tunnel socket.
@@ -473,7 +495,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             m.retain(|_, t| t.elapsed() < Duration::from_secs(30));
                         }
                         seq = seq.wrapping_add(1);
-                        let _ = counters_ka.packets_from_proxy.load(Ordering::Relaxed); // touch to avoid dead_code warning
+                        let _ = counters_ka.packets_from_proxy.load(Ordering::Relaxed);
+                        // touch to avoid dead_code warning
                     }
                 });
             }
@@ -501,7 +524,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 let mut active_server: Option<SocketAddrV4> = pre_known_server;
 
                 loop {
-                    if !running_loop.load(Ordering::Relaxed) { break; }
+                    if !running_loop.load(Ordering::Relaxed) {
+                        break;
+                    }
 
                     tokio::select! {
                         biased;
@@ -662,9 +687,14 @@ fn add_fw_rule(port: u16) {
     let name = format!("LightSpeed WinDivert Tunnel {}", port);
     let _ = std::process::Command::new("netsh")
         .args([
-            "advfirewall", "firewall", "add", "rule",
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
             &format!("name={name}"),
-            "protocol=UDP", "dir=in", "action=allow",
+            "protocol=UDP",
+            "dir=in",
+            "action=allow",
             &format!("program={}", exe.to_string_lossy()),
         ])
         .output();
@@ -676,7 +706,10 @@ fn remove_fw_rule(port: u16) {
     let name = format!("LightSpeed WinDivert Tunnel {}", port);
     let _ = std::process::Command::new("netsh")
         .args([
-            "advfirewall", "firewall", "delete", "rule",
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
             &format!("name={name}"),
         ])
         .output();

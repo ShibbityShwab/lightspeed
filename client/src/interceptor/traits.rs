@@ -12,8 +12,8 @@
 //! - **Recoverable**: Stale routes reset automatically.
 
 use std::net::SocketAddrV4;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use tokio::sync::oneshot;
 
@@ -134,12 +134,12 @@ impl Default for InterceptorCounters {
     fn default() -> Self {
         Self {
             packets_intercepted: AtomicU64::new(0),
-            bytes_intercepted:   AtomicU64::new(0),
-            packets_injected:    AtomicU64::new(0),
-            bytes_injected:      AtomicU64::new(0),
-            packets_from_proxy:  AtomicU64::new(0),
-            errors:              AtomicU64::new(0),
-            detected_server:     std::sync::Mutex::new(None),
+            bytes_intercepted: AtomicU64::new(0),
+            packets_injected: AtomicU64::new(0),
+            bytes_injected: AtomicU64::new(0),
+            packets_from_proxy: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            detected_server: std::sync::Mutex::new(None),
         }
     }
 }
@@ -149,16 +149,12 @@ impl InterceptorCounters {
     pub fn snapshot(&self, platform: &'static str) -> InterceptorStats {
         InterceptorStats {
             packets_intercepted: self.packets_intercepted.load(Ordering::Relaxed),
-            bytes_intercepted:   self.bytes_intercepted.load(Ordering::Relaxed),
-            packets_injected:    self.packets_injected.load(Ordering::Relaxed),
-            bytes_injected:      self.bytes_injected.load(Ordering::Relaxed),
-            packets_from_proxy:  self.packets_from_proxy.load(Ordering::Relaxed),
-            errors:              self.errors.load(Ordering::Relaxed),
-            detected_server: self
-                .detected_server
-                .lock()
-                .map(|g| *g)
-                .unwrap_or(None),
+            bytes_intercepted: self.bytes_intercepted.load(Ordering::Relaxed),
+            packets_injected: self.packets_injected.load(Ordering::Relaxed),
+            bytes_injected: self.bytes_injected.load(Ordering::Relaxed),
+            packets_from_proxy: self.packets_from_proxy.load(Ordering::Relaxed),
+            errors: self.errors.load(Ordering::Relaxed),
+            detected_server: self.detected_server.lock().map(|g| *g).unwrap_or(None),
             platform,
         }
     }
@@ -168,11 +164,11 @@ impl InterceptorCounters {
 #[derive(Clone, Debug, Default)]
 pub struct InterceptorStats {
     pub packets_intercepted: u64,
-    pub bytes_intercepted:   u64,
-    pub packets_injected:    u64,
-    pub bytes_injected:      u64,
-    pub packets_from_proxy:  u64,
-    pub errors:              u64,
+    pub bytes_intercepted: u64,
+    pub packets_injected: u64,
+    pub bytes_injected: u64,
+    pub packets_from_proxy: u64,
+    pub errors: u64,
     /// The game server address discovered at runtime (or pre-configured).
     pub detected_server: Option<SocketAddrV4>,
     /// Platform name: `"WinDivert"`, `"nftables"`, `"pf"`, …
@@ -278,7 +274,9 @@ pub struct UnsupportedInterceptor {
 
 impl UnsupportedInterceptor {
     pub fn new(reason: impl Into<String>) -> Self {
-        Self { reason: reason.into() }
+        Self {
+            reason: reason.into(),
+        }
     }
 }
 

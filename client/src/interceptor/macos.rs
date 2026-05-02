@@ -25,7 +25,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::traits::{InterceptorConfig, InterceptorCounters, InterceptorHandle, TrafficInterceptor};
+use super::traits::{
+    InterceptorConfig, InterceptorCounters, InterceptorHandle, TrafficInterceptor,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Struct
@@ -34,15 +36,21 @@ use super::traits::{InterceptorConfig, InterceptorCounters, InterceptorHandle, T
 pub struct PfInterceptor;
 
 impl PfInterceptor {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl Default for PfInterceptor {
-    fn default() -> Self { Self }
+    fn default() -> Self {
+        Self
+    }
 }
 
 impl TrafficInterceptor for PfInterceptor {
-    fn platform_name(&self) -> &'static str { "pfctl" }
+    fn platform_name(&self) -> &'static str {
+        "pfctl"
+    }
 
     fn check_availability(&self) -> Result<(), String> {
         if !std::path::Path::new("/sbin/pfctl").exists()
@@ -53,17 +61,15 @@ impl TrafficInterceptor for PfInterceptor {
                 .map(|o| !o.status.success())
                 .unwrap_or(true)
         {
-            return Err(
-                "pfctl not available. macOS 10.7+ required. Run as root.".into(),
-            );
+            return Err("pfctl not available. macOS 10.7+ required. Run as root.".into());
         }
         Ok(())
     }
 
     fn start(&self, config: InterceptorConfig) -> anyhow::Result<InterceptorHandle> {
-        use tokio::net::UdpSocket;
-        use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
         use bytes::BytesMut;
+        use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
+        use tokio::net::UdpSocket;
 
         // ── Resolve the server address ────────────────────────────────────
         let server_addr = config
@@ -174,7 +180,9 @@ impl TrafficInterceptor for PfInterceptor {
             let mut game_src: Option<SocketAddrV4> = None;
 
             loop {
-                if !running_loop.load(Ordering::Relaxed) { break; }
+                if !running_loop.load(Ordering::Relaxed) {
+                    break;
+                }
 
                 tokio::select! {
                     biased;
@@ -359,7 +367,12 @@ fn add_pf_anchor(anchor: &str, server: SocketAddrV4, local_port: u16) -> anyhow:
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    tracing::info!("pf: loaded anchor '{}' → redirect {} to :{}", anchor, server, local_port);
+    tracing::info!(
+        "pf: loaded anchor '{}' → redirect {} to :{}",
+        anchor,
+        server,
+        local_port
+    );
     Ok(())
 }
 

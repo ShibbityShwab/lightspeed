@@ -294,10 +294,7 @@ fn list_udp_windows() -> Vec<(Ipv4Addr, u16, u16, u32)> {
 /// Parse `"192.168.1.5:54321"` → `(54321)` and `"1.2.3.4:28015"` → `(ip, 28015)`.
 /// IPv4 only.
 #[cfg(target_os = "windows")]
-fn parse_local_remote_windows(
-    local: &str,
-    remote: &str,
-) -> Option<(u16, Ipv4Addr, u16)> {
+fn parse_local_remote_windows(local: &str, remote: &str) -> Option<(u16, Ipv4Addr, u16)> {
     let local_port = local.rsplit(':').next()?.parse::<u16>().ok()?;
 
     let colon = remote.rfind(':')?;
@@ -370,8 +367,7 @@ fn list_udp_linux_ss() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
         // Extract PID from users field: `users:(("proc",pid=N,fd=M))`
         let pid = extract_pid_from_ss_users(users_str)?;
 
-        let (local_port, remote_ip, remote_port) =
-            parse_addr_port_linux(local_str, remote_str)?;
+        let (local_port, remote_ip, remote_port) = parse_addr_port_linux(local_str, remote_str)?;
 
         result.push((remote_ip, remote_port, local_port, pid));
     }
@@ -383,7 +379,9 @@ fn extract_pid_from_ss_users(s: &str) -> Option<u32> {
     // s looks like: users:(("prog",pid=1234,fd=5))
     let start = s.find("pid=")?;
     let rest = &s[start + 4..];
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     rest[..end].parse().ok()
 }
 
@@ -396,7 +394,10 @@ fn parse_addr_port_linux(local: &str, remote: &str) -> Option<(u16, Ipv4Addr, u1
     let rip_str = &remote[..colon];
     let rport_str = &remote[colon + 1..];
     let remote_port: u16 = rport_str.parse().ok()?;
-    let remote_ip: Ipv4Addr = rip_str.trim_matches(|c| c == '[' || c == ']').parse().ok()?;
+    let remote_ip: Ipv4Addr = rip_str
+        .trim_matches(|c| c == '[' || c == ']')
+        .parse()
+        .ok()?;
 
     Some((local_port, remote_ip, remote_port))
 }
@@ -473,7 +474,9 @@ fn build_inode_pid_map() -> std::collections::HashMap<u64, u32> {
                 let s = link.to_string_lossy();
                 // socket:[12345]
                 if s.starts_with("socket:[") {
-                    if let Some(inode_str) = s.strip_prefix("socket:[").and_then(|s| s.strip_suffix(']')) {
+                    if let Some(inode_str) =
+                        s.strip_prefix("socket:[").and_then(|s| s.strip_suffix(']'))
+                    {
                         if let Ok(inode) = inode_str.parse::<u64>() {
                             map.insert(inode, pid);
                         }
@@ -502,7 +505,9 @@ fn parse_hex_addr(s: &str) -> Option<(Ipv4Addr, u16)> {
 // Allow dead_code suppression on Linux-only fn when building for non-Linux.
 #[allow(dead_code)]
 #[cfg(not(target_os = "linux"))]
-fn parse_hex_addr(_s: &str) -> Option<(Ipv4Addr, u16)> { None }
+fn parse_hex_addr(_s: &str) -> Option<(Ipv4Addr, u16)> {
+    None
+}
 
 /// macOS: parse `netstat -anup` or fall back to `lsof -i UDP -n -P`.
 ///

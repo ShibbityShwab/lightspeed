@@ -60,7 +60,7 @@ fn is_private_ipv4(ip: Ipv4Addr) -> bool {
         || ip.is_link_local()                 // 169.254.0.0/16
         || a == 10                            // 10.0.0.0/8
         || (a == 172 && (16..=31).contains(&b)) // 172.16.0.0/12
-        || (a == 192 && b == 168)             // 192.168.0.0/16
+        || (a == 192 && b == 168) // 192.168.0.0/16
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -84,7 +84,10 @@ fn add_firewall_rule() {
     let exe_str = exe.to_string_lossy();
     let output = std::process::Command::new("netsh")
         .args([
-            "advfirewall", "firewall", "add", "rule",
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
             &format!("name={}", FIREWALL_RULE_NAME),
             "protocol=UDP",
             "dir=in",
@@ -113,7 +116,10 @@ fn add_firewall_rule() {
 fn remove_firewall_rule() {
     let _ = std::process::Command::new("netsh")
         .args([
-            "advfirewall", "firewall", "delete", "rule",
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
             &format!("name={}", FIREWALL_RULE_NAME),
         ])
         .output();
@@ -168,10 +174,19 @@ pub async fn run_capture_mode(
     interface: Option<String>,
 ) -> anyhow::Result<()> {
     run_capture_mode_inner(
-        game, proxy_addr, proxy_id, proxy_region,
-        online_learner, keepalive_timestamps,
-        fec_enabled, fec_k, interface, None, None,
-    ).await
+        game,
+        proxy_addr,
+        proxy_id,
+        proxy_region,
+        online_learner,
+        keepalive_timestamps,
+        fec_enabled,
+        fec_k,
+        interface,
+        None,
+        None,
+    )
+    .await
 }
 
 /// Like [`run_capture_mode`] but accepts an external shutdown oneshot for GUI-driven stop,
@@ -195,10 +210,19 @@ pub async fn run_capture_mode_with_shutdown(
     stat_slot: Option<CaptureStatSlot>,
 ) -> anyhow::Result<()> {
     run_capture_mode_inner(
-        game, proxy_addr, proxy_id, proxy_region,
-        online_learner, keepalive_timestamps,
-        fec_enabled, fec_k, interface, Some(shutdown_rx), stat_slot,
-    ).await
+        game,
+        proxy_addr,
+        proxy_id,
+        proxy_region,
+        online_learner,
+        keepalive_timestamps,
+        fec_enabled,
+        fec_k,
+        interface,
+        Some(shutdown_rx),
+        stat_slot,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]

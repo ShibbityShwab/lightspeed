@@ -23,7 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::traits::{InterceptorConfig, InterceptorCounters, InterceptorHandle, TrafficInterceptor};
+use super::traits::{
+    InterceptorConfig, InterceptorCounters, InterceptorHandle, TrafficInterceptor,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Struct
@@ -32,15 +34,21 @@ use super::traits::{InterceptorConfig, InterceptorCounters, InterceptorHandle, T
 pub struct NftablesInterceptor;
 
 impl NftablesInterceptor {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl Default for NftablesInterceptor {
-    fn default() -> Self { Self }
+    fn default() -> Self {
+        Self
+    }
 }
 
 impl TrafficInterceptor for NftablesInterceptor {
-    fn platform_name(&self) -> &'static str { "nftables/iptables" }
+    fn platform_name(&self) -> &'static str {
+        "nftables/iptables"
+    }
 
     fn check_availability(&self) -> Result<(), String> {
         // Prefer nft; fall back to iptables.
@@ -52,21 +60,25 @@ impl TrafficInterceptor for NftablesInterceptor {
     }
 
     fn start(&self, config: InterceptorConfig) -> anyhow::Result<InterceptorHandle> {
-        use tokio::net::UdpSocket;
-        use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
         use bytes::BytesMut;
+        use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
+        use tokio::net::UdpSocket;
 
         // ── Resolve the server address ────────────────────────────────────
         //
         // The ProcessScanner should have populated `initial_routes` before we get here.
         // We require at least one route with a public remote address.
-        let server_addr = config.initial_routes.first()
+        let server_addr = config
+            .initial_routes
+            .first()
             .filter(|r| super::process_scanner::is_public_ipv4(*r.remote.ip()))
             .map(|r| r.remote)
-            .ok_or_else(|| anyhow::anyhow!(
-                "Linux interceptor requires a pre-discovered server route.\n\
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Linux interceptor requires a pre-discovered server route.\n\
                  Run ProcessScanner first and wait until the game is connected to a server."
-            ))?;
+                )
+            })?;
 
         let proxy_addr = config.proxy_addr;
         let fec_enabled = config.fec_enabled;
@@ -79,7 +91,8 @@ impl TrafficInterceptor for NftablesInterceptor {
         let local_port = listener_std.local_addr()?.port();
         tracing::info!(
             "Linux interceptor: redirecting {} → localhost:{}",
-            server_addr, local_port
+            server_addr,
+            local_port
         );
 
         // ── Install iptables REDIRECT rule ────────────────────────────────
@@ -115,7 +128,10 @@ impl TrafficInterceptor for NftablesInterceptor {
         listener_std.set_nonblocking(true)?;
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
 
-        tracing::info!("⚡ Linux interceptor active — intercepting → {}", server_addr);
+        tracing::info!(
+            "⚡ Linux interceptor active — intercepting → {}",
+            server_addr
+        );
 
         // ── Keepalive task ────────────────────────────────────────────────
         {
@@ -162,7 +178,9 @@ impl TrafficInterceptor for NftablesInterceptor {
             let mut game_src: Option<SocketAddrV4> = None;
 
             loop {
-                if !running_loop.load(Ordering::Relaxed) { break; }
+                if !running_loop.load(Ordering::Relaxed) {
+                    break;
+                }
 
                 tokio::select! {
                     biased;
@@ -304,7 +322,11 @@ impl TrafficInterceptor for NftablesInterceptor {
             tracing::info!("Linux interceptor loop exiting");
         });
 
-        Ok(InterceptorHandle::new(shutdown_tx, counters, "nftables/iptables"))
+        Ok(InterceptorHandle::new(
+            shutdown_tx,
+            counters,
+            "nftables/iptables",
+        ))
     }
 }
 
@@ -315,11 +337,7 @@ impl TrafficInterceptor for NftablesInterceptor {
 /// Add an OUTPUT chain REDIRECT rule so packets destined for `server` are
 /// redirected to `local_port` on the loopback, where our listener sits.
 /// We tag the rule with a comment so we can find-and-delete it precisely.
-fn add_iptables_redirect(
-    server: SocketAddrV4,
-    local_port: u16,
-    tag: &str,
-) -> anyhow::Result<()> {
+fn add_iptables_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow::Result<()> {
     // Try nftables first, fall back to iptables.
     if which("nft").is_some() {
         return add_nft_redirect(server, local_port, tag);
@@ -383,12 +401,24 @@ fn remove_nft_redirect(tag: &str) {
 fn add_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow::Result<()> {
     let out = std::process::Command::new("iptables")
         .args([
-            "-t", "nat", "-A", "OUTPUT",
-            "-p", "udp",
-            "-d", &server.ip().to_string(),
-            "--dport", &server.port().to_string(),
-            "-m", "comment", "--comment", tag,
-            "-j", "REDIRECT", "--to-port", &local_port.to_string(),
+            "-t",
+            "nat",
+            "-A",
+            "OUTPUT",
+            "-p",
+            "udp",
+            "-d",
+            &server.ip().to_string(),
+            "--dport",
+            &server.port().to_string(),
+            "-m",
+            "comment",
+            "--comment",
+            tag,
+            "-j",
+            "REDIRECT",
+            "--to-port",
+            &local_port.to_string(),
         ])
         .output()
         .map_err(|e| anyhow::anyhow!("iptables failed: {e}"))?;
@@ -406,12 +436,24 @@ fn add_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow:
 fn remove_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) {
     let _ = std::process::Command::new("iptables")
         .args([
-            "-t", "nat", "-D", "OUTPUT",
-            "-p", "udp",
-            "-d", &server.ip().to_string(),
-            "--dport", &server.port().to_string(),
-            "-m", "comment", "--comment", tag,
-            "-j", "REDIRECT", "--to-port", &local_port.to_string(),
+            "-t",
+            "nat",
+            "-D",
+            "OUTPUT",
+            "-p",
+            "udp",
+            "-d",
+            &server.ip().to_string(),
+            "--dport",
+            &server.port().to_string(),
+            "-m",
+            "comment",
+            "--comment",
+            tag,
+            "-j",
+            "REDIRECT",
+            "--to-port",
+            &local_port.to_string(),
         ])
         .output();
     tracing::info!("iptables: removed REDIRECT rule (tag={})", tag);
@@ -419,10 +461,9 @@ fn remove_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) {
 
 /// Return the full path to `cmd` if it exists in PATH.
 fn which(cmd: &str) -> Option<std::path::PathBuf> {
-    std::env::var_os("PATH")
-        .and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join(cmd))
-                .find(|p| p.is_file())
-        })
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(cmd))
+            .find(|p| p.is_file())
+    })
 }

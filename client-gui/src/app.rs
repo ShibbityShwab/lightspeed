@@ -114,7 +114,11 @@ impl LightSpeedApp {
         let auto_detected_game = try_auto_detect_game();
         let selected_game_idx = auto_detected_game
             .as_deref()
-            .and_then(|name| GAMES.iter().position(|(key, _, _)| key.eq_ignore_ascii_case(name)))
+            .and_then(|name| {
+                GAMES
+                    .iter()
+                    .position(|(key, _, _)| key.eq_ignore_ascii_case(name))
+            })
             .unwrap_or(0);
 
         let npcap_installed = check_npcap();
@@ -151,7 +155,6 @@ impl LightSpeedApp {
             .parse()
             .expect("proxy addr is always valid")
     }
-
 }
 
 // ── Tray builder ─────────────────────────────────────────────────────────────
@@ -351,18 +354,18 @@ impl eframe::App for LightSpeedApp {
                 self.last_tray_state = new_tray_state;
                 let (r, g, b): (u8, u8, u8) = match new_tray_state {
                     TrayState::Disconnected => (160, 160, 160), // gray
-                    TrayState::Connected    => (255, 200,  60), // amber
-                    TrayState::Optimizing   => ( 80, 210, 120), // green
-                    TrayState::Error        => (220,  80,  80), // red
+                    TrayState::Connected => (255, 200, 60),     // amber
+                    TrayState::Optimizing => (80, 210, 120),    // green
+                    TrayState::Error => (220, 80, 80),          // red
                 };
                 let tooltip: String = match new_tray_state {
                     TrayState::Disconnected => "\u{26a1} LightSpeed \u{2014} disconnected".into(),
-                    TrayState::Connected    => format!(
+                    TrayState::Connected => format!(
                         "\u{26a1} LightSpeed \u{2014} connected \u{00b7} RTT {:.0}ms",
                         self.status.latest_rtt_ms
                     ),
-                    TrayState::Optimizing   => "\u{26a1} LightSpeed \u{2014} optimizing".into(),
-                    TrayState::Error        => "\u{26a1} LightSpeed \u{2014} error".into(),
+                    TrayState::Optimizing => "\u{26a1} LightSpeed \u{2014} optimizing".into(),
+                    TrayState::Error => "\u{26a1} LightSpeed \u{2014} error".into(),
                 };
                 let _ = self.tray.set_icon(Some(lightning_icon(r, g, b)));
                 let _ = self.tray.set_tooltip(Some(&tooltip));
@@ -1069,7 +1072,7 @@ impl eframe::App for LightSpeedApp {
                     // when running as admin — no fallback needed.
                     let _ = parse_custom_port_range(&self.custom_port_input)
                             .unwrap_or_else(|| detect_windivert_port_range(self.selected_game_idx));
-                    
+
                     let game_key = GAMES[self.selected_game_idx].0;
                     let result = self.engine.lock().unwrap().start_interceptor(
                         game_key,
@@ -1260,16 +1263,15 @@ impl eframe::App for LightSpeedApp {
         }
 
         // ── Repaint schedule ─────────────────────────────────────────────
-        let repaint_interval =
-            if self.status.redirect_active
-                || self.status.capture_active
-                || self.status.windivert_active
-                || self.status.interceptor_active
-            {
-                Duration::from_millis(500) // 2 Hz for live counters
-            } else {
-                Duration::from_secs(1)
-            };
+        let repaint_interval = if self.status.redirect_active
+            || self.status.capture_active
+            || self.status.windivert_active
+            || self.status.interceptor_active
+        {
+            Duration::from_millis(500) // 2 Hz for live counters
+        } else {
+            Duration::from_secs(1)
+        };
         ctx.request_repaint_after(repaint_interval);
     }
 }
@@ -1296,7 +1298,10 @@ fn parse_server_addr(s: &str) -> Option<SocketAddrV4> {
 fn connect_instruction(game_idx: usize, local_port: u16) -> String {
     let (key, _, _) = GAMES[game_idx];
     match key {
-        "rust" => format!("In Rust  F1 console:  client.connect 127.0.0.1:{}", local_port),
+        "rust" => format!(
+            "In Rust  F1 console:  client.connect 127.0.0.1:{}",
+            local_port
+        ),
         "cs2" => format!("In CS2 console:  connect 127.0.0.1:{}", local_port),
         "dota2" => format!("In Dota 2 console:  connect 127.0.0.1:{}", local_port),
         _ => format!("Connect your game to:  127.0.0.1:{}", local_port),
@@ -1354,11 +1359,14 @@ fn detect_windivert_port_range(game_idx: usize) -> (u16, u16) {
         if let Some(range) = detect_rust_ports_netstat() {
             tracing::info!(
                 "🔍 RustClient.exe netstat-detected port range: {}-{}",
-                range.0, range.1
+                range.0,
+                range.1
             );
             return range;
         }
-        tracing::debug!("RustClient.exe netstat detection failed — using wide fallback 28015-28999");
+        tracing::debug!(
+            "RustClient.exe netstat detection failed — using wide fallback 28015-28999"
+        );
     }
     windivert_port_range(game_idx)
 }
@@ -1368,10 +1376,10 @@ fn detect_windivert_port_range(game_idx: usize) -> (u16, u16) {
 /// doesn't intercept Steam traffic instead of game traffic.
 const STEAM_SERVICE_PORTS: &[u16] = &[
     3478, 4379, 4380,  // Steam NAT punch / relay
-    27005,             // Steam client source
-    27015,             // Steam SRCDS / query
-    27020,             // Steam TV
-    27036, 27037,      // Steam Remote Play
+    27005, // Steam client source
+    27015, // Steam SRCDS / query
+    27020, // Steam TV
+    27036, 27037, // Steam Remote Play
 ];
 
 /// Detect the actual UDP port(s) that `RustClient.exe` is using by
@@ -1423,16 +1431,22 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
         // Column 4: PID (if -o is used)
         // Note: Sometimes Column 3 is missing in UDP output.
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 4 { continue; }
-        if !parts[0].eq_ignore_ascii_case("UDP") { continue; }
-        
+        if parts.len() < 4 {
+            continue;
+        }
+        if !parts[0].eq_ignore_ascii_case("UDP") {
+            continue;
+        }
+
         // Find PID - it's usually the last part
         let line_pid = parts.last().unwrap_or(&"");
-        if *line_pid != pid_str { continue; }
+        if *line_pid != pid_str {
+            continue;
+        }
 
         // We want the FOREIGN port (the game server port), not our LOCAL port.
-        // For UDP, netstat -ano usually shows "*:*" for the foreign address 
-        // until a packet is sent. If it's still "*:*", we have to fallback 
+        // For UDP, netstat -ano usually shows "*:*" for the foreign address
+        // until a packet is sent. If it's still "*:*", we have to fallback
         // to our local port as a hint, or use the wide default.
         let foreign_addr = parts[2];
         if let Some(port_str) = foreign_addr.rsplit(':').next() {
@@ -1442,8 +1456,8 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
                 }
             }
         }
-        
-        // If foreign port is unknown (*), check the local port. 
+
+        // If foreign port is unknown (*), check the local port.
         // In some games, the local port matches the remote port (source=dest).
         if ports.is_empty() {
             if let Some(port_str) = parts[1].rsplit(':').next() {
@@ -1456,7 +1470,11 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
         }
     }
 
-    tracing::debug!("RustClient.exe (PID {}) candidate UDP ports: {:?}", pid, ports);
+    tracing::debug!(
+        "RustClient.exe (PID {}) candidate UDP ports: {:?}",
+        pid,
+        ports
+    );
 
     if ports.is_empty() {
         return None;
@@ -1487,15 +1505,15 @@ fn windivert_port_range(game_idx: usize) -> (u16, u16) {
     match key {
         // Community Rust servers use any port in 28015–30000.
         // Official Facepunch servers default to 28015.
-        "rust"     => (28015, 30000),
+        "rust" => (28015, 30000),
         // Source-engine games share the 27000 block; matchmaking,
         // community, and dedicated server ports vary widely.
-        "cs2"      => (27015, 27100),
-        "dota2"    => (27015, 27100),
-        "valorant" => (7000,  7500),
-        "apex"     => (37000, 37050),
-        "lol"      => (5000,  5500),
-        "pubg"     => (7777,  7843),
+        "cs2" => (27015, 27100),
+        "dota2" => (27015, 27100),
+        "valorant" => (7000, 7500),
+        "apex" => (37000, 37050),
+        "lol" => (5000, 5500),
+        "pubg" => (7777, 7843),
         _ => (default_port, default_port),
     }
 }
@@ -1514,7 +1532,11 @@ fn parse_custom_port_range(s: &str) -> Option<(u16, u16)> {
     if let Some((lo_s, hi_s)) = s.split_once('-') {
         let lo = lo_s.trim().parse::<u16>().ok()?;
         let hi = hi_s.trim().parse::<u16>().ok()?;
-        if lo <= hi { Some((lo, hi)) } else { None }
+        if lo <= hi {
+            Some((lo, hi))
+        } else {
+            None
+        }
     } else {
         let p = s.parse::<u16>().ok()?;
         Some((p, p))

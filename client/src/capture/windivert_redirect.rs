@@ -106,11 +106,7 @@ pub fn parse_ipv4_udp(raw: &[u8]) -> Option<(SocketAddrV4, SocketAddrV4, &[u8])>
 /// argument to `WinDivertSend` (i.e., pass `0` for `flags` so WinDivert
 /// recalculates).  Alternatively call `WinDivertHelperCalcChecksums` before
 /// injecting.
-pub fn build_ipv4_udp(
-    src: SocketAddrV4,
-    dst: SocketAddrV4,
-    payload: &[u8],
-) -> Vec<u8> {
+pub fn build_ipv4_udp(src: SocketAddrV4, dst: SocketAddrV4, payload: &[u8]) -> Vec<u8> {
     let udp_len = 8u16 + payload.len() as u16;
     let total_len = 20u16 + udp_len;
 
@@ -189,11 +185,11 @@ mod inner {
         stats: Arc<WinDivertStats>,
         shutdown_rx: oneshot::Receiver<()>,
     ) -> anyhow::Result<()> {
-        use windivert::prelude::{WinDivert, WinDivertFlags, WinDivertPacket};
-        use windivert::address::WinDivertAddress;
-        use windivert::layer::NetworkLayer;
         use bytes::BytesMut;
         use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
+        use windivert::address::WinDivertAddress;
+        use windivert::layer::NetworkLayer;
+        use windivert::prelude::{WinDivert, WinDivertFlags, WinDivertPacket};
 
         let pre_known_server = cfg.server_addr;
         let proxy_addr = cfg.proxy_addr;
@@ -202,7 +198,11 @@ mod inner {
         tracing::info!("🔀 WinDivert redirect active");
         match pre_known_server {
             Some(s) => tracing::info!("   Game server : {} (manual)", s),
-            None    => tracing::info!("   Game server : auto-detect (port range {}-{})", port_lo, port_hi),
+            None => tracing::info!(
+                "   Game server : auto-detect (port range {}-{})",
+                port_lo,
+                port_hi
+            ),
         }
         tracing::info!("   Proxy       : {}", proxy_addr);
 
@@ -214,7 +214,8 @@ mod inner {
         let out_filter = match pre_known_server {
             Some(s) => format!(
                 "udp and outbound and ip.DstAddr == {} and udp.DstPort == {}",
-                s.ip(), s.port()
+                s.ip(),
+                s.port()
             ),
             None => {
                 if port_lo == port_hi {
@@ -231,8 +232,13 @@ mod inner {
         tracing::info!("   Outbound WinDivert filter: {}", out_filter);
 
         // Open WinDivert handle for outbound interception
-        let wd_intercept = WinDivert::network(&out_filter, 0, WinDivertFlags::new())
-            .map_err(|e| anyhow::anyhow!("WinDivert open failed (need Administrator + WinDivert64.sys): {}", e))?;
+        let wd_intercept =
+            WinDivert::network(&out_filter, 0, WinDivertFlags::new()).map_err(|e| {
+                anyhow::anyhow!(
+                    "WinDivert open failed (need Administrator + WinDivert64.sys): {}",
+                    e
+                )
+            })?;
 
         // Open WinDivert handle for injection (no filter — only used for sending).
         // IMPORTANT: do NOT set sniff flag here — sniff makes the handle read-only
@@ -251,8 +257,7 @@ mod inner {
         let (intercept_tx, mut intercept_rx) =
             tokio::sync::mpsc::channel::<(SocketAddrV4, SocketAddrV4, Vec<u8>)>(256);
         // inject_tx: raw IPv4+UDP bytes to inject back into the stack
-        let (inject_tx, inject_rx) =
-            std::sync::mpsc::sync_channel::<Vec<u8>>(256);
+        let (inject_tx, inject_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(256);
 
         // Shared interface-address cache: populated by the intercept thread from
         // the first captured outbound packet.  The inject thread clones this address
@@ -316,8 +321,7 @@ mod inner {
                 match wd_ic.recv(Some(&mut recv_buf)) {
                     Ok(pkt) => {
                         let parsed: Option<(SocketAddrV4, SocketAddrV4, Vec<u8>)> =
-                            parse_ipv4_udp(&pkt.data)
-                                .map(|(src, dst, pl)| (src, dst, pl.to_vec()));
+                            parse_ipv4_udp(&pkt.data).map(|(src, dst, pl)| (src, dst, pl.to_vec()));
 
                         match parsed {
                             Some((game_src, game_dst, payload_vec)) => {
@@ -333,8 +337,8 @@ mod inner {
                                     let mut guard = if_cache_ic.lock().unwrap();
                                     if guard.is_none() {
                                         let mut cached = pkt.address.clone();
-                                        cached.set_outbound(false);  // inbound direction for inject
-                                        cached.set_ip_checksum(false);  // let WinDivert recompute
+                                        cached.set_outbound(false); // inbound direction for inject
+                                        cached.set_ip_checksum(false); // let WinDivert recompute
                                         cached.set_udp_checksum(false); // let WinDivert recompute
                                         tracing::info!(
                                             "🔗 Cached inject interface: IfIdx={} SubIfIdx={}",
@@ -351,10 +355,16 @@ mod inner {
                                     if game_dst == server {
                                         // It IS game→known_server traffic — tunnel it.
                                         last_server_pkt = Some(now);
-                                        stats_ic.packets_intercepted.fetch_add(1, Ordering::Relaxed);
-                                        stats_ic.bytes_intercepted
+                                        stats_ic
+                                            .packets_intercepted
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        stats_ic
+                                            .bytes_intercepted
                                             .fetch_add(payload_vec.len() as u64, Ordering::Relaxed);
-                                        if itx.blocking_send((game_src, game_dst, payload_vec)).is_err() {
+                                        if itx
+                                            .blocking_send((game_src, game_dst, payload_vec))
+                                            .is_err()
+                                        {
                                             break;
                                         }
                                         continue;
@@ -366,7 +376,10 @@ mod inner {
                                     // but never tunnelled (e.g. manual pre-known mode) — don't
                                     // auto-reset those; they always pass through unchanged.
                                     let is_stale = last_server_pkt
-                                        .map(|t| now.duration_since(t) > Duration::from_secs(SERVER_STALE_SECS))
+                                        .map(|t| {
+                                            now.duration_since(t)
+                                                > Duration::from_secs(SERVER_STALE_SECS)
+                                        })
                                         .unwrap_or(false);
 
                                     if is_stale {
@@ -411,8 +424,8 @@ mod inner {
 
                                 // Update or insert candidate entry for game_dst.
                                 let mut committed = false;
-                                if let Some(entry) = candidates.iter_mut()
-                                    .find(|(addr, _, _)| *addr == game_dst)
+                                if let Some(entry) =
+                                    candidates.iter_mut().find(|(addr, _, _)| *addr == game_dst)
                                 {
                                     entry.1 += 1;
                                     if entry.1 >= DETECT_THRESHOLD_PKTS {
@@ -478,7 +491,9 @@ mod inner {
                             match guard.as_ref() {
                                 Some(a) => a.clone(),
                                 None => {
-                                    tracing::debug!("inject: interface not cached yet, using zeroed addr");
+                                    tracing::debug!(
+                                        "inject: interface not cached yet, using zeroed addr"
+                                    );
                                     // SAFETY: zeroed WinDivertAddress is a valid (if suboptimal)
                                     // fallback; the inject will succeed on loopback-capable configs.
                                     unsafe { WinDivertAddress::<NetworkLayer>::new() }
@@ -754,7 +769,9 @@ mod inner {
         let inj = stats.packets_injected.load(Ordering::Relaxed);
         tracing::info!(
             "📊 WinDivert final: intercepted={} from_proxy={} injected={}",
-            ic, fp, inj
+            ic,
+            fp,
+            inj
         );
 
         Ok(())
@@ -769,7 +786,10 @@ mod inner {
         let name = format!("{} {}", FW_RULE_BASE, port);
         let _ = std::process::Command::new("netsh")
             .args([
-                "advfirewall", "firewall", "add", "rule",
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
                 &format!("name={}", name),
                 "protocol=UDP",
                 "dir=in",
@@ -784,11 +804,17 @@ mod inner {
         let name = format!("{} {}", FW_RULE_BASE, port);
         let _ = std::process::Command::new("netsh")
             .args([
-                "advfirewall", "firewall", "delete", "rule",
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
                 &format!("name={}", name),
             ])
             .output();
-        tracing::info!("🔒 Firewall: removed WinDivert inbound rule (port {})", port);
+        tracing::info!(
+            "🔒 Firewall: removed WinDivert inbound rule (port {})",
+            port
+        );
     }
 }
 

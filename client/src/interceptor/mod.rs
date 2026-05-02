@@ -43,8 +43,8 @@ pub mod windows;
 // Re-export the most-used types at the module root for ergonomics.
 pub use process_scanner::{find_game_process, scan_for_games};
 pub use traits::{
-    InterceptorConfig, InterceptorCounters, InterceptorHandle, InterceptorStats,
-    ProcessInfo, Route, TrafficInterceptor, TransportProtocol, UnsupportedInterceptor,
+    InterceptorConfig, InterceptorCounters, InterceptorHandle, InterceptorStats, ProcessInfo,
+    Route, TrafficInterceptor, TransportProtocol, UnsupportedInterceptor,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,12 +176,8 @@ mod tests {
         // Even if the process isn't running the config is returned (with empty routes).
         // At runtime, the interceptor falls back to port-range auto-detect mode.
         use crate::games::rust::RustConfig;
-        let config = build_config_for_game(
-            &RustConfig,
-            "127.0.0.1:4434".parse().unwrap(),
-            false,
-            4,
-        );
+        let config =
+            build_config_for_game(&RustConfig, "127.0.0.1:4434".parse().unwrap(), false, 4);
         assert!(config.is_some());
         let cfg = config.unwrap();
         assert_eq!(cfg.game_name, "Rust");

@@ -180,7 +180,8 @@ impl LightSpeedEngine {
             s.keepalive_generation
         };
         let status = Arc::clone(&self.status);
-        self.rt.spawn(run_keepalive(proxy_addr, status, rx, generation));
+        self.rt
+            .spawn(run_keepalive(proxy_addr, status, rx, generation));
     }
 
     /// Stop the keepalive loop.
@@ -308,8 +309,7 @@ impl LightSpeedEngine {
 
         // Resolve the best capture interface now (before spawning) so the
         // pcap backend uses our scored pick instead of "first device in list".
-        let resolved_interface = interface_opt
-            .or_else(crate::capture::pick_best_interface);
+        let resolved_interface = interface_opt.or_else(crate::capture::pick_best_interface);
         tracing::info!(
             "🖧 Capture interface: {}",
             resolved_interface.as_deref().unwrap_or("(none found)")
@@ -601,17 +601,12 @@ impl LightSpeedEngine {
     ) -> Result<(), String> {
         self.stop_interceptor();
 
-        let game_box = crate::games::detect_game(game_key)
-            .map_err(|e| e.to_string())?;
+        let game_box = crate::games::detect_game(game_key).map_err(|e| e.to_string())?;
 
         // Build config: runs ProcessScanner synchronously on the calling thread.
-        let config = crate::interceptor::build_config_for_game(
-            game_box.as_ref(),
-            proxy_addr,
-            fec,
-            fec_k,
-        )
-        .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?;
+        let config =
+            crate::interceptor::build_config_for_game(game_box.as_ref(), proxy_addr, fec, fec_k)
+                .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?;
 
         let interceptor = crate::interceptor::create_interceptor();
 
@@ -622,8 +617,12 @@ impl LightSpeedEngine {
             .initial_routes
             .first()
             .map(|r| r.remote.to_string())
-            .unwrap_or_else(|| format!("Auto-detecting ({}-{})…",
-                config.port_range.0, config.port_range.1));
+            .unwrap_or_else(|| {
+                format!(
+                    "Auto-detecting ({}-{})…",
+                    config.port_range.0, config.port_range.1
+                )
+            });
         let platform = interceptor.platform_name();
 
         let handle = interceptor.start(config).map_err(|e| e.to_string())?;
@@ -685,8 +684,7 @@ impl LightSpeedEngine {
                         h.injector_stats.packets_from_proxy.load(Ordering::Relaxed);
                     snap.capture_injected =
                         h.injector_stats.packets_injected.load(Ordering::Relaxed);
-                    snap.capture_errors =
-                        h.injector_stats.inject_errors.load(Ordering::Relaxed);
+                    snap.capture_errors = h.injector_stats.inject_errors.load(Ordering::Relaxed);
                     snap.capture_fec_recovered =
                         h.injector_stats.fec_recovered.load(Ordering::Relaxed);
                 }
@@ -697,12 +695,9 @@ impl LightSpeedEngine {
         if let Some(ref slot) = self.windivert_stat_slot {
             if let Ok(guard) = slot.lock() {
                 if let Some(ref s) = *guard {
-                    snap.windivert_intercepted =
-                        s.packets_intercepted.load(Ordering::Relaxed);
-                    snap.windivert_from_proxy =
-                        s.packets_from_proxy.load(Ordering::Relaxed);
-                    snap.windivert_injected =
-                        s.packets_injected.load(Ordering::Relaxed);
+                    snap.windivert_intercepted = s.packets_intercepted.load(Ordering::Relaxed);
+                    snap.windivert_from_proxy = s.packets_from_proxy.load(Ordering::Relaxed);
+                    snap.windivert_injected = s.packets_injected.load(Ordering::Relaxed);
                     snap.windivert_errors = s.errors.load(Ordering::Relaxed);
                     // Update display string from auto-detected server address.
                     if let Ok(ds) = s.detected_server.lock() {
@@ -718,10 +713,10 @@ impl LightSpeedEngine {
         if let Some(ref handle) = self.interceptor_handle {
             let ist = handle.snapshot();
             snap.interceptor_intercepted = ist.packets_intercepted;
-            snap.interceptor_from_proxy   = ist.packets_from_proxy;
-            snap.interceptor_injected     = ist.packets_injected;
-            snap.interceptor_errors       = ist.errors;
-            snap.interceptor_platform     = ist.platform;
+            snap.interceptor_from_proxy = ist.packets_from_proxy;
+            snap.interceptor_injected = ist.packets_injected;
+            snap.interceptor_errors = ist.errors;
+            snap.interceptor_platform = ist.platform;
             if let Some(srv) = ist.detected_server {
                 snap.interceptor_server = srv.to_string();
             }

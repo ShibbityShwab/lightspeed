@@ -92,8 +92,14 @@ pub fn pick_best_interface() -> Option<String> {
     let interfaces = list_interfaces();
     // Keywords in description that indicate virtual / tunnel adapters to skip
     let skip_kw = [
-        "loopback", "warp", "tailscale", "hyper-v", "virtual",
-        "miniport", "wi-fi direct", "bluetooth",
+        "loopback",
+        "warp",
+        "tailscale",
+        "hyper-v",
+        "virtual",
+        "miniport",
+        "wi-fi direct",
+        "bluetooth",
     ];
 
     // Score each interface: 2 = wired ethernet, 1 = wifi, 0 = other
@@ -112,15 +118,15 @@ pub fn pick_best_interface() -> Option<String> {
                 || desc.contains("pcie")
                 || desc.contains("lan")
             {
-                2u8  // Wired Ethernet — preferred
+                2u8 // Wired Ethernet — preferred
             } else if desc.contains("wifi")
                 || desc.contains("wi-fi")
                 || desc.contains("wireless")
                 || desc.contains("802.11")
             {
-                1u8  // WiFi — second choice
+                1u8 // WiFi — second choice
             } else {
-                0u8  // Other — avoid
+                0u8 // Other — avoid
             }
         })
         .map(|i| i.name.clone())
