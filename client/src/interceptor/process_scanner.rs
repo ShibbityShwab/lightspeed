@@ -438,8 +438,14 @@ fn list_udp_linux_proc() -> Vec<(Ipv4Addr, u16, u16, u32)> {
             None => continue,
         };
 
-        let (local_ip, local_port) = parse_hex_addr(local_hex)?;
-        let (remote_ip, remote_port) = parse_hex_addr(remote_hex)?;
+        let (local_ip, local_port) = match parse_hex_addr(local_hex) {
+            Some(v) => v,
+            None => continue,
+        };
+        let (remote_ip, remote_port) = match parse_hex_addr(remote_hex) {
+            Some(v) => v,
+            None => continue,
+        };
 
         if !is_public_ipv4(remote_ip) {
             continue;
