@@ -309,7 +309,7 @@ fn parse_local_remote_windows(local: &str, remote: &str) -> Option<(u16, Ipv4Add
 /// Linux: parse `/proc/<pid>/net/udp` for all PIDs we found.
 ///
 /// The file format (space-separated):
-/// ```
+/// ```text
 /// sl  local_address rem_address   st tx_queue rx_queue tr tm inode
 ///  0: 00000000:6D87 1C02040A:E86F 01 ...
 /// ```
@@ -331,7 +331,7 @@ fn list_udp_linux() -> Vec<(Ipv4Addr, u16, u16, u32)> {
 }
 
 /// `ss -unp` output.  Example for connected UDP:
-/// ```
+/// ```text
 /// ESTAB  0  0  192.168.1.5:54321  1.2.3.4:28015  users:(("RustClient",pid=1234,fd=5))
 /// ```
 #[cfg(target_os = "linux")]
