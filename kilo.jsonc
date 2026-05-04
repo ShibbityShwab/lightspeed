@@ -1,0 +1,12 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "instructions": ["AGENTS.md"],
+  "permission": {
+    "bash": "allow",
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "task": "allow"
+  }
+}
