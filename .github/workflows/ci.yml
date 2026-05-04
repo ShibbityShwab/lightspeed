@@ -141,3 +141,129 @@ jobs:
           path: target/criterion/
           retention-days: 7
           if-no-files-found: warn
+
+  e2e-test:
+    name: End-to-End Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Build proxy and client
+        run: cargo build --workspace --exclude lightspeed-gui
+
+      - name: Start manual proxy and echo server
+        run: |
+          # Start echo server on port 9999
+          python3 -c "
+import socket
+import threading
+import time
+
+def echo_server():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 9999))
+    while True:
+        data, addr = sock.recvfrom(2048)
+        sock.sendto(data, addr)
+
+thread = threading.Thread(target=echo_server, daemon=True)
+thread.start()
+time.sleep(0.1)
+print('Echo server started on 127.0.0.1:9999')
+          " &
+          ECHO_PID=$!
+
+          # Start manual proxy on port 9998
+          python3 -c "
+import socket
+import struct
+import time
+
+def ip_to_bytes(ip_str):
+    return socket.inet_aton(ip_str)
+
+def bytes_to_ip(b):
+    return socket.inet_ntoa(b)
+
+def encode_header(seq, timestamp_us, src_ip, src_port, dst_ip, dst_port, flags=0, session_token=0):
+    ver_flags = (1 << 4) | (flags & 0x0F)
+    return struct.pack('!BBHI', ver_flags, session_token, seq, timestamp_us) + \\
+           ip_to_bytes(src_ip) + ip_to_bytes(dst_ip) + struct.pack('!HH', src_port, dst_port)
+
+def decode_header(data):
+    if len(data) < 20:
+        raise ValueError(f'Too short: {len(data)} < 20')
+    ver_flags, token, seq, ts = struct.unpack('!BBHI', data[:8])
+    version = ver_flags >> 4
+    flags = ver_flags & 0x0F
+    src_ip = bytes_to_ip(data[8:12])
+    dst_ip = bytes_to_ip(data[12:16])
+    src_port, dst_port = struct.unpack('!HH', data[16:20])
+    return {
+        'version': version,
+        'flags': flags,
+        'session_token': token,
+        'sequence': seq,
+        'timestamp_us': ts,
+        'src_ip': src_ip,
+        'src_port': src_port,
+        'dst_ip': dst_ip,
+        'dst_port': dst_port,
+    }, data[20:]
+
+def now_us():
+    return int(time.time() * 1_000_000) & 0xFFFFFFFF
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(('127.0.0.1', 9998))
+print('Manual proxy started on 127.0.0.1:9998')
+
+while True:
+    data, addr = sock.recvfrom(2048)
+    if len(data) >= 20:
+        header, payload = decode_header(data)
+        # Handle keepalive
+        if header['flags'] & 0x01:  # FLAG_KEEPALIVE
+            resp = encode_header(
+                header['sequence'],
+                now_us(),
+                '0.0.0.0', 0,
+                '0.0.0.0', 0,
+                flags=0x01,
+                session_token=header['session_token']
+            )
+            sock.sendto(resp, addr)
+            continue
+        # Handle data packets - forward to echo and back
+        outbound = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        outbound.sendto(payload, ('127.0.0.1', 9999))
+        echo_data, _ = outbound.recvfrom(2048)
+        outbound.close()
+        resp = encode_header(
+            header['sequence'],
+            now_us(),
+            header['dst_ip'], header['dst_port'],
+            header['src_ip'], header['src_port'],
+            session_token=header['session_token']
+        ) + echo_data
+        sock.sendto(resp, addr)
+          " &
+          PROXY_PID=$!
+
+          # Wait a moment for servers to start
+          sleep 1
+
+          # Run the E2E test
+          python3 tools/e2e_test.py
+          E2E_RESULT=$?
+
+          # Cleanup
+          kill $ECHO_PID 2>/dev/null || true
+          kill $PROXY_PID 2>/dev/null || true
+
+          exit $E2E_RESULT

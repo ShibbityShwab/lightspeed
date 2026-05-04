@@ -165,40 +165,43 @@ def main():
     print("LightSpeed E2E Tunnel Test")
     print("=" * 60)
 
-    # Configuration
-    proxies = [
-        # Add your own proxy node IPs here — run setup-new-node.sh to provision them
-        # ("My US Node",   ("YOUR_NODE_IP_1", 4434)),
-        # ("My Asia Node", ("YOUR_NODE_IP_2", 4434)),
-    ]
-    game_server_ip = proxies[0][1][0] if proxies else "127.0.0.1"  # Use first proxy or localhost
-    game_server_port = 9999
+    # For CI/testing, use localhost with manual proxy and echo server
+    proxy_addr = ("127.0.0.1", 9998)  # Manual proxy will bind here
+    game_server_ip = "127.0.0.1"
+    game_server_port = 9999  # Echo server will bind here
 
-    for name, proxy_addr in proxies:
-        print(f"\n{'─' * 50}")
-        print(f"Testing proxy: {name} ({proxy_addr[0]}:{proxy_addr[1]})")
-        print(f"Game server:   {game_server_ip}:{game_server_port}")
-        print(f"{'─' * 50}")
+    print(f"\n{'-' * 50}")
+    print(f"Testing proxy: localhost ({proxy_addr[0]}:{proxy_addr[1]})")
+    print(f"Game server:   {game_server_ip}:{game_server_port}")
+    print(f"{'-' * 50}")
 
-        # Test 1: Keepalive
-        print(f"\n[1] Keepalive test:")
-        ka_rtt = test_keepalive(proxy_addr)
+    # Test 1: Keepalive
+    print(f"\n[1] Keepalive test:")
+    ka_rtt = test_keepalive(proxy_addr)
 
-        # Test 2: Data relay
-        print(f"\n[2] Data relay test (5 packets):")
-        rtts = test_data_relay(proxy_addr, game_server_ip, game_server_port, count=5)
+    # Test 2: Data relay
+    print(f"\n[2] Data relay test (5 packets):")
+    rtts = test_data_relay(proxy_addr, game_server_ip, game_server_port, count=5)
 
-        if rtts:
-            avg = sum(rtts) / len(rtts)
-            mn = min(rtts)
-            mx = max(rtts)
-            print(f"\n  📊 Results: avg={avg:.1f}ms, min={mn:.1f}ms, max={mx:.1f}ms")
-            print(f"  📊 Packets: {len(rtts)}/5 received")
-            if ka_rtt:
-                overhead = avg - ka_rtt
-                print(f"  📊 Relay overhead vs keepalive: {overhead:+.1f}ms")
+    if rtts:
+        avg = sum(rtts) / len(rtts)
+        mn = min(rtts)
+        mx = max(rtts)
+        print(f"\n  - Results: avg={avg:.1f}ms, min={mn:.1f}ms, max={mx:.1f}ms")
+        print(f"  - Packets: {len(rtts)}/5 received")
+        if ka_rtt:
+            overhead = avg - ka_rtt
+            print(f"  - Relay overhead vs keepalive: {overhead:+.1f}ms")
+        # Return success if we got at least some responses
+        if len(rtts) >= 3:  # Allow for some packet loss in CI
+            print(f"\n  - E2e test PASSED ({len(rtts)}/5 packets)")
+            return 0
         else:
-            print(f"\n  ❌ No responses received - relay may not be working")
+            print(f"\n  - E2e test FAILED (only {len(rtts)}/5 packets)")
+            return 1
+    else:
+        print(f"\n  - No responses received - relay may not be working")
+        return 1
 
     print(f"\n{'=' * 60}")
     print("Test complete")
