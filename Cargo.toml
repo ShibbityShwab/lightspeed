@@ -20,7 +20,7 @@ description = "Zero-cost global network optimizer — reduce and stabilize ping 
 tokio = { version = "1", features = ["full"] }
 
 # Networking
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 bytes = "1"
 
 # Serialization / Config
