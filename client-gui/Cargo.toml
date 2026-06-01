@@ -20,6 +20,6 @@ anyhow = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = "0.17"
-eframe = { version = "0.29", features = ["default"] }
+eframe = { version = "0.34", features = ["default"] }
 egui_plot = "0.29"
 webbrowser = "1"
