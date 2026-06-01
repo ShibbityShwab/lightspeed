@@ -43,7 +43,7 @@ thiserror = "1"
 lightspeed-protocol = { path = "protocol" }
 
 # Metrics
-prometheus = "0.13"
+prometheus = "0.14"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
