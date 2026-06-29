@@ -30,7 +30,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
-rand = "0.8"
+rand = "0.9"
 
 # Optional dependencies
 quinn = { version = "0.11", optional = true }
