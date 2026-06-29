@@ -2631,7 +2631,7 @@ dependencies = [
  "lightspeed-protocol",
  "linfa 0.8.0",
  "linfa-linear",
- "ndarray 0.15.6",
+ "ndarray 0.16.1",
  "pcap",
  "quinn",
  "rand 0.8.5",
