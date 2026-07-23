@@ -1,3 +1,9 @@
+//! # LightSpeed GUI — Windows Platform
+//!
+//! Real tray-icon backend using `tray_icon`, Windows-specific font paths,
+//! admin check via `net session`, capture check via `sc query npcap`, and
+//! Rust port detection via `tasklist` + `netstat`.
+
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -22,6 +28,10 @@ const MENU_QUIT: &str = "quit";
 /// message loop — so moving it across threads never happens in practice.
 unsafe impl Send for WindowsTray {}
 
+/// Windows system-tray icon with a context menu (Show, Connect, Disconnect, Quit).
+///
+/// Created via [`WindowsPlatform::new_tray`].  Runs on the egui UI thread and
+/// communicates back to the app via [`TrayHandle::poll_events`].
 pub struct WindowsTray {
     icon: TrayIcon,
     id_show: MenuId,
@@ -123,6 +133,10 @@ impl TrayHandle for WindowsTray {
     }
 }
 
+/// Windows [`Platform`] backend.
+///
+/// Uses `tray_icon` for the system tray, Win32 font paths, admin check via
+/// `net session`, and Npcap detection via `sc query`.
 pub struct WindowsPlatform;
 
 impl Platform for WindowsPlatform {

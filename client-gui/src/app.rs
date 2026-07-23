@@ -1,3 +1,9 @@
+//! # LightSpeed GUI — App
+//!
+//! Main egui application state, UI layout, and pure helper functions.
+//! Wraps [`LightSpeedEngine`] in a platform-generic `<P: Platform>` struct
+//! so the same GUI code works on Windows (tray-icon) and Linux (stub tray).
+
 use std::net::SocketAddrV4;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,6 +14,7 @@ use egui_plot::{Line, Plot, PlotPoints};
 
 // ── Tray state enum ──────────────────────────────────────────────────────────
 
+/// The four states the tray icon can reflect in its color and tooltip.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TrayState {
     Disconnected,
@@ -19,6 +26,7 @@ use lightspeed_client::{EngineStatus, LightSpeedEngine};
 
 // ── Proxy nodes ────────────────────────────────────────────────────────────
 
+/// A proxy relay node the user can connect to.
 #[derive(Clone)]
 pub struct ProxyEntry {
     pub addr: SocketAddrV4,
@@ -77,6 +85,12 @@ pub const GAMES: &[(&str, &str, u16)] = &[
 
 // ── App struct ───────────────────────────────────────────────────────────────
 
+/// Platform-generic egui application for the LightSpeed status window.
+///
+/// Type parameter `P` selects the platform backend (Windows tray or Linux
+/// stub).  Most of the UI logic is platform-independent — only the tray
+/// interaction, font loading, port detection, and admin checks delegate to
+/// `P`.
 pub struct LightSpeedApp<P: Platform> {
     engine: Arc<Mutex<LightSpeedEngine>>,
     status: EngineStatus,

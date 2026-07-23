@@ -1,9 +1,16 @@
+//! # LightSpeed GUI — Linux Platform
+//!
+//! Stub tray (Linux has no system-tray standard), font setup via
+//! Noto Color Emoji, admin check via `id -u`, capture check via
+//! `tcpdump`/`dumpcap`, and Rust port detection via `pgrep` + `ss`.
+
 use std::sync::Arc;
 
 use crate::app::{TrayState, STEAM_SERVICE_PORTS};
 use crate::platform::{self, Platform, TrayHandle};
 use eframe::egui;
 
+/// No-op tray handle for Linux (no standard system-tray on modern DEs).
 pub struct LinuxTray;
 
 impl TrayHandle for LinuxTray {
@@ -14,6 +21,11 @@ impl TrayHandle for LinuxTray {
     fn set_state(&self, _state: TrayState, _rtt_ms: f64) {}
 }
 
+/// Linux [`Platform`] backend.
+///
+/// Stub tray (no system-tray standard on modern DEs), font setup via
+/// Noto Color Emoji, admin check via `id -u`, capture check via
+/// `tcpdump`/`dumpcap`.
 pub struct LinuxPlatform;
 
 impl Platform for LinuxPlatform {

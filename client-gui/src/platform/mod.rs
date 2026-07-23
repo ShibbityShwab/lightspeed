@@ -1,3 +1,11 @@
+//! # LightSpeed GUI — Platform Abstraction
+//!
+//! Traits and helpers that isolate platform-specific concerns (system tray,
+//! font paths, admin detection, game port discovery) behind a generic
+//! [`Platform`] + [`TrayHandle`] interface.  The Windows and Linux backends
+//! live in [`windows`] and [`linux`] and are selected at compile time
+//! via `#[cfg]`.
+
 use crate::app::TrayState;
 use eframe::egui;
 
