@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::sync::Arc;
 
-use crate::app::{TrayState, GAMES, STEAM_SERVICE_PORTS};
+use crate::app::{TrayState, STEAM_SERVICE_PORTS};
 use crate::platform::{self, Platform, TrayAction, TrayHandle};
 use eframe::egui;
 use tray_icon::{
@@ -17,7 +17,7 @@ const MENU_DISCONNECT: &str = "disconnect";
 const MENU_QUIT: &str = "quit";
 
 /// SAFETY: `TrayIcon` uses `Rc<RefCell<…>>` internally on Windows, which is
-/// not `Send` by default.  However `WindowsTray` is only ever created and
+/// not `Send` by default.  However, `WindowsTray` is only ever created and
 /// accessed on the main (egui) thread — the same thread that runs the Windows
 /// message loop — so moving it across threads never happens in practice.
 unsafe impl Send for WindowsTray {}
@@ -178,22 +178,8 @@ impl Platform for WindowsPlatform {
         ctx.set_fonts(fonts);
     }
 
-    fn detect_game_ports(game_idx: usize) -> (u16, u16) {
-        let (key, _, _) = GAMES[game_idx];
-        if key == "rust" {
-            if let Some(range) = detect_rust_ports_netstat() {
-                tracing::info!(
-                    "🔍 RustClient.exe netstat-detected port range: {}-{}",
-                    range.0,
-                    range.1
-                );
-                return range;
-            }
-            tracing::debug!(
-                "RustClient.exe netstat detection failed — using wide fallback 28015-28999"
-            );
-        }
-        platform::default_port_range(game_idx)
+    fn detect_rust_ports() -> Option<(u16, u16)> {
+        detect_rust_ports_netstat()
     }
 
     fn relaunch_as_admin() -> ! {
@@ -211,7 +197,6 @@ impl Platform for WindowsPlatform {
 
 // ── Icon generation ──────────────────────────────────────────────────────────
 
-/// Procedurally rasterise a ⚡ lightning-bolt silhouette into a 32×32 RGBA icon.
 fn lightning_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
     const SIZE: usize = 32;
     let poly: [(f32, f32); 6] = [
@@ -303,8 +288,8 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
             continue;
         }
 
-        let foreign_addr = parts[2];
-        if let Some(port_str) = foreign_addr.rsplit(':').next() {
+        // Local address: parts[1]
+        if let Some(port_str) = parts[1].rsplit(':').next() {
             if let Ok(port) = port_str.parse::<u16>() {
                 if port >= 1024 && !STEAM_SERVICE_PORTS.contains(&port) && !ports.contains(&port) {
                     ports.push(port);
@@ -312,12 +297,11 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
             }
         }
 
-        if ports.is_empty() {
-            if let Some(port_str) = parts[1].rsplit(':').next() {
-                if let Ok(port) = port_str.parse::<u16>() {
-                    if port >= 28015 && port <= 30000 && !ports.contains(&port) {
-                        ports.push(port);
-                    }
+        // Foreign address: parts[2]
+        if let Some(port_str) = parts[2].rsplit(':').next() {
+            if let Ok(port) = port_str.parse::<u16>() {
+                if !ports.contains(&port) && port >= 28015 && port <= 30000 {
+                    ports.push(port);
                 }
             }
         }
@@ -329,11 +313,5 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
         ports
     );
 
-    if ports.is_empty() {
-        return None;
-    }
-
-    let lo = *ports.iter().min().unwrap();
-    let hi = *ports.iter().max().unwrap();
-    Some((lo, hi.max(lo + 2)))
+    platform::ports_to_range(&ports)
 }

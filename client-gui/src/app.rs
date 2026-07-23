@@ -19,21 +19,46 @@ use lightspeed_client::{EngineStatus, LightSpeedEngine};
 
 // ── Proxy nodes ────────────────────────────────────────────────────────────
 
-/// (addr, label, recommended-for hint)
-/// Populated at runtime from LIGHTSPEED_PROXIES env var or falls back to placeholders.
-/// Set LIGHTSPEED_PROXIES='["YOUR_IP:4434","YOUR_IP_2:4434"]' to configure.
-const PROXIES: &[(&str, &str, &str)] = &[
-    (
-        "YOUR_LAX_IP:4434",
-        "LAX — US West",
-        "Best for NA/EU servers",
-    ),
-    (
-        "YOUR_SGP_IP:4434",
-        "SGP — Singapore",
-        "Best for SEA/AU servers",
-    ),
-];
+#[derive(Clone)]
+pub struct ProxyEntry {
+    pub addr: SocketAddrV4,
+    pub label: String,
+}
+
+/// Loaded from `LIGHTSPEED_PROXIES` env var (comma-separated `addr:port`)
+/// or falls back to localhost placeholders.
+///   LIGHTSPEED_PROXIES="1.2.3.4:4434,5.6.7.8:4434"
+pub fn load_proxies() -> Vec<ProxyEntry> {
+    if let Ok(val) = std::env::var("LIGHTSPEED_PROXIES") {
+        let proxies: Vec<_> = val
+            .split(',')
+            .filter_map(|s| {
+                let s = s.trim();
+                if s.is_empty() {
+                    return None;
+                }
+                match s.parse::<SocketAddrV4>() {
+                    Ok(addr) => Some(ProxyEntry {
+                        addr,
+                        label: "Custom".into(),
+                    }),
+                    Err(_) => {
+                        tracing::warn!("Skipping invalid proxy address: {s}");
+                        None
+                    }
+                }
+            })
+            .collect();
+        if !proxies.is_empty() {
+            return proxies;
+        }
+        tracing::warn!("LIGHTSPEED_PROXIES set but no valid addresses found — using defaults");
+    }
+    vec![
+        ProxyEntry { addr: "127.0.0.1:4434".parse().expect("valid"), label: "LAX — US West".into() },
+        ProxyEntry { addr: "127.0.0.1:4434".parse().expect("valid"), label: "SGP — Singapore".into() },
+    ]
+}
 
 // ── Game list ──────────────────────────────────────────────────────────────
 
@@ -61,6 +86,9 @@ pub struct LightSpeedApp<P: Platform> {
     selected_proxy_idx: usize,
     show_connect_dialog: bool,
     custom_proxy_input: String,
+    show_proxy_manager: bool,
+    manager_label_input: String,
+    manager_addr_input: String,
 
     // ── Game routing ──────────────────────────────────────────────────────
     selected_game_idx: usize,
@@ -69,8 +97,6 @@ pub struct LightSpeedApp<P: Platform> {
     auto_detected_game: Option<String>,
 
     // ── System state ──────────────────────────────────────────────────────
-    #[allow(dead_code)]
-    capture_available: bool,
     is_admin: bool,
     fonts_setup: bool,
 
@@ -80,6 +106,8 @@ pub struct LightSpeedApp<P: Platform> {
     // ── Boost diagnostics ─────────────────────────────────────────────────
     boost_start: Option<std::time::Instant>,
     custom_port_input: String,
+
+    proxies: Vec<ProxyEntry>,
 }
 
 impl<P: Platform> LightSpeedApp<P> {
@@ -98,7 +126,8 @@ impl<P: Platform> LightSpeedApp<P> {
             .unwrap_or(0);
 
         let is_admin = P::is_admin();
-        let capture_available = P::is_capture_available();
+
+        let proxies = load_proxies();
 
         Self {
             engine,
@@ -107,24 +136,24 @@ impl<P: Platform> LightSpeedApp<P> {
             selected_proxy_idx: 0,
             show_connect_dialog: false,
             custom_proxy_input: String::new(),
+            show_proxy_manager: false,
+            manager_label_input: String::new(),
+            manager_addr_input: String::new(),
             selected_game_idx,
             server_input: String::new(),
             fec_enabled: false,
             auto_detected_game,
-            capture_available,
             is_admin,
             fonts_setup: false,
             show_advanced: false,
             boost_start: None,
             custom_port_input: String::new(),
+            proxies,
         }
     }
 
     fn selected_proxy_addr(&self) -> SocketAddrV4 {
-        PROXIES[self.selected_proxy_idx]
-            .0
-            .parse()
-            .expect("proxy addr is always valid")
+        self.proxies[self.selected_proxy_idx].addr
     }
 }
 
@@ -215,13 +244,16 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             "https://github.com/ShibbityShwab/lightspeed/wiki/Choosing-a-Boost-Server");
                     });
                 let prev = self.selected_proxy_idx;
-                for (i, (_, label, hint)) in PROXIES.iter().enumerate() {
-                    let btn = ui.selectable_value(&mut self.selected_proxy_idx, i, *label);
-                    btn.on_hover_text(*hint);
+                for (i, entry) in self.proxies.iter().enumerate() {
+                    let btn = ui.selectable_value(&mut self.selected_proxy_idx, i, &entry.label);
+                    btn.on_hover_text(format!("{}", entry.addr));
                 }
                 if self.selected_proxy_idx != prev {
                     let proxy = self.selected_proxy_addr();
                     self.engine.lock().unwrap().connect(proxy);
+                }
+                if ui.button("✎ Manage").clicked() {
+                    self.show_proxy_manager = true;
                 }
             });
 
@@ -280,12 +312,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             // ── Game Routing section ──────────────────────────────────────
             ui.heading("🎮 Game Routing");
             ui.add_space(4.0);
-
-            let any_active =
-                self.status.redirect_active
-                    || self.status.capture_active
-                    || self.status.windivert_active
-                    || self.status.interceptor_active;
 
             if self.status.interceptor_active {
                 // ── BOOST ENGAGED (OOP Interceptor) state ──────────────────────
@@ -709,7 +735,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 }
             } else {
                 // ── IDLE: single Optimize button ──────────────────────────
-                let _ = any_active;
 
                 // ── Game auto-detect banner ───────────────────────────────
                 if let Some(ref detected) = self.auto_detected_game {
@@ -1071,6 +1096,67 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         }
                     });
                 });
+        }
+
+        // ── Proxy manager window ─────────────────────────────────────────
+        if self.show_proxy_manager {
+            let mut remove_idx: Option<usize> = None;
+            let mut add_addr: Option<SocketAddrV4> = None;
+
+            egui::Window::new("Proxy Manager")
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(&ctx, |ui| {
+                    for (i, entry) in self.proxies.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{}.", i + 1));
+                            ui.label(&entry.label);
+                            ui.label(entry.addr.to_string());
+                            if ui.button("✕").clicked() {
+                                remove_idx = Some(i);
+                            }
+                        });
+                    }
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Label:");
+                        ui.text_edit_singleline(&mut self.manager_label_input);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Addr:");
+                        ui.text_edit_singleline(&mut self.manager_addr_input);
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Add Proxy").clicked() {
+                            if self.manager_addr_input.parse::<SocketAddrV4>().is_ok() {
+                                add_addr = Some(self.manager_addr_input.parse().unwrap());
+                            }
+                        }
+                        if ui.button("Close").clicked() {
+                            self.show_proxy_manager = false;
+                        }
+                    });
+                });
+
+            if let Some(idx) = remove_idx {
+                self.proxies.remove(idx);
+                if !self.proxies.is_empty() {
+                    self.selected_proxy_idx = self.selected_proxy_idx.min(self.proxies.len() - 1);
+                }
+            }
+            if let Some(addr) = add_addr {
+                let label = if self.manager_label_input.is_empty() {
+                    addr.to_string()
+                } else {
+                    self.manager_label_input.clone()
+                };
+                self.proxies.push(ProxyEntry { addr, label });
+                self.manager_label_input.clear();
+                self.manager_addr_input.clear();
+            }
         }
 
         // ── Repaint schedule ─────────────────────────────────────────────

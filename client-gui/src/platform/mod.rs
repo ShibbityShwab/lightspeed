@@ -6,6 +6,7 @@ use eframe::egui;
 ///
 /// Show-window and Quit actions are handled inside the tray (they only need
 /// the `egui::Context`) and never appear here.
+#[allow(dead_code)] // Connect/Disconnect only constructed on Windows (real tray)
 #[derive(Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Connect,
@@ -13,11 +14,6 @@ pub enum TrayAction {
 }
 
 pub trait TrayHandle: Send {
-    /// Poll platform tray/menu events.
-    ///
-    /// The tray handles window-show/hide and quit internally (they only need
-    /// `ctx`).  Connect/Disconnect are returned because they need the Engine,
-    /// which only the app owns.
     fn poll_events(&self, ctx: &egui::Context) -> Vec<TrayAction>;
 
     /// Update the tray icon colour and tooltip to reflect `state`.
@@ -27,10 +23,8 @@ pub trait TrayHandle: Send {
     fn set_state(&self, state: TrayState, rtt_ms: f64);
 }
 
-/// Fallback port range for a given game index.
-///
-/// Used by both Windows and Linux port-detection paths when live
-/// detection (netstat / ss) fails or is unavailable.
+/// Shared port-range look-up used by both Windows and Linux port-detection
+/// paths when live detection (netstat / ss) fails or is unavailable.
 pub fn default_port_range(game_idx: usize) -> (u16, u16) {
     let (key, _, default_port) = crate::app::GAMES[game_idx];
     match key {
@@ -45,39 +39,69 @@ pub fn default_port_range(game_idx: usize) -> (u16, u16) {
     }
 }
 
+/// Helper: convert a list of candidate ports into a (lo, hi) range.
+///
+/// The hi end is extended by at least 2 to give the WinDivert/interceptor
+/// filter a small buffer.
+pub(crate) fn ports_to_range(ports: &[u16]) -> Option<(u16, u16)> {
+    if ports.is_empty() {
+        return None;
+    }
+    let lo = *ports.iter().min().unwrap();
+    let hi = *ports.iter().max().unwrap();
+    Some((lo, hi.max(lo + 2)))
+}
+
 pub trait Platform {
     type Tray: TrayHandle;
 
     fn new_tray() -> Self::Tray;
     fn is_admin() -> bool;
+    #[allow(dead_code)]
     fn is_capture_available() -> bool;
     fn setup_fonts(ctx: &egui::Context);
-    fn detect_game_ports(game_idx: usize) -> (u16, u16);
+
+    /// Detect active game-server ports for a game.
+    ///
+    /// The default implementation tries `detect_rust_ports()` for "rust" and
+    /// falls back to `default_port_range()`.  Override `detect_rust_ports()`
+    /// (or this method entirely) to add platform-specific detection.
+    fn detect_game_ports(game_idx: usize) -> (u16, u16) {
+        let (key, _, _) = crate::app::GAMES[game_idx];
+        if key == "rust" {
+            if let Some(range) = Self::detect_rust_ports() {
+                return range;
+            }
+        }
+        default_port_range(game_idx)
+    }
+
+    /// Platform-specific Rust port detection (tasklist+netstat on Windows,
+    /// pgrep+ss on Linux).  Returns None when the process is not running.
+    fn detect_rust_ports() -> Option<(u16, u16)> {
+        None
+    }
+
     fn relaunch_as_admin() -> !;
 }
 
 // ── Platform selection ──────────────────────────────────────────────────
 // Both modules exist on disk so the IDE can check them, but only one is
 // compiled depending on the target OS.
-//
-// NB: the #[cfg] attributes are currently commented out during development
-// to let the Linux-hosted IDE validate all code paths.  Uncomment before
-// shipping.
-// #[cfg(windows)]
+
+#[cfg(windows)]
 mod windows;
-// #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
 mod linux;
 
-// #[cfg(windows)]
+#[cfg(windows)]
 mod platform_impl {
-    pub use super::windows::*;
     pub type CurrentPlatform = super::windows::WindowsPlatform;
 }
 
-// #[cfg(target_os = "linux")]
-// mod platform_impl {
-//     pub use super::linux::*;
-//     pub type CurrentPlatform = super::linux::LinuxPlatform;
-// }
+#[cfg(target_os = "linux")]
+mod platform_impl {
+    pub type CurrentPlatform = super::linux::LinuxPlatform;
+}
 
 pub use platform_impl::*;

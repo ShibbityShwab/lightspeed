@@ -1,33 +1,31 @@
-//! LightSpeed GUI — Windows tray icon + egui status window.
+//! LightSpeed GUI — system-tray icon + egui status window.
 //!
-//! On non-Windows platforms this binary immediately prints a message and exits
-//! with code 1, so it can be compiled cross-platform but should only be
-//! installed on Windows.
+//! Cross-platform via the `platform` module (Windows tray-icon with
+//! `tray_icon`, Linux stub).
 
 mod app;
 mod platform;
 
-fn main() -> anyhow::Result<()> {
-    windows_main()
-}
+use eframe::egui;
+use std::sync::{Arc, Mutex};
 
-// #[cfg(windows)]
-fn windows_main() -> anyhow::Result<()> {
-    use eframe::egui;
-    use std::sync::{Arc, Mutex};
+fn main() -> anyhow::Result<()> {
 
     // Redirect tracing to a file since GUI apps have no console.
     // Use a simple file appender for straightforward single-file logging.
     let path = dirs::data_local_dir()
         .unwrap_or_default()
-        .join("lightspeed")
+        .join("Lightspeed")
         .join("gui-trace.log");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("Failed to create log directory");
+    }
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .expect("Failed to open log file");
-    let file_appender = std::sync::Mutex::new(file);
+    let file_appender = Mutex::new(file);
     tracing_subscriber::fmt()
         .with_target(false)
         .compact()
