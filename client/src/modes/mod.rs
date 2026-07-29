@@ -12,3 +12,4 @@ pub mod redirect_windivert;
 pub mod tunnel_test;
 
 pub mod intercept_mode;
+pub mod demo_mode;

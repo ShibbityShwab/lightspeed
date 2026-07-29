@@ -36,6 +36,7 @@ use modes::{
     keepalive::run_keepalive_mode,
     live_test::run_live_test,
     proxy_probe::{probe_all_proxies, select_best_proxy},
+    demo_mode::run_demo,
     intercept_mode::run_intercept_mode,
     tunnel_test::run_tunnel_test,
 };
@@ -206,6 +207,13 @@ data_port = 4434
             info!("   lightspeed --game rust");
         }
         return Ok(());
+    }
+
+    // ── --demo ──────────────────────────────────────────────────
+    if cli.demo {
+        let game_key = cli.game.as_deref().unwrap_or("rust");
+        let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
+        return run_demo(&config, game_key, proxy_str).await;
     }
 
     // ── --check ──────────────────────────────────────────────────
