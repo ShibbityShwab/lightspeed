@@ -1,0 +1,29 @@
+# LightSpeed Proxy — minimal Docker image
+# Build:  docker build -f infra/docker/Dockerfile.proxy -t lightspeed-proxy .
+# Run:    docker run -d --name ls-proxy -p 4434:4434/udp -p 8080:8080 lightspeed-proxy
+
+FROM rust:1.75-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY protocol/ protocol/
+COPY proxy/ proxy/
+
+RUN cargo build --release -p lightspeed-proxy && strip target/release/lightspeed-proxy
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/lightspeed-proxy /usr/local/bin/
+
+# Default config
+RUN mkdir -p /etc/lightspeed
+COPY proxy/proxy.toml /etc/lightspeed/proxy.toml
+
+EXPOSE 4434/udp 8080/tcp
+
+ENTRYPOINT ["lightspeed-proxy", "--config", "/etc/lightspeed/proxy.toml"]
+HEALTHCHECK --interval=30s --timeout=3s CMD lightspeed-proxy --check || exit 1

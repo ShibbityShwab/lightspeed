@@ -1,43 +1,24 @@
-# ──────────────────────────────────────────────────────────────
-# LightSpeed Proxy — Local Development / Single-Node Deploy
+# LightSpeed Proxy — single-node or mesh deployment
 #
-# Usage:
-#   docker compose up -d          # Start proxy
-#   docker compose logs -f        # View logs
-#   docker compose down           # Stop proxy
-#   docker compose pull && docker compose up -d  # Update
-# ──────────────────────────────────────────────────────────────
+# Single node:
+#   docker compose up -d
+#
+# Multi-node mesh (edit PROXY_SERVERS in each node's config):
+#   docker compose up -d --scale proxy=3
 
 services:
   proxy:
-    image: ghcr.io/shibbityshwab/lightspeed-proxy:latest
-    container_name: lightspeed-proxy
-    network_mode: host
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.proxy
+    ports:
+      - "4434:4434/udp"
+      - "8080:8080/tcp"
     restart: unless-stopped
-    volumes:
-      - ./proxy.toml:/etc/lightspeed/proxy.toml:ro
-    command:
-      - --config
-      - /etc/lightspeed/proxy.toml
-      - --data-bind
-      - "0.0.0.0:4434"
-      - --control-bind
-      - "0.0.0.0:4433"
-      - --health-bind
-      - "0.0.0.0:8080"
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-          cpus: "0.9"
+    environment:
+      - RUST_LOG=info
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
-      interval: 15s
-      timeout: 5s
+      test: ["CMD", "lightspeed-proxy", "--check"]
+      interval: 30s
+      timeout: 3s
       retries: 3
-      start_period: 10s
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
