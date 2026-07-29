@@ -53,11 +53,59 @@ struct Cli {
     /// Enable verbose logging
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
+
+    /// Run configuration and port checks, then exit.
+    #[arg(long, default_value_t = false)]
+    check: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // ── --check mode ────────────────────────────────────────────
+    if cli.check {
+        println!("🔍 LightSpeed Proxy health check");
+        println!();
+
+        // 1. Config
+        print!("   Config file ({})... ", cli.config);
+        match config::ProxyConfig::load(&cli.config) {
+            Ok(cfg) => {
+                println!("✅ loaded");
+                println!("      Data port:    {}", cfg.server.node_id);
+                println!("      Auth enabled: {}", cfg.security.require_auth);
+                println!("      Abuse PPS:    {}", cfg.rate_limit.max_pps_per_client);
+            }
+            Err(e) => {
+                println!("❌ {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        // 2. Bind check
+        print!("   UDP data port ({})... ", cli.data_bind);
+        match std::net::UdpSocket::bind(&cli.data_bind) {
+            Ok(_) => println!("✅ bindable"),
+            Err(e) => {
+                println!("❌ {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        print!("   HTTP health port ({})... ", cli.health_bind);
+        match std::net::TcpListener::bind(&cli.health_bind) {
+            Ok(_) => println!("✅ bindable"),
+            Err(e) => {
+                println!("❌ {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        println!();
+        println!("✅ All checks passed — proxy is ready to start");
+        return Ok(());
+    }
 
     // Initialize tracing
     let filter = if cli.verbose { "debug" } else { "info" };
