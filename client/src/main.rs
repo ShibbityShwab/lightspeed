@@ -113,6 +113,32 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // ── No-mode banner ────────────────────────────────────────────
+    //
+    // When no mode flags are provided, show a friendly quick-start
+    // instead of falling through to the default keepalive loop.
+    {
+        let has_mode = cli.list_games || cli.list_interfaces || cli.write_config
+            || cli.check || cli.demo || cli.intercept || cli.scan_processes
+            || cli.start_interceptor || cli.test_tunnel || cli.test_control
+            || cli.probe_proxies || cli.live_test || cli.warp_status
+            || cli.dry_run || cli.capture || cli.game_server.is_some()
+            || cli.game.is_some();
+        if !has_mode {
+            info!("╔════════════════════════════════════════════╗");
+            info!("║       ⚡  LightSpeed v{}                  ║", env!("CARGO_PKG_VERSION"));
+            info!("║   Zero-cost global network optimizer      ║");
+            info!("╠════════════════════════════════════════════╣");
+            info!("║  Quick start:                             ║");
+            info!("║    lightspeed --demo                      ║");
+            info!("║    lightspeed --check --game rust          ║");
+            info!("║    lightspeed --list-games                ║");
+            info!("║    lightspeed --help                      ║");
+            info!("╚════════════════════════════════════════════╝");
+            return Ok(());
+        }
+    }
+
     // ── --list-interfaces ─────────────────────────────────────────
     //
     // Also runs before game detection — no point scanning processes
