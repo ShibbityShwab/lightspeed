@@ -210,6 +210,14 @@ impl TrafficInterceptor for NftablesInterceptor {
             // Maps game ephemeral port → source SocketAddrV4 (for routing responses back).
             let mut game_src: Option<SocketAddrV4> = None;
 
+            // Debounce auto-detect state (port-range mode only).
+            // Tracks candidate server addresses and commits when one receives
+            // enough packets within the detection window.
+            const DETECT_PKTS: u8 = 3;
+            const DETECT_WINDOW_MS: u128 = 1_500;
+            let mut candidates: Vec<(std::net::SocketAddrV4, u8, std::time::Instant)> = Vec::with_capacity(8);
+            let mut detected_server: Option<std::net::SocketAddrV4> = None;
+
             loop {
                 if !running_loop.load(Ordering::Relaxed) {
                     break;
@@ -245,6 +253,32 @@ impl TrafficInterceptor for NftablesInterceptor {
                         } else {
                             server_addr
                         };
+
+                        // ── Debounce auto-detect (port-range mode only) ─────
+                        if server_addr.ip().is_unspecified() && detected_server.is_none() {
+                            let now = std::time::Instant::now();
+                            // Expire old candidates
+                            candidates.retain(|(_, _, t)| {
+                                now.duration_since(*t).as_millis() < DETECT_WINDOW_MS
+                            });
+                            // Increment or add candidate
+                            if let Some(entry) = candidates.iter_mut().find(|(a, _, _)| *a == actual_dst) {
+                                entry.1 += 1;
+                                if entry.1 >= DETECT_PKTS {
+                                    detected_server = Some(actual_dst);
+                                    tracing::info!(
+                                        "🔍 Auto-detected server: {} ({} pkts in ≤{}ms)",
+                                        actual_dst, DETECT_PKTS, DETECT_WINDOW_MS
+                                    );
+                                    if let Ok(mut g) = counters_loop.detected_server.lock() {
+                                        *g = Some(actual_dst);
+                                    }
+                                    candidates.clear();
+                                }
+                            } else {
+                                candidates.push((actual_dst, 1, now));
+                            }
+                        }
 
                         counters_loop.packets_intercepted.fetch_add(1, Ordering::Relaxed);
                         counters_loop.bytes_intercepted.fetch_add(len as u64, Ordering::Relaxed);
@@ -556,6 +590,9 @@ fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4
     };
 
     if ret != 0 {
+        // SO_ORIGINAL_DST may fail if the socket hasn't received a
+        // netfilter-redirected packet yet. This is expected in port-range
+        // mode before the first game packet arrives.
         return None;
     }
 
