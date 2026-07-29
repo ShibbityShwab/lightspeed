@@ -1,0 +1,10 @@
+target/
+.git/
+.DS_Store
+*.md
+docs/
+wat/
+.kilo/
+.omo/
+.clineskills/
+.github/
