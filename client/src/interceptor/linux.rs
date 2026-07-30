@@ -144,15 +144,67 @@ impl TrafficInterceptor for NftablesInterceptor {
         tunnel_std.set_nonblocking(true)?;
         let tunnel_socket = Arc::new(UdpSocket::from_std(tunnel_std)?);
 
-        // Convert the std socket to a tokio async socket.
-        // NOTE: from_std dups the fd internally, so we must use the tokio
-        // socket's fd for SO_ORIGINAL_DST, not the original std fd.
+        // Convert to tokio socket for the tunnel (proxy) side.
+        // For the listener side, we use raw recvmsg in a dedicated thread
+        // to capture CMSG data (IP_ORIGDSTADDR) for port-range auto-detect.
         listener_std.set_nonblocking(true)?;
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
-        let listener_fd = {
+
+        // Channel for recvmsg thread → async loop
+        let (pkt_tx, mut pkt_rx) = tokio::sync::mpsc::channel::<(Vec<u8>, std::net::SocketAddrV4, Option<std::net::SocketAddrV4>)>(256);
+        {
             use std::os::fd::AsRawFd;
-            listener_socket.as_raw_fd()
-        };
+            let fd = listener_socket.as_raw_fd();
+            std::thread::spawn(move || {
+                let mut buf = vec![0u8; 65535];
+                let mut cmsg_buf = [0u8; 256];
+                loop {
+                    let mut iov = libc::iovec {
+                        iov_base: buf.as_mut_ptr() as *mut libc::c_void,
+                        iov_len: buf.len(),
+                    };
+                    let mut src_addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+                    msg.msg_name = &mut src_addr as *mut _ as *mut libc::c_void;
+                    msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+                    msg.msg_iov = &mut iov;
+                    msg.msg_iovlen = 1;
+                    msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
+                    msg.msg_controllen = cmsg_buf.len();
+
+                    let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
+                    if n < 0 { continue; } // EAGAIN on empty
+
+                    let src = std::net::SocketAddrV4::new(
+                        std::net::Ipv4Addr::from(u32::from_be(src_addr.sin_addr.s_addr)),
+                        u16::from_be(src_addr.sin_port),
+                    );
+
+                    // Parse CMSG for IP_ORIGDSTADDR
+                    let orig_dst = unsafe {
+                        let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
+                        let mut dst = None;
+                        while !cmsg.is_null() {
+                            if (*cmsg).cmsg_level == libc::SOL_IP && (*cmsg).cmsg_type == 20 {
+                                let data = libc::CMSG_DATA(cmsg) as *const libc::sockaddr_in;
+                                let ip = u32::from_be((*data).sin_addr.s_addr);
+                                let port = u16::from_be((*data).sin_port);
+                                dst = Some(std::net::SocketAddrV4::new(
+                                    std::net::Ipv4Addr::from(ip), port));
+                                break;
+                            }
+                            cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
+                        }
+                        dst
+                    };
+
+                    let data = buf[..n as usize].to_vec();
+                    if pkt_tx.blocking_send((data, src, orig_dst)).is_err() {
+                        break; // channel closed
+                    }
+                }
+            });
+        }
 
         tracing::info!(
             "⚡ Linux interceptor active — intercepting → {}",
@@ -241,43 +293,27 @@ impl TrafficInterceptor for NftablesInterceptor {
                 tokio::select! {
                     biased;
 
-                    // Game → Proxy (redirected outbound packet arrives on listener)
-                    recv = tokio::time::timeout(
-                        Duration::from_millis(100),
-                        listener_socket.recv_from(&mut out_buf),
-                    ) => {
-                        let (len, from) = match recv {
-                            Ok(Ok(r)) => r,
-                            _ => continue,
+                    // Game → Proxy (redirected packet arrives via recvmsg thread)
+                    recv = pkt_rx.recv() => {
+                        let (data, src, recovered_dst) = match recv {
+                            Some(r) => r,
+                            None => break, // channel closed
                         };
-                        let src = match from {
-                            std::net::SocketAddr::V4(v4) => v4,
-                            _ => continue, // IPv6 not supported
-                        };
+                        let len = data.len();
+                        out_buf[..len].copy_from_slice(&data);
 
                         if game_src.is_none() {
                             tracing::info!("🎮 Game client detected at {} → {}", src, server_addr);
                         }
                         game_src = Some(src);
 
-                        // Recover original destination from redirected packet.
+                        // Use recovered destination from CMSG (recvmsg thread).
+                        // NOTE: nftables REDIRECT sets IP_ORIGDSTADDR to the
+                        // post-NAT address, not the original. For true auto-detect,
+                        // use --server-addr or ensure the game is running so
+                        // ProcessScanner discovers the route.
                         let actual_dst = if server_addr.ip().is_unspecified() {
-                            match recover_original_dst(listener_fd) {
-                                Some(dst) => dst,
-                                None => {
-                                    // SO_ORIGINAL_DST not available on this kernel.
-                                    // Log once, then use the placeholder.
-                                    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                                    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                                        tracing::warn!(
-                                            "SO_ORIGINAL_DST not supported for UDP on this kernel.
-                                             Use --server-addr <ip:port> to specify the game server,
-                                             or ensure the game is running so ProcessScanner can discover it."
-                                        );
-                                    }
-                                    server_addr
-                                }
-                            }
+                            recovered_dst.unwrap_or(server_addr)
                         } else {
                             server_addr
                         };
