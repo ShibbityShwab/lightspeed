@@ -112,6 +112,11 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub smoke_test: bool,
 
+    /// Watch for game process and auto-start interceptor when detected.
+    /// Requires --game and --proxy. Ctrl+C to stop.
+    #[arg(long, default_value_t = false)]
+    pub watch: bool,
+
     /// Enable pcap capture mode (alternative to redirect mode).
     /// Captures game packets directly from the network interface.
     /// Requires the pcap-capture feature and elevated privileges.
@@ -208,6 +213,7 @@ mod tests {
         assert!(!cli.check);
         assert!(!cli.demo);
         assert!(!cli.smoke_test);
+        assert!(!cli.watch);
         assert!(!cli.capture);
         assert!(!cli.intercept);
         assert!(!cli.start_interceptor);
@@ -260,6 +266,7 @@ mod tests {
             "--check",
             "--demo",
             "--smoke-test",
+            "--watch",
             "--capture",
             "--intercept",
             "--start-interceptor",
@@ -283,6 +290,7 @@ mod tests {
         assert!(cli.check);
         assert!(cli.demo);
         assert!(cli.smoke_test);
+        assert!(cli.watch);
         assert!(cli.capture);
         assert!(cli.intercept);
         assert!(cli.start_interceptor);
