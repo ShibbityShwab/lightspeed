@@ -20,6 +20,9 @@ use std::time::Instant;
 /// Abuse detector configuration.
 #[derive(Debug, Clone)]
 pub struct AbuseConfig {
+    /// Skip destination IP check (dev/testing only).
+    #[serde(default)]
+    pub dev_mode: bool,
     /// Maximum amplification ratio (outbound / inbound).
     pub max_amplification_ratio: f64,
     /// Maximum unique destinations per window per client.
@@ -137,7 +140,7 @@ impl AbuseDetector {
         }
 
         // Check destination is not a private IP
-        if !is_public_ipv4(dest.ip()) {
+        if !self.config.dev_mode && !is_public_ipv4(dest.ip()) {
             tracing::warn!(
                 client = %client_ip,
                 dest = %dest,

@@ -32,7 +32,7 @@ pub async fn run_smoke_test(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
     if proxy_bin.exists() {
         proxy_child = Some(std::process::Command::new(&proxy_bin)
             .arg("--data-bind").arg("127.0.0.1:4434")
-            .arg("--health-bind").arg("127.0.0.1:8081")
+            .arg("--health-bind").arg("127.0.0.1:8081").arg("--dev")
             .spawn()?);
         tokio::time::sleep(Duration::from_millis(500)).await;
         info!("🔌 Proxy: PID {}", proxy_child.as_ref().unwrap().id());
