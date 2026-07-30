@@ -281,6 +281,15 @@ data_port = 4434
         info!("   Version:    v{}", env!("CARGO_PKG_VERSION"));
         info!("   OS:         {}", std::env::consts::OS);
         info!("   Arch:       {}", std::env::consts::ARCH);
+    {
+        let mut feats = Vec::new();
+        if cfg!(feature="ml") { feats.push("ml"); }
+        if cfg!(feature="quic") { feats.push("quic"); }
+        if cfg!(feature="pcap-capture") { feats.push("pcap-capture"); }
+        if cfg!(feature="windivert-redirect") { feats.push("windivert-redirect"); }
+        let fstr = if feats.is_empty() { String::from("none") } else { feats.join(" ") };
+        info!("   Features:   {}", fstr);
+    }
         info!("");
 
         // Interceptor
