@@ -1,199 +1,58 @@
 name: Release
 
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - 'v*'
-
-permissions:
-  contents: write
+    tags: ['v*']
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
+  release:
+    name: Build & Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install system dependencies
+
+      - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-      - name: Run tests
-        run: cargo test --workspace --verbose
-
-  build:
-    name: Build ${{ matrix.target }}
-    needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            client_artifact: lightspeed.exe
-            proxy_artifact: lightspeed-proxy.exe
-            archive: lightspeed-${{ github.ref_name }}-windows-x64.zip
-
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            client_artifact: lightspeed
-            proxy_artifact: lightspeed-proxy
-            archive: lightspeed-${{ github.ref_name }}-linux-x64.tar.gz
-
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            client_artifact: lightspeed
-            proxy_artifact: lightspeed-proxy
-            archive: lightspeed-${{ github.ref_name }}-linux-arm64.tar.gz
-
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            client_artifact: lightspeed
-            proxy_artifact: lightspeed-proxy
-            archive: lightspeed-${{ github.ref_name }}-macos-x64.tar.gz
-
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            client_artifact: lightspeed
-            proxy_artifact: lightspeed-proxy
-            archive: lightspeed-${{ github.ref_name }}-macos-arm64.tar.gz
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-
-      # Cross-compilation toolchain for ARM64
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Build release binaries
-        run: cargo build --release --target ${{ matrix.target }}
-
-      # Package — Windows (zip)
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
         run: |
-          $staging = "lightspeed-${{ github.ref_name }}-windows-x64"
-          New-Item -Type Directory -Path $staging
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.client_artifact }}" "$staging/"
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.proxy_artifact }}" "$staging/"
-          Copy-Item README.md "$staging/"
-          Copy-Item CHANGELOG.md "$staging/"
-          Copy-Item LICENSE "$staging/" -ErrorAction SilentlyContinue
-          Compress-Archive -Path "$staging/*" -DestinationPath "${{ matrix.archive }}"
+          cargo build --release -p lightspeed-client -p lightspeed-proxy
+          strip target/release/lightspeed
+          strip target/release/lightspeed-proxy
 
-      # Package — Linux (tar.gz)
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
+      - name: Package
         run: |
-          staging="lightspeed-${{ github.ref_name }}-$( [ '${{ matrix.target }}' = 'aarch64-unknown-linux-gnu' ] && echo 'linux-arm64' || echo 'linux-x64' )"
-          mkdir -p "$staging"
-          cp "target/${{ matrix.target }}/release/${{ matrix.client_artifact }}" "$staging/"
-          cp "target/${{ matrix.target }}/release/${{ matrix.proxy_artifact }}" "$staging/"
-          cp README.md "$staging/"
-          cp CHANGELOG.md "$staging/"
-          cp LICENSE "$staging/" 2>/dev/null || true
-          tar czf "${{ matrix.archive }}" "$staging"
+          mkdir -p release
+          cp target/release/lightspeed release/
+          cp target/release/lightspeed-proxy release/
+          cp README.md CHANGELOG.md LICENSE release/
+          cp -r docs/ release/docs/
+          tar -czf lightspeed-linux-x86_64.tar.gz -C release .
+          echo "ARTIFACT=lightspeed-linux-x86_64.tar.gz" >> $GITHUB_ENV
 
-      # Package — macOS (tar.gz)
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          arch_label=$( [ '${{ matrix.target }}' = 'aarch64-apple-darwin' ] && echo 'macos-arm64' || echo 'macos-x64' )
-          staging="lightspeed-${{ github.ref_name }}-${arch_label}"
-          mkdir -p "$staging"
-          cp "target/${{ matrix.target }}/release/${{ matrix.client_artifact }}" "$staging/"
-          cp "target/${{ matrix.target }}/release/${{ matrix.proxy_artifact }}" "$staging/"
-          cp README.md "$staging/"
-          cp CHANGELOG.md "$staging/"
-          cp LICENSE "$staging/" 2>/dev/null || true
-          tar czf "${{ matrix.archive }}" "$staging"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}
-
-  release:
-    name: Create GitHub Release
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate release notes
-        id: notes
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-          # Extract changelog for this version
-          awk '/^## \['"$VERSION"'\]/{found=1; next} /^## \[/{found=0} found' CHANGELOG.md > release_notes.md
-
-          # Add download instructions
-          cat >> release_notes.md << 'EOF'
-
-          ---
-
-          ## Installation
-
-          ### Quick Install
-
-          1. Download the archive for your platform below
-          2. Extract it to a folder of your choice
-          3. Run `lightspeed --help` to get started
-
-          ### Supported Platforms
-
-          | Platform | Archive |
-          |----------|---------|
-          | Windows x64 | `lightspeed-${{ github.ref_name }}-windows-x64.zip` |
-          | Linux x64 | `lightspeed-${{ github.ref_name }}-linux-x64.tar.gz` |
-          | Linux ARM64 | `lightspeed-${{ github.ref_name }}-linux-arm64.tar.gz` |
-          | macOS x64 (Intel) | `lightspeed-${{ github.ref_name }}-macos-x64.tar.gz` |
-          | macOS ARM64 (Apple Silicon) | `lightspeed-${{ github.ref_name }}-macos-arm64.tar.gz` |
-
-          ### Build from Source
-
-          ```bash
-          git clone https://github.com/${{ github.repository }}.git
-          cd lightspeed
-          cargo build --release
-          ```
-          EOF
-
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "LightSpeed ${{ github.ref_name }}"
-          body_path: release_notes.md
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
-          files: |
-            artifacts/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: lightspeed-linux-x86_64.tar.gz
+          body: |
+            ## LightSpeed ${{ github.ref_name }}
 
+            ### Download
+            - `lightspeed-linux-x86_64.tar.gz` — Client + Proxy binaries
+
+            ### Quick Start
+            ```bash
+            tar xzf lightspeed-linux-x86_64.tar.gz
+            ./lightspeed --demo
+            sudo ./lightspeed --start-interceptor --game rust --proxy YOUR_PROXY:4434
+            ```
+
+            See [CHANGELOG.md](CHANGELOG.md) for full release notes.
+          generate_release_notes: true

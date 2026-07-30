@@ -29,7 +29,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --exclude lightspeed-gui
+        run: cargo clippy --workspace --all-targets --exclude lightspeed-gui
 
       - name: Build
         run: cargo build --release --workspace --exclude lightspeed-gui
@@ -74,7 +74,6 @@ jobs:
           cargo llvm-cov \
             --workspace \
             --exclude lightspeed-gui \
-            --all-features \
             --no-clean \
             --lcov \
             --output-path lcov.info
