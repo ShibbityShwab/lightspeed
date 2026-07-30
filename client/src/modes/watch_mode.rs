@@ -27,63 +27,59 @@ pub async fn run_watch_mode(
     let mut _state = State::Polling;
 
     loop {
-        match _state {
-            State::Polling => {
-                match crate::interceptor::process_scanner::find_game_process(&process_refs) {
-                    Some(p) => {
-                        info!("🎮 {} detected! PID {} with {} routes", game_name, p.pid, p.routes.len());
+        if let State::Polling = _state {
+            match crate::interceptor::process_scanner::find_game_process(&process_refs) {
+                Some(p) => {
+                    info!("🎮 {} detected! PID {} with {} routes", game_name, p.pid, p.routes.len());
 
-                        let mut config = crate::interceptor::build_config_for_game(
-                            game.as_ref(), proxy_addr, fec, fec_k,
-                        ).unwrap_or(crate::interceptor::InterceptorConfig {
-                            game_name: game_name.clone(), pid: Some(p.pid),
-                            port_range: (lo, hi), initial_routes: vec![],
-                            proxy_addr, fec_enabled: fec, fec_k,
+                    let mut config = crate::interceptor::build_config_for_game(
+                        game.as_ref(), proxy_addr, fec, fec_k,
+                    ).unwrap_or(crate::interceptor::InterceptorConfig {
+                        game_name: game_name.clone(), pid: Some(p.pid),
+                        port_range: (lo, hi), initial_routes: vec![],
+                        proxy_addr, fec_enabled: fec, fec_k,
+                    });
+
+                    if let Some(addr) = server_addr {
+                        config.initial_routes.push(crate::interceptor::Route {
+                            local: SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0),
+                            remote: addr,
+                            proto: crate::interceptor::TransportProtocol::Udp,
                         });
+                    }
 
-                        if let Some(addr) = server_addr {
-                            config.initial_routes.push(crate::interceptor::Route {
-                                local: SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0),
-                                remote: addr,
-                                proto: crate::interceptor::TransportProtocol::Udp,
-                            });
-                        }
+                    let interceptor = crate::interceptor::create_interceptor();
+                    if let Err(e) = interceptor.check_availability() {
+                        info!("❌ Interceptor unavailable: {}", e);
+                        return Err(anyhow::anyhow!("{}", e));
+                    }
 
-                        let interceptor = crate::interceptor::create_interceptor();
-                        if let Err(e) = interceptor.check_availability() {
-                            info!("❌ Interceptor unavailable: {}", e);
-                            return Err(anyhow::anyhow!("{}", e));
-                        }
+                    match interceptor.start(config) {
+                        Ok(mut handle) => {
+                            info!("✅ Interceptor active — optimizing {}\n", game_name);
+                            _state = State::Intercepting;
 
-                        match interceptor.start(config) {
-                            Ok(mut handle) => {
-                                info!("✅ Interceptor active — optimizing {}\n", game_name);
-                                _state = State::Intercepting;
-
-                                // Monitor until game exits
-                                loop {
-                                    tokio::time::sleep(Duration::from_secs(3)).await;
-                                    if crate::interceptor::process_scanner::find_game_process(&process_refs).is_none() {
-                                        info!("👋 {} exited — stopping interceptor\n", game_name);
-                                        handle.stop();
-                                        _state = State::Polling;
-                                        break;
-                                    }
+                            // Monitor until game exits
+                            loop {
+                                tokio::time::sleep(Duration::from_secs(3)).await;
+                                if crate::interceptor::process_scanner::find_game_process(&process_refs).is_none() {
+                                    info!("👋 {} exited — stopping interceptor\n", game_name);
+                                    handle.stop();
+                                    _state = State::Polling;
+                                    break;
                                 }
                             }
-                            Err(e) => {
-                                info!("❌ Interceptor start failed: {}\n", e);
-                                tokio::time::sleep(Duration::from_secs(5)).await;
-                            }
+                        }
+                        Err(e) => {
+                            info!("❌ Interceptor start failed: {}\n", e);
+                            tokio::time::sleep(Duration::from_secs(5)).await;
                         }
                     }
-                    None => {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
+                }
+                None => {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
                 }
             }
-
-            _ => {},
         }
     }
 }

@@ -256,7 +256,7 @@ data_port = 4434
         })?;
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         let proxy_addr = parse_proxy_addr(proxy_str)?;
-        let server_override = cli.server_addr.as_deref().map(|s| parse_proxy_addr(s)).transpose()?;
+        let server_override = cli.server_addr.as_deref().map(parse_proxy_addr).transpose()?;
         return run_watch_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 

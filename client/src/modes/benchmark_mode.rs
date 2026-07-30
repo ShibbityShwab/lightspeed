@@ -24,10 +24,7 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
         let start = Instant::now();
         let _ = sock.send_to(&hdr.encode_to_array(), target).await;
         let mut buf = [0u8; 1024];
-        match tokio::time::timeout(Duration::from_secs(3), sock.recv_from(&mut buf)).await {
-            Ok(Ok(_)) => direct.push(start.elapsed().as_millis() as u64),
-            _ => {}
-        }
+        if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(3), sock.recv_from(&mut buf)).await { direct.push(start.elapsed().as_millis() as u64) }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     stats("   Direct", &direct);
@@ -39,10 +36,7 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
         let start = Instant::now();
         let _ = sock.send_to(&hdr.encode_to_array(), proxy).await;
         let mut buf = [0u8; 1024];
-        match tokio::time::timeout(Duration::from_secs(3), sock.recv_from(&mut buf)).await {
-            Ok(Ok(_)) => ls.push(start.elapsed().as_millis() as u64),
-            _ => {}
-        }
+        if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(3), sock.recv_from(&mut buf)).await { ls.push(start.elapsed().as_millis() as u64) }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     stats("   LightSpeed", &ls);

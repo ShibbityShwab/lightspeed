@@ -19,10 +19,9 @@ pub async fn run_smoke_test(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
     info!("📡 Echo: 127.0.0.1:{}", echo_port);
     let echo_handle = tokio::spawn(async move {
         let mut buf = [0u8; 1024];
-        loop { match tokio::time::timeout(Duration::from_secs(30), echo_sock.recv_from(&mut buf)).await {
-            Ok(Ok((len, addr))) => { let _ = echo_sock.send_to(&buf[..len], addr).await; }
-            _ => break,
-        }}
+        while let Ok(Ok((len, addr))) = tokio::time::timeout(Duration::from_secs(30), echo_sock.recv_from(&mut buf)).await {
+            let _ = echo_sock.send_to(&buf[..len], addr).await;
+        }
     });
 
     // 2. Proxy

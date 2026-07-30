@@ -448,6 +448,27 @@ The first release of LightSpeed — a zero-cost, open-source global network opti
 ## [0.4.2] — 2026-07-29
 
 ### Linux Interceptor (WF-010—WF-013)
+- **Recvmsg refactor**: Replaced Tokio recv_from with raw recvmsg + CMSG capture in dedicated thread. Enables IP_RECVORIGDSTADDR for future kernel-level auto-detect.
+- **Debounce auto-detection**: Ported Windows-style debounce logic to Linux interceptor. Tracks candidate server addresses and commits when ≥3 packets arrive in ≤1.5s.
+- **`--watch` mode**: Auto-starts interceptor when game process is detected. Stops and resumes watching when game exits. Zero-config flow.
+- **`--benchmark` mode**: Direct vs LightSpeed latency comparison with 10 probes, avg/min/max table, and improvement percentage.
+- **`--smoke-test` mode**: Full E2E validation — echo server + proxy + interceptor + nftables rule install/cleanup.
+- **`--status` mode**: System overview showing version, OS, interceptor backend, root status, running games, nftables rules.
+- **`--demo` mode**: Interactive architecture walkthrough with platform detection, game profile, and projected latency table.
+- **`--list-games`**: Display all 9 supported games with port ranges and process names.
+- **`--write-config`**: Generate a documented `lightspeed.toml` template.
+- **`--check` mode (client)**: Environment validation — interceptor, root, game detection, proxy reachability.
+- **`--check` mode (proxy)**: Config parsing + port bindability validation.
+- **Startup banner**: Running `lightspeed` with no args shows a friendly quick-start banner instead of entering keepalive mode.
+
+### Proxy
+- **`--dev` flag**: Skips destination IP validation for local testing.
+- **Docker deployment**: Multi-stage Dockerfile + docker-compose.yml for single-node or mesh deployment.
+- **`scripts/build-release.sh`**: Stripped release archive builder.
+- **`.dockerignore`**: Faster Docker builds.
+
+### Dependencies
+- **Recvmsg refactor**: Replaced Tokio recv_from with raw recvmsg + CMSG capture
 - **Port-range fallback**: Interceptor now starts without a pre-discovered game server route. Uses nftables `udp dport {range}` match when game isn't running.
 - **SO_ORIGINAL_DST recovery**: Retrieves real destination address from netfilter-redirected packets via `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST)`.
 - **MockInterceptor**: In-memory `TrafficInterceptor` for CI testing — no root needed.
