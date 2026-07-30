@@ -94,6 +94,19 @@ impl TrafficInterceptor for NftablesInterceptor {
             .map_err(|e| anyhow::anyhow!("Listener bind failed: {e}"))?;
         let local_port = listener_std.local_addr()?.port();
 
+        // Enable IP_RECVORIGDSTADDR to recover original destination from
+        // redirected packets. Works on Linux >= 2.6.29, no conntrack needed.
+        {
+            use std::os::fd::AsRawFd;
+            let fd = listener_std.as_raw_fd();
+            let one: libc::c_int = 1;
+            unsafe {
+                libc::setsockopt(fd, libc::SOL_IP, 20,
+                    &one as *const _ as *const libc::c_void,
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+            }
+        }
+
 
         tracing::info!(
             "Linux interceptor: redirecting {} → localhost:{}",
@@ -592,33 +605,37 @@ fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4
     // These constants are stable on Linux:
     //   SOL_IP = 0
     //   SO_ORIGINAL_DST = 80
-    const SOL_IP: libc::c_int = 0;
-    const SO_ORIGINAL_DST: libc::c_int = 80;
-
-    let mut sockaddr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-    let mut socklen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
-
-    let ret = unsafe {
-        libc::getsockopt(
-            fd,
-            SOL_IP,
-            SO_ORIGINAL_DST,
-            &mut sockaddr as *mut _ as *mut libc::c_void,
-            &mut socklen,
-        )
+        // Use recvmsg(MSG_PEEK | MSG_DONTWAIT) with CMSG to recover
+    // IP_ORIGDSTADDR from redirected packets. Works without conntrack.
+    let mut cmsg_buf = [0u8; 256];
+    let mut iov = libc::iovec {
+        iov_base: cmsg_buf.as_mut_ptr() as *mut libc::c_void,
+        iov_len: 0,
     };
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
+    msg.msg_controllen = cmsg_buf.len();
 
-    if ret != 0 {
-        // SO_ORIGINAL_DST may fail if the socket hasn't received a
-        // netfilter-redirected packet yet. This is expected in port-range
-        // mode before the first game packet arrives.
+    if unsafe { libc::recvmsg(fd, &mut msg, libc::MSG_PEEK | libc::MSG_DONTWAIT) } < 0 {
         return None;
     }
 
-    // sockaddr_in fields are in network byte order.
-    let ip = std::net::Ipv4Addr::from(u32::from_be(sockaddr.sin_addr.s_addr));
-    let port = u16::from_be(sockaddr.sin_port);
-    Some(std::net::SocketAddrV4::new(ip, port))
+    unsafe {
+        let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
+        while !cmsg.is_null() {
+            if (*cmsg).cmsg_level == libc::SOL_IP && (*cmsg).cmsg_type == 20 {
+                let data = libc::CMSG_DATA(cmsg) as *const libc::sockaddr_in;
+                let ip = u32::from_be((*data).sin_addr.s_addr);
+                let port = u16::from_be((*data).sin_port);
+                return Some(std::net::SocketAddrV4::new(
+                    std::net::Ipv4Addr::from(ip), port));
+            }
+            cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
+        }
+    }
+    None
 }
 
 #[cfg(not(target_os = "linux"))]
