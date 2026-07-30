@@ -38,6 +38,7 @@ use modes::{
     proxy_probe::{probe_all_proxies, select_best_proxy},
     demo_mode::run_demo,
     smoke_test::run_smoke_test,
+    benchmark_mode::run_benchmark,
     watch_mode::run_watch_mode,
     intercept_mode::run_intercept_mode,
     tunnel_test::run_tunnel_test,
@@ -125,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
             || cli.start_interceptor || cli.test_tunnel || cli.test_control
             || cli.probe_proxies || cli.live_test || cli.warp_status
             || cli.dry_run || cli.capture || cli.game_server.is_some()
-            || cli.game.is_some() || cli.smoke_test || cli.watch;
+            || cli.game.is_some() || cli.smoke_test || cli.watch || cli.benchmark;
         if !has_mode {
             info!("╔════════════════════════════════════════════╗");
             info!("║       ⚡  LightSpeed v{}                  ║", env!("CARGO_PKG_VERSION"));
@@ -235,6 +236,17 @@ data_port = 4434
             info!("   lightspeed --game rust");
         }
         return Ok(());
+    }
+
+    // ── --benchmark ──────────────────────────────────────────
+    if cli.benchmark {
+        let target_str = cli.target.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("--benchmark requires --target <ip:port>")
+        })?;
+        let target_addr = parse_proxy_addr(target_str)?;
+        let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
+        let proxy_addr = parse_proxy_addr(proxy_str)?;
+        return run_benchmark(target_addr, proxy_addr).await;
     }
 
     // ── --watch ───────────────────────────────────────────────

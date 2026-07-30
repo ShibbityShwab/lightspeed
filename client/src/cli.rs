@@ -117,6 +117,15 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub watch: bool,
 
+    /// Run latency benchmark comparing direct vs LightSpeed routing.
+    /// Requires --target and --proxy.
+    #[arg(long, default_value_t = false)]
+    pub benchmark: bool,
+
+    /// Target server for --benchmark (ip:port).
+    #[arg(long)]
+    pub target: Option<String>,
+
     /// Enable pcap capture mode (alternative to redirect mode).
     /// Captures game packets directly from the network interface.
     /// Requires the pcap-capture feature and elevated privileges.
@@ -214,6 +223,7 @@ mod tests {
         assert!(!cli.demo);
         assert!(!cli.smoke_test);
         assert!(!cli.watch);
+        assert!(!cli.benchmark);
         assert!(!cli.capture);
         assert!(!cli.intercept);
         assert!(!cli.start_interceptor);
@@ -267,6 +277,7 @@ mod tests {
             "--demo",
             "--smoke-test",
             "--watch",
+            "--benchmark",
             "--capture",
             "--intercept",
             "--start-interceptor",
@@ -291,6 +302,7 @@ mod tests {
         assert!(cli.demo);
         assert!(cli.smoke_test);
         assert!(cli.watch);
+        assert!(cli.benchmark);
         assert!(cli.capture);
         assert!(cli.intercept);
         assert!(cli.start_interceptor);

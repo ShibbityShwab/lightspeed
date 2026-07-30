@@ -11,6 +11,7 @@ pub mod proxy_probe;
 pub mod redirect_windivert;
 pub mod tunnel_test;
 
+pub mod benchmark_mode;
 pub mod watch_mode;
 pub mod intercept_mode;
 pub mod smoke_test;
