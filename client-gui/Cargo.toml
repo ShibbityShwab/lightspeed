@@ -11,18 +11,23 @@ name = "lightspeed-gui"
 path = "src/main.rs"
 
 [dependencies]
-lightspeed-client = { path = "../client", features = ["pcap-capture", "windivert-redirect"] }
+lightspeed-client = { path = "../client", features = ["pcap-capture"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 anyhow = { workspace = true }
 dirs = "6.0"
-
 tray-icon = "0.24.1"
 eframe = { version = "0.35", features = ["default"] }
 egui_plot = "0.36.0"
 webbrowser = "1"
 
-
+# Windows-only: enable WinDivert support via lightspeed-client features
 [target.'cfg(windows)'.dependencies]
+windivert = { version = "0.6", optional = true, features = ["vendored"] }
+
+# Override lightspeed-client features on Windows
+[target.'cfg(windows)'.dependencies.lightspeed-client]
+path = "../client"
+features = ["pcap-capture", "windivert-redirect"]
