@@ -21,7 +21,7 @@ use std::time::Instant;
 #[derive(Debug, Clone)]
 pub struct AbuseConfig {
     /// Skip destination IP check (dev/testing only).
-    #[serde(default)]
+    // dev_mode defaults to false via Default impl
     pub dev_mode: bool,
     /// Maximum amplification ratio (outbound / inbound).
     pub max_amplification_ratio: f64,
@@ -36,6 +36,7 @@ pub struct AbuseConfig {
 impl Default for AbuseConfig {
     fn default() -> Self {
         Self {
+            dev_mode: false,
             max_amplification_ratio: 2.0,
             max_destinations_per_window: 10,
             ban_duration_secs: 3600, // 1 hour

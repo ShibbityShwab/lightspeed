@@ -57,6 +57,10 @@ struct Cli {
     /// Run configuration and port checks, then exit.
     #[arg(long, default_value_t = false)]
     check: bool,
+
+    /// Developer mode: skip destination IP validation.
+    #[arg(long, default_value_t = false)]
+    dev: bool,
 }
 
 #[tokio::main]
@@ -146,6 +150,7 @@ async fn main() -> anyhow::Result<()> {
     )));
 
     let abuse_config = abuse::AbuseConfig {
+        dev_mode: cli.dev,
         max_amplification_ratio: config.security.max_amplification_ratio,
         max_destinations_per_window: config.security.max_destinations_per_window,
         ban_duration_secs: config.security.ban_duration_secs,

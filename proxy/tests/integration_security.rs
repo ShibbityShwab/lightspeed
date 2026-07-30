@@ -56,6 +56,7 @@ impl Default for RelayTestConfig {
             max_pps: 10_000,
             max_bps: 10_000_000,
             abuse_config: AbuseConfig {
+            dev_mode: false,
                 max_amplification_ratio: 100.0,
                 max_destinations_per_window: 100,
                 ban_duration_secs: 3600,
@@ -317,6 +318,7 @@ async fn test_reflection_detection_bans_client() {
     let relay = start_relay(RelayTestConfig {
         require_auth: false,
         abuse_config: AbuseConfig {
+            dev_mode: false,
             max_destinations_per_window: 3, // Very low threshold
             max_amplification_ratio: 100.0,
             ban_duration_secs: 3600,
