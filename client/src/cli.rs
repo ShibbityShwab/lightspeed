@@ -107,6 +107,11 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub demo: bool,
 
+    /// Run a full E2E smoke test (starts echo server + interceptor).
+    /// Validates the entire pipeline. Requires root for nftables.
+    #[arg(long, default_value_t = false)]
+    pub smoke_test: bool,
+
     /// Enable pcap capture mode (alternative to redirect mode).
     /// Captures game packets directly from the network interface.
     /// Requires the pcap-capture feature and elevated privileges.
@@ -202,6 +207,7 @@ mod tests {
         assert!(!cli.write_config);
         assert!(!cli.check);
         assert!(!cli.demo);
+        assert!(!cli.smoke_test);
         assert!(!cli.capture);
         assert!(!cli.intercept);
         assert!(!cli.start_interceptor);
@@ -253,6 +259,7 @@ mod tests {
             "--write-config",
             "--check",
             "--demo",
+            "--smoke-test",
             "--capture",
             "--intercept",
             "--start-interceptor",
@@ -275,6 +282,7 @@ mod tests {
         assert!(cli.write_config);
         assert!(cli.check);
         assert!(cli.demo);
+        assert!(cli.smoke_test);
         assert!(cli.capture);
         assert!(cli.intercept);
         assert!(cli.start_interceptor);
