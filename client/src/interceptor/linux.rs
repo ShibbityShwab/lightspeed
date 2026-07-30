@@ -94,11 +94,7 @@ impl TrafficInterceptor for NftablesInterceptor {
             .map_err(|e| anyhow::anyhow!("Listener bind failed: {e}"))?;
         let local_port = listener_std.local_addr()?.port();
 
-        // Save raw fd for SO_ORIGINAL_DST recovery (needed in port-range mode).
-        let listener_fd = {
-            use std::os::fd::AsRawFd;
-            listener_std.as_raw_fd()
-        };
+
         tracing::info!(
             "Linux interceptor: redirecting {} → localhost:{}",
             server_addr,
@@ -135,9 +131,15 @@ impl TrafficInterceptor for NftablesInterceptor {
         tunnel_std.set_nonblocking(true)?;
         let tunnel_socket = Arc::new(UdpSocket::from_std(tunnel_std)?);
 
-        // Convert the std socket to a tokio async socket
+        // Convert the std socket to a tokio async socket.
+        // NOTE: from_std dups the fd internally, so we must use the tokio
+        // socket's fd for SO_ORIGINAL_DST, not the original std fd.
         listener_std.set_nonblocking(true)?;
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
+        let listener_fd = {
+            use std::os::fd::AsRawFd;
+            listener_socket.as_raw_fd()
+        };
 
         tracing::info!(
             "⚡ Linux interceptor active — intercepting → {}",
@@ -246,10 +248,23 @@ impl TrafficInterceptor for NftablesInterceptor {
                         game_src = Some(src);
 
                         // Recover original destination from redirected packet.
-                        // When the nftables REDIRECT rule fires, the kernel preserves
-                        // the original destination — we retrieve it via SO_ORIGINAL_DST.
                         let actual_dst = if server_addr.ip().is_unspecified() {
-                            recover_original_dst(listener_fd).unwrap_or(server_addr)
+                            match recover_original_dst(listener_fd) {
+                                Some(dst) => dst,
+                                None => {
+                                    // SO_ORIGINAL_DST not available on this kernel.
+                                    // Log once, then use the placeholder.
+                                    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                                    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                        tracing::warn!(
+                                            "SO_ORIGINAL_DST not supported for UDP on this kernel.
+                                             Use --server-addr <ip:port> to specify the game server,
+                                             or ensure the game is running so ProcessScanner can discover it."
+                                        );
+                                    }
+                                    server_addr
+                                }
+                            }
                         } else {
                             server_addr
                         };
@@ -562,12 +577,16 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
 //  SO_ORIGINAL_DST recovery
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Linux netfilter REDIRECT preserves the original destination address.
-/// We retrieve it via `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)`.
+/// Attempt to recover the original destination from a netfilter-redirected
+/// UDP packet via `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)`.
 ///
-/// This is needed in port-range mode where the nftables rule matches by port
-/// range instead of a specific server IP. Without this, we'd only know the
-/// game client's source address — not where it was trying to send packets.
+/// NOTE: SO_ORIGINAL_DST for UDP requires kernel support that may not be
+/// available (returns ENOPROTOOPT on many kernels). It works reliably for TCP
+/// but UDP support is kernel/config-dependent.
+///
+/// When this fails, use `--server-addr <ip:port>` to specify the game server,
+/// or ensure the game is running before starting the interceptor so the
+/// ProcessScanner can discover the route automatically.
 #[cfg(target_os = "linux")]
 fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4> {
     // These constants are stable on Linux:
