@@ -15,9 +15,8 @@ pub use header::{
 };
 
 pub use fec::{
-    build_fec_data_packet, build_fec_parity_packet, decode_fec_payload,
-    FecDecoder, FecEncoder, FecHeader, FecStats, DEFAULT_BLOCK_SIZE, FEC_HEADER_SIZE,
-    FEC_MAX_PAYLOAD, MAX_BLOCK_SIZE,
+    build_fec_data_packet, build_fec_parity_packet, decode_fec_payload, FecDecoder, FecEncoder,
+    FecHeader, FecStats, DEFAULT_BLOCK_SIZE, FEC_HEADER_SIZE, FEC_MAX_PAYLOAD, MAX_BLOCK_SIZE,
 };
 
 pub use control::{disconnect_reason, game_id, ControlDecodeError, ControlMessage};

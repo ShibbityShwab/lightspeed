@@ -63,8 +63,14 @@ pub fn load_proxies() -> Vec<ProxyEntry> {
         tracing::warn!("LIGHTSPEED_PROXIES set but no valid addresses found — using defaults");
     }
     vec![
-        ProxyEntry { addr: "127.0.0.1:4434".parse().expect("valid"), label: "LAX — US West".into() },
-        ProxyEntry { addr: "127.0.0.1:4434".parse().expect("valid"), label: "SGP — Singapore".into() },
+        ProxyEntry {
+            addr: "127.0.0.1:4434".parse().expect("valid"),
+            label: "LAX — US West".into(),
+        },
+        ProxyEntry {
+            addr: "127.0.0.1:4434".parse().expect("valid"),
+            label: "SGP — Singapore".into(),
+        },
     ]
 }
 

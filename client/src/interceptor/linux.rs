@@ -76,7 +76,8 @@ impl TrafficInterceptor for NftablesInterceptor {
             .unwrap_or_else(|| {
                 tracing::info!(
                     "No server route discovered — using port-range fallback ({}-{})",
-                    config.port_range.0, config.port_range.1
+                    config.port_range.0,
+                    config.port_range.1
                 );
                 std::net::SocketAddrV4::new(
                     std::net::Ipv4Addr::new(0, 0, 0, 0),
@@ -101,12 +102,15 @@ impl TrafficInterceptor for NftablesInterceptor {
             let fd = listener_std.as_raw_fd();
             let one: libc::c_int = 1;
             unsafe {
-                libc::setsockopt(fd, libc::SOL_IP, 20,
+                libc::setsockopt(
+                    fd,
+                    libc::SOL_IP,
+                    20,
                     &one as *const _ as *const libc::c_void,
-                    std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
             }
         }
-
 
         tracing::info!(
             "Linux interceptor: redirecting {} → localhost:{}",
@@ -151,7 +155,11 @@ impl TrafficInterceptor for NftablesInterceptor {
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
 
         // Channel for recvmsg thread → async loop
-        let (pkt_tx, mut pkt_rx) = tokio::sync::mpsc::channel::<(Vec<u8>, std::net::SocketAddrV4, Option<std::net::SocketAddrV4>)>(256);
+        let (pkt_tx, mut pkt_rx) = tokio::sync::mpsc::channel::<(
+            Vec<u8>,
+            std::net::SocketAddrV4,
+            Option<std::net::SocketAddrV4>,
+        )>(256);
         {
             use std::os::fd::AsRawFd;
             let fd = listener_socket.as_raw_fd();
@@ -173,7 +181,9 @@ impl TrafficInterceptor for NftablesInterceptor {
                     msg.msg_controllen = cmsg_buf.len();
 
                     let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
-                    if n < 0 { continue; } // EAGAIN on empty
+                    if n < 0 {
+                        continue;
+                    } // EAGAIN on empty
 
                     let src = std::net::SocketAddrV4::new(
                         std::net::Ipv4Addr::from(u32::from_be(src_addr.sin_addr.s_addr)),
@@ -190,7 +200,9 @@ impl TrafficInterceptor for NftablesInterceptor {
                                 let ip = u32::from_be((*data).sin_addr.s_addr);
                                 let port = u16::from_be((*data).sin_port);
                                 dst = Some(std::net::SocketAddrV4::new(
-                                    std::net::Ipv4Addr::from(ip), port));
+                                    std::net::Ipv4Addr::from(ip),
+                                    port,
+                                ));
                                 break;
                             }
                             cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
@@ -282,7 +294,8 @@ impl TrafficInterceptor for NftablesInterceptor {
             // enough packets within the detection window.
             const DETECT_PKTS: u8 = 3;
             const DETECT_WINDOW_MS: u128 = 1_500;
-            let mut candidates: Vec<(std::net::SocketAddrV4, u8, std::time::Instant)> = Vec::with_capacity(8);
+            let mut candidates: Vec<(std::net::SocketAddrV4, u8, std::time::Instant)> =
+                Vec::with_capacity(8);
             let mut detected_server: Option<std::net::SocketAddrV4> = None;
 
             loop {
@@ -504,11 +517,7 @@ fn add_nft_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow:
             server.port().saturating_add(100)
         )
     } else {
-        format!(
-            "ip daddr {} udp dport {}",
-            server.ip(),
-            server.port()
-        )
+        format!("ip daddr {} udp dport {}", server.ip(), server.port())
     };
 
     let script = format!(
@@ -641,7 +650,7 @@ fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4
     // These constants are stable on Linux:
     //   SOL_IP = 0
     //   SO_ORIGINAL_DST = 80
-        // Use recvmsg(MSG_PEEK | MSG_DONTWAIT) with CMSG to recover
+    // Use recvmsg(MSG_PEEK | MSG_DONTWAIT) with CMSG to recover
     // IP_ORIGDSTADDR from redirected packets. Works without conntrack.
     let mut cmsg_buf = [0u8; 256];
     let mut iov = libc::iovec {
@@ -666,7 +675,9 @@ fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4
                 let ip = u32::from_be((*data).sin_addr.s_addr);
                 let port = u16::from_be((*data).sin_port);
                 return Some(std::net::SocketAddrV4::new(
-                    std::net::Ipv4Addr::from(ip), port));
+                    std::net::Ipv4Addr::from(ip),
+                    port,
+                ));
             }
             cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
         }
@@ -678,7 +689,6 @@ fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4
 fn recover_original_dst(_fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4> {
     None
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -701,10 +711,7 @@ mod tests {
     #[test]
     fn port_range_fallback_placeholder_is_unspecified() {
         // Verify the placeholder IP is 0.0.0.0 (triggers port-range nftables mode).
-        let placeholder = std::net::SocketAddrV4::new(
-            std::net::Ipv4Addr::new(0, 0, 0, 0),
-            28015,
-        );
+        let placeholder = std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(0, 0, 0, 0), 28015);
         assert!(placeholder.ip().is_unspecified());
         assert_eq!(placeholder.port(), 28015);
     }

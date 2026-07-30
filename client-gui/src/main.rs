@@ -10,7 +10,6 @@ use eframe::egui;
 use std::sync::{Arc, Mutex};
 
 fn main() -> anyhow::Result<()> {
-
     // Redirect tracing to a file since GUI apps have no console.
     // Use a simple file appender for straightforward single-file logging.
     let path = dirs::data_local_dir()
@@ -63,9 +62,11 @@ fn main() -> anyhow::Result<()> {
         "⚡ LightSpeed",
         native_options,
         Box::new(move |_cc: &eframe::CreationContext<'_>| {
-            Ok(Box::new(app::LightSpeedApp::<platform::CurrentPlatform>::new(
-                Arc::clone(&engine_for_closure),
-            )))
+            Ok(Box::new(
+                app::LightSpeedApp::<platform::CurrentPlatform>::new(Arc::clone(
+                    &engine_for_closure,
+                )),
+            ))
         }),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {}", e))?;

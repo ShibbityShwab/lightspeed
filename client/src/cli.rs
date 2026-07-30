@@ -162,7 +162,6 @@ pub struct Cli {
     #[arg(long)]
     pub server_addr: Option<String>,
 
-
     /// Scan for game processes and display their UDP routes, then exit.
     /// Useful for debugging game detection before starting the interceptor.
     #[arg(long, default_value_t = false)]
@@ -197,8 +196,6 @@ pub fn parse_proxy_addr(s: &str) -> anyhow::Result<SocketAddrV4> {
     }
     anyhow::bail!("Could not resolve proxy address: {}", s);
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -356,10 +353,7 @@ mod tests {
     #[test]
     fn test_game_values() {
         for game in &["fortnite", "cs2", "dota2", "rust"] {
-            let cli = Cli::try_parse_from([
-                "lightspeed", "-g", game,
-            ])
-            .unwrap();
+            let cli = Cli::try_parse_from(["lightspeed", "-g", game]).unwrap();
             assert_eq!(cli.game.as_deref(), Some(*game));
         }
     }
@@ -382,11 +376,14 @@ mod tests {
         // Redirect mode with game server
         let cli = Cli::try_parse_from([
             "lightspeed",
-            "-g", "fortnite",
-            "-s", "10.0.0.1:7777",
+            "-g",
+            "fortnite",
+            "-s",
+            "10.0.0.1:7777",
             "--fec",
             "--warp",
-            "--route-strategy", "nearest",
+            "--route-strategy",
+            "nearest",
         ])
         .unwrap();
         assert_eq!(cli.game.as_deref(), Some("fortnite"));
@@ -400,9 +397,11 @@ mod tests {
     fn test_capture_mode() {
         let cli = Cli::try_parse_from([
             "lightspeed",
-            "-g", "cs2",
+            "-g",
+            "cs2",
             "--capture",
-            "--interface", "Ethernet",
+            "--interface",
+            "Ethernet",
         ])
         .unwrap();
         assert_eq!(cli.game.as_deref(), Some("cs2"));
@@ -415,8 +414,10 @@ mod tests {
         let cli = Cli::try_parse_from([
             "lightspeed",
             "--live-test",
-            "--echo-server", "10.0.0.1:9999",
-            "--proxy", "10.0.0.1:4434",
+            "--echo-server",
+            "10.0.0.1:9999",
+            "--proxy",
+            "10.0.0.1:4434",
         ])
         .unwrap();
         assert!(cli.live_test);
@@ -452,10 +453,7 @@ mod tests {
     #[test]
     fn test_route_strategies() {
         for strategy in &["nearest", "ml", "multipath"] {
-            let cli = Cli::try_parse_from([
-                "lightspeed", "--route-strategy", strategy,
-            ])
-            .unwrap();
+            let cli = Cli::try_parse_from(["lightspeed", "--route-strategy", strategy]).unwrap();
             assert_eq!(cli.route_strategy.as_deref(), Some(*strategy));
         }
     }

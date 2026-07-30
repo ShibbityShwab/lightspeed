@@ -1,5 +1,11 @@
 //! # LightSpeed Client
-#![allow(dead_code, unused_imports, clippy::useless_conversion, clippy::bool_assert_comparison, clippy::collapsible_if)]
+#![allow(
+    dead_code,
+    unused_imports,
+    clippy::useless_conversion,
+    clippy::bool_assert_comparison,
+    clippy::collapsible_if
+)]
 //!
 //! Zero-cost global network optimizer for multiplayer games.
 //! Captures game UDP packets and tunnels them through optimally-selected
@@ -31,17 +37,17 @@ use telemetry::TelemetryCollector;
 
 use cli::{parse_proxy_addr, Cli};
 use modes::{
+    benchmark_mode::run_benchmark,
     capture_mode::run_capture_mode,
     control_test::run_control_test,
+    demo_mode::run_demo,
+    intercept_mode::run_intercept_mode,
     keepalive::run_keepalive_mode,
     live_test::run_live_test,
     proxy_probe::{probe_all_proxies, select_best_proxy},
-    demo_mode::run_demo,
     smoke_test::run_smoke_test,
-    benchmark_mode::run_benchmark,
-    watch_mode::run_watch_mode,
-    intercept_mode::run_intercept_mode,
     tunnel_test::run_tunnel_test,
+    watch_mode::run_watch_mode,
 };
 use route::ProxyHealth;
 use tunnel::relay::UdpRelay;
@@ -102,7 +108,10 @@ async fn main() -> anyhow::Result<()> {
             );
             // Read proxy IPs from config or env var, with placeholder fallback for testing
             let proxy_ips = if let Ok(ips_str) = std::env::var("LIGHTSPEED_PROXY_IPS") {
-                ips_str.split(',').filter_map(|s| s.trim().parse().ok()).collect()
+                ips_str
+                    .split(',')
+                    .filter_map(|s| s.trim().parse().ok())
+                    .collect()
             } else {
                 vec![
                     Ipv4Addr::new(104, 26, 1, 50), // Example public IP for testing
@@ -121,15 +130,33 @@ async fn main() -> anyhow::Result<()> {
     // When no mode flags are provided, show a friendly quick-start
     // instead of falling through to the default keepalive loop.
     {
-        let has_mode = cli.list_games || cli.list_interfaces || cli.write_config
-            || cli.check || cli.demo || cli.intercept || cli.scan_processes
-            || cli.start_interceptor || cli.test_tunnel || cli.test_control
-            || cli.probe_proxies || cli.live_test || cli.warp_status
-            || cli.dry_run || cli.capture || cli.game_server.is_some()
-            || cli.game.is_some() || cli.smoke_test || cli.watch || cli.benchmark || cli.status;
+        let has_mode = cli.list_games
+            || cli.list_interfaces
+            || cli.write_config
+            || cli.check
+            || cli.demo
+            || cli.intercept
+            || cli.scan_processes
+            || cli.start_interceptor
+            || cli.test_tunnel
+            || cli.test_control
+            || cli.probe_proxies
+            || cli.live_test
+            || cli.warp_status
+            || cli.dry_run
+            || cli.capture
+            || cli.game_server.is_some()
+            || cli.game.is_some()
+            || cli.smoke_test
+            || cli.watch
+            || cli.benchmark
+            || cli.status;
         if !has_mode {
             info!("╔════════════════════════════════════════════╗");
-            info!("║       ⚡  LightSpeed v{}                  ║", env!("CARGO_PKG_VERSION"));
+            info!(
+                "║       ⚡  LightSpeed v{}                  ║",
+                env!("CARGO_PKG_VERSION")
+            );
             info!("║   Zero-cost global network optimizer      ║");
             info!("╠════════════════════════════════════════════╣");
             info!("║  Quick start:                             ║");
@@ -176,7 +203,13 @@ async fn main() -> anyhow::Result<()> {
             match games::detect_game(name) {
                 Ok(g) => {
                     let (lo, hi) = g.ports();
-                    info!("   {:<12} ports {}-{}  — {}", g.name(), lo, hi, g.process_names().join(", "));
+                    info!(
+                        "   {:<12} ports {}-{}  — {}",
+                        g.name(),
+                        lo,
+                        hi,
+                        g.process_names().join(", ")
+                    );
                 }
                 Err(_) => {
                     info!("   {:<12} (unknown)", name);
@@ -240,9 +273,10 @@ data_port = 4434
 
     // ── --benchmark ──────────────────────────────────────────
     if cli.benchmark {
-        let target_str = cli.target.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("--benchmark requires --target <ip:port>")
-        })?;
+        let target_str = cli
+            .target
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--benchmark requires --target <ip:port>"))?;
         let target_addr = parse_proxy_addr(target_str)?;
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         let proxy_addr = parse_proxy_addr(proxy_str)?;
@@ -251,12 +285,17 @@ data_port = 4434
 
     // ── --watch ───────────────────────────────────────────────
     if cli.watch {
-        let game_key = cli.game.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("--watch requires --game <name>")
-        })?;
+        let game_key = cli
+            .game
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--watch requires --game <name>"))?;
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         let proxy_addr = parse_proxy_addr(proxy_str)?;
-        let server_override = cli.server_addr.as_deref().map(parse_proxy_addr).transpose()?;
+        let server_override = cli
+            .server_addr
+            .as_deref()
+            .map(parse_proxy_addr)
+            .transpose()?;
         return run_watch_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
@@ -281,33 +320,70 @@ data_port = 4434
         info!("   Version:    v{}", env!("CARGO_PKG_VERSION"));
         info!("   OS:         {}", std::env::consts::OS);
         info!("   Arch:       {}", std::env::consts::ARCH);
-    {
-        let mut feats = Vec::new();
-        if cfg!(feature="ml") { feats.push("ml"); }
-        if cfg!(feature="quic") { feats.push("quic"); }
-        if cfg!(feature="pcap-capture") { feats.push("pcap-capture"); }
-        if cfg!(feature="windivert-redirect") { feats.push("windivert-redirect"); }
-        let fstr = if feats.is_empty() { String::from("none") } else { feats.join(" ") };
-        info!("   Features:   {}", fstr);
-    }
+        {
+            let mut feats = Vec::new();
+            if cfg!(feature = "ml") {
+                feats.push("ml");
+            }
+            if cfg!(feature = "quic") {
+                feats.push("quic");
+            }
+            if cfg!(feature = "pcap-capture") {
+                feats.push("pcap-capture");
+            }
+            if cfg!(feature = "windivert-redirect") {
+                feats.push("windivert-redirect");
+            }
+            let fstr = if feats.is_empty() {
+                String::from("none")
+            } else {
+                feats.join(" ")
+            };
+            info!("   Features:   {}", fstr);
+        }
         info!("");
 
         // Interceptor
         let interceptor = lightspeed_client::interceptor::create_interceptor();
         let platform = interceptor.platform_name();
         let avail = interceptor.check_availability();
-        info!("   Interceptor: {} ({})", platform,
-            if avail.is_ok() { "✅ available" } else { "❌ unavailable" });
-        if let Err(e) = &avail { info!("     {}", e); }
+        info!(
+            "   Interceptor: {} ({})",
+            platform,
+            if avail.is_ok() {
+                "✅ available"
+            } else {
+                "❌ unavailable"
+            }
+        );
+        if let Err(e) = &avail {
+            info!("     {}", e);
+        }
         info!("");
 
         // Root
         #[cfg(target_os = "linux")]
         {
-            let is_root = std::process::Command::new("id").args(["-u"]).output().ok()
-                .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
-                .map(|uid| uid == 0).unwrap_or(false);
-            info!("   Root:        {}", if is_root { "✅ yes" } else { "⚠️  no (needed for nftables)" });
+            let is_root = std::process::Command::new("id")
+                .args(["-u"])
+                .output()
+                .ok()
+                .and_then(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .trim()
+                        .parse::<u32>()
+                        .ok()
+                })
+                .map(|uid| uid == 0)
+                .unwrap_or(false);
+            info!(
+                "   Root:        {}",
+                if is_root {
+                    "✅ yes"
+                } else {
+                    "⚠️  no (needed for nftables)"
+                }
+            );
         }
         info!("");
 
@@ -315,11 +391,16 @@ data_port = 4434
         if let Some(ref g) = cli.game {
             match games::detect_game(g) {
                 Ok(game) => {
-                    let found = interceptor::process_scanner::find_game_process(game.process_names());
+                    let found =
+                        interceptor::process_scanner::find_game_process(game.process_names());
                     info!("   Game:        {}", game.name());
                     info!("   Ports:       {}-{}", game.ports().0, game.ports().1);
                     match found {
-                        Some(p) => info!("   Status:      🟢 Running (PID {}, {} routes)", p.pid, p.routes.len()),
+                        Some(p) => info!(
+                            "   Status:      🟢 Running (PID {}, {} routes)",
+                            p.pid,
+                            p.routes.len()
+                        ),
                         None => info!("   Status:      ⚪ Not running"),
                     }
                 }
@@ -327,7 +408,14 @@ data_port = 4434
             }
         } else {
             // Scan all games
-            let all: &[&str] = &["RustClient.exe","FortniteClient-Win64-Shipping.exe","cs2.exe","dota2.exe","r5apex.exe","VALORANT-Win64-Shipping.exe"];
+            let all: &[&str] = &[
+                "RustClient.exe",
+                "FortniteClient-Win64-Shipping.exe",
+                "cs2.exe",
+                "dota2.exe",
+                "r5apex.exe",
+                "VALORANT-Win64-Shipping.exe",
+            ];
             let found = interceptor::process_scanner::scan_for_games(all);
             if found.is_empty() {
                 info!("   Games:       none running");
@@ -343,14 +431,20 @@ data_port = 4434
         // nftables rules
         #[cfg(target_os = "linux")]
         {
-            let nft = std::process::Command::new("nft").args(["list","tables"]).output().ok()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+            let nft = std::process::Command::new("nft")
+                .args(["list", "tables"])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
             let ls_rules: Vec<&str> = nft.lines().filter(|l| l.contains("lightspeed_")).collect();
             if ls_rules.is_empty() {
                 info!("   nftables:    no LightSpeed rules");
             } else {
                 info!("   nftables rules:");
-                for r in &ls_rules { info!("     {}", r.trim()); }
+                for r in &ls_rules {
+                    info!("     {}", r.trim());
+                }
             }
         }
 
@@ -380,7 +474,12 @@ data_port = 4434
                 .args(["-u"])
                 .output()
                 .ok()
-                .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+                .and_then(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .trim()
+                        .parse::<u32>()
+                        .ok()
+                })
                 .map(|uid| uid == 0)
                 .unwrap_or(false);
             if is_root {
@@ -397,8 +496,16 @@ data_port = 4434
                     let procs = game.process_names();
                     let found = crate::interceptor::process_scanner::find_game_process(procs);
                     match found {
-                        Some(p) => info!("   ✅ Game '{}' detected: PID {} with {} routes", game.name(), p.pid, p.routes.len()),
-                        None => info!("   ⚠️  Game '{}' not running — port-range fallback will be used", game.name()),
+                        Some(p) => info!(
+                            "   ✅ Game '{}' detected: PID {} with {} routes",
+                            game.name(),
+                            p.pid,
+                            p.routes.len()
+                        ),
+                        None => info!(
+                            "   ⚠️  Game '{}' not running — port-range fallback will be used",
+                            game.name()
+                        ),
                     }
                 }
                 Err(_) => {
@@ -417,13 +524,18 @@ data_port = 4434
                 Err(e) => {
                     warn!("   ❌ Invalid proxy address '{}': {}", proxy_str, e);
                     all_ok = false;
-                    return if all_ok { Ok(()) } else { Err(anyhow::anyhow!("Some checks failed")) };
+                    return if all_ok {
+                        Ok(())
+                    } else {
+                        Err(anyhow::anyhow!("Some checks failed"))
+                    };
                 }
             };
             // Quick connectivity check — send a keepalive and wait briefly
             match std::net::UdpSocket::bind("0.0.0.0:0") {
                 Ok(sock) => {
-                    sock.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok();
+                    sock.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                        .ok();
                     let hdr = lightspeed_protocol::TunnelHeader::keepalive(0, 0);
                     if sock.send_to(&hdr.encode_to_array(), proxy_addr).is_ok() {
                         info!("   ✅ Proxy {} — UDP reachable", proxy_addr);
@@ -456,7 +568,11 @@ data_port = 4434
         use interceptor::process_scanner;
         let game_names: Vec<String> = if let Some(ref g) = cli.game {
             match games::detect_game(g) {
-                Ok(boxed) => boxed.process_names().iter().map(|s| s.to_string()).collect(),
+                Ok(boxed) => boxed
+                    .process_names()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
                 Err(e) => {
                     error!("Unknown game: {}", e);
                     return Err(e.into());
@@ -465,8 +581,11 @@ data_port = 4434
         } else {
             // Scan for all known games
             vec![
-                "RustClient.exe".into(), "FortniteClient-Win64-Shipping.exe".into(),
-                "cs2.exe".into(), "dota2.exe".into(), "r5apex.exe".into(),
+                "RustClient.exe".into(),
+                "FortniteClient-Win64-Shipping.exe".into(),
+                "cs2.exe".into(),
+                "dota2.exe".into(),
+                "r5apex.exe".into(),
                 "VALORANT-Win64-Shipping.exe".into(),
             ]
         };
@@ -490,7 +609,7 @@ data_port = 4434
         info!("🧪 Interceptor diagnostic mode");
         let interceptor = interceptor::create_interceptor();
         info!("   Platform: {}", interceptor.platform_name());
-        
+
         match interceptor.check_availability() {
             Ok(()) => info!("   Availability: ✅ Ready"),
             Err(e) => {
@@ -498,7 +617,7 @@ data_port = 4434
                 return Ok(());
             }
         }
-        
+
         // If game specified, try to build config and show routes
         if let Some(ref game_name) = cli.game {
             match games::detect_game(game_name) {
@@ -511,11 +630,14 @@ data_port = 4434
                             return Err(e.into());
                         }
                     };
-                    
+
                     let config_opt = interceptor::build_config_for_game(
-                        game.as_ref(), proxy_addr, cli.fec, cli.fec_k
+                        game.as_ref(),
+                        proxy_addr,
+                        cli.fec,
+                        cli.fec_k,
                     );
-                    
+
                     match config_opt {
                         Some(cfg) => {
                             info!("   Game: {}", cfg.game_name);
@@ -541,18 +663,19 @@ data_port = 4434
         } else {
             info!("   (specify --game <name> to scan for a specific game's routes)");
         }
-        
+
         return Ok(());
     }
 
     // ── --start-interceptor ────────────────────────────────────────
     if cli.start_interceptor {
-        let game_key = cli.game.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("--start-interceptor requires --game <name>")
-        })?;
+        let game_key = cli
+            .game
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--start-interceptor requires --game <name>"))?;
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         let proxy_addr = parse_proxy_addr(proxy_str)?;
-        
+
         info!("🚀 Starting live interceptor mode");
         let server_override = match cli.server_addr.as_deref() {
             Some(s) => Some(parse_proxy_addr(s)?),
@@ -756,8 +879,14 @@ data_port = 4434
     //
     // Collects live RTT data from keepalive probes and retrains the
     // route model when enough new data accumulates.
-    let (proxy_id, proxy_region) = if let Some(id) = std::env::var("LIGHTSPEED_PROXY_ID").ok().filter(|s| !s.is_empty()) {
-        (id, std::env::var("LIGHTSPEED_PROXY_REGION").unwrap_or_else(|_| "unknown".to_string()))
+    let (proxy_id, proxy_region) = if let Some(id) = std::env::var("LIGHTSPEED_PROXY_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        (
+            id,
+            std::env::var("LIGHTSPEED_PROXY_REGION").unwrap_or_else(|_| "unknown".to_string()),
+        )
     } else {
         (format!("proxy-{}", proxy_addr.ip()), "unknown".to_string())
     };

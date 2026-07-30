@@ -4,9 +4,9 @@
 //! that records calls and allows test assertions on the interceptor pipeline
 //! without requiring root, kernel modules, or real game processes.
 
+use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::net::SocketAddrV4;
 
 use super::traits::{
     InterceptorConfig, InterceptorCounters, InterceptorHandle, TrafficInterceptor,
@@ -117,10 +117,7 @@ mod tests {
             pid: Some(12345),
             port_range: (27015, 27017),
             initial_routes: vec![],
-            proxy_addr: SocketAddrV4::new(
-                std::net::Ipv4Addr::new(127, 0, 0, 1),
-                4434,
-            ),
+            proxy_addr: SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
             fec_enabled: false,
             fec_k: 4,
         }

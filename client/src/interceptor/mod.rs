@@ -186,8 +186,6 @@ mod tests {
         assert!(!cfg.fec_enabled);
     }
 
-
-
     // ── Mock interceptor integration tests ─────────────────────────
 
     #[test]
@@ -228,15 +226,17 @@ mod tests {
     #[test]
     fn mock_handle_counters_default_zero() {
         let interceptor = mock::MockInterceptor::new();
-        let handle = interceptor.start(InterceptorConfig {
-            game_name: "Test".into(),
-            pid: None,
-            port_range: (1, 2),
-            initial_routes: vec![],
-            proxy_addr: "127.0.0.1:4434".parse().unwrap(),
-            fec_enabled: false,
-            fec_k: 4,
-        }).unwrap();
+        let handle = interceptor
+            .start(InterceptorConfig {
+                game_name: "Test".into(),
+                pid: None,
+                port_range: (1, 2),
+                initial_routes: vec![],
+                proxy_addr: "127.0.0.1:4434".parse().unwrap(),
+                fec_enabled: false,
+                fec_k: 4,
+            })
+            .unwrap();
 
         let snap = handle.snapshot();
         assert_eq!(snap.packets_intercepted, 0);

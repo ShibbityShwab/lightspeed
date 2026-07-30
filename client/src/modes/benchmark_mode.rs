@@ -24,7 +24,11 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
         let start = Instant::now();
         let _ = sock.send_to(&hdr.encode_to_array(), target).await;
         let mut buf = [0u8; 1024];
-        if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(3), sock.recv_from(&mut buf)).await { direct.push(start.elapsed().as_millis() as u64) }
+        if let Ok(Ok(_)) =
+            tokio::time::timeout(Duration::from_secs(3), sock.recv_from(&mut buf)).await
+        {
+            direct.push(start.elapsed().as_millis() as u64)
+        }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     stats("   Direct", &direct);
@@ -36,7 +40,11 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
         let start = Instant::now();
         let _ = sock.send_to(&hdr.encode_to_array(), proxy).await;
         let mut buf = [0u8; 1024];
-        if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(3), sock.recv_from(&mut buf)).await { ls.push(start.elapsed().as_millis() as u64) }
+        if let Ok(Ok(_)) =
+            tokio::time::timeout(Duration::from_secs(3), sock.recv_from(&mut buf)).await
+        {
+            ls.push(start.elapsed().as_millis() as u64)
+        }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     stats("   LightSpeed", &ls);
@@ -49,12 +57,23 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
         info!("│ Metric       │ Direct   │ LightSpeed│");
         info!("├──────────────┼──────────┼──────────┤");
         info!("│ Avg          │ {:>6} ms │ {:>6} ms │", da, la);
-        info!("│ Min          │ {:>6} ms │ {:>6} ms │", direct.iter().min().unwrap(), ls.iter().min().unwrap());
-        info!("│ Max          │ {:>6} ms │ {:>6} ms │", direct.iter().max().unwrap(), ls.iter().max().unwrap());
+        info!(
+            "│ Min          │ {:>6} ms │ {:>6} ms │",
+            direct.iter().min().unwrap(),
+            ls.iter().min().unwrap()
+        );
+        info!(
+            "│ Max          │ {:>6} ms │ {:>6} ms │",
+            direct.iter().max().unwrap(),
+            ls.iter().max().unwrap()
+        );
         if la < da {
             let save = da - la;
             info!("│ Saving       │    —     │ {:>6} ms │", save);
-            info!("│ Improvement  │    —     │   {:>5}% │", (save as f64/da as f64*100.0) as u64);
+            info!(
+                "│ Improvement  │    —     │   {:>5}% │",
+                (save as f64 / da as f64 * 100.0) as u64
+            );
         }
         info!("└──────────────┴──────────┴──────────┘");
     } else {
@@ -64,8 +83,15 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
 }
 
 fn stats(label: &str, lats: &[u64]) {
-    if lats.is_empty() { info!("{label}: no response"); return; }
+    if lats.is_empty() {
+        info!("{label}: no response");
+        return;
+    }
     let avg = lats.iter().sum::<u64>() / lats.len() as u64;
-    info!("{label}: avg={avg}ms min={}ms max={}ms ({} probes)",
-        lats.iter().min().unwrap(), lats.iter().max().unwrap(), lats.len());
+    info!(
+        "{label}: avg={avg}ms min={}ms max={}ms ({} probes)",
+        lats.iter().min().unwrap(),
+        lats.iter().max().unwrap(),
+        lats.len()
+    );
 }

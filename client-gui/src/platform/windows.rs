@@ -11,7 +11,7 @@ use crate::app::{TrayState, STEAM_SERVICE_PORTS};
 use crate::platform::{self, Platform, TrayAction, TrayHandle};
 use eframe::egui;
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, MenuId},
+    menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
 
@@ -123,7 +123,10 @@ impl TrayHandle for WindowsTray {
         let tooltip: String = match state {
             TrayState::Disconnected => "\u{26a1} LightSpeed \u{2014} disconnected".into(),
             TrayState::Connected => {
-                format!("\u{26a1} LightSpeed \u{2014} connected \u{00b7} RTT {:.0}ms", rtt_ms)
+                format!(
+                    "\u{26a1} LightSpeed \u{2014} connected \u{00b7} RTT {:.0}ms",
+                    rtt_ms
+                )
             }
             TrayState::Optimizing => "\u{26a1} LightSpeed \u{2014} optimizing".into(),
             TrayState::Error => "\u{26a1} LightSpeed \u{2014} error".into(),
@@ -174,7 +177,11 @@ impl Platform for WindowsPlatform {
                 Arc::new(egui::FontData::from_owned(bytes)),
             );
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts.families.entry(family).or_default().push("seguiemj".to_owned());
+                fonts
+                    .families
+                    .entry(family)
+                    .or_default()
+                    .push("seguiemj".to_owned());
             }
         }
 

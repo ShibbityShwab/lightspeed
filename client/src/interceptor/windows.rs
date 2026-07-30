@@ -708,7 +708,10 @@ fn add_fw_rule(port: u16) {
             );
         }
         Err(e) => {
-            tracing::warn!("Failed to run netsh for firewall (need Administrator?): {}", e);
+            tracing::warn!(
+                "Failed to run netsh for firewall (need Administrator?): {}",
+                e
+            );
         }
     }
 }

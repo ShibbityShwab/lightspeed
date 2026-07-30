@@ -23,21 +23,37 @@ pub async fn run_watch_mode(
     info!("   Press Ctrl+C to stop\n");
 
     // State: Polling → Intercepting → Polling
-    enum State { Polling, Intercepting }
+    enum State {
+        Polling,
+        Intercepting,
+    }
     let mut _state = State::Polling;
 
     loop {
         if let State::Polling = _state {
             match crate::interceptor::process_scanner::find_game_process(&process_refs) {
                 Some(p) => {
-                    info!("🎮 {} detected! PID {} with {} routes", game_name, p.pid, p.routes.len());
+                    info!(
+                        "🎮 {} detected! PID {} with {} routes",
+                        game_name,
+                        p.pid,
+                        p.routes.len()
+                    );
 
                     let mut config = crate::interceptor::build_config_for_game(
-                        game.as_ref(), proxy_addr, fec, fec_k,
-                    ).unwrap_or(crate::interceptor::InterceptorConfig {
-                        game_name: game_name.clone(), pid: Some(p.pid),
-                        port_range: (lo, hi), initial_routes: vec![],
-                        proxy_addr, fec_enabled: fec, fec_k,
+                        game.as_ref(),
+                        proxy_addr,
+                        fec,
+                        fec_k,
+                    )
+                    .unwrap_or(crate::interceptor::InterceptorConfig {
+                        game_name: game_name.clone(),
+                        pid: Some(p.pid),
+                        port_range: (lo, hi),
+                        initial_routes: vec![],
+                        proxy_addr,
+                        fec_enabled: fec,
+                        fec_k,
                     });
 
                     if let Some(addr) = server_addr {
@@ -62,7 +78,11 @@ pub async fn run_watch_mode(
                             // Monitor until game exits
                             loop {
                                 tokio::time::sleep(Duration::from_secs(3)).await;
-                                if crate::interceptor::process_scanner::find_game_process(&process_refs).is_none() {
+                                if crate::interceptor::process_scanner::find_game_process(
+                                    &process_refs,
+                                )
+                                .is_none()
+                                {
                                     info!("👋 {} exited — stopping interceptor\n", game_name);
                                     handle.stop();
                                     _state = State::Polling;

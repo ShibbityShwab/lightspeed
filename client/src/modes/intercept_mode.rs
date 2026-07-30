@@ -43,13 +43,14 @@ pub async fn run_intercept_mode(
     info!("🎮 Game: {} (ports: {:?})", game_name, game.ports());
 
     // ── Build interceptor config (runs ProcessScanner) ──────────────
-    let mut config = build_config_for_game(game.as_ref(), proxy_addr, fec, fec_k).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Failed to build interceptor config for '{}'. \
+    let mut config =
+        build_config_for_game(game.as_ref(), proxy_addr, fec, fec_k).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to build interceptor config for '{}'. \
              Is the game running and connected to a server?",
-            game_key
-        )
-    })?;
+                game_key
+            )
+        })?;
 
     // ── Server address override (for testing without a running game) ─
     if let Some(addr) = server_addr {
@@ -70,7 +71,10 @@ pub async fn run_intercept_mode(
         }
     } else {
         info!("📍 No server routes — interceptor will use port-range auto-detection");
-        info!("   Port range: {}-{}", config.port_range.0, config.port_range.1);
+        info!(
+            "   Port range: {}-{}",
+            config.port_range.0, config.port_range.1
+        );
     }
 
     // ── Create and start the interceptor ────────────────────────────
@@ -87,7 +91,10 @@ pub async fn run_intercept_mode(
         .start(config)
         .map_err(|e| anyhow::anyhow!("Failed to start {} interceptor: {}", platform, e))?;
 
-    info!("✅ Interceptor active — MITM-ing {} traffic via {}", game_name, platform);
+    info!(
+        "✅ Interceptor active — MITM-ing {} traffic via {}",
+        game_name, platform
+    );
     info!("   Proxy: {}", proxy_addr);
     info!("   Press Ctrl+C to stop");
 

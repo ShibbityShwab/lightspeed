@@ -14,8 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use lightspeed_protocol::{
-    build_fec_data_packet, build_fec_parity_packet, decode_fec_payload,
-    FecDecoder, FecEncoder, FecHeader, TunnelHeader,
+    build_fec_data_packet, build_fec_parity_packet, decode_fec_payload, FecDecoder, FecEncoder,
+    FecHeader, TunnelHeader,
 };
 use tokio::net::UdpSocket;
 
@@ -170,7 +170,8 @@ impl UdpRelay {
                 let parity_seq = self.next_sequence();
                 let parity_header = TunnelHeader::new_fec(parity_seq, now_us(), orig_src, orig_dst);
                 let parity_fec = FecHeader::parity(block_id, k_size);
-                let parity_buf = build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
+                let parity_buf =
+                    build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
 
                 let parity_sent = socket.send_to(&parity_buf, proxy_addr).await?;
                 self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);

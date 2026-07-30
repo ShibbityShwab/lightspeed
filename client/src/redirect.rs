@@ -33,8 +33,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lightspeed_protocol::{
-    build_fec_data_packet, build_fec_parity_packet, decode_fec_payload,
-    FecDecoder, FecEncoder, FecHeader, TunnelHeader,
+    build_fec_data_packet, build_fec_parity_packet, decode_fec_payload, FecDecoder, FecEncoder,
+    FecHeader, TunnelHeader,
 };
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;

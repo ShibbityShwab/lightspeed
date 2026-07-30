@@ -226,8 +226,6 @@ impl Config {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,10 +459,7 @@ keepalive_ms = "not_a_number"
     #[test]
     fn test_route_strategy_values() {
         for strategy in &["nearest", "ml", "multipath"] {
-            let toml_str = format!(
-                "[route]\nstrategy = \"{}\"\n",
-                strategy
-            );
+            let toml_str = format!("[route]\nstrategy = \"{}\"\n", strategy);
             let config: Config = toml::from_str(&toml_str).unwrap();
             assert_eq!(config.route.strategy, *strategy);
         }
@@ -473,10 +468,7 @@ keepalive_ms = "not_a_number"
     #[test]
     fn test_log_level_values() {
         for level in &["trace", "debug", "info", "warn", "error"] {
-            let toml_str = format!(
-                "[general]\nlog_level = \"{}\"\n",
-                level
-            );
+            let toml_str = format!("[general]\nlog_level = \"{}\"\n", level);
             let config: Config = toml::from_str(&toml_str).unwrap();
             assert_eq!(config.general.log_level, *level);
         }
@@ -505,25 +497,13 @@ servers = [
         let deserialized: Config = toml::from_str(&serialized).unwrap();
 
         // All fields should survive the round-trip
-        assert_eq!(
-            deserialized.general.log_level,
-            original.general.log_level
-        );
+        assert_eq!(deserialized.general.log_level, original.general.log_level);
         assert_eq!(
             deserialized.tunnel.keepalive_ms,
             original.tunnel.keepalive_ms
         );
-        assert_eq!(
-            deserialized.proxy.quic_port,
-            original.proxy.quic_port
-        );
-        assert_eq!(
-            deserialized.route.strategy,
-            original.route.strategy
-        );
-        assert_eq!(
-            deserialized.ml.min_samples,
-            original.ml.min_samples
-        );
+        assert_eq!(deserialized.proxy.quic_port, original.proxy.quic_port);
+        assert_eq!(deserialized.route.strategy, original.route.strategy);
+        assert_eq!(deserialized.ml.min_samples, original.ml.min_samples);
     }
 }

@@ -640,12 +640,8 @@ mod tests {
         assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(
             104, 26, 1, 50
         ))); // Example public IP (Cloudflare)
-        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(
-            1, 1, 1, 1
-        ))); // Cloudflare DNS
-        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(
-            8, 8, 8, 8
-        ))); // Google DNS
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(1, 1, 1, 1))); // Cloudflare DNS
+        assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(8, 8, 8, 8))); // Google DNS
         assert!(WarpManager::is_ip_routed_static(Ipv4Addr::new(8, 8, 8, 8))); // Google DNS
     }
 
@@ -674,10 +670,7 @@ mod tests {
         // Uses the mutable is_ip_routed path which falls back to static list
         // when warp-cli tunnel dump is unavailable (e.g. CI).
         let mut manager = WarpManager::new();
-        let ips = vec![
-            Ipv4Addr::new(192, 0, 2, 1),
-            Ipv4Addr::new(198, 51, 100, 1),
-        ];
+        let ips = vec![Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(198, 51, 100, 1)];
         let results = manager.verify_proxy_routing(&ips);
         assert_eq!(results.len(), 2);
         assert!(results[0].1);

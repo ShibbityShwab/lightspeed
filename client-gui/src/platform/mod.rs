@@ -97,10 +97,10 @@ pub trait Platform {
 // Both modules exist on disk so the IDE can check them, but only one is
 // compiled depending on the target OS.
 
-#[cfg(windows)]
-mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(windows)]
 mod platform_impl {

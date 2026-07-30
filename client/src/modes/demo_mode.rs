@@ -15,11 +15,18 @@ use tracing::info;
 use crate::config;
 
 /// Run the demo — shows what LightSpeed would do for a given game and proxy list.
-pub async fn run_demo(_config: &config::Config, game_key: &str, proxy_str: &str) -> anyhow::Result<()> {
+pub async fn run_demo(
+    _config: &config::Config,
+    game_key: &str,
+    proxy_str: &str,
+) -> anyhow::Result<()> {
     let proxy_addr: SocketAddrV4 = crate::cli::parse_proxy_addr(proxy_str)?;
 
     info!("╔══════════════════════════════════════════╗");
-    info!("║       ⚡ LightSpeed v{} Demo           ║", env!("CARGO_PKG_VERSION"));
+    info!(
+        "║       ⚡ LightSpeed v{} Demo           ║",
+        env!("CARGO_PKG_VERSION")
+    );
     info!("╚══════════════════════════════════════════╝");
     info!("");
 
@@ -43,9 +50,14 @@ pub async fn run_demo(_config: &config::Config, game_key: &str, proxy_str: &str)
             info!("   Processes:    {}", game.process_names().join(", "));
 
             // Check if running
-            let found = crate::interceptor::process_scanner::find_game_process(game.process_names());
+            let found =
+                crate::interceptor::process_scanner::find_game_process(game.process_names());
             match found {
-                Some(p) => info!("   Status:       🟢 Running (PID {}, {} routes)", p.pid, p.routes.len()),
+                Some(p) => info!(
+                    "   Status:       🟢 Running (PID {}, {} routes)",
+                    p.pid,
+                    p.routes.len()
+                ),
                 None => info!("   Status:       ⚪ Not running (port-range fallback available)"),
             }
         }
@@ -99,7 +111,13 @@ pub async fn run_demo(_config: &config::Config, game_key: &str, proxy_str: &str)
         let avg = latencies.iter().sum::<u64>() / latencies.len() as u64;
         let min = latencies.iter().min().unwrap();
         let max = latencies.iter().max().unwrap();
-        info!("   Proxy latency: avg={}ms  min={}ms  max={}ms  ({} probes)", avg, min, max, latencies.len());
+        info!(
+            "   Proxy latency: avg={}ms  min={}ms  max={}ms  ({} probes)",
+            avg,
+            min,
+            max,
+            latencies.len()
+        );
     }
     info!("");
 
@@ -122,7 +140,10 @@ pub async fn run_demo(_config: &config::Config, game_key: &str, proxy_str: &str)
     info!("🚀 Ready to try?");
     info!("   1. Deploy a proxy:  see docs/deploy-proxy.md");
     info!("   2. Start the interceptor:");
-    info!("      sudo lightspeed --start-interceptor --game {} --proxy {}", game_key, proxy_addr);
+    info!(
+        "      sudo lightspeed --start-interceptor --game {} --proxy {}",
+        game_key, proxy_addr
+    );
     info!("   3. Launch your game and connect to a server");
     info!("");
 
@@ -134,6 +155,9 @@ fn print_next_steps(game_key: &str, proxy_addr: SocketAddrV4) {
     info!("🚀 Ready to try?");
     info!("   1. Deploy a proxy:  see docs/deploy-proxy.md");
     info!("   2. Start the interceptor:");
-    info!("      sudo lightspeed --start-interceptor --game {} --proxy {}", game_key, proxy_addr);
+    info!(
+        "      sudo lightspeed --start-interceptor --game {} --proxy {}",
+        game_key, proxy_addr
+    );
     info!("   3. Launch your game and connect to a server");
 }
