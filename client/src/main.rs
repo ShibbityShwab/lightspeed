@@ -126,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
             || cli.start_interceptor || cli.test_tunnel || cli.test_control
             || cli.probe_proxies || cli.live_test || cli.warp_status
             || cli.dry_run || cli.capture || cli.game_server.is_some()
-            || cli.game.is_some() || cli.smoke_test || cli.watch || cli.benchmark;
+            || cli.game.is_some() || cli.smoke_test || cli.watch || cli.benchmark || cli.status;
         if !has_mode {
             info!("╔════════════════════════════════════════════╗");
             info!("║       ⚡  LightSpeed v{}                  ║", env!("CARGO_PKG_VERSION"));
@@ -273,6 +273,79 @@ data_port = 4434
         let game_key = cli.game.as_deref().unwrap_or("rust");
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         return run_demo(&config, game_key, proxy_str).await;
+    }
+
+    // ── --status ─────────────────────────────────────────────────
+    if cli.status {
+        info!("📊 LightSpeed System Status");
+        info!("   Version:    v{}", env!("CARGO_PKG_VERSION"));
+        info!("   OS:         {}", std::env::consts::OS);
+        info!("   Arch:       {}", std::env::consts::ARCH);
+        info!("");
+
+        // Interceptor
+        let interceptor = lightspeed_client::interceptor::create_interceptor();
+        let platform = interceptor.platform_name();
+        let avail = interceptor.check_availability();
+        info!("   Interceptor: {} ({})", platform,
+            if avail.is_ok() { "✅ available" } else { "❌ unavailable" });
+        if let Err(e) = &avail { info!("     {}", e); }
+        info!("");
+
+        // Root
+        #[cfg(target_os = "linux")]
+        {
+            let is_root = std::process::Command::new("id").args(["-u"]).output().ok()
+                .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+                .map(|uid| uid == 0).unwrap_or(false);
+            info!("   Root:        {}", if is_root { "✅ yes" } else { "⚠️  no (needed for nftables)" });
+        }
+        info!("");
+
+        // Games
+        if let Some(ref g) = cli.game {
+            match games::detect_game(g) {
+                Ok(game) => {
+                    let found = interceptor::process_scanner::find_game_process(game.process_names());
+                    info!("   Game:        {}", game.name());
+                    info!("   Ports:       {}-{}", game.ports().0, game.ports().1);
+                    match found {
+                        Some(p) => info!("   Status:      🟢 Running (PID {}, {} routes)", p.pid, p.routes.len()),
+                        None => info!("   Status:      ⚪ Not running"),
+                    }
+                }
+                Err(_) => info!("   Game:        {} (unknown)", g),
+            }
+        } else {
+            // Scan all games
+            let all: &[&str] = &["RustClient.exe","FortniteClient-Win64-Shipping.exe","cs2.exe","dota2.exe","r5apex.exe","VALORANT-Win64-Shipping.exe"];
+            let found = interceptor::process_scanner::scan_for_games(all);
+            if found.is_empty() {
+                info!("   Games:       none running");
+            } else {
+                info!("   Games running:");
+                for p in &found {
+                    info!("     {} (PID {}, {} routes)", p.name, p.pid, p.routes.len());
+                }
+            }
+        }
+        info!("");
+
+        // nftables rules
+        #[cfg(target_os = "linux")]
+        {
+            let nft = std::process::Command::new("nft").args(["list","tables"]).output().ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+            let ls_rules: Vec<&str> = nft.lines().filter(|l| l.contains("lightspeed_")).collect();
+            if ls_rules.is_empty() {
+                info!("   nftables:    no LightSpeed rules");
+            } else {
+                info!("   nftables rules:");
+                for r in &ls_rules { info!("     {}", r.trim()); }
+            }
+        }
+
+        return Ok(());
     }
 
     // ── --check ──────────────────────────────────────────────────

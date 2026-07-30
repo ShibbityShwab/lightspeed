@@ -103,6 +103,10 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub check: bool,
 
+    /// Show detailed system state (OS, interceptor, games, nftables rules).
+    #[arg(long, default_value_t = false)]
+    pub status: bool,
+
     /// Run an interactive demonstration of LightSpeed architecture and latency projections.
     #[arg(long, default_value_t = false)]
     pub demo: bool,
@@ -220,6 +224,7 @@ mod tests {
         assert!(!cli.list_games);
         assert!(!cli.write_config);
         assert!(!cli.check);
+        assert!(!cli.status);
         assert!(!cli.demo);
         assert!(!cli.smoke_test);
         assert!(!cli.watch);
@@ -274,6 +279,7 @@ mod tests {
             "--list-games",
             "--write-config",
             "--check",
+            "--status",
             "--demo",
             "--smoke-test",
             "--watch",
@@ -299,6 +305,7 @@ mod tests {
         assert!(cli.list_games);
         assert!(cli.write_config);
         assert!(cli.check);
+        assert!(cli.status);
         assert!(cli.demo);
         assert!(cli.smoke_test);
         assert!(cli.watch);
