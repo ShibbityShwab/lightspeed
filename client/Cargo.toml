@@ -21,11 +21,12 @@ quic = ["dep:quinn", "dep:rustls", "dep:rcgen", "lightspeed-protocol/quic"]
 # Enable pcap packet capture (requires Npcap/libpcap)
 pcap-capture = ["dep:pcap"]
 # Enable WinDivert active redirect (Windows only; requires WinDivert64.sys next to exe)
-windivert-redirect = ["dep:windivert"]
 # Enable ML route prediction
 ml = ["dep:linfa", "dep:linfa-linear", "dep:ndarray", "dep:bincode"]
+# Windows-only: WinDivert packet interception (not in full — breaks Linux)
+windivert-redirect = ["dep:windivert"]
 # Enable all features
-full = ["quic", "pcap-capture", "windivert-redirect", "ml"]
+full = ["quic", "pcap-capture", "ml"]  # windivert-redirect excluded (Windows-only)
 
 [dependencies]
 lightspeed-protocol.workspace = true

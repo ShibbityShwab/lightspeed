@@ -11,7 +11,7 @@ name = "lightspeed-gui"
 path = "src/main.rs"
 
 [dependencies]
-lightspeed-client = { path = "../client", features = ["pcap-capture"] }
+lightspeed-client = { path = "../client", features = ["pcap-capture", "windivert-redirect"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
