@@ -158,9 +158,27 @@ lightspeed-proxy --config proxy.toml
 lightspeed-proxy --verbose
 ```
 
+### CLI Reference
+
+| Flag | Description |
+|------|-------------|
+| `--status` | System overview (OS, interceptor, games, nftables) |
+| `--check --game <name>` | Environment validation (exit codes) |
+| `--demo` | Interactive architecture walkthrough |
+| `--benchmark --target IP --proxy IP` | Direct vs LightSpeed latency comparison |
+| `--watch --game <name> --proxy IP` | Auto-start interceptor when game launches |
+| `--smoke-test` | Full E2E validation (needs sudo) |
+| `--start-interceptor --game <name>` | Live MITM mode (needs sudo) |
+| `--intercept --game <name>` | Interceptor diagnostic |
+| `--scan-processes` | Game process debug |
+| `--list-games` | Show all 9 supported games |
+| `--write-config` | Generate lightspeed.toml template |
+| `--test-tunnel --proxy IP` | Proxy connectivity test |
+| `--probe-proxies` | Latency probe all proxies |
+
 ### Configuration
 
-LightSpeed uses TOML configuration files. A default config is generated on first run:
+LightSpeed uses TOML configuration files. Generate one with `--write-config`:
 
 ```toml
 # ~/.lightspeed/config.toml
