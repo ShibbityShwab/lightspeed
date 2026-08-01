@@ -98,3 +98,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Feature gate**: Excluded `windivert-redirect` from full feature set for Linux compatibility
 - **Format check**: `cargo fmt --all` for CI compliance
 - **E2E test**: Fixed proxy/echo test step in CI pipeline
+
+## [0.4.0] — 2026-04-27
+
+### Added (2026-04-27) — Item H: Windows GUI / tray app
+
+Native Windows GUI client: system-tray icon + egui status window.
+
+- **`client-gui/`** — new `lightspeed-gui` workspace crate (Windows-only binary).
+- **`client/src/engine.rs`** — `LightSpeedEngine` / `EngineStatus`: background async keepalive loop driven from a non-Tokio GUI thread via a `Handle`. Sends keepalives every 5 s, measures RTT, maintains rolling 120-sample history.
+- **`client/src/lib.rs`** — `lightspeed_client` library target; re-exports `LightSpeedEngine` and `EngineStatus` for GUI consumption.
+- **`client-gui/src/main.rs`** — builds a dedicated multi-thread Tokio runtime, auto-connects to the LAX proxy, launches eframe.
+- **`client-gui/src/app.rs`** — `LightSpeedApp` implements `eframe::App`: tray icon, RTT sparkline, connect dialog, 1 Hz repaint.
+- **`Cargo.toml`** (workspace) — added `"client-gui"` member.
+- **`.github/workflows/ci.yml`** — all Linux/macOS `cargo` commands now carry `--exclude lightspeed-gui`.
+
+### Added — Item G: Opt-in latency telemetry
+
+Anonymous, aggregated network-quality reporting — **off by default**, enabled with `--telemetry`. No PII is ever transmitted.
+
+- **`protocol/src/telemetry.rs`** — `TelemetryReport` struct with PII regression test.
+- **`client/src/telemetry.rs`** — `TelemetryCollector` ring-buffer, HTTP/1.0 POST, periodic 15-min flush.
+- **`proxy/src/health.rs`** — `POST /telemetry` handler on `:8080`.
+- **`proxy/src/metrics.rs`** — `lightspeed_telemetry_reports_total` Prometheus counter.
+
+### Performance — WF-008: zero-alloc FEC + CI coverage
+- **`TunnelHeader::encode_to_array()`** — stack-based header encode, ~7× faster.
+- **Compact FEC parity** — `(max_payload_len + 2)` bytes instead of fixed 1400 B.
+- **`recvmmsg` batched inbound** — 32-datagram batches on Linux, 5–10× pps improvement.
+
+### Added — WF-007: 9-game support + macOS CI
+- **Overwatch 2**, **League of Legends**, **PUBG** game profiles.
+- **macOS CI smoke test** job in CI pipeline.
+
+### Deployed — v0.4.0-dev promoted to production
+- Both Vultr nodes (proxy-lax, relay-sgp) updated. Health checks passing.
+
+## [0.3.0] — 2026-03-20
+
+### What's New in v0.3.0
+- **FEC (Forward Error Correction)**: XOR-based parity with encode/decode, 5 tests.
+- **WARP integration**: Cloudflare WARP IP detection and routing logic.
+- **Multi-proxy support**: Multiple proxy servers with failover.
+- **Keepalive mode**: Continuous tunnel keepalive with RTT measurement.
+- **UDP redirect mode**: Full UDP redirect with iptables/nftables integration.
+- **Linux ARM64 support**: Cross-compilation for ARM64 targets.
+- **Documentation**: Protocol spec, architecture, security audit, test reports.
+
+## [0.2.0] — 2026-02-23
+
+### Beta Release: Live Infrastructure Verified
+- **Vultr deployment**: proxy-lax (US-West) and relay-sgp (Singapore) nodes live.
+- **Tunnel relay**: End-to-end UDP tunnel verified across all nodes.
+- **FEC module**: 8 tests passing.
+- **WARP routing**: Unit tested.
+- **UDP redirect**: Tested with game traffic simulation.
+- **Infrastructure research**: ISP path analysis, relay strategy, ExitLag gap analysis.
+
+## [0.1.0] — 2026-02-22
+
+### Initial MVP Release
+
+The first release of LightSpeed — a zero-cost, open-source global network optimizer for multiplayer games.
+
+#### Client (`lightspeed`)
+- UDP Tunnel Engine with Tokio, keepalive, stats, timeout handling.
+- 20-byte binary tunnel header with encode/decode, session tokens, sequence numbers.
+- QUIC Control Plane for proxy discovery and health checks.
+- Game Profiles for Fortnite, CS2, Dota 2.
+- Route Selection Framework with nearest-proxy, multipath, failover.
+- ML Route Prediction with 11 features, Random Forest via linfa, heuristic fallback.
+- Packet Capture Abstraction (Windows/Linux/macOS).
+- TOML-based config with CLI overrides via clap.
+
+#### Proxy Server (`lightspeed-proxy`)
+- UDP Relay Loop with concurrent client support.
+- Session Management with token-based auth and automatic timeout.
+- Rate Limiting per-IP and per-session.
+- Abuse Detection: destination validation, amplification prevention, private IP blocking.
+- Prometheus-compatible metrics endpoint.
+- HTTP health check endpoint.
+- QUIC Control Server.
+
+#### Protocol (`lightspeed-protocol`)
+- 20-byte binary tunnel header format.
+- Binary-encoded control messages.
+
+#### Testing
+- 52 tests total, 100% pass rate.
+- E2E tunnel lifecycle, concurrent relay, security integration tests.
+- Performance: 162μs tunnel overhead, ≤5ms target achieved.
+
+#### Security
+- Token-based session authentication.
+- Per-IP/session rate limiting.
+- Destination validation (blocks private, localhost, multicast).
+- Amplification prevention.
+- No Critical or High audit findings.
+
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.2...v0.5.0
+[0.4.2]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/ShibbityShwab/lightspeed/releases/tag/v0.1.0
