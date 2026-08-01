@@ -62,14 +62,17 @@ jobs:
 
       - name: Package (Windows)
         if: matrix.archive_ext == 'zip'
+        shell: pwsh
         run: |
-          mkdir -p release
-          cp target/release/lightspeed.exe release/
-          cp target/release/lightspeed-proxy.exe release/
-          cp README.md CHANGELOG.md LICENSE release/
-          cp -r docs/ release/docs/
-          powershell Compress-Archive -Path release\* -DestinationPath lightspeed-${{ matrix.target }}.zip
-          echo "ARTIFACT=lightspeed-${{ matrix.target }}.zip" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force -Path release
+          Copy-Item target/release/lightspeed.exe release/
+          Copy-Item target/release/lightspeed-proxy.exe release/
+          Copy-Item README.md release/
+          Copy-Item CHANGELOG.md release/
+          Copy-Item LICENSE release/
+          Copy-Item -Recurse docs/ release/docs/
+          Compress-Archive -Path release/* -DestinationPath lightspeed-${{ matrix.target }}.zip
+          "ARTIFACT=lightspeed-${{ matrix.target }}.zip" >> $env:GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
