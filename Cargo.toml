@@ -1,45 +1,25 @@
 [workspace]
+members = ["client", "proxy", "protocol", "client-gui"]
 resolver = "2"
-members = [
-    "protocol",
-    "client",
-    "proxy",
-    "client-gui",
-]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 authors = ["LightSpeed Contributors"]
-license = "MIT"
-repository = "https://github.com/ShibbityShwab/lightspeed"
-description = "Zero-cost global network optimizer — reduce and stabilize ping for multiplayer games"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-# Async runtime
 tokio = { version = "1", features = ["full"] }
-
-# Networking
-bytes = "1.12"
-
-# Serialization / Config
+bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "1.1"
-
-# CLI
+toml = "1"
 clap = { version = "4", features = ["derive"] }
-
-# Logging / Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
-
-# Error handling
 anyhow = "1"
 thiserror = "2"
-
-# Internal crates
-lightspeed-protocol = { path = "protocol" }
-
-# Time
 chrono = { version = "0.4", features = ["serde"] }
+
+# Use the latest stable rustc for CI (keep in sync with .github/workflows)
+# MSRV: 1.75 (for workspace resolver v2)
