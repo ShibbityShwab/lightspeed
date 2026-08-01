@@ -9,44 +9,102 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    name: Build & Release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            binary_ext: ""
+            archive_ext: tar.gz
+            deps: sudo apt-get update && sudo apt-get install -y libpcap-dev
+          - os: windows-latest
+            target: windows-x86_64
+            binary_ext: .exe
+            archive_ext: zip
+            deps: ""
+          - os: macos-latest
+            target: macos-x86_64
+            binary_ext: ""
+            archive_ext: tar.gz
+            deps: ""
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install System Dependencies
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: Install dependencies
+        if: matrix.deps != ''
+        run: ${{ matrix.deps }}
 
       - name: Build release binaries
+        run: cargo build --release -p lightspeed-client -p lightspeed-proxy
+
+      - name: Strip binaries (non-Windows)
+        if: matrix.os != 'windows-latest'
         run: |
-          cargo build --release -p lightspeed-client -p lightspeed-proxy
           strip target/release/lightspeed
           strip target/release/lightspeed-proxy
 
-      - name: Package
+      - name: Package (Linux/macOS)
+        if: matrix.archive_ext == 'tar.gz'
         run: |
           mkdir -p release
           cp target/release/lightspeed release/
           cp target/release/lightspeed-proxy release/
           cp README.md CHANGELOG.md LICENSE release/
           cp -r docs/ release/docs/
-          tar -czf lightspeed-linux-x86_64.tar.gz -C release .
-          echo "ARTIFACT=lightspeed-linux-x86_64.tar.gz" >> $GITHUB_ENV
+          tar -czf lightspeed-${{ matrix.target }}.tar.gz -C release .
+          echo "ARTIFACT=lightspeed-${{ matrix.target }}.tar.gz" >> $GITHUB_ENV
+
+      - name: Package (Windows)
+        if: matrix.archive_ext == 'zip'
+        run: |
+          mkdir -p release
+          cp target/release/lightspeed.exe release/
+          cp target/release/lightspeed-proxy.exe release/
+          cp README.md CHANGELOG.md LICENSE release/
+          cp -r docs/ release/docs/
+          powershell Compress-Archive -Path release\* -DestinationPath lightspeed-${{ matrix.target }}.zip
+          echo "ARTIFACT=lightspeed-${{ matrix.target }}.zip" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightspeed-${{ matrix.target }}
+          path: lightspeed-${{ matrix.target }}.${{ matrix.archive_ext }}
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: lightspeed-linux-x86_64.tar.gz
+          files: artifacts/*
           body: |
             ## LightSpeed ${{ github.ref_name }}
 
-            ### Download
-            - `lightspeed-linux-x86_64.tar.gz` — Client + Proxy binaries
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | Linux x86_64 | `lightspeed-linux-x86_64.tar.gz` |
+            | Windows x86_64 | `lightspeed-windows-x86_64.zip` |
+            | macOS x86_64 | `lightspeed-macos-x86_64.tar.gz` |
 
             ### Quick Start
             ```bash
