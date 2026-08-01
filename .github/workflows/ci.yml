@@ -123,9 +123,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Npcap SDK
-        run: choco install -y npcap --version=1.79 --allow-downgrade
-
       - name: Build GUI (release)
         run: cargo build --release -p lightspeed-gui
 
