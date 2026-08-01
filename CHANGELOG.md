@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial `proxy/proxy.toml` configuration file
 - E2E test tool: `tools/echo28015.py`, `tools/rust_traffic_sim.ps1`, `tools/start_echo.sh`
 
+## [0.5.1] — 2026-08-01
+
+### CI Fixes
+- **Cross-platform builds**: Added `#[cfg(target_os)]` guards to interceptor modules — fixes macOS and Windows compilation
+- **Windows GUI Build**: Moved `windivert` dependency to correct Windows target; removed `pcap-capture` from GUI deps
+- **Security**: Updated `crossbeam-epoch` 0.9.18→0.9.20, `quinn-proto` 0.11.14→0.11.16
+- **cargo-deny**: Added RUSTSEC-2026-0190, RUSTSEC-2026-0192 ignores; added CC0-1.0, Ubuntu-font-1.0 licenses
+- **Benchmarks**: Removed broken `--save-baseline` flag causing CI failures
+- **Format**: Fixed trailing newline in interceptor module
+
+### Documentation
+- **CHANGELOG**: Restored all historical version sections (0.4.0–0.1.0) that were truncated
+- **README**: CLI reference table updated for v0.5.0
+
 ## [0.5.0] — 2026-08-01
 
 ### Linux Interceptor (WF-010—WF-013)
@@ -196,7 +210,8 @@ The first release of LightSpeed — a zero-cost, open-source global network opti
 - Amplification prevention.
 - No Critical or High audit findings.
 
-[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/ShibbityShwab/lightspeed/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.0...v0.4.1

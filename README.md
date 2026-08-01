@@ -3,315 +3,226 @@
 **Reduce your ping. Free. Forever.**
 
 [![Release](https://img.shields.io/github/v/release/ShibbityShwab/lightspeed?style=flat-square)](https://github.com/ShibbityShwab/lightspeed/releases)
-[![License: Non-Commercial](https://img.shields.io/badge/License-Non--Commercial-blue.svg?style=flat-square)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg?style=flat-square)](https://www.rust-lang.org/)
-[![Landing Page](https://img.shields.io/badge/web-live-brightgreen?style=flat-square)](https://shibbityshwab.github.io/lightspeed/)
+[![CI](https://github.com/ShibbityShwab/lightspeed/actions/workflows/ci.yml/badge.svg)](https://github.com/ShibbityShwab/lightspeed/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/ShibbityShwab/lightspeed?style=flat-square)](LICENSE)
 
-LightSpeed is a zero-cost, open-source global network optimizer for multiplayer games. It reduces latency by tunneling game traffic through optimally-placed proxy nodes that leverage cloud provider backbone networks — delivering measurable ping reduction without any subscription fees.
+LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It reduces and stabilizes your ping by routing game traffic through an intelligent proxy network — no subscriptions, no usage fees, no infrastructure bills.
 
-## How It Works
+> 💡 **Why?** Multiplayer game servers are often thousands of kilometers away. Your ISP routes traffic through slow, congested paths. LightSpeed lets you bypass those routes, sending your packets through an optimized proxy tunnel that's faster and more stable.
 
+---
+
+## 🚀 Quick Start
+
+```bash
+# Download the latest release
+# https://github.com/ShibbityShwab/lightspeed/releases/latest
+
+# Run the interactive demo
+./lightspeed --demo
+
+# Or jump straight in:
+./lightspeed --start-interceptor --game rust --proxy YOUR_PROXY_IP:4434
 ```
-Your PC  ──UDP Tunnel──▶  Proxy Node   ──Direct UDP──▶  Game Server
-(LightSpeed Client)      (Vultr Cloud)                  (Epic/Valve)
-                          ~500KB RAM
-```
 
-1. **Intercept**: LightSpeed captures outbound game UDP packets via local redirect or pcap
-2. **Route**: Select the optimal proxy node based on real-time latency (ML-powered or nearest)
-3. **Tunnel**: Packets are wrapped in a lightweight 20-byte header and sent through the proxy's superior network path
-4. **Protect**: FEC (Forward Error Correction) recovers lost packets in 3ms instead of 400ms+ retransmit
-5. **Deliver**: The game server receives your original packet — your real IP is preserved
+See [**CLI Reference**](docs/CLI-REFERENCE.md) for all commands.
 
-## Key Features
+---
 
-| Feature | Details |
-|---------|---------|
-| 🆓 **Free Forever** | Zero infrastructure cost — Vultr free credits, no subscription |
-| 🔓 **Transparent** | Unencrypted tunneling — anti-cheat friendly, no IP masking |
-| 🛡️ **FEC Protection** | XOR-based Forward Error Correction — recover lost packets without retransmission |
-| 🌐 **WARP Boost** | Optional Cloudflare WARP integration for 5-10ms local route optimization |
-| 🤖 **AI-Powered** | ML route selection via linfa Random Forest (11 network features) |
-| 🎮 **Game Support** | Fortnite, CS2, Dota 2, Rust, Valorant, Apex, OW2, LoL, PUBG (9 games) |
-| 🌍 **Global Mesh** | Proxy nodes in US-West (LA) and Asia (Singapore) |
-| 🦀 **Rust** | High-performance async runtime with Tokio, ~500KB RAM per proxy |
-| 📖 **Open Source** | Full transparency, community-driven development |
+## 🎮 Supported Games (9 total)
 
-## Performance
+| Game | CLI Flag | Auto-Detect Process | Anti-Cheat |
+|------|----------|---------------------|------------|
+| Rust | `--game rust` | `RustClient.exe` | EAC (EasyAntiCheat) |
+| Counter-Strike 2 | `--game cs2` | `cs2.exe` | VAC |
+| Fortnite | `--game fortnite` | `FortniteClient-Win64-Shipping.exe` | EAC + BattlEye |
+| Dota 2 | `--game dota2` | `dota2.exe` | VAC |
+| Apex Legends | `--game apex` | `r5apex.exe` | EAC |
+| Valorant | `--game valorant` | `VALORANT-Win64-Shipping.exe` | Riot Vanguard |
+| Overwatch 2 | `--game ow2` | `Overwatch.exe` | Blizzard Warden |
+| League of Legends | `--game lol` | `League of Legends.exe` | Riot Vanguard |
+| PUBG: Battlegrounds | `--game pubg` | `TslGame.exe` | BattlEye |
 
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| Tunnel overhead | ≤ 5ms | **162μs** ✅ |
-| Test pass rate | 100% | **183 tests (100%)** ✅ |
-| Security findings | 0 Critical/High | **0** ✅ |
-| Proxy RAM usage | < 10MB | **~500KB** ✅ |
-| WARP improvement | — | **5-10ms** ✅ |
+---
 
-### Benchmark Results (Self-Hosted on Vultr vc2-1c-1gb)
+## 📋 Features
 
-| Node Region | Latency (from Bangkok) | Role |
-|-------------|----------------------|------|
-| US-West (Los Angeles) | 206ms | Primary proxy |
-| Asia (Singapore) | 31ms | FEC multipath / SEA relay |
+### Client (`lightspeed`)
+- **UDP Tunnel Engine** — async packet relay with Tokio, keepalive, stats
+- **FEC (Forward Error Correction)** — XOR-based parity for packet loss recovery
+- **Route Selection** — nearest-proxy, multipath, ML-based prediction with heuristic fallback
+- **ML Route Prediction** — 11-feature Random Forest model via linfa, online learning
+- **Game Profiles** — 9 built-in configurations with auto-detection
+- **Cross-Platform** — Windows x64, Linux x64, Linux ARM64, macOS (Intel + Apple Silicon)
+- **TrafficInterceptor** — platform-native MITM (nftables/iptables on Linux, pfctl on macOS, WinDivert on Windows)
 
-> **With WARP enabled**: 193ms to LA — only 6ms off ExitLag's premium 187ms — at zero cost.
+### Proxy Server (`lightspeed-proxy`)
+- **UDP Relay** — high-performance session-based packet relay
+- **Session Management** — token-based auth with automatic timeout
+- **Rate Limiting** — per-IP and per-session (PPS/BPS)
+- **Abuse Detection** — destination validation, amplification prevention, private IP blocking
+- **Monitoring** — Prometheus metrics, HTTP health check
+- **Docker** — multi-stage Dockerfile + docker-compose for easy deployment
 
-Every user runs **their own proxy node**. Set one up on any VPS in under 5 minutes — see [Running the Proxy Server](#running-the-proxy-server) and [infra/README.md](infra/README.md).
+### Protocol (`lightspeed-protocol`)
+- **20-byte binary header** — version, flags, sequence, timestamp, original IPs/ports
+- **Binary control messages** — Ping/Pong, Register/RegisterAck, Disconnect, ServerInfo
+- **Unencrypted by design** — game traffic remains inspectable (anti-cheat compatible)
 
-## Supported Games
+---
 
-| Game | CLI Flag | Anti-Cheat | UDP Ports | Auto-detect Process | Status |
-|------|----------|-----------|-----------|---------------------|--------|
-| Fortnite | `--game fortnite` | EasyAntiCheat | 7000–9000 | `FortniteClient-Win64-Shipping.exe` | ✅ Ready |
-| Counter-Strike 2 | `--game cs2` | VAC | 27015–27050 | `cs2.exe` | ✅ Ready |
-| Dota 2 | `--game dota2` | VAC | 27015–27050 | `dota2.exe` | ✅ Ready |
-| Rust (Facepunch) | `--game rust` | EAC + Facepunch | 28015–28017 | `RustClient.exe` | ✅ Ready |
-| Valorant | `--game valorant` | Riot Vanguard | 7000–7500 | `VALORANT-Win64-Shipping.exe` | ✅ Ready |
-| Apex Legends | `--game apex` | EasyAntiCheat | 37000–37050 | `r5apex.exe` | ✅ Ready |
-| Overwatch 2 | `--game ow2` | Blizzard Warden | 3478–6250 | `Overwatch.exe` | ✅ Ready |
-| League of Legends | `--game lol` | Riot Vanguard | 5000–5500 | `League of Legends.exe` | ✅ Ready |
-| PUBG: Battlegrounds | `--game pubg` | BattlEye | 7000–17999 | `TslGame.exe` | ✅ Ready |
+## 📦 Installation
 
-## Installation
+### Pre-built Binaries
 
-### Download Pre-built Binaries
-
-Download the latest release for your platform from [**GitHub Releases**](https://github.com/ShibbityShwab/lightspeed/releases/latest).
-
-| Platform | Download |
-|----------|----------|
-| Windows x64 | `lightspeed-vX.Y.Z-windows-x64.zip` |
-| Linux x64 | `lightspeed-vX.Y.Z-linux-x64.tar.gz` |
-| Linux ARM64 | `lightspeed-vX.Y.Z-linux-arm64.tar.gz` |
+Download from [Releases](https://github.com/ShibbityShwab/lightspeed/releases).
 
 ### Build from Source
 
-#### Prerequisites
-
-- [Rust](https://rustup.rs/) 1.75+ (stable, 2021 edition)
-- C compiler (MSVC on Windows, gcc on Linux)
-- Optional: [Npcap](https://npcap.com/) (Windows) or libpcap (Linux/macOS) for packet capture features
-
-#### Build
-
 ```bash
-# Clone the repository
 git clone https://github.com/ShibbityShwab/lightspeed.git
 cd lightspeed
-
-# Build both client and proxy (release mode)
 cargo build --release
 
-# Binaries will be at:
-#   target/release/lightspeed        (client)
-#   target/release/lightspeed-proxy  (proxy server)
+# Run the client
+./target/release/lightspeed --demo
+
+# Or run the proxy
+./target/release/lightspeed-proxy --config proxy/proxy.toml
 ```
 
-## Quick Start
+**Requirements:** Rust 1.75+, `libpcap-dev` (Linux), Npcap SDK (Windows).
 
-### Running the Client
+---
 
-You need a proxy node to connect to. Either [run your own](#running-the-proxy-server) on any Linux VPS, or join the community to find nodes near you.
+## 🐳 Docker
 
 ```bash
-# Check your environment (interceptor, root, game, proxy reachability)
-lightspeed --check --game rust --proxy YOUR_PROXY_IP:4434
+docker compose up -d
 
-# List supported games
-lightspeed --list-games
-
-# Generate a default config
-lightspeed --write-config
-
-# Diagnostic: show interceptor backend and discover game routes
-lightspeed --intercept --game rust
-
-# Live interceptor mode (Linux — needs sudo for nftables)
-sudo lightspeed --start-interceptor --game rust --proxy YOUR_PROXY_IP:4434
-
-# Live interceptor with FEC enabled
-sudo lightspeed --start-interceptor --game cs2 --proxy YOUR_PROXY_IP:4434 --fec
-
-# Scan for game processes and show UDP routes
-lightspeed --scan-processes
-
-# Test proxy connectivity
-lightspeed --test-tunnel --proxy YOUR_PROXY_IP:4434
-
-# Probe all configured proxies and show latencies
-lightspeed --probe-proxies
+# Or build and run manually:
+docker build -t lightspeed-proxy .
+docker run -p 4434:4434/udp -p 8080:8080 lightspeed-proxy
 ```
 
-### Running the Proxy Server
+---
 
-```bash
-# Start the proxy with default settings
-lightspeed-proxy
+## 🌍 Infrastructure
 
-# Custom bind address and ports
-lightspeed-proxy --bind 0.0.0.0 --data-port 4434 --control-port 4433
+LightSpeed runs on **Always Free** tier cloud resources ($0.00/month).
 
-# With config file
-lightspeed-proxy --config proxy.toml
+| Node | Region | Provider |
+|------|--------|----------|
+| proxy-lax | US-West (Los Angeles) | Vultr Free Tier |
+| relay-sgp | Asia (Singapore) | Vultr Free Tier |
 
-# Verbose logging
-lightspeed-proxy --verbose
-```
+See [docs/deploy-proxy.md](docs/deploy-proxy.md) for deployment guide.
 
-### CLI Reference
+---
 
-| Flag | Description |
-|------|-------------|
-| `--status` | System overview (OS, interceptor, games, nftables) |
-| `--check --game <name>` | Environment validation (exit codes) |
-| `--demo` | Interactive architecture walkthrough |
-| `--benchmark --target IP --proxy IP` | Direct vs LightSpeed latency comparison |
-| `--watch --game <name> --proxy IP` | Auto-start interceptor when game launches |
-| `--smoke-test` | Full E2E validation (needs sudo) |
-| `--start-interceptor --game <name>` | Live MITM mode (needs sudo) |
-| `--intercept --game <name>` | Interceptor diagnostic |
-| `--scan-processes` | Game process debug |
-| `--list-games` | Show all 9 supported games |
-| `--write-config` | Generate lightspeed.toml template |
-| `--test-tunnel --proxy IP` | Proxy connectivity test |
-| `--probe-proxies` | Latency probe all proxies |
+## 📊 Monitoring
 
-### Configuration
+- `:8080/health` — HTTP health check
+- `:8080/metrics` — Prometheus metrics endpoint
+- `:8080/telemetry` — Opt-in anonymous latency reporting
 
-LightSpeed uses TOML configuration files. Generate one with `--write-config`:
+---
 
-```toml
-# ~/.lightspeed/config.toml
+## 📚 Documentation
 
-[general]
-game = "fortnite"
-log_level = "info"
+| Document | Description |
+|----------|-------------|
+| [CLI Reference](docs/CLI-REFERENCE.md) | All CLI commands and flags |
+| [Architecture](docs/architecture.md) | System design and data flow |
+| [Protocol](docs/protocol.md) | Wire protocol specification |
+| [User Guide](docs/user-guide.md) | Step-by-step setup |
+| [FAQ](docs/faq.md) | Common questions |
+| [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
+| [Supported Games](docs/supported-games.md) | Game-specific configuration |
+| [Glossary](docs/glossary.md) | Terminology reference |
+| [Privacy](docs/privacy.md) | Telemetry privacy policy |
+| [Deploy Proxy](docs/deploy-proxy.md) | Vultr/Oracle deployment guide |
+| [Security Audit](docs/security-audit-mvp.md) | MVP security review |
 
-[proxy]
-address = "YOUR_PROXY_IP:4434"   # IP of your own proxy node
-control_port = 4433
+---
 
-[tunnel]
-keepalive_interval_secs = 5
-timeout_secs = 30
-fec_enabled = true
-fec_group_size = 8
-
-[route]
-strategy = "nearest"
-```
-
-## Architecture
-
-```
-lightspeed/
-├── client/          # Rust client — packet capture, tunnel, ML routing
-│   └── src/
-│       ├── main.rs      # Entry point — arg parsing, mode dispatch
-│       ├── cli.rs       # CLI flag definitions (clap)
-│       ├── config.rs    # TOML configuration
-│       ├── error.rs     # Centralized error types
-│       ├── warp.rs      # Cloudflare WARP integration
-│       ├── redirect.rs  # UDP redirect proxy (game integration)
-│       ├── telemetry.rs # Session telemetry collection + report
-│       ├── modes/       # Run-mode handlers (capture, tunnel_test, live_test, proxy_probe)
-│       ├── tunnel/      # UDP tunnel engine, header codec, relay
-│       ├── quic/        # QUIC control plane (discovery, health)
-│       ├── route/       # Route selection, multipath, failover
-│       ├── capture/     # Cross-platform packet capture
-│       ├── ml/          # ML model: features, training, prediction
-│       └── games/       # Per-game configurations (9 games: Fortnite, CS2, Dota 2, Rust, Valorant, Apex, OW2, LoL, PUBG)
-├── client-gui/      # Windows system-tray GUI (WinAPI, tray-item)
-├── proxy/           # Rust proxy server — UDP relay, auth, metrics
-│   └── src/
-│       ├── relay.rs         # Session-based packet relay loop
-│       ├── auth.rs          # Token authentication
-│       ├── rate_limit.rs    # Per-client PPS/BPS rate limiting
-│       ├── abuse.rs         # Amplification/reflection detection
-│       ├── metrics.rs       # Prometheus metrics
-│       ├── health.rs        # HTTP health check endpoint
-│       └── control.rs       # QUIC control server
-├── protocol/        # Shared protocol crate
-│   └── src/
-│       ├── header.rs    # 20-byte tunnel header (v1 plain, v2 FEC)
-│       ├── control.rs   # Binary control messages
-│       ├── fec.rs       # XOR Forward Error Correction
-│       └── telemetry.rs # Telemetry event schema + POST /telemetry payload
-├── docs/            # Architecture, protocol spec, security audit
-├── infra/           # Terraform, Docker, deployment scripts
-├── tools/           # E2E test scripts, echo server
-└── web/             # Landing page (GitHub Pages)
-```
-
-See [`docs/architecture.md`](docs/architecture.md) for the full system design and [`docs/protocol.md`](docs/protocol.md) for the tunnel protocol specification.
-
-## How It's Different
-
-| | ExitLag | WTFast | LightSpeed |
-|---|---------|--------|------------|
-| **Price** | $6.50/mo | $9.99/mo | **Free** |
-| **Encryption** | Yes | Yes | **No** (transparent) |
-| **IP Preserved** | No | No | **Yes** |
-| **Anti-Cheat Safe** | Sometimes | Sometimes | **By design** |
-| **FEC** | No | No | **Yes** (XOR parity) |
-| **Open Source** | No | No | **Yes** |
-| **AI Routing** | Proprietary | Proprietary | **Open (linfa RF)** |
-| **Proxy RAM** | Unknown | Unknown | **~500KB** |
-
-## Development
+## 🧪 Testing
 
 ```bash
 # Run all tests
-cargo test --workspace
+cargo test --workspace --exclude lightspeed-gui
 
-# Run specific test suite
-cargo test -p lightspeed-proxy --test integration_e2e
-
-# Run FEC tests
-cargo test -p lightspeed-protocol fec
-
-# Check without building
-cargo check --workspace
-
-# Format code
-cargo fmt --all
-
-# Lint
-cargo clippy --workspace
+# Run with formatting and linting (what CI does)
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --exclude lightspeed-gui
+cargo build --release --workspace --exclude lightspeed-gui
+cargo test --workspace --exclude lightspeed-gui
 ```
 
-## Documentation
+---
 
-- [Architecture Design](docs/architecture.md)
-- [Protocol Specification](docs/protocol.md) — v1 (plain) and v2 (FEC)
-- [Security Audit](docs/security-audit-mvp.md)
-- [Test Report](docs/test-report-mvp.md)
-- [Changelog](CHANGELOG.md)
-- [Infrastructure](infra/README.md)
+## 🔒 Security
 
-## Roadmap
+- **Token-based authentication** for all data-plane sessions
+- **Rate limiting** per client (packets/sec, bytes/sec)
+- **Destination validation** — blocks RFC 1918, localhost, multicast, link-local
+- **Anti-amplification** — inbound/outbound byte ratio tracking
+- **QUIC control plane** with mTLS for registration and token distribution
+- **No secrets in source** — configuration via environment variables
+
+See [docs/security-audit-mvp.md](docs/security-audit-mvp.md) for full audit report.
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! See the [WAT system](wat/) for our autonomous development workflow.
+
+### CI Pipeline
+
+All PRs must pass:
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets --exclude lightspeed-gui`
+- `cargo test --workspace --exclude lightspeed-gui`
+- `cargo audit` (security vulnerabilities)
+
+### Project Structure
+
+```
+lightspeed/
+├── client/          # `lightspeed` CLI client
+├── client-gui/      # `lightspeed-gui` Windows tray app
+├── proxy/           # `lightspeed-proxy` UDP relay server
+├── protocol/        # `lightspeed-protocol` shared types
+├── docs/            # Documentation
+├── web/             # GitHub Pages landing page
+├── wat/             # WAT autonomy engine
+├── infra/           # Infrastructure (Terraform, Docker)
+└── tools/           # Development utilities
+```
+
+---
+
+## 📈 Roadmap
 
 - [x] **v0.1.0** — MVP: UDP tunnel, proxy server, QUIC control, security hardening, 52 tests
 - [x] **v0.2.0** — FEC (XOR parity), Cloudflare WARP integration, UDP redirect mode, live Vultr mesh, protocol v2
 - [x] **v0.3.0** — Prometheus + Grafana monitoring, 10 alerting rules, CI/CD pipeline, pre-built binaries, load tested at 0.00% packet loss, online ML learning
 - [x] **v0.4.0** — 9-game support (OW2, LoL, PUBG added), session telemetry (`--telemetry`), Windows GUI tray app, recvmmsg batched I/O, zero-alloc FEC hot path (-57% encode time), 153 tests across 4 crates, CI coverage job
+- [x] **v0.5.0** — Linux interceptor CLI (--watch, --benchmark, --smoke-test, --status, --demo, --check), cross-platform GUI refactor (Platform trait), Docker deployment, MockInterceptor, 200 tests, 0 clippy warnings
+- [x] **v0.5.1** — Cross-platform CI fixes (macOS, Windows), security audit passing, cargo-deny compliance, benchmark regression fixed
 - [ ] **v1.0.0** — Public stable release: polished UX, installer wizard, community proxy network
 
 ## Contributing
 
-LightSpeed is community-driven. Contributions welcome — open an issue or submit a PR.
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## License & Commercial Use
+## License
 
-This project uses a dual-licensing model to protect its technical discoveries and implementations:
-
-1. **Free for Non-Commercial & Personal Use:** You can use, study, and modify this project for personal or educational purposes, provided you give **explicit credit and attribution** to the original authors.
-2. **Paid for Commercial Use:** You are strictly prohibited from using this software, its architecture, or its underlying technologies to generate revenue, offer SaaS products, or integrate into proprietary systems without permission. 
-
-**If you wish to use this technology commercially, you must contact the author to negotiate and purchase a commercial license.**
-
-See [LICENSE](LICENSE) for full details.
+MIT OR Apache-2.0 — see [LICENSE](LICENSE).
 
 ---
 
-*Built with 🦀 Rust and ⚡ ambition.*
+<p align="center">
+  <sub>⚡ Built with Rust. Deployed on Vultr Free Tier. Zero cost. Forever.</sub>
+</p>
