@@ -54,10 +54,10 @@ bincode = { version = "1", optional = true }
 rand = "0.9"
 
 [target.'cfg(windows)'.dependencies]
+windivert = { version = "0.6", optional = true, features = ["vendored"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
-windivert = { version = "0.6", optional = true, features = ["vendored"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
