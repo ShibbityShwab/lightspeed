@@ -20,6 +20,8 @@ ignore = [
   # -- unmaintained crates with no safe upgrade path -------------------------
   { id = "RUSTSEC-2025-0141", reason = "bincode unmaintained; v1.3.3 considered complete by maintainers, zero runtime risk" },
   { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; linfa transitive dep, upstream migration tracked" },
+  { id = "RUSTSEC-2026-0190", reason = "anyhow unsound in downcast_mut; CLI binary, no user-controlled error context chaining" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; GUI font parsing via egui, no network-facing code" },
 ]
 
 [licenses]
@@ -31,12 +33,13 @@ allow = [
   # GUI crate additional licenses:
   "BSL-1.0",             # clipboard-win, error-code (arboard -> egui-winit chain)
   "OFL-1.1",             # epaint_default_fonts (egui embedded fonts)
-  "LicenseRef-UFL-1.0",  # epaint_default_fonts Ubuntu Font License (non-SPDX)
   "MPL-2.0",             # option-ext (dirs -> tray-icon chain)
   # WinDivert (kernel-level packet filter) -- LGPL-3.0, used only in lightspeed-client
   "LGPL-3.0-or-later",   # windivert, windivert-sys
   # webpki-root-certs (TLS trust anchors, bundled in binary)
   "CDLA-Permissive-2.0",
+  "CC0-1.0",             # hexf-parse (naga -> wgpu -> egui chain, GUI only)
+  "Ubuntu-font-1.0",    # epaint_default_fonts (egui embedded fonts)
 ]
 
 [bans]
