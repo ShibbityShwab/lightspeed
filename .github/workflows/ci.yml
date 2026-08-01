@@ -143,7 +143,7 @@ jobs:
           tool: critcmp
 
       - name: Run benchmarks (report only)
-        run: cargo bench --workspace --exclude lightspeed-gui -- --save-baseline current
+        run: cargo bench --workspace --exclude lightspeed-gui
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
