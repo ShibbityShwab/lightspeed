@@ -1,6 +1,6 @@
 # ⚡ LightSpeed Documentation
 
-Welcome to the LightSpeed documentation wiki. Version-controlled alongside the source code — every commit updates these pages.
+Welcome to the LightSpeed documentation wiki — version-controlled alongside the source code.
 
 ---
 
