@@ -28,6 +28,8 @@ ignore = [
 allow = [
   "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
   "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
+  # LightSpeed custom license (workspace crates)
+  "LicenseRef-LightSpeed-NC-1.0",
   # Unicode / ICU -- idna/url/webbrowser chain (GUI only)
   "Unicode-3.0",         # icu_collections, icu_locale_core, icu_normalizer, etc.
   # GUI crate additional licenses:
