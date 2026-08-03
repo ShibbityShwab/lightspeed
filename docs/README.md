@@ -1,6 +1,6 @@
 # ⚡ LightSpeed Documentation
 
-Welcome to the LightSpeed documentation wiki — version-controlled alongside the source code.
+Welcome to the LightSpeed documentation wiki — synced from the [source repo](https://github.com/ShibbityShwab/lightspeed/tree/master/docs).
 
 ---
 
