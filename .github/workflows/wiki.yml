@@ -17,47 +17,43 @@ jobs:
 
       - name: Sync to Wiki
         env:
-          GH_TOKEN: ${{ github.token }}
+          TOKEN: ${{ secrets.WIKI_TOKEN }}
         run: |
-          # Clone wiki using gh CLI (pre-installed, handles auth)
-          gh repo clone "${{ github.repository }}.wiki" wiki-repo 2>/dev/null || {
-            echo "Initializing wiki..."
+          if [ -z "$TOKEN" ]; then
+            echo "WIKI_TOKEN secret not set. Add a PAT with repo scope to Settings > Secrets > Actions > WIKI_TOKEN"
+            exit 1
+          fi
+
+          REPO="${{ github.repository }}"
+          WIKI_URL="https://x-access-token:${TOKEN}@github.com/${REPO}.wiki.git"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "actions@github.com"
+
+          git clone "$WIKI_URL" wiki-repo 2>/dev/null || {
             mkdir wiki-repo && cd wiki-repo
             git init && git checkout -b master
             echo "# LightSpeed Wiki" > Home.md
             git add Home.md && git commit -m "init"
-            git remote add origin "https://${GH_TOKEN}@github.com/${{ github.repository }}.wiki.git"
-            git push -u origin master --force
+            git remote add origin "$WIKI_URL"
+            git push -u origin master
             cd .. && rm -rf wiki-repo
-            gh repo clone "${{ github.repository }}.wiki" wiki-repo
+            git clone "$WIKI_URL" wiki-repo
           }
 
           cd wiki-repo
+          find . -name "*.md" ! -name "_Footer.md" ! -name "_Sidebar.md" -delete
 
-          # Remove old pages
-          find . -name "*.md" ! -name "_*" -delete 2>/dev/null || true
-
-          # Copy all docs pages
           for f in ../docs/*.md; do
             base=$(basename "$f")
             sed 's|\.md)|)|g' "$f" > "$base"
             git add "$base"
           done
 
-          # Copy archive
-          mkdir -p archive
-          for f in ../docs/archive/*.md; do
-            [ -f "$f" ] || continue
-            base=$(basename "$f")
-            sed 's|\.md)|)|g' "$f" > "archive/$base"
-            git add "archive/$base"
-          done
-
-          # Push
           if git diff --staged --quiet; then
             echo "No changes"
           else
             git commit -m "Sync docs/"
             git push origin master
-            echo "Wiki updated!"
+            echo "Wiki updated with $(ls *.md | wc -l) pages"
           fi
