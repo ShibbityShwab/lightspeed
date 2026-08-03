@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/release/ShibbityShwab/lightspeed?style=flat-square&color=blue)](https://github.com/ShibbityShwab/lightspeed/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/ShibbityShwab/lightspeed/ci.yml?branch=master&style=flat-square)](https://github.com/ShibbityShwab/lightspeed/actions)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-NonCommercial-blue.svg?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/built%20with-Rust%201.85+-orange.svg?style=flat-square)](https://rust-lang.org)
 [![Tests](https://img.shields.io/badge/tests-206%2B%20passing-brightgreen.svg?style=flat-square)](https://github.com/ShibbityShwab/lightspeed/actions)
 
@@ -187,7 +187,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) and the [issue 
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE).
+Free for non-commercial use. Commercial use requires a paid license. See [LICENSE](LICENSE).
 
 ---
 

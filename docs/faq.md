@@ -6,7 +6,7 @@
 
 ### Is LightSpeed really free?
 
-Yes. LightSpeed is MIT-licensed open source. You run your own proxy on a free-tier VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
+Yes. LightSpeed is free for personal, non-commercial use under the LightSpeed Software License. Commercial use requires a paid license — see [LICENSE](../LICENSE). You run your own proxy on a free-tier VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
 
 ### Will LightSpeed get me banned?
 

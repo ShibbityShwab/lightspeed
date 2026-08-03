@@ -179,6 +179,6 @@ bash setup-new-node.sh YOUR_VPS_IP your-node-id your-region
 
 ## License
 
-LightSpeed uses a custom dual-license. Personal and open-source use is free. See [LICENSE](LICENSE) for details.
+LightSpeed is free for non-commercial use. Commercial use requires a paid license. By contributing, you agree to license your contribution under the same terms. See [LICENSE](LICENSE) for full details.
 
 **tl;dr:** Free for gamers. If you want to use this commercially, contact us.

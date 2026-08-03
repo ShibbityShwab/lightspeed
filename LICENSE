@@ -1,34 +1,64 @@
-LightSpeed Non-Commercial & Attribution License
+# LightSpeed Software License v1.0
 
-Copyright (c) 2026 LightSpeed Contributors
+Copyright (c) 2025-2026 ShibbityShwab and LightSpeed Contributors
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, subject to the following conditions:
+---
 
-1. NON-COMMERCIAL USE ONLY
-   This Software is provided exclusively for personal, educational, and 
-   non-commercial use. You may not use this Software, or any derivative works, 
-   for any commercial purposes. This includes, but is not limited to:
-   - Selling the Software or derivative works.
-   - Integrating the Software into a commercial product or proprietary system.
-   - Offering the Software as a paid service (e.g., SaaS).
-   - Using the Software to generate revenue directly or indirectly.
+## 1. Non-Commercial Use — Free
 
-2. ATTRIBUTION REQUIRED
-   You must give appropriate credit and attribution to the original authors 
-   for the technical discoveries, routing optimizations, and implementations 
-   contained herein. If you distribute this Software, publish research based 
-   on it, or create derivative works for non-commercial use, you must retain 
-   this copyright notice and clearly indicate the original source repository.
+Permission is granted, free of charge, to any person obtaining a copy of this
+software and associated documentation files (the "Software"), to use, copy,
+modify, merge, publish, distribute, and sublicense the Software, subject to
+the following conditions:
 
-3. COMMERCIAL LICENSING
-   If you wish to use this Software, its architecture, or its underlying 
-   technologies for any commercial purpose, you are legally required to 
-   contact the original authors to negotiate and purchase a commercial license.
+**The Software may only be used for Non-Commercial purposes.**
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+"Non-Commercial" means:
+- Personal gaming use by an individual
+- Educational use at an accredited institution
+- Research and academic publication
+- Open-source contribution to this project
+- Internal evaluation before purchasing a commercial license
+
+**The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.**
+
+---
+
+## 2. Commercial Use — License Required
+
+You may NOT use the Software for any Commercial purpose without first
+obtaining a separate commercial license from the copyright holder.
+
+"Commercial" means any use where the Software is deployed, integrated, or
+offered in connection with a business, product, or service that generates
+revenue, directly or indirectly. This includes, but is not limited to:
+
+- Selling or licensing the Software or derivative works
+- Integrating the Software into a commercial product
+- Offering the Software as a paid service (SaaS, managed hosting)
+- Using the Software to provide a service to paying customers
+- Bundling the Software with hardware or other commercial offerings
+- Deploying the Software within a for-profit organization's infrastructure
+  (beyond personal use by individual employees for gaming)
+
+**To obtain a commercial license, contact:**
+- GitHub: [@ShibbityShwab](https://github.com/ShibbityShwab)
+- Open a GitHub Issue with "[Commercial License]" in the title
+
+---
+
+## 3. Attribution
+
+If you distribute the Software or create derivative works, you must retain
+this license notice and clearly credit the original project:
+```
+Powered by LightSpeed (https://github.com/ShibbityShwab/lightspeed)
+```
+
+---
+
+## 4. Disclaimer
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -37,3 +67,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+## 5. Contributions
+
+By submitting a pull request or contribution to this project, you agree to
+license your contribution under the same terms as this license. You retain
+copyright over your contribution but grant the project a perpetual,
+worldwide, non-exclusive, royalty-free license to use it.
