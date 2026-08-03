@@ -87,6 +87,34 @@ jobs:
           name: coverage-lcov
           path: lcov.info
           retention-days: 14
+
+  windows-test:
+    name: Windows Build & Test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release --workspace --exclude lightspeed-gui
+
+      - name: Test
+        run: cargo test --workspace --lib --exclude lightspeed-gui
+
+  windows-gui:
+    name: Windows GUI Build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build GUI (release)
+        run: cargo build --release -p lightspeed-gui
+
   benchmarks:
     name: Benchmark Regression
     runs-on: ubuntu-latest
