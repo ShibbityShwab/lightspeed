@@ -48,8 +48,8 @@ pub mod windows;
 pub use process_scanner::find_game_process;
 #[allow(unused_imports)]
 pub use traits::{
-    InterceptorConfig, InterceptorHandle, Route, TrafficInterceptor,
-    TransportProtocol, UnsupportedInterceptor,
+    InterceptorConfig, InterceptorHandle, Route, TrafficInterceptor, TransportProtocol,
+    UnsupportedInterceptor,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ mod tests {
 
         let saved = interceptor.last_config().unwrap();
         assert_eq!(saved.game_name, "Rust");
-        assert_eq!(saved.fec_enabled, true);
+        assert!(saved.fec_enabled);
         assert_eq!(saved.fec_k, 4);
 
         handle.stop();

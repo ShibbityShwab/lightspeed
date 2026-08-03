@@ -663,7 +663,7 @@ fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4
         iov_len: 0,
     };
     // SAFETY: zeroed() on POD msghdr; pointers set below before recvmsg.
-                    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
     msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
