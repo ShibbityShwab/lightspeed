@@ -5,8 +5,6 @@ on:
     branches: [master]
     paths:
       - 'docs/**'
-      - 'CONTRIBUTING.md'
-      - 'CHANGELOG.md'
   workflow_dispatch:
 
 permissions:
@@ -19,9 +17,61 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Sync to Wiki
-        uses: Andrew-Chen-Wang/github-wiki-action@v4
         with:
-          path: docs
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync docs to wiki
+        env:
+          WIKI_REPO: "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git"
+        run: |
+          # Clone the wiki repo
+          git clone "$WIKI_REPO" wiki-repo 2>/dev/null || (
+            echo "Wiki not yet initialized - creating first page..."
+            mkdir wiki-repo
+            cd wiki-repo
+            git init
+            git checkout -b master
+            echo "# LightSpeed Wiki" > Home.md
+            git add Home.md
+            git commit -m "Initialize wiki"
+            git remote add origin "$WIKI_REPO"
+            git push -u origin master --force
+            cd ..
+            rm -rf wiki-repo
+            git clone "$WIKI_REPO" wiki-repo
+          )
+
+          cd wiki-repo
+
+          # Remove old docs pages
+          find . -name "*.md" ! -name "_*" -delete 2>/dev/null || true
+
+          # Copy docs/ pages
+          for f in ../docs/*.md; do
+            base=$(basename "$f")
+            sed 's|\.md)|)|g' "$f" > "$base"
+            git add "$base"
+          done
+
+          # Copy archive docs
+          mkdir -p archive
+          for f in ../docs/archive/*.md; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            sed 's|\.md)|)|g' "$f" > "archive/$base"
+            git add "archive/$base"
+          done
+
+          # Commit and push if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to wiki"
+          else
+            git commit -m "Sync docs/ from ${{ github.sha }}"
+            git push origin master
+            echo "Wiki updated successfully"
+          fi
