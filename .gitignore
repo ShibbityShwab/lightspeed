@@ -47,9 +47,5 @@ node_modules/
 *.key
 *.crt
 
-# Internal WAT (Workflows, Agents, Tools) system — private AI operating system
-# Not for public consumption — contains internal prompts, rules, state, and IPs
-wat/
-
 # AI assistant generated artifacts
 .omo/
