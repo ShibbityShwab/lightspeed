@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Community Discussions
+    url: https://github.com/ShibbityShwab/lightspeed/discussions
+    about: Ask questions, share benchmarks, and discuss ideas
+  - name: 📖 Documentation
+    url: https://github.com/ShibbityShwab/lightspeed/tree/master/docs
+    about: Read the user guide, FAQ, and troubleshooting docs
+  - name: 💰 Commercial License
+    url: https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE
+    about: Contact for commercial licensing

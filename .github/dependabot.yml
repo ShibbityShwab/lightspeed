@@ -11,17 +11,39 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
       - "P3-low"
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
+    groups:
+      patch:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "P3-low"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+
+  # Docker
+  - package-ecosystem: "docker"
+    directory: "/infra/docker"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -32,5 +54,5 @@ updates:
       - "dependencies"
       - "P3-low"
     commit-message:
-      prefix: "chore(ci)"
+      prefix: "chore(docker)"
       include: "scope"
