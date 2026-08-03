@@ -49,7 +49,7 @@ rcgen = { version = "0.13", optional = true }
 pcap = { version = "2", optional = true }
 linfa = { version = "0.8", optional = true }
 linfa-linear = { version = "0.8", optional = true }
-ndarray = { version = "0.16", optional = true }
+ndarray = { version = "0.17", optional = true }
 bincode = { version = "1", optional = true }
 rand = "0.9"
 
