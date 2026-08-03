@@ -75,6 +75,8 @@ impl PcapCapture {
 // The `pcap::Capture<Active>` raw-pointer handle is Send but not Sync by default;
 // wrapping it here is safe because no shared `&self` code path touches `self.capture`.
 #[cfg(feature = "pcap-capture")]
+// SAFETY: PcapCapture wraps a pcap Capture handle. pcap handles are
+// internally reference-counted and safe to share across threads.
 unsafe impl Sync for PcapCapture {}
 
 #[cfg(feature = "pcap-capture")]

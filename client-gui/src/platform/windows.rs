@@ -27,6 +27,8 @@ const MENU_QUIT: &str = "quit";
 /// (egui) thread — the same thread that runs the Windows message loop.
 /// It is never sent across threads, so `Rc<RefCell<…>>` internals from
 /// the `tray_icon` crate cannot cause data races in practice.
+// SAFETY: WindowsTray contains winapi HANDLEs which are Send-safe (HANDLEs
+// can be used from any thread in the Windows API model).
 unsafe impl Send for WindowsTray {}
 
 /// Windows system-tray icon with a context menu (Show, Connect, Disconnect, Quit).

@@ -412,6 +412,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 let guard = if_cache_inj.lock().unwrap();
                                 match guard.as_ref() {
                                     Some(a) => a.clone(),
+                                    // SAFETY: WinDivertAddress::new() for NetworkLayer allocates
+                                    // a zeroed address struct; no unsafe memory access.
                                     None => unsafe { WinDivertAddress::<NetworkLayer>::new() },
                                 }
                             };

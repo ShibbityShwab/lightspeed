@@ -45,10 +45,11 @@ pub mod traits;
 pub mod windows;
 
 // Re-export the most-used types at the module root for ergonomics.
-pub use process_scanner::{find_game_process, scan_for_games};
+pub use process_scanner::find_game_process;
+#[allow(unused_imports)]
 pub use traits::{
-    InterceptorConfig, InterceptorCounters, InterceptorHandle, InterceptorStats, ProcessInfo,
-    Route, TrafficInterceptor, TransportProtocol, UnsupportedInterceptor,
+    InterceptorConfig, InterceptorHandle, Route, TrafficInterceptor,
+    TransportProtocol, UnsupportedInterceptor,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

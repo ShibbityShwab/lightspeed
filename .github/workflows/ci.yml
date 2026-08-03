@@ -114,6 +114,32 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  feature-matrix:
+    name: Feature Matrix (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - "quic"
+          - "full"
+          - "ml"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Build (${{ matrix.features }})
+        run: cargo build --release --workspace --exclude lightspeed-gui --features ${{ matrix.features }}
+
+      - name: Test (${{ matrix.features }})
+        run: cargo test --workspace --lib --exclude lightspeed-gui --features ${{ matrix.features }}
+
+      - name: Clippy (${{ matrix.features }})
+        run: cargo clippy --workspace --exclude lightspeed-gui --features ${{ matrix.features }}
+
   e2e-test:
     name: End-to-End Test
     runs-on: ubuntu-latest

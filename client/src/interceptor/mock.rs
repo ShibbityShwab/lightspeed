@@ -4,6 +4,7 @@
 //! that records calls and allows test assertions on the interceptor pipeline
 //! without requiring root, kernel modules, or real game processes.
 
+#[cfg(test)]
 use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

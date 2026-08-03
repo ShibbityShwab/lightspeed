@@ -101,6 +101,7 @@ impl TrafficInterceptor for NftablesInterceptor {
             use std::os::fd::AsRawFd;
             let fd = listener_std.as_raw_fd();
             let one: libc::c_int = 1;
+            // SAFETY: setsockopt SOL_IP/IP_TRANSPARENT with valid option value.
             unsafe {
                 libc::setsockopt(
                     fd,
@@ -171,7 +172,9 @@ impl TrafficInterceptor for NftablesInterceptor {
                         iov_base: buf.as_mut_ptr() as *mut libc::c_void,
                         iov_len: buf.len(),
                     };
+                    // SAFETY: zeroed() on POD sockaddr_in; kernel overwrites all fields.
                     let mut src_addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                    // SAFETY: zeroed() on POD msghdr; pointers set below before recvmsg.
                     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
                     msg.msg_name = &mut src_addr as *mut _ as *mut libc::c_void;
                     msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
@@ -180,6 +183,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                     msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
                     msg.msg_controllen = cmsg_buf.len();
 
+                    // SAFETY: recvmsg with valid msghdr, iovec, and cmsg buffer.
                     let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
                     if n < 0 {
                         continue;
@@ -191,6 +195,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                     );
 
                     // Parse CMSG for IP_ORIGDSTADDR
+                    // SAFETY: CMSG macros operate within the valid cmsg_buf from recvmsg.
                     let orig_dst = unsafe {
                         let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
                         let mut dst = None;
@@ -657,7 +662,8 @@ fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4
         iov_base: cmsg_buf.as_mut_ptr() as *mut libc::c_void,
         iov_len: 0,
     };
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    // SAFETY: zeroed() on POD msghdr; pointers set below before recvmsg.
+                    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
     msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;

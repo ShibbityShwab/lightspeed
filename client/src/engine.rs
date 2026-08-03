@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use tokio::net::UdpSocket;
@@ -124,7 +124,7 @@ pub struct EngineStatus {
 
 // ── Engine ───────────────────────────────────────────────────────────────
 
-type Shared = Arc<Mutex<EngineStatus>>;
+type Shared = Arc<RwLock<EngineStatus>>;
 
 /// Manages the keepalive loop, optional game redirect, and optional pcap capture.
 /// Designed for use from GUI code running outside a Tokio context.
@@ -151,7 +151,7 @@ impl LightSpeedEngine {
     pub fn new(rt: Handle) -> Self {
         Self {
             rt,
-            status: Arc::new(Mutex::new(EngineStatus::default())),
+            status: Arc::new(RwLock::new(EngineStatus::default())),
             shutdown_tx: None,
             redirect_shutdown_tx: None,
             redirect_stats: None,
@@ -169,7 +169,7 @@ impl LightSpeedEngine {
         let (tx, rx) = oneshot::channel();
         self.shutdown_tx = Some(tx);
         let generation = {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.write().unwrap();
             s.keepalive_generation = s.keepalive_generation.wrapping_add(1);
             s.connected = true;
             s.proxy_addr = proxy_addr.to_string();
@@ -189,7 +189,7 @@ impl LightSpeedEngine {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
-        if let Ok(mut s) = self.status.lock() {
+        if let Ok(mut s) = self.status.write() {
             s.connected = false;
         }
     }
@@ -221,7 +221,7 @@ impl LightSpeedEngine {
         self.redirect_shutdown_tx = Some(tx);
 
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.write().unwrap();
             s.redirect_active = true;
             s.redirect_game = game_name;
             s.redirect_server = game_server.to_string();
@@ -245,12 +245,12 @@ impl LightSpeedEngine {
                 }
                 Err(e) => {
                     tracing::error!("Redirect error: {}", e);
-                    if let Ok(mut s) = status.lock() {
+                    if let Ok(mut s) = status.write() {
                         s.redirect_error = Some(format!("{e}"));
                     }
                 }
             }
-            if let Ok(mut s) = status.lock() {
+            if let Ok(mut s) = status.write() {
                 s.redirect_active = false;
             }
         });
@@ -262,7 +262,7 @@ impl LightSpeedEngine {
             let _ = tx.send(());
         }
         self.redirect_stats = None;
-        if let Ok(mut s) = self.status.lock() {
+        if let Ok(mut s) = self.status.write() {
             s.redirect_active = false;
         }
     }
@@ -323,7 +323,7 @@ impl LightSpeedEngine {
         self.capture_shutdown_tx = Some(tx);
 
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.write().unwrap();
             s.capture_active = true;
             s.capture_game = game_box.name().to_string();
             s.capture_interface = iface_desc;
@@ -367,12 +367,12 @@ impl LightSpeedEngine {
                 Ok(()) => tracing::info!("Capture stopped cleanly"),
                 Err(e) => {
                     tracing::error!("Capture error: {}", e);
-                    if let Ok(mut s) = status.lock() {
+                    if let Ok(mut s) = status.write() {
                         s.capture_error = Some(format!("{e}"));
                     }
                 }
             }
-            if let Ok(mut s) = status.lock() {
+            if let Ok(mut s) = status.write() {
                 s.capture_active = false;
             }
         });
@@ -386,7 +386,7 @@ impl LightSpeedEngine {
             let _ = tx.send(());
         }
         self.capture_stat_slot = None;
-        if let Ok(mut s) = self.status.lock() {
+        if let Ok(mut s) = self.status.write() {
             s.capture_active = false;
         }
     }
@@ -442,7 +442,7 @@ impl LightSpeedEngine {
         self.windivert_shutdown_tx = Some(tx);
 
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.write().unwrap();
             s.windivert_active = true;
             s.windivert_server = server_addr.to_string();
             s.windivert_intercepted = 0;
@@ -458,12 +458,12 @@ impl LightSpeedEngine {
                 Ok(()) => tracing::info!("WinDivert redirect stopped cleanly"),
                 Err(e) => {
                     tracing::error!("WinDivert redirect error: {}", e);
-                    if let Ok(mut s) = status.lock() {
+                    if let Ok(mut s) = status.write() {
                         s.windivert_error = Some(format!("{e}"));
                     }
                 }
             }
-            if let Ok(mut s) = status.lock() {
+            if let Ok(mut s) = status.write() {
                 s.windivert_active = false;
             }
         });
@@ -522,7 +522,7 @@ impl LightSpeedEngine {
         self.windivert_shutdown_tx = Some(tx);
 
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.write().unwrap();
             s.windivert_active = true;
             s.windivert_server = format!("Auto-detecting (ports {}-{})…", port_lo, port_hi);
             s.windivert_intercepted = 0;
@@ -538,12 +538,12 @@ impl LightSpeedEngine {
                 Ok(()) => tracing::info!("WinDivert auto-redirect stopped cleanly"),
                 Err(e) => {
                     tracing::error!("WinDivert auto-redirect error: {}", e);
-                    if let Ok(mut s) = status.lock() {
+                    if let Ok(mut s) = status.write() {
                         s.windivert_error = Some(format!("{e}"));
                     }
                 }
             }
-            if let Ok(mut s) = status.lock() {
+            if let Ok(mut s) = status.write() {
                 s.windivert_active = false;
             }
         });
@@ -570,7 +570,7 @@ impl LightSpeedEngine {
             let _ = tx.send(());
         }
         self.windivert_stat_slot = None;
-        if let Ok(mut s) = self.status.lock() {
+        if let Ok(mut s) = self.status.write() {
             s.windivert_active = false;
         }
     }
@@ -628,7 +628,7 @@ impl LightSpeedEngine {
         let handle = interceptor.start(config).map_err(|e| e.to_string())?;
 
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.status.write().unwrap();
             s.interceptor_active = true;
             s.interceptor_platform = platform;
             s.interceptor_server = initial_server;
@@ -655,7 +655,7 @@ impl LightSpeedEngine {
         if let Some(mut h) = self.interceptor_handle.take() {
             h.stop();
         }
-        if let Ok(mut s) = self.status.lock() {
+        if let Ok(mut s) = self.status.write() {
             s.interceptor_active = false;
         }
     }
@@ -664,7 +664,7 @@ impl LightSpeedEngine {
 
     /// Snapshot of current engine state, including live stats from all modes.
     pub fn snapshot(&self) -> EngineStatus {
-        let mut snap = self.status.lock().unwrap().clone();
+        let mut snap = self.status.read().unwrap().clone();
 
         // Overlay live redirect counters from atomics (avoids lock contention).
         if let Some(ref rs) = self.redirect_stats {
@@ -756,7 +756,7 @@ async fn run_keepalive(
         Err(e) => {
             tracing::error!("GUI engine: socket bind failed: {}", e);
             // Only mark disconnected if we're still the current generation.
-            if let Ok(mut s) = status.lock() {
+            if let Ok(mut s) = status.write() {
                 if s.keepalive_generation == generation {
                     s.connected = false;
                 }
@@ -785,7 +785,7 @@ async fn run_keepalive(
                 if socket.send_to(&hdr.encode_to_array(), proxy).await.is_ok() {
                     ts.insert(seq, Instant::now());
                     ts.retain(|_, t| t.elapsed() < Duration::from_secs(30));
-                    if let Ok(mut s) = status.lock() {
+                    if let Ok(mut s) = status.write() {
                         s.packets_sent += 1;
                     }
                 }
@@ -799,7 +799,7 @@ async fn run_keepalive(
                         if hdr.is_keepalive() {
                             if let Some(send_time) = ts.remove(&hdr.sequence) {
                                 let rtt_ms = send_time.elapsed().as_secs_f64() * 1000.0;
-                                if let Ok(mut s) = status.lock() {
+                                if let Ok(mut s) = status.write() {
                                     s.packets_received += 1;
                                     s.latest_rtt_ms = rtt_ms;
                                     s.rtt_history.push(rtt_ms);
@@ -818,7 +818,7 @@ async fn run_keepalive(
     // Only clear connected status if we are still the active generation.
     // If connect() was called again while we were running, new gen already
     // set connected=true and we must not clobber it.
-    if let Ok(mut s) = status.lock() {
+    if let Ok(mut s) = status.write() {
         if s.keepalive_generation == generation {
             s.connected = false;
         }

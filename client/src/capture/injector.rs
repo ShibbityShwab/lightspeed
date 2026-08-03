@@ -225,6 +225,10 @@ impl PacketInjector {
 
 // SAFETY: Our use of the Mutex makes the Send/Sync requirement safe for the pcap handle.
 #[cfg(feature = "pcap-capture")]
+// SAFETY: PacketInjector wraps a pcap handle which is Send-safe (libpcap
+// handles are internally synchronized for concurrent access).
 unsafe impl Send for PacketInjector {}
 #[cfg(feature = "pcap-capture")]
+// SAFETY: PacketInjector only exposes &self methods that internally
+// synchronize access to the pcap handle.
 unsafe impl Sync for PacketInjector {}

@@ -1,11 +1,10 @@
 //! # LightSpeed Client
-#![allow(
-    dead_code,
-    unused_imports,
-    clippy::useless_conversion,
-    clippy::bool_assert_comparison,
-    clippy::collapsible_if
-)]
+//!
+//! NOTE: `dead_code` is allowed because the binary shares its module tree with
+//! the library (`lib.rs`). Items used only by the GUI library path appear dead
+//! from the binary's perspective, and vice versa. Individual items are gated
+//! behind feature flags and platform-specific compilation.
+#![allow(dead_code)]
 //!
 //! Zero-cost global network optimizer for multiplayer games.
 //! Captures game UDP packets and tunnels them through optimally-selected
@@ -575,7 +574,7 @@ data_port = 4434
                     .collect(),
                 Err(e) => {
                     error!("Unknown game: {}", e);
-                    return Err(e.into());
+                    return Err(e);
                 }
             }
         } else {
@@ -627,7 +626,7 @@ data_port = 4434
                         Ok(a) => a,
                         Err(e) => {
                             warn!("   Invalid proxy address '{}': {}", proxy, e);
-                            return Err(e.into());
+                            return Err(e);
                         }
                     };
 
