@@ -28,7 +28,7 @@ scrape_configs:
       #   labels:
       #     node_id: "proxy-us-west"
       #     region: "us-west-lax"
-      #     provider: "vultr"
+      #     provider: "your-provider"
       #     role: "primary"
 
       # Example second node
@@ -36,7 +36,7 @@ scrape_configs:
       #   labels:
       #     node_id: "proxy-asia-se"
       #     region: "asia-sgp"
-      #     provider: "vultr"
+      #     provider: "your-provider"
       #     role: "relay"
 
       # Development — local proxy on default port (uncomment for local testing)

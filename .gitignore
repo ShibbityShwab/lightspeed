@@ -26,16 +26,6 @@ Desktop.ini
 .env
 .env.local
 
-# Terraform
-infra/terraform/.terraform/
-infra/terraform/*.tfstate
-infra/terraform/*.tfstate.backup
-infra/terraform/.terraform.lock.hcl
-infra/terraform/terraform.tfvars
-infra/terraform/*.auto.tfvars
-infra/terraform/lightspeed_deploy_key
-infra/terraform/lightspeed_deploy_key.pub
-
 # AI/ML models (too large for git)
 ai/models/*.bin
 ai/models/*.onnx
@@ -44,14 +34,13 @@ ai/data/*.parquet
 
 # Test results
 tests/results/
+load-test-results.json
 
 # Logs
 *.log
-wat/state/agent-logs/
 
 # Node.js
 node_modules/
-tools/vultr-mcp/node_modules/
 
 # Secrets
 *.pem
@@ -62,12 +51,5 @@ tools/vultr-mcp/node_modules/
 # Not for public consumption — contains internal prompts, rules, state, and IPs
 wat/
 
-# Internal developer tooling (not part of the open-source project)
-tools/vultr-mcp/src/
-tools/vultr-mcp/build/
-tools/build_gemini_context.js
-tools/build_gemini_context.py
-
 # AI assistant generated artifacts
-.kilo/
 .omo/

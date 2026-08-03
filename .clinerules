@@ -1,5 +1,0 @@
-# LightSpeed WAT — Cline Entry Point
-
-> This file is a Cline compatibility hook. The canonical AI agent instructions for this repository are in `AGENTS.md` (the industry-standard format recognized by Cursor, Copilot, Windsurf, and others).
-
-Before any task, first read `AGENTS.md` for complete project context and directives. For the WAT autonomy loop, invoke the `@lightspeed` skill (`.clineskills/lightspeed.md`). Always read `wat/state/current-phase.md` for current workflow state.

@@ -10,7 +10,7 @@
 
 **Total ongoing infrastructure cost MUST remain exactly $0.00.**
 
-- Use only Always Free tier resources (Vultr Free Tier, Oracle Cloud Always Free).
+- Use only Always Free tier resources (any Always Free tier provider).
 - No paid services, no usage-based billing that could exceed $0.00.
 - CI/CD must not introduce paid services (blocks paid Codecov plans, etc.).
 - Infrastructure must be self-hostable on free-tier resources.

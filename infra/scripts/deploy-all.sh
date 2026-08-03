@@ -9,7 +9,7 @@
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
-SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/lightspeed_vultr}"
+SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/lightspeed_deploy}"
 SSH_USER="${DEPLOY_SSH_USER:-root}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes"
 
@@ -19,7 +19,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # Check SSH key exists
 if [ ! -f "$SSH_KEY" ]; then
     echo "SSH key not found: $SSH_KEY"
-    echo "Set DEPLOY_SSH_KEY or place key at ~/.ssh/lightspeed_vultr"
+    echo "Set DEPLOY_SSH_KEY or place key at ~/.ssh/lightspeed_deploy"
     exit 1
 fi
 

@@ -113,8 +113,8 @@ LightSpeed runs on **Always Free** tier cloud resources ($0.00/month).
 
 | Node | Region | Provider |
 |------|--------|----------|
-| proxy-lax | US-West (Los Angeles) | Vultr Free Tier |
-| relay-sgp | Asia (Singapore) | Vultr Free Tier |
+| proxy-us | US-West (Los Angeles) | Any Free Tier VPS |
+| proxy-sgp | Asia (Singapore) | Any Free Tier VPS |
 
 See [docs/deploy-proxy.md](docs/deploy-proxy.md) for deployment guide.
 
@@ -141,7 +141,7 @@ See [docs/deploy-proxy.md](docs/deploy-proxy.md) for deployment guide.
 | [Supported Games](docs/supported-games.md) | Game-specific configuration |
 | [Glossary](docs/glossary.md) | Terminology reference |
 | [Privacy](docs/privacy.md) | Telemetry privacy policy |
-| [Deploy Proxy](docs/deploy-proxy.md) | Vultr/Oracle deployment guide |
+| [Deploy Proxy](docs/deploy-proxy.md) | Self-hosted deployment guide |
 | [Security Audit](docs/security-audit-mvp.md) | MVP security review |
 
 ---
@@ -224,5 +224,5 @@ MIT OR Apache-2.0 — see [LICENSE](LICENSE).
 ---
 
 <p align="center">
-  <sub>⚡ Built with Rust. Deployed on Vultr Free Tier. Zero cost. Forever.</sub>
+  <sub>⚡ Built with Rust. Self-hosted on any VPS. Zero cost. Forever.</sub>
 </p>

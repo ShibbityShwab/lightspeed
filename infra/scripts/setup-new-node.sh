@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────
 # LightSpeed — Setup New Proxy Node (from scratch)
 #
-# Complete setup for a fresh Vultr (or any Ubuntu/Debian) instance.
+# Complete setup for a fresh Ubuntu/Debian instance.
 # Installs the proxy binary, config, systemd service, firewall,
 # and verifies health. Run from your LOCAL machine.
 #
@@ -28,7 +28,7 @@ if [ $# -lt 3 ]; then
     echo "  $0 1.2.3.4 proxy-ewr ewr    # New Jersey"
     echo "  $0 5.6.7.8 proxy-ams ams    # Amsterdam"
     echo ""
-    echo "Create instances at: https://my.vultr.com/deploy/"
+    echo "Create instances at: your provider dashboard"
     echo "  Type: Cloud Compute (Regular)"
     echo "  Plan: vc2-1c-1gb (\$6/mo)"
     echo "  OS:   Ubuntu 24.04 LTS"
@@ -189,9 +189,9 @@ echo "      - targets: [\"$NODE_IP:8080\"]"
 echo "        labels:"
 echo "          node_id: \"$NODE_ID\""
 echo "          region: \"$REGION\""
-echo "          provider: \"vultr\""
+echo "          provider: \"your-provider\""
 echo ""
-echo "  ── Add to deploy-vultr.sh ──"
+echo "  ── Add to deploy.sh ──"
 echo "      NODES[\"$NODE_ID\"]=\"$NODE_IP\""
 echo ""
 echo "  ── Add to mesh-health.sh BUILTIN_NODES ──"

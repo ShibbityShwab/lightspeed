@@ -89,7 +89,7 @@ All metrics include `region` and `node_id` labels.
      labels:
        node_id: "proxy-new"
        region: "new-region"
-       provider: "vultr"
+       provider: "your-provider"
    ```
 
 The dashboard automatically picks up new nodes via label queries.

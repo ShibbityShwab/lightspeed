@@ -50,7 +50,7 @@
 
 ## InfraDev
 
-**Role:** Vultr/Oracle Cloud infrastructure
+**Role:** any Always Free tier provider infrastructure
 
 **Expertise:**
 - Cloud infrastructure provisioning (Terraform, Fly.io)

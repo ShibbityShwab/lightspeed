@@ -22,13 +22,11 @@
 The project uses a specialized agent system defined in `wat/archive/agents.md`. Key agents include:
 - **Architect** — System design and technical decisions
 - **RustDev** — Rust systems programming (Tokio, pcap, quinn, linfa)
-- **InfraDev** — Vultr/Oracle Cloud infrastructure
+- **InfraDev** — Cloud infrastructure (any Always Free tier provider)
 - **NetEng** — Network engineering, BGP, UDP tunnels
 - **QAEngineer** — Testing, benchmarks, game compatibility
 - **SecOps** — Security, anti-abuse
 - **DevOps** — CI/CD, deployment
-
-For Cline users, invoke the `@lightspeed` skill (`.clineskills/lightspeed.md`) to run the autonomy loop.
 
 ## Quick Reference
 

@@ -1,31 +1,31 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────────────
-# LightSpeed — Provision New Vultr Proxy Nodes
+# LightSpeed — Provision New Proxy Nodes
 #
-# Creates new Vultr instances for mesh expansion using the API.
+# Creates new VPS for mesh expansion using the API.
 # Installs the proxy binary, systemd service, and proxy config.
 #
 # Usage:
-#   export VULTR_API_KEY="your-api-key"
-#   ./provision-vultr.sh [region...]
+#   export VPS_API_KEY="your-api-key"
+#   ./provision.sh [region...]
 #
 # Examples:
-#   ./provision-vultr.sh ewr ams         # US-East + EU-West
-#   ./provision-vultr.sh ewr ams nrt     # + Japan
-#   ./provision-vultr.sh --list-regions  # Show available regions
+#   ./provision.sh ewr ams         # US-East + EU-West
+#   ./provision.sh ewr ams nrt     # + Japan
+#   ./provision.sh --list-regions  # Show available regions
 #
 # Prerequisites:
-#   - Vultr API key (https://my.vultr.com/settings/#settingsapi)
-#   - SSH key already uploaded to Vultr (or specify VULTR_SSH_KEY_ID)
+#   - YOUR API key (YOUR provider settings page)
+#   - SSH key already uploaded to your provider (or specify VPS_SSH_KEY_ID)
 #   - jq, curl
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VULTR_API="${VULTR_API_KEY:-}"
-VULTR_API_URL="https://api.vultr.com/v2"
+PROVIDER_API_KEY="${VPS_API_KEY:-}"
+VPS_API_URL="https://YOUR_PROVIDER_API_ENDPOINT/v2"
 PLAN="vc2-1c-1gb"  # $6/mo — 1 vCPU, 1GB RAM, 25GB SSD (cheapest with IPv4)
 OS_ID=2136          # Ubuntu 24.04 LTS
-SSH_KEY_ID="${VULTR_SSH_KEY_ID:-}"
+SSH_KEY_ID="${VPS_SSH_KEY_ID:-}"
 
 # ── Node name mapping ────────────────────────────────────────
 declare -A REGION_NAMES
@@ -52,13 +52,13 @@ api() {
     local method="$1" endpoint="$2"
     shift 2
     curl -sf -X "$method" \
-        -H "Authorization: Bearer $VULTR_API" \
+        -H "Authorization: Bearer $PROVIDER_API_KEY" \
         -H "Content-Type: application/json" \
-        "$VULTR_API_URL/$endpoint" "$@"
+        "$VPS_API_URL/$endpoint" "$@"
 }
 
 list_regions() {
-    echo "Available Vultr regions:"
+    echo "Available provider regions:"
     api GET "regions" | jq -r '.regions[] | select(.options | index("vc2")) | "\(.id)\t\(.city), \(.country)"' | sort
 }
 
@@ -82,7 +82,7 @@ mkdir -p /etc/lightspeed
 
 # Download latest proxy binary from GitHub release (or GHCR)
 # For now, placeholder — will be replaced by SCP deploy
-echo "LightSpeed proxy node provisioned. Run deploy-vultr.sh to install binary."
+echo "LightSpeed proxy node provisioned. Run deploy.sh to install binary."
 
 # Create systemd service
 cat > /etc/systemd/system/lightspeed-proxy.service << "UNIT"
@@ -121,10 +121,10 @@ ufw --force enable
 '
 
 # ── Main ─────────────────────────────────────────────────────
-if [ -z "$VULTR_API" ]; then
-    echo -e "${RED}Error: VULTR_API_KEY not set${NC}"
-    echo "  export VULTR_API_KEY='your-api-key-here'"
-    echo "  Get it from: https://my.vultr.com/settings/#settingsapi"
+if [ -z "$PROVIDER_API_KEY" ]; then
+    echo -e "${RED}Error: VPS_API_KEY not set${NC}"
+    echo "  export VPS_API_KEY='your-api-key-here'"
+    echo "  Get it from: YOUR provider settings page"
     exit 1
 fi
 
@@ -147,7 +147,7 @@ fi
 if [ -z "$SSH_KEY_ID" ]; then
     SSH_KEY_ID=$(get_ssh_keys)
     if [ -z "$SSH_KEY_ID" ]; then
-        echo -e "${RED}No SSH key found in Vultr account. Upload one first.${NC}"
+        echo -e "${RED}No SSH key found in provider account. Upload one first.${NC}"
         exit 1
     fi
     echo "Using SSH key: $SSH_KEY_ID"
@@ -159,7 +159,7 @@ echo "  Plan:    $PLAN"
 echo "  Regions: $*"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Create startup script in Vultr
+# Create startup script on provider
 echo -e "\n${CYAN}Creating startup script...${NC}"
 SCRIPT_RESP=$(api POST "startup-scripts" -d "{
     \"name\": \"lightspeed-proxy-init\",
@@ -211,9 +211,9 @@ for region in "$@"; do
             echo "      labels:"
             echo "        node_id: \"$node_name\""
             echo "        region: \"$region\""
-            echo "        provider: \"vultr\""
+            echo "        provider: \"your-provider\""
             echo ""
-            echo "  Add to deploy-vultr.sh:"
+            echo "  Add to deploy.sh:"
             echo "    NODES[\"$node_name\"]=\"$IP\""
             echo ""
             echo "  Deploy proxy:"
@@ -233,6 +233,6 @@ echo -e "${GREEN}✅ Provisioning complete${NC}"
 echo ""
 echo "Next steps:"
 echo "  1. Wait ~2min for instances to boot"
-echo "  2. Run: ./deploy-vultr.sh  (deploys proxy binary to all nodes)"
+echo "  2. Run: ./deploy.sh  (deploys proxy binary to all nodes)"
 echo "  3. Update infra/monitoring/prometheus/prometheus.yml with new IPs"
 echo "  4. Restart Prometheus: curl -X POST http://localhost:9090/-/reload"

@@ -162,3 +162,25 @@
 Compiles cleanly on Linux (`cargo check -p lightspeed-gui`), merges without conflicts against current master.
 **Impact:** Makes `lightspeed-gui` buildable and runnable on Linux (previously Windows-only). The proxy manager removes the need for environment variable restarts.
 **Alternatives Considered:** Requesting changes to add persistent proxy storage — deferred to a follow-up PR (contributor explicitly noted "Persistence is intentionally omitted").
+
+### 2026-08-03: Project Cleanup — Harness Consolidation & Provider Genericization
+
+**Agent:** Architect + RustDev
+**Status:** Accepted
+**Rationale:** The project had accumulated 4 overlapping agentic harnesses (.kilo/, .clineskills/, .clinerules, kilo.jsonc + wat/AGENTS.md) from different eras, plus Vultr/OCI/Fly.io provider sprawl across scripts, CI, and docs. The cleanup consolidates to a single canonical harness (wat/ + AGENTS.md) and makes all hosting documentation provider-agnostic.
+**Impact:**
+- **Deleted:** `.kilo/` (12 files — duplicate agent definitions), `.clineskills/` (2 files — Cline wrappers), `.clinerules`, `kilo.jsonc`
+- **Deleted:** `infra/archive/` (OCI Terraform + Fly.io — dead code, preserved in git history)
+- **Deleted:** `infra/docker/Dockerfile.proxy` (duplicate, older Dockerfile)
+- **Deleted:** `tools/vultr-mcp/` (stale Vultr-specific MCP server)
+- **Deleted:** `tools/e2e_test.js` (duplicate of e2e_test.py)
+- **Deleted:** `load-test-results.json` (test artifact, added to .gitignore)
+- **Renamed:** `deploy-vultr.sh` → `deploy.sh`, `provision-vultr.sh` → `provision.sh` (all Vultr branding removed)
+- **Rewritten:** `infra/README.md` — provider-agnostic, simplified to 3 deployment options
+- **Updated:** `deploy.yml` — genericized, references `deploy.sh`
+- **Updated:** `docker-compose.yml` — references `Dockerfile` not `Dockerfile.proxy`
+- **Updated:** `.gitignore` — cleaned stale entries, added `load-test-results.json`
+- **Updated:** `AGENTS.md` — removed Cline/Kilo references
+- **Updated:** `wat/archive/agents.md`, `wat/rules.md` — "any Always Free tier provider"
+- **Consolidated:** Removed duplicate `security` job from `ci.yml` (already in `security.yml`)
+**Alternatives Considered:** Keeping .kilo/ for backward compatibility — rejected because it was never canonical and duplicated wat/. Keeping OCI Terraform — rejected because it's dead code and git history preserves it.

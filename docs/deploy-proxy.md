@@ -1,91 +1,14 @@
 # Deploy a LightSpeed Proxy
 
-> Deploy your own zero-cost proxy relay on Vultr or Oracle Cloud Always Free tier.
+> Deploy your own zero-cost proxy relay on any Linux VPS with a free tier.
 
-## Quickstart (Vultr)
+## Quickstart
 
-1. **Create a Vultr VPS** — the $6/mo plan has a [free trial credit](https://www.vultr.com/free/)
-2. **SSH in** and run:
+See the full deployment guide in **[`infra/README.md`](../infra/README.md)** — it covers:
 
-```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source ~/.cargo/env
-
-# Clone and build
-git clone https://github.com/ShibbityShwab/lightspeed.git
-cd lightspeed
-cargo build --release -p lightspeed-proxy
-```
-
-3. **Configure** — create `proxy.toml`:
-
-```toml
-[proxy]
-listen_addr = "0.0.0.0:4434"
-http_addr = "0.0.0.0:8080"
-
-[auth]
-enabled = false   # Set to true and add tokens for production
-tokens = []
-
-[abuse]
-max_pps = 10000
-max_bps = 10485760
-```
-
-4. **Run**:
-
-```bash
-sudo ./target/release/lightspeed-proxy
-```
-
-5. **Open firewall** (Vultr dashboard → Firewall → add UDP 4434 + TCP 8080)
-
-6. **Test from your PC**:
-
-```bash
-lightspeed --proxy YOUR_VULTR_IP:4434 --game rust
-```
-
-## Oracle Cloud Always Free
-
-Oracle's Always Free tier includes 4 ARM cores + 24 GB RAM — complete overkill for a proxy (~500 KB RAM), but it's permanent and free.
-
-```bash
-# On Oracle Linux / Ubuntu ARM64
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source ~/.cargo/env
-git clone https://github.com/ShibbityShwab/lightspeed.git
-cd lightspeed
-cargo build --release -p lightspeed-proxy
-```
-
-Same `proxy.toml` config as above.
-
-## Systemd Service
-
-```ini
-# /etc/systemd/system/lightspeed-proxy.service
-[Unit]
-Description=LightSpeed Proxy
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/home/ubuntu/lightspeed/target/release/lightspeed-proxy
-Restart=always
-RestartSec=5
-User=nobody
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now lightspeed-proxy
-```
+- **Option A:** Native binary + systemd (recommended, ~500KB RAM)
+- **Option B:** Docker (pull from GHCR or build locally)
+- **Option C:** Automated deploy script
 
 ## Multi-Node Mesh
 
@@ -99,7 +22,7 @@ For best results, deploy 2-3 nodes in different regions:
 | Frankfurt | ~170 ms |
 | Sydney | ~115 ms |
 
-Add all proxies to your `lightspeed.toml`:
+Add all proxies to your config:
 
 ```toml
 [proxy]

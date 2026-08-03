@@ -10,7 +10,7 @@ services:
   proxy:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.proxy
+      dockerfile: infra/docker/Dockerfile
     ports:
       - "4434:4434/udp"
       - "8080:8080/tcp"
@@ -18,7 +18,7 @@ services:
     environment:
       - RUST_LOG=info
     healthcheck:
-      test: ["CMD", "lightspeed-proxy", "--check"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s
       timeout: 3s
       retries: 3

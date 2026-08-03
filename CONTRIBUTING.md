@@ -60,7 +60,7 @@ Use [GitHub Discussions](https://github.com/ShibbityShwab/lightspeed/discussions
 ### 🌐 Run Your Own Proxy Node
 LightSpeed is **self-hosted** — there is no shared network. You run your own proxy on a VPS near the game servers you play on. This is the core model.
 
-1. Get a Linux VPS ($5-6/mo on Vultr, or free with Oracle Cloud Always Free)
+1. Get a Linux VPS (any provider with a free tier — see infra/README.md)
 2. Follow the setup guide in [`infra/README.md`](infra/README.md)
 3. Use `infra/scripts/setup-new-node.sh` for automated setup
 4. Requires: Linux VPS, UDP ports 4433/4434 open, 512MB RAM minimum
@@ -111,7 +111,7 @@ lightspeed/
 cargo test --workspace
 
 # E2E test against your proxy node (requires YOUR_PROXY_IP to be running)
-node tools/e2e_test.js
+python3 tools/e2e_test.py
 
 # Load test against your own node
 python tools/load_test.py YOUR_PROXY_IP --duration 60
@@ -149,9 +149,6 @@ bash setup-new-node.sh YOUR_VPS_IP your-node-id your-region
 ### Supported Cloud Providers (Free Tier Available)
 | Provider | Instance | Free Period | Notes |
 |----------|----------|------------|-------|
-| Vultr | Cloud Compute | With credits | $300 credit for new accounts |
-| Oracle Cloud | E2.1.Micro | Forever | 2 instances per region |
-| Fly.io | shared-cpu-1x | Limited | 3 free VMs |
 
 ---
 

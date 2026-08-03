@@ -1,31 +1,31 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────────────
-# LightSpeed — Deploy Updated Proxy to Vultr Mesh
+# LightSpeed — Deploy Updated Proxy to Mesh Nodes
 #
 # Cross-compiles the proxy binary for Linux x86_64, uploads via
 # SCP, and restarts the systemd service on each node.
 #
 # Usage:
-#   ./deploy-vultr.sh                    # Deploy to all nodes
-#   ./deploy-vultr.sh proxy-lax          # Deploy to specific node
-#   ./deploy-vultr.sh --build-only       # Just compile, don't deploy
+#   ./deploy.sh                    # Deploy to all nodes
+#   ./deploy.sh proxy-lax          # Deploy to specific node
+#   ./deploy.sh --build-only       # Just compile, don't deploy
 #
 # Prerequisites:
-#   - SSH key at ~/.ssh/lightspeed_vultr (or set DEPLOY_SSH_KEY)
+#   - SSH key at ~/.ssh/lightspeed_deploy (or set DEPLOY_SSH_KEY)
 #   - Rust cross-compilation target: rustup target add x86_64-unknown-linux-gnu
 #   - Or use cross: cargo install cross
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────
-SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/lightspeed_vultr}"
+SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/lightspeed_deploy}"
 SSH_USER="${DEPLOY_SSH_USER:-root}"
 SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes"
 BINARY_NAME="lightspeed-proxy"
 REMOTE_BINARY="/usr/local/bin/${BINARY_NAME}"
 SERVICE_NAME="lightspeed-proxy"
 
-# Vultr mesh nodes.
+# Proxy mesh nodes.
 # Set LIGHTSPEED_NODES as a JSON object, or add entries to the NODES map below.
 # Example: export LIGHTSPEED_NODES='{"proxy-lax":{"ip":"1.2.3.4"}}'
 # Run setup-new-node.sh to provision a new node, then add it below.
@@ -66,7 +66,7 @@ for arg in "$@"; do
     esac
 done
 
-echo "⚡ LightSpeed Proxy — Vultr Deployment"
+echo "⚡ LightSpeed Proxy — Proxy Deployment"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── Step 1: Build ────────────────────────────────────────────
@@ -108,7 +108,7 @@ echo -e "\n${CYAN}[2/3] Verifying SSH access...${NC}"
 
 if [ ! -f "$SSH_KEY" ]; then
     echo -e "${RED}❌ SSH key not found: $SSH_KEY${NC}"
-    echo "  Set DEPLOY_SSH_KEY or place key at ~/.ssh/lightspeed_vultr"
+    echo "  Set DEPLOY_SSH_KEY or place key at ~/.ssh/lightspeed_deploy"
     exit 1
 fi
 
