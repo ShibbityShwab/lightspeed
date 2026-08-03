@@ -7,9 +7,6 @@ on:
       - 'docs/**'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   sync:
     name: Sync docs/ → GitHub Wiki
@@ -18,51 +15,49 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Setup Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Sync to Wiki
         env:
-          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          WIKI_URL="https://x-access-token:${WIKI_TOKEN}@github.com/${{ github.repository }}.wiki.git"
-
-          # Try to clone wiki repo; initialize if it doesn't exist
-          if git clone "$WIKI_URL" wiki-repo 2>/dev/null; then
-            echo "Wiki repo cloned"
-          else
+          # Clone wiki using gh CLI (pre-installed, handles auth)
+          gh repo clone "${{ github.repository }}.wiki" wiki-repo 2>/dev/null || {
             echo "Initializing wiki..."
             mkdir wiki-repo && cd wiki-repo
             git init && git checkout -b master
             echo "# LightSpeed Wiki" > Home.md
             git add Home.md && git commit -m "init"
-            git remote add origin "$WIKI_URL"
-            git push -u origin master --force || echo "Push failed - wiki may need to be enabled in repo Settings > Features"
+            git remote add origin "https://${GH_TOKEN}@github.com/${{ github.repository }}.wiki.git"
+            git push -u origin master --force
             cd .. && rm -rf wiki-repo
-            git clone "$WIKI_URL" wiki-repo || echo "Wiki clone failed - enable Wiki in repo Settings"
-          fi
+            gh repo clone "${{ github.repository }}.wiki" wiki-repo
+          }
 
-          if [ -d wiki-repo ]; then
-            cd wiki-repo
-            find . -name "*.md" ! -name "_*" -delete 2>/dev/null || true
-            for f in ../docs/*.md; do
-              base=$(basename "$f")
-              sed 's|\.md)|)|g' "$f" > "$base"
-              git add "$base"
-            done
-            mkdir -p archive
-            for f in ../docs/archive/*.md; do
-              [ -f "$f" ] || continue
-              base=$(basename "$f")
-              sed 's|\.md)|)|g' "$f" > "archive/$base"
-              git add "archive/$base"
-            done
-            if git diff --staged --quiet; then
-              echo "No changes"
-            else
-              git commit -m "Sync docs/ @ ${{ github.sha }}"
-              git push origin master || echo "Push failed - set WIKI_TOKEN secret with a PAT"
-            fi
+          cd wiki-repo
+
+          # Remove old pages
+          find . -name "*.md" ! -name "_*" -delete 2>/dev/null || true
+
+          # Copy all docs pages
+          for f in ../docs/*.md; do
+            base=$(basename "$f")
+            sed 's|\.md)|)|g' "$f" > "$base"
+            git add "$base"
+          done
+
+          # Copy archive
+          mkdir -p archive
+          for f in ../docs/archive/*.md; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            sed 's|\.md)|)|g' "$f" > "archive/$base"
+            git add "archive/$base"
+          done
+
+          # Push
+          if git diff --staged --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Sync docs/"
+            git push origin master
+            echo "Wiki updated!"
           fi
