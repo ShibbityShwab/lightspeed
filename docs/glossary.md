@@ -1,62 +1,75 @@
-# LightSpeed Glossary
-
-> **How this is used:** Every tooltip in the LightSpeed app links back to a section on this page.  
-> The left column is what you see **in the app**; the right is the technical name used in code and docs.
+# Glossary
 
 ---
 
 ## Core Concepts
 
-| **In the App**           | **Technical Name**          | **What it means**                                                                                                                                   |
-|--------------------------|-----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| Boost Server             | Proxy node                  | A LightSpeed relay server in a major city. Your game packets travel through this server instead of the slow default route.                           |
-| Boost Ping               | Proxy RTT                   | The round-trip time (in milliseconds) from your PC to the Boost Server. Lower = faster.                                                             |
-| Boost Engaged / BOOSTED  | WinDivert active            | The kernel-level intercept is running. Your game's connection is fully routed through the Boost Server.                                              |
-| Finding your game server | Auto-detection / debounce   | LightSpeed watches your outbound UDP packets and identifies the game server IP automatically — no manual config needed.                              |
-| Packets Sent             | packets_intercepted         | Game packets captured at the OS level and forwarded to the Boost Server.                                                                             |
-| Packets Returned         | packets_from_proxy          | Responses from the Boost Server (which it relayed from the game server).                                                                             |
-| Packets Delivered        | packets_injected            | Spoofed responses injected back to your game client so it thinks they came directly from the game server.                                            |
-| Lost packets recovered   | FEC recovered               | Forward Error Correction rebuilt a packet that was dropped in transit — your game never noticed.                                                     |
-| Reliability Shield       | FEC (Forward Error Correction) | An optional mode that sends extra redundancy data (+25% bandwidth) so the Boost Server can reconstruct dropped packets before they hurt your gameplay. |
-| Deep Boost               | Active redirect / WinDivert | The strongest mode — intercepts packets at the Windows kernel level. Requires Administrator. Used automatically when available.                       |
-| Heartbeat                | Keepalive                   | A tiny "are you still there?" message sent every 5 seconds between your app and the Boost Server to measure latency and keep the connection alive.   |
-| Drops                    | Inject errors               | Packets that couldn't be delivered back to your game — usually a sign of a driver permission issue.                                                  |
-| Server Switch            | Re-detection                | When you disconnect from one game server and join another, LightSpeed automatically detects the new server within ~5 seconds.                       |
+**Proxy Node (Boost Server):** A lightweight UDP relay server (~500KB RAM) that forwards game traffic between your PC and game servers through a faster backbone path. You run your own proxy on any Linux VPS.
+
+**Interceptor:** The OS-level component that captures outbound game UDP packets before they leave your network interface and redirects them through the proxy. Uses nftables/iptables (Linux), pfctl (macOS), or WinDivert (Windows).
+
+**Tunnel:** The encapsulated UDP connection between your PC and the proxy node. Game packets are wrapped in a 20-byte LightSpeed header that preserves the original source/destination IPs.
+
+**Session Token:** An 8-bit authentication token assigned by the proxy during registration. Included in every data-plane packet to prevent unauthorized relay usage.
 
 ---
 
-## Status Indicators
+## Routing & Performance
 
-| **Indicator**        | **Meaning**                                                                                             |
-|----------------------|---------------------------------------------------------------------------------------------------------|
-| ● Green              | Connected to Boost Server and all systems working.                                                      |
-| ● Yellow / Amber     | Connected to Boost Server but boost not yet active (waiting for game to launch).                        |
-| ● Red                | Disconnected from Boost Server or an error occurred. Check your internet connection.                    |
-| ⚡ Yellow bolt (tray) | Boost is engaged — game traffic is being optimised.                                                     |
-| ⚡ Grey bolt (tray)  | Disconnected — LightSpeed is running in the background but not active.                                  |
-| ⚡ Green bolt (tray) | Actively optimising game traffic.                                                                        |
-| ⚡ Red bolt (tray)   | Error state — click the tray icon to open the app and see the error message.                            |
+**FEC (Forward Error Correction):** XOR-based packet loss recovery. For every K data packets, one parity packet is sent. If any single packet in the block is lost, it can be reconstructed from the remaining packets. Uses ~25% bandwidth at K=4 (vs. ExitLag's 200% duplication approach).
 
----
+**K (Block Size):** Number of data packets per FEC parity packet. Default is 4 (25% overhead). Higher K = less overhead but less protection against burst loss.
 
-## Ping / Latency Colours
+**RTT (Round-Trip Time):** The time in milliseconds for a packet to travel from your PC to the proxy and back. Measured continuously during keepalive probing.
 
-| **Colour** | **Range**    | **What it means**                 |
-|------------|--------------|-----------------------------------|
-| 🟢 Green   | < 60 ms      | Excellent — you won't notice lag. |
-| 🟡 Yellow  | 60 – 120 ms  | Acceptable for most games.        |
-| 🔴 Red     | > 120 ms     | High — may cause rubber-banding.  |
+**Keepalive:** Periodic empty packets sent between client and proxy to measure RTT and maintain the session. Sent every 5 seconds.
+
+**Multipath:** Sending data packets on one path and FEC parity packets on a secondary path. If the primary path drops a packet, it's recovered from the parity on the secondary path.
 
 ---
 
 ## Modes
 
-| **Mode**        | **When it's used**                                     | **Requires**                        |
-|-----------------|-------------------------------------------------------|--------------------------------------|
-| Deep Boost (WinDivert) | Default when running as Administrator.         | Admin rights, WinDivert64.sys        |
-| Manual Boost    | Advanced panel — you type the server IP:port yourself. | Nothing (no Admin needed)           |
-| Reliability Shield | Add-on to either mode. Optional, uses +25% data.  | Nothing extra                        |
+**Interceptor Mode (`--start-interceptor`):** Kernel-level MITM that transparently redirects game traffic through the proxy. No game configuration needed — the game connects normally.
+
+**Redirect Mode (`--game-server`):** The game connects to localhost on a specific port, and LightSpeed forwards traffic to the real server through the proxy. No root required.
+
+**Capture Mode (`--capture`):** Uses libpcap to read packets from a network interface. Requires the `pcap-capture` feature and elevated privileges.
+
+**Watch Mode (`--watch`):** Monitors for a game process and automatically starts the interceptor when the game launches.
 
 ---
 
-*Last updated: 2026-05 · [Back to docs index](../docs/README.md) · [Wiki home](https://github.com/ShibbityShwab/lightspeed/wiki)*
+## Protocol
+
+**Tunnel Header:** 20-byte binary header prepended to every game packet in the tunnel. Contains version, flags, session token, sequence number, timestamp, and original source/destination IP/port.
+
+**FEC Header:** 4-byte extension appended after the tunnel header when FEC is active. Contains block ID, packet index, and block size.
+
+**Control Plane:** QUIC-based channel for proxy registration, session token distribution, and health checks. Separate from the data plane (UDP tunnel).
+
+**Data Plane:** The actual UDP tunnel carrying game packets. Unencrypted by design to remain compatible with anti-cheat systems.
+
+---
+
+## Infrastructure
+
+**VPS (Virtual Private Server):** A cloud-hosted virtual machine running Linux. LightSpeed proxies run on VPS instances with as little as 512MB RAM.
+
+**systemd:** Linux service manager. The proxy runs as a systemd service for automatic startup and crash recovery.
+
+**GHCR (GitHub Container Registry):** Where pre-built Docker images of the proxy are published: `ghcr.io/shibbityshwab/lightspeed-proxy`.
+
+---
+
+## Anti-Cheat
+
+**EAC (EasyAntiCheat):** Used by Rust, Fortnite, Apex Legends. Compatible with LightSpeed.
+
+**VAC (Valve Anti-Cheat):** Used by CS2, Dota 2. Compatible.
+
+**BattlEye:** Used by Fortnite, PUBG. Compatible.
+
+**Riot Vanguard:** Used by Valorant, League of Legends. Compatible.
+
+**Blizzard Warden:** Used by Overwatch 2. Compatible.

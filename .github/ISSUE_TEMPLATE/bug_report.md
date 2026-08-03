@@ -1,41 +1,34 @@
 ---
 name: Bug Report
-about: Something isn't working right
-title: '[BUG] '
+about: Something isn't working correctly
+title: "[Bug] "
 labels: bug
 assignees: ''
 ---
 
-## What happened?
+**Describe the bug**
+A clear and concise description of what went wrong.
 
-<!-- Describe the bug clearly -->
+**To Reproduce**
+Steps to reproduce the behavior:
+1. Ran `lightspeed ...`
+2. Connected to game server at `...`
+3. Observed `...`
 
-## What did you expect?
+**Expected behavior**
+What should have happened instead.
 
-<!-- What should have happened? -->
+**Environment:**
+- OS: [e.g. Windows 11, Ubuntu 24.04, macOS 15]
+- LightSpeed version: [e.g. v0.5.1 — run `lightspeed --version`]
+- Game: [e.g. Rust, CS2]
+- Proxy region: [e.g. US-West, Singapore]
 
-## Steps to reproduce
-
-1. 
-2. 
-3. 
-
-## Environment
-
-- **OS:** <!-- Windows 11 / Ubuntu 22.04 / macOS 14 -->
-- **Game:** <!-- Fortnite / CS2 / Dota 2 / other -->
-- **Proxy node:** <!-- relay-sgp (Singapore) / proxy-lax (US-West) / self-hosted -->
-- **LightSpeed version:** <!-- v0.3.0 / built from source (commit hash) -->
-
-## Logs
-
-<!-- Run with RUST_LOG=debug and paste relevant output here -->
-```
-paste logs here
+**Logs**
+Run with debug logging and attach the output:
+```bash
+RUST_LOG=debug lightspeed [your command] 2>&1 | tee lightspeed.log
 ```
 
-## Ping before / after
-
-<!-- If relevant: your ping before and after using LightSpeed -->
-- Before: ___ ms
-- After: ___ ms
+**Additional context**
+Any other information that might help.

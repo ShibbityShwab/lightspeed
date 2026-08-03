@@ -1,135 +1,162 @@
 # LightSpeed User Guide
 
-> **TL;DR:** Install → run as Admin → click **⚡ BOOST MY GAME** → launch game → connect to any server. Done.
+> Step-by-step instructions for reducing your ping with LightSpeed.
 
 ---
 
-## What is LightSpeed?
+## How LightSpeed Works
 
-LightSpeed is a free network optimizer for multiplayer games. It reroutes your game traffic through strategically placed relay servers (Boost Servers) to find a faster path to your game server than your ISP's default route.
+Your ISP routes game traffic through paths optimized for cost, not speed. LightSpeed intercepts your game's UDP packets and tunnels them through a **proxy node** — a lightweight relay server you control — that sits in a data center with high-speed backbone connections to game server regions. If that path is faster than your ISP's default route, your ping drops.
 
-**What this means for you:**
-- Lower in-game ping
-- Fewer rubber-banding and lag spikes  
-- More consistent connection (especially on intercontinental servers)
-- Zero cost — LightSpeed is free and open source
-
----
-
-## System Requirements
-
-| Requirement        | Details                                           |
-|--------------------|---------------------------------------------------|
-| Operating System   | Windows 10 / 11 (64-bit)                          |
-| Privileges         | Run as **Administrator** for best (deep boost) mode |
-| Files              | `WinDivert64.sys` and `WinDivert.dll` next to the `.exe` |
-| Internet           | Any connection — LightSpeed works on Wi-Fi and Ethernet |
+```
+Your PC ──→ ISP (slow path) ──→ Game Server        ❌ High ping
+Your PC ──→ LightSpeed Proxy (fast backbone) ──→ Game Server   ✅ Low ping
+```
 
 ---
 
-## Quick Start (60 seconds)
+## Prerequisites
 
-### Step 1 — Download
+- A LightSpeed proxy node running somewhere (see [Deploy Proxy](deploy-proxy.md) — takes 5 minutes)
+- The `lightspeed` CLI tool or `lightspeed-gui` (Windows)
+- For interceptor mode: root/Administrator privileges
 
-Grab the latest release ZIP from the [Releases page](https://github.com/ShibbityShwab/lightspeed/releases).  
-Extract all files to a folder. Keep `WinDivert64.sys` and `WinDivert.dll` in the same folder as `lightspeed-gui.exe`.
+---
 
-### Step 2 — Run as Administrator
+## Quick Start (CLI — All Platforms)
 
-Right-click `lightspeed-gui.exe` → **Run as administrator**.
+### 1. Check your environment
 
-> **Why?** The Deep Boost mode intercepts packets at the OS kernel level, which requires elevated rights — just like VPN software.
+```bash
+lightspeed --check
+```
 
-If you forget, the app will show a yellow warning and a **🔑 Restart as Administrator** button.
+This verifies that your OS has the required packet filtering tools (nftables/iptables on Linux, pfctl on macOS, WinDivert on Windows).
 
-### Step 3 — Choose your Boost Server
+### 2. Probe your proxies
 
-The app shows available Boost Servers with their ping to you.  
-Pick the one closest to your **game server**, not necessarily closest to your house.
+```bash
+lightspeed --probe-proxies
+```
 
-> *Example: If you're in Australia playing on a US East game server, pick the US East Boost Server even if it's farther from you — it has a faster backbone route to the game server.*
+Shows latency to each configured proxy. Pick the one closest to your **game server**, not your location.
 
-### Step 4 — Choose your game
+### 3. Start the interceptor
 
-Select your game from the dropdown. LightSpeed knows the UDP port ranges for 9 popular titles and will auto-detect the game server.
+```bash
+# Linux/macOS (requires root)
+sudo lightspeed --start-interceptor --game rust --proxy YOUR_PROXY_IP:4434
 
-### Step 5 — Click ⚡ BOOST MY GAME
+# Windows (requires Administrator)
+lightspeed --start-interceptor --game rust --proxy YOUR_PROXY_IP:4434
+```
 
-The button activates Deep Boost mode. The status changes to **"🎯 Finding your game server…"**
+### 4. Launch your game
 
-### Step 6 — Launch your game and connect
+Connect to any server normally. LightSpeed auto-detects the game server from outbound packets and begins tunneling within seconds.
 
-Open your game normally and connect to any game server. Within a few seconds LightSpeed will see your packets and show:
+### 5. Monitor
 
+The CLI displays live stats:
 ```
 ⚡ BOOST ENGAGED — 123.45.67.89:28015
 Packets Sent: 142 | Packets Returned: 139 | Packets Delivered: 139
 ```
 
-Your in-game ping now reflects the route through the Boost Server. If the Boost Server route is faster than your direct route, you'll see a lower ping.
+---
 
-### Step 7 — Play!
+## Quick Start (GUI — Windows)
 
-That's it. LightSpeed runs silently in the background. When you're done, click **Stop Boost** or right-click the tray icon → **Disconnect**.
+### 1. Download
+
+Grab the latest release from [Releases](https://github.com/ShibbityShwab/lightspeed/releases). Extract all files — keep `WinDivert64.sys` and `WinDivert.dll` next to `lightspeed-gui.exe`.
+
+### 2. Run as Administrator
+
+Right-click `lightspeed-gui.exe` → **Run as administrator**. The interceptor needs kernel-level access (same as VPN software).
+
+### 3. Pick a proxy and game
+
+Select your proxy from the dropdown and choose your game.
+
+### 4. Click **⚡ BOOST MY GAME**
+
+Status changes to "🎯 Finding your game server…"
+
+### 5. Launch your game
+
+Connect to any server. LightSpeed auto-detects it within seconds.
 
 ---
 
-## What the numbers mean
+## Choosing the Right Proxy
 
-| Number             | What it tracks                                                        |
-|--------------------|-----------------------------------------------------------------------|
-| **Boost Ping**     | Milliseconds from your PC to the Boost Server. Aim for < 100ms.     |
-| **Packets Sent**   | Game packets intercepted and forwarded to the Boost Server.          |
-| **Packets Returned** | Responses from the Boost Server (forwarded from game server).      |
-| **Packets Delivered** | Responses injected back to your game client.                      |
+| You're in | Game server in | Best proxy region |
+|-----------|---------------|-------------------|
+| Australia | US West | US West (Los Angeles) |
+| Europe | US East | US East (New York) |
+| Southeast Asia | Singapore | Singapore |
+| South America | US East | US East (Miami) |
+| Anywhere | Same region | Closest to game server |
 
-**Healthy session:** Sent ≈ Returned ≈ Delivered. If Delivered is much lower than Returned, see [Troubleshooting](troubleshooting.md).
-
----
-
-## Reliability Shield (optional)
-
-Enable **Reliability Shield** before clicking BOOST MY GAME to turn on Forward Error Correction (FEC).
-
-- The Boost Server sends a small amount of extra data (~25% more bandwidth).
-- If a packet is lost in transit, the server can reconstruct it from the extra data.
-- Result: your game sees fewer dropped packets, especially useful on lossy Wi-Fi.
-
-**When to use it:** Enable if you have frequent micro-stutters or packet loss. Disable if you're on a metered connection or if your download is already saturated.
+> **Rule of thumb:** Pick the proxy closest to the **game server**, not closest to you. Your traffic goes PC → proxy → game server, so the proxy-to-game-server leg is what matters most.
 
 ---
 
-## Switching game servers mid-session
+## Forward Error Correction (FEC)
 
-If you disconnect from one server and join another (same game, different IP), LightSpeed automatically detects the new server within ~5 seconds.
+FEC adds ~25% bandwidth overhead to recover lost packets without retransmission.
 
-You'll see the status briefly show **"🎯 Finding your game server…"** again, then lock onto the new server. No manual action needed.
+**Enable when:**
+- You have packet loss (micro-stutters, rubber-banding)
+- You're on Wi-Fi with intermittent interference
 
----
+**Disable when:**
+- Your connection is already saturated
+- You're on a metered/capped connection
+- You have < 0.1% packet loss (no benefit)
 
-## Hiding to the system tray
+```bash
+# CLI: enable FEC with default block size (K=4)
+lightspeed --start-interceptor --game cs2 --proxy YOUR_PROXY:4434 --fec
 
-Click the **×** button to minimise LightSpeed to the system tray (it doesn't quit).  
-Double-click the tray bolt icon to bring the window back.  
-Right-click the tray icon for quick **Connect / Disconnect / Quit** options.
-
----
-
-## Advanced — Manual server IP
-
-If auto-detect doesn't work for your game (e.g., custom server port):
-
-1. Click **▶ Advanced — set server manually**
-2. Type the server address in `IP:port` format (e.g., `123.45.67.89:28015`)
-3. Click **▶ Start Boost (manual)**
-4. Connect your game to `127.0.0.1:<port>` as shown in the instruction box
+# Custom block size (K=8 → 12.5% overhead)
+lightspeed --start-interceptor --game cs2 --proxy YOUR_PROXY:4434 --fec --fec-k 8
+```
 
 ---
 
-## See also
+## Advanced: Manual Server Mode
 
-- [FAQ](faq.md) — Common questions
-- [Troubleshooting](troubleshooting.md) — Fix common issues
-- [Supported Games](supported-games.md) — All 9 supported titles
-- [Glossary](glossary.md) — Term definitions
-- [Wiki](https://github.com/ShibbityShwab/lightspeed/wiki)
+If auto-detection doesn't work (custom ports, unusual game):
+
+```bash
+# Redirect mode: game connects to localhost, LightSpeed forwards to real server
+lightspeed --game rust --game-server 123.45.67.89:28015 --proxy YOUR_PROXY:4434
+```
+
+Then configure your game to connect to `127.0.0.1:<port>` (the local port LightSpeed prints).
+
+---
+
+## Switching Servers Mid-Session
+
+LightSpeed automatically detects when you disconnect from one server and connect to another. The status briefly shows "🎯 Finding your game server…" and locks onto the new destination. No manual action needed.
+
+---
+
+## System Tray (Windows GUI)
+
+- Click **×** to minimize to tray (doesn't quit)
+- Double-click the bolt icon to restore
+- Right-click for quick Connect / Disconnect / Quit
+
+---
+
+## See Also
+
+- [CLI Reference](CLI-REFERENCE.md) — every flag explained
+- [FAQ](faq.md) — common questions
+- [Troubleshooting](troubleshooting.md) — fix issues
+- [Deploy Proxy](deploy-proxy.md) — run your own proxy
+- [Supported Games](supported-games.md) — game compatibility

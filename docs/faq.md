@@ -2,120 +2,125 @@
 
 ---
 
-## Getting Started
+## Basics
 
-### Do I need to pay for LightSpeed?
+### Is LightSpeed really free?
 
-No. LightSpeed is completely free and open source under the MIT license.
+Yes. LightSpeed is MIT-licensed open source. You run your own proxy on a free-tier VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
 
 ### Will LightSpeed get me banned?
 
-No. LightSpeed works exactly like commercial network optimizers (ExitLag, WTFast, NoPing). It uses a standard Windows network driver (WinDivert) that is permitted by EAC (Rust), VAC (CS2), and Vanguard (Valorant). It does not modify game files or memory.
+No. LightSpeed uses the same class of network driver (WinDivert/nftables/pfctl) as ExitLag, WTFast, and NoPing. It does not modify game files, memory, or processes. All major anti-cheat systems (EAC, VAC, BattlEye, Riot Vanguard) permit this. Game servers see your real IP address — this is a transparent tunnel, not a VPN or anonymizer.
 
-### Why do I need to run as Administrator?
+### Why does the interceptor need root/Administrator?
 
-Deep Boost mode intercepts packets at the Windows kernel level to completely reroute your game traffic. This requires elevated privileges — the same reason VPN software and antivirus programs need admin rights. If you don't want to run as admin, use the **Advanced — set server manually** option instead (no admin required, but less effective).
+Kernel-level packet interception requires elevated privileges — the same reason VPNs and firewalls need them. On Linux it uses nftables/iptables. On macOS it uses pfctl. On Windows it uses WinDivert (a signed kernel driver). Without root, you can still use redirect mode (`--game-server`).
 
-### What files do I need to keep next to the .exe?
+### What platforms are supported?
 
-- `lightspeed-gui.exe`
-- `WinDivert64.sys`
-- `WinDivert.dll`
-
-All three must be in the same folder. Download WinDivert from [reqrypt.org/windivert.html](https://reqrypt.org/windivert.html) if the files are missing.
-
----
-
-## The Boost
-
-### How does LightSpeed actually improve my ping?
-
-Your ISP routes your packets along whatever path it prefers, which often isn't the fastest. LightSpeed sends your packets through a Boost Server in a major data center that has high-speed backbone connections to game server regions. If the Boost Server's path to the game server is shorter or less congested than your ISP's path, your ping drops.
-
-### My boost ping went UP. Why?
-
-If the Boost Server adds distance to your path (e.g., you're already close to the game server), using LightSpeed will increase your ping. Try a different Boost Server, or if none are faster, don't use LightSpeed for that particular server.
-
-### Which Boost Server should I pick?
-
-Pick the server closest to your **game server**, not your own location. For example:
-- Playing on a US West game server → pick US West Boost Server
-- Playing on a Singapore game server from Australia → pick Singapore Boost Server
-
-### How long does it take to detect my game server?
-
-Usually 1–3 seconds after you connect in-game. LightSpeed watches for 3 packets to the same destination within 1.5 seconds before locking on.
-
-### I switched servers in-game and the boost stopped working. What do I do?
-
-Nothing — this is now handled automatically. LightSpeed detects that the old server has gone quiet (5 seconds of silence) and re-enters detection mode. You'll see **"🎯 Finding your game server…"** briefly, then it locks onto the new server. If it takes longer than 10 seconds, try Stop Boost → BOOST MY GAME again.
+| Platform | Interceptor | Redirect Mode | GUI |
+|----------|-------------|---------------|-----|
+| Windows 10/11 | ✅ WinDivert | ✅ | ✅ egui |
+| Linux | ✅ nftables/iptables | ✅ | ❌ CLI only |
+| macOS | ✅ pfctl | ✅ | ❌ CLI only |
+| Linux ARM64 | ✅ | ✅ | ❌ |
 
 ---
 
-## Reliability Shield
+## How It Works
 
-### What is Reliability Shield?
+### How does LightSpeed actually reduce ping?
 
-It's Forward Error Correction (FEC). The Boost Server sends a small amount of extra redundancy data alongside your game packets. If a packet is dropped between you and the Boost Server, the server can reconstruct it from the extra data — your game never sees the drop.
+Your ISP sends packets along whatever path is cheapest for them — often congested or circuitous. LightSpeed sends your packets through a proxy in a major data center with direct backbone connections to game server regions. If that path is shorter or less congested, your ping drops. Typical improvement: 10–40ms.
 
-### Should I enable Reliability Shield?
+### My ping went UP. Why?
 
-Enable it if you experience micro-stutters or packet loss. Disable it if:
-- You're on a metered / capped connection (it adds ~25% traffic)
-- Your connection is already fully saturated (it could make things worse)
-- You're on a great connection with < 0.1% packet loss (no benefit)
+If the proxy is farther from the game server than your direct path, it adds latency. Try a different proxy region. Rule of thumb: pick the proxy closest to the **game server**, not closest to you.
 
----
+### Which proxy should I pick?
 
-## Errors and Troubleshooting
+The proxy closest to the **game server region**. Examples:
+- Playing on US West servers → pick a US West proxy
+- Playing on Singapore servers from Australia → pick a Singapore proxy
+- Playing on EU servers from NA → pick a Frankfurt/London proxy
 
-### The app says "Needs to run as Administrator"
+### How fast is auto-detection?
 
-Right-click `lightspeed-gui.exe` → **Run as administrator**, or click the **🔑 Restart as Administrator** button in the app.
-
-### No game detected / packets not seen
-
-1. Make sure your game is actually running and connected to a server.
-2. Select the correct game in the dropdown.
-3. Click **🔄 Rescan** if the game was launched after LightSpeed.
-4. If your game server uses a non-standard port, use **Advanced — set server manually**.
-
-### Packets Sent is climbing but Packets Delivered is 0
-
-Your packets are reaching the Boost Server but the spoofed responses aren't making it back to your game client. This is usually a Windows Firewall issue. LightSpeed tries to add a firewall rule automatically. If it fails:
-1. Open Windows Defender Firewall → Advanced Settings
-2. Add an Inbound Rule → Program → browse to `lightspeed-gui.exe` → Allow
-
-### The app crashes immediately on launch
-
-Make sure `WinDivert64.sys` and `WinDivert.dll` are in the same folder as the `.exe`.
-
-See [Troubleshooting](troubleshooting.md) for more detailed steps.
+Usually 1–3 seconds after you connect to a game server. The interceptor watches for 3 packets to the same destination within 1.5 seconds before locking on.
 
 ---
 
-## Privacy and Security
+## FEC (Reliability Shield)
+
+### What is FEC?
+
+Forward Error Correction. The proxy sends a small amount of redundant data (~25%) alongside your packets. If a packet is lost, it can be reconstructed without retransmission. Much more efficient than ExitLag's packet duplication (which sends every packet 2–3 times, using 200–300% bandwidth).
+
+### When should I enable it?
+
+Enable if you have packet loss (micro-stutters, rubber-banding). Disable if your connection is already saturated, metered, or has negligible loss (< 0.1%).
+
+---
+
+## Running a Proxy
+
+### Do I need to run my own proxy?
+
+Yes. LightSpeed is self-hosted — there's no shared network. You deploy a lightweight proxy (~500KB RAM) on any Linux VPS. Many providers offer free tiers. See the [deployment guide](../infra/README.md).
+
+### How much does a proxy cost?
+
+Zero if you use a free tier. Options include Oracle Cloud Always Free (4 ARM cores, 24GB RAM — permanent), Google Cloud free tier, or AWS free tier. Even a paid $5/mo VPS works — the binary uses ~500KB RAM.
+
+### Can I share my proxy with friends?
+
+Yes. The proxy supports multiple concurrent sessions with per-client rate limiting and authentication. Configure tokens in `proxy.toml`.
+
+---
+
+## Troubleshooting
+
+### "No game traffic seen"
+
+- Make sure your game is actually connected to a server (not just the main menu)
+- Verify you selected the correct game (`--game` flag)
+- Try `--scan-processes` to list running game processes
+- If your server uses a non-standard port, use manual server mode (`--game-server`)
+
+### "Interceptor not available"
+
+- Linux: make sure you're running as root and nftables/iptables is installed
+- macOS: pfctl is built-in but requires root
+- Windows: ensure `WinDivert64.sys` and `WinDivert.dll` are next to the `.exe`
+
+### Packets sent but not delivered
+
+Your packets reach the proxy but responses aren't reaching your game. Usually a firewall issue. LightSpeed tries to add firewall rules automatically. If that fails, add an inbound UDP rule for `lightspeed` or `lightspeed-gui.exe` manually.
+
+---
+
+## Privacy
 
 ### Does LightSpeed read my game traffic?
 
-LightSpeed intercepts your UDP packets to forward them through the Boost Server. It can see (but does not log or store) the source/destination IP addresses and UDP payload sizes. Game content (e.g., player positions) passes through encrypted by the game's own protocol. See the full [Privacy Policy](privacy.md).
+LightSpeed sees UDP packet headers (source/destination IP, port, size) to route them. Game content (player positions, chat, etc.) is encrypted by the game's own protocol and is not decrypted or logged. See the full [Privacy Policy](privacy.md).
 
-### Is the Boost Server run by LightSpeed?
+### Is there telemetry?
 
-Currently the Boost Servers are community-run. In future releases, a dedicated server network will be available.
+Telemetry is **opt-in only** (`--telemetry` flag). When enabled, it collects anonymized aggregate metrics (RTT percentiles, FEC stats). No IP addresses, user identities, or game account data are collected. See [Privacy Policy](privacy.md).
 
 ---
 
 ## Other
 
-### Does LightSpeed work on Linux / Mac?
+### Can I use LightSpeed with a VPN?
 
-Not yet. The WinDivert kernel driver is Windows-only. Linux support using eBPF/nftables is planned.
+Generally no — both try to intercept network traffic and will conflict. Disable your VPN before using LightSpeed.
 
-### Can I run LightSpeed while using a VPN?
+### Does LightSpeed work with Cloudflare WARP?
 
-Generally no — both try to intercept your network traffic and will conflict. Disable your VPN before using LightSpeed.
+Yes. Use `--warp` to enable WARP for the proxy leg of the connection. WARP can shave 5–10ms off local ISP routing. Combine with a proxy for maximum benefit.
 
 ### Where do I report bugs?
 
-Open an issue on [GitHub](https://github.com/ShibbityShwab/lightspeed/issues) with your log output (launch from command prompt to see logs).
+[Open an issue on GitHub](https://github.com/ShibbityShwab/lightspeed/issues). Include your OS, game, and log output (run with `RUST_LOG=debug` for verbose logs).

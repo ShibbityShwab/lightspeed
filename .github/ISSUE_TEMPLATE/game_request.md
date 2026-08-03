@@ -1,31 +1,25 @@
 ---
-name: Game Support Request
+name: Game Request
 about: Request support for a new game
-title: '[GAME] '
+title: "[Game] "
 labels: game-request
 assignees: ''
 ---
 
-## Game Name
+**Game name:**
 
-<!-- e.g. Valorant, Apex Legends, Overwatch 2 -->
+**Platform(s):** [e.g. Windows, Linux, macOS]
 
-## Game Details
+**Anti-cheat system:** [e.g. EAC, VAC, BattlEye, Vanguard, None]
 
-- **Anti-cheat system:** <!-- EasyAntiCheat / Vanguard / VAC / BattlEye / none -->
-- **Protocol:** <!-- UDP / TCP / both -->
-- **Known port range:** <!-- e.g. UDP 7000-9000 -->
-- **Available on:** <!-- Windows / Linux / macOS -->
+**Default UDP port range:**
+- From: _____
+- To: _____
 
-## Why do you need LightSpeed for this?
+**Process name (Windows):** [e.g. `GameClient.exe`]
+**Binary name (Linux/macOS):** [e.g. `game-client`]
 
-<!-- What's your ping situation? Where are you located vs. the game servers? -->
+**Store page:** [Steam/Epic/other URL]
 
-- **Your location:** 
-- **Game server region:**
-- **Current ping:** ___ ms
-- **Expected improvement:** 
-
-## Additional context
-
-<!-- Anything else? Traffic captures, official documentation, etc. -->
+**Additional notes:**
+Any special networking behavior, multiple executables, launchers, etc.

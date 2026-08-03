@@ -1,26 +1,26 @@
 ---
 name: Feature Request
-about: Suggest an improvement or new capability
-title: '[FEATURE] '
+about: Suggest an idea for LightSpeed
+title: "[Feature] "
 labels: enhancement
 assignees: ''
 ---
 
-## What would you like?
+**Is your feature request related to a problem?**
+A clear description of the problem. Ex: "I'm frustrated when [...]"
 
-<!-- A clear description of the feature you'd like to see -->
+**Describe the solution you'd like**
+What should LightSpeed do?
 
-## Why is this valuable?
+**Describe alternatives you've considered**
+Other approaches or workarounds you've tried.
 
-<!-- How would this help you or other users? -->
+**Impact**
+- [ ] Would improve ping/latency
+- [ ] Would improve stability/reliability
+- [ ] Would support a new game
+- [ ] Would support a new platform
+- [ ] Other: _________
 
-## Possible implementation
-
-<!-- Optional: any ideas on how this could work technically -->
-
-## Are you willing to help build it?
-
-<!-- We welcome PRs! If you'd like to implement this, let us know -->
-- [ ] I can submit a PR for this
-- [ ] I can help test it
-- [ ] I just want to request it
+**Additional context**
+Any other details, mockups, or references.

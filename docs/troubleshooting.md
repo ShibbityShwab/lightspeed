@@ -2,174 +2,135 @@
 
 ---
 
-## Quick checklist
+## Quick Diagnostic
 
-Before diving in, verify:
+Run the built-in environment check first — it catches most issues:
 
-- [ ] `WinDivert64.sys` and `WinDivert.dll` are in the **same folder** as `lightspeed-gui.exe`
-- [ ] LightSpeed is running as **Administrator**
-- [ ] Your game is **running** and **connected to a server** (not just at the main menu)
-- [ ] You selected the **correct game** in the LightSpeed dropdown
+```bash
+lightspeed --check
+```
 
----
-
-## Problem: "Boost Engaged" appears but in-game ping hasn't changed
-
-**Most likely cause:** The Boost Server is not a shorter route than your direct connection for this particular game server. Not all game servers benefit from a relay.
-
-**What to try:**
-1. Try a different Boost Server location.
-2. Check your Boost Ping in LightSpeed vs your game's native ping. If Boost Ping > game ping, the direct route is already faster.
-3. Some games cache the ping display — disconnect and reconnect in-game to force a fresh reading.
+This verifies: interceptor availability, packet filtering tools, game profile resolution, and proxy connectivity.
 
 ---
 
-## Problem: "Packets Sent" stays at 0 after boosting — port not detected {#port-not-detected}
+## Common Issues
 
-**Why this happens:** LightSpeed auto-detects your game server from outbound UDP packets in a specific port range. If your server runs on a port outside that range the filter never matches and `Packets Sent` stays at **0**.
+### "Interceptor not available"
 
-**Quick diagnosis:** After clicking BOOST MY GAME, wait 15 seconds. If you see the amber **"⚠ No game traffic seen — possible port mismatch"** banner, a port mismatch is the likely cause.
+**CLI:** Your OS doesn't have the required packet filtering tools or you lack privileges.
 
-**How to find your server's real port:**
+| OS | Required | How to fix |
+|----|----------|------------|
+| Linux | nftables or iptables + root | `sudo lightspeed ...` |
+| macOS | pfctl (built-in) + root | `sudo lightspeed ...` |
+| Windows | WinDivert driver + Administrator | Right-click → Run as Administrator |
 
-1. Open an **elevated PowerShell** while your game is running:
+Verify with:
+```bash
+lightspeed --check
+```
 
+### "No game traffic seen" / Packets Sent stays at 0
+
+**CLI:** The interceptor can't find game packets in the expected port range.
+
+1. Make sure your game is **connected to a server** (not just the main menu or lobby)
+2. Verify the game with `--scan-processes`:
+   ```bash
+   lightspeed --scan-processes
+   ```
+3. Try a different game profile or use manual server mode
+
+**GUI (Windows):** Wait 15 seconds. If the amber "⚠ No game traffic seen" banner appears:
+1. Open elevated PowerShell:
+   ```powershell
+   Get-NetUDPEndpoint -OwningProcess (Get-Process RustClient).Id |
+     Where-Object LocalPort -gt 1024 |
+     Select-Object LocalPort
+   ```
+2. Use the port shown in **Advanced → set server manually**
+
+### "🎯 Finding your game server…" never resolves
+
+The detector hasn't seen 3 packets to the same destination within 1.5 seconds.
+
+1. Make sure you're connected to a game server (move your character to generate traffic)
+2. If packets still aren't detected after 15 seconds, your server is on a non-standard port — use manual server mode
+3. Stop and restart the interceptor after connecting to the server
+
+### Packets Sent climbing, Packets Delivered = 0
+
+Packets reach the proxy but responses aren't reaching your game. Usually a firewall issue.
+
+**Linux:**
+```bash
+sudo iptables -I INPUT -p udp --sport 4434 -j ACCEPT
+```
+
+**macOS:**
+```bash
+sudo pfctl -d  # Temporarily disable pf to test
+```
+
+**Windows:**
 ```powershell
-Get-NetUDPEndpoint -OwningProcess (Get-Process RustClient).Id |
-  Where-Object LocalPort -gt 1024 |
-  Select-Object LocalPort
+# Check if the firewall rule exists
+netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
+
+# Add it manually if missing
+netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
 ```
 
-   Replace `RustClient` with your game's process name (e.g. `cs2`, `VALORANT-Win64-Shipping`).
+### Proxy health check fails
 
-2. Note the port numbers shown.
+```bash
+# Test connectivity
+curl http://YOUR_PROXY_IP:8080/health
 
-**How to fix it:**
-
-1. Click **Stop Boost**.
-2. Click **▶ Advanced — set server manually** to expand it.
-3. In the **Custom Port Range** field enter the range that covers your server port, e.g. `28015-28999`.
-4. Click **⚡ BOOST MY GAME** again.
-
-**Common ranges by game:**
-
-| Game | Range to try |
-|------|-------------|
-| Rust | `28015-28999` |
-| CS2 | `27015-27100` |
-| Dota 2 | `27015-27100` |
-| Valorant | `7000-7500` |
-| PUBG | `7777-7843` |
-
-> **Note:** Default ranges have been widened in v0.5+ to cover most community servers automatically. Update to the latest release to get the widest defaults.
-
----
-
-## Problem: "🎯 Finding your game server…" never goes away
-
-The debounce detector hasn't seen 3 packets to the same destination within 1.5 seconds.
-
-**What to try:**
-1. Make sure you are **connected to a game server** (not just the main menu or lobby).
-2. Try moving your character in-game to generate traffic.
-3. If packets still aren't detected after 15 seconds, see the **"Packets Sent stays at 0"** section above — your server is likely on a non-standard port.
-4. Click **Stop Boost** and try again after connecting to the game server.
-
----
-
-## Problem: Boost stops working after switching servers
-
-**As of v0.5+:** This is fixed. LightSpeed detects silence from the old server (5 seconds) and automatically re-enters detection for the new server.
-
-If you're on an older version, update to the latest release.
-
-If you're on the latest version and still seeing this:
-1. Watch for **"🔄 Server stale — re-entering detection"** in the log (run from command prompt to see logs).
-2. If it's not appearing, the 5-second window may not have expired — wait a bit longer after disconnecting before joining the new server.
-
----
-
-## Problem: Packets Sent climbing, but Packets Delivered = 0
-
-Your packets are reaching the Boost Server, but the spoofed responses aren't arriving at your game. This is almost always a **Windows Firewall** issue.
-
-**What to try:**
-
-**Option A (automatic):** LightSpeed adds a firewall rule automatically on each launch. If it's failing silently:
-1. Open an **elevated command prompt** (Run as Administrator)
-2. Run: `netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"`
-3. If the rule is missing, add it manually:
-   ```
-   netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
-   ```
-
-**Option B (GUI):** Windows Security → Firewall & network protection → Allow an app through firewall → Add `lightspeed-gui.exe`
-
----
-
-## Problem: "WinDivert open failed" error
-
-```
-WinDivert open failed (need Administrator + WinDivert64.sys)
+# Expected response:
+# {"status":"ok","node_id":"proxy-1","uptime_secs":86400,...}
 ```
 
-**Solutions:**
+If unreachable:
+- Check the proxy is running: `systemctl status lightspeed-proxy`
+- Check firewall allows UDP 4434 and TCP 8080
+- Check the proxy logs: `journalctl -u lightspeed-proxy --tail 50`
 
-1. **Run as Administrator** — right-click → Run as administrator, or use the 🔑 button in the app.
-2. **Missing driver files** — ensure `WinDivert64.sys` and `WinDivert.dll` are in the same directory as the `.exe`.
-3. **Antivirus blocking the driver** — some antivirus products quarantine WinDivert. Add an exclusion for `WinDivert64.sys`.
-4. **Windows version** — Windows 7/8 are not supported. Windows 10 1903+ required.
+### Game disconnects when interceptor starts
 
----
+The interceptor seizes packets before the game can receive responses, and the inject path fails.
 
-## Problem: Game disconnects when BOOST MY GAME is clicked
+**Windows:**
+1. Verify `WinDivert64.sys` and `WinDivert.dll` are next to the `.exe`
+2. Disconnect secondary network adapters (Docker, VMware, Hamachi virtual adapters)
+3. Connect to the game server **before** starting the interceptor
 
-The kernel intercept seizes packets before the game can receive server responses, then the inject side fails.
-
-**Most likely causes:**
-1. **WinDivert.dll missing** — the inject handle fails to open silently, then all intercepted packets are dropped.
-2. **Wrong network interface** — the injected packets go to the wrong adapter. Check the log for `Cached inject interface: IfIdx=N` — if N=0 on the first intercept, this is the issue.
-
-**What to try:**
-1. Verify all three files are present.
-2. Disconnect any secondary network adapters (e.g., virtual adapters from Docker, VMware, Hamachi).
-3. Make sure you're connected to the game server **before** clicking BOOST MY GAME (so the first packet captures the correct interface).
+**Linux:**
+1. Check nftables rules: `sudo nft list ruleset | grep lightspeed`
+2. If rules are stale: `sudo lightspeed --check` to diagnose
 
 ---
 
-## Problem: App closes instead of minimising to tray
+## Logs for Bug Reports
 
-The window close button should hide to tray. If it's quitting instead:
-- Make sure you have the tray icon visible. If Windows is hiding it, click the `^` arrow in the system tray area to show hidden icons.
+Run with debug logging to capture detailed diagnostics:
 
----
+```bash
+# CLI
+RUST_LOG=debug lightspeed --start-interceptor --game rust --proxy YOUR_PROXY:4434 2>&1 | tee lightspeed.log
 
-## Problem: App won't launch / crashes at startup
-
-Run from a command prompt to see the error:
-```
+# Windows GUI
 cd C:\path\to\lightspeed
-lightspeed-gui.exe
+lightspeed-gui.exe 2>&1 | tee lightspeed-log.txt
 ```
 
-Common causes:
-- Missing Visual C++ Redistributable (install from Microsoft)
-- Missing WinDivert files
-- Running on an unsupported Windows build
+Attach the log file to your [GitHub issue](https://github.com/ShibbityShwab/lightspeed/issues).
 
 ---
 
-## Collecting logs for a bug report
+## Still Stuck?
 
-1. Open a command prompt in the LightSpeed folder
-2. Run: `lightspeed-gui.exe 2>&1 | tee lightspeed-log.txt`
-3. Reproduce the issue
-4. Attach `lightspeed-log.txt` to your [GitHub issue](https://github.com/ShibbityShwab/lightspeed/issues)
-
----
-
-## Still stuck?
-
-- Check [FAQ](faq.md) for common questions
-- Search [existing GitHub issues](https://github.com/ShibbityShwab/lightspeed/issues)
-- Open a new issue with your log file attached
+- [FAQ](faq.md) — common questions
+- [GitHub Issues](https://github.com/ShibbityShwab/lightspeed/issues) — search existing reports
+- Open a new issue with your OS, game, and log output

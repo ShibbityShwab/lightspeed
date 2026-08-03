@@ -1,107 +1,96 @@
-# LightSpeed Privacy Policy (Telemetry)
+# Privacy Policy
 
-_Last updated: 2026-04-27_
+> Last updated: 2026-08-03
+
+---
 
 ## Summary
 
-LightSpeed collects **no data by default**.
-
-The optional `--telemetry` flag enables anonymous, aggregated network-quality
-reporting.  This feature is **opt-in only** — it is never enabled without your
-explicit choice.
+LightSpeed is **privacy-first by design**. The tunnel is unencrypted to remain compatible with anti-cheat systems — game servers always see your real IP address. Telemetry is opt-in only and limited to anonymized aggregate metrics. No personally identifiable information (PII) is ever collected.
 
 ---
 
-## What is collected (opt-in only)
+## What LightSpeed Does NOT Collect
 
-When you pass `--telemetry`, the client periodically (every 15 minutes) sends
-a small JSON report to the LightSpeed proxy you are already connected to.  No
-third-party servers are ever contacted.
-
-| Field | Description | Example |
-|---|---|---|
-| `game_id` | Numeric game identifier (0 = unknown/keepalive) | `1` |
-| `client_country` | Locale string derived from OS regional settings | `"en-US"` |
-| `p50_ms` | Median round-trip time (ms) over the flush window | `42.3` |
-| `p95_ms` | 95th-percentile RTT (ms) | `87.1` |
-| `p99_ms` | 99th-percentile RTT (ms) | `124.5` |
-| `jitter_ms` | Mean absolute deviation of RTT samples (ms) | `8.2` |
-| `sample_count` | Number of RTT samples in this window (max 1024) | `180` |
-| `fec_recoveries` | Packets recovered by forward error correction | `3` |
-| `fec_losses` | Unrecoverable packet losses detected | `0` |
-| `client_version` | Application version string | `"0.4.0"` |
-
-All latency values are **aggregates** — the raw per-packet timestamps are
-discarded immediately after percentile computation and never leave your device.
+- ❌ IP addresses (yours or game servers')
+- ❌ User identities or account information
+- ❌ Game account data or player names
+- ❌ Packet payloads (game data is encrypted by the game's own protocol)
+- ❌ Browsing history or other non-game traffic
 
 ---
 
-## What is NOT collected
+## What LightSpeed Sees (and Doesn't Store)
 
-The following information is **never** included in any telemetry report:
+During operation, the client and proxy process UDP packet headers:
+- Source/destination IP addresses (for routing)
+- Source/destination ports (for game detection)
+- Packet sizes (for bandwidth accounting)
+- Session tokens (for authentication)
 
-- IP address (source or destination)
-- User ID, account ID, or any persistent identifier
-- Session token or authentication credential
-- Raw packet contents or game payload data
-- Player name, gamertag, or any in-game identifier
-- Hardware fingerprint, MAC address, or device serial number
-- Location beyond coarse OS locale string (e.g. `"en-US"`, `"ja-JP"`)
-- Timestamps with sub-minute resolution
-- Any data about other players or game servers
-
-A compile-time regression test (`test_no_pii_fields_in_json` in
-`protocol/src/telemetry.rs`) guards against accidental addition of PII fields
-to the serialised report.
+This information is held in memory only and is never written to disk beyond debug logs (which you control via the `RUST_LOG` environment variable). Debug logging is off by default.
 
 ---
 
-## Where data goes
+## Opt-In Telemetry (`--telemetry`)
 
-Telemetry reports are sent via **HTTP POST to port 8080 on the proxy node you
-are already tunnelling through** (e.g. `YOUR_PROXY_IP:8080/telemetry`).
+When you explicitly enable telemetry with the `--telemetry` flag, LightSpeed collects:
 
-- The proxy node stores **only an in-memory counter** (`telemetry_reports_total`)
-  that is exposed in its Prometheus metrics endpoint.
-- Individual report contents are **not persisted** to disk or any database.
-- Data is **lost on proxy restart** — this is intentional.
-- The proxy is operated on Vultr Always Free / $5 VPS tier.  No data is shared
-  with Vultr or any other third party.
+| Metric | Example | PII? |
+|--------|---------|------|
+| RTT percentiles | p50: 31ms, p95: 45ms, p99: 52ms | No |
+| Jitter | 2.3ms stddev | No |
+| FEC recovery rate | 12 packets recovered / 1000 | No |
+| Session duration | 45 minutes | No |
+| Proxy region | "us-west" | No |
+| Game name | "rust" | No |
+| LightSpeed version | "0.5.1" | No |
 
----
+**Explicitly NOT collected:** IP addresses, user identities, game account data, packet payloads.
 
-## How to enable or disable
+Telemetry is sent to your own proxy's `/telemetry` endpoint. You control where it goes — there is no central LightSpeed telemetry server.
 
-```
-# Enable telemetry
-lightspeed --telemetry
+### How to Enable/Disable
 
-# Explicitly disable (also the default when neither flag is passed)
-lightspeed --no-telemetry
+```bash
+# Enable for this session
+lightspeed --telemetry --start-interceptor --game rust --proxy YOUR_PROXY:4434
+
+# Disable for this session (overrides config)
+lightspeed --no-telemetry --start-interceptor --game rust --proxy YOUR_PROXY:4434
 ```
 
-`--no-telemetry` always wins if both flags are passed simultaneously.
-
-When `--telemetry` is first used, a disclosure banner is printed to stdout
-before any data collection begins.
+Telemetry is **off by default**. There is no auto-enrollment.
 
 ---
 
-## Open source
+## Proxy Logs
 
-The full telemetry implementation is auditable in the repository:
+If you run your own proxy, the proxy server writes access logs to stdout (configurable via `RUST_LOG`). These logs contain:
+- Client IP addresses (for rate limiting and abuse detection)
+- Session start/end times
+- Packets/bytes relayed per session
 
-- `protocol/src/telemetry.rs` — data structure + PII regression test
-- `client/src/telemetry.rs` — collection, aggregation, HTTP flush
-- `proxy/src/health.rs` — server-side receiver
-- `proxy/src/metrics.rs` — in-memory counter only
-
-This privacy document is tracked in version control alongside the code and
-updated with every change to the telemetry data schema.
+These logs are stored on **your server** — LightSpeed does not have access to them. Configure log rotation and retention according to your own policies.
 
 ---
 
-## Contact
+## Data Retention
 
-Open an issue at <https://github.com/ShibbityShwab/lightspeed/issues> for any
-privacy questions or concerns.
+- **Client:** No data is persisted beyond the current session (in-memory only).
+- **Proxy:** Logs are written to stdout. Retention is controlled by your server's logging configuration.
+- **Telemetry:** Data is sent to your proxy's endpoint. You control retention.
+
+---
+
+## Third-Party Services
+
+LightSpeed does not integrate with any third-party analytics, advertising, or tracking services. The only network connections are:
+1. Your PC → your proxy (UDP tunnel + optional QUIC control plane)
+2. Your proxy → game servers (forwarded UDP packets)
+
+---
+
+## Questions?
+
+Open a [GitHub issue](https://github.com/ShibbityShwab/lightspeed/issues) or discussion.
