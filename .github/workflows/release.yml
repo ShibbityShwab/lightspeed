@@ -75,7 +75,7 @@ jobs:
           "ARTIFACT=lightspeed-${{ matrix.target }}.zip" >> $env:GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: lightspeed-${{ matrix.target }}
           path: lightspeed-${{ matrix.target }}.${{ matrix.archive_ext }}

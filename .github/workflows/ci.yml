@@ -82,7 +82,7 @@ jobs:
         run: cargo llvm-cov --no-run --workspace --exclude lightspeed-gui
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov
           path: lcov.info
@@ -107,7 +107,7 @@ jobs:
         run: cargo bench --workspace --exclude lightspeed-gui
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: bench-results
           path: target/criterion/
