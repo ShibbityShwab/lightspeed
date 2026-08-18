@@ -1,6 +1,6 @@
 # ⚡ LightSpeed Tunnel Protocol v1/v2
 
-> Last updated: 2026-04-27 — v0.4.0-dev: compact FEC parity format, zero-alloc header encode
+> Last updated: 2026-08-18 — v1.2.0: adds TCP framing (client→proxy leg), session_token stamping
 
 ---
 
@@ -13,6 +13,7 @@ The LightSpeed Tunnel Protocol is a lightweight UDP encapsulation protocol desig
 - **Low overhead** — 20 bytes added per packet (v1), 24 bytes with FEC (v2)
 - **Sequence-numbered** — supports dedup for multipath routing
 - **FEC-capable** — optional Forward Error Correction for packet loss recovery (v2)
+- **TCP-transportable** — the same packet can travel the client→proxy leg over TCP (length-prefixed framing) for UDP-restricted networks
 
 ---
 
@@ -289,16 +290,35 @@ Messages are length-prefixed with a 2-byte big-endian length field:
 
 ---
 
+## TCP Framing (client→proxy leg)
+
+The client↔proxy leg of the data plane can run over TCP instead of UDP (`--tcp`). Each
+tunnel packet is wrapped in a length-prefixed frame:
+
+```
+[length: u32 big-endian][tunnel packet bytes...]
+```
+
+- `length` is capped at `MAX_FRAME_SIZE` (header + FEC header + 2048 bytes = 2072). A zero
+  or oversized length is rejected before any allocation, preventing an attacker-supplied
+  `u32::MAX` from triggering a huge buffer.
+- The frame payload is the exact bytes that would travel as one UDP datagram, so the header
+  format, FEC, and security pipeline are unchanged.
+- The proxy accepts both UDP and TCP on its data port; the same auth, rate-limit, abuse,
+  destination validation, and FEC apply to TCP traffic.
+
+---
+
 ## Security Considerations
 
 1. **No encryption by design** — game traffic is inspectable (anti-cheat compatible)
 2. **IP preservation** — game servers see real user IP (not proxy IP)
-3. **Session tokens** — per-client authentication in header Reserved byte
+3. **Session tokens** — per-client `session_token` byte in header, stamped after QUIC registration (v1.1.0+)
 4. **Rate limiting** — per-client PPS and BPS limits enforced by proxy
 5. **Anti-amplification** — proxy tracks inbound/outbound byte ratio
 6. **Anti-reflection** — proxy limits unique destinations per client per time window
 7. **Destination validation** — proxy blocks private IPs, localhost, multicast, link-local
-8. **No open relay** — only authenticated sessions can relay traffic
+8. **No open relay** — only authenticated sessions can relay traffic (`require_auth` on by default)
 
 ---
 

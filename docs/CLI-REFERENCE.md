@@ -15,7 +15,7 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | Flag | Description |
 |------|-------------|
 | `-c, --config <PATH>` | Path to config file (default: `lightspeed.toml`) |
-| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg` |
+| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot` |
 | `-p, --proxy <ADDR>` | Proxy server address (`host:port`). Auto-selects from config if omitted |
 | `-v, --verbose` | Enable verbose logging |
 
@@ -52,6 +52,12 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 |------|-------------|
 | `--capture` | Enable pcap capture mode (needs `pcap-capture` feature + elevated privileges) |
 | `--interface <IFACE>` | Network interface for capture (e.g. `eth0`) |
+
+### Transport
+
+| Flag | Description |
+|------|-------------|
+| `--tcp` | Use TCP for the client→proxy leg (for networks that block or throttle UDP). The proxy must have its TCP listener enabled (on by default). |
 
 ### FEC (Forward Error Correction)
 
@@ -112,7 +118,27 @@ sudo lightspeed --watch --game rust --proxy proxy.example.com:4434
 
 # Benchmark latency
 lightspeed --benchmark --target game-server.example.com:27015 --proxy proxy.example.com:4434
+
+# TCP tunnel for UDP-restricted networks
+lightspeed --game rust --proxy proxy.example.com:4434 --tcp
 ```
+
+## Proxy Configuration
+
+The proxy reads `proxy.toml`. Its ports are configurable via a `[network]` section:
+
+```toml
+[network]
+data_port    = 4434    # UDP + TCP data plane
+control_port = 4433    # QUIC control plane
+health_port  = 8080    # HTTP health/metrics
+
+# TCP tunnel (client→proxy over TCP)
+tcp_enabled = true
+tcp_max_connections = 256
+```
+
+See [Deploy Proxy](deploy-proxy.md) for the full reference.
 
 ## See Also
 

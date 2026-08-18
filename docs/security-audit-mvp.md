@@ -5,6 +5,8 @@
 > **Scope:** All code from WF-001 Steps 1-4 (tunnel engine, proxy, QUIC control plane)  
 > **Status:** ✅ PASS — All Critical/High findings mitigated
 
+> **Update (2026-08-18):** This audit is from the MVP (2026-02-21). In shipped releases, S-02 and S-04 are now fully closed — `require_auth` defaults to **`true`** (v1.1.0) and the client registers over QUIC then stamps its session token into every data-plane packet (v1.1.0). v1.2.0 added a TCP tunnel leg and configurable ports (see §1 and §4).
+
 ---
 
 ## 1. Threat Model
@@ -53,10 +55,10 @@ Internet → [QUIC Control :4433] → Proxy
 **After:**
 - ✅ `Authenticator` validates `(IP, session_token)` per-packet in relay inbound loop
 - ✅ Shared via `Arc<RwLock<Authenticator>>` between QUIC control server and relay
-- ✅ `require_auth` config option (default: false for dev, MUST be true in production)
+- ✅ `require_auth` config option (default: `true` since v1.1.0; was `false` in the MVP)
 - ✅ 5 unit tests cover auth enable/disable, multi-client, token mismatch
 
-**Residual Risk:** Auth disabled by default in MVP. Production deployments MUST set `security.require_auth = true`.
+**Residual Risk:** None for token auth as of v1.1.0. The 8-bit token space (S-04) remains defense-in-depth alongside the IP check.
 
 ### S-03: TLS Certificate Verification Disabled (HIGH → DOCUMENTED)
 
@@ -171,8 +173,8 @@ Client ──UDP────────────►│  Per-packet checks:  
 
 ```toml
 [security]
-# MUST be true in production
-require_auth = false
+# Defaults to true since v1.1.0 (client registers over QUIC and stamps its token)
+require_auth = true
 
 # Abuse detection thresholds
 max_amplification_ratio = 2.0
@@ -200,7 +202,7 @@ ban_duration_secs = 3600
 
 Before deploying to production:
 
-- [ ] Set `security.require_auth = true`
+- [x] Set `security.require_auth = true` (default since v1.1.0)
 - [ ] Replace self-signed TLS certs with proper PKI
 - [ ] Enable client certificate verification
 - [ ] Tune abuse detection thresholds with real traffic data
@@ -208,5 +210,5 @@ Before deploying to production:
 - [ ] Implement connection rate limiting per source IP
 - [ ] Add IP reputation checking (optional)
 - [ ] Set up fail2ban or equivalent on proxy instances
-- [ ] Review firewall rules (only expose ports 4433/UDP, 4434/UDP)
+- [ ] Review firewall rules (expose 4433/UDP control, 4434/UDP + 4434/TCP data, 8080/TCP health)
 - [ ] Enable audit logging for auth events

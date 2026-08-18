@@ -16,9 +16,11 @@ The full deployment options (native binary, Docker, automated script) are docume
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| `4434` | UDP | Data plane: relayed game traffic |
+| `4434` | UDP + TCP | Data plane: relayed game traffic (UDP, or TCP via the `--tcp` tunnel) |
 | `4433` | QUIC | Control plane: client registration and auth |
 | `8080` | HTTP | Health check and Prometheus metrics |
+
+All three ports are configurable via the `[network]` section — see [Configurable ports](#configurable-ports).
 
 ## Prerequisites
 
@@ -26,7 +28,7 @@ Before you start, you need:
 
 - **A Linux VPS.** Any provider with a free tier works: Vultr, Hetzner, Oracle Cloud (OCI), AWS Lightsail, DigitalOcean, Linode. A single small instance is plenty.
 - **SSH access** to the VPS.
-- **Open firewall ports.** Allow inbound UDP `4434` (data), UDP `4433` (QUIC control), and TCP `8080` (health/metrics). The exact commands depend on your provider's firewall and `ufw`/`firewalld` on the box.
+- **Open firewall ports.** Allow inbound UDP `4434` (data) and TCP `4434` (TCP tunnel), UDP `4433` (QUIC control), and TCP `8080` (health/metrics). Ports are configurable via the `[network]` section — see [Configurable ports](#configurable-ports). The exact commands depend on your provider's firewall and `ufw`/`firewalld` on the box.
 - **A way to run the proxy.** Either the Rust toolchain to build from source, or Docker. See the options below.
 
 ## Quick Deployment
@@ -57,17 +59,17 @@ This is the recommended path: ~500KB RAM, sandboxed with `DynamicUser`, `Protect
 # Pull from GitHub Container Registry
 docker pull ghcr.io/shibbityshwab/lightspeed-proxy:latest
 docker run -d --name ls-proxy \
-  -p 4434:4434/udp -p 4433:4433/udp -p 8080:8080 \
+  -p 4434:4434/udp -p 4434:4434/tcp -p 4433:4433/udp -p 8080:8080 \
   ghcr.io/shibbityshwab/lightspeed-proxy:latest
 
 # Or build from source
 docker build -f infra/docker/Dockerfile -t lightspeed-proxy .
 docker run -d --name ls-proxy \
-  -p 4434:4434/udp -p 4433:4433/udp -p 8080:8080 \
+  -p 4434:4434/udp -p 4434:4434/tcp -p 4433:4433/udp -p 8080:8080 \
   lightspeed-proxy
 ```
 
-Note the control plane port `4433` is published alongside the data plane. The `infra/README.md` Docker examples predate the control plane; make sure you publish all three ports so registration works.
+Note the control plane port `4433` is published alongside the data plane, and the data port is published for both UDP and TCP (the TCP listener supports the `--tcp` tunnel). The `infra/README.md` Docker examples predate the control plane; make sure you publish all ports so registration and the TCP tunnel work.
 
 ### Option C: Automated deploy script
 
@@ -120,6 +122,33 @@ The proxy prints the auth state at startup, so you can confirm the setting took 
 ```text
 Auth enabled: true
 ```
+
+## Configurable ports
+
+All three ports are configurable via a `[network]` section in `proxy.toml`:
+
+```toml
+[network]
+data_port     = 4434    # UDP + TCP data plane
+control_port  = 4433    # QUIC control plane
+health_port   = 8080    # HTTP health/metrics
+
+# TCP tunnel (client→proxy over TCP)
+tcp_enabled           = true
+tcp_max_connections   = 256
+tcp_read_timeout_secs = 10
+```
+
+The `--data-bind`, `--control-bind`, and `--health-bind` CLI flags override the config
+(e.g. to bind a specific interface instead of `0.0.0.0`).
+
+## TCP tunnel
+
+For networks that block or throttle UDP, the client↔proxy leg can run over TCP instead.
+On the client, pass `--tcp` (or set `tunnel.transport = "tcp"` in the client config); the
+proxy accepts both UDP and TCP on its data port by default. The same auth, rate-limit,
+abuse, and FEC pipeline applies to TCP traffic — it is not a weaker path. The TCP tunnel
+uses length-prefixed framing with a hard frame-size cap and connection limits.
 
 ## Multi-Node Mesh
 

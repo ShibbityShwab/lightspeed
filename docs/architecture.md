@@ -1,6 +1,6 @@
 # ⚡ LightSpeed Architecture
 
-> Last updated: 2026-04-27 — Reflects FEC, WARP, redirect mode, Vultr mesh deployment, session telemetry, recvmmsg batched I/O, Windows GUI tray app, 9-game support
+> Last updated: 2026-08-18 — Reflects v1.0.0–v1.2.0: installer pipeline (cargo-dist), self-hosted proxy model, token authentication, TCP tunnel, configurable ports, 13-game support
 
 ---
 
@@ -143,8 +143,8 @@ main.rs ────────────────────────
 
 ```
 main.rs ──────────────────────────── CLI, task spawning, graceful shutdown
-  ├── config.rs                      ← ProxyConfig (server, security, rate_limit, metrics)
-  ├── relay.rs                       ← RelayEngine: session mgmt, packet forward, FEC decode
+  ├── config.rs                      ← ProxyConfig (server, network, security, rate_limit, metrics)
+  ├── relay.rs                       ← RelayEngine: session mgmt, packet forward, FEC decode, ClientSender (UDP/TCP), run_tcp_inbound
   ├── auth.rs                        ← Authenticator: per-client token auth
   ├── metrics.rs                     ← ProxyMetrics: atomic counters, Prometheus export
   ├── health.rs                      ← HealthResponse: HTTP /health endpoint (JSON)
@@ -160,6 +160,7 @@ lib.rs ────────────────────────�
   ├── header.rs                      ← TunnelHeader: 20-byte binary, v1/v2, encode/decode
   ├── control.rs                     ← ControlMessage: binary QUIC messages
   ├── fec.rs                         ← FecEncoder/FecDecoder: XOR parity, FecHeader, FecStats
+  ├── framing.rs                     ← TCP length-prefixed framing (client→proxy TCP leg)
   └── telemetry.rs                   ← TelemetryEvent schema, POST /telemetry JSON payload
 ```
 
@@ -174,7 +175,7 @@ lib.rs ────────────────────────�
 2. [redirect]  UdpRedirect receives game packet on local socket
 3. [tunnel]    TunnelHeader created (20 bytes: version, seq, timestamp, orig addrs)
 4. [fec]       If FEC enabled: FecEncoder groups K packets, generates parity
-5. [relay]     Header + payload sent to proxy via UDP (port 4434)
+5. [relay]     Header + payload sent to proxy via UDP (port 4434) — or TCP (port 4434) when `--tcp` is set
 6. [proxy]     Proxy receives, strips header, validates session
 7. [proxy]     Original UDP packet forwarded to game server
 8. [game]      Game server sees user's ORIGINAL IP (preserved!)
@@ -189,7 +190,7 @@ lib.rs ────────────────────────�
 4. [route]     RouteSelector picks optimal proxy (Nearest or ML)
 5. [tunnel]    TunnelHeader created (20 bytes)
 6. [fec]       If FEC enabled: FecEncoder adds parity packets
-7. [relay]     Header + payload sent to proxy via UDP (port 4434)
+7. [relay]     Header + payload sent to proxy via UDP (port 4434) — or TCP when `--tcp` is set
 8-9. Same as redirect mode
 ```
 
