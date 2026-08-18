@@ -2516,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-client"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2546,7 +2546,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-gui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2564,7 +2564,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-protocol"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -2577,7 +2577,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-proxy"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "bytes",
