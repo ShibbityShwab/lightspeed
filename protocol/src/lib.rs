@@ -6,6 +6,7 @@
 
 pub mod control;
 pub mod fec;
+pub mod framing;
 pub mod header;
 pub mod telemetry;
 
