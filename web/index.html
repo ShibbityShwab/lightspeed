@@ -100,14 +100,14 @@
           <div class="step-number">1</div>
           <div class="step-icon">🎮</div>
           <h3>Launch LightSpeed</h3>
-          <p>Run the lightweight client before your game. It auto-detects Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, and more.</p>
+          <p>Run the lightweight client before your game. It auto-detects Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, and more.</p>
         </div>
         <div class="step-arrow">→</div>
         <div class="step">
           <div class="step-number">2</div>
           <div class="step-icon">🧠</div>
           <h3>AI Picks Your Route</h3>
-          <p>Our ML model analyzes latency, jitter, and packet loss across all proxy nodes to find the fastest path in under 1ms.</p>
+          <p>Our ML model analyzes latency, jitter, and packet loss across your proxy nodes to find the fastest path in under 1ms.</p>
         </div>
         <div class="step-arrow">→</div>
         <div class="step">
@@ -128,7 +128,7 @@
             <div class="arch-node-detail">LightSpeed Client</div>
           </div>
           <div class="arch-arrow">
-            <span class="arch-arrow-label">UDP Tunnel</span>
+            <span class="arch-arrow-label">UDP / TCP Tunnel</span>
             <div class="arch-arrow-line"></div>
           </div>
           <div class="arch-node arch-proxy">
@@ -154,7 +154,7 @@
   <section class="section section-dark" id="games">
     <div class="container">
       <h2 class="section-title">Supported Games</h2>
-      <p class="section-subtitle">Built-in profiles for 9 games. Drop-in and play.</p>
+      <p class="section-subtitle">Built-in profiles for 13 games. Drop-in and play.</p>
       <div class="games-grid">
         <div class="game-card">
           <div class="game-icon">🔫</div>
@@ -244,6 +244,46 @@
             <span class="game-tag">BattlEye</span>
           </div>
           <p>Supports all PUBG server regions. Direct UDP to Krafton servers — no relay layers. Transparent tunneling is fully compatible with BattlEye.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🍁</div>
+          <h3>MapleStory</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 7575-7599</span>
+            <span class="game-tag">BlackCipher NGS</span>
+          </div>
+          <p>Direct UDP to Nexon's regional servers worldwide. Transparent routing is compatible with BlackCipher's kernel-level anti-cheat.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">✨</div>
+          <h3>Genshin Impact</h3>
+          <div class="game-details">
+            <span class="game-tag">TCP 12451</span>
+            <span class="game-tag">Action Combat</span>
+          </div>
+          <p>TCP-tunneled traffic to HoYoverse regional servers. No kernel anti-cheat — clean, low-latency routing for action combat.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🏎️</div>
+          <h3>Rocket League</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 27015-27050</span>
+            <span class="game-tag">EasyAntiCheat</span>
+          </div>
+          <p>Direct UDP to Psyonix servers across all regions. EAC-compatible transparent routing — no packet modification, no relay layers.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🎖️</div>
+          <h3>World of Tanks</h3>
+          <div class="game-details">
+            <span class="game-tag">TCP 20010</span>
+            <span class="game-tag">Wargaming</span>
+          </div>
+          <p>TCP-tunneled traffic to Wargaming regional servers. No kernel anti-cheat — straightforward route optimization for tank combat.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
       </div>
@@ -354,6 +394,16 @@
           <h3>Built in Rust</h3>
           <p>Blazing fast, memory-safe, zero-cost abstractions. The entire stack — client, proxy, protocol — is pure Rust with async Tokio and QUIC.</p>
         </div>
+        <div class="compare-card">
+          <div class="compare-icon">🔐</div>
+          <h3>Token Authenticated</h3>
+          <p>Clients register over a QUIC control plane and stamp a session token into every data-plane packet. The proxy validates <code>(IP, token)</code> per packet — unregistered senders are dropped. <code>require_auth</code> is on by default.</p>
+        </div>
+        <div class="compare-card">
+          <div class="compare-icon">🔌</div>
+          <h3>TCP Fallback</h3>
+          <p>The client ↔ proxy tunnel defaults to UDP, but switches to TCP (<code>--tcp</code>) on networks that block UDP — hotels, coffee shops, restrictive ISPs. Same low-overhead optimization, broader compatibility.</p>
+        </div>
       </div>
 
       <!-- Comparison Table -->
@@ -418,6 +468,20 @@
               <td>❌</td>
               <td>❌</td>
             </tr>
+            <tr>
+              <td>Token Authentication</td>
+              <td class="compare-us">✅ Per-packet</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>TCP Tunnel</td>
+              <td class="compare-us">✅ <code>--tcp</code></td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -428,7 +492,7 @@
   <section class="section section-accent" id="download">
     <div class="container">
       <h2 class="section-title">Download LightSpeed</h2>
-      <p class="section-subtitle">Grab the latest release. Run it. That's the whole setup.</p>
+      <p class="section-subtitle">Grab v1.2.0 &mdash; the latest release. Run it. That's the whole setup.</p>
       <div class="download-grid">
         <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
           <div class="download-icon">🪟</div>
@@ -442,8 +506,19 @@
           <p>x64 / ARM64</p>
           <span class="download-filename">lightspeed-linux-x64</span>
         </a>
+        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
+          <div class="download-icon">🍎</div>
+          <h3>macOS</h3>
+          <p>Intel &amp; Apple Silicon</p>
+          <span class="download-filename">lightspeed-macos-universal</span>
+        </a>
       </div>
       <div class="download-alt">
+        <p>One-line install (Linux / macOS):</p>
+        <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-installer.sh | sh</code>
+        <p>One-line install (Windows PowerShell):</p>
+        <code class="code-block">irm https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-installer.ps1 | iex</code>
+        <p>MSI installers and per-platform archives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">GitHub Releases</a>.</p>
         <p>Or build from source:</p>
         <code class="code-block">git clone https://github.com/ShibbityShwab/lightspeed.git && cd lightspeed && cargo build --release</code>
       </div>
@@ -469,7 +544,7 @@
         </details>
         <details class="faq-item">
           <summary>What games are supported?</summary>
-          <p>Currently: Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, and PUBG all have built-in profiles — just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
+          <p>Currently: Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, and World of Tanks all have built-in profiles — just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
         </details>
         <details class="faq-item">
           <summary>Is my data safe?</summary>
@@ -477,7 +552,7 @@
         </details>
         <details class="faq-item">
           <summary>How do I get a proxy node?</summary>
-          <p>You host your own — that's the whole idea. Spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
+          <p>You host your own — that's the whole idea. Spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
         </details>
         <details class="faq-item">
           <summary>Why Rust?</summary>

@@ -284,6 +284,8 @@ img { max-width: 100%; display: block; }
 .download-filename { font-family: var(--mono); font-size: 0.75rem; color: var(--accent-light); }
 .download-alt { text-align: center; }
 .download-alt p { font-size: 0.9rem; color: var(--text-dim); margin-bottom: 12px; }
+.download-alt p + .code-block { margin-top: -4px; }
+.download-alt .code-block + p { margin-top: 18px; }
 .code-block {
   display: inline-block; padding: 12px 20px; border-radius: var(--radius-sm);
   background: var(--bg-card); border: 1px solid var(--border);
