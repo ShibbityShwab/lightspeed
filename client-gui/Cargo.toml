@@ -19,8 +19,8 @@ tracing-appender = "0.2"
 anyhow = { workspace = true }
 dirs = "6.0"
 tray-icon = "0.24.1"
-eframe = { version = "0.35", features = ["default"] }
-egui_plot = "0.36.0"
+eframe = { version = "0.36", features = ["default"] }
+egui_plot = "0.37"
 webbrowser = "1"
 
 # Windows-only: enable WinDivert support via lightspeed-client features
