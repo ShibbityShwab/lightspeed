@@ -12,7 +12,7 @@
 #
 # Access:
 #   Prometheus:  http://localhost:9090
-#   Grafana:     http://localhost:3000  (admin / lightspeed)
+#   Grafana:     http://localhost:3000  (admin / $GRAFANA_ADMIN_PASSWORD — see .env.example)
 #
 # Requirements:
 #   - Docker + Docker Compose
@@ -57,7 +57,7 @@ services:
       - grafana_data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-lightspeed}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=http://localhost:3000
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/lightspeed-overview.json

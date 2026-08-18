@@ -6,13 +6,18 @@ Prometheus + Grafana monitoring for the LightSpeed proxy mesh.
 
 ```bash
 cd infra/monitoring
+cp .env.example .env          # set GRAFANA_ADMIN_PASSWORD
 docker compose up -d
 ```
 
-- **Grafana**: http://localhost:3000 (login: `admin` / `lightspeed`)
+- **Grafana**: http://localhost:3000 (login: `admin` / `$GRAFANA_ADMIN_PASSWORD`)
 - **Prometheus**: http://localhost:9090
 
 The dashboard auto-loads on first visit — no manual import needed.
+
+> **Grafana password is required.** `docker compose` refuses to start without
+> `GRAFANA_ADMIN_PASSWORD` set. Copy `.env.example` to `.env` and choose a strong
+> password.
 
 ## Architecture
 
@@ -24,7 +29,7 @@ The dashboard auto-loads on first visit — no manual import needed.
            │ query
 ┌──────────▼──────────┐
 │   Grafana (3000)    │  ⚡ LightSpeed Proxy Mesh dashboard
-│   admin/lightspeed  │  20 panels, 6 sections, auto-refresh 10s
+│   admin / $PASSWORD │  20 panels, 6 sections, auto-refresh 10s
 └─────────────────────┘
 ```
 
