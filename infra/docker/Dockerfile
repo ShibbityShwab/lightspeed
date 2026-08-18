@@ -6,7 +6,7 @@
 # ──────────────────────────────────────────────────────────────
 
 # ── Stage 1: Build ───────────────────────────────────────────
-FROM rust:1.85.0-slim-bookworm AS builder
+FROM rust:1.88.0-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -68,9 +68,11 @@ USER lightspeed
 
 # Expose ports
 #   4434/udp  — Data plane (tunnel traffic)
+#   4434/tcp  — Data plane (TCP tunnel, for UDP-blocked networks)
 #   4433/udp  — QUIC control plane
 #   8080/tcp  — Health check HTTP
 EXPOSE 4434/udp
+EXPOSE 4434/tcp
 EXPOSE 4433/udp
 EXPOSE 8080/tcp
 

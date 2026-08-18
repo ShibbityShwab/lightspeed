@@ -94,7 +94,7 @@ cargo build --release
 ./target/release/lightspeed-proxy --config proxy/proxy.toml
 ```
 
-**Requirements:** Rust 1.75+ (1.95+ for the GUI), `libpcap-dev` (Linux), Npcap SDK (Windows).
+**Requirements:** Rust 1.88+ (1.95+ for the GUI), `libpcap-dev` (Linux), Npcap SDK (Windows).
 
 ---
 
