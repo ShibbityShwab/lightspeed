@@ -12,7 +12,7 @@ name = "lightspeed-gui"
 path = "src/main.rs"
 
 [dependencies]
-lightspeed-client = { path = "../client", features = ["windivert-redirect"] }
+lightspeed-client = { path = "../client", features = ["quic", "windivert-redirect"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -31,7 +31,7 @@ windivert = { version = "0.6", optional = true, features = ["vendored"] }
 # Override lightspeed-client features on Windows
 [target.'cfg(windows)'.dependencies.lightspeed-client]
 path = "../client"
-features = ["windivert-redirect"]
+features = ["quic", "windivert-redirect"]
 
 # cargo-dist: the GUI has no macOS platform module, so restrict its release
 # targets to Linux and Windows (the client + proxy still ship for macOS).

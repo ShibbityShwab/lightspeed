@@ -13,6 +13,10 @@ path-guid = "5CF0E353-A6F5-49BC-A30F-7957AFC20EA6"
 license = false
 eula = false
 
+# Ship the client with the QUIC control plane so it can register for token auth.
+[package.metadata.dist]
+features = ["quic"]
+
 [[bin]]
 name = "lightspeed"
 path = "src/main.rs"

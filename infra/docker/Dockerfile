@@ -27,7 +27,7 @@ RUN mkdir -p protocol/src client/src proxy/src client-gui/src && \
     echo "fn main() {}" > client-gui/src/main.rs
 
 # Build dependencies only (cached layer)
-RUN cargo build --release --bin lightspeed-proxy || echo "Note: dependency cache layer may need real source"
+RUN cargo build --release --bin lightspeed-proxy --features quic || echo "Note: dependency cache layer may need real source"
 
 # Now copy real source code
 COPY protocol/ protocol/
@@ -37,7 +37,7 @@ COPY proxy/ proxy/
 RUN touch protocol/src/lib.rs proxy/src/main.rs proxy/src/lib.rs
 
 # Build the proxy binary
-RUN cargo build --release --bin lightspeed-proxy && \
+RUN cargo build --release --bin lightspeed-proxy --features quic && \
     strip /build/target/release/lightspeed-proxy
 
 # ── Stage 2: Runtime ─────────────────────────────────────────
