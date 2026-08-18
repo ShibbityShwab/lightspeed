@@ -146,7 +146,8 @@ impl UdpRelay {
             let index = encoder.current_index();
             let k_size = index.max(2); // k_size for FEC header
 
-            let header = TunnelHeader::new_fec(seq, now_us(), orig_src, orig_dst);
+            let header = TunnelHeader::new_fec(seq, now_us(), orig_src, orig_dst)
+                .with_session_token(crate::session::session_token());
             let fec_hdr = FecHeader::data(block_id, index, k_size);
             let pkt_buf = build_fec_data_packet(&header, &fec_hdr, payload);
 
@@ -168,7 +169,8 @@ impl UdpRelay {
 
             if let Some(parity_bytes) = parity {
                 let parity_seq = self.next_sequence();
-                let parity_header = TunnelHeader::new_fec(parity_seq, now_us(), orig_src, orig_dst);
+                let parity_header = TunnelHeader::new_fec(parity_seq, now_us(), orig_src, orig_dst)
+                    .with_session_token(crate::session::session_token());
                 let parity_fec = FecHeader::parity(block_id, k_size);
                 let parity_buf =
                     build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
@@ -190,7 +192,8 @@ impl UdpRelay {
             Ok(sent)
         } else {
             // ── Non-FEC mode: original behavior ─────────────────
-            let header = TunnelHeader::new(seq, now_us(), orig_src, orig_dst);
+            let header = TunnelHeader::new(seq, now_us(), orig_src, orig_dst)
+                .with_session_token(crate::session::session_token());
             let packet = header.encode_with_payload(payload);
 
             let sent = socket.send_to(&packet, proxy_addr).await?;
@@ -216,7 +219,8 @@ impl UdpRelay {
         let socket = self.socket.as_ref().ok_or(TunnelError::NotConnected)?;
 
         let seq = self.next_sequence();
-        let header = TunnelHeader::keepalive(seq, now_us());
+        let header = TunnelHeader::keepalive(seq, now_us())
+            .with_session_token(crate::session::session_token());
         let packet = header.encode_to_array();
 
         socket.send_to(&packet, proxy_addr).await?;
@@ -305,7 +309,8 @@ impl UdpRelay {
                 let socket = self.socket.as_ref().ok_or(TunnelError::NotConnected)?;
                 let seq = self.next_sequence();
                 let dummy_addr = SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0);
-                let header = TunnelHeader::new_fec(seq, now_us(), dummy_addr, dummy_addr);
+                let header = TunnelHeader::new_fec(seq, now_us(), dummy_addr, dummy_addr)
+                    .with_session_token(crate::session::session_token());
                 let fec_hdr = FecHeader::parity(block_id, 0);
                 let buf = build_fec_parity_packet(&header, &fec_hdr, &parity_bytes);
 

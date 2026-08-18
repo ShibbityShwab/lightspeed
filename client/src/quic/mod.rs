@@ -182,6 +182,7 @@ mod inner {
                     self.session_token = Some(session_token);
                     self.node_id = Some(node_id);
                     self.region = Some(region);
+                    crate::session::set_session_token(session_token);
                 }
                 Some(ControlMessage::Disconnect { reason }) => {
                     return Err(QuicError::ConnectionFailed(format!(
@@ -380,3 +381,49 @@ mod inner {
 }
 
 pub use inner::ControlClient;
+
+/// Register with the proxy's control plane to obtain a data-plane session token.
+///
+/// Best-effort: returns `None` (leaving the token at its default of `0`) when
+/// the `quic` feature is disabled, the proxy has no control plane, or
+/// registration is rejected. The data plane then sends token `0`, which the
+/// proxy accepts only when `require_auth = false`.
+pub async fn register_session(data_addr: std::net::SocketAddrV4, control_port: u16) -> Option<u8> {
+    register_session_inner(data_addr, control_port).await
+}
+
+#[cfg(feature = "quic")]
+async fn register_session_inner(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+) -> Option<u8> {
+    use std::net::{SocketAddr, SocketAddrV4};
+
+    let control_addr = SocketAddr::V4(SocketAddrV4::new(*data_addr.ip(), control_port));
+    let mut client = match ControlClient::new() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("QUIC control plane unavailable ({e}); no session token");
+            return None;
+        }
+    };
+
+    match client
+        .connect(control_addr, lightspeed_protocol::game_id::UNKNOWN)
+        .await
+    {
+        Ok(()) => client.session_token(),
+        Err(e) => {
+            tracing::warn!("QUIC registration failed ({e}); continuing without a session token");
+            None
+        }
+    }
+}
+
+#[cfg(not(feature = "quic"))]
+async fn register_session_inner(
+    _data_addr: std::net::SocketAddrV4,
+    _control_port: u16,
+) -> Option<u8> {
+    None
+}

@@ -149,7 +149,8 @@ impl TrafficInterceptor for PfInterceptor {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_micros() as u32;
-                    let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us);
+                    let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us)
+                        .with_session_token(crate::session::session_token());
                     let _ = ts.send_to(&hdr.encode_to_array(), proxy_addr).await;
                     seq = seq.wrapping_add(1);
                 }
@@ -217,7 +218,8 @@ impl TrafficInterceptor for PfInterceptor {
                         if let Some(ref mut enc) = fec_encoder {
                             let block_id = enc.block_id();
                             let index = enc.current_index();
-                            let hdr = lightspeed_protocol::TunnelHeader::new_fec(seq, ts_us, src, server_addr);
+                            let hdr = lightspeed_protocol::TunnelHeader::new_fec(seq, ts_us, src, server_addr)
+                                .with_session_token(crate::session::session_token());
                             let fh = FecHeader::data(block_id, index, fec_k);
                             let mut buf = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + len);
                             buf.extend_from_slice(&hdr.encode_to_array());
@@ -227,7 +229,8 @@ impl TrafficInterceptor for PfInterceptor {
                             let _ = tunnel_socket.send_to(&buf, proxy_addr).await;
                             if let Some(pb) = parity {
                                 let ps = seq.wrapping_add(1);
-                                let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts_us, src, server_addr);
+                                let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts_us, src, server_addr)
+                                    .with_session_token(crate::session::session_token());
                                 let pf2 = FecHeader::parity(block_id, fec_k);
                                 let mut pb2 = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + pb.len());
                                 pb2.extend_from_slice(&ph.encode_to_array());
@@ -237,7 +240,8 @@ impl TrafficInterceptor for PfInterceptor {
                                 seq = seq.wrapping_add(1);
                             }
                         } else {
-                            let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts_us, src, server_addr);
+                            let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts_us, src, server_addr)
+                                .with_session_token(crate::session::session_token());
                             let pkt = hdr.encode_with_payload(payload);
                             let _ = tunnel_socket.send_to(&pkt, proxy_addr).await;
                         }

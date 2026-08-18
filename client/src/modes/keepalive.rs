@@ -52,7 +52,8 @@ pub async fn run_keepalive_mode(
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_micros() as u32,
-                );
+                )
+                .with_session_token(crate::session::session_token());
                 let packet = header.encode_to_array();
                 match relay_socket.send_to(&packet, proxy_addr).await {
                     Ok(_) => {

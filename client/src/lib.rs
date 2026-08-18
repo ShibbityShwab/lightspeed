@@ -21,6 +21,7 @@ pub(crate) mod modes;
 pub(crate) mod quic;
 pub(crate) mod redirect;
 pub(crate) mod route;
+pub(crate) mod session;
 pub(crate) mod telemetry;
 pub(crate) mod tunnel;
 pub(crate) mod warp;

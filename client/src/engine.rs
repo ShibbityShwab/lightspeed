@@ -182,6 +182,10 @@ impl LightSpeedEngine {
         let status = Arc::clone(&self.status);
         self.rt
             .spawn(run_keepalive(proxy_addr, status, rx, generation));
+        self.rt.spawn(async move {
+            // control port
+            let _ = crate::quic::register_session(proxy_addr, 4433).await;
+        });
     }
 
     /// Stop the keepalive loop.
@@ -236,6 +240,10 @@ impl LightSpeedEngine {
         }
 
         let status = Arc::clone(&self.status);
+        self.rt.spawn(async move {
+            // control port
+            let _ = crate::quic::register_session(proxy_addr, 4433).await;
+        });
         self.rt.spawn(async move {
             // run_with_shutdown takes &self and is Send, but UdpRedirect isn't
             // Arc'd — we move it into the task.
@@ -340,6 +348,10 @@ impl LightSpeedEngine {
         let status = Arc::clone(&self.status);
         let proxy_id = proxy_addr.to_string();
 
+        self.rt.spawn(async move {
+            // control port
+            let _ = crate::quic::register_session(proxy_addr, 4433).await;
+        });
         self.rt.spawn(async move {
             // game_box owned here; reference valid for the duration of the .await
             let game: Box<dyn crate::games::GameConfig> = game_box;
@@ -453,6 +465,10 @@ impl LightSpeedEngine {
         }
 
         let status = Arc::clone(&self.status);
+        self.rt.spawn(async move {
+            // control port
+            let _ = crate::quic::register_session(proxy_addr, 4433).await;
+        });
         self.rt.spawn(async move {
             match run_windivert_mode_with_shutdown(cfg, rx, Some(stat_slot)).await {
                 Ok(()) => tracing::info!("WinDivert redirect stopped cleanly"),
@@ -625,6 +641,10 @@ impl LightSpeedEngine {
             });
         let platform = interceptor.platform_name();
 
+        self.rt.spawn(async move {
+            // control port
+            let _ = crate::quic::register_session(proxy_addr, 4433).await;
+        });
         let handle = interceptor.start(config).map_err(|e| e.to_string())?;
 
         {
@@ -781,7 +801,8 @@ async fn run_keepalive(
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_micros() as u32,
-                );
+                )
+                .with_session_token(crate::session::session_token());
                 if socket.send_to(&hdr.encode_to_array(), proxy).await.is_ok() {
                     ts.insert(seq, Instant::now());
                     ts.retain(|_, t| t.elapsed() < Duration::from_secs(30));

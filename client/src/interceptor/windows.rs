@@ -489,7 +489,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_micros() as u32;
-                        let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us);
+                        let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us)
+                            .with_session_token(crate::session::session_token());
                         if ts.send_to(&hdr.encode_to_array(), proxy_addr).await.is_ok() {
                             let mut m = ka.lock().await;
                             m.insert(seq, Instant::now());
@@ -553,7 +554,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             if let Some(ref mut enc) = fec_encoder {
                                 let block_id = enc.block_id();
                                 let index = enc.current_index();
-                                let hdr = lightspeed_protocol::TunnelHeader::new_fec(seq, ts, game_src, game_dst);
+                                let hdr = lightspeed_protocol::TunnelHeader::new_fec(seq, ts, game_src, game_dst)
+                                    .with_session_token(crate::session::session_token());
                                 let fh = FecHeader::data(block_id, index, fec_k);
                                 let mut buf2 = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
                                 buf2.extend_from_slice(&hdr.encode_to_array());
@@ -563,7 +565,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 let _ = tunnel_socket.send_to(&buf2, proxy_addr).await;
                                 if let Some(pb) = parity {
                                     let ps = seq.wrapping_add(1);
-                                    let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, game_src, game_dst);
+                                    let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, game_src, game_dst)
+                                        .with_session_token(crate::session::session_token());
                                     let pf = FecHeader::parity(block_id, fec_k);
                                     let mut pb2 = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + pb.len());
                                     pb2.extend_from_slice(&ph.encode_to_array());
@@ -573,7 +576,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     seq = seq.wrapping_add(1);
                                 }
                             } else {
-                                let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts, game_src, game_dst);
+                                let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts, game_src, game_dst)
+                                    .with_session_token(crate::session::session_token());
                                 let pkt = hdr.encode_with_payload(&payload);
                                 let _ = tunnel_socket.send_to(&pkt, proxy_addr).await;
                             }

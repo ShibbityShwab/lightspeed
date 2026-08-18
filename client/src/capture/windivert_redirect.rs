@@ -551,7 +551,8 @@ mod inner {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_micros() as u32;
-                    let hdr = lightspeed_protocol::TunnelHeader::keepalive(ka_seq, now_us);
+                    let hdr = lightspeed_protocol::TunnelHeader::keepalive(ka_seq, now_us)
+                        .with_session_token(crate::session::session_token());
                     if ts.send_to(&hdr.encode_to_array(), proxy_addr).await.is_ok() {
                         let mut map = ka_ts.lock().await;
                         map.insert(ka_seq, Instant::now());
@@ -621,7 +622,8 @@ mod inner {
                         let index = encoder.current_index();
                         let hdr = lightspeed_protocol::TunnelHeader::new_fec(
                             seq, ts, game_src, game_dst,
-                        );
+                        )
+                        .with_session_token(crate::session::session_token());
                         let fec_hdr = FecHeader::data(block_id, index, cfg.fec_k);
                         let pkt_buf = build_fec_data_packet(&hdr, &fec_hdr, &payload);
                         let parity = encoder.add_packet(&payload);
@@ -630,7 +632,8 @@ mod inner {
                             let ps = seq.wrapping_add(1);
                             let ph = lightspeed_protocol::TunnelHeader::new_fec(
                                 ps, ts, game_src, game_dst,
-                            );
+                            )
+                            .with_session_token(crate::session::session_token());
                             let pfec = FecHeader::parity(block_id, cfg.fec_k);
                             let pb = build_fec_parity_packet(&ph, &pfec, &parity_bytes);
                             let _ = tunnel_socket.send_to(&pb, proxy_addr).await;
@@ -639,7 +642,8 @@ mod inner {
                     } else {
                         let hdr = lightspeed_protocol::TunnelHeader::new(
                             seq, ts, game_src, game_dst,
-                        );
+                        )
+                        .with_session_token(crate::session::session_token());
                         let pkt_bytes = hdr.encode_with_payload(&payload);
                         let _ = tunnel_socket.send_to(&pkt_bytes, proxy_addr).await;
                     }

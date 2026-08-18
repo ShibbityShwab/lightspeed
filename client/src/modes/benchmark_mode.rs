@@ -15,7 +15,7 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
     info!("");
 
     let sock = UdpSocket::bind("0.0.0.0:0").await?;
-    let hdr = TunnelHeader::keepalive(0, 0);
+    let hdr = TunnelHeader::keepalive(0, 0).with_session_token(crate::session::session_token());
 
     // Direct
     info!("🔴 Direct route:");

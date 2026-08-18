@@ -21,6 +21,7 @@ mod modes;
 mod quic;
 mod redirect;
 mod route;
+mod session;
 mod telemetry;
 mod tunnel;
 mod warp;
@@ -279,6 +280,7 @@ data_port = 4434
         let target_addr = parse_proxy_addr(target_str)?;
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         let proxy_addr = parse_proxy_addr(proxy_str)?;
+        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         return run_benchmark(target_addr, proxy_addr).await;
     }
 
@@ -295,6 +297,7 @@ data_port = 4434
             .as_deref()
             .map(parse_proxy_addr)
             .transpose()?;
+        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         return run_watch_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
@@ -303,6 +306,7 @@ data_port = 4434
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         let proxy_addr = parse_proxy_addr(proxy_str)?;
         info!("🔥 Running E2E smoke test (needs root for nftables)...");
+        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         return run_smoke_test(proxy_addr).await;
     }
 
@@ -310,6 +314,8 @@ data_port = 4434
     if cli.demo {
         let game_key = cli.game.as_deref().unwrap_or("rust");
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
+        let proxy_addr = parse_proxy_addr(proxy_str)?;
+        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         return run_demo(&config, game_key, proxy_str).await;
     }
 
@@ -535,7 +541,8 @@ data_port = 4434
                 Ok(sock) => {
                     sock.set_read_timeout(Some(std::time::Duration::from_millis(500)))
                         .ok();
-                    let hdr = lightspeed_protocol::TunnelHeader::keepalive(0, 0);
+                    let hdr = lightspeed_protocol::TunnelHeader::keepalive(0, 0)
+                        .with_session_token(crate::session::session_token());
                     if sock.send_to(&hdr.encode_to_array(), proxy_addr).is_ok() {
                         info!("   ✅ Proxy {} — UDP reachable", proxy_addr);
                     } else {
@@ -680,6 +687,7 @@ data_port = 4434
             Some(s) => Some(parse_proxy_addr(s)?),
             None => None,
         };
+        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         return run_intercept_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
@@ -856,6 +864,7 @@ data_port = 4434
             .echo_server
             .as_ref()
             .and_then(|s| parse_proxy_addr(s).ok());
+        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         return run_live_test(&config, Some(proxy_addr), echo_server, cli.fec, cli.fec_k).await;
     }
 
@@ -866,6 +875,7 @@ data_port = 4434
 
     // ── --test-tunnel ─────────────────────────────────────────────
     if cli.test_tunnel {
+        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         return run_tunnel_test(relay, proxy_addr).await;
     }
 
@@ -873,6 +883,8 @@ data_port = 4434
     if cli.test_control {
         return run_control_test(proxy_addr, &config).await;
     }
+
+    crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
 
     // ── Online learner ────────────────────────────────────────────
     //

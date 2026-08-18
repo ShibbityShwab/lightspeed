@@ -35,7 +35,8 @@ pub async fn probe_single_proxy(
             .unwrap_or_default()
             .as_micros() as u32;
 
-        let header = TunnelHeader::keepalive(seq, ts);
+        let header =
+            TunnelHeader::keepalive(seq, ts).with_session_token(crate::session::session_token());
         let packet = header.encode_to_array();
 
         if socket.send_to(&packet, addr).await.is_err() {

@@ -234,7 +234,8 @@ impl UdpRedirect {
                         let block_id = encoder.block_id();
                         let index = encoder.current_index();
                         let header =
-                            TunnelHeader::new_fec(seq_num, now_us(), orig_src, game_server);
+                            TunnelHeader::new_fec(seq_num, now_us(), orig_src, game_server)
+                                .with_session_token(crate::session::session_token());
                         let fec_hdr = FecHeader::data(block_id, index, fec_k);
                         let pkt_buf = build_fec_data_packet(&header, &fec_hdr, payload);
                         let parity = encoder.add_packet(payload);
@@ -261,7 +262,8 @@ impl UdpRedirect {
                         if let Some(parity_bytes) = parity {
                             let parity_seq = seq.fetch_add(1, Ordering::Relaxed);
                             let parity_header =
-                                TunnelHeader::new_fec(parity_seq, now_us(), orig_src, game_server);
+                                TunnelHeader::new_fec(parity_seq, now_us(), orig_src, game_server)
+                                    .with_session_token(crate::session::session_token());
                             let parity_fec = FecHeader::parity(block_id, fec_k);
                             let parity_buf =
                                 build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
@@ -283,7 +285,8 @@ impl UdpRedirect {
                         }
                     } else {
                         // ── Non-FEC mode: original behavior ─────────────
-                        let header = TunnelHeader::new(seq_num, now_us(), orig_src, game_server);
+                        let header = TunnelHeader::new(seq_num, now_us(), orig_src, game_server)
+                            .with_session_token(crate::session::session_token());
                         let packet = header.encode_with_payload(payload);
 
                         match tunnel_socket.send_to(&packet, proxy_addr).await {
@@ -414,7 +417,8 @@ impl UdpRedirect {
                 let mut seq: u16 = 60000; // Start high to not conflict with data seqs
                 loop {
                     interval.tick().await;
-                    let header = TunnelHeader::keepalive(seq, now_us());
+                    let header = TunnelHeader::keepalive(seq, now_us())
+                        .with_session_token(crate::session::session_token());
                     let packet = header.encode();
                     let _ = tunnel_socket.send_to(&packet, proxy_addr).await;
                     seq = seq.wrapping_add(1);

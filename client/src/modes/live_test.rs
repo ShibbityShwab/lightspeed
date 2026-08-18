@@ -180,7 +180,8 @@ pub async fn run_live_test(
                 .unwrap_or_default()
                 .as_micros() as u32;
 
-            let header = TunnelHeader::keepalive(seq, ts);
+            let header = TunnelHeader::keepalive(seq, ts)
+                .with_session_token(crate::session::session_token());
             let packet = header.encode_to_array();
 
             if socket.send_to(&packet, addr).await.is_err() {
@@ -257,7 +258,8 @@ pub async fn run_live_test(
                     .unwrap_or_default()
                     .as_micros() as u32;
 
-                let header = TunnelHeader::new(seq, ts, local_addr, echo_addr);
+                let header = TunnelHeader::new(seq, ts, local_addr, echo_addr)
+                    .with_session_token(crate::session::session_token());
                 let packet = header.encode_with_payload(payload.as_bytes());
 
                 let send_time = std::time::Instant::now();
@@ -355,7 +357,8 @@ pub async fn run_live_test(
                     let block_id = encoder.block_id();
                     let index = encoder.current_index();
 
-                    let header = TunnelHeader::new_fec(seq, ts, local_addr, echo_addr);
+                    let header = TunnelHeader::new_fec(seq, ts, local_addr, echo_addr)
+                        .with_session_token(crate::session::session_token());
                     let fec_hdr = FecHeader::data(block_id, index, fec_k);
                     let pkt = build_fec_data_packet(&header, &fec_hdr, payload.as_bytes());
 
@@ -364,7 +367,8 @@ pub async fn run_live_test(
 
                     if let Some(parity_bytes) = parity {
                         let parity_header =
-                            TunnelHeader::new_fec(seq + 1000, ts, local_addr, echo_addr);
+                            TunnelHeader::new_fec(seq + 1000, ts, local_addr, echo_addr)
+                                .with_session_token(crate::session::session_token());
                         let parity_fec = FecHeader::parity(block_id, fec_k);
                         let parity_pkt =
                             build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);

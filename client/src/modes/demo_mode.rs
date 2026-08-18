@@ -86,7 +86,7 @@ pub async fn run_demo(
     };
     // connect on UDP just sets default destination — ignore errors
 
-    let hdr = TunnelHeader::keepalive(0, 0);
+    let hdr = TunnelHeader::keepalive(0, 0).with_session_token(crate::session::session_token());
     let mut latencies: Vec<u64> = Vec::new();
 
     for _ in 0..5 {

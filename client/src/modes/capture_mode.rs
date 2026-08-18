@@ -533,7 +533,8 @@ async fn run_capture_mode_inner(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_micros() as u32;
-                let header = lightspeed_protocol::TunnelHeader::keepalive(ka_seq, ts);
+                let header = lightspeed_protocol::TunnelHeader::keepalive(ka_seq, ts)
+                    .with_session_token(crate::session::session_token());
                 if tunnel_socket
                     .send_to(&header.encode_to_array(), proxy_addr)
                     .await
@@ -624,7 +625,8 @@ async fn run_capture_mode_inner(
                     let block_id = encoder.block_id();
                     let index = encoder.current_index();
                     let header =
-                        lightspeed_protocol::TunnelHeader::new_fec(seq, ts, pkt.src, pkt.dst);
+                        lightspeed_protocol::TunnelHeader::new_fec(seq, ts, pkt.src, pkt.dst)
+                            .with_session_token(crate::session::session_token());
                     let fec_hdr = FecHeader::data(block_id, index, fec_k);
                     let pkt_buf = build_fec_data_packet(&header, &fec_hdr, &pkt.payload);
                     let parity = encoder.add_packet(&pkt.payload);
@@ -634,7 +636,8 @@ async fn run_capture_mode_inner(
                         let parity_seq = seq.wrapping_add(1);
                         let parity_header = lightspeed_protocol::TunnelHeader::new_fec(
                             parity_seq, ts, pkt.src, pkt.dst,
-                        );
+                        )
+                        .with_session_token(crate::session::session_token());
                         let parity_fec = FecHeader::parity(block_id, fec_k);
                         let parity_buf =
                             build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
@@ -643,7 +646,8 @@ async fn run_capture_mode_inner(
                     }
                 } else {
                     // Non-FEC: simple tunnel header + payload
-                    let header = lightspeed_protocol::TunnelHeader::new(seq, ts, pkt.src, pkt.dst);
+                    let header = lightspeed_protocol::TunnelHeader::new(seq, ts, pkt.src, pkt.dst)
+                        .with_session_token(crate::session::session_token());
                     let packet = header.encode_with_payload(&pkt.payload);
                     let _ = tunnel_socket.send_to(&packet, proxy_addr).await;
                 }
