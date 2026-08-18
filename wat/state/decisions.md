@@ -213,3 +213,18 @@ Compiles cleanly on Linux (`cargo check -p lightspeed-gui`), merges without conf
 - **`quic` feature:** enabled in the Dockerfile, the cargo-dist client build, and the GUI's client dependency.
 - **`require_auth = true`:** now the default in config, shipped tomls, and the provision script.
 **Alternatives Considered:** Keeping `require_auth = false` and leaving token stamping as a documented gap — rejected because secure-by-default is the stated goal and the client-side stamping is now complete. Threading the token via `Arc<AtomicU8>` through every struct — rejected in favor of a process-global (a client has one active proxy session, and the global minimizes plumbing across ~15 files).
+
+### 2026-08-18: WF-016/WF-017 — TCP Tunnel & Configurable Ports
+
+**Agent:** RustDev + NetEng + SecOps
+**Status:** Accepted
+**Rationale:** Issues #10 (TCP tunnel) and #39 (configurable ports) were the last open enhancement requests. The TCP tunnel adds a second transport to the security-critical relay, so the design was validated by an oracle before implementation.
+**Impact:**
+- **`protocol/framing.rs`:** length-prefixed framing (4-byte BE length + tunnel packet), with a `MAX_FRAME_SIZE` cap rejecting zero/oversized lengths before allocation.
+- **Proxy `ClientSender`:** abstracts the response write path (UDP `send_to` vs TCP framed write); a `CancellationToken` drives teardown (send-error alone is insufficient because `Arc` keeps the write half alive).
+- **`run_tcp_inbound`:** TCP listener on the data port feeds frames through the same `process_inbound_packet` pipeline — auth, rate-limit, abuse, destination validation, and FEC apply identically.
+- **TCP hardening:** connection semaphore (256), read timeout (10 s), `TCP_NODELAY` on both ends.
+- **Client `TunnelTransport`:** UDP/TCP enum with `--tcp` flag and `tunnel.transport` config; scope is relay + redirect only (interceptors remain UDP-only).
+- **Configurable ports:** `[network]` section (data/control/health) with CLI flags as optional overrides.
+- **glib advisory:** documented; blocked on upstream gtk-rs 0.20 (filed tauri-apps/tray-icon#356).
+**Alternatives Considered:** A parallel `TcpRelay` type — rejected in favor of a transport enum to avoid duplicating the FEC/header/stats logic. Unifying the TCP read path into `ClientSender` — rejected because UDP uses a batched recvmmsg loop while TCP is accept→frame; only the write path is shared. Extending TCP to the kernel-MITM interceptors — deferred (raw-socket reinjection is UDP-specific).

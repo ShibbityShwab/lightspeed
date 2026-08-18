@@ -62,6 +62,7 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 - **Automatic proxy selection** — probes all configured proxies and picks the fastest
 - **ML-based route prediction** — 11-feature Random Forest model learns from your connection patterns
 - **Multipath FEC** — XOR-based Forward Error Correction with ~25% bandwidth overhead (vs. ExitLag's 200%)
+- **TCP tunnel fallback** — client↔proxy leg over TCP (`--tcp`) for networks that block UDP
 
 ### Packet Interception
 - **Kernel-level MITM** — nftables/iptables (Linux), pfctl (macOS), WinDivert (Windows)
