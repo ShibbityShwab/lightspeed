@@ -7,11 +7,9 @@ region      = "local"
 max_clients = 100
 
 [security]
-# NOTE: require_auth = true requires BOTH (a) the proxy built with `--features quic`
-# (so the control plane runs) AND (b) a client that stamps the session token into
-# data-plane packets. The current client does not stamp tokens, so `true` would
-# reject every legitimate client. Left `false` by default until that lands.
-require_auth                = false
+# Token auth: clients register over QUIC and stamp their session token into every
+# data-plane packet. Unregistered clients are rejected.
+require_auth                = true
 max_amplification_ratio     = 2.0
 max_destinations_per_window = 10
 ban_duration_secs           = 3600

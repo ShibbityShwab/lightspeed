@@ -175,7 +175,7 @@ for region in "$@"; do
     echo -e "\n${CYAN}Provisioning $node_name ($region)...${NC}"
 
     # Create proxy.toml for this region
-    PROXY_TOML="[server]\nnode_id = \"$node_name\"\nregion = \"$region\"\nmax_clients = 100\n\n[security]\nrequire_auth = false\nmax_amplification_ratio = 2.0\n\n[rate_limit]\nmax_pps_per_client = 1000\nmax_bps_per_client = 1000000\n\n[metrics]\nenabled = true\ninterval_secs = 10"
+    PROXY_TOML="[server]\nnode_id = \"$node_name\"\nregion = \"$region\"\nmax_clients = 100\n\n[security]\nrequire_auth = true\nmax_amplification_ratio = 2.0\n\n[rate_limit]\nmax_pps_per_client = 1000\nmax_bps_per_client = 1000000\n\n[metrics]\nenabled = true\ninterval_secs = 10"
 
     RESP=$(api POST "instances" -d "{
         \"region\": \"$region\",

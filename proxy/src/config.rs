@@ -102,7 +102,7 @@ fn default_ban_duration() -> u64 {
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
-            require_auth: false,
+            require_auth: true,
             max_amplification_ratio: default_amplification_ratio(),
             max_destinations_per_window: default_max_destinations(),
             ban_duration_secs: default_ban_duration(),
