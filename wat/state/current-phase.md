@@ -1,42 +1,39 @@
-# Current Phase — WF-014: v1.0.0 Release
+# Current Phase — WF-015: Token Auth & Client Session Stamping
 
-**Workflow:** WF-014  
-**Agent:** RustDev + QAEngineer + InfraDev  
-**Status:** ✅ v1.0.0 release work completed  
+**Workflow:** WF-015
+**Agent:** RustDev + QAEngineer + SecOps
+**Status:** ✅ Token auth wired end-to-end — `require_auth` now defaults to `true` (pending 1.1.0 tag)
 **Last updated:** 2026-08-18
 
 ---
 
-## Completed Steps (WF-014)
+## Completed Steps (WF-015)
 
 | Step | Description | Status |
 |------|-------------|--------|
-| 1 | Dependency health — egui bump to eframe 0.36 / egui_plot 0.37 | ✅ Done |
-| 2 | Installer wizard via cargo-dist v0.32.0 | ✅ Done |
-| 3 | Self-hosting guide replacing the community-network idea | ✅ Done |
-| 4 | Security audit — documented the auth gap (full token auth deferred) | ✅ Done |
-| 5 | 4 new game profiles — MapleStory / Genshin / Rocket League / World of Tanks | ✅ Done |
-| 6 | Grafana password hardening | ✅ Done |
-| 7 | Version bump to 1.0.0 | ✅ Done |
+| 1 | `session.rs` — global atomic session-token holder | ✅ Done |
+| 2 | `ControlClient::connect()` sets the token after `RegisterAck` | ✅ Done |
+| 3 | `register_session()` best-effort registration helper (quic-gated) | ✅ Done |
+| 4 | Stamp `.with_session_token()` on every data-plane header site | ✅ Done |
+| 5 | Wire registration into `main.rs` modes + GUI engine entry points | ✅ Done |
+| 6 | `quic` feature enabled in Dockerfile + cargo-dist client build + GUI dep | ✅ Done |
+| 7 | `require_auth` default flipped to `true` (config + tomls + provision.sh) | ✅ Done |
 
 ---
 
-## v1.0.0 Release Summary
+## Token Auth Summary
 
-The v1.0.0 release run addressed dependency health, installer tooling, documentation, security defaults, and game coverage ahead of the public stable release.
-
-- **Dependency health:** egui bumped to eframe 0.36 / egui_plot 0.37 to keep the GUI stack current.
-- **Installer wizard:** adopted cargo-dist v0.32.0 to produce platform installers rather than hand-rolled packaging.
-- **Self-hosting guide:** a dedicated guide now documents zero-cost self-hosting, replacing the earlier community-proxy-network idea.
-- **Security audit:** traced the client/proxy auth flow; `require_auth` stays `false` by default because the client does not stamp session tokens into data-plane packets. Full token auth is documented and deferred.
-- **Game profiles:** MapleStory, Genshin, Rocket League, and World of Tanks added, expanding supported-game coverage.
-- **Grafana hardening:** the weak default Grafana password was removed.
-- **Version:** bumped to 1.0.0.
+- **Client** registers over QUIC, receives a session token, and stamps it into every
+  data-plane packet header.
+- **Proxy** (with `require_auth = true`, the new default) validates the (IP, token) pair
+  per packet; unregistered clients are rejected.
+- **Backward compatible**: a client without the `quic` feature sends token `0`, which the
+  proxy accepts only when `require_auth = false`.
 
 ---
 
 ## Next Action
 
-1. **Tag and push the v1.0.0 release** (not yet done — awaiting explicit release step)
-2. **WF-015**: Configurable ports (issue #39)
-3. **WF-016**: TCP tunnel (issue #10)
+1. **Tag and push v1.1.0** (token auth release — pending explicit release step)
+2. **WF-016**: Configurable ports (issue #39)
+3. **WF-017**: TCP tunnel (issue #10)

@@ -5,6 +5,15 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-08-18
+
+### Security
+- **Token authentication**: the client now registers over the QUIC control plane and stamps its session token into every data-plane packet header. `require_auth` now defaults to `true`, so unregistered clients are rejected.
+- **`quic` in release builds**: the Docker image and cargo-dist release binaries build the `quic` feature so registration works out of the box.
+
+### Known issue
+- **glib advisory (medium, GUI-only)**: `glib` 0.18.x has an unsoundness in `VariantStrIter` (patched in 0.20.0). Blocked on a tray-icon/libappindicator release that adopts gtk-rs 0.20; the GUI never uses the affected iterator.
+
 ## [1.0.0] — 2026-08-18
 
 ### Installer Wizard

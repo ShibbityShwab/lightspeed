@@ -198,3 +198,18 @@ Compiles cleanly on Linux (`cargo check -p lightspeed-gui`), merges without conf
 - **Self-hosting guide:** A dedicated guide documents zero-cost self-hosting, replacing the earlier community-proxy-network idea.
 - **Deferred to post-1.0:** Issue #39 (configurable ports) and issue #10 (TCP tunnel) are deferred beyond the 1.0.0 release.
 **Alternatives Considered:** Hand-rolled installers — rejected in favor of cargo-dist for reproducible, cross-platform packaging. `require_auth = true` default — evaluated and rejected for v1.0.0 because the client does not yet stamp session tokens into data-plane packets (would reject all legitimate clients). Keeping the community-proxy-network idea — rejected in favor of a concrete self-hosting guide. Including configurable ports and the TCP tunnel in 1.0.0 — rejected to keep the release scope focused.
+
+### 2026-08-18: WF-015 — Token Auth & Client Session Stamping
+
+**Agent:** RustDev + QAEngineer + SecOps
+**Status:** Accepted
+**Rationale:** The v1.0.0 audit revealed the client never stamped the session token into data-plane packets, so `require_auth` could not be safely enabled. WF-015 closes that gap: the client now registers over QUIC and stamps its token into every data-plane header, enabling `require_auth = true` as the secure default.
+**Impact:**
+- **`client/src/session.rs`:** new process-global atomic session-token holder (defaults to 0).
+- **`ControlClient::connect()`:** sets the global token after a successful `RegisterAck`.
+- **`register_session()`:** new best-effort registration helper (no-op without the `quic` feature).
+- **36 data-plane header sites:** stamped with `.with_session_token(...)` across relay, redirect, engine, interceptors, capture, and modes.
+- **Registration wired:** into `main.rs` modes and the GUI engine entry points.
+- **`quic` feature:** enabled in the Dockerfile, the cargo-dist client build, and the GUI's client dependency.
+- **`require_auth = true`:** now the default in config, shipped tomls, and the provision script.
+**Alternatives Considered:** Keeping `require_auth = false` and leaving token stamping as a documented gap — rejected because secure-by-default is the stated goal and the client-side stamping is now complete. Threading the token via `Arc<AtomicU8>` through every struct — rejected in favor of a process-global (a client has one active proxy session, and the global minimizes plumbing across ~15 files).

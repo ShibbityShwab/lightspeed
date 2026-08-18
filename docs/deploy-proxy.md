@@ -80,47 +80,45 @@ export LIGHTSPEED_NODES='{"proxy-1":{"ip":"1.2.3.4"},"proxy-2":{"ip":"5.6.7.8"}}
 
 ## Security & Authentication
 
-The proxy has a QUIC control plane (port `4433`) that can gate the data plane. As of
-**v1.0.0**, `require_auth` **defaults to `false`** (open relay, dev mode). This is a
-documented limitation, not a recommendation — read the caveats below.
+The proxy has a QUIC control plane (port `4433`) that gates the data plane. As of
+**v1.1.0**, **`require_auth` defaults to `true`**: the proxy will not relay data-plane
+packets from a client until that client has registered over the QUIC control plane.
 
-### How the control plane works
+### How it works
 
-The control plane is **QUIC with mTLS**. When the proxy is built with the `quic`
-feature and `require_auth` is enabled, the flow is:
+The control plane is **QUIC with mTLS**. The flow is:
 
 1. A client connects to the QUIC control port (`4433`) and sends a `Register` message.
 2. The proxy checks capacity, generates a random `session_token`, and records the client's IP.
 3. The proxy replies with a `RegisterAck` carrying the `session_token`.
-4. The proxy then validates an **(IP, token)** pair on every data-plane packet, dropping any that do not match.
+4. The client stamps that token into **every** data-plane packet header.
+5. The proxy validates an **(IP, token)** pair on every data-plane packet, dropping any that do not match.
 
-### Current status and caveats
+This raises the bar for abuse: a random UDP sender cannot relay through your node without
+first completing a QUIC registration. The token is 8-bit (defense-in-depth alongside the
+IP binding); the enforcement path is covered by `proxy/tests/integration_security.rs`.
 
-Full token authentication is **not yet wired end-to-end** in v1.0.0:
+### Requirements for token auth to work
 
-- The proxy enforces `require_auth` correctly, and its enforcement path is covered by
-  `proxy/tests/integration_security.rs`.
-- The **client does not yet stamp the session token into data-plane packets** (it always
-  sends `0`), so enabling `require_auth = true` today would reject every legitimate client.
-- The proxy must be built with the `quic` feature for the control plane to run; the
-  published Docker image does not enable it yet.
-
-For these reasons `require_auth` stays `false` by default and full token auth is tracked
-for a follow-up release. Until then, protect a public node with the built-in rate
-limiting, destination validation, and abuse detection, and restrict ingress to trusted
-sources.
+- The **proxy** must be built with the `quic` feature (the Docker image and release
+  binaries already are).
+- The **client** must be built with the `quic` feature so it can register (the release
+  binaries already are). A client built without `quic` sends token `0` and will be
+  rejected by an authenticated proxy — build with `cargo build --features quic`.
 
 ### Setting the config
 
 ```toml
 [security]
-require_auth = false   # default; see caveats above
+require_auth = true   # default
 ```
+
+To disable auth (dev mode only, **not** recommended for a public node), set it to `false`.
 
 The proxy prints the auth state at startup, so you can confirm the setting took effect:
 
 ```text
-Auth enabled: false
+Auth enabled: true
 ```
 
 ## Multi-Node Mesh
