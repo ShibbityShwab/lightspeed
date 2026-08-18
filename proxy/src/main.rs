@@ -38,17 +38,17 @@ struct Cli {
     #[arg(short, long, default_value = "proxy.toml")]
     config: String,
 
-    /// UDP data plane bind address
-    #[arg(long, default_value = "0.0.0.0:4434")]
-    data_bind: String,
+    /// UDP data plane bind address (overrides [network] data_port)
+    #[arg(long)]
+    data_bind: Option<String>,
 
-    /// QUIC control plane bind address
-    #[arg(long, default_value = "0.0.0.0:4433")]
-    control_bind: String,
+    /// QUIC control plane bind address (overrides [network] control_port)
+    #[arg(long)]
+    control_bind: Option<String>,
 
-    /// Health check HTTP bind address
-    #[arg(long, default_value = "0.0.0.0:8080")]
-    health_bind: String,
+    /// Health check HTTP bind address (overrides [network] health_port)
+    #[arg(long)]
+    health_bind: Option<String>,
 
     /// Enable verbose logging
     #[arg(short, long, default_value_t = false)]
@@ -74,22 +74,33 @@ async fn main() -> anyhow::Result<()> {
 
         // 1. Config
         print!("   Config file ({})... ", cli.config);
-        match config::ProxyConfig::load(&cli.config) {
-            Ok(cfg) => {
+        let cfg = match config::ProxyConfig::load(&cli.config) {
+            Ok(c) => {
                 println!("✅ loaded");
-                println!("      Data port:    {}", cfg.server.node_id);
-                println!("      Auth enabled: {}", cfg.security.require_auth);
-                println!("      Abuse PPS:    {}", cfg.rate_limit.max_pps_per_client);
+                c
             }
             Err(e) => {
                 println!("❌ {}", e);
                 std::process::exit(1);
             }
-        }
+        };
+        println!("      Node ID:      {}", cfg.server.node_id);
+        println!("      Data port:    {}", cfg.network.data_port);
+        println!("      Auth enabled: {}", cfg.security.require_auth);
+        println!("      Abuse PPS:    {}", cfg.rate_limit.max_pps_per_client);
+
+        let data_bind = cli
+            .data_bind
+            .clone()
+            .unwrap_or_else(|| format!("0.0.0.0:{}", cfg.network.data_port));
+        let health_bind = cli
+            .health_bind
+            .clone()
+            .unwrap_or_else(|| format!("0.0.0.0:{}", cfg.network.health_port));
 
         // 2. Bind check
-        print!("   UDP data port ({})... ", cli.data_bind);
-        match std::net::UdpSocket::bind(&cli.data_bind) {
+        print!("   UDP data port ({})... ", data_bind);
+        match std::net::UdpSocket::bind(&data_bind) {
             Ok(_) => println!("✅ bindable"),
             Err(e) => {
                 println!("❌ {}", e);
@@ -97,8 +108,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        print!("   HTTP health port ({})... ", cli.health_bind);
-        match std::net::TcpListener::bind(&cli.health_bind) {
+        print!("   HTTP health port ({})... ", health_bind);
+        match std::net::TcpListener::bind(&health_bind) {
             Ok(_) => println!("✅ bindable"),
             Err(e) => {
                 println!("❌ {}", e);
@@ -118,19 +129,32 @@ async fn main() -> anyhow::Result<()> {
         .with_target(true)
         .init();
 
-    info!(
-        "⚡ LightSpeed Proxy v{} starting",
-        env!("CARGO_PKG_VERSION")
-    );
-    info!("Data plane:    {}", cli.data_bind);
-    info!("Control plane: {}", cli.control_bind);
-    info!("Health check:  {}", cli.health_bind);
-
     // Load configuration
     let config = config::ProxyConfig::load(&cli.config).unwrap_or_else(|e| {
         tracing::warn!("Config not found ({}), using defaults", e);
         config::ProxyConfig::default()
     });
+
+    let data_bind = cli
+        .data_bind
+        .clone()
+        .unwrap_or_else(|| format!("0.0.0.0:{}", config.network.data_port));
+    let control_bind = cli
+        .control_bind
+        .clone()
+        .unwrap_or_else(|| format!("0.0.0.0:{}", config.network.control_port));
+    let health_bind = cli
+        .health_bind
+        .clone()
+        .unwrap_or_else(|| format!("0.0.0.0:{}", config.network.health_port));
+
+    info!(
+        "⚡ LightSpeed Proxy v{} starting",
+        env!("CARGO_PKG_VERSION")
+    );
+    info!("Data plane:    {}", data_bind);
+    info!("Control plane: {}", control_bind);
+    info!("Health check:  {}", health_bind);
 
     info!("Node ID: {}", config.server.node_id);
     info!("Region:  {}", config.server.region);
@@ -167,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
     let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
 
     // Bind data plane UDP socket
-    let data_socket = Arc::new(UdpSocket::bind(&cli.data_bind).await?);
+    let data_socket = Arc::new(UdpSocket::bind(&data_bind).await?);
     info!("Data plane socket bound to {}", data_socket.local_addr()?);
 
     // Spawn the relay inbound loop (client → game server)
@@ -208,7 +232,7 @@ async fn main() -> anyhow::Result<()> {
     // Spawn QUIC control plane server (if compiled with --features quic)
     #[cfg(feature = "quic")]
     let control_handle = {
-        let control_addr: std::net::SocketAddr = cli.control_bind.parse()?;
+        let control_addr: std::net::SocketAddr = control_bind.parse()?;
         let control_state = Arc::new(control::ControlState::new(
             config.clone(),
             Arc::clone(&authenticator),
@@ -229,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
         let engine = Arc::clone(&engine);
         let region = config.server.region.clone();
         let node_id = config.server.node_id.clone();
-        let health_bind = cli.health_bind.clone();
+        let health_bind = health_bind.clone();
         let start_time = std::time::Instant::now();
         tokio::spawn(async move {
             if let Err(e) =

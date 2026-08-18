@@ -6,6 +6,11 @@ node_id     = "proxy-dev"
 region      = "local"
 max_clients = 100
 
+[network]
+data_port    = 4434
+control_port = 4433
+health_port  = 8080
+
 [security]
 # Token auth: clients register over QUIC and stamp their session token into every
 # data-plane packet. Unregistered clients are rejected.

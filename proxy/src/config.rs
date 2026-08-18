@@ -10,6 +10,10 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub server: ServerConfig,
 
+    /// Network bind configuration.
+    #[serde(default)]
+    pub network: NetworkConfig,
+
     /// Security settings.
     #[serde(default)]
     pub security: SecurityConfig,
@@ -21,6 +25,22 @@ pub struct ProxyConfig {
     /// Metrics settings.
     #[serde(default)]
     pub metrics: MetricsConfig,
+}
+
+/// Network bind configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    /// UDP data plane port.
+    #[serde(default = "default_data_port")]
+    pub data_port: u16,
+
+    /// QUIC control plane port.
+    #[serde(default = "default_control_port")]
+    pub control_port: u16,
+
+    /// HTTP health/metrics port.
+    #[serde(default = "default_health_port")]
+    pub health_port: u16,
 }
 
 /// Server identity and general settings.
@@ -119,6 +139,15 @@ fn default_region() -> String {
 fn default_max_clients() -> usize {
     100
 }
+fn default_data_port() -> u16 {
+    4434
+}
+fn default_control_port() -> u16 {
+    4433
+}
+fn default_health_port() -> u16 {
+    8080
+}
 fn default_pps_limit() -> u64 {
     1000
 }
@@ -141,6 +170,16 @@ impl Default for ServerConfig {
             node_id: default_node_id(),
             region: default_region(),
             max_clients: default_max_clients(),
+        }
+    }
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            data_port: default_data_port(),
+            control_port: default_control_port(),
+            health_port: default_health_port(),
         }
     }
 }
@@ -173,5 +212,33 @@ impl ProxyConfig {
         let content = std::fs::read_to_string(path)?;
         let config: ProxyConfig = toml::from_str(&content)?;
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_network_defaults() {
+        let n = NetworkConfig::default();
+        assert_eq!(n.data_port, 4434);
+        assert_eq!(n.control_port, 4433);
+        assert_eq!(n.health_port, 8080);
+    }
+
+    #[test]
+    fn test_parse_network_ports() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+[network]
+data_port = 5555
+health_port = 9000
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.network.data_port, 5555);
+        assert_eq!(config.network.health_port, 9000);
+        assert_eq!(config.network.control_port, 4433);
     }
 }
