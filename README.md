@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/ShibbityShwab/lightspeed/ci.yml?branch=master&style=flat-square)](https://github.com/ShibbityShwab/lightspeed/actions)
 [![License](https://img.shields.io/badge/license-NonCommercial-blue.svg?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/built%20with-Rust%201.85+-orange.svg?style=flat-square)](https://rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-206%2B%20passing-brightgreen.svg?style=flat-square)](https://github.com/ShibbityShwab/lightspeed/actions)
+[![Tests](https://img.shields.io/badge/tests-200%2B%20passing-brightgreen.svg?style=flat-square)](https://github.com/ShibbityShwab/lightspeed/actions)
 
 LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It routes your game traffic through an optimized proxy tunnel, bypassing slow ISP paths to reduce and stabilize your ping — no subscriptions, no usage fees, no infrastructure bills.
 
@@ -47,6 +47,10 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 | Overwatch 2 | `--game ow2` | Blizzard Warden | ✅ |
 | League of Legends | `--game lol` | Riot Vanguard | ✅ |
 | PUBG: Battlegrounds | `--game pubg` | BattlEye | ✅ |
+| MapleStory | `--game maplestory` | BlackCipher (NGS) | ✅ |
+| Genshin Impact | `--game genshin` | None | ✅ |
+| Rocket League | `--game rocketleague` | EAC | ✅ |
+| World of Tanks | `--game wot` | None | ✅ |
 
 📖 **[Full Game List →](docs/supported-games.md)**
 
@@ -89,7 +93,7 @@ cargo build --release
 ./target/release/lightspeed-proxy --config proxy/proxy.toml
 ```
 
-**Requirements:** Rust 1.75+, `libpcap-dev` (Linux), Npcap SDK (Windows).
+**Requirements:** Rust 1.75+ (1.95+ for the GUI), `libpcap-dev` (Linux), Npcap SDK (Windows).
 
 ---
 
@@ -175,7 +179,7 @@ lightspeed/
 - [x] **v0.3.0** — Prometheus + Grafana, CI/CD pipeline, pre-built binaries
 - [x] **v0.4.0** — 9-game support, session telemetry, Windows GUI, recvmmsg batched I/O
 - [x] **v0.5.0** — Linux interceptor CLI, cross-platform GUI, Docker, MockInterceptor
-- [ ] **v1.0.0** — Public stable release: installer wizard, community proxy network
+- [x] **v1.0.0** — Public stable release: installer wizard + self-hosted proxy model
 
 ---
 

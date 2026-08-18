@@ -5,29 +5,24 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.1] — 2026-05-02
+## [1.0.0] — 2026-08-18
 
-### WAT Modernization
-- **AGENTS.md**: Created as industry-standard canonical AI agent instructions file (recognized by Cursor, Copilot, Windsurf, etc.)
-- **`.clinerules`**: Slimmed to Cline compatibility hook that delegates to AGENTS.md
-- **`.clineskills/`**: Created `@lightspeed` autonomy loop skill and `@debug` iterative test-fix loop skill
-- **`wat/`**: Archived 7 static reference files to `wat/archive/` (agents.md, workflows.md, tools.md, autonomy-loop.md, workspace.md, mcp-integration.md, project-goals.md)
-- **`wat/TASK.md`**: Created structured task definition template with success criteria, test commands, and rollback
-- **`wat/rules.md`**: Added AGENTIC VERIFICATION section — must pass tests+clippy before claiming completion, 3-attempt escalation rule
-- **Deleted model-specific stubs**: `.geminirules`, `.antigravityrules`, `wat/run-gemini.txt`, `.agents/` directory
+### Installer Wizard
+- **cargo-dist v0.32.0**: shell, PowerShell, and MSI installers with free Sigstore/GitHub attestations.
+- **Cross-platform matrix**: client + proxy for Linux, Windows, and macOS (x86_64 + Apple Silicon); GUI for Linux and Windows.
 
-### CI Improvements
-- **Security audit**: Added `cargo-audit --deny warnings` job to CI pipeline
-- **Windows build/test**: Added `windows-latest` job for full build + test coverage on primary target
-- **Benchmark baseline**: Added `cargo bench` job with criterion baseline capture + artifact upload
+### Self-Hosted Proxy Model
+- **`docs/deploy-proxy.md`**: expanded into a full self-hosting guide, replacing the earlier "community proxy network" idea.
 
-### Documentation
-- **Gamer docs**: Added `docs/glossary.md`, `docs/user-guide.md`, `docs/faq.md`, `docs/troubleshooting.md`, `docs/supported-games.md`
-- **Capture mode**: Added `docs/capture-mode-limitations.md` documenting architectural limitations
+### New Game Profiles
+- MapleStory (`--game maplestory`), Genshin Impact (`--game genshin`), Rocket League (`--game rocketleague`), World of Tanks (`--game wot`).
 
-### Chores & Maintenance
-- Initial `proxy/proxy.toml` configuration file
-- E2E test tool: `tools/echo28015.py`, `tools/rust_traffic_sim.ps1`, `tools/start_echo.sh`
+### Security
+- **Grafana**: removed the weak default admin password (now requires `GRAFANA_ADMIN_PASSWORD`).
+- **Auth caveat documented**: `require_auth` stays `false` by default; the client does not yet stamp session tokens into data-plane packets, so full token auth is deferred.
+
+### Dependencies
+- **egui**: eframe 0.35→0.36 and egui_plot 0.36→0.37 (GUI MSRV is now Rust 1.95).
 
 ## [0.5.1] — 2026-08-01
 
@@ -112,6 +107,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Feature gate**: Excluded `windivert-redirect` from full feature set for Linux compatibility
 - **Format check**: `cargo fmt --all` for CI compliance
 - **E2E test**: Fixed proxy/echo test step in CI pipeline
+
+## [0.4.1] — 2026-05-02
+
+### WAT Modernization
+- **AGENTS.md**: Created as industry-standard canonical AI agent instructions file (recognized by Cursor, Copilot, Windsurf, etc.)
+- **`.clinerules`**: Slimmed to Cline compatibility hook that delegates to AGENTS.md
+- **`.clineskills/`**: Created `@lightspeed` autonomy loop skill and `@debug` iterative test-fix loop skill
+- **`wat/`**: Archived 7 static reference files to `wat/archive/` (agents.md, workflows.md, tools.md, autonomy-loop.md, workspace.md, mcp-integration.md, project-goals.md)
+- **`wat/TASK.md`**: Created structured task definition template with success criteria, test commands, and rollback
+- **`wat/rules.md`**: Added AGENTIC VERIFICATION section — must pass tests+clippy before claiming completion, 3-attempt escalation rule
+- **Deleted model-specific stubs**: `.geminirules`, `.antigravityrules`, `wat/run-gemini.txt`, `.agents/` directory
+
+### CI Improvements
+- **Security audit**: Added `cargo-audit --deny warnings` job to CI pipeline
+- **Windows build/test**: Added `windows-latest` job for full build + test coverage on primary target
+- **Benchmark baseline**: Added `cargo bench` job with criterion baseline capture + artifact upload
+
+### Documentation
+- **Gamer docs**: Added `docs/glossary.md`, `docs/user-guide.md`, `docs/faq.md`, `docs/troubleshooting.md`, `docs/supported-games.md`
+- **Capture mode**: Added `docs/capture-mode-limitations.md` documenting architectural limitations
+
+### Chores & Maintenance
+- Initial `proxy/proxy.toml` configuration file
+- E2E test tool: `tools/echo28015.py`, `tools/rust_traffic_sim.ps1`, `tools/start_echo.sh`
 
 ## [0.4.0] — 2026-04-27
 
