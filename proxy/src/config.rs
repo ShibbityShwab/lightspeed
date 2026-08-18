@@ -41,6 +41,19 @@ pub struct NetworkConfig {
     /// HTTP health/metrics port.
     #[serde(default = "default_health_port")]
     pub health_port: u16,
+
+    /// Enable the TCP listener on the data plane port for UDP-restricted
+    /// networks. TCP and UDP can coexist on the same port number.
+    #[serde(default = "default_true")]
+    pub tcp_enabled: bool,
+
+    /// Maximum concurrent TCP client connections.
+    #[serde(default = "default_tcp_max_connections")]
+    pub tcp_max_connections: usize,
+
+    /// TCP read timeout in seconds (idle connections are closed).
+    #[serde(default = "default_tcp_read_timeout")]
+    pub tcp_read_timeout_secs: u64,
 }
 
 /// Server identity and general settings.
@@ -163,6 +176,12 @@ fn default_true() -> bool {
 fn default_metrics_interval() -> u64 {
     10
 }
+fn default_tcp_max_connections() -> usize {
+    256
+}
+fn default_tcp_read_timeout() -> u64 {
+    10
+}
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -180,6 +199,9 @@ impl Default for NetworkConfig {
             data_port: default_data_port(),
             control_port: default_control_port(),
             health_port: default_health_port(),
+            tcp_enabled: true,
+            tcp_max_connections: default_tcp_max_connections(),
+            tcp_read_timeout_secs: default_tcp_read_timeout(),
         }
     }
 }

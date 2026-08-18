@@ -27,15 +27,18 @@
 //! 4. **Destination validation**: Blocks forwarding to private/internal IPs
 
 use std::collections::HashMap;
-use std::net::SocketAddrV4;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::net::UdpSocket;
-use tokio::sync::RwLock;
+use tokio::net::tcp::OwnedWriteHalf;
+use tokio::net::{TcpListener, UdpSocket};
+use tokio::sync::{RwLock, Semaphore};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
+use lightspeed_protocol::framing::{read_frame, write_frame, MAX_FRAME_SIZE};
 use lightspeed_protocol::{
     FecDecoder, FecEncoder, FecHeader, TunnelHeader, FEC_HEADER_SIZE, HEADER_SIZE,
 };
@@ -55,6 +58,64 @@ use super::auth::Authenticator;
 use super::metrics::ProxyMetrics;
 use super::rate_limit::{RateLimitResult, RateLimiter};
 
+/// How responses are written back to a client.
+///
+/// UDP sessions send raw datagrams to the client's bound address.  TCP
+/// sessions write length-prefixed frames to the shared write half, guarded by
+/// a [`CancellationToken`] so an in-flight send observes connection teardown.
+#[derive(Clone)]
+pub enum ClientSender {
+    Udp {
+        socket: Arc<UdpSocket>,
+        addr: SocketAddrV4,
+    },
+    Tcp {
+        write: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
+        cancel: CancellationToken,
+    },
+}
+
+impl std::fmt::Debug for ClientSender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientSender::Udp { socket, addr } => f
+                .debug_struct("Udp")
+                .field("socket", socket)
+                .field("addr", addr)
+                .finish(),
+            ClientSender::Tcp { cancel, .. } => f
+                .debug_struct("Tcp")
+                .field("cancelled", &cancel.is_cancelled())
+                .finish(),
+        }
+    }
+}
+
+impl ClientSender {
+    /// Send `bytes` to the client.  Returns the number of bytes written.
+    pub async fn send(&self, bytes: &[u8]) -> std::io::Result<usize> {
+        match self {
+            ClientSender::Udp { socket, addr } => socket.send_to(bytes, addr).await,
+            ClientSender::Tcp { write, cancel } => {
+                if cancel.is_cancelled() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "session cancelled",
+                    ));
+                }
+                let mut guard = write.lock().await;
+                write_frame(&mut *guard, bytes).await?;
+                Ok(bytes.len())
+            }
+        }
+    }
+
+    /// Whether this sender writes to a TCP connection.
+    pub fn is_tcp(&self) -> bool {
+        matches!(self, ClientSender::Tcp { .. })
+    }
+}
+
 /// Get current timestamp in microseconds (wrapping u32).
 fn now_us() -> u32 {
     SystemTime::now()
@@ -72,6 +133,11 @@ pub struct ClientSession {
     pub game_server: SocketAddrV4,
     /// Outbound socket for forwarding to game server.
     pub outbound_socket: Arc<UdpSocket>,
+    /// How responses are sent back to the client (UDP or TCP).
+    pub sender: ClientSender,
+    /// Cancellation token — fired when the session is torn down so the
+    /// response listener can observe the close and stop reading.
+    pub cancel: CancellationToken,
     /// Packets relayed in this session.
     pub packets_relayed: u64,
     /// Bytes relayed in this session.
@@ -132,6 +198,7 @@ impl RelayEngine {
         game_server: SocketAddrV4,
         fec_enabled: bool,
         fec_k: u8,
+        sender: ClientSender,
     ) -> anyhow::Result<(Arc<ClientSession>, bool)> {
         // Fast path: check existing session
         {
@@ -149,6 +216,14 @@ impl RelayEngine {
         // Bind a new outbound socket for this client's game traffic
         let outbound_socket = UdpSocket::bind("0.0.0.0:0").await?;
 
+        // A TCP session shares its connection's cancellation token so the
+        // response listener stops when the connection drops; UDP sessions get
+        // an independent token.
+        let cancel = match &sender {
+            ClientSender::Udp { .. } => CancellationToken::new(),
+            ClientSender::Tcp { cancel, .. } => cancel.clone(),
+        };
+
         info!(
             client = %client_addr,
             game_server = %game_server,
@@ -161,6 +236,8 @@ impl RelayEngine {
             client_addr,
             game_server,
             outbound_socket: Arc::new(outbound_socket),
+            sender,
+            cancel,
             packets_relayed: 0,
             bytes_relayed: 0,
             started_at: Instant::now(),
@@ -334,13 +411,13 @@ async fn recv_batch_async(sock: &UdpSocket, batch: &mut BatchState) -> std::io::
 async fn process_inbound_packet(
     buf: &[u8],
     client_addr: SocketAddrV4,
-    data_socket: &Arc<UdpSocket>,
+    sender: &ClientSender,
     engine: &Arc<RelayEngine>,
     rate_limiter: &Arc<tokio::sync::Mutex<RateLimiter>>,
     authenticator: &Arc<RwLock<Authenticator>>,
     abuse_detector: &Arc<tokio::sync::Mutex<AbuseDetector>>,
     metrics: &Arc<ProxyMetrics>,
-) {
+) -> bool {
     let len = buf.len();
 
     // ── Rate limit check ────────────────────────────────────────
@@ -352,13 +429,13 @@ async fn process_inbound_packet(
                 trace!(client = %client_addr, "Rate limited (PPS)");
                 metrics.record_drop();
                 metrics.record_rate_limit();
-                return;
+                return false;
             }
             RateLimitResult::BandwidthExceeded => {
                 trace!(client = %client_addr, "Rate limited (BPS)");
                 metrics.record_drop();
                 metrics.record_rate_limit();
-                return;
+                return false;
             }
         }
     }
@@ -369,7 +446,7 @@ async fn process_inbound_packet(
         Err(e) => {
             debug!(client = %client_addr, error = %e, "Invalid tunnel packet");
             metrics.record_drop();
-            return;
+            return false;
         }
     };
 
@@ -384,7 +461,7 @@ async fn process_inbound_packet(
             );
             metrics.record_drop();
             metrics.record_auth_rejection();
-            return;
+            return false;
         }
     }
 
@@ -394,16 +471,18 @@ async fn process_inbound_packet(
         let response = TunnelHeader::keepalive(header.sequence, now_us())
             .with_session_token(header.session_token);
         let response_bytes = response.encode_to_array();
-        let _ = data_socket.send_to(&response_bytes, client_addr).await;
-        return;
+        let _ = sender.send(&response_bytes).await;
+        return false;
     }
 
     if header.is_fin() {
         info!(client = %client_addr, "Client sent FIN — closing session");
         let sessions_lock = engine.sessions();
         let mut sessions = sessions_lock.write().await;
-        sessions.remove(&client_addr);
-        return;
+        if let Some(session) = sessions.remove(&client_addr) {
+            session.cancel.cancel();
+        }
+        return true;
     }
 
     // Get the original destination (game server) from the header
@@ -423,25 +502,25 @@ async fn process_inbound_packet(
                 );
                 metrics.record_drop();
                 metrics.record_abuse_block();
-                return;
+                return false;
             }
             AbuseCheckResult::Banned => {
                 trace!(client = %client_addr, "Blocked: client is banned");
                 metrics.record_drop();
                 metrics.record_abuse_block();
-                return;
+                return false;
             }
             AbuseCheckResult::ReflectionDetected => {
                 warn!(client = %client_addr, "Blocked: reflection attack detected");
                 metrics.record_drop();
                 metrics.record_abuse_block();
-                return;
+                return false;
             }
             AbuseCheckResult::AmplificationDetected => {
                 warn!(client = %client_addr, "Blocked: amplification detected");
                 metrics.record_drop();
                 metrics.record_abuse_block();
-                return;
+                return false;
             }
         }
     }
@@ -451,7 +530,7 @@ async fn process_inbound_packet(
         if payload.len() < FEC_HEADER_SIZE {
             debug!(client = %client_addr, "FEC packet too short");
             metrics.record_drop();
-            return;
+            return false;
         }
         let mut fec_slice: &[u8] = &payload[..FEC_HEADER_SIZE];
         match FecHeader::decode(&mut fec_slice) {
@@ -459,7 +538,7 @@ async fn process_inbound_packet(
             None => {
                 debug!(client = %client_addr, "Invalid FEC header");
                 metrics.record_drop();
-                return;
+                return false;
             }
         }
     } else {
@@ -471,14 +550,14 @@ async fn process_inbound_packet(
 
     // ── Session: get or create ───────────────────────────────────
     let (session, is_new) = match engine
-        .get_or_create_session(client_addr, game_server, is_fec, fec_k)
+        .get_or_create_session(client_addr, game_server, is_fec, fec_k, sender.clone())
         .await
     {
         Ok(s) => s,
         Err(e) => {
             warn!(client = %client_addr, error = %e, "Failed to create session");
             metrics.record_drop();
-            return;
+            return false;
         }
     };
 
@@ -486,10 +565,9 @@ async fn process_inbound_packet(
     if is_new {
         metrics.record_session_created();
         let session_clone = Arc::clone(&session);
-        let data_socket_clone = Arc::clone(data_socket);
         let metrics_clone = Arc::clone(metrics);
         tokio::spawn(async move {
-            run_session_response_listener(session_clone, data_socket_clone, metrics_clone).await;
+            run_session_response_listener(session_clone, metrics_clone).await;
         });
         info!(client = %client_addr, fec = is_fec, "Response listener spawned immediately");
     }
@@ -526,7 +604,7 @@ async fn process_inbound_packet(
             }
             // Periodic GC
             decoder.gc();
-            return; // Don't forward parity to game server
+            return false; // Don't forward parity to game server
         } else {
             // Data packet with FEC: track in decoder, then forward game_payload
             let data_bytes = bytes::Bytes::copy_from_slice(game_payload);
@@ -565,6 +643,8 @@ async fn process_inbound_packet(
             metrics.record_drop();
         }
     }
+
+    false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -621,7 +701,10 @@ pub async fn run_relay_inbound(
             process_inbound_packet(
                 &batch.bufs[i][..pkt_len],
                 client_addr,
-                &data_socket,
+                &ClientSender::Udp {
+                    socket: Arc::clone(&data_socket),
+                    addr: client_addr,
+                },
                 &engine,
                 &rate_limiter,
                 &authenticator,
@@ -670,7 +753,10 @@ pub async fn run_relay_inbound(
         process_inbound_packet(
             &buf[..len],
             client_addr,
-            &data_socket,
+            &ClientSender::Udp {
+                socket: Arc::clone(&data_socket),
+                addr: client_addr,
+            },
             &engine,
             &rate_limiter,
             &authenticator,
@@ -690,7 +776,6 @@ pub async fn run_relay_inbound(
 /// If the client uses FEC, responses are also FEC-encoded.
 pub async fn run_session_response_listener(
     session: Arc<ClientSession>,
-    data_socket: Arc<UdpSocket>,
     metrics: Arc<ProxyMetrics>,
 ) {
     let mut buf = vec![0u8; 2048];
@@ -708,16 +793,22 @@ pub async fn run_session_response_listener(
     };
 
     loop {
-        // Receive response from game server
-        let (len, _game_addr) = match session.outbound_socket.recv_from(&mut buf).await {
-            Ok(result) => result,
-            Err(e) => {
-                debug!(
-                    client = %session.client_addr,
-                    error = %e,
-                    "Outbound socket recv error"
-                );
-                break;
+        // Receive response from game server, bailing early if the session is
+        // cancelled (TCP connection dropped or FIN received).
+        let len = tokio::select! {
+            _ = session.cancel.cancelled() => break,
+            res = session.outbound_socket.recv_from(&mut buf) => {
+                match res {
+                    Ok((len, _game_addr)) => len,
+                    Err(e) => {
+                        debug!(
+                            client = %session.client_addr,
+                            error = %e,
+                            "Outbound socket recv error"
+                        );
+                        break;
+                    }
+                }
             }
         };
 
@@ -754,10 +845,7 @@ pub async fn run_session_response_listener(
             let block_complete = encoder.add_packet_inplace(payload);
 
             // Send data packet to client (zero heap allocation)
-            match data_socket
-                .send_to(&pkt_buf[..data_end], session.client_addr)
-                .await
-            {
+            match session.sender.send(&pkt_buf[..data_end]).await {
                 Ok(sent) => {
                     metrics.record_relay(sent as u64);
                     trace!(
@@ -769,6 +857,9 @@ pub async fn run_session_response_listener(
                     );
                 }
                 Err(e) => {
+                    if session.sender.is_tcp() {
+                        break;
+                    }
                     debug!(
                         client = %session.client_addr,
                         error = %e,
@@ -799,10 +890,7 @@ pub async fn run_session_response_listener(
                 pkt_buf[..HEADER_SIZE].copy_from_slice(&parity_header.encode_to_array());
                 pkt_buf[HEADER_SIZE..parity_offset].copy_from_slice(&parity_fec.encode_to_array());
 
-                match data_socket
-                    .send_to(&pkt_buf[..par_end], session.client_addr)
-                    .await
-                {
+                match session.sender.send(&pkt_buf[..par_end]).await {
                     Ok(sent) => {
                         metrics.record_relay(sent as u64);
                         trace!(
@@ -813,6 +901,9 @@ pub async fn run_session_response_listener(
                         );
                     }
                     Err(e) => {
+                        if session.sender.is_tcp() {
+                            break;
+                        }
                         debug!(
                             client = %session.client_addr,
                             error = %e,
@@ -834,10 +925,7 @@ pub async fn run_session_response_listener(
             pkt_buf[HEADER_SIZE..HEADER_SIZE + payload.len()].copy_from_slice(payload);
             let pkt_end = HEADER_SIZE + payload.len();
 
-            match data_socket
-                .send_to(&pkt_buf[..pkt_end], session.client_addr)
-                .await
-            {
+            match session.sender.send(&pkt_buf[..pkt_end]).await {
                 Ok(sent) => {
                     metrics.record_relay(sent as u64);
                     trace!(
@@ -848,6 +936,9 @@ pub async fn run_session_response_listener(
                     );
                 }
                 Err(e) => {
+                    if session.sender.is_tcp() {
+                        break;
+                    }
                     debug!(
                         client = %session.client_addr,
                         error = %e,
@@ -863,7 +954,6 @@ pub async fn run_session_response_listener(
 /// response listeners for new sessions.
 pub async fn run_session_manager(
     engine: Arc<RelayEngine>,
-    data_socket: Arc<UdpSocket>,
     abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
     metrics: Arc<ProxyMetrics>,
 ) {
@@ -902,11 +992,10 @@ pub async fn run_session_manager(
         for (addr, session) in active.iter() {
             if !known_sessions.contains_key(addr) {
                 let session = Arc::clone(session);
-                let data_socket = Arc::clone(&data_socket);
                 let metrics = Arc::clone(&metrics);
 
                 let handle = tokio::spawn(async move {
-                    run_session_response_listener(session, data_socket, metrics).await;
+                    run_session_response_listener(session, metrics).await;
                 });
 
                 known_sessions.insert(*addr, handle);
@@ -926,11 +1015,133 @@ pub async fn run_session_manager(
     }
 }
 
+/// Run the TCP inbound listener for the client→proxy leg.
+///
+/// Accepts TCP connections on the data-plane port, reads length-prefixed
+/// frames, and feeds each frame through the exact same [`process_inbound_packet`]
+/// pipeline as UDP — rate limiting, auth, abuse detection, destination
+/// validation, and FEC all apply identically.  Responses are written back as
+/// framed packets via [`ClientSender::Tcp`].
+pub async fn run_tcp_inbound(
+    tcp_bind: SocketAddr,
+    engine: Arc<RelayEngine>,
+    rate_limiter: Arc<tokio::sync::Mutex<RateLimiter>>,
+    authenticator: Arc<RwLock<Authenticator>>,
+    abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
+    metrics: Arc<ProxyMetrics>,
+    max_connections: usize,
+    read_timeout: Duration,
+) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(tcp_bind).await?;
+    info!("TCP inbound listener bound to {}", listener.local_addr()?);
+
+    let semaphore = Arc::new(Semaphore::new(max_connections));
+
+    loop {
+        let (stream, peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(e) => {
+                warn!("TCP accept error: {}", e);
+                continue;
+            }
+        };
+
+        // The data plane is IPv4-only.
+        let peer_v4 = match peer {
+            SocketAddr::V4(v4) => v4,
+            SocketAddr::V6(_) => {
+                trace!(peer = %peer, "Dropping IPv6 TCP client");
+                continue;
+            }
+        };
+
+        // Enforce the concurrent-connection cap.
+        let permit = match Arc::clone(&semaphore).try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                debug!(client = %peer_v4, "TCP connection limit reached — dropping");
+                continue;
+            }
+        };
+
+        let engine = Arc::clone(&engine);
+        let rate_limiter = Arc::clone(&rate_limiter);
+        let authenticator = Arc::clone(&authenticator);
+        let abuse_detector = Arc::clone(&abuse_detector);
+        let metrics = Arc::clone(&metrics);
+
+        tokio::spawn(async move {
+            // Hold the permit for the lifetime of the connection.
+            let _permit = permit;
+
+            if let Err(e) = stream.set_nodelay(true) {
+                warn!(client = %peer_v4, error = %e, "Failed to set TCP_NODELAY");
+            }
+
+            let (read, write) = stream.into_split();
+            let cancel = CancellationToken::new();
+            let sender = ClientSender::Tcp {
+                write: Arc::new(tokio::sync::Mutex::new(write)),
+                cancel: cancel.clone(),
+            };
+
+            let mut read = read;
+            let mut buf: Vec<u8> = Vec::with_capacity(MAX_FRAME_SIZE);
+
+            loop {
+                let frame =
+                    match tokio::time::timeout(read_timeout, read_frame(&mut read, &mut buf)).await
+                    {
+                        Ok(Ok(Some(n))) => n,
+                        Ok(Ok(None)) => break,
+                        Ok(Err(e)) => {
+                            trace!(client = %peer_v4, error = %e, "TCP read error");
+                            break;
+                        }
+                        Err(_) => {
+                            debug!(client = %peer_v4, "TCP read timeout");
+                            break;
+                        }
+                    };
+
+                let fin = process_inbound_packet(
+                    &buf[..frame],
+                    peer_v4,
+                    &sender,
+                    &engine,
+                    &rate_limiter,
+                    &authenticator,
+                    &abuse_detector,
+                    &metrics,
+                )
+                .await;
+
+                if fin {
+                    break;
+                }
+            }
+
+            // Connection closed — cancel the session (stops its response
+            // listener) and remove it from the engine.
+            cancel.cancel();
+            engine.sessions().write().await.remove(&peer_v4);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bytes::BytesMut;
     use std::net::Ipv4Addr;
+
+    /// Build a throwaway UDP [`ClientSender`] for engine unit tests.
+    async fn test_udp_sender() -> ClientSender {
+        ClientSender::Udp {
+            socket: Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap()),
+            addr: SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345),
+        }
+    }
 
     #[tokio::test]
     async fn test_relay_engine_session_lifecycle() {
@@ -943,7 +1154,7 @@ mod tests {
         let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
 
         let (session, is_new) = engine
-            .get_or_create_session(client, server, false, 4)
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
             .await
             .unwrap();
         assert!(is_new);
@@ -954,7 +1165,7 @@ mod tests {
 
         // Getting same client again should return existing session
         let (session2, is_new2) = engine
-            .get_or_create_session(client, server, false, 4)
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
             .await
             .unwrap();
         assert!(!is_new2);
@@ -970,7 +1181,7 @@ mod tests {
         let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
 
         let (session, is_new) = engine
-            .get_or_create_session(client, server, true, 4)
+            .get_or_create_session(client, server, true, 4, test_udp_sender().await)
             .await
             .unwrap();
         assert!(is_new);
@@ -987,11 +1198,11 @@ mod tests {
         let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
 
         engine
-            .get_or_create_session(client1, server, false, 4)
+            .get_or_create_session(client1, server, false, 4, test_udp_sender().await)
             .await
             .unwrap();
         assert!(engine
-            .get_or_create_session(client2, server, false, 4)
+            .get_or_create_session(client2, server, false, 4, test_udp_sender().await)
             .await
             .is_err());
     }

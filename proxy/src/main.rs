@@ -221,12 +221,42 @@ async fn main() -> anyhow::Result<()> {
     // Spawn the session manager (handles response listeners + cleanup)
     let manager_handle = {
         let engine = Arc::clone(&engine);
-        let data_socket = Arc::clone(&data_socket);
         let abuse_detector = Arc::clone(&abuse_detector);
         let metrics = Arc::clone(&metrics);
         tokio::spawn(async move {
-            relay::run_session_manager(engine, data_socket, abuse_detector, metrics).await;
+            relay::run_session_manager(engine, abuse_detector, metrics).await;
         })
+    };
+
+    // Spawn the TCP inbound listener (client → proxy over TCP, opt-in)
+    let tcp_handle = if config.network.tcp_enabled {
+        let tcp_bind: std::net::SocketAddr = data_bind.parse()?;
+        let engine = Arc::clone(&engine);
+        let rate_limiter = Arc::clone(&rate_limiter);
+        let authenticator = Arc::clone(&authenticator);
+        let abuse_detector = Arc::clone(&abuse_detector);
+        let metrics = Arc::clone(&metrics);
+        let max_connections = config.network.tcp_max_connections;
+        let read_timeout = std::time::Duration::from_secs(config.network.tcp_read_timeout_secs);
+        Some(tokio::spawn(async move {
+            if let Err(e) = relay::run_tcp_inbound(
+                tcp_bind,
+                engine,
+                rate_limiter,
+                authenticator,
+                abuse_detector,
+                metrics,
+                max_connections,
+                read_timeout,
+            )
+            .await
+            {
+                tracing::error!("TCP inbound loop failed: {}", e);
+            }
+        }))
+    } else {
+        info!("TCP inbound listener disabled");
+        None
     };
 
     // Spawn QUIC control plane server (if compiled with --features quic)
@@ -304,6 +334,9 @@ async fn main() -> anyhow::Result<()> {
     // Abort background tasks
     relay_handle.abort();
     manager_handle.abort();
+    if let Some(handle) = tcp_handle {
+        handle.abort();
+    }
     health_handle.abort();
     stats_handle.abort();
     #[cfg(feature = "quic")]
