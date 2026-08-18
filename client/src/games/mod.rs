@@ -19,6 +19,10 @@
 //! - **Overwatch 2**: `Overwatch.exe`
 //! - **League of Legends**: `League of Legends.exe`
 //! - **PUBG: Battlegrounds**: `TslGame.exe`
+//! - **MapleStory**: `MapleStory.exe`
+//! - **Genshin Impact**: `GenshinImpact.exe`
+//! - **Rocket League**: `RocketLeague.exe`
+//! - **World of Tanks**: `WorldOfTanks.exe`
 //!
 //! ## Capture Filters
 //!
@@ -29,11 +33,15 @@ pub mod apex;
 pub mod cs2;
 pub mod dota2;
 pub mod fortnite;
+pub mod genshin;
 pub mod lol;
+pub mod maplestory;
 pub mod ow2;
 pub mod pubg;
+pub mod rocketleague;
 pub mod rust;
 pub mod valorant;
+pub mod wot;
 
 use std::net::Ipv4Addr;
 
@@ -110,8 +118,12 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "ow2" | "overwatch2" | "overwatch-2" | "overwatch" => Ok(Box::new(ow2::Ow2Config)),
         "lol" | "leagueoflegends" | "league-of-legends" | "league" => Ok(Box::new(lol::LolConfig)),
         "pubg" | "battlegrounds" => Ok(Box::new(pubg::PubgConfig)),
+        "maplestory" | "maple" => Ok(Box::new(maplestory::MapleStoryConfig)),
+        "genshin" | "genshinimpact" | "genshin-impact" => Ok(Box::new(genshin::GenshinConfig)),
+        "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
+        "wot" | "worldoftanks" | "world-of-tanks" => Ok(Box::new(wot::WotConfig)),
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, dota2, rust, valorant, apex, ow2, lol, pubg",
+            "Unknown game: '{}'. Supported: fortnite, cs2, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot",
             name
         ),
     }
@@ -144,6 +156,10 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         Box::new(ow2::Ow2Config),
         Box::new(lol::LolConfig),
         Box::new(pubg::PubgConfig),
+        Box::new(maplestory::MapleStoryConfig),
+        Box::new(genshin::GenshinConfig),
+        Box::new(rocketleague::RocketLeagueConfig),
+        Box::new(wot::WotConfig),
     ];
 
     for game in all_games {
@@ -173,6 +189,10 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         "Overwatch.exe",
         "League of Legends.exe",
         "TslGame.exe",
+        "MapleStory.exe",
+        "GenshinImpact.exe",
+        "RocketLeague.exe",
+        "WorldOfTanks.exe",
     ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
@@ -181,7 +201,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, dota2, rust, valorant, apex, ow2, lol, pubg"
+         Supported: fortnite, cs2, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot"
     )
 }
 
@@ -309,6 +329,18 @@ mod tests {
         "league",
         "pubg",
         "battlegrounds",
+        // New games (v1.0.0)
+        "maplestory",
+        "maple",
+        "genshin",
+        "genshinimpact",
+        "genshin-impact",
+        "rocketleague",
+        "rocket-league",
+        "rocket",
+        "wot",
+        "worldoftanks",
+        "world-of-tanks",
     ];
 
     #[test]
@@ -401,6 +433,48 @@ mod tests {
         assert!(!pubg.uses_sdr());
         assert!(pubg.typical_pps() > 0);
         assert_eq!(pubg.anti_cheat(), "BattlEye (kernel-mode)");
+
+        let maple = maplestory::MapleStoryConfig;
+        assert_eq!(maple.name(), "MapleStory");
+        assert!(maple.process_names().contains(&"MapleStory.exe"));
+        assert_eq!(maple.ports(), (7575, 8484));
+        assert_eq!(maple.redirect_port(), 8484);
+        assert!(!maple.uses_sdr());
+        assert!(maple.typical_pps() > 0);
+        assert_eq!(
+            maple.anti_cheat(),
+            "BlackCipher / Nexon Game Security (NGS)"
+        );
+
+        let genshin = genshin::GenshinConfig;
+        assert_eq!(genshin.name(), "Genshin Impact");
+        assert!(genshin.process_names().contains(&"GenshinImpact.exe"));
+        assert_eq!(genshin.ports(), (22101, 42472));
+        assert_eq!(genshin.redirect_port(), 22101);
+        assert!(!genshin.uses_sdr());
+        assert!(genshin.typical_pps() > 0);
+        assert_eq!(genshin.anti_cheat(), "None");
+
+        let rocket = rocketleague::RocketLeagueConfig;
+        assert_eq!(rocket.name(), "Rocket League");
+        assert!(rocket.process_names().contains(&"RocketLeague.exe"));
+        assert_eq!(rocket.ports(), (7000, 9000));
+        assert_eq!(rocket.redirect_port(), 7000);
+        assert!(rocket.uses_sdr());
+        assert!(rocket.typical_pps() > 0);
+        assert_eq!(
+            rocket.anti_cheat(),
+            "Easy Anti-Cheat (EAC) / Epic Online Services"
+        );
+
+        let wot = wot::WotConfig;
+        assert_eq!(wot.name(), "World of Tanks");
+        assert!(wot.process_names().contains(&"WorldOfTanks.exe"));
+        assert_eq!(wot.ports(), (12000, 29999));
+        assert_eq!(wot.redirect_port(), 12000);
+        assert!(!wot.uses_sdr());
+        assert!(wot.typical_pps() > 0);
+        assert_eq!(wot.anti_cheat(), "None");
     }
 
     #[test]

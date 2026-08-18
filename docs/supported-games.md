@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 9 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 13 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -17,6 +17,10 @@ LightSpeed includes built-in profiles for 9 popular multiplayer games. Each prof
 | 7 | **Overwatch 2** | `--game ow2` | 3478–6250 | Blizzard Warden | `Overwatch.exe` |
 | 8 | **League of Legends** | `--game lol` | 5000–5500 | Riot Vanguard | `League of Legends.exe` |
 | 9 | **PUBG: Battlegrounds** | `--game pubg` | 7000–17999 | BattlEye | `TslGame.exe` |
+| 10 | **MapleStory** | `--game maplestory` | 7575–8484 | BlackCipher (NGS) | `MapleStory.exe` |
+| 11 | **Genshin Impact** | `--game genshin` | 22101–42472 | None | `GenshinImpact.exe` |
+| 12 | **Rocket League** | `--game rocketleague` | 7000–9000 | EAC | `RocketLeague.exe` |
+| 13 | **World of Tanks** | `--game wot` | 12000–29999 | None | `WorldOfTanks.exe` |
 
 ---
 
@@ -26,11 +30,12 @@ LightSpeed is compatible with all major anti-cheat systems:
 
 | System | Games | Status |
 |--------|-------|--------|
-| **EasyAntiCheat (EAC)** | Rust, Fortnite, Apex Legends | ✅ Permitted |
+| **EasyAntiCheat (EAC)** | Rust, Fortnite, Apex Legends, Rocket League | ✅ Permitted |
 | **Valve Anti-Cheat (VAC)** | CS2, Dota 2 | ✅ Permitted |
 | **BattlEye** | Fortnite, PUBG | ✅ Permitted |
 | **Riot Vanguard** | Valorant, League of Legends | ✅ Permitted |
 | **Blizzard Warden** | Overwatch 2 | ✅ Permitted |
+| **Nexon Game Security (NGS)** | MapleStory | ✅ Permitted |
 
 LightSpeed uses standard OS-level network drivers (WinDivert, nftables, pfctl) — the same class used by commercial optimizers like ExitLag, WTFast, and NoPing. It does **not**:
 - Modify game files or memory
