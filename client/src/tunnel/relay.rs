@@ -20,6 +20,7 @@ use lightspeed_protocol::{
 use tokio::net::UdpSocket;
 
 use crate::error::TunnelError;
+use crate::tunnel::transport::TunnelTransport;
 
 /// Get current timestamp in microseconds since epoch.
 fn now_us() -> u32 {
@@ -63,8 +64,8 @@ impl RelayStats {
 /// - Outbound: packets are grouped into blocks, XOR parity generated
 /// - Inbound: packets are tracked, lost packets recovered from parity
 pub struct UdpRelay {
-    /// The bound UDP socket for tunnel traffic.
-    socket: Option<Arc<UdpSocket>>,
+    /// The transport for tunnel traffic (UDP or TCP).
+    transport: Option<TunnelTransport>,
     /// Local bind address.
     local_addr: SocketAddrV4,
     /// Receive buffer size.
@@ -83,7 +84,7 @@ impl UdpRelay {
     /// Create a new UDP relay bound to the specified address.
     pub fn new(local_addr: SocketAddrV4) -> Self {
         Self {
-            socket: None,
+            transport: None,
             local_addr,
             recv_buf_size: 2048,
             sequence: AtomicU16::new(0),
@@ -107,17 +108,28 @@ impl UdpRelay {
 
     /// Bind the UDP socket.
     pub async fn bind(&mut self) -> Result<(), TunnelError> {
-        let socket = UdpSocket::bind(self.local_addr).await?;
+        let transport = TunnelTransport::connect_udp(self.local_addr).await?;
 
         // Set socket buffer sizes for low-latency gaming traffic
-        tracing::info!("UDP relay bound to {}", socket.local_addr()?);
-        self.socket = Some(Arc::new(socket));
+        tracing::info!("UDP relay bound to {}", transport.local_addr()?);
+        self.transport = Some(transport);
         Ok(())
     }
 
-    /// Get a clone of the socket Arc (for spawning recv tasks).
+    /// Connect a TCP transport to the proxy (UDP-restricted networks).
+    pub async fn connect_tcp(&mut self, proxy_addr: SocketAddrV4) -> Result<(), TunnelError> {
+        let transport = TunnelTransport::connect_tcp(proxy_addr).await?;
+        tracing::info!("TCP relay connected to {}", proxy_addr);
+        self.transport = Some(transport);
+        Ok(())
+    }
+
+    /// Get a clone of the UDP socket (UDP transports only; `None` for TCP).
     pub fn socket(&self) -> Option<Arc<UdpSocket>> {
-        self.socket.clone()
+        match &self.transport {
+            Some(TunnelTransport::Udp { socket, .. }) => Some(Arc::clone(socket)),
+            _ => None,
+        }
     }
 
     /// Get the next sequence number.
@@ -136,7 +148,11 @@ impl UdpRelay {
         orig_dst: SocketAddrV4,
         proxy_addr: SocketAddrV4,
     ) -> Result<usize, TunnelError> {
-        let socket = self.socket.as_ref().ok_or(TunnelError::NotConnected)?;
+        // Point the UDP transport at the target proxy (TCP's peer is fixed).
+        if let Some(transport) = self.transport.as_mut() {
+            transport.set_proxy(proxy_addr);
+        }
+        let transport = self.transport.as_ref().ok_or(TunnelError::NotConnected)?;
 
         // Get sequence numbers upfront to avoid borrow conflicts
         let seq = self.next_sequence();
@@ -153,7 +169,7 @@ impl UdpRelay {
 
             let parity = encoder.add_packet(payload);
 
-            let sent = socket.send_to(&pkt_buf, proxy_addr).await?;
+            let sent = transport.send(&pkt_buf).await?;
             self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
             self.stats
                 .bytes_sent
@@ -175,7 +191,7 @@ impl UdpRelay {
                 let parity_buf =
                     build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
 
-                let parity_sent = socket.send_to(&parity_buf, proxy_addr).await?;
+                let parity_sent = transport.send(&parity_buf).await?;
                 self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
                 self.stats
                     .bytes_sent
@@ -196,7 +212,7 @@ impl UdpRelay {
                 .with_session_token(crate::session::session_token());
             let packet = header.encode_with_payload(payload);
 
-            let sent = socket.send_to(&packet, proxy_addr).await?;
+            let sent = transport.send(&packet).await?;
 
             self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
             self.stats
@@ -215,15 +231,18 @@ impl UdpRelay {
     }
 
     /// Send a keepalive to the proxy.
-    pub async fn send_keepalive(&self, proxy_addr: SocketAddrV4) -> Result<(), TunnelError> {
-        let socket = self.socket.as_ref().ok_or(TunnelError::NotConnected)?;
+    pub async fn send_keepalive(&mut self, proxy_addr: SocketAddrV4) -> Result<(), TunnelError> {
+        if let Some(transport) = self.transport.as_mut() {
+            transport.set_proxy(proxy_addr);
+        }
+        let transport = self.transport.as_ref().ok_or(TunnelError::NotConnected)?;
 
         let seq = self.next_sequence();
         let header = TunnelHeader::keepalive(seq, now_us())
             .with_session_token(crate::session::session_token());
         let packet = header.encode_to_array();
 
-        socket.send_to(&packet, proxy_addr).await?;
+        transport.send(&packet).await?;
         tracing::trace!(seq = seq, "Sent keepalive");
         Ok(())
     }
@@ -238,21 +257,18 @@ impl UdpRelay {
     pub async fn recv_from_proxy(
         &mut self,
     ) -> Result<(TunnelHeader, Bytes, SocketAddrV4), TunnelError> {
-        let socket = self.socket.as_ref().ok_or(TunnelError::NotConnected)?;
-
         let mut buf = vec![0u8; self.recv_buf_size];
-        let (len, addr) = socket.recv_from(&mut buf).await?;
+        let (len, proxy_addr) = {
+            let transport = self.transport.as_mut().ok_or(TunnelError::NotConnected)?;
+            let len = match transport.recv(&mut buf).await? {
+                Some(n) => n,
+                None => return Err(TunnelError::Relay("tunnel closed".into())),
+            };
+            (len, transport.proxy_addr())
+        };
 
         // Decode header
         let (header, payload_slice) = TunnelHeader::decode_with_payload(&buf[..len])?;
-
-        // Convert addr to SocketAddrV4
-        let proxy_addr = match addr {
-            std::net::SocketAddr::V4(v4) => v4,
-            std::net::SocketAddr::V6(_) => {
-                return Err(TunnelError::Relay("IPv6 not supported yet".into()));
-            }
-        };
 
         // Update stats
         self.stats.packets_received.fetch_add(1, Ordering::Relaxed);
@@ -306,7 +322,10 @@ impl UdpRelay {
     pub async fn flush_fec(&mut self, proxy_addr: SocketAddrV4) -> Result<(), TunnelError> {
         if let Some(ref mut encoder) = self.fec_encoder {
             if let Some((block_id, _k, parity_bytes)) = encoder.flush() {
-                let socket = self.socket.as_ref().ok_or(TunnelError::NotConnected)?;
+                if let Some(transport) = self.transport.as_mut() {
+                    transport.set_proxy(proxy_addr);
+                }
+                let transport = self.transport.as_ref().ok_or(TunnelError::NotConnected)?;
                 let seq = self.next_sequence();
                 let dummy_addr = SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0);
                 let header = TunnelHeader::new_fec(seq, now_us(), dummy_addr, dummy_addr)
@@ -314,7 +333,7 @@ impl UdpRelay {
                 let fec_hdr = FecHeader::parity(block_id, 0);
                 let buf = build_fec_parity_packet(&header, &fec_hdr, &parity_bytes);
 
-                socket.send_to(&buf, proxy_addr).await?;
+                transport.send(&buf).await?;
                 self.stats.fec_parity_sent.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -326,8 +345,8 @@ impl UdpRelay {
         self.fec_decoder.as_ref().map(|d| d.stats())
     }
 
-    /// Close the relay socket.
+    /// Close the relay transport.
     pub fn close(&mut self) {
-        self.socket = None;
+        self.transport = None;
     }
 }

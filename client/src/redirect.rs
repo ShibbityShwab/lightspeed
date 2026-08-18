@@ -40,6 +40,8 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 
+use crate::tunnel::transport::TunnelTransport;
+
 /// Get current timestamp in microseconds.
 fn now_us() -> u32 {
     SystemTime::now()
@@ -94,6 +96,8 @@ pub struct UdpRedirect {
     fec_enabled: bool,
     /// FEC block size (K data packets per parity).
     fec_k: u8,
+    /// Use TCP for the client↔proxy leg (UDP-restricted networks).
+    tcp: bool,
     /// Stats.
     pub stats: Arc<RedirectStats>,
 }
@@ -108,6 +112,7 @@ impl UdpRedirect {
             sequence: AtomicU16::new(0),
             fec_enabled: false,
             fec_k: 4,
+            tcp: false,
             stats: Arc::new(RedirectStats::new()),
         }
     }
@@ -116,6 +121,12 @@ impl UdpRedirect {
     pub fn with_fec(mut self, k_size: u8) -> Self {
         self.fec_enabled = true;
         self.fec_k = k_size.clamp(2, 16);
+        self
+    }
+
+    /// Use TCP for the client↔proxy leg instead of UDP.
+    pub fn with_tcp(mut self) -> Self {
+        self.tcp = true;
         self
     }
 
@@ -152,10 +163,20 @@ impl UdpRedirect {
         let local_socket = Arc::new(UdpSocket::bind(local_addr).await?);
         info!("🎮 Local game socket bound to {}", local_addr);
 
-        // Bind the tunnel socket for proxy communication
-        let tunnel_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
-        let tunnel_socket = Arc::new(UdpSocket::bind(tunnel_addr).await?);
-        info!("🌐 Tunnel socket bound to {}", tunnel_socket.local_addr()?);
+        // Establish the tunnel transport for proxy communication (UDP or TCP).
+        // The send half is shared by the outbound + keepalive tasks; the read
+        // half is owned by the inbound task.
+        let transport = if self.tcp {
+            TunnelTransport::connect_tcp(self.proxy_addr).await?
+        } else {
+            TunnelTransport::connect_udp(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await?
+        };
+        let (tunnel_sender, mut tunnel_reader) = transport.split();
+        if self.tcp {
+            info!("🌐 TCP tunnel connected to {}", self.proxy_addr);
+        } else {
+            info!("🌐 UDP tunnel bound");
+        }
 
         let game_server = self.game_server;
         let proxy_addr = self.proxy_addr;
@@ -182,7 +203,7 @@ impl UdpRedirect {
         // ── Outbound task: Game → Proxy ─────────────────────────────
         let outbound_handle = {
             let local_socket = Arc::clone(&local_socket);
-            let tunnel_socket = Arc::clone(&tunnel_socket);
+            let tunnel_sender = tunnel_sender.clone();
             let game_client_addr = Arc::clone(&game_client_addr);
             let stats = Arc::clone(&stats);
 
@@ -240,7 +261,7 @@ impl UdpRedirect {
                         let pkt_buf = build_fec_data_packet(&header, &fec_hdr, payload);
                         let parity = encoder.add_packet(payload);
 
-                        match tunnel_socket.send_to(&pkt_buf, proxy_addr).await {
+                        match tunnel_sender.send(&pkt_buf).await {
                             Ok(sent) => {
                                 stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
                                 stats
@@ -268,7 +289,7 @@ impl UdpRedirect {
                             let parity_buf =
                                 build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
 
-                            match tunnel_socket.send_to(&parity_buf, proxy_addr).await {
+                            match tunnel_sender.send(&parity_buf).await {
                                 Ok(sent) => {
                                     stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
                                     stats
@@ -289,7 +310,7 @@ impl UdpRedirect {
                             .with_session_token(crate::session::session_token());
                         let packet = header.encode_with_payload(payload);
 
-                        match tunnel_socket.send_to(&packet, proxy_addr).await {
+                        match tunnel_sender.send(&packet).await {
                             Ok(sent) => {
                                 stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
                                 stats
@@ -310,7 +331,6 @@ impl UdpRedirect {
         // ── Inbound task: Proxy → Game ──────────────────────────────
         let inbound_handle = {
             let local_socket = Arc::clone(&local_socket);
-            let tunnel_socket = Arc::clone(&tunnel_socket);
             let game_client_addr = Arc::clone(&game_client_addr);
             let stats = Arc::clone(&stats);
 
@@ -328,9 +348,17 @@ impl UdpRedirect {
 
                 loop {
                     // Receive from the proxy
-                    let (len, _from_addr) = match tunnel_socket.recv_from(&mut buf).await {
-                        Ok(r) => r,
+                    let len = match tunnel_reader.recv(&mut buf).await {
+                        Ok(Some(n)) => n,
+                        Ok(None) => {
+                            debug!("Tunnel closed by proxy");
+                            break;
+                        }
                         Err(e) => {
+                            if tunnel_reader.is_tcp() {
+                                debug!("Tunnel socket recv error: {}", e);
+                                break;
+                            }
                             warn!("Tunnel socket recv error: {}", e);
                             stats.errors.fetch_add(1, Ordering::Relaxed);
                             continue;
@@ -411,7 +439,7 @@ impl UdpRedirect {
 
         // ── Keepalive task ──────────────────────────────────────────
         let keepalive_handle = {
-            let tunnel_socket = Arc::clone(&tunnel_socket);
+            let tunnel_sender = tunnel_sender.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(5));
                 let mut seq: u16 = 60000; // Start high to not conflict with data seqs
@@ -420,7 +448,7 @@ impl UdpRedirect {
                     let header = TunnelHeader::keepalive(seq, now_us())
                         .with_session_token(crate::session::session_token());
                     let packet = header.encode();
-                    let _ = tunnel_socket.send_to(&packet, proxy_addr).await;
+                    let _ = tunnel_sender.send(&packet).await;
                     seq = seq.wrapping_add(1);
                 }
             })

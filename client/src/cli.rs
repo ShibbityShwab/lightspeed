@@ -56,6 +56,10 @@ pub struct Cli {
     #[arg(long, default_value_t = 4)]
     pub fec_k: u8,
 
+    /// Use TCP for the client→proxy leg of the tunnel (UDP-restricted networks).
+    #[arg(long, default_value_t = false)]
+    pub tcp: bool,
+
     /// Enable Cloudflare WARP for improved routing (5-10ms savings).
     /// Automatically connects WARP on startup and restores on shutdown.
     #[arg(short = 'w', long, default_value_t = false)]

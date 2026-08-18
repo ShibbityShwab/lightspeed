@@ -40,8 +40,9 @@ windivert-redirect = ["dep:windivert"]
 full = ["quic", "pcap-capture", "ml"]  # windivert-redirect excluded (Windows-only)
 
 [dependencies]
-lightspeed-protocol.workspace = true
+lightspeed-protocol = { workspace = true, features = ["tokio"] }
 tokio.workspace = true
+tokio-util.workspace = true
 bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -59,6 +59,10 @@ pub struct TunnelConfig {
     /// Maximum packet size (MTU).
     #[serde(default = "default_mtu")]
     pub mtu: usize,
+
+    /// Transport for the client→proxy leg: "udp" (default) or "tcp".
+    #[serde(default = "default_transport")]
+    pub transport: String,
 }
 
 /// Proxy connection settings.
@@ -131,6 +135,10 @@ fn default_mtu() -> usize {
     1400
 }
 
+fn default_transport() -> String {
+    "udp".into()
+}
+
 fn default_quic_port() -> u16 {
     4433
 }
@@ -171,6 +179,7 @@ impl Default for TunnelConfig {
             keepalive_ms: default_keepalive_ms(),
             timeout_ms: default_timeout_ms(),
             mtu: default_mtu(),
+            transport: default_transport(),
         }
     }
 }

@@ -83,6 +83,12 @@ async fn main() -> anyhow::Result<()> {
         config::Config::default()
     });
 
+    // ── Transport selection (UDP default, TCP opt-in) ─────────────
+    let use_tcp = cli.tcp || config.tunnel.transport.eq_ignore_ascii_case("tcp");
+    if use_tcp {
+        info!("🌐 TCP tunnel transport enabled");
+    }
+
     // ── Cloudflare WARP manager (used by several early-exit paths) ─
     let mut warp_manager = warp::WarpManager::new();
 
@@ -871,7 +877,11 @@ data_port = 4434
     // ── Relay socket (shared by tunnel/control tests + keepalive) ─
     let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
     let mut relay = UdpRelay::new(bind_addr);
-    relay.bind().await?;
+    if use_tcp {
+        relay.connect_tcp(proxy_addr).await?;
+    } else {
+        relay.bind().await?;
+    }
 
     // ── --test-tunnel ─────────────────────────────────────────────
     if cli.test_tunnel {
@@ -955,6 +965,9 @@ data_port = 4434
                 100 / cli.fec_k as u32
             );
             redirect_proxy = redirect_proxy.with_fec(cli.fec_k);
+        }
+        if use_tcp {
+            redirect_proxy = redirect_proxy.with_tcp();
         }
         return redirect_proxy.run().await;
     }
