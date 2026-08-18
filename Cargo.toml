@@ -43,3 +43,8 @@ lightspeed-protocol = { path = "protocol" }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
+
+# cargo-dist release build profile.
+[profile.dist]
+inherits = "release"
+lto = "thin"

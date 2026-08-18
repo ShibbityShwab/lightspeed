@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "LightSpeed game network optimizer — proxy relay server"
+
+[package.metadata.wix]
+upgrade-guid = "C320857F-CC05-48BB-BE1F-412A5634100F"
+path-guid = "3B7EB06D-2BD4-4A8B-960B-25D89ADB2C09"
+license = false
+eula = false
 
 [[bin]]
 name = "lightspeed-proxy"

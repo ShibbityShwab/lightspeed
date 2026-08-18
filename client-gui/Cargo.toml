@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "LightSpeed Windows tray icon + egui status window"
 
 [[bin]]
@@ -31,3 +32,14 @@ windivert = { version = "0.6", optional = true, features = ["vendored"] }
 [target.'cfg(windows)'.dependencies.lightspeed-client]
 path = "../client"
 features = ["windivert-redirect"]
+
+# cargo-dist: the GUI has no macOS platform module, so restrict its release
+# targets to Linux and Windows (the client + proxy still ship for macOS).
+[package.metadata.dist]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+[package.metadata.wix]
+upgrade-guid = "41D817A3-8271-4718-B962-EC50BAAF4D99"
+path-guid = "30C41895-8B6B-4E34-A4A3-8B43865072EA"
+license = false
+eula = false

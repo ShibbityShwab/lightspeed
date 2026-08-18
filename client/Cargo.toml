@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "LightSpeed game network optimizer — client application"
+
+[package.metadata.wix]
+upgrade-guid = "97B46AF6-E50E-49C3-BE72-A8A5B5C8BDC6"
+path-guid = "5CF0E353-A6F5-49BC-A30F-7957AFC20EA6"
+license = false
+eula = false
 
 [[bin]]
 name = "lightspeed"
