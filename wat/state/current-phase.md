@@ -1,79 +1,42 @@
-# Current Phase — WF-013: MockInterceptor + CI testability
+# Current Phase — WF-014: v1.0.0 Release
 
-**Workflow:** WF-013  
-**Agent:** RustDev + QAEngineer  
-**Status:** ✅ Mock interceptor + 12 new tests committed  
-**Last updated:** 2026-07-29
+**Workflow:** WF-014  
+**Agent:** RustDev + QAEngineer + InfraDev  
+**Status:** ✅ v1.0.0 release work completed  
+**Last updated:** 2026-08-18
 
 ---
 
-## Completed Steps (WF-013)
+## Completed Steps (WF-014)
 
 | Step | Description | Status |
 |------|-------------|--------|
-| 1 | Create `interceptor/mock.rs` — in-memory MockInterceptor | ✅ Done |
-| 2 | Implement full `TrafficInterceptor` trait on mock | ✅ Done |
-| 3 | 7 mock unit tests | ✅ Done |
-| 4 | 5 interceptor integration tests | ✅ Done |
-| 5 | `cargo test --workspace` — 197 tests, 0 failures | ✅ Done |
-| 6 | `cargo clippy --workspace --all-targets --all-features` — 0 errors | ✅ Done |
+| 1 | Dependency health — egui bump to eframe 0.36 / egui_plot 0.37 | ✅ Done |
+| 2 | Installer wizard via cargo-dist v0.32.0 | ✅ Done |
+| 3 | Self-hosting guide replacing the community-network idea | ✅ Done |
+| 4 | Security audit — documented the auth gap (full token auth deferred) | ✅ Done |
+| 5 | 4 new game profiles — MapleStory / Genshin / Rocket League / World of Tanks | ✅ Done |
+| 6 | Grafana password hardening | ✅ Done |
+| 7 | Version bump to 1.0.0 | ✅ Done |
 
 ---
 
-## MockInterceptor Design
+## v1.0.0 Release Summary
 
-```rust
-pub struct MockInterceptor {
-    available: bool,           // controls check_availability()
-    start_count: Arc<AtomicU64>,  // how many times start() called
-    stop_count: Arc<AtomicU64>,   // how many times stop() called
-    last_config: Arc<Mutex<Option<InterceptorConfig>>>,  // last config saved
-    active: Arc<AtomicBool>,      // current activity state
-}
-```
+The v1.0.0 release run addressed dependency health, installer tooling, documentation, security defaults, and game coverage ahead of the public stable release.
 
-- Uses `std::thread::spawn` for shutdown handler (no Tokio runtime needed)
-- `blocking_recv()` on `oneshot::Receiver` — works in any context
-- Two constructors: `new()` (available) and `unavailable()` (error path testing)
-
-## Tests Added (12 new, 185→197)
-
-**Mock unit tests (7):**
-- `mock_platform_name` — returns "mock"
-- `mock_available` / `mock_unavailable` — availability path
-- `mock_start_increments_count` — start counter
-- `mock_start_stores_config` — config preservation
-- `mock_stop_via_handle` — handle stop triggers cleanup
-- `mock_multiple_starts` — idempotent start
-
-**Integration tests (5):**
-- `mock_create_interceptor_lifecycle` — full create→check→start→stop
-- `mock_unavailable_reports_error` — error path
-- `mock_handle_counters_default_zero` — snapshot defaults
-- `process_scanner_scan_for_games_empty_input` — edge case
-- `process_scanner_find_nonexistent_game` — edge case
-
----
-
-## PR #20 Review: Cross-Platform GUI (CiroBurro)
-
-**Status:** Reviewed — compiles cleanly against current master.
-
-**Changes:**
-- `Platform` trait: abstracts OS-specific code (tray, fonts, port detection, admin)
-- `LinuxPlatform` (156 LoC): stub tray, Noto Color Emoji, pgrep+ss, pkexec
-- `WindowsPlatform` (317 LoC): full tray icon, Segoe UI Emoji, Npcap, UAC
-- Proxy Manager UI: add/remove/list proxies at runtime
-- egui 0.35 API migration
-- Bug fixes: hardcoded log path crash, placeholder IP crash
-
-**Verdict:** ✅ Ready to merge. Compiles on Linux (`cargo check -p lightspeed-gui`). No conflicts with master.
+- **Dependency health:** egui bumped to eframe 0.36 / egui_plot 0.37 to keep the GUI stack current.
+- **Installer wizard:** adopted cargo-dist v0.32.0 to produce platform installers rather than hand-rolled packaging.
+- **Self-hosting guide:** a dedicated guide now documents zero-cost self-hosting, replacing the earlier community-proxy-network idea.
+- **Security audit:** traced the client/proxy auth flow; `require_auth` stays `false` by default because the client does not stamp session tokens into data-plane packets. Full token auth is documented and deferred.
+- **Game profiles:** MapleStory, Genshin, Rocket League, and World of Tanks added, expanding supported-game coverage.
+- **Grafana hardening:** the weak default Grafana password was removed.
+- **Version:** bumped to 1.0.0.
 
 ---
 
 ## Next Action
 
-1. **Merge PR #20** (or request changes if any)
-2. **Push latest commits** via GitHub Desktop
-3. **WF-014**: Clean up 80 dead-code warnings — many structs/methods marked as "never used" that are vestigial from rapid prototyping
-4. **WF-010**: Windows live test (needs Windows + Administrator)
+1. **Tag and push the v1.0.0 release** (not yet done — awaiting explicit release step)
+2. **WF-015**: Configurable ports (issue #39)
+3. **WF-016**: TCP tunnel (issue #10)

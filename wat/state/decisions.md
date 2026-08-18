@@ -184,3 +184,17 @@ Compiles cleanly on Linux (`cargo check -p lightspeed-gui`), merges without conf
 - **Updated:** `wat/archive/agents.md`, `wat/rules.md` — "any Always Free tier provider"
 - **Consolidated:** Removed duplicate `security` job from `ci.yml` (already in `security.yml`)
 **Alternatives Considered:** Keeping .kilo/ for backward compatibility — rejected because it was never canonical and duplicated wat/. Keeping OCI Terraform — rejected because it's dead code and git history preserves it.
+
+### 2026-08-18: v1.0.0 Release Decisions
+
+**Agent:** RustDev + QAEngineer + InfraDev
+**Status:** Accepted
+**Rationale:** The v1.0.0 release run consolidated dependency health, installer tooling, documentation, security defaults, and game coverage into a single stable release. The egui stack was bumped to eframe 0.36 / egui_plot 0.37 to stay current, and the version was bumped to 1.0.0.
+**Impact:**
+- **cargo-dist adoption:** Installer wizard via cargo-dist v0.32.0 replaces hand-rolled packaging, producing platform installers for the release.
+- **`require_auth` default unchanged:** Traced the QUIC control-plane / data-plane auth flow; `require_auth` stays `false` by default because the client never stamps the session token into data-plane packets (always sends `0`) and the Docker image builds without the `quic` feature. Full token auth is deferred.
+- **Grafana password hardening:** The weak default Grafana password was removed.
+- **4 new game profiles:** MapleStory, Genshin, Rocket League, and World of Tanks added to supported-game coverage.
+- **Self-hosting guide:** A dedicated guide documents zero-cost self-hosting, replacing the earlier community-proxy-network idea.
+- **Deferred to post-1.0:** Issue #39 (configurable ports) and issue #10 (TCP tunnel) are deferred beyond the 1.0.0 release.
+**Alternatives Considered:** Hand-rolled installers — rejected in favor of cargo-dist for reproducible, cross-platform packaging. `require_auth = true` default — evaluated and rejected for v1.0.0 because the client does not yet stamp session tokens into data-plane packets (would reject all legitimate clients). Keeping the community-proxy-network idea — rejected in favor of a concrete self-hosting guide. Including configurable ports and the TCP tunnel in 1.0.0 — rejected to keep the release scope focused.
