@@ -6,7 +6,7 @@
 # ──────────────────────────────────────────────────────────────
 
 # ── Stage 1: Build ───────────────────────────────────────────
-FROM rust:1.88.0-slim-bookworm AS builder
+FROM rust:1.98.0-slim-bookworm AS builder
 
 WORKDIR /build
 
