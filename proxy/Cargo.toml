@@ -43,7 +43,7 @@ rand = "0.9"
 # Optional dependencies
 quinn = { version = "0.11", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
-rcgen = { version = "0.13", optional = true }
+rcgen = { version = "0.14", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

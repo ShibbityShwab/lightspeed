@@ -57,7 +57,7 @@ chrono.workspace = true
 # Optional dependencies (require C compiler or system libraries)
 quinn = { version = "0.11", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
-rcgen = { version = "0.13", optional = true }
+rcgen = { version = "0.14", optional = true }
 pcap = { version = "2", optional = true }
 linfa = { version = "0.8", optional = true }
 linfa-linear = { version = "0.8", optional = true }
