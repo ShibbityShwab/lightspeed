@@ -128,6 +128,22 @@
                                 Source='$(var.CargoTargetBinDir)\lightspeed.exe'
                                 KeyPath='yes'/>
                         </Component>
+                        <Component Id='WinDivertDll' Guid='*'>
+                            <File
+                                Id='WinDivertDllFile'
+                                Name='WinDivert.dll'
+                                DiskId='1'
+                                Source='..\windivert\WinDivert.dll'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='WinDivertSys' Guid='*'>
+                            <File
+                                Id='WinDivertSysFile'
+                                Name='WinDivert64.sys'
+                                DiskId='1'
+                                Source='..\windivert\WinDivert64.sys'
+                                KeyPath='yes'/>
+                        </Component>
                     </Directory>
                 </Directory>
             </Directory>
@@ -150,6 +166,8 @@
             <!--<ComponentRef Id='License'/>-->
 
             <ComponentRef Id='binary0'/>
+            <ComponentRef Id='WinDivertDll'/>
+            <ComponentRef Id='WinDivertSys'/>
 
             <Feature
                 Id='Environment'

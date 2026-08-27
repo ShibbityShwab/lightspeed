@@ -23,6 +23,9 @@ targets = [
 ]
 # Free Sigstore/GitHub attestations (no code-signing certs needed).
 github-attestations = true
+# main.wxs for the client is hand-edited to bundle WinDivert.dll + WinDivert64.sys
+# into the MSI (cargo-dist's `include` only populates archives, not MSIs).
+allow-dirty = ["msi"]
 
 # Linux system packages for the build jobs. libpcap-dev is for the client's
 # pcap-capture feature; the rest are the eframe/winit GUI build deps (X11,
