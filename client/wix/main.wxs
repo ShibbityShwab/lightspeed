@@ -133,7 +133,7 @@
                                 Id='WinDivertDllFile'
                                 Name='WinDivert.dll'
                                 DiskId='1'
-                                Source='..\windivert\WinDivert.dll'
+                                Source='$(var.CargoTargetBinDir)\WinDivert.dll'
                                 KeyPath='yes'/>
                         </Component>
                         <Component Id='WinDivertSys' Guid='*'>
@@ -141,7 +141,7 @@
                                 Id='WinDivertSysFile'
                                 Name='WinDivert64.sys'
                                 DiskId='1'
-                                Source='..\windivert\WinDivert64.sys'
+                                Source='$(var.CargoTargetBinDir)\WinDivert64.sys'
                                 KeyPath='yes'/>
                         </Component>
                     </Directory>
