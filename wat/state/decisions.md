@@ -2,7 +2,7 @@
 
 > **Canonical log of significant technical decisions for the LightSpeed project.**
 > Each entry includes the date, deciding agent, rationale, and impact.
-> Last entry: 2026-05-25
+> Last entry: 2026-08-28
 
 ---
 
@@ -228,3 +228,16 @@ Compiles cleanly on Linux (`cargo check -p lightspeed-gui`), merges without conf
 - **Configurable ports:** `[network]` section (data/control/health) with CLI flags as optional overrides.
 - **glib advisory:** documented; blocked on upstream gtk-rs 0.20 (filed tauri-apps/tray-icon#356).
 **Alternatives Considered:** A parallel `TcpRelay` type — rejected in favor of a transport enum to avoid duplicating the FEC/header/stats logic. Unifying the TCP read path into `ClientSender` — rejected because UDP uses a batched recvmmsg loop while TCP is accept→frame; only the write path is shared. Extending TCP to the kernel-MITM interceptors — deferred (raw-socket reinjection is UDP-specific).
+
+---
+
+### 2026-08-28: Windows Release WinDivert Fix — v1.2.1
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted
+**Rationale:** The v1.2.0 Windows release shipped without the `windivert-redirect` feature, so the interceptor reported "unsupported" and `WinDivert.dll`/`WinDivert64.sys` were absent (issues #50, #58). Root cause: `[package.metadata.dist] features = ["quic"]` never enabled `windivert-redirect`, and cargo-dist v0.32.0 has no per-target `features` or `include`.
+**Impact:**
+- **`client/Cargo.toml`:** dist `features` is now `["quic","windivert-redirect"]`. `windivert-redirect` is safe on every target because its `windivert` dependency is `cfg(windows)`-gated (verified: `cargo check --features windivert-redirect` passes on Linux).
+- **`client/windivert/`:** vendored official WinDivert 2.2.2 `WinDivert.dll` + signed `WinDivert64.sys` + `LICENSE.windivert`, bundled next to the exe via `[package.metadata.dist] include`.
+- **Known limitation:** `include` is package-global, so the two WinDivert binaries also land in Linux/macOS archives (inert, ~200KB).
+**Alternatives Considered:** Per-target includes — rejected (not supported in cargo-dist 0.32). Static linking via `windivert-sys` `static` — rejected (LGPL static-link compliance burden). Downloading WinDivert in CI — rejected (vendoring is reproducible and avoids release-time network).
