@@ -31,11 +31,18 @@ Kernel-level packet interception requires elevated privileges — the same reaso
 
 ### How does LightSpeed actually reduce ping?
 
-Your ISP sends packets along whatever path is cheapest for them — often congested or circuitous. LightSpeed sends your packets through a proxy in a major data center with direct backbone connections to game server regions. If that path is shorter or less congested, your ping drops. Typical improvement: 10–40ms.
+LightSpeed does **not** make your traffic go faster — packets can't outrun the speed of light. What it does is *proactively route* your traffic onto the fastest available path, avoiding congestion and needlessly long detours.
+
+Your ISP sends packets along whatever path is cheapest for *them* — often congested or circuitous. LightSpeed sends your packets through a proxy in a major data center with direct backbone connections to game server regions. If that path is shorter or less congested than your ISP's default, your ping drops and stabilizes. Typical improvement: 10–40ms.
 
 ### My ping went UP. Why?
 
-If the proxy is farther from the game server than your direct path, it adds latency. Try a different proxy region. Rule of thumb: pick the proxy closest to the **game server**, not closest to you.
+Two common reasons:
+
+1. **Wrong proxy location** — if the proxy is farther from the game server than your direct path, the extra hop adds latency. This is the most common cause. Rule of thumb: pick the proxy closest to the **game server**, not closest to you.
+2. **Poorly-connected proxy** — not all data centers are equal. A proxy only helps if that data center sits close to a major internet backbone or peering exchange. A cheap VPS in the "right" city but on a congested or residential upstream can be slower than your direct route.
+
+LightSpeed can only optimize the route it's given. If you point it at a badly-placed proxy, your ping will go up — that's expected behavior, not a bug.
 
 ### Which proxy should I pick?
 
@@ -43,6 +50,16 @@ The proxy closest to the **game server region**. Examples:
 - Playing on US West servers → pick a US West proxy
 - Playing on Singapore servers from Australia → pick a Singapore proxy
 - Playing on EU servers from NA → pick a Frankfurt/London proxy
+
+### A note on routing reality (BGP)
+
+Real internet routing is governed by **BGP** (Border Gateway Protocol) — the contracts and policies ISPs and transit providers use to hand off traffic. Your packets don't travel in a straight line; they follow whatever path the BGP tables and peering agreements decide, and providers routinely prioritize or deprioritize certain routes for cost or policy reasons.
+
+What that means for you:
+
+- A proxy only helps if it sits on a *better* BGP path than your home connection's default — typically a data center near a major backbone or peering point.
+- "Closer on the map" doesn't always mean "faster on the wire."
+- Route-optimization tools (including LightSpeed) estimate and re-route, but the physical path is ultimately dictated by the networks in between — which neither you nor LightSpeed control.
 
 ### How fast is auto-detection?
 

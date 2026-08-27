@@ -28,6 +28,7 @@
         <a href="#how-it-works">How It Works</a>
         <a href="#games">Games</a>
         <a href="#benchmarks">Benchmarks</a>
+        <a href="route-visualizer/">Route Visualizer</a>
         <a href="#faq">FAQ</a>
         <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">GitHub</a>
         <a href="#download" class="btn btn-sm btn-primary">Download</a>
@@ -541,6 +542,14 @@
         <details class="faq-item">
           <summary>How much will this actually reduce my ping?</summary>
           <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut 10-50ms off your ping. If your ISP already has optimal routing, the improvement may be minimal. The AI model picks the best route — or direct if that's fastest.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Does LightSpeed make my internet faster?</summary>
+          <p>No. LightSpeed can't make your traffic go faster — it can't outrun physics. What it does is <strong>proactively route</strong> your traffic onto the fastest available path, avoiding congestion and needlessly long routes. If your ISP already has a clean route, or your proxy is badly placed, you'll see little to no improvement.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Why is my ping higher when I use a proxy?</summary>
+          <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot — how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>game server</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">Route Visualizer</a>.</p>
         </details>
         <details class="faq-item">
           <summary>What games are supported?</summary>
