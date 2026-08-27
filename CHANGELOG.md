@@ -5,6 +5,11 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] — 2026-08-28
+
+### Windows GUI WinDivert fix
+- The `lightspeed-gui` MSI + ZIP now bundle `WinDivert.dll` + `WinDivert64.sys` next to the GUI exe (same fix as the client in 1.2.1). Fixes the "WinDivert.dll not found" error when launching the GUI (issues #50, #58).
+
 ## [1.2.1] — 2026-08-28
 
 ### Windows interception fix
