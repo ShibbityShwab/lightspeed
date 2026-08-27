@@ -13,9 +13,13 @@ path-guid = "5CF0E353-A6F5-49BC-A30F-7957AFC20EA6"
 license = false
 eula = false
 
-# Ship the client with the QUIC control plane so it can register for token auth.
+# Ship the client with QUIC (token auth) + WinDivert (Windows interception).
+# `windivert-redirect` is safe to enable on every target: its `windivert`
+# dependency is `cfg(windows)`-gated, so non-Windows builds simply skip it.
 [package.metadata.dist]
-features = ["quic"]
+features = ["quic", "windivert-redirect"]
+# Bundle the WinDivert DLL + signed kernel driver next to the exe (Windows).
+include = ["windivert/WinDivert.dll", "windivert/WinDivert64.sys", "windivert/LICENSE.windivert"]
 
 [[bin]]
 name = "lightspeed"
@@ -34,7 +38,9 @@ pcap-capture = ["dep:pcap"]
 # Enable WinDivert active redirect (Windows only; requires WinDivert64.sys next to exe)
 # Enable ML route prediction
 ml = ["dep:linfa", "dep:linfa-linear", "dep:ndarray", "dep:bincode"]
-# Windows-only: WinDivert packet interception (not in full — breaks Linux)
+# WinDivert packet interception. Windows-only at runtime, but safe to enable on
+# any target — the `windivert` dependency is `cfg(windows)`-gated, so non-Windows
+# builds skip it (verified: `cargo check --features windivert-redirect` on Linux).
 windivert-redirect = ["dep:windivert"]
 # Enable all features
 full = ["quic", "pcap-capture", "ml"]  # windivert-redirect excluded (Windows-only)
