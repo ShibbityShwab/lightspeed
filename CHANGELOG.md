@@ -5,6 +5,14 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-08-28
+
+### Windows interception fix
+- **WinDivert bundled in the Windows release**: the cargo-dist build now enables the `windivert-redirect` feature and ships the official WinDivert 2.2.2 `WinDivert.dll` + signed `WinDivert64.sys` next to the exe. Fixes the v1.2.0 "unsupported — WinDivert requires the 'windivert-redirect' Cargo feature" error and the missing-DLL startup failures (issues #50, #58).
+
+### Dependencies
+- rcgen 0.13→0.14, pcap 2.4→2.5, Rust (Docker base) 1.88→1.98.
+
 ## [1.2.0] — 2026-08-18
 
 ### TCP Tunnel (issue #10)
