@@ -110,6 +110,21 @@ The interceptor seizes packets before the game can receive responses, and the in
 1. Check nftables rules: `sudo nft list ruleset | grep lightspeed`
 2. If rules are stale: `sudo lightspeed --check` to diagnose
 
+### "WinDivert open failed" / `FWP_E_IN_USE` (0x8032000A) on Windows
+
+After LightSpeed (or any WinDivert app) is **force-killed** (`taskkill /f`, a crash, or Ctrl+C on the console), the Windows Filtering Platform (WFP) can be left holding stale WinDivert callout/filter state. The next `WinDivertOpen` then fails with `FWP_E_IN_USE` even though no process is visibly using WinDivert.
+
+This is a known **WinDivert 2.2.x driver limitation on Windows 10/11** (upstream issues basil00/WinDivert#196, #294), not a LightSpeed bug. Fixes:
+
+1. **Full shutdown, not restart** — Windows 11 "Restart" reuses the kernel session that holds the stale state; you need a full **Shutdown → power on** to clear it.
+2. **Stop the WinDivert service** (avoids a reboot in some cases):
+   ```powershell
+   sc stop windivert
+   ```
+3. **Quit LightSpeed gracefully** instead of killing it — use the GUI's **Quit** or let the CLI's Ctrl+C handler run; the v1.2.3 client now explicitly closes its WinDivert handles on shutdown, which avoids accumulating stale state.
+
+> **Tip:** On v1.2.2 and earlier, a separate bug (data-plane auth rejecting all packets — issue #59) froze the connection and forced users to repeatedly kill the client, which is what triggered most `FWP_E_IN_USE` reports. That auth bug is fixed in v1.2.3, so you should no longer need to force-kill the client in normal use.
+
 ---
 
 ## Logs for Bug Reports

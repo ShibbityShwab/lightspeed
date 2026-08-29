@@ -242,3 +242,23 @@ Compiles cleanly on Linux (`cargo check -p lightspeed-gui`), merges without conf
 - **ZIP/tar:** bundled next to the exe via `[package.metadata.dist] include` (package-global, so they also land in Linux/macOS archives — inert, ~200KB).
 - **MSI:** cargo-dist's `include` does NOT populate MSIs, so `client/wix/main.wxs` was hand-edited to add WinDivert `Component`/`File` entries, with `allow-dirty = ["msi"]` at the workspace level (`dist-workspace.toml` — package-level is ignored). The wxs `Source` resolves relative to the process CWD (repo root), so paths are `client\windivert\WinDivert.dll` — a `..\windivert\` path fails in `light` (LGHT0103/exit 103).
 **Alternatives Considered:** Per-target includes — rejected (not supported in cargo-dist 0.32). Static linking via `windivert-sys` `static` — rejected (LGPL static-link compliance burden). Downloading WinDivert in CI — rejected (vendoring is reproducible and avoids release-time network).
+
+---
+
+### 2026-08-29: v1.2.3 — Auth Regression Fix + WinDivert Handle Close
+
+**Agent:** RustDev + QAEngineer + NetEng
+**Status:** Accepted
+**Rationale:** Post-1.2.2 housekeeping triaged GitHub feedback and found two linked Windows bugs (issue #59) plus an install-confusion complaint (#50, #58).
+
+**Bug 1 (critical): data-plane auth rejected 100% of packets.** The proxy revokes data-plane authorization when the QUIC control connection closes (`proxy/src/control.rs` `handle_connection` → `auth.revoke`). The client's `register_session()` (`client/src/quic/mod.rs`) created a throwaway `ControlClient` that dropped immediately after registration, closing the connection and revoking the token before any game traffic flowed. Result: `auth_rejections` spiked while `sessions_created` stayed 0. Fix: `register_session` now moves the `ControlClient` into a background keepalive task (ping every 15s) so the connection — and therefore the data-plane authorization — lives for the process lifetime.
+
+**Bug 2 (Windows): WinDivert `FWP_E_IN_USE`.** The `windivert` crate 0.6 has no `Drop` impl, and LightSpeed never called `WinDivert::close()`, so the WFP filter/callout was never unregistered on shutdown — leaking state that caused `FWP_E_IN_USE` (0x8032000A) on subsequent runs. Fix: `client/src/interceptor/windows.rs` now explicitly closes the capture and inject handles on thread exit and on the inject-open failure path (`CloseAction::Nothing`). The remaining hard-kill case is an upstream WinDivert 2.2.x driver limitation (basil00/WinDivert#196, #294) — documented in `docs/troubleshooting.md`.
+
+**Impact:**
+- `client/src/quic/mod.rs`: keepalive task holds the control connection open.
+- `client/src/interceptor/windows.rs`: explicit `WinDivert::close()` at 3 points.
+- `client/src/games/deadbydaylight.rs` (new): DBD profile, wired into `games/mod.rs` (module, `detect_game`, `auto_detect`, drift-guard test).
+- `README.md`, `docs/user-guide.md`, `docs/supported-games.md`, `docs/troubleshooting.md`: "which file do I download" clarification + WinDivert troubleshooting.
+- Version bumped 1.2.2 → 1.2.3.
+**Alternatives Considered:** Making the proxy keep authorization after connection close (TTL-based re-auth) — rejected because revoke-on-disconnect is correct security semantics once the client holds the connection. Adding a `Drop` impl to the `windivert` crate upstream — rejected (external dep); explicit `close()` is the pragmatic fix.

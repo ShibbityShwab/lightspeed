@@ -31,6 +31,7 @@
 
 pub mod apex;
 pub mod cs2;
+pub mod deadbydaylight;
 pub mod dota2;
 pub mod fortnite;
 pub mod genshin;
@@ -111,6 +112,9 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
     match name.to_lowercase().as_str() {
         "fortnite" => Ok(Box::new(fortnite::FortniteConfig)),
         "cs2" | "counter-strike" | "counterstrike" => Ok(Box::new(cs2::Cs2Config)),
+        "deadbydaylight" | "dbd" | "dead-by-daylight" => {
+            Ok(Box::new(deadbydaylight::DeadByDaylightConfig))
+        }
         "dota2" | "dota" => Ok(Box::new(dota2::Dota2Config)),
         "rust" | "rustgame" => Ok(Box::new(rust::RustConfig)),
         "valorant" => Ok(Box::new(valorant::ValorantConfig)),
@@ -123,7 +127,7 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
         "wot" | "worldoftanks" | "world-of-tanks" => Ok(Box::new(wot::WotConfig)),
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot",
+            "Unknown game: '{}'. Supported: fortnite, cs2, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot",
             name
         ),
     }
@@ -149,6 +153,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
     let all_games: Vec<Box<dyn GameConfig>> = vec![
         Box::new(fortnite::FortniteConfig),
         Box::new(cs2::Cs2Config),
+        Box::new(deadbydaylight::DeadByDaylightConfig),
         Box::new(dota2::Dota2Config),
         Box::new(rust::RustConfig),
         Box::new(valorant::ValorantConfig),
@@ -182,6 +187,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
     let known_procs: Vec<&str> = vec![
         "FortniteClient-Win64-Shipping.exe",
         "cs2.exe",
+        "DeadByDaylight-Win64-Shipping.exe",
         "dota2.exe",
         "RustClient.exe",
         "VALORANT-Win64-Shipping.exe",
@@ -201,7 +207,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot"
+         Supported: fortnite, cs2, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot"
     )
 }
 
@@ -310,6 +316,9 @@ mod tests {
         "cs2",
         "counter-strike",
         "counterstrike",
+        "deadbydaylight",
+        "dbd",
+        "dead-by-daylight",
         "dota2",
         "dota",
         "rust",
@@ -475,6 +484,17 @@ mod tests {
         assert!(!wot.uses_sdr());
         assert!(wot.typical_pps() > 0);
         assert_eq!(wot.anti_cheat(), "None");
+
+        let dbd = deadbydaylight::DeadByDaylightConfig;
+        assert_eq!(dbd.name(), "Dead by Daylight");
+        assert!(dbd
+            .process_names()
+            .contains(&"DeadByDaylight-Win64-Shipping.exe"));
+        assert_eq!(dbd.ports(), (27000, 27050));
+        assert_eq!(dbd.redirect_port(), 27000);
+        assert!(!dbd.uses_sdr());
+        assert!(dbd.typical_pps() > 0);
+        assert_eq!(dbd.anti_cheat(), "Easy Anti-Cheat (EAC)");
     }
 
     #[test]

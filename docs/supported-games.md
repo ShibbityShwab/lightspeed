@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 13 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 14 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -21,6 +21,7 @@ LightSpeed includes built-in profiles for 13 popular multiplayer games. Each pro
 | 11 | **Genshin Impact** | `--game genshin` | 22101–42472 | None | `GenshinImpact.exe` |
 | 12 | **Rocket League** | `--game rocketleague` | 7000–9000 | EAC | `RocketLeague.exe` |
 | 13 | **World of Tanks** | `--game wot` | 12000–29999 | None | `WorldOfTanks.exe` |
+| 14 | **Dead by Daylight** | `--game deadbydaylight` | 27000–27050 | EAC | `DeadByDaylight-Win64-Shipping.exe` |
 
 ---
 
@@ -30,7 +31,7 @@ LightSpeed is compatible with all major anti-cheat systems:
 
 | System | Games | Status |
 |--------|-------|--------|
-| **EasyAntiCheat (EAC)** | Rust, Fortnite, Apex Legends, Rocket League | ✅ Permitted |
+| **EasyAntiCheat (EAC)** | Rust, Fortnite, Apex Legends, Rocket League, Dead by Daylight | ✅ Permitted |
 | **Valve Anti-Cheat (VAC)** | CS2, Dota 2 | ✅ Permitted |
 | **BattlEye** | Fortnite, PUBG | ✅ Permitted |
 | **Riot Vanguard** | Valorant, League of Legends | ✅ Permitted |

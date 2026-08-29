@@ -98,7 +98,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
         use tokio::net::UdpSocket;
         use windivert::address::WinDivertAddress;
         use windivert::layer::NetworkLayer;
-        use windivert::prelude::{WinDivert, WinDivertFlags, WinDivertPacket};
+        use windivert::prelude::{CloseAction, WinDivert, WinDivertFlags, WinDivertPacket};
 
         let (port_lo, port_hi) = config.port_range;
         let proxy_addr = config.proxy_addr;
@@ -182,6 +182,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
             }
             Err(e) => {
                 tracing::error!("❌ WinDivert inject open failed: {}", e);
+                // Close the already-open intercept handle before returning.
+                let mut wd_intercept = wd_intercept;
+                let _ = wd_intercept.close(CloseAction::Nothing);
                 return Err(anyhow::anyhow!("WinDivert inject handle failed: {e}"));
             }
         };
@@ -390,6 +393,13 @@ impl TrafficInterceptor for WinDivertInterceptor {
                         }
                     }
                 }
+                // Explicitly close the WinDivert handle — the `windivert` crate
+                // has no Drop impl, so without this the WFP filter/callout is
+                // never unregistered, leaking state that causes FWP_E_IN_USE
+                // (0x8032000A) on subsequent runs.
+                if let Ok(mut handle) = Arc::try_unwrap(wd_ic) {
+                    let _ = handle.close(CloseAction::Nothing);
+                }
                 tracing::info!("WinDivert intercept thread exiting");
             });
         }
@@ -440,6 +450,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                         }
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
+                }
+                if let Ok(mut handle) = Arc::try_unwrap(wd_inj) {
+                    let _ = handle.close(CloseAction::Nothing);
                 }
                 tracing::info!("WinDivert inject thread exiting");
             });

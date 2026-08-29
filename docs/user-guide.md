@@ -23,6 +23,18 @@ Your PC ──→ LightSpeed Proxy (fast backbone) ──→ Game Server   ✅ L
 
 ---
 
+## Which app do I need?
+
+| You're on | Download | Why |
+|-----------|----------|-----|
+| **Windows** | `lightspeed-gui` (MSI or ZIP) | The GUI is a standalone app — it already includes the client engine + WinDivert driver. You do **not** need the CLI. |
+| **Linux / macOS** | `lightspeed-client` | No GUI is built for these platforms yet, so the CLI is the way to go. |
+| **Hosting a proxy** | `lightspeed-proxy` | Only if you're running a relay node on a VPS. |
+
+> **You only ever need one package.** If you're a Windows player, grab `lightspeed-gui` and ignore the rest. The separate `lightspeed-client` and `lightspeed-proxy` are for Linux/macOS players and self-hosters respectively.
+
+---
+
 ## Quick Start (CLI — All Platforms)
 
 ### 1. Check your environment

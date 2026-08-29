@@ -398,6 +398,7 @@ async fn register_session_inner(
     control_port: u16,
 ) -> Option<u8> {
     use std::net::{SocketAddr, SocketAddrV4};
+    use std::time::Duration;
 
     let control_addr = SocketAddr::V4(SocketAddrV4::new(*data_addr.ip(), control_port));
     let mut client = match ControlClient::new() {
@@ -412,7 +413,33 @@ async fn register_session_inner(
         .connect(control_addr, lightspeed_protocol::game_id::UNKNOWN)
         .await
     {
-        Ok(()) => client.session_token(),
+        Ok(()) => {
+            let token = client.session_token();
+            // CRITICAL: the proxy revokes data-plane authorization when the
+            // QUIC control connection closes (see proxy/src/control.rs
+            // `handle_connection`). Dropping `client` here would close the
+            // connection and revoke our token before any game traffic flows,
+            // causing the proxy to reject 100% of data-plane packets.
+            //
+            // Keep the connection open for the process lifetime by moving the
+            // client into a background keepalive task. The periodic ping both
+            // holds the connection open and detects a dead proxy.
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(15));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    if client.ping().await.is_err() {
+                        tracing::warn!(
+                            "Control-plane ping failed — data-plane auth may be revoked by the proxy"
+                        );
+                        break;
+                    }
+                }
+                // `client` dropped here → connection closes → proxy revokes auth
+            });
+            token
+        }
         Err(e) => {
             tracing::warn!("QUIC registration failed ({e}); continuing without a session token");
             None

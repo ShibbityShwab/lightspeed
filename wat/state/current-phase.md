@@ -1,39 +1,32 @@
-# Current Phase — WF-015: Token Auth & Client Session Stamping
+# Current Phase — WF-018: v1.2.3 Post-Release Housekeeping
 
-**Workflow:** WF-015
-**Agent:** RustDev + QAEngineer + SecOps
-**Status:** ✅ Token auth wired end-to-end — `require_auth` now defaults to `true` (pending 1.1.0 tag)
-**Last updated:** 2026-08-18
-
----
-
-## Completed Steps (WF-015)
-
-| Step | Description | Status |
-|------|-------------|--------|
-| 1 | `session.rs` — global atomic session-token holder | ✅ Done |
-| 2 | `ControlClient::connect()` sets the token after `RegisterAck` | ✅ Done |
-| 3 | `register_session()` best-effort registration helper (quic-gated) | ✅ Done |
-| 4 | Stamp `.with_session_token()` on every data-plane header site | ✅ Done |
-| 5 | Wire registration into `main.rs` modes + GUI engine entry points | ✅ Done |
-| 6 | `quic` feature enabled in Dockerfile + cargo-dist client build + GUI dep | ✅ Done |
-| 7 | `require_auth` default flipped to `true` (config + tomls + provision.sh) | ✅ Done |
+**Workflow:** WF-018
+**Agent:** RustDev + QAEngineer + NetEng
+**Status:** ✅ Code complete — pending `v1.2.3` tag/release
+**Last updated:** 2026-08-29
 
 ---
 
-## Token Auth Summary
+## Summary
 
-- **Client** registers over QUIC, receives a session token, and stamps it into every
-  data-plane packet header.
-- **Proxy** (with `require_auth = true`, the new default) validates the (IP, token) pair
-  per packet; unregistered clients are rejected.
-- **Backward compatible**: a client without the `quic` feature sends token `0`, which the
-  proxy accepts only when `require_auth = false`.
+Housekeeping pass over GitHub feedback since v1.2.2. Fixed a critical auth
+regression and a WinDivert handle leak, added a game profile, and clarified
+installer docs.
+
+| Item | Status |
+|------|--------|
+| Bug 1 — data-plane auth rejected 100% (issue #59) | ✅ Fixed |
+| Bug 2 — WinDivert `FWP_E_IN_USE` handle leak (issue #59) | ✅ Fixed (code) + documented |
+| Dead by Daylight profile (issue #51) | ✅ Added |
+| client-vs-GUI install confusion (#50, #58) | ✅ Docs clarified |
+| CS:GO Legacy (issue #60) | ⏳ Awaiting store page from reporter |
 
 ---
 
 ## Next Action
 
-1. **Tag and push v1.1.0** (token auth release — pending explicit release step)
-2. **WF-016**: Configurable ports (issue #39)
-3. **WF-017**: TCP tunnel (issue #10)
+1. **Tag and push `v1.2.3`** (cargo-dist CI builds + publishes the release).
+2. **Reply to open issues** (#59, #58, #50, #51, #60) with findings.
+3. **WF-019**: Consider a single "lightspeed" Windows installer bundling the
+   GUI + CLI (the GUI already embeds the client; a unified artifact would
+   further reduce install confusion).

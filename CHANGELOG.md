@@ -5,6 +5,22 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] — 2026-08-29
+
+### Critical fix: data-plane auth rejected all traffic (issue #59)
+- **Root cause:** the client's `register_session()` created a throwaway QUIC control connection that closed immediately after registration. The proxy revokes data-plane authorization when the control connection closes, so the token was revoked before any game traffic flowed — the proxy rejected 100% of data-plane packets (`auth_rejections` spiked, `sessions_created` stayed 0).
+- **Fix:** the client now keeps the control connection alive for the process lifetime (background keepalive ping every 15s), so the data-plane token stays authorized.
+
+### Windows: WinDivert handle leak → `FWP_E_IN_USE` (issue #59)
+- The `windivert` crate has no `Drop` impl, and LightSpeed never called `WinDivert::close()`, so the WFP filter/callout was never unregistered on shutdown. The interceptor now explicitly closes its capture and inject handles on stop and on the inject-open failure path, preventing stale WFP state that caused `FWP_E_IN_USE` (0x8032000A) on subsequent runs.
+- Documented the remaining WinDivert 2.2.x driver limitation (hard-kill leaves stale WFP state until a full shutdown) in `docs/troubleshooting.md`.
+
+### New game profile
+- **Dead by Daylight** (issue #51): `--game deadbydaylight` — UDP 27000–27050, EAC-compatible, process `DeadByDaylight-Win64-Shipping.exe`.
+
+### Docs: client vs GUI clarification (issues #50, #58)
+- The README and user guide now lead with a "which file do I download?" table: Windows players download `lightspeed-gui` (standalone — it already embeds the client), Linux/macOS players use `lightspeed-client`, and only self-hosters need `lightspeed-proxy`. You never need both the client and the GUI.
+
 ## [1.2.2] — 2026-08-28
 
 ### Windows GUI WinDivert fix

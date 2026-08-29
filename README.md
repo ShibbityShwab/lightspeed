@@ -51,6 +51,7 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 | Genshin Impact | `--game genshin` | None | ✅ |
 | Rocket League | `--game rocketleague` | EAC | ✅ |
 | World of Tanks | `--game wot` | None | ✅ |
+| Dead by Daylight | `--game deadbydaylight` | EAC | ✅ |
 
 📖 **[Full Game List →](docs/supported-games.md)**
 
@@ -77,6 +78,18 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 ---
 
 ## 📦 Installation
+
+### Which file do I download?
+
+LightSpeed ships three packages. **You only need one**:
+
+| You want to… | Download | Notes |
+|--------------|----------|-------|
+| **Play on Windows** (recommended) | `lightspeed-gui-...-windows-msvc.msi` (or `.zip`) | Everything included — GUI + engine + WinDivert driver. No separate client needed. |
+| **Play on Linux / macOS** | `lightspeed-client-...` | CLI client (no GUI on these platforms yet). |
+| **Host a proxy node** | `lightspeed-proxy-...` | Only if you're running a relay server on a VPS. |
+
+> **Why is there both a "client" and a "gui"?** The GUI (`lightspeed-gui`) is a standalone app that already contains the client engine — Windows players should download the GUI only. The CLI (`lightspeed-client`) is for headless/power users and for Linux/macOS, where the GUI isn't built yet. You never need to install both.
 
 ### Pre-built Binaries
 Download from **[Releases](https://github.com/ShibbityShwab/lightspeed/releases)** — Windows, Linux, macOS.
