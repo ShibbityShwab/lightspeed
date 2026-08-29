@@ -166,6 +166,7 @@ lightspeed/
 | [FAQ](docs/faq.md) | Common questions |
 | [Troubleshooting](docs/troubleshooting.md) | Fix common issues |
 | [Deploy Proxy](docs/deploy-proxy.md) | Self-hosting guide |
+| [Community Relay Network](docs/community-network.md) | Run + publish a relay for others |
 | [Architecture](docs/architecture.md) | System design |
 | [Protocol](docs/protocol.md) | Wire protocol spec |
 | [Supported Games](docs/supported-games.md) | Game profiles |

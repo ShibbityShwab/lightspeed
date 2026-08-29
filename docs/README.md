@@ -18,6 +18,7 @@ Welcome to the LightSpeed documentation wiki — synced from the [source repo](h
 | Document | Description |
 |----------|-------------|
 | [Deploy Proxy](deploy-proxy) | Self-host a proxy on any VPS |
+| [Community Relay Network](community-network) | Run + publish a relay for others |
 | [Troubleshooting](troubleshooting) | Diagnose and fix issues |
 
 ## 🏗️ Architecture & Protocol
