@@ -20,6 +20,7 @@ mod ml;
 mod modes;
 mod quic;
 mod redirect;
+mod registry;
 mod route;
 mod session;
 mod telemetry;
@@ -838,11 +839,29 @@ data_port = 4434
 
     // ── --probe-proxies ───────────────────────────────────────────
     if cli.probe_proxies {
-        if config.proxy.servers.is_empty() {
-            warn!("No proxies configured in config file");
+        // Build the candidate server list: configured proxies + registry nodes.
+        let mut servers = config.proxy.servers.clone();
+        let registry_url = cli.registry.as_deref().or(config.registry.url.as_deref());
+        if let Some(url) = registry_url {
+            match config.registry.operator_key.as_deref() {
+                Some(key) if !key.is_empty() => {
+                    match crate::registry::discover_data_addrs(url, key) {
+                        Ok(addrs) => {
+                            info!("🔍 Registry: {} relay(s) discovered", addrs.len());
+                            servers.extend(addrs);
+                        }
+                        Err(e) => warn!("Registry fetch failed: {e}"),
+                    }
+                }
+                _ => warn!("Registry URL set but no operator_key configured — skipping"),
+            }
+        }
+
+        if servers.is_empty() {
+            warn!("No proxies configured or discovered");
         } else {
-            info!("🔍 Probing all configured proxies...");
-            let probes = probe_all_proxies(&config.proxy.servers, config.proxy.data_port).await;
+            info!("🔍 Probing {} proxy candidate(s)...", servers.len());
+            let probes = probe_all_proxies(&servers, config.proxy.data_port).await;
             info!("📊 Proxy Latency Report:");
             for node in &probes {
                 let status = match node.health {

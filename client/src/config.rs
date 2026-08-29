@@ -20,6 +20,10 @@ pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
 
+    /// Community registry settings.
+    #[serde(default)]
+    pub registry: RegistryConfig,
+
     /// Route selection settings.
     #[serde(default)]
     pub route: RouteConfig,
@@ -79,6 +83,18 @@ pub struct ProxyConfig {
     /// UDP data plane port.
     #[serde(default = "default_data_port")]
     pub data_port: u16,
+}
+
+/// Community registry settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegistryConfig {
+    /// Registry URL (signed node list). Empty = disabled.
+    #[serde(default)]
+    pub url: Option<String>,
+
+    /// Operator Ed25519 public key (base64) used to verify the registry.
+    #[serde(default)]
+    pub operator_key: Option<String>,
 }
 
 /// Route selection settings.

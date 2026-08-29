@@ -1,0 +1,11 @@
+name = "lightspeed-registry"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+# Secrets to set via `wrangler secret put`:
+#   OPERATOR_KEY_B64 — the operator's Ed25519 private key (PKCS8), base64-encoded.
+#   INVITE_TOKEN     — a random bearer token that gates /register and /revoke.
+
+[[kv_namespaces]]
+binding = "REGISTRY_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

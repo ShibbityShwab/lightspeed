@@ -120,6 +120,12 @@ pub struct SecurityConfig {
     /// Abuse ban duration in seconds.
     #[serde(default = "default_ban_duration")]
     pub ban_duration_secs: u64,
+
+    /// Optional destination allowlist (CIDR strings, e.g. "104.26.0.0/16").
+    /// Empty = allow any public destination. Non-empty = only relay to these
+    /// prefixes. Recommended for community relays to prevent open-relay abuse.
+    #[serde(default)]
+    pub destination_allowlist: Vec<String>,
 }
 
 fn default_amplification_ratio() -> f64 {
@@ -139,6 +145,7 @@ impl Default for SecurityConfig {
             max_amplification_ratio: default_amplification_ratio(),
             max_destinations_per_window: default_max_destinations(),
             ban_duration_secs: default_ban_duration(),
+            destination_allowlist: Vec::new(),
         }
     }
 }

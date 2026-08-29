@@ -61,6 +61,7 @@ impl Default for RelayTestConfig {
                 max_destinations_per_window: 100,
                 ban_duration_secs: 3600,
                 window_secs: 60,
+                destination_allowlist: Vec::new(),
             },
         }
     }
@@ -323,6 +324,7 @@ async fn test_reflection_detection_bans_client() {
             max_amplification_ratio: 100.0,
             ban_duration_secs: 3600,
             window_secs: 60,
+            destination_allowlist: Vec::new(),
         },
         ..Default::default()
     })

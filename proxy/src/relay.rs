@@ -504,6 +504,16 @@ async fn process_inbound_packet(
                 metrics.record_abuse_block();
                 return false;
             }
+            AbuseCheckResult::DestinationNotAllowed => {
+                debug!(
+                    client = %client_addr,
+                    dest = %game_server,
+                    "Blocked: destination not in allowlist"
+                );
+                metrics.record_drop();
+                metrics.record_abuse_block();
+                return false;
+            }
             AbuseCheckResult::Banned => {
                 trace!(client = %client_addr, "Blocked: client is banned");
                 metrics.record_drop();

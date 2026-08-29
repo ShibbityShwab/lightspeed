@@ -178,6 +178,12 @@ async fn main() -> anyhow::Result<()> {
         max_amplification_ratio: config.security.max_amplification_ratio,
         max_destinations_per_window: config.security.max_destinations_per_window,
         ban_duration_secs: config.security.ban_duration_secs,
+        destination_allowlist: config
+            .security
+            .destination_allowlist
+            .iter()
+            .filter_map(|s| abuse::parse_cidr(s))
+            .collect(),
         ..Default::default()
     };
     let abuse_detector = Arc::new(tokio::sync::Mutex::new(abuse::AbuseDetector::new(

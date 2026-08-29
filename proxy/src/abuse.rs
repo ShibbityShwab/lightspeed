@@ -31,6 +31,12 @@ pub struct AbuseConfig {
     pub ban_duration_secs: u64,
     /// Tracking window duration in seconds.
     pub window_secs: u64,
+    /// Optional destination allowlist as `(network, prefix_len)` pairs.
+    /// Empty = allow any public destination (backward-compatible default).
+    /// Non-empty = only relay to destinations within these prefixes. This is
+    /// the primary defense for community relays — it stops the relay being
+    /// aimed at arbitrary public IPs (DDoS reflection/amplification).
+    pub destination_allowlist: Vec<(Ipv4Addr, u8)>,
 }
 
 impl Default for AbuseConfig {
@@ -41,6 +47,7 @@ impl Default for AbuseConfig {
             max_destinations_per_window: 10,
             ban_duration_secs: 3600, // 1 hour
             window_secs: 10,
+            destination_allowlist: Vec::new(),
         }
     }
 }
@@ -99,6 +106,8 @@ pub enum AbuseCheckResult {
     ReflectionDetected,
     /// Destination is a private/internal IP — blocked.
     PrivateDestination,
+    /// Destination is not in the configured allowlist — blocked.
+    DestinationNotAllowed,
 }
 
 /// Abuse detector.
@@ -148,6 +157,16 @@ impl AbuseDetector {
                 "Blocked relay to private/internal IP"
             );
             return AbuseCheckResult::PrivateDestination;
+        }
+
+        // Check destination is within the allowlist (if configured)
+        if !is_destination_allowed(dest.ip(), &self.config.destination_allowlist) {
+            tracing::warn!(
+                client = %client_ip,
+                dest = %dest,
+                "Blocked relay to non-allowlisted destination"
+            );
+            return AbuseCheckResult::DestinationNotAllowed;
         }
 
         // Get or create tracker
@@ -227,6 +246,37 @@ impl AbuseDetector {
 }
 
 // ── Destination Validation ──────────────────────────────────────────
+
+/// Parse a CIDR string ("a.b.c.d/len") into `(network, prefix_len)`.
+pub fn parse_cidr(s: &str) -> Option<(Ipv4Addr, u8)> {
+    let (ip_str, len_str) = s.split_once('/')?;
+    let ip = ip_str.trim().parse::<Ipv4Addr>().ok()?;
+    let len = len_str.trim().parse::<u8>().ok()?;
+    if len > 32 {
+        return None;
+    }
+    Some((ip, len))
+}
+
+/// Whether `ip` is within the given CIDR prefix `(network, prefix_len)`.
+fn in_prefix(ip: Ipv4Addr, prefix: (Ipv4Addr, u8)) -> bool {
+    let (net, len) = prefix;
+    if len == 0 {
+        return true;
+    }
+    let mask = if len == 32 {
+        u32::MAX
+    } else {
+        u32::MAX << (32 - len)
+    };
+    (u32::from(ip) & mask) == (u32::from(net) & mask)
+}
+
+/// Whether `ip` is allowed by the destination allowlist.
+/// An empty allowlist permits any address (backward-compatible default).
+pub fn is_destination_allowed(ip: &Ipv4Addr, allowlist: &[(Ipv4Addr, u8)]) -> bool {
+    allowlist.is_empty() || allowlist.iter().any(|&p| in_prefix(*ip, p))
+}
 
 /// Check if an IPv4 address is a public (routable) address.
 ///
@@ -413,5 +463,62 @@ mod tests {
 
         detector.cleanup();
         assert_eq!(detector.banned_count(), 0);
+    }
+
+    #[test]
+    fn test_destination_allowlist_enforcement() {
+        let config = AbuseConfig {
+            destination_allowlist: vec![(Ipv4Addr::new(104, 26, 0, 0), 16)],
+            ..Default::default()
+        };
+        let mut detector = AbuseDetector::new(config);
+        let ip = Ipv4Addr::new(1, 2, 3, 4);
+
+        // Within the allowlist (104.26.x.x) → allowed
+        let allowed = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+        assert_eq!(
+            detector.record_inbound(ip, allowed, 100),
+            AbuseCheckResult::Allowed
+        );
+
+        // Outside the allowlist → blocked
+        let blocked = SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 7777);
+        assert_eq!(
+            detector.record_inbound(ip, blocked, 100),
+            AbuseCheckResult::DestinationNotAllowed
+        );
+    }
+
+    #[test]
+    fn test_parse_cidr() {
+        assert_eq!(
+            parse_cidr("104.26.0.0/16"),
+            Some((Ipv4Addr::new(104, 26, 0, 0), 16))
+        );
+        assert_eq!(
+            parse_cidr("1.2.3.4/32"),
+            Some((Ipv4Addr::new(1, 2, 3, 4), 32))
+        );
+        assert_eq!(
+            parse_cidr("0.0.0.0/0"),
+            Some((Ipv4Addr::new(0, 0, 0, 0), 0))
+        );
+        assert!(parse_cidr("1.2.3.4/33").is_none());
+        assert!(parse_cidr("not-an-ip").is_none());
+    }
+
+    #[test]
+    fn test_is_destination_allowed() {
+        let allowlist = vec![(Ipv4Addr::new(104, 26, 0, 0), 16)];
+        assert!(is_destination_allowed(
+            &Ipv4Addr::new(104, 26, 1, 1),
+            &allowlist
+        ));
+        assert!(!is_destination_allowed(
+            &Ipv4Addr::new(104, 27, 1, 1),
+            &allowlist
+        ));
+        // Empty allowlist permits everything
+        assert!(is_destination_allowed(&Ipv4Addr::new(8, 8, 8, 8), &[]));
     }
 }

@@ -20,6 +20,7 @@ pub(crate) mod ml;
 pub(crate) mod modes;
 pub(crate) mod quic;
 pub(crate) mod redirect;
+pub mod registry;
 pub(crate) mod route;
 pub(crate) mod session;
 pub(crate) mod telemetry;

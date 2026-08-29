@@ -81,6 +81,11 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub probe_proxies: bool,
 
+    /// Community registry URL (signed node list) for proxy discovery.
+    /// When set with --probe-proxies, the registry's nodes are probed too.
+    #[arg(long)]
+    pub registry: Option<String>,
+
     /// Run comprehensive live integration test against configured proxies.
     /// Tests health, route selection, keepalive echo, data relay, and FEC.
     #[arg(long, default_value_t = false)]

@@ -5,6 +5,21 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.4] — 2026-08-29
+
+### Relay network (self-hosted proxy mesh)
+- **OCI Always-Free provisioning**: `infra/scripts/provision-oci.sh` replaces the placeholder `provision.sh` — one-click provisioning of relays on Oracle Cloud's Always Free tier (idempotent VCN/subnet/IGW/security-list, ARM-first launch with automatic `E2.1.Micro` fallback, cloud-init self-install + Ed25519 node identity).
+- **Region guidance**: `infra/README.md` documents which OCI region to pick per game-server region, plus the Always-Free constraints (2 OCPU ARM per tenancy, home-region-only, ~10 TB egress, idle reclamation).
+- **ARM64 Linux release**: added `aarch64-unknown-linux-gnu` to the cargo-dist targets so the Always-Free Ampere instances have a prebuilt proxy binary.
+
+### Relay security
+- **Destination allowlisting**: `[security] destination_allowlist = ["104.26.0.0/16", ...]` restricts a relay to forwarding only to listed CIDR prefixes — the key defense that makes a community relay safe to open (prevents open-relay DDoS/reflection).
+
+### Community proxy registry
+- **Signed node list + revocation**: `client/src/registry.rs` defines the registry format and verifies the operator's Ed25519 signature (`ring`).
+- **Operator tooling**: `client/examples/sign_registry.rs` signs a node list offline; `infra/registry/worker.js` is a reference Cloudflare Worker for serving the signed list.
+- **Client discovery**: `--probe-proxies --registry <url>` (or `[registry] url` in config) fetches, verifies, and probes community relays alongside configured proxies.
+
 ## [1.2.3] — 2026-08-29
 
 ### Critical fix: data-plane auth rejected all traffic (issue #59)

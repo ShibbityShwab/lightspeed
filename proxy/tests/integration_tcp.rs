@@ -52,6 +52,7 @@ async fn start_tcp_relay(require_auth: bool, dev_mode: bool) -> TestTcpRelay {
         max_destinations_per_window: 100,
         ban_duration_secs: 3600,
         window_secs: 60,
+        destination_allowlist: Vec::new(),
     })));
     let rate_limiter = Arc::new(tokio::sync::Mutex::new(RateLimiter::new(RateLimitConfig {
         max_pps_per_client: 10_000,
