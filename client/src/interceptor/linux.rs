@@ -85,7 +85,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                 )
             });
 
-        let proxy_addr = config.proxy_addr;
+        let config_proxy = config.proxy_addr;
         let fec_enabled = config.fec_enabled;
         let fec_k = config.fec_k;
 
@@ -243,7 +243,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                         .as_micros() as u32;
                     let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us)
                         .with_session_token(crate::session::session_token());
-                    let _ = ts.send_to(&hdr.encode_to_array(), proxy_addr).await;
+                    let _ = ts.send_to(&hdr.encode_to_array(), crate::session::current_proxy().unwrap_or(config_proxy)).await;
                     seq = seq.wrapping_add(1);
                 }
             });
@@ -384,7 +384,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                             fh.encode(&mut buf);
                             buf.extend_from_slice(payload);
                             let parity = enc.add_packet(payload);
-                            let _ = tunnel_socket.send_to(&buf, proxy_addr).await;
+                            let _ = tunnel_socket.send_to(&buf, crate::session::current_proxy().unwrap_or(config_proxy)).await;
                             if let Some(pb) = parity {
                                 let ps = seq.wrapping_add(1);
                                 let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, src, actual_dst)
@@ -394,14 +394,14 @@ impl TrafficInterceptor for NftablesInterceptor {
                                 pb2.extend_from_slice(&ph.encode_to_array());
                                 pf.encode(&mut pb2);
                                 pb2.extend_from_slice(&pb);
-                                let _ = tunnel_socket.send_to(&pb2, proxy_addr).await;
+                                let _ = tunnel_socket.send_to(&pb2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
                                 seq = seq.wrapping_add(1);
                             }
                         } else {
                             let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts, src, actual_dst)
                                 .with_session_token(crate::session::session_token());
                             let pkt = hdr.encode_with_payload(payload);
-                            let _ = tunnel_socket.send_to(&pkt, proxy_addr).await;
+                            let _ = tunnel_socket.send_to(&pkt, crate::session::current_proxy().unwrap_or(config_proxy)).await;
                         }
                         seq = seq.wrapping_add(1);
                     }

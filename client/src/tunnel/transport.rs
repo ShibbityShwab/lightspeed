@@ -7,7 +7,7 @@
 
 use std::io;
 use std::net::SocketAddrV4;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpStream, UdpSocket};
@@ -121,7 +121,7 @@ impl TunnelTransport {
     pub fn split(self) -> (TunnelSender, TunnelReader) {
         match self {
             Self::Udp { socket, proxy } => (
-                TunnelSender::Udp(Arc::clone(&socket), proxy),
+                TunnelSender::Udp(Arc::clone(&socket), Arc::new(RwLock::new(proxy))),
                 TunnelReader::Udp(socket),
             ),
             Self::Tcp { sender, reader, .. } => {
@@ -132,9 +132,12 @@ impl TunnelTransport {
 }
 
 /// Shared send half of a tunnel transport, cloneable for outbound tasks.
+///
+/// For UDP the proxy destination is held behind a lock so it can be switched
+/// mid-session (continuous re-routing) without rebuilding the tunnel.
 #[derive(Clone)]
 pub enum TunnelSender {
-    Udp(Arc<UdpSocket>, SocketAddrV4),
+    Udp(Arc<UdpSocket>, Arc<RwLock<SocketAddrV4>>),
     Tcp(Arc<Mutex<OwnedWriteHalf>>),
 }
 
@@ -142,12 +145,31 @@ impl TunnelSender {
     /// Send `bytes` to the proxy.
     pub async fn send(&self, bytes: &[u8]) -> io::Result<usize> {
         match self {
-            Self::Udp(socket, proxy) => socket.send_to(bytes, *proxy).await,
+            Self::Udp(socket, proxy) => {
+                let proxy = *proxy.read().unwrap();
+                socket.send_to(bytes, proxy).await
+            }
             Self::Tcp(sender) => {
                 let mut guard = sender.lock().await;
                 write_frame(&mut *guard, bytes).await?;
                 Ok(bytes.len())
             }
+        }
+    }
+
+    /// Switch the UDP proxy destination in place (no-op for TCP, where the
+    /// peer is fixed at connect time).
+    pub fn set_proxy(&self, proxy: SocketAddrV4) {
+        if let Self::Udp(_, p) = self {
+            *p.write().unwrap() = proxy;
+        }
+    }
+
+    /// The current proxy destination.
+    pub fn proxy_addr(&self) -> Option<SocketAddrV4> {
+        match self {
+            Self::Udp(_, p) => Some(*p.read().unwrap()),
+            Self::Tcp(_) => None,
         }
     }
 }

@@ -53,6 +53,90 @@ use modes::{
 use route::ProxyHealth;
 use tunnel::relay::UdpRelay;
 
+/// Resolve the proxy to use: explicit `--proxy`, else auto-select from
+/// configured servers, else a localhost dev default.
+async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Result<SocketAddrV4> {
+    if let Some(ref proxy_str) = cli.proxy {
+        let addr = parse_proxy_addr(proxy_str)?;
+        info!("🌐 Proxy (explicit): {}", addr);
+        return Ok(addr);
+    }
+    if !config.proxy.servers.is_empty() {
+        let strategy = cli
+            .route_strategy
+            .as_deref()
+            .unwrap_or(config.route.strategy.as_str());
+        let game_server_addr = cli
+            .game_server
+            .as_ref()
+            .and_then(|s| parse_proxy_addr(s).ok())
+            .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
+        info!(
+            "🔍 Probing {} configured proxies (strategy: {})...",
+            config.proxy.servers.len(),
+            strategy
+        );
+        let selected = select_best_proxy(
+            &config.proxy.servers,
+            config.proxy.data_port,
+            game_server_addr,
+            strategy,
+        )
+        .await?;
+        info!(
+            "🌐 Proxy (auto-selected): {} [{}] — {:.1}ms latency, strategy: {:?}",
+            selected.primary.data_addr,
+            selected.primary.id,
+            selected.primary.latency_us.unwrap_or(0) as f64 / 1000.0,
+            selected.strategy,
+        );
+        if !selected.backups.is_empty() {
+            info!(
+                "   Backups: {}",
+                selected
+                    .backups
+                    .iter()
+                    .map(|p| format!(
+                        "{} ({:.1}ms)",
+                        p.id,
+                        p.latency_us.unwrap_or(0) as f64 / 1000.0
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        return Ok(selected.primary.data_addr);
+    }
+    let default = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 4434);
+    warn!("No proxy specified, using default: {}", default);
+    Ok(default)
+}
+
+/// Spawn the continuous re-routing loop when multiple relays are configured.
+fn start_continuous_rerouting(config: &config::Config, cli: &Cli) {
+    if config.proxy.servers.len() <= 1 {
+        return;
+    }
+    let strategy = cli
+        .route_strategy
+        .clone()
+        .unwrap_or_else(|| config.route.strategy.clone());
+    let game_server = cli
+        .game_server
+        .as_ref()
+        .and_then(|s| parse_proxy_addr(s).ok())
+        .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(crate::modes::reroute::run_continuous_rerouting(
+        config.proxy.servers.clone(),
+        config.proxy.data_port,
+        config.proxy.quic_port,
+        game_server,
+        strategy,
+        rx,
+    ));
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -297,14 +381,15 @@ data_port = 4434
             .game
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("--watch requires --game <name>"))?;
-        let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
-        let proxy_addr = parse_proxy_addr(proxy_str)?;
+        let proxy_addr = resolve_proxy_addr(&cli, &config).await?;
         let server_override = cli
             .server_addr
             .as_deref()
             .map(parse_proxy_addr)
             .transpose()?;
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        crate::session::set_current_proxy(proxy_addr);
+        start_continuous_rerouting(&config, &cli);
         return run_watch_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
@@ -686,8 +771,7 @@ data_port = 4434
             .game
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("--start-interceptor requires --game <name>"))?;
-        let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
-        let proxy_addr = parse_proxy_addr(proxy_str)?;
+        let proxy_addr = resolve_proxy_addr(&cli, &config).await?;
 
         info!("🚀 Starting live interceptor mode");
         let server_override = match cli.server_addr.as_deref() {
@@ -695,6 +779,8 @@ data_port = 4434
             None => None,
         };
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        crate::session::set_current_proxy(proxy_addr);
+        start_continuous_rerouting(&config, &cli);
         return run_intercept_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
@@ -774,68 +860,10 @@ data_port = 4434
         }
     }
 
-    // ── Proxy selection ───────────────────────────────────────────
-    //
-    // Priority:
-    // 1. --proxy flag (explicit, highest priority)
-    // 2. config.proxy.servers + RouteSelector (probe & pick best)
-    // 3. Default localhost for development
-    let proxy_addr = if let Some(ref proxy_str) = cli.proxy {
-        let addr = parse_proxy_addr(proxy_str)?;
-        info!("🌐 Proxy (explicit): {}", addr);
-        addr
-    } else if !config.proxy.servers.is_empty() {
-        let strategy = cli
-            .route_strategy
-            .as_deref()
-            .unwrap_or(config.route.strategy.as_str());
-        info!(
-            "🔍 Probing {} configured proxies (strategy: {})...",
-            config.proxy.servers.len(),
-            strategy
-        );
-        let game_server_addr = cli
-            .game_server
-            .as_ref()
-            .and_then(|s| parse_proxy_addr(s).ok())
-            .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
-
-        let selected = select_best_proxy(
-            &config.proxy.servers,
-            config.proxy.data_port,
-            game_server_addr,
-            strategy,
-        )
-        .await?;
-
-        info!(
-            "🌐 Proxy (auto-selected): {} [{}] — {:.1}ms latency, strategy: {:?}",
-            selected.primary.data_addr,
-            selected.primary.id,
-            selected.primary.latency_us.unwrap_or(0) as f64 / 1000.0,
-            selected.strategy,
-        );
-        if !selected.backups.is_empty() {
-            info!(
-                "   Backups: {}",
-                selected
-                    .backups
-                    .iter()
-                    .map(|p| format!(
-                        "{} ({:.1}ms)",
-                        p.id,
-                        p.latency_us.unwrap_or(0) as f64 / 1000.0
-                    ))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        selected.primary.data_addr
-    } else {
-        let default = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 4434);
-        warn!("No proxy specified, using default: {}", default);
-        default
-    };
+    // ── Proxy selection (explicit → auto-select → default) ────────
+    let proxy_addr = resolve_proxy_addr(&cli, &config).await?;
+    crate::session::set_current_proxy(proxy_addr);
+    start_continuous_rerouting(&config, &cli);
 
     // ── --probe-proxies ───────────────────────────────────────────
     if cli.probe_proxies {

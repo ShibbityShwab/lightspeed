@@ -9,6 +9,7 @@ pub mod keepalive;
 pub mod live_test;
 pub mod proxy_probe;
 pub mod redirect_windivert;
+pub mod reroute;
 pub mod tunnel_test;
 
 pub mod benchmark_mode;

@@ -101,7 +101,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
         use windivert::prelude::{CloseAction, WinDivert, WinDivertFlags, WinDivertPacket};
 
         let (port_lo, port_hi) = config.port_range;
-        let proxy_addr = config.proxy_addr;
+        let config_proxy = config.proxy_addr;
         let pre_known_server: Option<SocketAddrV4> =
             config.initial_routes.first().map(|r| r.remote);
 
@@ -504,7 +504,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             .as_micros() as u32;
                         let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us)
                             .with_session_token(crate::session::session_token());
-                        if ts.send_to(&hdr.encode_to_array(), proxy_addr).await.is_ok() {
+                        if ts.send_to(&hdr.encode_to_array(), crate::session::current_proxy().unwrap_or(config_proxy)).await.is_ok() {
                             let mut m = ka.lock().await;
                             m.insert(seq, Instant::now());
                             m.retain(|_, t| t.elapsed() < Duration::from_secs(30));
@@ -575,7 +575,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 fh.encode(&mut buf2);
                                 buf2.extend_from_slice(&payload);
                                 let parity = enc.add_packet(&payload);
-                                let _ = tunnel_socket.send_to(&buf2, proxy_addr).await;
+                                let _ = tunnel_socket.send_to(&buf2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
                                 if let Some(pb) = parity {
                                     let ps = seq.wrapping_add(1);
                                     let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, game_src, game_dst)
@@ -585,14 +585,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     pb2.extend_from_slice(&ph.encode_to_array());
                                     pf.encode(&mut pb2);
                                     pb2.extend_from_slice(&pb);
-                                    let _ = tunnel_socket.send_to(&pb2, proxy_addr).await;
+                                    let _ = tunnel_socket.send_to(&pb2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
                                     seq = seq.wrapping_add(1);
                                 }
                             } else {
                                 let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts, game_src, game_dst)
                                     .with_session_token(crate::session::session_token());
                                 let pkt = hdr.encode_with_payload(&payload);
-                                let _ = tunnel_socket.send_to(&pkt, proxy_addr).await;
+                                let _ = tunnel_socket.send_to(&pkt, crate::session::current_proxy().unwrap_or(config_proxy)).await;
                             }
                             seq = seq.wrapping_add(1);
                         }
