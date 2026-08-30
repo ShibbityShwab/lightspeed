@@ -26,24 +26,22 @@
 
 ## Choosing a Region (Network Position)
 
-A relay only reduces ping if it has a *lower-latency, better-peered* path to the game server than your home ISP. Pick the relay region **closest to the game server**, not closest to you.
+A relay only reduces ping if it has a *lower-latency, better-peered* path to the game server than your home ISP. Two rules:
 
-| Game server region | OCI Always-Free region | Fallback region |
-|---|---|---|
-| US-East | `us-ashburn-1` (Ashburn, VA) | `us-chicago-1` |
-| US-West | `us-phoenix-1` / `us-sanjose-1` | — |
-| EU-Central | `eu-frankfurt-1` | `eu-zurich-1` |
-| EU-West | `eu-amsterdam-1` / `uk-london-1` | — |
-| APAC (Japan/Korea) | `ap-tokyo-1` / `ap-seoul-1` | `ap-osaka-1` |
-| APAC (Southeast Asia) | `ap-singapore-1` | `ap-mumbai-1` |
-| South America-East | `sa-saopaulo-1` | `sa-vinhedo-1` |
+1. **Pick the region closest to the game server**, not closest to you.
+2. **Pick a host with good peering.** Oversubscribed bargain hosts can have worse transit than a well-peered box slightly further away. Premium VPS providers peer directly with the major transit networks and the clouds that host game servers.
 
-**Oracle Cloud Always-Free constraints (2026):**
-- Always-Free compute must live in your **home region** — one tenancy covers one region. Covering multiple regions means multiple accounts (one per region).
-- Per tenancy you get **2 OCPU / 12 GB** of ARM (Ampere A1) *plus* two `VM.Standard.E2.1.Micro` x86 (1/8 OCPU, 1 GB). That's ~4 small relay VMs per region.
-- ARM capacity is frequently **"out of capacity"** in popular regions (Ashburn, Frankfurt, Tokyo) — provision with a retry + fall back to `E2.1.Micro`.
-- ~**10 TB/month** egress per tenancy (≈ 600+ concurrent 50 Kbps game streams). GCP free tier (1 GB/month, US-only) and AWS (12-month expiry) are *not* viable for relay egress.
-- Idle instances may be **reclaimed** (~7 days) — a relay with no traffic can vanish.
+| Game server region | Well-connected hosting regions |
+|---|---|
+| US-East | Ashburn, VA / New York / Chicago |
+| US-West | Phoenix / Los Angeles / San Jose |
+| EU-Central | Frankfurt / Zurich |
+| EU-West | Amsterdam / London |
+| APAC (Japan/Korea) | Tokyo / Seoul / Osaka |
+| APAC (Southeast Asia) | Singapore |
+| South America-East | São Paulo |
+
+The relay needs a **public IPv4 address** and is a ~500 KB static binary that idles at ~50 MB RAM — any small Linux VM (512 MB–1 GB) is plenty.
 
 > **Measurement beats guesswork.** The client already probes all configured proxies and picks the fastest. Deploy relays in a few candidate regions, then let the client's `--probe-proxies` tell you which region actually wins for your game + location.
 
@@ -51,7 +49,7 @@ A relay only reduces ping if it has a *lower-latency, better-peered* path to the
 
 ### Prerequisites
 
-- A Linux VPS (any provider: Vultr, Hetzner, DigitalOcean, Linode, OCI, AWS Lightsail, etc.)
+- A Linux VPS (any provider)
 - SSH access to your VPS
 - Rust toolchain installed locally (or use Docker)
 

@@ -14,7 +14,7 @@ onboard in one page.
 ```
 Relay operator                          LightSpeed client
      │                                        │
-     │  provision-oci.sh (or BYO host)        │
+     │  provision a VPS (or BYO host)          │
      │  → proxy + Ed25519 node key            │
      │                                        │
      │  POST /register (invite token)         │
@@ -44,33 +44,26 @@ path to the game server than the player's home ISP. Pick the region **closest to
 the game servers you want to serve** — see the table in
 [`infra/README.md`](../infra/README.md#choosing-a-region-network-position).
 
-Key constraint: Oracle Always-Free compute must be in your account's **home
-region** (one region per account).
-
 ### 2. Deploy a relay
 
-**Option A — Oracle Cloud Always-Free (recommended, $0):**
-
-```bash
-# Prereqs: oci-cli configured (oci setup config), jq, an SSH key.
-./infra/scripts/provision-oci.sh us-east-1
-```
-
-This provisions an Ampere A1 (or falls back to `E2.1.Micro`), creates the VCN,
-and self-installs the proxy via cloud-init. List regions with `--list-regions`.
-
-**Option B — bring your own Linux host:**
+Provision any small Linux VPS with a public IPv4 address in your chosen region —
+any provider works; the proxy is a single static binary. Then deploy it with the
+provider-agnostic script:
 
 ```bash
 cargo build --release -p lightspeed-proxy
 ./infra/scripts/setup-new-node.sh <ip> <node-id> <region>
 ```
 
+> `infra/scripts/provision-oci.sh` is an optional example of fully-automated
+> provisioning for one provider's API; `setup-new-node.sh` above is the
+> supported default and works on any host.
+
 ### 3. Get your node identity
 
 Every relay has an Ed25519 identity so the registry can revoke it individually.
 
-- `provision-oci.sh` generates it automatically at `/etc/lightspeed/node.key`
+- The automated provisioning script generates it at `/etc/lightspeed/node.key`
   (public key in `/etc/lightspeed/identity`).
 - On a BYO host, generate one yourself: `ssh-keygen -t ed25519 -N "" -f node.key`.
 
@@ -162,9 +155,9 @@ The signing logic (`sign_registry` / `verify_registry`) lives in
 - ✅ Code complete and tested: relay provisioning, destination allowlisting,
   signed node-list + Ed25519 verify, client fetch + discovery. (117 client +
   30 proxy unit tests, clippy clean.)
-- ⏳ **Needs live smoke-testing** (not runnable in CI): `provision-oci.sh`
-  against a real OCI account (launch flags + ARM capacity fallback), and the
-  Worker against a real Cloudflare account.
+- ⏳ **Needs live smoke-testing** (not runnable in CI): the automated
+  provisioning script against a real provider account, and the Worker against
+  a real Cloudflare account.
 - ⚠️ **Key-format note:** the Rust signer uses PKCS8; the reference Worker's
   WebCrypto `importKey` expects the raw 32-byte Ed25519 seed. Reconcile these
   (or move signing fully offline and serve a static file) during deployment.
@@ -181,4 +174,3 @@ The signing logic (`sign_registry` / `verify_registry`) lives in
 | "registry fetch failed" | Worker down, or signature/JSON malformed |
 | Node shows ❌ in probe | Relay not running — check `curl http://<ip>:8080/health` |
 | Node rejected / banned | It was revoked, or its destination allowlist/rate-limit tripped |
-| ARM instance "out of capacity" | Re-run `provision-oci.sh` (retries + falls back to `E2.1.Micro`) |

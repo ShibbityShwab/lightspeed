@@ -10,11 +10,11 @@
 ┌──────────────────────┐   UDP Tunnel    ┌──────────────────────┐   Direct UDP   ┌──────────────┐
 │                      │ (20B header +   │                      │               │              │
 │   Game Client PC     │  optional FEC)  │   Proxy Node         │──────────────▶│  Game Server  │
-│   + LightSpeed       │────────────────▶│  (Vultr Cloud,       │               │  (Epic/Valve) │
+│   + LightSpeed       │────────────────▶│  (your VPS,          │               │  (Epic/Valve) │
 │   Client (Rust)      │                 │   ~500KB RAM)        │◀──────────────│              │
 │                      │◀────────────────│                      │               │              │
 └──────────────────────┘                 └──────────────────────┘               └──────────────┘
-     User PC                               Vultr VPS                           Game Infra
+     User PC                               Proxy VPS                           Game Infra
 
      QUIC Control ◄──────────────────────► QUIC Control
      (quinn, port 4433)                    (quinn, port 4433)
@@ -31,7 +31,7 @@
 
 ## Example Infrastructure (2-Node Self-Hosted Mesh)
 
-Each user runs their own proxy nodes. This is an example of a 2-node Vultr setup:
+Each user runs their own proxy nodes. This is an example of a 2-node setup:
 
 > **All nodes are identical.** Both boxes run the same `lightspeed-proxy` binary. The words
 > "primary" and "relay" below are *topology role labels* — not separate node types or
@@ -58,7 +58,7 @@ Each user runs their own proxy nodes. This is an example of a 2-node Vultr setup
 │  Deployment: Native binary + systemd (no Docker overhead)        │
 └──────────────────────────────────────────────────────────────────┘
 
-Example benchmark (Bangkok → US-West Vultr LA):
+Example benchmark (Bangkok → US-West LA):
   Direct route:   ~206ms
   Via SGP relay:  ~31ms + 178ms = ~209ms (relay adds latency here)
   With WARP:      ~193ms (5-10ms improvement via Cloudflare NTT backbone)
@@ -229,11 +229,11 @@ Receiver (Proxy / Client):
 
 ```
 Without WARP:
-  User → True ISP → SBN/AWN SGP → HGC SGP (+29ms detour!) → Pacific → Vultr LA
+  User → True ISP → SBN/AWN SGP → HGC SGP (+29ms detour!) → Pacific → LA
   Total: ~203-206ms
 
 With WARP:
-  User → CF BKK PoP (4ms) → CF backbone → NTT (36ms) → Pacific (166ms) → Vultr LA
+  User → CF BKK PoP (4ms) → CF backbone → NTT (36ms) → Pacific (166ms) → LA
   Total: ~193-197ms  (bypasses HGC detour via Cloudflare NTT peering)
 ```
 
@@ -327,7 +327,7 @@ Default build (no features) compiles with just the Rust toolchain.
 
 ### Linux
 - **Capture**: libpcap (MVP), AF_PACKET with PACKET_MMAP (planned)
-- **Proxy**: Primary proxy deployment target (Vultr Ubuntu)
+- **Proxy**: Primary proxy deployment target (any Linux VPS)
 - **Permissions**: Requires `CAP_NET_RAW` capability or root for capture; redirect mode unprivileged
 - **Deployment**: Native binary + systemd, ~500KB RAM
 
@@ -352,6 +352,6 @@ Default build (no features) compiles with just the Rust toolchain.
 | **Config Format** | TOML | Human-readable, Rust ecosystem standard |
 | **FEC** | XOR parity | Simple, low overhead, recovers single packet loss per group |
 | **WARP** | Optional integration | Free 5-10ms improvement, auto-detected |
-| **Infra Provider** | Vultr | $300 free credit, good Asia peering, native deployment |
+| **Infra Provider** | Any Linux VPS | Provider-agnostic; the proxy is a single static binary |
 | **No Docker** | Native binary | 350x less RAM (500KB vs 175MB), simpler systemd |
 | **Redirect Mode** | Local UDP proxy | No admin/root needed, game connects to localhost |

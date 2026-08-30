@@ -1,6 +1,6 @@
 # Deploy a LightSpeed Proxy
 
-> Deploy your own zero-cost proxy relay on any Linux VPS with a free tier. You own the node, you run the node. There is no shared "LightSpeed network". This is self-hosting, full stop.
+> Deploy your own proxy relay on any Linux VPS. You own the node, you run the node. There is no shared "LightSpeed network". This is self-hosting, full stop.
 
 ## Overview
 
@@ -8,7 +8,7 @@ A **proxy node** is a small relay server that sits between your game client and 
 
 The model is **self-hosted**: you provision a VPS, install the proxy binary, and point your client at it. Nobody else uses your node, and you don't rely on anyone else's. Run one node for yourself, or spin up a few in different regions and let the client pick the fastest automatically (see [Multi-Node Mesh](#multi-node-mesh)).
 
-A single node is tiny, roughly **~500KB of actual RAM**, so it fits comfortably inside any free-tier VPS.
+A single node is tiny, roughly **~500KB of actual RAM**, so it fits comfortably on even the smallest VPS.
 
 The full deployment options (native binary, Docker, automated script) are documented in depth in **[`infra/README.md`](../infra/README.md)**. This guide gives you the essentials and the operational details you need day to day. Don't duplicate what infra already covers; follow the links.
 
@@ -26,7 +26,7 @@ All three ports are configurable via the `[network]` section — see [Configurab
 
 Before you start, you need:
 
-- **A Linux VPS.** Any provider with a free tier works: Vultr, Hetzner, Oracle Cloud (OCI), AWS Lightsail, DigitalOcean, Linode. A single small instance is plenty.
+- **A Linux VPS.** Any provider works. A single small instance is plenty.
 - **SSH access** to the VPS.
 - **Open firewall ports.** Allow inbound UDP `4434` (data) and TCP `4434` (TCP tunnel), UDP `4433` (QUIC control), and TCP `8080` (health/metrics). Ports are configurable via the `[network]` section — see [Configurable ports](#configurable-ports). The exact commands depend on your provider's firewall and `ufw`/`firewalld` on the box.
 - **A way to run the proxy.** Either the Rust toolchain to build from source, or Docker. See the options below.

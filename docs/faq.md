@@ -6,7 +6,7 @@
 
 ### Is LightSpeed really free?
 
-Yes. LightSpeed is free for personal, non-commercial use under the LightSpeed Software License. Commercial use requires a paid license — see [LICENSE](../LICENSE). You run your own proxy on a free-tier VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
+Yes. LightSpeed is free for personal, non-commercial use under the LightSpeed Software License. Commercial use requires a paid license — see [LICENSE](../LICENSE). You run your own proxy on a small VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
 
 ### Will LightSpeed get me banned?
 
@@ -83,11 +83,11 @@ Enable if you have packet loss (micro-stutters, rubber-banding). Disable if your
 
 ### Do I need to run my own proxy?
 
-Yes. LightSpeed is self-hosted — there's no shared network. You deploy a lightweight proxy (~500KB RAM) on any Linux VPS. Many providers offer free tiers. See the [deployment guide](../infra/README.md).
+Yes. LightSpeed is self-hosted — there's no shared network. You deploy a lightweight proxy (~500KB RAM) on any Linux VPS. See the [deployment guide](../infra/README.md).
 
 ### How much does a proxy cost?
 
-Zero if you use a free tier. Options include Oracle Cloud Always Free (4 ARM cores, 24GB RAM — permanent), Google Cloud free tier, or AWS free tier. Even a paid $5/mo VPS works — the binary uses ~500KB RAM.
+A few dollars a month for a small VPS. The proxy binary uses ~500KB RAM, so even the smallest instance is plenty. LightSpeed itself has no fees — the VPS is the only cost.
 
 ### Can I share my proxy with friends?
 
