@@ -13,6 +13,9 @@ path-guid = "3B7EB06D-2BD4-4A8B-960B-25D89ADB2C09"
 license = false
 eula = false
 
+[package.metadata.dist]
+features = ["quic"]
+
 [[bin]]
 name = "lightspeed-proxy"
 path = "src/main.rs"

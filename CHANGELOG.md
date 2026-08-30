@@ -5,6 +5,11 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.5] — 2026-08-30
+
+### Fixed
+- **Critical: the release proxy was missing the QUIC control plane.** The proxy's `quic` feature (which serves the control plane on UDP 4433) was not enabled in cargo-dist builds, so every release binary ran with `require_auth = true` but no way for clients to register — rejecting 100% of data-plane traffic in production. Added `features = ["quic"]` to the proxy's `[package.metadata.dist]`.
+
 ## [1.2.4] — 2026-08-29
 
 ### Relay network (self-hosted proxy mesh)
