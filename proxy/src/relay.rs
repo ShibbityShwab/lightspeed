@@ -146,8 +146,11 @@ pub struct ClientSession {
     pub started_at: Instant,
     /// Last activity time.
     pub last_activity: Instant,
-    /// Response sequence counter.
+    /// Response sequence counter (FEC responses).
     pub response_seq: AtomicU16,
+    /// Last client packet sequence seen (echoed in non-FEC responses so the
+    /// client can dedupe multipath duplicate responses).
+    pub last_client_seq: AtomicU16,
     /// Whether this client uses FEC (detected from first v2 packet).
     pub fec_enabled: bool,
     /// FEC block size (K) from the client's packets.
@@ -243,6 +246,7 @@ impl RelayEngine {
             started_at: Instant::now(),
             last_activity: Instant::now(),
             response_seq: AtomicU16::new(0),
+            last_client_seq: AtomicU16::new(0),
             fec_enabled,
             fec_k,
             fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
@@ -640,6 +644,8 @@ async fn process_inbound_packet(
                 "Forwarded to game server"
             );
 
+            session.last_client_seq.store(header.sequence, Ordering::Relaxed);
+
             let mut abuse = abuse_detector.lock().await;
             abuse.record_outbound(*client_addr.ip(), sent as u64);
         }
@@ -927,8 +933,12 @@ pub async fn run_session_response_listener(
             }
         } else {
             // ── Non-FEC mode: zero-alloc response ────────────────────
-            let response_header =
-                TunnelHeader::new(seq, now_us(), session.game_server, session.client_addr);
+            let response_header = TunnelHeader::new(
+                session.last_client_seq.load(Ordering::Relaxed),
+                now_us(),
+                session.game_server,
+                session.client_addr,
+            );
 
             // Write header + payload directly into the pre-allocated task buffer.
             pkt_buf[..HEADER_SIZE].copy_from_slice(&response_header.encode_to_array());
