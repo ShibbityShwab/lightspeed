@@ -592,7 +592,10 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts, game_src, game_dst)
                                     .with_session_token(crate::session::session_token());
                                 let pkt = hdr.encode_with_payload(&payload);
-                                let _ = tunnel_socket.send_to(&pkt, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                                let (dests, n) = crate::session::send_destinations(config_proxy);
+                                for d in dests.iter().take(n) {
+                                    let _ = tunnel_socket.send_to(&pkt, *d).await;
+                                }
                             }
                             seq = seq.wrapping_add(1);
                         }
@@ -613,6 +616,10 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                             if header.is_keepalive() {
                                 continue; // keepalive echo — RTT measured by keepalive task
+                            }
+
+                            if crate::session::multipath_is_duplicate(header.sequence) {
+                                continue;
                             }
 
                             let game_src = match game_src_learned {

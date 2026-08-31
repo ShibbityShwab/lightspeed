@@ -133,6 +133,7 @@ fn start_continuous_rerouting(config: &config::Config, cli: &Cli) {
         config.proxy.quic_port,
         game_server,
         strategy,
+        config.route.multipath,
         rx,
     ));
 }

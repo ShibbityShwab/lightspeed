@@ -40,6 +40,7 @@ pub async fn run_continuous_rerouting(
     control_port: u16,
     game_server: SocketAddrV4,
     strategy: String,
+    multipath_enabled: bool,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut current = crate::session::current_proxy();
@@ -57,6 +58,13 @@ pub async fn run_continuous_rerouting(
         };
 
         let best = route.primary;
+
+        if multipath_enabled {
+            let mut paths = vec![best.data_addr];
+            paths.extend(route.backups.iter().map(|b| b.data_addr));
+            crate::session::set_multipath_paths(paths);
+        }
+
         if best.health != ProxyHealth::Healthy {
             continue;
         }
