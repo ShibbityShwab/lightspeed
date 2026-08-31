@@ -5,6 +5,12 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-08-31
+
+### Security
+- **Control plane no longer MITM-able.** The client used `SkipServerVerification` (accepted any TLS certificate), so an on-path attacker could impersonate the proxy and own the control plane. It now pins the proxy's self-signed certificate fingerprint on first connect and rejects any change (SSH `known_hosts` model), and verifies the TLS handshake signature so a peer must hold the private key matching the pinned cert. Pins persist per-address in `~/.lightspeed-proxy-fingerprints`.
+- **Proxy certificate is now persistent** (`LIGHTSPEED_TLS_DIR`, default `/var/lib/lightspeed/tls`) instead of regenerated per boot, so the pinned fingerprint stays stable. Relay provisioning adds `StateDirectory=lightspeed`.
+
 ## [1.3.0] — 2026-08-31
 
 ### Security (from the exploitability-driven audit)
