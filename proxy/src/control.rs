@@ -82,26 +82,45 @@ mod inner {
 
     // ── TLS ─────────────────────────────────────────────────────────
 
-    /// Generate a self-signed certificate for the QUIC server (dev / MVP).
-    ///
-    /// SECURITY: MVP only. Production deployments MUST use proper PKI
-    /// with certificates issued by a trusted CA.
-    fn generate_self_signed_cert() -> anyhow::Result<(
+    /// Load a persistent self-signed certificate, or generate + store one on
+    /// first boot. A stable certificate is required for client trust-on-first-
+    /// use pinning: a fresh per-boot cert would change the fingerprint on every
+    /// restart and force clients to re-pin (and look like a MITM).
+    fn load_or_generate_cert() -> anyhow::Result<(
         Vec<rustls::pki_types::CertificateDer<'static>>,
         rustls::pki_types::PrivateKeyDer<'static>,
     )> {
+        let dir = std::path::PathBuf::from(
+            std::env::var("LIGHTSPEED_TLS_DIR")
+                .unwrap_or_else(|_| "/var/lib/lightspeed/tls".to_string()),
+        );
+        let cert_path = dir.join("cert.der");
+        let key_path = dir.join("key.der");
+
+        if cert_path.exists() && key_path.exists() {
+            let cert_der = rustls::pki_types::CertificateDer::from(std::fs::read(&cert_path)?);
+            let key_der = rustls::pki_types::PrivateKeyDer::try_from(std::fs::read(&key_path)?)
+                .map_err(|e| anyhow::anyhow!("Failed to load private key: {}", e))?;
+            return Ok((vec![cert_der], key_der));
+        }
+
         let key_pair = rcgen::KeyPair::generate()?;
         let cert_params = rcgen::CertificateParams::new(vec!["lightspeed-proxy".into()])?;
         let cert = cert_params.self_signed(&key_pair)?;
         let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
         let key_der = rustls::pki_types::PrivateKeyDer::try_from(key_pair.serialize_der())
             .map_err(|e| anyhow::anyhow!("Failed to serialize private key: {}", e))?;
+
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(&cert_path, cert_der.as_ref())?;
+        std::fs::write(&key_path, key_der.secret_der())?;
+
         Ok((vec![cert_der], key_der))
     }
 
     /// Build a quinn `ServerConfig` with a self-signed certificate.
     fn build_server_config() -> anyhow::Result<quinn::ServerConfig> {
-        let (certs, key) = generate_self_signed_cert()?;
+        let (certs, key) = load_or_generate_cert()?;
 
         let rustls_config = rustls::ServerConfig::builder()
             .with_no_client_auth()

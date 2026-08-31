@@ -13,6 +13,9 @@
 pub mod discovery;
 pub mod health;
 
+#[cfg(feature = "quic")]
+mod pinning;
+
 // ── Feature-gated real implementation ───────────────────────────────
 
 #[cfg(feature = "quic")]
@@ -29,53 +32,12 @@ mod inner {
 
     use crate::error::QuicError;
 
-    /// Skip server certificate verification (MVP / dev mode).
-    /// In production this would verify the proxy's certificate.
-    #[derive(Debug)]
-    struct SkipServerVerification;
-
-    impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-        fn verify_server_cert(
-            &self,
-            _end_entity: &rustls::pki_types::CertificateDer<'_>,
-            _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-            _server_name: &rustls::pki_types::ServerName<'_>,
-            _ocsp_response: &[u8],
-            _now: rustls::pki_types::UnixTime,
-        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-            Ok(rustls::client::danger::ServerCertVerified::assertion())
-        }
-
-        fn verify_tls12_signature(
-            &self,
-            _message: &[u8],
-            _cert: &rustls::pki_types::CertificateDer<'_>,
-            _dss: &rustls::DigitallySignedStruct,
-        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            _message: &[u8],
-            _cert: &rustls::pki_types::CertificateDer<'_>,
-            _dss: &rustls::DigitallySignedStruct,
-        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            rustls::crypto::ring::default_provider()
-                .signature_verification_algorithms
-                .supported_schemes()
-        }
-    }
-
-    /// Build a quinn client config that skips certificate verification (MVP).
-    fn build_client_config() -> Result<quinn::ClientConfig, QuicError> {
+    /// Build a quinn client config that pins the proxy's self-signed
+    /// certificate (trust-on-first-use) and verifies the TLS signature.
+    fn build_client_config(addr: SocketAddr) -> Result<quinn::ClientConfig, QuicError> {
         let crypto = rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+            .with_custom_certificate_verifier(Arc::new(super::pinning::TofuVerifier::new(addr)))
             .with_no_client_auth();
 
         let quic_crypto =
@@ -117,10 +79,11 @@ mod inner {
     impl ControlClient {
         /// Create a new control plane client.
         pub fn new() -> Result<Self, QuicError> {
-            // Bind to any available port for the client endpoint
-            let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
+            // Bind to any available port for the client endpoint. The default
+            // client config (with the proxy's pinned certificate) is set per
+            // connection in `connect` since it depends on the target address.
+            let endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
                 .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
-            endpoint.set_default_client_config(build_client_config()?);
 
             Ok(Self {
                 endpoint,
@@ -136,6 +99,9 @@ mod inner {
         /// Connect to a proxy's control plane and register.
         pub async fn connect(&mut self, addr: SocketAddr, game: u8) -> Result<(), QuicError> {
             info!("Connecting QUIC control plane to {}", addr);
+
+            self.endpoint
+                .set_default_client_config(build_client_config(addr)?);
 
             let conn = self
                 .endpoint
