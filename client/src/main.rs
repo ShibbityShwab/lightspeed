@@ -878,7 +878,7 @@ data_port = 4434
         if let Some(url) = registry_url {
             match config.registry.operator_key.as_deref() {
                 Some(key) if !key.is_empty() => {
-                    match crate::registry::discover_data_addrs(url, key) {
+                    match crate::registry::discover_data_addrs(url, key, config.proxy.quic_port) {
                         Ok(addrs) => {
                             info!("🔍 Registry: {} relay(s) discovered", addrs.len());
                             servers.extend(addrs);

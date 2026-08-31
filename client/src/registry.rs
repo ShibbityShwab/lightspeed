@@ -25,6 +25,10 @@ pub struct RegistryNode {
     pub health_url: String,
     /// Base64-encoded Ed25519 public key — the node's identity.
     pub pubkey: String,
+    /// Hex SHA-256 fingerprint of the node's QUIC certificate, used to pin the
+    /// control plane against the registry (empty = fall back to TOFU).
+    #[serde(default)]
+    pub cert_fingerprint: String,
     #[serde(default)]
     pub note: String,
 }
@@ -111,24 +115,74 @@ pub fn available_data_addrs(registry: &Registry) -> Vec<&str> {
         .collect()
 }
 
-/// Fetch a registry, verify it, and return the non-revoked nodes' data-plane
-/// addresses as owned "ip:port" strings.
+/// Fetch a registry, verify it, pre-pin the discovered relays' certificate
+/// fingerprints, and return the non-revoked nodes' data-plane addresses as
+/// owned "ip:port" strings.
 pub fn discover_data_addrs(
     url: &str,
     operator_public_key_b64: &str,
+    control_port: u16,
 ) -> anyhow::Result<Vec<String>> {
     let registry = fetch_registry(url, operator_public_key_b64)?;
+    pre_pin_nodes(&registry, control_port);
     Ok(available_data_addrs(&registry)
         .into_iter()
         .map(str::to_string)
         .collect())
 }
 
+/// Pre-pin the control-plane certificate fingerprint for each non-revoked
+/// registry node, so the client verifies the relay's cert against the
+/// registry's published value instead of trust-on-first-use. Returns the
+/// number of nodes pinned.
+pub fn pre_pin_nodes(registry: &Registry, control_port: u16) -> usize {
+    let mut pinned = 0;
+    for node in &registry.nodes {
+        if is_revoked(registry, node) || node.cert_fingerprint.is_empty() {
+            continue;
+        }
+        if let Some((ip, _)) = node.data_addr.rsplit_once(':') {
+            if let Ok(ip) = ip.parse::<std::net::Ipv4Addr>() {
+                let control_addr =
+                    std::net::SocketAddr::V4(std::net::SocketAddrV4::new(ip, control_port));
+                crate::quic::fingerprint::pre_pin(control_addr, &node.cert_fingerprint);
+                pinned += 1;
+            }
+        }
+    }
+    pinned
+}
+
 /// Fetch a signed registry over HTTPS and verify it against the operator key.
 /// Returns the parsed, trusted registry (revoked nodes are NOT filtered out —
 /// callers filter via `is_revoked`).
 pub fn fetch_registry(url: &str, operator_public_key_b64: &str) -> anyhow::Result<Registry> {
+    validate_registry_url(url)?;
+    fetch_registry_inner(url, operator_public_key_b64)
+}
+
+/// Reject non-https and private/internal registry URLs (SSRF guard).
+fn validate_registry_url(url: &str) -> anyhow::Result<()> {
+    if !url.starts_with("https://") {
+        return Err(anyhow::anyhow!("registry URL must use https"));
+    }
+    if let Some(host) = url_host(url) {
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            if is_private_or_unsafe(ip) {
+                return Err(anyhow::anyhow!(
+                    "registry URL host is a private/internal address"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fetch + verify a registry, without the SSRF URL guard (used by tests that
+/// serve a local registry over plain HTTP).
+fn fetch_registry_inner(url: &str, operator_public_key_b64: &str) -> anyhow::Result<Registry> {
     let body = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(10))
         .call()
         .map_err(|e| anyhow::anyhow!("registry fetch failed: {e}"))?
         .into_string()
@@ -138,6 +192,45 @@ pub fn fetch_registry(url: &str, operator_public_key_b64: &str) -> anyhow::Resul
     let registry = verify_registry(&signed, operator_public_key_b64)?;
     enforce_freshness(&registry)?;
     Ok(registry)
+}
+
+/// Extract the host portion of an http(s) URL (no scheme, port, path, or
+/// query). Handles bracketed IPv6 literals. Used to reject literal
+/// private/internal IP hosts as an SSRF guard.
+fn url_host(url: &str) -> Option<&str> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        return bracketed.split(']').next();
+    }
+    authority
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .or(Some(authority))
+}
+
+/// Reject loopback, private, link-local, multicast, and unspecified addresses
+/// (the SSRF-reachable ranges) so a hostile registry URL can't target internal
+/// hosts.
+fn is_private_or_unsafe(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 /// Reject a registry whose `published_at` is older than the most recently
@@ -195,6 +288,7 @@ mod tests {
                 data_addr: "1.2.3.4:4434".into(),
                 health_url: "http://1.2.3.4:8080/health".into(),
                 pubkey: "node-pubkey".into(),
+                cert_fingerprint: String::new(),
                 note: String::new(),
             }],
             revoked: vec![],
@@ -262,6 +356,7 @@ mod tests {
             data_addr: "1.1.1.1:4434".into(),
             health_url: "h".into(),
             pubkey: "revoked-key".into(),
+            cert_fingerprint: String::new(),
             note: String::new(),
         };
         assert!(is_revoked(&registry, &node));
@@ -279,6 +374,7 @@ mod tests {
                     data_addr: "1.2.3.4:4434".into(),
                     health_url: "http://1.2.3.4:8080/health".into(),
                     pubkey: "good-key".into(),
+                    cert_fingerprint: String::new(),
                     note: String::new(),
                 },
                 RegistryNode {
@@ -287,6 +383,7 @@ mod tests {
                     data_addr: "5.6.7.8:4434".into(),
                     health_url: "http://5.6.7.8:8080/health".into(),
                     pubkey: "revoked-key".into(),
+                    cert_fingerprint: String::new(),
                     note: String::new(),
                 },
             ],
@@ -303,7 +400,7 @@ mod tests {
         let signed = sign_registry(&registry, &key_pair);
 
         let (url, handle) = serve_once(&serde_json::to_string(&signed).unwrap());
-        let fetched = fetch_registry(&url, &pubkey_b64).unwrap();
+        let fetched = fetch_registry_inner(&url, &pubkey_b64).unwrap();
         assert_eq!(fetched, registry);
         handle.join().unwrap();
     }
@@ -316,8 +413,18 @@ mod tests {
         let signed = sign_registry(&sample_registry(), &key_pair);
 
         let (url, handle) = serve_once(&serde_json::to_string(&signed).unwrap());
-        assert!(fetch_registry(&url, &other_pubkey_b64).is_err());
+        assert!(fetch_registry_inner(&url, &other_pubkey_b64).is_err());
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_validate_registry_url_rejects_unsafe_targets() {
+        assert!(validate_registry_url("http://example.com/nodes").is_err());
+        assert!(validate_registry_url("https://127.0.0.1/nodes").is_err());
+        assert!(validate_registry_url("https://10.0.0.8/nodes").is_err());
+        assert!(validate_registry_url("https://192.168.1.1/nodes").is_err());
+        assert!(validate_registry_url("https://[::1]/nodes").is_err());
+        assert!(validate_registry_url("https://example.com/nodes").is_ok());
     }
 
     /// Serve `payload` exactly once over HTTP on an ephemeral local port.

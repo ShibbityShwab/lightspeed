@@ -68,10 +68,17 @@ mod inner {
             }
         }
 
-        /// Generate a random, unique session ID.
-        fn generate_session_id(&self) -> u32 {
-            // Use random IDs to prevent prediction/enumeration
-            rand::random::<u32>()
+        /// Generate a random, collision-free session ID.
+        async fn generate_session_id(&self) -> u32 {
+            // Random IDs prevent prediction/enumeration; the loop retries on
+            // the (birthday-bound) chance of a 32-bit collision with an active
+            // session, which would otherwise silently overwrite it.
+            loop {
+                let id = rand::random::<u32>();
+                if !self.sessions.read().await.contains_key(&id) {
+                    return id;
+                }
+            }
         }
 
         /// Current number of active sessions.
@@ -311,7 +318,7 @@ mod inner {
                 }
 
                 // Generate random session ID and token
-                let session_id = state.generate_session_id();
+                let session_id = state.generate_session_id().await;
                 let session_token = Authenticator::generate_token();
 
                 let session = ClientSession {

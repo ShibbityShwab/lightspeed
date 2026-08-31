@@ -6,35 +6,13 @@
 //! the SSH `known_hosts` model. It still verifies the TLS handshake signature so
 //! a peer must hold the private key matching the pinned certificate.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error, SignatureScheme};
 
-fn store_path() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".lightspeed-proxy-fingerprints");
-    }
-    PathBuf::from(".lightspeed-proxy-fingerprints")
-}
-
-fn load_fingerprints() -> HashMap<String, String> {
-    std::fs::read_to_string(store_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save_fingerprint(addr: &str, fp: &str) {
-    let mut map = load_fingerprints();
-    map.insert(addr.to_string(), fp.to_string());
-    if let Ok(json) = serde_json::to_string_pretty(&map) {
-        let _ = std::fs::write(store_path(), json);
-    }
-}
+use super::fingerprint::{load_fingerprints, save_fingerprint, store_path};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()

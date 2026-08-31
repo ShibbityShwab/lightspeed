@@ -13,6 +13,8 @@
 pub mod discovery;
 pub mod health;
 
+pub(crate) mod fingerprint;
+
 #[cfg(feature = "quic")]
 mod pinning;
 
