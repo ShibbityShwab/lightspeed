@@ -454,6 +454,20 @@ async fn process_inbound_packet(
         }
     };
 
+    // ── Control packets ─────────────────────────────────────────
+    // Keepalives are answered without auth: they are "are you alive" pings the
+    // client uses to probe latency before registering, and they reveal nothing
+    // the public health endpoint does not already expose. (No amplification
+    // risk — the response is the same size as the request.)
+    if header.is_keepalive() {
+        trace!(client = %client_addr, seq = header.sequence, "Keepalive received");
+        let response = TunnelHeader::keepalive(header.sequence, now_us())
+            .with_session_token(header.session_token);
+        let response_bytes = response.encode_to_array();
+        let _ = sender.send(&response_bytes).await;
+        return false;
+    }
+
     // ── Security: Authentication check ──────────────────────────
     {
         let auth = authenticator.read().await;
@@ -467,16 +481,6 @@ async fn process_inbound_packet(
             metrics.record_auth_rejection();
             return false;
         }
-    }
-
-    // ── Control packets ─────────────────────────────────────────
-    if header.is_keepalive() {
-        trace!(client = %client_addr, seq = header.sequence, "Keepalive received");
-        let response = TunnelHeader::keepalive(header.sequence, now_us())
-            .with_session_token(header.session_token);
-        let response_bytes = response.encode_to_array();
-        let _ = sender.send(&response_bytes).await;
-        return false;
     }
 
     if header.is_fin() {
