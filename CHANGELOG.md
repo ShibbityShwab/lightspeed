@@ -5,6 +5,11 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.9] — 2026-08-31
+
+### Fixed
+- **Probing auth-enabled proxies**: `--probe-proxies` (and route selection) sent keepalive probes with no session token before registering, so auth-enabled proxies rejected every probe and reported "all proxies unhealthy". Keepalives are now answered without auth (they are harmless liveness pings), so probing works before registration.
+
 ## [1.2.8] — 2026-08-31
 
 ### Added
