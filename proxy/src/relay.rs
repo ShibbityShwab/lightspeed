@@ -987,6 +987,7 @@ pub async fn run_session_manager(
     engine: Arc<RelayEngine>,
     abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
     metrics: Arc<ProxyMetrics>,
+    rate_limiter: Arc<tokio::sync::Mutex<RateLimiter>>,
 ) {
     let mut known_sessions: HashMap<SocketAddrV4, tokio::task::JoinHandle<()>> = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -1001,11 +1002,14 @@ pub async fn run_session_manager(
             info!("Cleaned up {} expired sessions", removed);
         }
 
-        // Clean up abuse detector state
+        // Clean up abuse detector + rate limiter state. Both are keyed by
+        // client address and would otherwise grow unbounded from spoofed
+        // datagrams (65k source ports per IP).
         {
             let mut abuse = abuse_detector.lock().await;
             abuse.cleanup();
         }
+        rate_limiter.lock().await.cleanup();
 
         // Remove join handles for sessions that no longer exist
         let sessions_lock = engine.sessions();

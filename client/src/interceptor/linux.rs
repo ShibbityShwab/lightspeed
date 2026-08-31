@@ -556,7 +556,7 @@ fn add_nft_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow:
         match_clause = match_clause,
         local_port = local_port,
     );
-    let out = std::process::Command::new("nft")
+    let out = std::process::Command::new("/usr/sbin/nft")
         .arg("-f")
         .arg("-")
         .stdin(std::process::Stdio::piped())
@@ -579,7 +579,7 @@ fn add_nft_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow:
 }
 
 fn remove_nft_redirect(tag: &str) {
-    let _ = std::process::Command::new("nft")
+    let _ = std::process::Command::new("/usr/sbin/nft")
         .args(["delete", "table", "ip", tag])
         .output();
     tracing::info!("nftables: removed redirect table '{}'", tag);
@@ -587,7 +587,7 @@ fn remove_nft_redirect(tag: &str) {
 
 /// iptables legacy: add a REDIRECT rule in nat OUTPUT.
 fn add_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow::Result<()> {
-    let out = std::process::Command::new("iptables")
+    let out = std::process::Command::new("/usr/sbin/iptables")
         .args([
             "-t",
             "nat",
@@ -622,7 +622,7 @@ fn add_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow:
 }
 
 fn remove_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) {
-    let _ = std::process::Command::new("iptables")
+    let _ = std::process::Command::new("/usr/sbin/iptables")
         .args([
             "-t",
             "nat",

@@ -54,7 +54,7 @@ impl TrafficInterceptor for PfInterceptor {
 
     fn check_availability(&self) -> Result<(), String> {
         if !std::path::Path::new("/sbin/pfctl").exists()
-            && std::process::Command::new("pfctl")
+            && std::process::Command::new("/sbin/pfctl")
                 .arg("-s")
                 .arg("info")
                 .output()
@@ -343,7 +343,7 @@ impl TrafficInterceptor for PfInterceptor {
 /// Ensure pf is enabled (`pfctl -e`). Idempotent — if already enabled the
 /// error "pf already enabled" is suppressed.
 fn enable_pf() -> anyhow::Result<()> {
-    let out = std::process::Command::new("pfctl")
+    let out = std::process::Command::new("/sbin/pfctl")
         .args(["-e"])
         .output()
         .map_err(|e| anyhow::anyhow!("pfctl enable failed: {e}"))?;
@@ -369,7 +369,7 @@ fn add_pf_anchor(anchor: &str, server: SocketAddrV4, local_port: u16) -> anyhow:
         local_port = local_port,
     );
 
-    let out = std::process::Command::new("pfctl")
+    let out = std::process::Command::new("/sbin/pfctl")
         .args(["-a", anchor, "-f", "-"])
         .stdin(std::process::Stdio::piped())
         .spawn()
@@ -398,7 +398,7 @@ fn add_pf_anchor(anchor: &str, server: SocketAddrV4, local_port: u16) -> anyhow:
 /// Remove a named pf anchor by flushing it.
 fn remove_pf_anchor(anchor: &str) {
     // Flush the anchor rules (empty input removes all rules in anchor).
-    let _ = std::process::Command::new("pfctl")
+    let _ = std::process::Command::new("/sbin/pfctl")
         .args(["-a", anchor, "-F", "all"])
         .output();
     tracing::info!("pf: flushed anchor '{}'", anchor);
