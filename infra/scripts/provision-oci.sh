@@ -83,10 +83,14 @@ case "$(uname -m)" in
   x86_64)  TARGET="x86_64-unknown-linux-gnu" ;;
   *) echo "unsupported arch"; exit 1 ;;
 esac
-URL="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-${TARGET}.tar.xz"
-curl -sL "$URL" -o /tmp/proxy.tar.xz
+FILE="lightspeed-proxy-${TARGET}.tar.xz"
+URL="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/$FILE"
+cd /tmp
+curl -sL "$URL" -o "$FILE"
+curl -sL "$URL.sha256" -o "$FILE.sha256"
+sha256sum -c "$FILE.sha256" || { echo "proxy checksum verification failed"; exit 1; }
 rm -rf /tmp/proxy-extract && mkdir -p /tmp/proxy-extract
-tar -xJf /tmp/proxy.tar.xz -C /tmp/proxy-extract
+tar -xJf "$FILE" -C /tmp/proxy-extract
 BIN=$(find /tmp/proxy-extract -type f -name lightspeed-proxy | head -1)
 install -m755 "$BIN" /usr/local/bin/lightspeed-proxy
 
