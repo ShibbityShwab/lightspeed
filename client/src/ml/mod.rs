@@ -88,6 +88,12 @@ impl RouteModel {
                 "Model file too small — likely corrupted".into(),
             ));
         }
+        // Cap the upper bound so a corrupt or hostile model file can't exhaust memory.
+        if bytes.len() > 128 * 1024 * 1024 {
+            return Err(MlError::PredictionFailed(
+                "Model file too large (max 128MB)".into(),
+            ));
+        }
 
         self.model_bytes = bytes;
         self.loaded = true;
