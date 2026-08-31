@@ -102,6 +102,23 @@ Connect to any server. LightSpeed auto-detects it within seconds.
 
 ---
 
+### macOS GUI (untested)
+
+The GUI compiles for macOS but is **untested** on real hardware. The release
+ships a bare `tar.xz` (cargo-dist 0.32 has no `.app`/`.dmg` support), so to
+produce a proper bundle, run on a Mac:
+
+```bash
+cargo build --release -p lightspeed-gui
+./tools/package-macos.sh 1.2.9
+```
+
+This creates `LightSpeed.app` and `LightSpeed-1.2.9.dmg`. The app is ad-hoc
+signed, so the first launch needs right-click → Open (or
+`xattr -dr com.apple.quarantine LightSpeed.app`).
+
+---
+
 ## Choosing the Right Proxy
 
 | You're in | Game server in | Best proxy region |

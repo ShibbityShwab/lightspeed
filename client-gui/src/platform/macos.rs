@@ -71,25 +71,22 @@ impl Platform for MacosPlatform {
     fn setup_fonts(ctx: &egui::Context) {
         let mut fonts = egui::FontDefinitions::default();
 
-        let candidates = [
-            "/System/Library/Fonts/Apple Color Emoji.ttc",
-            "/System/Library/Fonts/Apple Color Emoji.ttf",
-        ];
-
-        for path in &candidates {
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts.font_data.insert(
-                    "apple-color-emoji".to_owned(),
-                    Arc::new(egui::FontData::from_owned(bytes)),
-                );
-                for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                    fonts
-                        .families
-                        .entry(family)
-                        .or_default()
-                        .push("apple-color-emoji".to_owned());
-                }
-                break;
+        // Apple Color Emoji is the correct system emoji font, but it is
+        // sbix-only (no glyph outlines), which egui/ab_glyph cannot rasterize,
+        // so emoji render as tofu regardless. The load is harmless; real emoji
+        // support needs egui_noto_emoji or a monochrome emoji TTF.
+        let path = "/System/Library/Fonts/Apple Color Emoji.ttc";
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts.font_data.insert(
+                "apple-color-emoji".to_owned(),
+                Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                fonts
+                    .families
+                    .entry(family)
+                    .or_default()
+                    .push("apple-color-emoji".to_owned());
             }
         }
 
@@ -103,9 +100,13 @@ impl Platform for MacosPlatform {
     fn relaunch_as_admin() -> ! {
         let exe = std::env::current_exe().unwrap_or_default();
         let exe_str = exe.display().to_string();
+        // Wrap the path in AppleScript's `quoted form of` so spaces, quotes and
+        // shell metacharacters in the executable path survive into the elevated
+        // `do shell script` (Apple TN2065 quoting guidance).
+        let escaped = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
-            "do shell script \"{}\" with administrator privileges",
-            exe_str
+            "do shell script (quoted form of \"{}\") with administrator privileges",
+            escaped
         );
         let _ = std::process::Command::new("osascript")
             .args(["-e", &script])
