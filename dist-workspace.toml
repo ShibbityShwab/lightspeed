@@ -24,9 +24,6 @@ targets = [
 ]
 # Free Sigstore/GitHub attestations (no code-signing certs needed).
 github-attestations = true
-# No per-asset checksum files (Sigstore attestations cover integrity). This also
-# drops the unified sha256.sum, which cargo-dist 0.32 cannot produce independently.
-checksum = "false"
 # dist's own uploaded source tarball is redundant with GitHub's auto-generated one.
 source-tarball = false
 # main.wxs for the client is hand-edited to bundle WinDivert.dll + WinDivert64.sys
