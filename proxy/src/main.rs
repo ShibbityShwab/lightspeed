@@ -168,6 +168,13 @@ async fn main() -> anyhow::Result<()> {
         }
     );
 
+    if config.security.destination_allowlist.is_empty() {
+        tracing::warn!(
+            "destination_allowlist is empty: this relay will forward to ANY public \
+             destination (open proxy). Set a game-server CIDR allowlist for shared relays."
+        );
+    }
+
     // Initialize shared state
     let authenticator = Arc::new(RwLock::new(auth::Authenticator::new(
         config.security.require_auth,

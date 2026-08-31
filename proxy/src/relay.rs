@@ -819,7 +819,14 @@ pub async fn run_session_response_listener(
             _ = session.cancel.cancelled() => break,
             res = session.outbound_socket.recv_from(&mut buf) => {
                 match res {
-                    Ok((len, _game_addr)) => len,
+                    Ok((len, src_addr)) => {
+                        // Drop datagrams from any host other than the game
+                        // server (off-path injection guard).
+                        if src_addr.ip() != std::net::IpAddr::from(*session.game_server.ip()) {
+                            continue;
+                        }
+                        len
+                    }
                     Err(e) => {
                         debug!(
                             client = %session.client_addr,
