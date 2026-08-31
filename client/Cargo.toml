@@ -18,6 +18,15 @@ eula = false
 # dependency is `cfg(windows)`-gated, so non-Windows builds simply skip it.
 [package.metadata.dist]
 features = ["quic", "windivert-redirect"]
+# The GUI is the Windows entry point (it bundles this crate), so the CLI client
+# ships for Linux + macOS only.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+installers = ["shell"]
 # Bundle the WinDivert DLL + signed kernel driver next to the exe (Windows).
 include = ["windivert/WinDivert.dll", "windivert/WinDivert64.sys", "windivert/LICENSE.windivert"]
 

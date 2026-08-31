@@ -36,7 +36,8 @@ features = ["quic", "windivert-redirect"]
 # cargo-dist: the GUI has no macOS platform module, so restrict its release
 # targets to Linux and Windows (the client + proxy still ship for macOS).
 [package.metadata.dist]
-targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+targets = ["x86_64-pc-windows-msvc"]
+installers = ["msi"]
 # Bundle the WinDivert DLL + signed kernel driver next to the GUI exe (Windows).
 include = ["../client/windivert/WinDivert.dll", "../client/windivert/WinDivert64.sys", "../client/windivert/LICENSE.windivert"]
 
