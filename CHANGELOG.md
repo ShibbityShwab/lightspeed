@@ -5,6 +5,15 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.6] — 2026-08-31
+
+### Added
+- **Continuous re-routing**: the client auto-selects the best relay from `[proxy] servers`, re-probes every 30s, and switches mid-session when a meaningfully better path appears. `--start-interceptor` and `--watch` now auto-select from configured servers (previously fell back to localhost).
+- **Multipath routing**: spread each packet across the top-N relays with response deduplication (first response wins, duplicates dropped). Enable with `[route] multipath = true`.
+
+### Changed
+- The proxy now echoes the client's sequence in non-FEC data responses (instead of a proxy-local counter) so the client has a stable dedup key across relay paths.
+
 ## [1.2.5] — 2026-08-30
 
 ### Fixed
