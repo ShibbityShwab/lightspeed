@@ -34,8 +34,8 @@ mod inner {
     pub struct ClientSession {
         /// Session ID assigned at registration (random).
         pub session_id: u32,
-        /// Data-plane session token (random u8).
-        pub session_token: u8,
+        /// Data-plane session token (random u32).
+        pub session_token: u32,
         /// Client remote address.
         pub remote_addr: SocketAddr,
         /// Game the client is optimizing.

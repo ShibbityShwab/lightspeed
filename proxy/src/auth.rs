@@ -5,17 +5,17 @@
 //!
 //! ## Strategy
 //! 1. Client connects via QUIC and sends Register
-//! 2. Proxy assigns a random session token (u8) and returns it in RegisterAck
+//! 2. Proxy assigns a random session token (u32) and returns it in RegisterAck
 //! 3. Client includes the token in every tunnel header's `session_token` field
 //! 4. Proxy validates (IP + token) per-packet (fast HashMap lookup)
 //!
 //! ## Security Properties
 //! - **IP binding**: Client IP is recorded at registration time
-//! - **Token binding**: Random 8-bit token prevents trivial IP spoofing
+//! - **Token binding**: Random 32-bit token prevents trivial IP spoofing
 //! - **Defense in depth**: Combined with rate limiting and abuse detection
 //!
 //! ## Limitations (MVP)
-//! - 8-bit token space (256 values) — sufficient alongside IP check
+//! - 32-bit token space (4 billion values), infeasible to brute-force
 //! - NAT: Multiple clients behind same NAT share an IP (documented risk)
 //! - No per-packet crypto (game packets are latency-sensitive)
 
@@ -29,7 +29,7 @@ use std::net::Ipv4Addr;
 /// The write path (`authorize`/`revoke`) is cold — only on QUIC events.
 pub struct Authenticator {
     /// Map of authorized client IPs to their assigned session tokens.
-    tokens: HashMap<Ipv4Addr, u8>,
+    tokens: HashMap<Ipv4Addr, u32>,
     /// Whether authentication is enforced.
     /// When false, all packets are allowed (backward-compatible dev mode).
     require_auth: bool,
@@ -46,7 +46,7 @@ impl Authenticator {
 
     /// Authorize a client with a specific session token.
     /// Called after successful QUIC registration.
-    pub fn authorize(&mut self, ip: Ipv4Addr, token: u8) {
+    pub fn authorize(&mut self, ip: Ipv4Addr, token: u32) {
         tracing::info!(ip = %ip, token = token, "Authorized client for data plane");
         self.tokens.insert(ip, token);
     }
@@ -66,7 +66,7 @@ impl Authenticator {
     /// - Auth is disabled (`require_auth = false`), OR
     /// - The client IP is authorized AND the token matches
     #[inline]
-    pub fn validate(&self, ip: &Ipv4Addr, token: u8) -> bool {
+    pub fn validate(&self, ip: &Ipv4Addr, token: u32) -> bool {
         if !self.require_auth {
             return true;
         }
@@ -85,8 +85,8 @@ impl Authenticator {
     }
 
     /// Generate a random session token for a new client.
-    pub fn generate_token() -> u8 {
-        rand::random::<u8>()
+    pub fn generate_token() -> u32 {
+        rand::random::<u32>()
     }
 
     /// Number of authorized clients.
@@ -108,7 +108,7 @@ mod tests {
     fn test_authorize_and_validate() {
         let mut auth = Authenticator::new(true);
         let ip = Ipv4Addr::new(192, 168, 1, 100);
-        let token = 42u8;
+        let token = 42u32;
 
         assert!(!auth.validate(&ip, token));
         auth.authorize(ip, token);

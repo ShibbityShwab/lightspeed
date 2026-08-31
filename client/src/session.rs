@@ -10,13 +10,13 @@
 //! only when `require_auth = false` (unregistered dev mode).
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::route::multipath::MultipathState;
 
 /// The current data-plane session token (0 = unregistered).
-static SESSION_TOKEN: AtomicU8 = AtomicU8::new(0);
+static SESSION_TOKEN: AtomicU32 = AtomicU32::new(0);
 
 /// The current relay destination (0 = unset). Packed as `ip << 16 | port` so a
 /// single lock-free atomic can be read on the per-packet hot path. The
@@ -34,12 +34,12 @@ fn multipath() -> &'static Mutex<MultipathState> {
 }
 
 /// Set the session token after a successful QUIC registration.
-pub fn set_session_token(token: u8) {
+pub fn set_session_token(token: u32) {
     SESSION_TOKEN.store(token, Ordering::Relaxed);
 }
 
 /// Get the current session token (0 when unregistered).
-pub fn session_token() -> u8 {
+pub fn session_token() -> u32 {
     SESSION_TOKEN.load(Ordering::Relaxed)
 }
 

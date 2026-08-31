@@ -85,7 +85,7 @@ pub enum ControlMessage {
         session_id: u32,
         /// Data-plane session token (included in every tunnel header).
         /// Used for per-packet authentication alongside IP-based auth.
-        session_token: u8,
+        session_token: u32,
         /// Proxy node ID.
         node_id: String,
         /// Proxy geographic region.
@@ -162,7 +162,7 @@ impl ControlMessage {
             } => {
                 buf.put_u8(MSG_REGISTER_ACK);
                 buf.put_u32(*session_id);
-                buf.put_u8(*session_token);
+                buf.put_u32(*session_token);
                 put_short_string(&mut buf, node_id);
                 put_short_string(&mut buf, region);
             }
@@ -231,9 +231,9 @@ impl ControlMessage {
                 })
             }
             MSG_REGISTER_ACK => {
-                ensure_remaining(buf, 5)?;
+                ensure_remaining(buf, 8)?;
                 let session_id = buf.get_u32();
-                let session_token = buf.get_u8();
+                let session_token = buf.get_u32();
                 let node_id = get_short_string(&mut buf)?;
                 let region = get_short_string(&mut buf)?;
                 Ok(Self::RegisterAck {

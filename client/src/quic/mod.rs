@@ -107,7 +107,7 @@ mod inner {
         /// Session ID assigned by the proxy.
         session_id: Option<u32>,
         /// Data-plane session token (for tunnel header auth).
-        session_token: Option<u8>,
+        session_token: Option<u32>,
         /// Proxy node ID.
         node_id: Option<String>,
         /// Proxy region.
@@ -294,7 +294,7 @@ mod inner {
         }
 
         /// Get the data-plane session token (for tunnel header auth).
-        pub fn session_token(&self) -> Option<u8> {
+        pub fn session_token(&self) -> Option<u32> {
             self.session_token
         }
 
@@ -362,7 +362,7 @@ mod inner {
             None
         }
 
-        pub fn session_token(&self) -> Option<u8> {
+        pub fn session_token(&self) -> Option<u32> {
             None
         }
 
@@ -388,7 +388,7 @@ pub use inner::ControlClient;
 /// the `quic` feature is disabled, the proxy has no control plane, or
 /// registration is rejected. The data plane then sends token `0`, which the
 /// proxy accepts only when `require_auth = false`.
-pub async fn register_session(data_addr: std::net::SocketAddrV4, control_port: u16) -> Option<u8> {
+pub async fn register_session(data_addr: std::net::SocketAddrV4, control_port: u16) -> Option<u32> {
     register_session_inner(data_addr, control_port).await
 }
 
@@ -396,7 +396,7 @@ pub async fn register_session(data_addr: std::net::SocketAddrV4, control_port: u
 async fn register_session_inner(
     data_addr: std::net::SocketAddrV4,
     control_port: u16,
-) -> Option<u8> {
+) -> Option<u32> {
     use std::net::{SocketAddr, SocketAddrV4};
     use std::time::Duration;
 
@@ -451,6 +451,6 @@ async fn register_session_inner(
 async fn register_session_inner(
     _data_addr: std::net::SocketAddrV4,
     _control_port: u16,
-) -> Option<u8> {
+) -> Option<u32> {
     None
 }

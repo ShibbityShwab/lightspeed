@@ -193,7 +193,7 @@ async fn test_concurrent_clients() {
             for seq in 0..5u16 {
                 let payload = format!("client{}_{}", client_id, seq);
                 let header = TunnelHeader::new(seq, now_us(), client_addr, game_server)
-                    .with_session_token(client_id as u8);
+                    .with_session_token(client_id as u32);
 
                 let result =
                     send_and_recv(&client, proxy_addr, &header, payload.as_bytes(), 3000).await;

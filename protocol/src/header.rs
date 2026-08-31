@@ -23,10 +23,11 @@
 //!
 //! ## Session Token (Security)
 //!
-//! The session token byte is assigned by the proxy during QUIC registration.
+//! The 32-bit session token is assigned by the proxy during QUIC registration.
 //! Clients MUST include their assigned token in every data-plane packet.
 //! The proxy validates this per-packet to prevent unauthorized relay usage.
-//! While only 8 bits, it provides defense-in-depth alongside IP-based auth.
+//! 32 bits (4 billion values) makes brute-force packet injection infeasible,
+//! providing defense-in-depth alongside IP-based auth and rate limiting.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 // Note: BufMut import kept for encode_with_payload; Buf for decode.
@@ -34,15 +35,15 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use thiserror::Error;
 
 /// Current protocol version.
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 3;
 
 /// Protocol version indicating FEC header follows the tunnel header.
 /// When a packet uses version 2, a 4-byte FEC header is present
 /// immediately after the 20-byte tunnel header.
-pub const PROTOCOL_VERSION_FEC: u8 = 2;
+pub const PROTOCOL_VERSION_FEC: u8 = 4;
 
 /// Header size in bytes.
-pub const HEADER_SIZE: usize = 20;
+pub const HEADER_SIZE: usize = 24;
 
 /// Maximum payload size (MTU - IP header - UDP header - tunnel header).
 pub const MAX_PAYLOAD_SIZE: usize = 1400 - 20 - 8 - HEADER_SIZE;
@@ -81,7 +82,7 @@ pub struct TunnelHeader {
     pub flags: u8,
     /// Session token assigned by proxy during QUIC registration.
     /// Used for per-packet authentication on the data plane.
-    pub session_token: u8,
+    pub session_token: u32,
     /// Packet sequence number (for ordering and dedup).
     pub sequence: u16,
     /// Timestamp in microseconds (for latency measurement).
@@ -147,7 +148,7 @@ impl TunnelHeader {
     ///
     /// The token is assigned by the proxy during QUIC registration
     /// and must be included in every subsequent data-plane packet.
-    pub fn with_session_token(mut self, token: u8) -> Self {
+    pub fn with_session_token(mut self, token: u32) -> Self {
         self.session_token = token;
         self
     }
@@ -172,38 +173,21 @@ impl TunnelHeader {
         let mut buf = [0u8; HEADER_SIZE];
         // Byte 0: version (high nibble) | flags (low nibble)
         buf[0] = (self.version << 4) | (self.flags & 0x0F);
-        // Byte 1: session token
-        buf[1] = self.session_token;
-        // Bytes 2-3: sequence number (big-endian)
-        let seq = self.sequence.to_be_bytes();
-        buf[2] = seq[0];
-        buf[3] = seq[1];
-        // Bytes 4-7: timestamp (big-endian)
-        let ts = self.timestamp_us.to_be_bytes();
-        buf[4] = ts[0];
-        buf[5] = ts[1];
-        buf[6] = ts[2];
-        buf[7] = ts[3];
-        // Bytes 8-11: original source IP
-        let src = self.orig_src_ip.octets();
-        buf[8] = src[0];
-        buf[9] = src[1];
-        buf[10] = src[2];
-        buf[11] = src[3];
-        // Bytes 12-15: original dest IP
-        let dst = self.orig_dst_ip.octets();
-        buf[12] = dst[0];
-        buf[13] = dst[1];
-        buf[14] = dst[2];
-        buf[15] = dst[3];
-        // Bytes 16-17: original source port (big-endian)
-        let sp = self.orig_src_port.to_be_bytes();
-        buf[16] = sp[0];
-        buf[17] = sp[1];
-        // Bytes 18-19: original dest port (big-endian)
-        let dp = self.orig_dst_port.to_be_bytes();
-        buf[18] = dp[0];
-        buf[19] = dp[1];
+        // Bytes 1-4: session token (big-endian)
+        buf[1..5].copy_from_slice(&self.session_token.to_be_bytes());
+        // Bytes 5-6: sequence number (big-endian)
+        buf[5..7].copy_from_slice(&self.sequence.to_be_bytes());
+        // Bytes 7-10: timestamp (big-endian)
+        buf[7..11].copy_from_slice(&self.timestamp_us.to_be_bytes());
+        // Bytes 11-14: original source IP
+        buf[11..15].copy_from_slice(&self.orig_src_ip.octets());
+        // Bytes 15-18: original dest IP
+        buf[15..19].copy_from_slice(&self.orig_dst_ip.octets());
+        // Bytes 19-20: original source port (big-endian)
+        buf[19..21].copy_from_slice(&self.orig_src_port.to_be_bytes());
+        // Bytes 21-22: original dest port (big-endian)
+        buf[21..23].copy_from_slice(&self.orig_dst_port.to_be_bytes());
+        // Byte 23: reserved
         buf
     }
 
@@ -248,7 +232,7 @@ impl TunnelHeader {
             });
         }
 
-        let session_token = buf.get_u8();
+        let session_token = buf.get_u32();
         let sequence = buf.get_u16();
         let timestamp_us = buf.get_u32();
 
