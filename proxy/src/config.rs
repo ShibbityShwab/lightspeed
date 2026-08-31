@@ -106,7 +106,7 @@ pub struct SecurityConfig {
     /// Require QUIC registration before accepting data-plane packets.
     /// When false, any client can send tunnel packets (dev mode).
     /// MUST be true in production.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub require_auth: bool,
 
     /// Maximum amplification ratio before banning (outbound/inbound).

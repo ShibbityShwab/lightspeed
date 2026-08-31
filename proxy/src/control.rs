@@ -183,16 +183,14 @@ mod inner {
         state: Arc<ControlState>,
     ) -> anyhow::Result<()> {
         let remote = conn.remote_address();
-        let session_id: Option<u32> = None;
 
         // Accept bidirectional streams from the client
         loop {
             match conn.accept_bi().await {
                 Ok((send, recv)) => {
-                    let sid = session_id;
                     let state = Arc::clone(&state);
                     tokio::spawn(async move {
-                        if let Err(e) = handle_stream(send, recv, remote, sid, state).await {
+                        if let Err(e) = handle_stream(send, recv, remote, state).await {
                             debug!("Stream handler error for {}: {}", remote, e);
                         }
                     });
@@ -208,11 +206,14 @@ mod inner {
             }
         }
 
-        // Clean up session and revoke data-plane auth
-        if let Some(sid) = session_id {
-            state.sessions.write().await.remove(&sid);
-            info!("Removed session {} for {}", sid, remote);
-        }
+        // Remove any session this connection registered and revoke data-plane
+        // auth. Sessions are keyed by session_id (generated during Register
+        // inside a stream handler), so clean up by matching the remote address.
+        state
+            .sessions
+            .write()
+            .await
+            .retain(|_, s| s.remote_addr != remote);
 
         // Revoke data-plane authorization for this client's IP
         if let Some(ipv4) = extract_ipv4(&remote) {
@@ -228,7 +229,6 @@ mod inner {
         mut send: quinn::SendStream,
         mut recv: quinn::RecvStream,
         remote: SocketAddr,
-        _session_id: Option<u32>,
         state: Arc<ControlState>,
     ) -> anyhow::Result<()> {
         while let Some(msg) = ControlMessage::read_from(&mut recv).await? {
