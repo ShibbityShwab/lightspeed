@@ -5,6 +5,19 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-08-31
+
+### Security
+- **Proxy response-source validation**: the relay's outbound response listener now drops datagrams whose source is not the game server, closing the off-path injection vector on the proxy side.
+- **Control-connection cap**: concurrent QUIC control connections are now bounded (previously only `max_clients` at registration was enforced), so idle pre-registration connections can't exhaust resources.
+- **Open-relay warning**: the proxy warns on startup when `destination_allowlist` is empty, flagging the forward-to-anything behavior for shared relays.
+- **Collision-free session IDs**: session IDs now retry on collision instead of silently overwriting an existing session.
+- **Registry SSRF guard**: the client requires https, enforces a 10s timeout, and rejects private/internal IP hosts for the registry URL.
+- **Registry cert pre-pinning**: registry nodes can publish a `cert_fingerprint`; discovery pre-pins each relay's control-plane cert against the registry's value, upgrading trust-on-first-use to trust-from-start for registry-discovered relays.
+- **Binary checksum verification**: `provision-oci.sh` verifies the proxy binary against the release `.sha256` before installing.
+- **Registry worker input validation**: the worker validates node fields and caps payload size before mutating the registry.
+- **ML model size cap**: model files above 128MB are rejected to prevent memory exhaustion.
+
 ## [1.3.1] — 2026-08-31
 
 ### Security
