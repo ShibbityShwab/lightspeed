@@ -282,11 +282,10 @@ impl TrafficInterceptor for NftablesInterceptor {
             } else {
                 None
             };
-            let mut fec_decoder = if fec_enabled {
-                Some(lightspeed_protocol::FecDecoder::new())
-            } else {
-                None
-            };
+            let mut fec_decoders: std::collections::HashMap<
+                std::net::SocketAddr,
+                lightspeed_protocol::FecDecoder,
+            > = std::collections::HashMap::new();
 
             let mut seq: u16 = 0;
             let mut out_buf = vec![0u8; 65535];
@@ -428,10 +427,6 @@ impl TrafficInterceptor for NftablesInterceptor {
 
                         if header.is_keepalive() { continue; }
 
-                        if crate::session::multipath_record_response(header.sequence, src_addr, 0) {
-                            continue;
-                        }
-
                         let dest = match game_src {
                             Some(gs) => gs,
                             None => continue,
@@ -445,15 +440,29 @@ impl TrafficInterceptor for NftablesInterceptor {
                                 None => continue,
                             };
                             let d = &payload[FEC_HEADER_SIZE..];
-                            if let Some(ref mut dec) = fec_decoder {
-                                if fh.is_parity() {
-                                    dec.receive_parity(&fh, bytes::Bytes::copy_from_slice(d)).map(|(_, r)| r)
+                            let dec = fec_decoders.entry(src_addr).or_default();
+                            if fh.is_parity() {
+                                dec.receive_parity(&fh, bytes::Bytes::copy_from_slice(d))
+                                    .map(|(_, r)| r)
+                            } else {
+                                let b = bytes::Bytes::copy_from_slice(d);
+                                dec.receive_data(&fh, b.clone());
+                                if crate::session::multipath_record_response(
+                                    header.sequence,
+                                    src_addr,
+                                    0,
+                                ) {
+                                    None
                                 } else {
-                                    let b = bytes::Bytes::copy_from_slice(d);
-                                    dec.receive_data(&fh, b.clone());
                                     Some(b)
                                 }
-                            } else { None }
+                            }
+                        } else if crate::session::multipath_record_response(
+                            header.sequence,
+                            src_addr,
+                            0,
+                        ) {
+                            None
                         } else {
                             Some(bytes::Bytes::copy_from_slice(payload))
                         };

@@ -846,8 +846,15 @@ pub async fn run_session_response_listener(
             let index = encoder.current_index();
 
             // Build: [TunnelHeader v2][FecHeader data][game_response]
-            let response_header =
-                TunnelHeader::new_fec(seq, now_us(), session.game_server, session.client_addr);
+            // The sequence field echoes the client's last packet sequence (not a
+            // proxy-local counter) so the client can deduplicate the same game
+            // response arriving via multiple relays in multipath mode.
+            let response_header = TunnelHeader::new_fec(
+                session.last_client_seq.load(Ordering::Relaxed),
+                now_us(),
+                session.game_server,
+                session.client_addr,
+            );
             let fec_hdr = FecHeader::data(block_id, index, session.fec_k);
 
             // Zero-alloc: write FEC data packet directly into the pre-allocated task buffer.
