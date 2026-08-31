@@ -135,7 +135,37 @@ pub fn fetch_registry(url: &str, operator_public_key_b64: &str) -> anyhow::Resul
         .map_err(|e| anyhow::anyhow!("registry body read failed: {e}"))?;
     let signed: SignedRegistry = serde_json::from_str(&body)
         .map_err(|e| anyhow::anyhow!("malformed signed registry: {e}"))?;
-    verify_registry(&signed, operator_public_key_b64)
+    let registry = verify_registry(&signed, operator_public_key_b64)?;
+    enforce_freshness(&registry)?;
+    Ok(registry)
+}
+
+/// Reject a registry whose `published_at` is older than the most recently
+/// accepted one, then persist the new timestamp. This stops an attacker from
+/// replaying an old (still validly signed) registry to resurrect a revoked
+/// node.
+fn enforce_freshness(registry: &Registry) -> anyhow::Result<()> {
+    let path = registry_state_path();
+    if let Ok(prev) = std::fs::read_to_string(&path) {
+        if let Ok(prev_ts) = prev.trim().parse::<u64>() {
+            if registry.published_at < prev_ts {
+                return Err(anyhow::anyhow!(
+                    "registry rollback detected: published_at {} is older than last-seen {}",
+                    registry.published_at,
+                    prev_ts
+                ));
+            }
+        }
+    }
+    let _ = std::fs::write(&path, registry.published_at.to_string());
+    Ok(())
+}
+
+fn registry_state_path() -> std::path::PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        return std::path::PathBuf::from(home).join(".lightspeed-registry-state");
+    }
+    std::path::PathBuf::from(".lightspeed-registry-state")
 }
 
 #[cfg(test)]

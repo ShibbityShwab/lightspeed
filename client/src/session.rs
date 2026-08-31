@@ -101,6 +101,18 @@ pub fn multipath_stats() -> Vec<(SocketAddrV4, crate::route::multipath::PathStat
     m.stats().iter().map(|(a, s)| (*a, s.clone())).collect()
 }
 
+/// Whether a received datagram's source is one of the active relay
+/// destinations (multipath paths or the current proxy). Used to reject
+/// datagrams injected by off-path hosts.
+pub fn is_known_proxy(source: SocketAddr, config_fallback: SocketAddrV4) -> bool {
+    let source_v4 = match source {
+        SocketAddr::V4(v4) => v4,
+        SocketAddr::V6(_) => return false,
+    };
+    let (dests, n) = send_destinations(config_fallback);
+    dests.iter().take(n).any(|d| *d == source_v4)
+}
+
 /// Relay destinations for an outbound packet: the multipath spread when two or
 /// more paths are active, otherwise the single current relay. Returns
 /// `(destinations, count)`; only the first `count` entries are valid.

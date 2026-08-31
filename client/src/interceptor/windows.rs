@@ -606,6 +606,10 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 _ => continue,
                             };
 
+                            if !crate::session::is_known_proxy(src_addr, config_proxy) {
+                                continue;
+                            }
+
                             counters_t.packets_from_proxy.fetch_add(1, Ordering::Relaxed);
 
                             let (header, payload) = match lightspeed_protocol::TunnelHeader::decode_with_payload(&buf[..len]) {
