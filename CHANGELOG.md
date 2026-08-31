@@ -5,6 +5,17 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-08-31
+
+### Security (from the exploitability-driven audit)
+- **Session token widened 8 → 32 bits** (protocol v3/v4). The old 8-bit token (256 values, IP-only bound) was brute-forceable in ≤256 packets to inject packets into a victim's session. 4 billion values makes this infeasible. Breaking wire change: old clients/proxies reject each other cleanly.
+- **Control-plane session leak fixed** — disconnect cleanup was dead code, so the sessions table leaked forever and eventually exhausted `max_clients`, rejecting all new clients.
+- **`require_auth` now defaults `true`** — a config that listed other `[security]` keys but omitted `require_auth` silently disabled auth.
+- **Rate-limiter state is now bounded** — `cleanup()` is called so spoofed datagrams can't grow the table unbounded.
+- **Off-path response injection closed** — interceptors reject datagrams whose source is not an active relay.
+- **Registry rollback protection** — `published_at` monotonicity enforced, so a replayed older registry can't resurrect a revoked node.
+- **Privileged tools invoked by absolute path** — `nft`/`iptables`/`pfctl` no longer resolve from PATH as root.
+
 ## [1.2.9] — 2026-08-31
 
 ### Fixed
