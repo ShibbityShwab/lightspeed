@@ -9,7 +9,7 @@
 //! every data-plane send reads it. It defaults to `0`, which the proxy accepts
 //! only when `require_auth = false` (unregistered dev mode).
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -75,14 +75,30 @@ pub fn multipath_paths() -> [SocketAddrV4; MAX_MULTIPATH_PATHS] {
     out
 }
 
-/// Whether a response sequence is a multipath duplicate. Returns false when
-/// multipath is inactive (single-path mode).
-pub fn multipath_is_duplicate(seq: u16) -> bool {
+/// Record a received response and report whether it is a multipath duplicate
+/// (drop it). On the first response, records a win for `source`; on duplicates,
+/// records a loss. No-op (returns false) when multipath is inactive.
+pub fn multipath_record_response(seq: u16, source: SocketAddr, latency_us: u64) -> bool {
+    let source_v4 = match source {
+        SocketAddr::V4(v4) => v4,
+        SocketAddr::V6(_) => return false,
+    };
     let mut m = multipath().lock().unwrap();
     if !m.is_active() {
         return false;
     }
-    m.is_duplicate(seq)
+    if m.is_duplicate(seq) {
+        m.record_loss(source_v4);
+        return true;
+    }
+    m.record_win(source_v4, latency_us);
+    false
+}
+
+/// Snapshot of per-path multipath stats (wins, total, EMA latency).
+pub fn multipath_stats() -> Vec<(SocketAddrV4, crate::route::multipath::PathStats)> {
+    let m = multipath().lock().unwrap();
+    m.stats().iter().map(|(a, s)| (*a, s.clone())).collect()
 }
 
 /// Relay destinations for an outbound packet: the multipath spread when two or

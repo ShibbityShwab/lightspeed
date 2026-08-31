@@ -28,6 +28,50 @@ fn should_switch(current_latency: Option<u64>, candidate_latency: u64) -> bool {
     }
 }
 
+/// Order multipath paths by accumulated win rate (highest first). Paths with
+/// fewer than 10 observed responses are treated as unknown and kept first so
+/// new relays are not demoted before they have a track record.
+fn order_by_win_rate(paths: Vec<SocketAddrV4>) -> Vec<SocketAddrV4> {
+    let stats = crate::session::multipath_stats();
+    let win_rate = |a: &SocketAddrV4| -> f64 {
+        stats
+            .iter()
+            .find(|(addr, _)| addr == a)
+            .map(|(_, s)| {
+                if s.total >= 10 {
+                    s.wins as f64 / s.total as f64
+                } else {
+                    1.0
+                }
+            })
+            .unwrap_or(1.0)
+    };
+    let mut ranked: Vec<(SocketAddrV4, f64)> =
+        paths.into_iter().map(|p| (p, win_rate(&p))).collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.into_iter().map(|(p, _)| p).collect()
+}
+
+fn log_multipath_stats() {
+    let stats = crate::session::multipath_stats();
+    if stats.is_empty() {
+        return;
+    }
+    let mut lines: Vec<String> = stats
+        .iter()
+        .map(|(a, s)| {
+            let rate = if s.total > 0 {
+                s.wins as f64 / s.total as f64 * 100.0
+            } else {
+                0.0
+            };
+            format!("{} {:.0}% ({}w/{}t)", a, rate, s.wins, s.total)
+        })
+        .collect();
+    lines.sort();
+    tracing::info!(stats = %lines.join(", "), "multipath path win rates");
+}
+
 /// Run the continuous re-routing loop until `shutdown` fires.
 ///
 /// Re-probes `servers` every [`REROUTE_INTERVAL`], re-selects the best relay,
@@ -40,7 +84,7 @@ pub async fn run_continuous_rerouting(
     control_port: u16,
     game_server: SocketAddrV4,
     strategy: String,
-    multipath_enabled: bool,
+    max_paths: u8,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut current = crate::session::current_proxy();
@@ -59,10 +103,12 @@ pub async fn run_continuous_rerouting(
 
         let best = route.primary;
 
-        if multipath_enabled {
+        if max_paths >= 2 {
             let mut paths = vec![best.data_addr];
             paths.extend(route.backups.iter().map(|b| b.data_addr));
-            crate::session::set_multipath_paths(paths);
+            paths.truncate(max_paths as usize);
+            crate::session::set_multipath_paths(order_by_win_rate(paths));
+            log_multipath_stats();
         }
 
         if best.health != ProxyHealth::Healthy {

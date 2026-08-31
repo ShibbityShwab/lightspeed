@@ -133,14 +133,18 @@ fn start_continuous_rerouting(config: &config::Config, cli: &Cli) {
         config.proxy.quic_port,
         game_server,
         strategy,
-        config.route.multipath,
+        if config.route.multipath {
+            config.route.multipath_max_paths
+        } else {
+            1
+        },
         rx,
     ));
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
     // ── Tracing ───────────────────────────────────────────────────
     let filter = if cli.verbose { "debug" } else { "info" };
@@ -168,6 +172,14 @@ async fn main() -> anyhow::Result<()> {
         warn!("Config not found ({}), using defaults", e);
         config::Config::default()
     });
+
+    // FEC and multipath are mutually exclusive: the proxy's response FEC is
+    // per-relay, so two relays produce incompatible parity streams that the
+    // client cannot deduplicate. Disable FEC when multipath is active.
+    if cli.fec && config.route.multipath && config.proxy.servers.len() >= 2 {
+        warn!("FEC disabled: cannot combine with multipath (per-relay parity streams are incompatible across paths)");
+        cli.fec = false;
+    }
 
     // ── Transport selection (UDP default, TCP opt-in) ─────────────
     let use_tcp = cli.tcp || config.tunnel.transport.eq_ignore_ascii_case("tcp");

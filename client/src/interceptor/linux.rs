@@ -414,7 +414,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                         Duration::from_millis(50),
                         tunnel_socket.recv_from(&mut in_buf),
                     ) => {
-                        let (len, _) = match resp {
+                        let (len, src_addr) = match resp {
                             Ok(Ok(r)) => r,
                             _ => continue,
                         };
@@ -428,7 +428,7 @@ impl TrafficInterceptor for NftablesInterceptor {
 
                         if header.is_keepalive() { continue; }
 
-                        if crate::session::multipath_is_duplicate(header.sequence) {
+                        if crate::session::multipath_record_response(header.sequence, src_addr, 0) {
                             continue;
                         }
 

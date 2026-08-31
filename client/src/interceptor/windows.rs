@@ -602,7 +602,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                         // Proxy response → inject as spoofed server packet
                         recv = tokio::time::timeout(Duration::from_millis(50), tunnel_socket.recv_from(&mut buf)) => {
-                            let (len, _) = match recv {
+                            let (len, src_addr) = match recv {
                                 Ok(Ok(r)) => r,
                                 _ => continue,
                             };
@@ -618,7 +618,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 continue; // keepalive echo — RTT measured by keepalive task
                             }
 
-                            if crate::session::multipath_is_duplicate(header.sequence) {
+                            if crate::session::multipath_record_response(header.sequence, src_addr, 0) {
                                 continue;
                             }
 

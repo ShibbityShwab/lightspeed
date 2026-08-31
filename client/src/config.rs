@@ -108,6 +108,10 @@ pub struct RouteConfig {
     #[serde(default)]
     pub multipath: bool,
 
+    /// Maximum number of simultaneous relay paths when multipath is enabled.
+    #[serde(default = "default_multipath_max_paths")]
+    pub multipath_max_paths: u8,
+
     /// Health check interval in milliseconds.
     #[serde(default = "default_health_check_ms")]
     pub health_check_ms: u64,
@@ -175,6 +179,10 @@ fn default_max_failover() -> usize {
     3
 }
 
+fn default_multipath_max_paths() -> u8 {
+    2
+}
+
 fn default_min_samples() -> usize {
     50
 }
@@ -215,6 +223,7 @@ impl Default for RouteConfig {
         Self {
             strategy: default_strategy(),
             multipath: false,
+            multipath_max_paths: default_multipath_max_paths(),
             health_check_ms: default_health_check_ms(),
             max_failover: default_max_failover(),
         }
