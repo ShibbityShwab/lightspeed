@@ -2,9 +2,9 @@
 //!
 //! Traits and helpers that isolate platform-specific concerns (system tray,
 //! font paths, admin detection, game port discovery) behind a generic
-//! [`Platform`] + [`TrayHandle`] interface.  The Windows and Linux backends
-//! live in [`windows`] and [`linux`] and are selected at compile time
-//! via `#[cfg]`.
+//! [`Platform`] + [`TrayHandle`] interface.  The Windows, Linux, and macOS
+//! backends live in [`windows`], [`linux`], and [`macos`] respectively and are
+//! selected at compile time via `#[cfg]`. The macOS backend is **untested**.
 
 use crate::app::TrayState;
 use eframe::egui;
@@ -99,6 +99,8 @@ pub trait Platform {
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(windows)]
 mod windows;
 
@@ -110,6 +112,11 @@ mod platform_impl {
 #[cfg(target_os = "linux")]
 mod platform_impl {
     pub type CurrentPlatform = super::linux::LinuxPlatform;
+}
+
+#[cfg(target_os = "macos")]
+mod platform_impl {
+    pub type CurrentPlatform = super::macos::MacosPlatform;
 }
 
 pub use platform_impl::*;

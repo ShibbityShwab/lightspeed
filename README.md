@@ -86,10 +86,11 @@ LightSpeed ships three packages. **You only need one**:
 | You want to… | Download | Notes |
 |--------------|----------|-------|
 | **Play on Windows** (recommended) | `lightspeed-gui-...-windows-msvc.msi` (or `.zip`) | Everything included — GUI + engine + WinDivert driver. No separate client needed. |
-| **Play on Linux / macOS** | `lightspeed-client-...` | CLI client (no GUI on these platforms yet). |
+| **Play on Linux** | `lightspeed-gui-...-linux-gnu.tar.xz` (or `lightspeed-client`) | GUI + engine, or the CLI for power users. |
+| **Play on macOS** | `lightspeed-client-...` | CLI client. The GUI compiles for macOS but is **untested** on real hardware. |
 | **Host a proxy node** | `lightspeed-proxy-...` | Only if you're running a relay server on a VPS. |
 
-> **Why is there both a "client" and a "gui"?** The GUI (`lightspeed-gui`) is a standalone app that already contains the client engine — Windows players should download the GUI only. The CLI (`lightspeed-client`) is for headless/power users and for Linux/macOS, where the GUI isn't built yet. You never need to install both.
+> **Why is there both a "client" and a "gui"?** The GUI (`lightspeed-gui`) is a standalone app that already contains the client engine. Grab it for the easiest experience. The CLI (`lightspeed-client`) is for headless/power users and for macOS, where the GUI is untested. You never need to install both.
 
 ### Pre-built Binaries
 Download from **[Releases](https://github.com/ShibbityShwab/lightspeed/releases)** — Windows, Linux, macOS.

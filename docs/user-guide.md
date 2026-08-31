@@ -28,10 +28,11 @@ Your PC ──→ LightSpeed Proxy (fast backbone) ──→ Game Server   ✅ L
 | You're on | Download | Why |
 |-----------|----------|-----|
 | **Windows** | `lightspeed-gui` (MSI or ZIP) | The GUI is a standalone app — it already includes the client engine + WinDivert driver. You do **not** need the CLI. |
-| **Linux / macOS** | `lightspeed-client` | No GUI is built for these platforms yet, so the CLI is the way to go. |
+| **Linux** | `lightspeed-gui` (or `lightspeed-client`) | The GUI works on Linux (the system tray is a stub); the CLI is for power users. |
+| **macOS** | `lightspeed-client` | No tested GUI yet. The GUI compiles for macOS but is **untested** on real hardware. |
 | **Hosting a proxy** | `lightspeed-proxy` | Only if you're running a relay node on a VPS. |
 
-> **You only ever need one package.** If you're a Windows player, grab `lightspeed-gui` and ignore the rest. The separate `lightspeed-client` and `lightspeed-proxy` are for Linux/macOS players and self-hosters respectively.
+> **You only ever need one package.** If you're a Windows player, grab `lightspeed-gui` and ignore the rest. The `lightspeed-client` is for Linux power users and macOS players; `lightspeed-proxy` is for self-hosters.
 
 ---
 
