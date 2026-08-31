@@ -5,6 +5,15 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.7] — 2026-08-31
+
+### Added
+- **Multipath path scoring**: per-relay win/loss tracking with adaptive ordering — relays that consistently lose are demoted, and win rates are logged each re-route cycle.
+- **Configurable multipath path count**: `[route] multipath_max_paths` (default 2).
+
+### Changed
+- **FEC and multipath are now mutually exclusive**: enabling both disables FEC with a warning, because the proxy's response FEC is per-relay and two relays produce incompatible parity streams.
+
 ## [1.2.6] — 2026-08-31
 
 ### Added
