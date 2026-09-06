@@ -645,7 +645,15 @@ impl LightSpeedEngine {
             // control port
             let _ = crate::quic::register_session(proxy_addr, 4433).await;
         });
-        let handle = interceptor.start(config).map_err(|e| e.to_string())?;
+        // `start()` must run inside a Tokio runtime context: the WinDivert
+        // backend calls `tokio::spawn`/`spawn_blocking`/`Handle::current()`,
+        // which panic with "there is no reactor running" from a non-Tokio
+        // thread (e.g. the egui UI loop). `start()` is synchronous and only
+        // spawns tasks, so `block_on` enters the context and returns at once.
+        let handle = self
+            .rt
+            .block_on(async move { interceptor.start(config) })
+            .map_err(|e| e.to_string())?;
 
         {
             let mut s = self.status.write().unwrap();
