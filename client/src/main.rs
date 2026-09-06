@@ -37,6 +37,7 @@ use tracing::{error, info, warn};
 use telemetry::TelemetryCollector;
 
 use cli::{parse_proxy_addr, Cli};
+use interceptor::{effective_interception_mode, InterceptionMode, ResolvedMode};
 use modes::{
     benchmark_mode::run_benchmark,
     capture_mode::run_capture_mode,
@@ -246,7 +247,8 @@ async fn main() -> anyhow::Result<()> {
             || cli.smoke_test
             || cli.watch
             || cli.benchmark
-            || cli.status;
+            || cli.status
+            || cli.interception_mode.is_some();
         if !has_mode {
             info!("╔════════════════════════════════════════════╗");
             info!(
@@ -1032,6 +1034,64 @@ data_port = 4434
             cli.interface,
         )
         .await;
+    }
+
+    // ── Interception-mode-driven backend selection ────────────────
+    //
+    // When the effective mode is explicitly `kernel` or `userspace`, route
+    // the default game path to that backend. `auto` (the default) preserves
+    // the pre-existing behavior and falls through to keepalive mode below.
+    let interception_mode =
+        effective_interception_mode(cli.interception_mode.as_deref(), &config.interception.mode)
+            .map_err(anyhow::Error::msg)?;
+
+    match interception_mode {
+        InterceptionMode::Kernel | InterceptionMode::Userspace => {
+            let game_ref = game.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Interception mode requires a game. Use --game <name> or ensure a game is running."
+                )
+            })?;
+            let (kernel_available, userspace_available) = interceptor::probe_availability();
+            match interceptor::resolve_mode(
+                interception_mode,
+                kernel_available,
+                userspace_available,
+            )
+            .map_err(anyhow::Error::msg)?
+            {
+                ResolvedMode::Kernel => {
+                    info!("🚀 Starting live interceptor mode (kernel)");
+                    crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+                    crate::session::set_current_proxy(proxy_addr);
+                    start_continuous_rerouting(&config, &cli);
+                    return run_intercept_mode(
+                        game_ref.name(),
+                        proxy_addr,
+                        cli.fec,
+                        cli.fec_k,
+                        None,
+                    )
+                    .await;
+                }
+                ResolvedMode::Userspace => {
+                    info!("🚀 Starting userspace pcap capture mode");
+                    return run_capture_mode(
+                        game_ref.as_ref(),
+                        proxy_addr,
+                        proxy_id,
+                        proxy_region,
+                        online_learner,
+                        keepalive_timestamps,
+                        cli.fec,
+                        cli.fec_k,
+                        cli.interface.clone(),
+                    )
+                    .await;
+                }
+            }
+        }
+        InterceptionMode::Auto => {}
     }
 
     // ── Game setup instructions ───────────────────────────────────

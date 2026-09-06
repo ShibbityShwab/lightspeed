@@ -176,6 +176,39 @@ pub enum InterceptionMode {
     Kernel,
 }
 
+impl InterceptionMode {
+    /// Parse a user-facing mode string into an [`InterceptionMode`].
+    ///
+    /// Accepts `"auto"`, `"userspace"`, and `"kernel"` (case-insensitive, with
+    /// surrounding whitespace ignored). Returns a descriptive error for any
+    /// other value.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "userspace" => Ok(Self::Userspace),
+            "kernel" => Ok(Self::Kernel),
+            other => Err(format!(
+                "invalid interception mode \"{other}\": expected \"auto\", \"userspace\", or \"kernel\""
+            )),
+        }
+    }
+}
+
+/// Compute the effective interception mode from the CLI flag and config value.
+///
+/// The `--interception-mode` CLI flag wins over `config.interception.mode`.
+/// When neither is explicitly set, `config` carries the default `"auto"` (see
+/// [`crate::config::InterceptionConfig`]), which resolves to [`InterceptionMode::Auto`].
+pub fn effective_interception_mode(
+    cli: Option<&str>,
+    config: &str,
+) -> Result<InterceptionMode, String> {
+    match cli {
+        Some(value) => InterceptionMode::parse(value),
+        None => InterceptionMode::parse(config),
+    }
+}
+
 /// The concrete backend selected after resolving an [`InterceptionMode`] against
 /// live probe results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +279,88 @@ mod tests {
     #[test]
     fn interception_mode_default_is_auto() {
         assert_eq!(InterceptionMode::default(), InterceptionMode::Auto);
+    }
+
+    #[test]
+    fn parse_interception_mode_valid_lowercase() {
+        assert_eq!(
+            InterceptionMode::parse("auto").unwrap(),
+            InterceptionMode::Auto
+        );
+        assert_eq!(
+            InterceptionMode::parse("userspace").unwrap(),
+            InterceptionMode::Userspace
+        );
+        assert_eq!(
+            InterceptionMode::parse("kernel").unwrap(),
+            InterceptionMode::Kernel
+        );
+    }
+
+    #[test]
+    fn parse_interception_mode_case_and_whitespace_insensitive() {
+        assert_eq!(
+            InterceptionMode::parse("AUTO").unwrap(),
+            InterceptionMode::Auto
+        );
+        assert_eq!(
+            InterceptionMode::parse(" Userspace ").unwrap(),
+            InterceptionMode::Userspace
+        );
+        assert_eq!(
+            InterceptionMode::parse("Kernel").unwrap(),
+            InterceptionMode::Kernel
+        );
+    }
+
+    #[test]
+    fn parse_interception_mode_invalid_errors() {
+        assert!(InterceptionMode::parse("bogus").is_err());
+        assert!(InterceptionMode::parse("").is_err());
+        assert!(InterceptionMode::parse("   ").is_err());
+        assert!(InterceptionMode::parse("user-space").is_err());
+    }
+
+    #[test]
+    fn effective_interception_mode_cli_overrides_config() {
+        assert_eq!(
+            effective_interception_mode(Some("kernel"), "auto").unwrap(),
+            InterceptionMode::Kernel
+        );
+        assert_eq!(
+            effective_interception_mode(Some("userspace"), "kernel").unwrap(),
+            InterceptionMode::Userspace
+        );
+        assert_eq!(
+            effective_interception_mode(Some("auto"), "userspace").unwrap(),
+            InterceptionMode::Auto
+        );
+    }
+
+    #[test]
+    fn effective_interception_mode_falls_back_to_config() {
+        assert_eq!(
+            effective_interception_mode(None, "kernel").unwrap(),
+            InterceptionMode::Kernel
+        );
+        assert_eq!(
+            effective_interception_mode(None, "userspace").unwrap(),
+            InterceptionMode::Userspace
+        );
+        assert_eq!(
+            effective_interception_mode(None, "auto").unwrap(),
+            InterceptionMode::Auto
+        );
+    }
+
+    #[test]
+    fn effective_interception_mode_invalid_cli_errors() {
+        assert!(effective_interception_mode(Some("banana"), "auto").is_err());
+    }
+
+    #[test]
+    fn effective_interception_mode_invalid_config_errors() {
+        assert!(effective_interception_mode(None, "banana").is_err());
     }
 
     #[test]
