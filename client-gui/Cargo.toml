@@ -19,13 +19,16 @@ tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 anyhow = { workspace = true }
 dirs = "6.0"
-tray-icon = "0.24.1"
 eframe = { version = "0.36", features = ["default"] }
 egui_plot = "0.37"
 webbrowser = "1"
 
-# Windows-only: enable WinDivert support via lightspeed-client features
+# Windows-only: the real system tray (tray-icon) plus WinDivert support.
+# tray-icon is Windows-only because the Linux/macOS tray backends are stubs
+# that never use it; keeping it global pulled gtk -> glib 0.18 into the
+# Linux build, triggering GHSA-wrw7-89jp-8q8g.
 [target.'cfg(windows)'.dependencies]
+tray-icon = "0.24.1"
 windivert = { version = "0.6", optional = true, features = ["vendored"] }
 
 # Override lightspeed-client features on Windows
