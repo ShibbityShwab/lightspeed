@@ -18,6 +18,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use super::traits::{ProcessInfo, Route, TransportProtocol};
+#[cfg(target_os = "linux")]
 use crate::games::process_name_matches;
 
 // ─────────────────────────────────────────────────────────────────────────────
