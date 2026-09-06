@@ -18,6 +18,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use super::traits::{ProcessInfo, Route, TransportProtocol};
+use crate::games::process_name_matches;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Public API
@@ -173,7 +174,7 @@ fn list_pids_linux(names: &[&str]) -> Vec<(u32, String)> {
         let comm_path = format!("/proc/{}/comm", pid);
         if let Ok(comm) = std::fs::read_to_string(&comm_path) {
             let comm = comm.trim();
-            if names.iter().any(|n| n.eq_ignore_ascii_case(comm)) {
+            if names.iter().any(|n| process_name_matches(comm, n)) {
                 result.push((pid, comm.to_string()));
             }
         }

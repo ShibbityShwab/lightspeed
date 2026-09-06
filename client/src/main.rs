@@ -291,26 +291,15 @@ async fn main() -> anyhow::Result<()> {
     // ── --list-games ──────────────────────────────────────────────
     if cli.list_games {
         info!("🎮 Supported games:");
-        // Access game registry through the games module
-        let all_games: &[&str] = &[
-            "rust", "fortnite", "cs2", "dota2", "valorant", "apex", "ow2", "lol", "pubg",
-        ];
-        for name in all_games {
-            match games::detect_game(name) {
-                Ok(g) => {
-                    let (lo, hi) = g.ports();
-                    info!(
-                        "   {:<12} ports {}-{}  — {}",
-                        g.name(),
-                        lo,
-                        hi,
-                        g.process_names().join(", ")
-                    );
-                }
-                Err(_) => {
-                    info!("   {:<12} (unknown)", name);
-                }
-            }
+        for game in games::all_games() {
+            let (lo, hi) = game.ports();
+            info!(
+                "   {:<12} ports {}-{} - {}",
+                game.name(),
+                lo,
+                hi,
+                game.process_names().join(", ")
+            );
         }
         return Ok(());
     }

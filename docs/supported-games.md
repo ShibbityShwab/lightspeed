@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 14 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 15 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -22,6 +22,7 @@ LightSpeed includes built-in profiles for 14 popular multiplayer games. Each pro
 | 12 | **Rocket League** | `--game rocketleague` | 7000–9000 | EAC | `RocketLeague.exe` |
 | 13 | **World of Tanks** | `--game wot` | 12000–29999 | None | `WorldOfTanks.exe` |
 | 14 | **Dead by Daylight** | `--game deadbydaylight` | 27000–27050 | EAC | `DeadByDaylight-Win64-Shipping.exe` |
+| 15 | **Bodycam** | `--game bodycam` | 27000-27050 | None | `Bodycam-Win64-Shipping.exe` |
 
 ---
 

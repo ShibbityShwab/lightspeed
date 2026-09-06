@@ -12,7 +12,7 @@ pub struct Cli {
     #[arg(short, long, default_value = "lightspeed.toml")]
     pub config: String,
 
-    /// Game to optimize (fortnite, cs2, dota2, rust)
+    /// Game to optimize (run --list-games for the full list)
     #[arg(short, long)]
     pub game: Option<String>,
 

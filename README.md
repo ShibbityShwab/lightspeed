@@ -52,6 +52,7 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 | Rocket League | `--game rocketleague` | EAC | ✅ |
 | World of Tanks | `--game wot` | None | ✅ |
 | Dead by Daylight | `--game deadbydaylight` | EAC | ✅ |
+| Bodycam | `--game bodycam` | None | ✅ |
 
 📖 **[Full Game List →](docs/supported-games.md)**
 

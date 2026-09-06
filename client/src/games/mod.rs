@@ -30,6 +30,7 @@
 //! generates an appropriate BPF filter for pcap capture mode.
 
 pub mod apex;
+pub mod bodycam;
 pub mod cs2;
 pub mod deadbydaylight;
 pub mod dota2;
@@ -112,6 +113,7 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
     match name.to_lowercase().as_str() {
         "fortnite" => Ok(Box::new(fortnite::FortniteConfig)),
         "cs2" | "counter-strike" | "counterstrike" => Ok(Box::new(cs2::Cs2Config)),
+        "bodycam" | "body-cam" => Ok(Box::new(bodycam::BodycamConfig)),
         "deadbydaylight" | "dbd" | "dead-by-daylight" => {
             Ok(Box::new(deadbydaylight::DeadByDaylightConfig))
         }
@@ -127,10 +129,51 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
         "wot" | "worldoftanks" | "world-of-tanks" => Ok(Box::new(wot::WotConfig)),
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot",
+            "Unknown game: '{}'. Supported: fortnite, cs2, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot",
             name
         ),
     }
+}
+
+/// Return the full list of supported game configs.
+///
+/// This is the canonical registry shared by `auto_detect` and `--list-games`.
+/// Register every new game profile here.
+pub fn all_games() -> Vec<Box<dyn GameConfig>> {
+    vec![
+        Box::new(fortnite::FortniteConfig),
+        Box::new(cs2::Cs2Config),
+        Box::new(bodycam::BodycamConfig),
+        Box::new(deadbydaylight::DeadByDaylightConfig),
+        Box::new(dota2::Dota2Config),
+        Box::new(rust::RustConfig),
+        Box::new(valorant::ValorantConfig),
+        Box::new(apex::ApexConfig),
+        Box::new(ow2::Ow2Config),
+        Box::new(lol::LolConfig),
+        Box::new(pubg::PubgConfig),
+        Box::new(maplestory::MapleStoryConfig),
+        Box::new(genshin::GenshinConfig),
+        Box::new(rocketleague::RocketLeagueConfig),
+        Box::new(wot::WotConfig),
+    ]
+}
+
+/// Match an observed process name against a known game process name.
+///
+/// Linux truncates `/proc/<pid>/comm` to 15 chars (`TASK_COMM_LEN`), so a
+/// Windows-style name like `Bodycam-Win64-Shipping.exe` surfaces under
+/// Proton/Wine as its 15-char prefix. Exact match is checked first (short
+/// names and full-name platforms are unaffected); the prefix fallback handles
+/// the truncation.
+pub(crate) fn process_name_matches(observed: &str, known: &str) -> bool {
+    if observed.eq_ignore_ascii_case(known) {
+        return true;
+    }
+    observed.len() == 15
+        && known
+            .get(..15)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(observed))
 }
 
 /// Auto-detect which supported game is currently running.
@@ -150,28 +193,11 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
     }
 
     // Check each supported game
-    let all_games: Vec<Box<dyn GameConfig>> = vec![
-        Box::new(fortnite::FortniteConfig),
-        Box::new(cs2::Cs2Config),
-        Box::new(deadbydaylight::DeadByDaylightConfig),
-        Box::new(dota2::Dota2Config),
-        Box::new(rust::RustConfig),
-        Box::new(valorant::ValorantConfig),
-        Box::new(apex::ApexConfig),
-        Box::new(ow2::Ow2Config),
-        Box::new(lol::LolConfig),
-        Box::new(pubg::PubgConfig),
-        Box::new(maplestory::MapleStoryConfig),
-        Box::new(genshin::GenshinConfig),
-        Box::new(rocketleague::RocketLeagueConfig),
-        Box::new(wot::WotConfig),
-    ];
-
-    for game in all_games {
+    for game in all_games() {
         for process_name in game.process_names() {
             if processes
                 .iter()
-                .any(|p| p.eq_ignore_ascii_case(process_name))
+                .any(|p| process_name_matches(p, process_name))
             {
                 tracing::info!(
                     "🎮 Auto-detected game: {} (matched process: {})",
@@ -187,6 +213,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
     let known_procs: Vec<&str> = vec![
         "FortniteClient-Win64-Shipping.exe",
         "cs2.exe",
+        "Bodycam-Win64-Shipping.exe",
         "DeadByDaylight-Win64-Shipping.exe",
         "dota2.exe",
         "RustClient.exe",
@@ -207,7 +234,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot"
+         Supported: fortnite, cs2, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot"
     )
 }
 
@@ -316,6 +343,8 @@ mod tests {
         "cs2",
         "counter-strike",
         "counterstrike",
+        "bodycam",
+        "body-cam",
         "deadbydaylight",
         "dbd",
         "dead-by-daylight",
@@ -371,6 +400,35 @@ mod tests {
         // Note: "overwatch" is now a valid alias for Overwatch 2
         assert!(detect_game("warzone").is_err());
         assert!(detect_game("").is_err());
+    }
+
+    #[test]
+    fn test_process_name_matches_truncation() {
+        // Exact match (case-insensitive).
+        assert!(process_name_matches("cs2.exe", "cs2.exe"));
+        assert!(process_name_matches("CS2.EXE", "cs2.exe"));
+        // Linux 15-char comm truncation under Proton/Wine.
+        assert!(process_name_matches(
+            "Bodycam-Win64-S",
+            "Bodycam-Win64-Shipping.exe"
+        ));
+        assert!(process_name_matches(
+            "DeadByDaylight-",
+            "DeadByDaylight-Win64-Shipping.exe"
+        ));
+        // Short names never truncate, and no false positives.
+        assert!(!process_name_matches(
+            "RustClient.exe",
+            "RustClient.exe.old"
+        ));
+        assert!(!process_name_matches(
+            "Bodycam-Win64-X",
+            "Bodycam-Win64-Shipping.exe"
+        ));
+        assert!(!process_name_matches(
+            "not-a-game",
+            "Bodycam-Win64-Shipping.exe"
+        ));
     }
 
     #[test]
@@ -495,6 +553,17 @@ mod tests {
         assert!(!dbd.uses_sdr());
         assert!(dbd.typical_pps() > 0);
         assert_eq!(dbd.anti_cheat(), "Easy Anti-Cheat (EAC)");
+
+        let bodycam = bodycam::BodycamConfig;
+        assert_eq!(bodycam.name(), "Bodycam");
+        assert!(bodycam
+            .process_names()
+            .contains(&"Bodycam-Win64-Shipping.exe"));
+        assert_eq!(bodycam.ports(), (27000, 27050));
+        assert_eq!(bodycam.redirect_port(), 27000);
+        assert!(bodycam.uses_sdr());
+        assert!(bodycam.typical_pps() > 0);
+        assert_eq!(bodycam.anti_cheat(), "None");
     }
 
     #[test]
