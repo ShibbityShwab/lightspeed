@@ -29,6 +29,10 @@ source-tarball = false
 # main.wxs for the client is hand-edited to bundle WinDivert.dll + WinDivert64.sys
 # into the MSI (cargo-dist's `include` only populates archives, not MSIs).
 allow-dirty = ["msi"]
+# Ship a self-updater for shell installers (Linux/macOS). The updater uses the
+# axoupdater library; MSI installs on Windows cannot self-update and stay on
+# winget/manual updates.
+install-updater = true
 
 # Linux system packages for the build jobs. libpcap-dev is for the client's
 # pcap-capture feature; the rest are the eframe/winit GUI build deps (X11,
