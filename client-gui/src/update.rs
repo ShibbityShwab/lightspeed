@@ -83,11 +83,17 @@ pub fn check_for_update_blocking() -> Result<UpdateStatus, String> {
 async fn check_for_update(current: String) -> Result<UpdateStatus, String> {
     let mut updater = AxoUpdater::new_for("lightspeed-gui");
 
-    // A missing receipt just means a non-shell (e.g. MSI) install. Log it and
-    // continue; the compiled-in version is authoritative for `current` anyway,
-    // and `is_update_needed` will surface the resulting misconfiguration.
+    // A missing receipt means a non-shell (e.g. Windows MSI) install, which the
+    // standalone updater cannot service. Surface a friendly message rather than
+    // letting `is_update_needed` fail later with a raw configuration error.
     if let Err(err) = updater.load_receipt() {
-        tracing::debug!("no install receipt; relying on compiled-in version: {err}");
+        tracing::debug!("no install receipt; update check unavailable: {err}");
+        return Err(
+            "update check unavailable: not installed via the shell installer \
+             (e.g. Windows MSI); update through a package manager or reinstall \
+             from the latest release"
+                .to_string(),
+        );
     }
 
     let current_parsed =
