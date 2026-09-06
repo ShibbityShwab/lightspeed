@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::platform::{self, Platform, TrayAction, TrayHandle};
+use crate::update::UpdateStatus;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 
@@ -92,6 +93,16 @@ pub const GAMES: &[(&str, &str, u16)] = &[
 
 // ── App struct ───────────────────────────────────────────────────────────────
 
+/// The in-progress or completed state of a self-update availability check.
+enum UpdateCheckState {
+    /// No check has been requested.
+    Idle,
+    /// A background thread is consulting the releases API.
+    Checking,
+    /// The check finished; the dialog shows this result.
+    Done(Result<UpdateStatus, String>),
+}
+
 /// Platform-generic egui application for the LightSpeed status window.
 ///
 /// Type parameter `P` selects the platform backend (Windows tray or Linux
@@ -127,6 +138,11 @@ pub struct LightSpeedApp<P: Platform> {
     // ── Boost diagnostics ─────────────────────────────────────────────────
     boost_start: Option<std::time::Instant>,
     custom_port_input: String,
+
+    // ── Update check ─────────────────────────────────────────────────────
+    update_check: UpdateCheckState,
+    show_update_dialog: bool,
+    update_shared: Arc<Mutex<Option<Result<UpdateStatus, String>>>>,
 
     proxies: Vec<ProxyEntry>,
 }
@@ -169,12 +185,29 @@ impl<P: Platform> LightSpeedApp<P> {
             show_advanced: false,
             boost_start: None,
             custom_port_input: String::new(),
+            update_check: UpdateCheckState::Idle,
+            show_update_dialog: false,
+            update_shared: Arc::new(Mutex::new(None)),
             proxies,
         }
     }
 
     fn selected_proxy_addr(&self) -> SocketAddrV4 {
         self.proxies[self.selected_proxy_idx].addr
+    }
+
+    fn start_update_check(&mut self) {
+        if matches!(self.update_check, UpdateCheckState::Checking) {
+            return;
+        }
+        *self.update_shared.lock().unwrap() = None;
+        self.update_check = UpdateCheckState::Checking;
+        self.show_update_dialog = true;
+        let shared = Arc::clone(&self.update_shared);
+        std::thread::spawn(move || {
+            let result = crate::update::check_for_update_blocking();
+            *shared.lock().unwrap() = Some(result);
+        });
     }
 }
 
@@ -212,6 +245,14 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
         // Refresh engine snapshot.
         self.status = self.engine.lock().unwrap().snapshot();
+
+        // Collect a finished update check from the background thread.
+        if matches!(self.update_check, UpdateCheckState::Checking) {
+            if let Some(result) = self.update_shared.lock().unwrap().take() {
+                self.update_check = UpdateCheckState::Done(result);
+                self.show_update_dialog = true;
+            }
+        }
 
         // ── Tray icon state machine ───────────────────────────────────────
         {
@@ -1094,6 +1135,13 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     self.engine.lock().unwrap().connect(proxy);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("Check for updates")
+                        .on_hover_text("Check whether a newer version of LightSpeed is available.")
+                        .clicked()
+                    {
+                        self.start_update_check();
+                    }
                     if P::has_system_tray() && ui.small_button("Hide to tray").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     }
@@ -1184,6 +1232,49 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 self.manager_label_input.clear();
                 self.manager_addr_input.clear();
             }
+        }
+
+        // ── Update check dialog ──────────────────────────────────────────
+        if self.show_update_dialog {
+            egui::Window::new("Check for updates")
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(&ctx, |ui| {
+                    match &self.update_check {
+                        UpdateCheckState::Checking => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label("Checking for updates…");
+                            });
+                        }
+                        UpdateCheckState::Done(result) => {
+                            let current = match result {
+                                Ok(status) => status.current.clone(),
+                                Err(_) => env!("CARGO_PKG_VERSION").to_string(),
+                            };
+                            let latest = match result {
+                                Ok(status) => status
+                                    .latest
+                                    .clone()
+                                    .unwrap_or_else(|| "unknown".to_string()),
+                                Err(_) => "unknown".to_string(),
+                            };
+                            ui.label(format!("Current version: {current}"));
+                            ui.label(format!("Latest version: {latest}"));
+                            ui.add_space(4.0);
+                            ui.label(crate::update::update_status_line(result));
+                        }
+                        UpdateCheckState::Idle => {}
+                    }
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Close").clicked() {
+                            self.show_update_dialog = false;
+                            self.update_check = UpdateCheckState::Idle;
+                        }
+                    });
+                });
         }
 
         // ── Repaint schedule ─────────────────────────────────────────────

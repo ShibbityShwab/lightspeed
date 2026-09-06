@@ -4,11 +4,6 @@
 //! the GitHub releases API. This module only CHECKS; it never invokes
 //! `AxoUpdater::run`, so no installer is ever downloaded or executed.
 
-// The UI wiring that calls this module lands in a later task; until then none
-// of these items have a caller, so allow dead_code to keep `cargo build` green
-// under the repo's `RUSTFLAGS = -Dwarnings` gate.
-#![allow(dead_code)]
-
 use axoupdater::{AxoUpdater, Version};
 
 /// The outcome of an update availability check.
@@ -27,6 +22,7 @@ pub struct UpdateStatus {
 /// compared as unsigned integers; non-numeric or empty segments are treated as
 /// `0`, so malformed input never panics and never compares greater than a
 /// well-formed version sharing the same numeric prefix.
+#[allow(dead_code)] // Test-only: the runtime path delegates version comparison to axoupdater.
 pub fn compare_versions(current: &str, latest: &str) -> bool {
     let current_segments = numeric_segments(strip_v_prefix(current));
     let latest_segments = numeric_segments(strip_v_prefix(latest));
@@ -122,9 +118,50 @@ async fn check_for_update(current: String) -> Result<UpdateStatus, String> {
     })
 }
 
+/// Maps the outcome of an update check to a single user-facing status line.
+///
+/// `Ok` with `update_available` true reads "Update available"; `Ok` otherwise
+/// reads "You're up to date"; `Err` surfaces the underlying failure (e.g. a
+/// missing install receipt on non-shell installs) verbatim.
+pub fn update_status_line(result: &Result<UpdateStatus, String>) -> String {
+    match result {
+        Ok(status) if status.update_available => "Update available".to_string(),
+        Ok(_) => "You're up to date".to_string(),
+        Err(err) => err.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::compare_versions;
+    use super::{compare_versions, update_status_line, UpdateStatus};
+
+    #[test]
+    fn update_status_line_reports_available() {
+        let status = UpdateStatus {
+            current: "1.0.0".into(),
+            latest: Some("1.1.0".into()),
+            update_available: true,
+        };
+        assert_eq!(update_status_line(&Ok(status)), "Update available");
+    }
+
+    #[test]
+    fn update_status_line_reports_up_to_date() {
+        let status = UpdateStatus {
+            current: "1.0.0".into(),
+            latest: None,
+            update_available: false,
+        };
+        assert_eq!(update_status_line(&Ok(status)), "You're up to date");
+    }
+
+    #[test]
+    fn update_status_line_reports_error() {
+        assert_eq!(
+            update_status_line(&Err("no install receipt found".to_string())),
+            "no install receipt found"
+        );
+    }
 
     #[test]
     fn latest_patch_bump_is_newer() {
