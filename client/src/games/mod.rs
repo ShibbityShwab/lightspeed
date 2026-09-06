@@ -32,6 +32,7 @@
 pub mod apex;
 pub mod bodycam;
 pub mod cs2;
+pub mod csgo;
 pub mod deadbydaylight;
 pub mod dota2;
 pub mod fortnite;
@@ -113,6 +114,7 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
     match name.to_lowercase().as_str() {
         "fortnite" => Ok(Box::new(fortnite::FortniteConfig)),
         "cs2" | "counter-strike" | "counterstrike" => Ok(Box::new(cs2::Cs2Config)),
+        "csgo" | "cs-go" | "csgolegacy" | "csgo-legacy" => Ok(Box::new(csgo::CsgoConfig)),
         "bodycam" | "body-cam" => Ok(Box::new(bodycam::BodycamConfig)),
         "deadbydaylight" | "dbd" | "dead-by-daylight" => {
             Ok(Box::new(deadbydaylight::DeadByDaylightConfig))
@@ -129,7 +131,7 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
         "wot" | "worldoftanks" | "world-of-tanks" => Ok(Box::new(wot::WotConfig)),
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot",
+            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot",
             name
         ),
     }
@@ -143,6 +145,7 @@ pub fn all_games() -> Vec<Box<dyn GameConfig>> {
     vec![
         Box::new(fortnite::FortniteConfig),
         Box::new(cs2::Cs2Config),
+        Box::new(csgo::CsgoConfig),
         Box::new(bodycam::BodycamConfig),
         Box::new(deadbydaylight::DeadByDaylightConfig),
         Box::new(dota2::Dota2Config),
@@ -234,7 +237,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot"
+         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot"
     )
 }
 

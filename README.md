@@ -40,6 +40,7 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 |------|----------|------------|-------------|
 | Rust | `--game rust` | EAC | ✅ |
 | Counter-Strike 2 | `--game cs2` | VAC | ✅ |
+| CS:GO Legacy | `--game csgo` | VAC | ✅ |
 | Fortnite | `--game fortnite` | EAC + BattlEye | ✅ |
 | Dota 2 | `--game dota2` | VAC | ✅ |
 | Apex Legends | `--game apex` | EAC | ✅ |
