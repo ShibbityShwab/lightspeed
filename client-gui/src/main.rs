@@ -5,6 +5,7 @@
 
 mod app;
 mod platform;
+mod update;
 
 use eframe::egui;
 use std::sync::{Arc, Mutex};

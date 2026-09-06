@@ -18,9 +18,15 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 anyhow = { workspace = true }
+axoupdater = "0.10.2"
 dirs = "6.0"
 eframe = { version = "0.36", features = ["default"] }
 egui_plot = "0.37"
+# axoupdater pulls reqwest with default-features = false and no TLS backend, so
+# HTTPS calls (GitHub releases API) would fail at runtime. Enable native-tls so
+# the tree's single reqwest instance can actually talk TLS: schannel on Windows,
+# Security.framework on macOS, OpenSSL on Linux.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json"] }
 webbrowser = "1"
 
 # Windows-only: the real system tray (tray-icon) plus WinDivert support.
