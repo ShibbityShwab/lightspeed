@@ -297,8 +297,30 @@ jobs:
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # secrets.* cannot be read inside an `if:`, so gate on the env var instead.
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Post release announcement to Discord
+        if: ${{ env.DISCORD_WEBHOOK != '' }}
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_URL: https://github.com/ShibbityShwab/lightspeed/releases/tag/${{ github.ref_name }}
+        run: |
+          PAYLOAD=$(cat <<EOF
+          {
+            "content": "A new LightSpeed release is out: **$RELEASE_TAG**",
+            "embeds": [
+              {
+                "title": "LightSpeed $RELEASE_TAG",
+                "description": "Reduce your ping. Free. Forever. Download the latest LightSpeed release for Windows, Linux, or macOS.",
+                "url": "$RELEASE_URL"
+              }
+            ]
+          }
+          EOF
+          )
+          curl -sS -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"
