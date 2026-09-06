@@ -1,10 +1,8 @@
 //! # LightSpeed GUI — Linux Platform
 //!
-//! Stub tray (Linux has no system-tray standard), font setup via
-//! Noto Color Emoji, admin check via `id -u`, capture check via
-//! `tcpdump`/`dumpcap`, and Rust port detection via `pgrep` + `ss`.
-
-use std::sync::Arc;
+//! Stub tray (Linux has no system-tray standard), admin check via `id -u`,
+//! capture check via `tcpdump`/`dumpcap`, and Rust port detection via
+//! `pgrep` + `ss`.
 
 use crate::app::{TrayState, STEAM_SERVICE_PORTS};
 use crate::platform::{self, Platform, TrayHandle};
@@ -23,9 +21,8 @@ impl TrayHandle for LinuxTray {
 
 /// Linux [`Platform`] backend.
 ///
-/// Stub tray (no system-tray standard on modern DEs), font setup via
-/// Noto Color Emoji, admin check via `id -u`, capture check via
-/// `tcpdump`/`dumpcap`.
+/// Stub tray (no system-tray standard on modern DEs), admin check via
+/// `id -u`, capture check via `tcpdump`/`dumpcap`.
 pub struct LinuxPlatform;
 
 impl Platform for LinuxPlatform {
@@ -66,34 +63,11 @@ impl Platform for LinuxPlatform {
         tcpdump || dumpcap
     }
 
-    fn setup_fonts(ctx: &egui::Context) {
-        let mut fonts = egui::FontDefinitions::default();
-
-        let candidates = [
-            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
-            "/usr/share/fonts/noto-emoji/NotoColorEmoji.ttf",
-        ];
-
-        for path in &candidates {
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts.font_data.insert(
-                    "noto-emoji".to_owned(),
-                    Arc::new(egui::FontData::from_owned(bytes)),
-                );
-                for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                    fonts
-                        .families
-                        .entry(family)
-                        .or_default()
-                        .push("noto-emoji".to_owned());
-                }
-                break;
-            }
-        }
-
-        ctx.set_fonts(fonts);
+    fn setup_fonts(_ctx: &egui::Context) {
+        // egui's bundled default fonts already include a monochrome Noto
+        // Emoji, which renders the UI emojis consistently on every platform.
+        // Color-emoji fonts cannot be rasterized by egui, so nothing else is
+        // loaded here.
     }
 
     fn detect_rust_ports() -> Option<(u16, u16)> {
@@ -103,9 +77,28 @@ impl Platform for LinuxPlatform {
     fn relaunch_as_admin() -> ! {
         let exe = std::env::current_exe().unwrap_or_default();
         let exe_str = exe.display().to_string();
-        let _ = std::process::Command::new("pkexec")
-            .args([&exe_str])
-            .spawn();
+
+        // `pkexec` scrubs the environment, so a root-relaunched GUI loses its
+        // display and cannot open a window. Forward DISPLAY + XAUTHORITY (and
+        // deliberately omit WAYLAND_DISPLAY so winit falls back to XWayland,
+        // which root can access) plus the LightSpeed relay config, so the
+        // elevated instance keeps the same settings. This matches Windows
+        // (UAC) and macOS (osascript admin), where the elevated instance
+        // retains its display context.
+        let mut cmd = std::process::Command::new("pkexec");
+        cmd.arg("env");
+        for var in [
+            "DISPLAY",
+            "XAUTHORITY",
+            "LIGHTSPEED_PROXIES",
+            "LIGHTSPEED_PROXY",
+        ] {
+            if let Ok(val) = std::env::var(var) {
+                cmd.arg(format!("{var}={val}"));
+            }
+        }
+        cmd.arg(&exe_str);
+        let _ = cmd.spawn();
         std::process::exit(0);
     }
 }

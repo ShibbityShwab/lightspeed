@@ -84,6 +84,7 @@ pub const GAMES: &[(&str, &str, u16)] = &[
     ("dota2", "Dota 2", 27015),
     ("valorant", "Valorant", 7000),
     ("apex", "Apex Legends", 37015),
+    ("bodycam", "Bodycam", 27000),
     ("ow2", "Overwatch 2", 3724),
     ("lol", "League of Legends", 5000),
     ("pubg", "PUBG: Battlegrounds", 7777),
@@ -202,8 +203,8 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             }
         }
 
-        // Intercept close → hide to tray.
-        if ctx.input(|i| i.viewport().close_requested()) {
+        // Intercept close → hide to tray (only where a real tray exists).
+        if P::has_system_tray() && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
@@ -243,9 +244,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 ui.heading("⚡ LightSpeed");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (label, colour) = if self.status.connected {
-                        ("● Connected", egui::Color32::from_rgb(80, 200, 120))
+                        ("• Connected", egui::Color32::from_rgb(80, 200, 120))
                     } else {
-                        ("● Disconnected", egui::Color32::from_rgb(220, 80, 80))
+                        ("• Disconnected", egui::Color32::from_rgb(220, 80, 80))
                     };
                     ui.colored_label(colour, label);
                 });
@@ -272,7 +273,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     let proxy = self.selected_proxy_addr();
                     self.engine.lock().unwrap().connect(proxy);
                 }
-                if ui.button("✎ Manage").clicked() {
+                if ui.button("⚙ Manage").clicked() {
                     self.show_proxy_manager = true;
                 }
             });
@@ -280,9 +281,15 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             ui.horizontal(|ui| {
                 ui.label("Boost Ping:")
                     .on_hover_ui(|ui| {
-                        ui.label("Round-trip time from your PC to the Boost Server.\n\
-                                  🟢 < 60ms  |  🟡 60–120ms  |  🔴 > 120ms\n\
-                                  This becomes your in-game ping when Boost is engaged.");
+                        ui.label("Round-trip time from your PC to the Boost Server.");
+                        ui.horizontal(|ui| {
+                            ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "• < 60ms");
+                            ui.label("  |  ");
+                            ui.colored_label(egui::Color32::from_rgb(255, 210, 0), "• 60-120ms");
+                            ui.label("  |  ");
+                            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "• > 120ms");
+                        });
+                        ui.label("This becomes your in-game ping when Boost is engaged.");
                         ui.hyperlink_to("📖 Understanding ping",
                             "https://github.com/ShibbityShwab/lightspeed/wiki/Understanding-Ping");
                     });
@@ -684,7 +691,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 ui.horizontal(|ui| {
                     ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "⚡ BOOST ENGAGED (manual)");
                     ui.label(format!(
-                        " — {} → port {}",
+                        " — {} -> port {}",
                         self.status.redirect_game, self.status.redirect_local_port,
                     ));
                 });
@@ -880,7 +887,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             if ui
                                 .button("🔑 Restart as Administrator")
                                 .on_hover_text(
-                                    "Relaunches LightSpeed with elevated privileges (UAC prompt).",
+                                    "Relaunches LightSpeed with elevated privileges (system permission prompt).",
                                 )
                                 .clicked()
                             {
@@ -948,7 +955,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
                 // ── Advanced expander (manual server IP fallback) ─────────
                 let adv_label = if self.show_advanced {
-                    "▼ Advanced — set server manually"
+                    "v Advanced — set server manually"
                 } else {
                     "▶ Advanced — set server manually"
                 };
@@ -1087,7 +1094,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     self.engine.lock().unwrap().connect(proxy);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Hide to tray").clicked() {
+                    if P::has_system_tray() && ui.small_button("Hide to tray").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     }
                 });
@@ -1133,7 +1140,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             ui.label(format!("{}.", i + 1));
                             ui.label(&entry.label);
                             ui.label(entry.addr.to_string());
-                            if ui.button("✕").clicked() {
+                            if ui.button("×").clicked() {
                                 remove_idx = Some(i);
                             }
                         });

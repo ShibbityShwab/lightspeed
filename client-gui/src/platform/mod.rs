@@ -43,6 +43,7 @@ pub fn default_port_range(game_idx: usize) -> (u16, u16) {
         "apex" => (37000, 37050),
         "lol" => (5000, 5500),
         "pubg" => (7777, 7843),
+        "bodycam" => (27000, 27050),
         _ => (default_port, default_port),
     }
 }
@@ -68,6 +69,15 @@ pub trait Platform {
     #[allow(dead_code)]
     fn is_capture_available() -> bool;
     fn setup_fonts(ctx: &egui::Context);
+
+    /// Whether this platform has a real, recoverable system tray.
+    ///
+    /// Only Windows does in this build; Linux and macOS use a stub tray, so
+    /// the close-intercept and "Hide to tray" affordance are skipped there
+    /// (hiding would leave the window unrecoverable).
+    fn has_system_tray() -> bool {
+        false
+    }
 
     /// Detect active game-server ports for a game.
     ///

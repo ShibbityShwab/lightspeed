@@ -2,11 +2,8 @@
 //!
 //! **UNTESTED.** This backend compiles but has not been run on real macOS
 //! hardware. It is modeled on the Linux backend: stub tray (no menu-bar
-//! integration yet), Apple Color Emoji fonts, `id -u` admin check,
-//! `tcpdump`/`dumpcap` capture check, and Rust port detection via `pgrep` +
-//! `lsof`.
-
-use std::sync::Arc;
+//! integration yet), `id -u` admin check, `tcpdump`/`dumpcap` capture check,
+//! and Rust port detection via `pgrep` + `lsof`.
 
 use crate::app::{TrayState, STEAM_SERVICE_PORTS};
 use crate::platform::{self, Platform, TrayHandle};
@@ -26,8 +23,8 @@ impl TrayHandle for MacosTray {
 /// macOS [`Platform`] backend.
 ///
 /// **UNTESTED**: compiles but has not been validated on macOS hardware. Stub
-/// tray, Apple Color Emoji fonts, `id -u` admin check, `tcpdump`/`dumpcap`
-/// capture check, and `pgrep` + `lsof` port detection.
+/// tray, `id -u` admin check, `tcpdump`/`dumpcap` capture check, and
+/// `pgrep` + `lsof` port detection.
 pub struct MacosPlatform;
 
 impl Platform for MacosPlatform {
@@ -68,29 +65,11 @@ impl Platform for MacosPlatform {
         tcpdump || dumpcap
     }
 
-    fn setup_fonts(ctx: &egui::Context) {
-        let mut fonts = egui::FontDefinitions::default();
-
-        // Apple Color Emoji is the correct system emoji font, but it is
-        // sbix-only (no glyph outlines), which egui/ab_glyph cannot rasterize,
-        // so emoji render as tofu regardless. The load is harmless; real emoji
-        // support needs egui_noto_emoji or a monochrome emoji TTF.
-        let path = "/System/Library/Fonts/Apple Color Emoji.ttc";
-        if let Ok(bytes) = std::fs::read(path) {
-            fonts.font_data.insert(
-                "apple-color-emoji".to_owned(),
-                Arc::new(egui::FontData::from_owned(bytes)),
-            );
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts
-                    .families
-                    .entry(family)
-                    .or_default()
-                    .push("apple-color-emoji".to_owned());
-            }
-        }
-
-        ctx.set_fonts(fonts);
+    fn setup_fonts(_ctx: &egui::Context) {
+        // egui's bundled default fonts already include a monochrome Noto
+        // Emoji, which renders the UI emojis consistently on every platform.
+        // Color-emoji fonts cannot be rasterized by egui, so nothing else is
+        // loaded here.
     }
 
     fn detect_rust_ports() -> Option<(u16, u16)> {

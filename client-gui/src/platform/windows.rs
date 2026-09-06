@@ -1,11 +1,10 @@
 //! # LightSpeed GUI — Windows Platform
 //!
-//! Real tray-icon backend using `tray_icon`, Windows-specific font paths,
-//! admin check via `net session`, capture check via `sc query npcap`, and
-//! Rust port detection via `tasklist` + `netstat`.
+//! Real tray-icon backend using `tray_icon`, admin check via `net session`,
+//! capture check via `sc query npcap`, and Rust port detection via
+//! `tasklist` + `netstat`.
 
 use std::cell::Cell;
-use std::sync::Arc;
 
 use crate::app::{TrayState, STEAM_SERVICE_PORTS};
 use crate::platform::{self, Platform, TrayAction, TrayHandle};
@@ -141,8 +140,8 @@ impl TrayHandle for WindowsTray {
 
 /// Windows [`Platform`] backend.
 ///
-/// Uses `tray_icon` for the system tray, Win32 font paths, admin check via
-/// `net session`, and Npcap detection via `sc query`.
+/// Uses `tray_icon` for the system tray, admin check via `net session`, and
+/// Npcap detection via `sc query`.
 pub struct WindowsPlatform;
 
 impl Platform for WindowsPlatform {
@@ -170,36 +169,15 @@ impl Platform for WindowsPlatform {
             .unwrap_or(false)
     }
 
-    fn setup_fonts(ctx: &egui::Context) {
-        let mut fonts = egui::FontDefinitions::default();
+    fn setup_fonts(_ctx: &egui::Context) {
+        // egui's bundled default fonts already include a monochrome Noto
+        // Emoji, which renders the UI emojis consistently on every platform.
+        // Color-emoji fonts cannot be rasterized by egui, so nothing else is
+        // loaded here.
+    }
 
-        if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\seguiemj.ttf") {
-            fonts.font_data.insert(
-                "seguiemj".to_owned(),
-                Arc::new(egui::FontData::from_owned(bytes)),
-            );
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts
-                    .families
-                    .entry(family)
-                    .or_default()
-                    .push("seguiemj".to_owned());
-            }
-        }
-
-        if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\seguisym.ttf") {
-            fonts.font_data.insert(
-                "seguisym".to_owned(),
-                Arc::new(egui::FontData::from_owned(bytes)),
-            );
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .push("seguisym".to_owned());
-        }
-
-        ctx.set_fonts(fonts);
+    fn has_system_tray() -> bool {
+        true
     }
 
     fn detect_rust_ports() -> Option<(u16, u16)> {
