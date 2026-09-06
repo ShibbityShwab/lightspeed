@@ -504,7 +504,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             .as_micros() as u32;
                         let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us)
                             .with_session_token(crate::session::session_token());
-                        if ts.send_to(&hdr.encode_to_array(), crate::session::current_proxy().unwrap_or(config_proxy)).await.is_ok() {
+                        if ts
+                            .send_to(
+                                &hdr.encode_to_array(),
+                                crate::session::current_proxy().unwrap_or(config_proxy),
+                            )
+                            .await
+                            .is_ok()
+                        {
                             let mut m = ka.lock().await;
                             m.insert(seq, Instant::now());
                             m.retain(|_, t| t.elapsed() < Duration::from_secs(30));

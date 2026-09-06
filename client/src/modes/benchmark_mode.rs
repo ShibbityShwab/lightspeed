@@ -16,7 +16,10 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
 
     info!("📊 LightSpeed Latency Benchmark");
     info!("   Echo target: {}  Proxy: {}", target, proxy);
-    info!("   {} interleaved probes per route (median reported)", PROBES);
+    info!(
+        "   {} interleaved probes per route (median reported)",
+        PROBES
+    );
     info!("");
 
     let sock = UdpSocket::bind("0.0.0.0:0").await?;
@@ -69,7 +72,11 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
         let rm = median(&relay);
         info!("");
         info!("┌───────────────────────┬───────────┬───────────┐");
-        info!("│ Median                │ {:>7} ms │ {:>7} ms │", dm / 1000, rm / 1000);
+        info!(
+            "│ Median                │ {:>7} ms │ {:>7} ms │",
+            dm / 1000,
+            rm / 1000
+        );
         info!(
             "│ Packet loss           │ {:>7}/{} │ {:>7}/{} │",
             PROBES - direct.len(),
@@ -78,9 +85,15 @@ pub async fn run_benchmark(target: SocketAddrV4, proxy: SocketAddrV4) -> anyhow:
             PROBES
         );
         if rm < dm {
-            info!("│ Saving                │     -     │ {:>7} ms │", (dm - rm) / 1000);
+            info!(
+                "│ Saving                │     -     │ {:>7} ms │",
+                (dm - rm) / 1000
+            );
         } else if dm < rm {
-            info!("│ Penalty               │     -     │ {:>7} ms │", (rm - dm) / 1000);
+            info!(
+                "│ Penalty               │     -     │ {:>7} ms │",
+                (rm - dm) / 1000
+            );
         }
         info!("└───────────────────────┴───────────┴───────────┘");
     } else {

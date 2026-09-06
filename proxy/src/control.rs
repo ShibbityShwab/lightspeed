@@ -184,7 +184,7 @@ mod inner {
         // Cap concurrent control connections so idle pre-registration
         // connections can't exhaust task/memory (only max_clients is enforced
         // at Register).
-        let conn_limit = (state.config.server.max_clients as usize).max(1);
+        let conn_limit = state.config.server.max_clients.max(1);
         let semaphore = Arc::new(tokio::sync::Semaphore::new(conn_limit));
 
         while let Some(incoming) = endpoint.accept().await {
@@ -195,7 +195,7 @@ mod inner {
                     return;
                 };
                 let Ok(permit) = semaphore.clone().try_acquire_owned() else {
-                    let _ = conn.close(0u32.into(), b"at capacity");
+                    conn.close(0u32.into(), b"at capacity");
                     return;
                 };
                 let remote = conn.remote_address();

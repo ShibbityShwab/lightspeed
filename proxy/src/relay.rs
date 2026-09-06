@@ -648,7 +648,9 @@ async fn process_inbound_packet(
                 "Forwarded to game server"
             );
 
-            session.last_client_seq.store(header.sequence, Ordering::Relaxed);
+            session
+                .last_client_seq
+                .store(header.sequence, Ordering::Relaxed);
 
             let mut abuse = abuse_detector.lock().await;
             abuse.record_outbound(*client_addr.ip(), sent as u64);

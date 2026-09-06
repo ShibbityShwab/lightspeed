@@ -151,7 +151,12 @@ impl TrafficInterceptor for PfInterceptor {
                         .as_micros() as u32;
                     let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us)
                         .with_session_token(crate::session::session_token());
-                    let _ = ts.send_to(&hdr.encode_to_array(), crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                    let _ = ts
+                        .send_to(
+                            &hdr.encode_to_array(),
+                            crate::session::current_proxy().unwrap_or(config_proxy),
+                        )
+                        .await;
                     seq = seq.wrapping_add(1);
                 }
             });
