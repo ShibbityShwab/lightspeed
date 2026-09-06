@@ -324,3 +324,37 @@ jobs:
           EOF
           )
           curl -sS -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"
+
+  # Manual addition (not cargo-dist generated): publish the Windows GUI MSI to
+  # the Windows Package Manager via winget-releaser on each successful tag-push
+  # release. It is gated on `host` having succeeded so the GitHub release (and
+  # its MSI asset) is already published when this runs; winget-releaser requires
+  # a published release, and reads assets + the release tag directly from GitHub
+  # (no checkout needed).
+  #
+  # No-op when unconfigured: secrets cannot be read inside an `if:`, so
+  # WINGET_TOKEN is mirrored into a job-level env var and the step is gated on
+  # it, the same idiom the Discord step in `announce` uses. Until a WINGET_TOKEN
+  # secret exists (see dist/winget/README.md: a fine-grained PAT on
+  # microsoft/winget-pkgs with "Pull requests: write" and "Contents: read"), the
+  # step is skipped and this job exits 0.
+  winget-releaser:
+    needs:
+      - plan
+      - host
+    # Same gating as `announce`: only for a successful tag-push release, while
+    # still resolving to a clean skip on pull_request runs.
+    if: ${{ always() && needs.host.result == 'success' }}
+    runs-on: "ubuntu-22.04"
+    env:
+      # secrets.* cannot be read inside an `if:`, so gate on the env var instead.
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - name: Publish LightSpeed to Windows Package Manager (winget)
+        if: ${{ env.WINGET_TOKEN != '' }}
+        # vedantmgoyal9/winget-releaser: repo was renamed from
+        # vedantmgoyal2009/winget-releaser (the old name still redirects).
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: ShibbityShwab.LightSpeed
+          token: ${{ secrets.WINGET_TOKEN }}
