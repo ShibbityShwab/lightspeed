@@ -161,12 +161,141 @@ pub fn build_config_for_game(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Interception mode selection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// How the user wants game traffic intercepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InterceptionMode {
+    /// Auto-select the best available backend (kernel first, userspace fallback).
+    #[default]
+    Auto,
+    /// Force the userspace pcap capture backend.
+    Userspace,
+    /// Force the kernel-level MITM backend (nftables/pfctl/WinDivert).
+    Kernel,
+}
+
+/// The concrete backend selected after resolving an [`InterceptionMode`] against
+/// live probe results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedMode {
+    Kernel,
+    Userspace,
+}
+
+/// Resolve a requested [`InterceptionMode`] into a concrete [`ResolvedMode`]
+/// given the live availability of each backend.
+///
+/// Pure function: no I/O, no side effects.
+pub fn resolve_mode(
+    requested: InterceptionMode,
+    kernel_available: bool,
+    userspace_available: bool,
+) -> Result<ResolvedMode, String> {
+    match requested {
+        InterceptionMode::Kernel => {
+            if kernel_available {
+                Ok(ResolvedMode::Kernel)
+            } else {
+                Err("kernel interception unavailable".to_string())
+            }
+        }
+        InterceptionMode::Userspace => {
+            if userspace_available {
+                Ok(ResolvedMode::Userspace)
+            } else {
+                Err("userspace interception unavailable".to_string())
+            }
+        }
+        InterceptionMode::Auto => {
+            if kernel_available {
+                Ok(ResolvedMode::Kernel)
+            } else if userspace_available {
+                Ok(ResolvedMode::Userspace)
+            } else {
+                Err("no interception backend available".to_string())
+            }
+        }
+    }
+}
+
+/// Probe the current build/runtime for backend availability.
+///
+/// Returns `(kernel_available, userspace_available)`.
+pub fn probe_availability() -> (bool, bool) {
+    let kernel_available = create_interceptor().check_availability().is_ok();
+
+    #[cfg(feature = "pcap-capture")]
+    let userspace_available = crate::capture::create_default_capture().is_ok();
+
+    #[cfg(not(feature = "pcap-capture"))]
+    let userspace_available = false;
+
+    (kernel_available, userspace_available)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interception_mode_default_is_auto() {
+        assert_eq!(InterceptionMode::default(), InterceptionMode::Auto);
+    }
+
+    #[test]
+    fn resolve_mode_truth_table() {
+        use InterceptionMode::*;
+
+        let cases: Vec<(InterceptionMode, bool, bool, Result<ResolvedMode, &str>)> = vec![
+            // ── Kernel requested: only kernel availability matters ──
+            (Kernel, true, true, Ok(ResolvedMode::Kernel)),
+            (Kernel, true, false, Ok(ResolvedMode::Kernel)),
+            (Kernel, false, true, Err("kernel interception unavailable")),
+            (Kernel, false, false, Err("kernel interception unavailable")),
+            // ── Userspace requested: only userspace availability matters ──
+            (Userspace, true, true, Ok(ResolvedMode::Userspace)),
+            (
+                Userspace,
+                true,
+                false,
+                Err("userspace interception unavailable"),
+            ),
+            (Userspace, false, true, Ok(ResolvedMode::Userspace)),
+            (
+                Userspace,
+                false,
+                false,
+                Err("userspace interception unavailable"),
+            ),
+            // ── Auto: prefer kernel, fall back to userspace ──
+            (Auto, true, true, Ok(ResolvedMode::Kernel)),
+            (Auto, true, false, Ok(ResolvedMode::Kernel)),
+            (Auto, false, true, Ok(ResolvedMode::Userspace)),
+            (Auto, false, false, Err("no interception backend available")),
+        ];
+
+        for (requested, kernel, userspace, expected) in cases {
+            let actual = resolve_mode(requested, kernel, userspace);
+            match expected {
+                Ok(m) => assert_eq!(
+                    actual,
+                    Ok(m),
+                    "requested={requested:?} kernel={kernel} userspace={userspace}"
+                ),
+                Err(e) => assert_eq!(
+                    actual,
+                    Err(e.to_string()),
+                    "requested={requested:?} kernel={kernel} userspace={userspace}"
+                ),
+            }
+        }
+    }
 
     #[test]
     fn create_interceptor_is_always_some() {

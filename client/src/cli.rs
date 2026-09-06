@@ -77,6 +77,10 @@ pub struct Cli {
     #[arg(long)]
     pub route_strategy: Option<String>,
 
+    /// Interception mode: auto, userspace, or kernel.
+    #[arg(long, value_name = "MODE")]
+    pub interception_mode: Option<String>,
+
     /// Probe all configured proxies and display latencies, then exit
     #[arg(long, default_value_t = false)]
     pub probe_proxies: bool,
@@ -246,6 +250,7 @@ mod tests {
         assert!(cli.game_server.is_none());
         assert!(cli.local_port.is_none());
         assert!(cli.route_strategy.is_none());
+        assert!(cli.interception_mode.is_none());
         assert!(cli.echo_server.is_none());
         assert!(cli.interface.is_none());
     }
@@ -342,6 +347,8 @@ mod tests {
             "8",
             "--route-strategy",
             "ml",
+            "--interception-mode",
+            "userspace",
             "--echo-server",
             "10.0.0.1:9999",
             "--interface",
@@ -355,6 +362,7 @@ mod tests {
         assert_eq!(cli.local_port, Some(8888));
         assert_eq!(cli.fec_k, 8);
         assert_eq!(cli.route_strategy.as_deref(), Some("ml"));
+        assert_eq!(cli.interception_mode.as_deref(), Some("userspace"));
         assert_eq!(cli.echo_server.as_deref(), Some("10.0.0.1:9999"));
         assert_eq!(cli.interface.as_deref(), Some("eth0"));
     }
@@ -465,6 +473,15 @@ mod tests {
             let cli = Cli::try_parse_from(["lightspeed", "--route-strategy", strategy]).unwrap();
             assert_eq!(cli.route_strategy.as_deref(), Some(*strategy));
         }
+    }
+
+    #[test]
+    fn test_interception_mode_flag() {
+        let cli = Cli::try_parse_from(["lightspeed"]).unwrap();
+        assert!(cli.interception_mode.is_none());
+
+        let cli = Cli::try_parse_from(["lightspeed", "--interception-mode", "userspace"]).unwrap();
+        assert_eq!(cli.interception_mode.as_deref(), Some("userspace"));
     }
 
     // ── parse_proxy_addr tests ───────────────────────────────────────

@@ -31,6 +31,10 @@ pub struct Config {
     /// ML model settings.
     #[serde(default)]
     pub ml: MlConfig,
+
+    /// Interception backend selection settings.
+    #[serde(default)]
+    pub interception: InterceptionConfig,
 }
 
 /// General application settings.
@@ -137,6 +141,14 @@ pub struct MlConfig {
     pub min_samples: usize,
 }
 
+/// Interception backend selection settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterceptionConfig {
+    /// Interception mode: "auto", "userspace", or "kernel".
+    #[serde(default = "default_interception_mode")]
+    pub mode: String,
+}
+
 // Default value functions
 
 fn default_log_level() -> String {
@@ -185,6 +197,10 @@ fn default_multipath_max_paths() -> u8 {
 
 fn default_min_samples() -> usize {
     50
+}
+
+fn default_interception_mode() -> String {
+    "auto".into()
 }
 
 impl Default for GeneralConfig {
@@ -240,6 +256,14 @@ impl Default for MlConfig {
     }
 }
 
+impl Default for InterceptionConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_interception_mode(),
+        }
+    }
+}
+
 impl Config {
     /// Load configuration from a TOML file.
     pub fn load(path: &str) -> anyhow::Result<Self> {
@@ -285,6 +309,7 @@ mod tests {
         assert!(config.ml.model_path.is_none());
         assert!(!config.ml.online_learning);
         assert_eq!(config.ml.min_samples, 50);
+        assert_eq!(config.interception.mode, "auto");
     }
 
     #[test]
@@ -314,6 +339,9 @@ mod tests {
         assert!(ml.model_path.is_none());
         assert!(!ml.online_learning);
         assert_eq!(ml.min_samples, 50);
+
+        let interception = InterceptionConfig::default();
+        assert_eq!(interception.mode, "auto");
     }
 
     // ── TOML round-trip tests ──────────────────────────────────────────
@@ -496,6 +524,15 @@ keepalive_ms = "not_a_number"
             let toml_str = format!("[route]\nstrategy = \"{}\"\n", strategy);
             let config: Config = toml::from_str(&toml_str).unwrap();
             assert_eq!(config.route.strategy, *strategy);
+        }
+    }
+
+    #[test]
+    fn test_interception_mode_values() {
+        for mode in &["auto", "userspace", "kernel"] {
+            let toml_str = format!("[interception]\nmode = \"{}\"\n", mode);
+            let config: Config = toml::from_str(&toml_str).unwrap();
+            assert_eq!(config.interception.mode, *mode);
         }
     }
 
