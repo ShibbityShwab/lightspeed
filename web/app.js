@@ -1,4 +1,4 @@
-// LightSpeed Landing Page — app.js
+// LightSpeed Landing Page - app.js
 // Minimal JS: mobile nav, scroll animations, nav background
 
 (function () {
@@ -34,7 +34,7 @@
   }
 
   // --- Scroll: Fade-in elements ---
-  const faders = document.querySelectorAll('.step, .game-card, .bench-card, .compare-card, .download-card, .faq-item');
+  const faders = document.querySelectorAll('.step, .game-card, .bench-card, .compare-card, .download-card, .faq-item, .relay-card');
   if (faders.length && 'IntersectionObserver' in window) {
     faders.forEach(el => el.classList.add('fade-in'));
     const observer = new IntersectionObserver((entries) => {

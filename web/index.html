@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LightSpeed — Free Game Network Optimizer</title>
+  <title>LightSpeed - Free Game Network Optimizer</title>
   <meta name="description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
   <meta name="theme-color" content="#0a0a1a">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,7 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <!-- Open Graph -->
-  <meta property="og:title" content="LightSpeed — Free Game Network Optimizer">
+  <meta property="og:title" content="LightSpeed - Free Game Network Optimizer">
   <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source AI-powered routing for competitive gamers.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shibbityshwab.github.io/lightspeed">
@@ -26,6 +26,7 @@
       </a>
       <div class="nav-links" id="nav-links">
         <a href="#how-it-works">How It Works</a>
+        <a href="#network">Network</a>
         <a href="#games">Games</a>
         <a href="#benchmarks">Benchmarks</a>
         <a href="route-visualizer/">Route Visualizer</a>
@@ -69,8 +70,8 @@
       </div>
       <div class="hero-stats">
         <div class="stat">
-          <span class="stat-value">Self</span>
-          <span class="stat-label">Hosted — You Control It</span>
+          <span class="stat-value">5</span>
+          <span class="stat-label">Community Relays</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
@@ -101,7 +102,7 @@
           <div class="step-number">1</div>
           <div class="step-icon">🎮</div>
           <h3>Launch LightSpeed</h3>
-          <p>Run the lightweight client before your game. It auto-detects Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, and more.</p>
+          <p>Run the lightweight client before your game. It auto-detects 17 built-in profiles: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, and more.</p>
         </div>
         <div class="step-arrow">→</div>
         <div class="step">
@@ -151,11 +152,78 @@
     </div>
   </section>
 
+  <!-- Global Network -->
+  <section class="section" id="network">
+    <div class="container">
+      <h2 class="section-title">Global Network</h2>
+      <p class="section-subtitle">Five community-hosted relays across four regions (North America, Europe, AP-Southeast, AP-Northeast). Your client verifies the signed registry and auto-discovers the fastest path.</p>
+      <div class="relay-grid">
+        <div class="relay-card">
+          <div class="relay-flag">🇺🇸</div>
+          <h3>Los Angeles</h3>
+          <div class="relay-region">US-West</div>
+          <div class="relay-status"><span class="status-dot"></span>Online</div>
+        </div>
+        <div class="relay-card">
+          <div class="relay-flag">🇺🇸</div>
+          <h3>New Jersey</h3>
+          <div class="relay-region">US-East</div>
+          <div class="relay-status"><span class="status-dot"></span>Online</div>
+        </div>
+        <div class="relay-card">
+          <div class="relay-flag">🇩🇪</div>
+          <h3>Frankfurt</h3>
+          <div class="relay-region">EU-Central</div>
+          <div class="relay-status"><span class="status-dot"></span>Online</div>
+        </div>
+        <div class="relay-card">
+          <div class="relay-flag">🇸🇬</div>
+          <h3>Singapore</h3>
+          <div class="relay-region">AP-Southeast</div>
+          <div class="relay-status"><span class="status-dot"></span>Online</div>
+        </div>
+        <div class="relay-card">
+          <div class="relay-flag">🇯🇵</div>
+          <h3>Tokyo</h3>
+          <div class="relay-region">AP-Northeast</div>
+          <div class="relay-status"><span class="status-dot"></span>Online</div>
+        </div>
+      </div>
+      <div class="network-stats">
+        <div class="stat">
+          <span class="stat-value">5</span>
+          <span class="stat-label">Relay Nodes</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">4</span>
+          <span class="stat-label">Regions</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">17</span>
+          <span class="stat-label">Game Profiles</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">✓</span>
+          <span class="stat-label">Signed Registry</span>
+        </div>
+      </div>
+      <p class="network-note">
+        The network is community-hosted and sponsor-funded. Every relay is published in a
+        <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">signed registry</a>,
+        so your client verifies each node and picks the fastest path automatically. No manual proxy setup needed.
+        Relay status reflects the latest registry snapshot; we do not publish live latency numbers.
+      </p>
+    </div>
+  </section>
+
   <!-- Supported Games -->
   <section class="section section-dark" id="games">
     <div class="container">
       <h2 class="section-title">Supported Games</h2>
-      <p class="section-subtitle">Built-in profiles for 13 games. Drop-in and play.</p>
+      <p class="section-subtitle">Built-in profiles for 17 games. Drop-in and play.</p>
       <div class="games-grid">
         <div class="game-card">
           <div class="game-icon">🔫</div>
@@ -164,7 +232,7 @@
             <span class="game-tag">UDP 9000-9100</span>
             <span class="game-tag">EasyAntiCheat</span>
           </div>
-          <p>Full support for all Fortnite server regions. Compatible with EasyAntiCheat — no modifications to game packets.</p>
+          <p>Full support for all Fortnite server regions. Compatible with EasyAntiCheat, with no modifications to game packets.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -174,7 +242,7 @@
             <span class="game-tag">UDP 27015-27050</span>
             <span class="game-tag">VAC</span>
           </div>
-          <p>Optimized for CS2's tick-sensitive networking. VAC-safe — we only reroute, never modify packets.</p>
+          <p>Optimized for CS2's tick-sensitive networking. VAC-safe: we only reroute, never modify packets.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -194,7 +262,7 @@
             <span class="game-tag">UDP 28015-28017</span>
             <span class="game-tag">EAC + Facepunch</span>
           </div>
-          <p>Direct UDP to community and official servers — no Steam Datagram Relay, ideal for LightSpeed proxying. Compatible with EAC and Facepunch Anti-Hack.</p>
+          <p>Direct UDP to community and official servers, no Steam Datagram Relay, ideal for LightSpeed proxying. Compatible with EAC and Facepunch Anti-Hack.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -204,7 +272,7 @@
             <span class="game-tag">UDP 7000-7500</span>
             <span class="game-tag">Riot Vanguard</span>
           </div>
-          <p>Direct UDP to Riot's regional servers worldwide. LightSpeed only reroutes packets transparently — fully compatible with Riot Vanguard's kernel-level anti-cheat.</p>
+          <p>Direct UDP to Riot's regional servers worldwide. LightSpeed only reroutes packets transparently, fully compatible with Riot Vanguard's kernel-level anti-cheat.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -214,7 +282,7 @@
             <span class="game-tag">UDP 37000-37050</span>
             <span class="game-tag">EasyAntiCheat</span>
           </div>
-          <p>Direct UDP to EA's data-centre servers across NA, EU, Asia, and OCE. No Steam relay layer — straightforward to proxy. EAC-safe transparent routing.</p>
+          <p>Direct UDP to EA's data-centre servers across NA, EU, Asia, and OCE. No Steam relay layer, which makes it straightforward to proxy. EAC-safe transparent routing.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -224,7 +292,7 @@
             <span class="game-tag">UDP 5060-5062</span>
             <span class="game-tag">Warden</span>
           </div>
-          <p>Supports all Blizzard regional servers. Blizzard's game traffic uses direct UDP — transparent rerouting works seamlessly alongside Warden anti-cheat.</p>
+          <p>Supports all Blizzard regional servers. Blizzard's game traffic uses direct UDP, so transparent rerouting works seamlessly alongside Warden anti-cheat.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -234,7 +302,7 @@
             <span class="game-tag">UDP 5500</span>
             <span class="game-tag">Riot Vanguard</span>
           </div>
-          <p>Works across all Riot regional servers (NA, EUW, EUNE, KR, etc.). Fully compatible with Riot Vanguard — we only change the route, never the payload.</p>
+          <p>Works across all Riot regional servers (NA, EUW, EUNE, KR, etc.). Fully compatible with Riot Vanguard: we only change the route, never the payload.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -244,7 +312,7 @@
             <span class="game-tag">UDP 7777</span>
             <span class="game-tag">BattlEye</span>
           </div>
-          <p>Supports all PUBG server regions. Direct UDP to Krafton servers — no relay layers. Transparent tunneling is fully compatible with BattlEye.</p>
+          <p>Supports all PUBG server regions. Direct UDP to Krafton servers, with no relay layers. Transparent tunneling is fully compatible with BattlEye.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -264,7 +332,7 @@
             <span class="game-tag">TCP 12451</span>
             <span class="game-tag">Action Combat</span>
           </div>
-          <p>TCP-tunneled traffic to HoYoverse regional servers. No kernel anti-cheat — clean, low-latency routing for action combat.</p>
+          <p>TCP-tunneled traffic to HoYoverse regional servers. No kernel anti-cheat, just clean, low-latency routing for action combat.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -274,7 +342,7 @@
             <span class="game-tag">UDP 27015-27050</span>
             <span class="game-tag">EasyAntiCheat</span>
           </div>
-          <p>Direct UDP to Psyonix servers across all regions. EAC-compatible transparent routing — no packet modification, no relay layers.</p>
+          <p>Direct UDP to Psyonix servers across all regions. EAC-compatible transparent routing with no packet modification and no relay layers.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
         <div class="game-card">
@@ -284,7 +352,47 @@
             <span class="game-tag">TCP 20010</span>
             <span class="game-tag">Wargaming</span>
           </div>
-          <p>TCP-tunneled traffic to Wargaming regional servers. No kernel anti-cheat — straightforward route optimization for tank combat.</p>
+          <p>TCP-tunneled traffic to Wargaming regional servers. No kernel anti-cheat, so route optimization is straightforward for tank combat.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">💣</div>
+          <h3>CS:GO Legacy</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 27000-27050</span>
+            <span class="game-tag">VAC</span>
+          </div>
+          <p>Legacy CS:GO servers still accept direct UDP. VAC-safe transparent routing, same as CS2. Some servers use Steam Datagram Relay, so auto-detection picks the direct path when one exists.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">👻</div>
+          <h3>Dead by Daylight</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 27000-27050</span>
+            <span class="game-tag">EasyAntiCheat</span>
+          </div>
+          <p>Direct UDP to Behaviour Interactive's dedicated servers across all regions. EAC-compatible transparent routing with no packet modification.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">📷</div>
+          <h3>Bodycam</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 27000-27050</span>
+            <span class="game-tag">Steam P2P</span>
+          </div>
+          <p>Peer-to-peer over Steam with no kernel anti-cheat. LightSpeed reroutes the Steam datagram traffic onto a cleaner path to your peers.</p>
+          <div class="game-status game-status-ready">✓ Ready</div>
+        </div>
+        <div class="game-card">
+          <div class="game-icon">🧱</div>
+          <h3>Roblox</h3>
+          <div class="game-details">
+            <span class="game-tag">UDP 49152-65535</span>
+            <span class="game-tag">Byfron (Hyperion)</span>
+          </div>
+          <p>Direct UDP to Roblox's regional game servers on a high ephemeral source port. Transparent forwarding stays compatible with Byfron (Hyperion), since packets are never modified.</p>
           <div class="game-status game-status-ready">✓ Ready</div>
         </div>
       </div>
@@ -343,16 +451,16 @@
           <p>Protocol encapsulation adds just 0.162ms. 20-byte header + optional 4-byte FEC extension.</p>
           <div class="bench-bar">
             <div class="bench-bar-fill" style="width: 3%"></div>
-            <span class="bench-bar-label">0.162ms — imperceptible</span>
+            <span class="bench-bar-label">0.162ms (imperceptible)</span>
           </div>
         </div>
         <div class="bench-card">
           <h3>🧪 Test Suite</h3>
-          <div class="bench-value">153+ <span class="bench-unit">tests</span></div>
-          <p>Protocol tests (header, FEC, telemetry, zero-alloc API), integration tests across all 4 crates, plus E2E relay tests against 2 live proxy nodes.</p>
+          <div class="bench-value">200+ <span class="bench-unit">tests</span></div>
+          <p>Protocol tests (header, FEC, telemetry, zero-alloc API), integration tests across all 4 crates, plus E2E relay tests against 5 live community relays.</p>
           <div class="bench-bar">
             <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
-            <span class="bench-bar-label">100% pass rate &middot; 2 live nodes verified</span>
+            <span class="bench-bar-label">100% pass rate &middot; 5 live relays verified</span>
           </div>
         </div>
       </div>
@@ -368,7 +476,7 @@
         <div class="compare-card">
           <div class="compare-icon">💸</div>
           <h3>Actually Free</h3>
-          <p>Not "free trial" free. Not "freemium" free. Free as in <strong>zero dollars forever</strong>. You run your own proxy on free-tier cloud VPS credits — no middleman, no subscription, no hidden cost. Ever.</p>
+          <p>Not "free trial" free. Not "freemium" free. Free as in <strong>zero dollars forever</strong>. The community relay network is community-hosted and sponsor-funded, and you can still run your own proxy on free-tier cloud VPS credits. No middleman, no subscription, no hidden cost. Ever.</p>
         </div>
         <div class="compare-card">
           <div class="compare-icon">🔓</div>
@@ -383,27 +491,27 @@
         <div class="compare-card">
           <div class="compare-icon">🛡️</div>
           <h3>Anti-Cheat Safe</h3>
-          <p>We never modify game packets. LightSpeed only changes the <em>route</em> your packets take — the content is untouched. Compatible with EAC, VAC, and Vanguard.</p>
+          <p>We never modify game packets. LightSpeed only changes the <em>route</em> your packets take. The content is untouched. Compatible with EAC, VAC, and Vanguard.</p>
         </div>
         <div class="compare-card">
           <div class="compare-icon">🔒</div>
           <h3>Privacy First</h3>
-          <p>No accounts. No telemetry (unless you opt in). No data harvesting. We don't even know who you are — and we like it that way.</p>
+          <p>No accounts. No telemetry (unless you opt in). No data harvesting. We don't even know who you are, and we like it that way.</p>
         </div>
         <div class="compare-card">
           <div class="compare-icon">🦀</div>
           <h3>Built in Rust</h3>
-          <p>Blazing fast, memory-safe, zero-cost abstractions. The entire stack — client, proxy, protocol — is pure Rust with async Tokio and QUIC.</p>
+          <p>Blazing fast, memory-safe, zero-cost abstractions. The entire stack (client, proxy, protocol) is pure Rust with async Tokio and QUIC.</p>
         </div>
         <div class="compare-card">
           <div class="compare-icon">🔐</div>
           <h3>Token Authenticated</h3>
-          <p>Clients register over a QUIC control plane and stamp a session token into every data-plane packet. The proxy validates <code>(IP, token)</code> per packet — unregistered senders are dropped. <code>require_auth</code> is on by default.</p>
+          <p>Clients register over a QUIC control plane and stamp a session token into every data-plane packet. The proxy validates <code>(IP, token)</code> per packet. Unregistered senders are dropped. <code>require_auth</code> is on by default.</p>
         </div>
         <div class="compare-card">
           <div class="compare-icon">🔌</div>
           <h3>TCP Fallback</h3>
-          <p>The client ↔ proxy tunnel defaults to UDP, but switches to TCP (<code>--tcp</code>) on networks that block UDP — hotels, coffee shops, restrictive ISPs. Same low-overhead optimization, broader compatibility.</p>
+          <p>The client ↔ proxy tunnel defaults to UDP, but switches to TCP (<code>--tcp</code>) on networks that block UDP: hotels, coffee shops, restrictive ISPs. Same low-overhead optimization, broader compatibility.</p>
         </div>
       </div>
 
@@ -493,7 +601,7 @@
   <section class="section section-accent" id="download">
     <div class="container">
       <h2 class="section-title">Download LightSpeed</h2>
-      <p class="section-subtitle">Grab v1.2.0 &mdash; the latest release. Run it. That's the whole setup.</p>
+      <p class="section-subtitle">Grab v1.4.0, the latest release. Run it. That's the whole setup.</p>
       <div class="download-grid">
         <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
           <div class="download-icon">🪟</div>
@@ -533,7 +641,7 @@
       <div class="faq-grid">
         <details class="faq-item">
           <summary>How is this free? What's the catch?</summary>
-          <p>There is no catch. LightSpeed is <strong>self-hosted</strong> — you run the proxy software on your own VPS (Vultr gives new accounts $300 free credit, Oracle Cloud has a free tier forever). The software is fully open source. We don't sell your data because we don't collect it. In the future, we plan to offer a managed cloud option for those who don't want to self-host.</p>
+          <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data because we don't collect it.</p>
         </details>
         <details class="faq-item">
           <summary>Will this get me banned?</summary>
@@ -541,27 +649,27 @@
         </details>
         <details class="faq-item">
           <summary>How much will this actually reduce my ping?</summary>
-          <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut 10-50ms off your ping. If your ISP already has optimal routing, the improvement may be minimal. The AI model picks the best route — or direct if that's fastest.</p>
+          <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut 10-50ms off your ping. If your ISP already has optimal routing, the improvement may be minimal. The AI model picks the best route, or direct if that's fastest.</p>
         </details>
         <details class="faq-item">
           <summary>Does LightSpeed make my internet faster?</summary>
-          <p>No. LightSpeed can't make your traffic go faster — it can't outrun physics. What it does is <strong>proactively route</strong> your traffic onto the fastest available path, avoiding congestion and needlessly long routes. If your ISP already has a clean route, or your proxy is badly placed, you'll see little to no improvement.</p>
+          <p>No. LightSpeed can't make your traffic go faster. It can't outrun physics. What it does is <strong>proactively route</strong> your traffic onto the fastest available path, avoiding congestion and needlessly long routes. If your ISP already has a clean route, or your proxy is badly placed, you'll see little to no improvement.</p>
         </details>
         <details class="faq-item">
           <summary>Why is my ping higher when I use a proxy?</summary>
-          <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot — how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>game server</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">Route Visualizer</a>.</p>
+          <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>game server</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">Route Visualizer</a>.</p>
         </details>
         <details class="faq-item">
           <summary>What games are supported?</summary>
-          <p>Currently: Fortnite, CS2, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, and World of Tanks all have built-in profiles — just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
+          <p>Currently 17 games: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, and Roblox all have built-in profiles. Just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
         </details>
         <details class="faq-item">
           <summary>Is my data safe?</summary>
-          <p>We don't collect any data by default. No accounts, no registration, no telemetry. If you opt-in to anonymous latency reporting, we collect only aggregate network metrics (ping times, not your identity or game data). All traffic passes through unencrypted to avoid adding overhead — we document this transparently.</p>
+          <p>We don't collect any data by default. No accounts, no registration, no telemetry. If you opt-in to anonymous latency reporting, we collect only aggregate network metrics (ping times, not your identity or game data). All traffic passes through unencrypted to avoid adding overhead. We document this transparently.</p>
         </details>
         <details class="faq-item">
           <summary>How do I get a proxy node?</summary>
-          <p>You host your own — that's the whole idea. Spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
+          <p>The easiest path is to do nothing: the default client experience uses the community relay network, and your client auto-discovers the fastest relay from the <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">signed registry</a>. If you want to run your own node instead, spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
         </details>
         <details class="faq-item">
           <summary>Why Rust?</summary>
