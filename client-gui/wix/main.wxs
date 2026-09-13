@@ -147,6 +147,26 @@
                     </Directory>
                 </Directory>
             </Directory>
+            <Directory Id='ProgramMenuFolder'>
+                <Directory Id='ApplicationProgramsFolder' Name='LightSpeed'>
+                    <Component Id='ApplicationShortcut' Guid='*'>
+                        <Shortcut
+                            Id='ApplicationStartMenuShortcut'
+                            Name='LightSpeed'
+                            Description='Reduce your ping. Free. Forever.'
+                            Target='[#exe0]'
+                            WorkingDirectory='APPLICATIONFOLDER'/>
+                        <RemoveFolder Id='ApplicationProgramsFolder' On='uninstall'/>
+                        <RegistryValue
+                            Root='HKCU'
+                            Key='Software\LightSpeed\lightspeed-gui'
+                            Name='installed'
+                            Type='integer'
+                            Value='1'
+                            KeyPath='yes'/>
+                    </Component>
+                </Directory>
+            </Directory>
         </Directory>
 
         <Feature
@@ -168,6 +188,7 @@
             <ComponentRef Id='binary0'/>
             <ComponentRef Id='WinDivertDll'/>
             <ComponentRef Id='WinDivertSys'/>
+            <ComponentRef Id='ApplicationShortcut'/>
 
             <Feature
                 Id='Environment'

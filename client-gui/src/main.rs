@@ -3,6 +3,8 @@
 //! Cross-platform via the `platform` module (Windows tray-icon with
 //! `tray_icon`, Linux stub).
 
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod app;
 mod platform;
 mod update;
