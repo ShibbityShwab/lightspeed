@@ -5,10 +5,21 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] - 2026-09-13
 
 ### Added
+- **Community relay network**: 5 sponsor-funded relays (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo) form a global, community-discoverable network.
+- **Zero-config registry discovery**: the client now fetches and verifies a signed community registry and auto-probes relays when no proxy is configured; the registry URL and operator key are compiled into the client.
+- **Roblox** game profile: `--game roblox`, high-ephemeral UDP range (49152-65535), process `RobloxPlayerBeta.exe`, Byfron (Hyperion) anti-cheat.
 - **Bodycam** game profile: `--game bodycam`, peer-to-peer over Steam (no dedicated servers), no anti-cheat, process `Bodycam-Win64-Shipping.exe` (Steam App ID 2406770).
+
+### Fixed
+- **GUI console window** (#68): the Windows GUI no longer opens a console window (`windows_subsystem = "windows"`).
+- **Start Menu shortcut** (#67): the GUI MSI installer now creates a Start Menu shortcut.
+
+### Changed
+- Website: added a Global Network section and refreshed stale copy (v1.4.0, 17 games, 200+ tests).
+- Docs: the community relay network is now documented as live, with the signed registry URL and the zero-config discovery flow.
 
 ## [1.3.2] - 2026-08-31
 
