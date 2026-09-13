@@ -8,9 +8,13 @@
 [![Rust](https://img.shields.io/badge/built%20with-Rust%201.85+-orange.svg?style=flat-square)](https://rust-lang.org)
 [![Tests](https://img.shields.io/badge/tests-200%2B%20passing-brightgreen.svg?style=flat-square)](https://github.com/ShibbityShwab/lightspeed/actions)
 
-LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It routes your game traffic through an optimized proxy tunnel, bypassing slow ISP paths to reduce and stabilize your ping — no subscriptions, no usage fees, no infrastructure bills.
+LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It routes your game traffic through an optimized proxy tunnel, bypassing slow ISP paths to reduce and stabilize your ping - no subscriptions, no usage fees, no infrastructure bills.
 
-> **How?** Your ISP routes game packets through congested paths chosen for cost, not speed. LightSpeed tunnels them through a proxy node with high-speed backbone connections to game server regions. The result is lower, more stable latency — typically 10–40ms improvement depending on your location and the game server.
+> **How?** Your ISP routes game packets through congested paths chosen for cost, not speed. LightSpeed tunnels them through a proxy node with high-speed backbone connections to game server regions. The result is lower, more stable latency - typically 10-40ms improvement depending on your location and the game server.
+
+### 🌐 Community Relay Network
+
+LightSpeed now runs a **community relay network**: five sponsor-funded relays in Los Angeles, New Jersey, Singapore, Frankfurt, and Tokyo. Clients discover them automatically through a signed registry (`https://shibbityshwab.github.io/lightspeed/registry.json`) with the operator's key compiled in, so there is nothing to configure. Self-hosting your own proxy is still fully supported. See the [Community Relay Network guide](docs/community-network.md) for details.
 
 ---
 
@@ -54,6 +58,7 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 | World of Tanks | `--game wot` | None | ✅ |
 | Dead by Daylight | `--game deadbydaylight` | EAC | ✅ |
 | Bodycam | `--game bodycam` | None | ✅ |
+| Roblox | `--game roblox` | Byfron (Hyperion) | ✅ |
 
 📖 **[Full Game List →](docs/supported-games.md)**
 
@@ -62,20 +67,21 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 ## ✨ Features
 
 ### Smart Routing
-- **Automatic proxy selection** — probes all configured proxies and picks the fastest
-- **ML-based route prediction** — 11-feature Random Forest model learns from your connection patterns
-- **Multipath FEC** — XOR-based Forward Error Correction with ~25% bandwidth overhead (vs. ExitLag's 200%)
-- **TCP tunnel fallback** — client↔proxy leg over TCP (`--tcp`) for networks that block UDP
+- **Automatic proxy selection** - probes all configured proxies and picks the fastest
+- **Community relay auto-discovery** - finds the five community relays via the signed registry with zero config, or point at your own with `--registry <url>`
+- **ML-based route prediction** - 11-feature Random Forest model learns from your connection patterns
+- **Multipath FEC** - XOR-based Forward Error Correction with ~25% bandwidth overhead (vs. ExitLag's 200%)
+- **TCP tunnel fallback** - client↔proxy leg over TCP (`--tcp`) for networks that block UDP
 
 ### Packet Interception
-- **Kernel-level MITM** — nftables/iptables (Linux), pfctl (macOS), WinDivert (Windows)
-- **Per-process targeting** — auto-detects your game process and its UDP connections
-- **IP-transparent** — game servers always see your real IP (not a VPN)
+- **Kernel-level MITM** - nftables/iptables (Linux), pfctl (macOS), WinDivert (Windows)
+- **Per-process targeting** - auto-detects your game process and its UDP connections
+- **IP-transparent** - game servers always see your real IP (not a VPN)
 
 ### Operations
-- **Zero-cost self-hosting** — deploy your own proxy on any Linux VPS (~500KB RAM)
-- **Prometheus + Grafana** — built-in monitoring stack
-- **Cross-platform** — Windows, Linux, macOS (Intel + Apple Silicon)
+- **Zero-cost self-hosting** - deploy your own proxy on any Linux VPS (~500KB RAM)
+- **Prometheus + Grafana** - built-in monitoring stack
+- **Cross-platform** - Windows, Linux, macOS (Intel + Apple Silicon)
 
 ---
 
@@ -87,7 +93,7 @@ LightSpeed ships three packages. **You only need one**:
 
 | You want to… | Download | Notes |
 |--------------|----------|-------|
-| **Play on Windows** (recommended) | `lightspeed-gui-...-windows-msvc.msi` (or `.zip`) | Everything included — GUI + engine + WinDivert driver. No separate client needed. |
+| **Play on Windows** (recommended) | `lightspeed-gui-...-windows-msvc.msi` (or `.zip`) | Everything included - GUI + engine + WinDivert driver. No separate client needed. |
 | **Play on Linux** | `lightspeed-gui-...-linux-gnu.tar.xz` (or `lightspeed-client`) | GUI + engine, or the CLI for power users. |
 | **Play on macOS** | `lightspeed-client-...` | CLI client. The GUI compiles for macOS but is **untested** on real hardware. |
 | **Host a proxy node** | `lightspeed-proxy-...` | Only if you're running a relay server on a VPS. |
@@ -95,7 +101,7 @@ LightSpeed ships three packages. **You only need one**:
 > **Why is there both a "client" and a "gui"?** The GUI (`lightspeed-gui`) is a standalone app that already contains the client engine. Grab it for the easiest experience. The CLI (`lightspeed-client`) is for headless/power users and for macOS, where the GUI is untested. You never need to install both.
 
 ### Pre-built Binaries
-Download from **[Releases](https://github.com/ShibbityShwab/lightspeed/releases)** — Windows, Linux, macOS.
+Download from **[Releases](https://github.com/ShibbityShwab/lightspeed/releases)** - Windows, Linux, macOS.
 
 ### Build from Source
 ```bash
@@ -182,9 +188,9 @@ lightspeed/
 
 - **Token-based authentication** for all data-plane sessions
 - **Rate limiting** per client (packets/sec, bytes/sec)
-- **Destination validation** — blocks RFC 1918, localhost, multicast
-- **Anti-amplification** — inbound/outbound byte ratio tracking
-- **Unencrypted by design** — game traffic remains inspectable (anti-cheat compatible)
+- **Destination validation** - blocks RFC 1918, localhost, multicast
+- **Anti-amplification** - inbound/outbound byte ratio tracking
+- **Unencrypted by design** - game traffic remains inspectable (anti-cheat compatible)
 
 📖 **[Security Audit →](docs/security-audit-mvp.md)**
 
@@ -192,12 +198,12 @@ lightspeed/
 
 ## 🗺️ Roadmap
 
-- [x] **v0.1.0** — MVP: UDP tunnel, proxy server, QUIC control, security hardening
-- [x] **v0.2.0** — FEC (XOR parity), WARP integration, redirect mode, live proxy mesh
-- [x] **v0.3.0** — Prometheus + Grafana, CI/CD pipeline, pre-built binaries
-- [x] **v0.4.0** — 9-game support, session telemetry, Windows GUI, recvmmsg batched I/O
-- [x] **v0.5.0** — Linux interceptor CLI, cross-platform GUI, Docker, MockInterceptor
-- [x] **v1.0.0** — Public stable release: installer wizard + self-hosted proxy model
+- [x] **v0.1.0** - MVP: UDP tunnel, proxy server, QUIC control, security hardening
+- [x] **v0.2.0** - FEC (XOR parity), WARP integration, redirect mode, live proxy mesh
+- [x] **v0.3.0** - Prometheus + Grafana, CI/CD pipeline, pre-built binaries
+- [x] **v0.4.0** - 9-game support, session telemetry, Windows GUI, recvmmsg batched I/O
+- [x] **v0.5.0** - Linux interceptor CLI, cross-platform GUI, Docker, MockInterceptor
+- [x] **v1.0.0** - Public stable release: installer wizard + self-hosted proxy model
 
 ---
 

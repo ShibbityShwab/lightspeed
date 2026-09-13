@@ -1,11 +1,12 @@
 # Community Relay Network
 
-> How to run a relay, publish it, and let clients discover it — end to end.
+> How to run a relay, publish it, and let clients discover it, end to end.
 
-LightSpeed is self-hosted: the relay nodes that actually reduce ping are run by
-the community, not by a central operator. This document ties the whole flow
-together — **deploy → register → discover** — so a new relay operator can
-onboard in one page.
+LightSpeed runs a **community relay network**: five sponsor-funded relays,
+hosted by the community, that any client can use with zero configuration. You
+can also self-host your own relay. This document ties the whole flow together
+(**deploy → register → discover**) so a new relay operator can onboard in one
+page.
 
 ---
 
@@ -17,21 +18,45 @@ Relay operator                          LightSpeed client
      │  provision a VPS (or BYO host)          │
      │  → proxy + Ed25519 node key            │
      │                                        │
-     │  POST /register (invite token)         │
+     │  sign registry offline (Ed25519)        │
      ▼                                        │
-  Registry (Cloudflare Worker + KV) ── signed node list ──▶ verify signature
+  Registry (static signed JSON on           │
+  GitHub Pages) ── signed node list ──────▶ verify signature
      ▲                                                       │ probe, pick fastest
      │                                                       ▼
   Operator signs list (Ed25519)                      connect + tunnel
 ```
 
 The registry is a small signed JSON document. Clients verify the operator's
-Ed25519 signature against a key they trust, drop revoked nodes, probe the
-survivors, and connect to the fastest — the same "probe and pick" logic that
-already runs against configured proxies.
+Ed25519 signature against a key compiled into the binary, drop revoked nodes,
+probe the survivors, and connect to the fastest. That is the same "probe and
+pick" logic that already runs against configured proxies.
 
 **Trust model (v1):** *registered + healthy + not revoked.* There is no
 transitive reputation or Sybil resistance yet.
+
+### The live network
+
+Five relays are live, covering the major game-server regions:
+
+| Region | Location |
+|--------|----------|
+| US-West | Los Angeles |
+| US-East | New Jersey |
+| AP-Southeast | Singapore |
+| EU-Central | Frankfurt |
+| AP-Northeast | Tokyo |
+
+The default registry is a **static signed file** served from GitHub Pages:
+
+```
+https://shibbityshwab.github.io/lightspeed/registry.json
+```
+
+This is a plain static file, not the Cloudflare Worker. The Worker in
+`infra/registry/` remains available as an optional dynamic registry, but the
+static file is the current default. The operator's Ed25519 public key is
+compiled into the client, so discovery works with no config at all.
 
 ---
 
@@ -41,13 +66,13 @@ transitive reputation or Sybil resistance yet.
 
 Network position is everything: the relay must have a *better-peered, lower-latency*
 path to the game server than the player's home ISP. Pick the region **closest to
-the game servers you want to serve** — see the table in
+the game servers you want to serve**. See the table in
 [`infra/README.md`](../infra/README.md#choosing-a-region-network-position).
 
 ### 2. Deploy a relay
 
-Provision any small Linux VPS with a public IPv4 address in your chosen region —
-any provider works; the proxy is a single static binary. Then deploy it with the
+Provision any small Linux VPS with a public IPv4 address in your chosen region.
+Any provider works; the proxy is a single static binary. Then deploy it with the
 provider-agnostic script:
 
 ```bash
@@ -71,6 +96,11 @@ Your **public** key is what you submit to the registry.
 
 ### 4. Register with the registry
 
+The default registry is a static signed file, so "registration" means adding
+your node to the JSON and re-signing it offline (see
+[Operator tooling](#operator-tooling)). If you run the optional dynamic
+Cloudflare Worker instead, you can register over HTTP:
+
 ```bash
 curl -X POST https://<your-worker>/register \
   -H "x-registry-token: <invite-token>" \
@@ -85,29 +115,36 @@ curl -X POST https://<your-worker>/register \
       }'
 ```
 
-Registration is gated by an invite token so strangers can't poison the list.
+Worker registration is gated by an invite token so strangers can't poison the
+list.
 
 ---
 
 ## For players
 
-The client fetches + verifies the registry and probes its nodes alongside any
-locally configured proxies:
+Discovery is **zero-config by default**. The client ships with the default
+registry URL and the operator's public key compiled in, so it can find and
+probe the community relays without any setup.
+
+To point at a different registry (your own, or a mirror), override it on the
+command line:
 
 ```bash
-lightspeed --probe-proxies --registry https://<your-worker>/nodes
+lightspeed --probe-proxies --registry https://shibbityshwab.github.io/lightspeed/registry.json
 ```
 
 Or in `lightspeed.toml`:
 
 ```toml
 [registry]
-url          = "https://<your-worker>/nodes"
+url          = "https://shibbityshwab.github.io/lightspeed/registry.json"
 operator_key = "<base64-ed25519-public-key>"   # the operator's public key
 ```
 
 > The client only trusts nodes whose signatures verify against `operator_key`,
 > and it skips any node whose public key is in the registry's revocation list.
+> The default URL and key are compiled in for zero-config discovery; setting
+> either here overrides them.
 
 ---
 
@@ -127,7 +164,7 @@ operator_key = "<base64-ed25519-public-key>"   # the operator's public key
   Non-empty = only relay to these prefixes (community mode).
 - **Token auth** ties every data-plane packet to a registered client; **rate
   limiting** and **anti-amplification** are on by default.
-- **A community relay can see and MITM your game traffic** — the same as any
+- **A community relay can see and MITM your game traffic**, the same as any
   paid optimizer's relay. Don't imply privacy; document it.
 - **Relaying UDP can look like a VPN/proxy to your cloud provider** and risk a
   ToS ban. Keep the relay token-gated so it's demonstrably not an open relay.
@@ -136,8 +173,8 @@ operator_key = "<base64-ed25519-public-key>"   # the operator's public key
 
 ## Operator tooling
 
-Generate the operator key and sign a node list offline (no Worker needed for a
-static-file registry):
+Generate the operator key and sign a node list offline. The static-file
+registry is the current default, so no Worker is needed:
 
 ```bash
 ssh-keygen -t ed25519 -N "" -f operator.key -C "lightspeed-operator"
@@ -146,23 +183,39 @@ cargo run -p lightspeed-client --example sign_registry -- operator.pk8 registry.
 ```
 
 The signing logic (`sign_registry` / `verify_registry`) lives in
-`client/src/registry.rs`; the reference Worker is in `infra/registry/`.
+`client/src/registry.rs`. The optional dynamic registry Worker is in
+`infra/registry/`.
 
 ---
 
 ## Current status & known gaps
 
-- ✅ Code complete and tested: relay provisioning, destination allowlisting,
-  signed node-list + Ed25519 verify, client fetch + discovery. (117 client +
-  30 proxy unit tests, clippy clean.)
-- ⏳ **Needs live smoke-testing** (not runnable in CI): the automated
-  provisioning script against a real provider account, and the Worker against
-  a real Cloudflare account.
-- ⚠️ **Key-format note:** the Rust signer uses PKCS8; the reference Worker's
-  WebCrypto `importKey` expects the raw 32-byte Ed25519 seed. Reconcile these
-  (or move signing fully offline and serve a static file) during deployment.
-- The `[registry] operator_key` should be **compiled into the client** for
-  production (config is fine for bring-up).
+The community network is **LIVE** as of v1.4.0:
+
+- ✅ **Five relays online:** Los Angeles (US-West), New Jersey (US-East),
+  Singapore (AP-Southeast), Frankfurt (EU-Central), and Tokyo (AP-Northeast).
+  All are community-hosted and sponsor-funded.
+- ✅ **Registry hosted and signed:** the default registry is a static signed
+  JSON file at
+  `https://shibbityshwab.github.io/lightspeed/registry.json`, served from
+  GitHub Pages. This static file is the current default, not the Cloudflare
+  Worker.
+- ✅ **Operator key compiled in:** the operator's Ed25519 public key is built
+  into the client, so discovery is zero-config.
+- ✅ **Key-format gap resolved:** the signer and verifier now agree on PKCS8
+  Ed25519, so the sign/verify round-trip works end to end.
+- ✅ **Code complete and tested:** relay provisioning, destination
+  allowlisting, signed node-list + Ed25519 verify, client fetch + discovery.
+  (117 client + 30 proxy unit tests, clippy clean.)
+
+Known gaps:
+
+- ⏳ **Live smoke-testing** of the automated provisioning script against a real
+  provider account is still manual (not runnable in CI).
+- The Cloudflare Worker in `infra/registry/` remains an optional dynamic
+  registry; it is not the default path.
+- **Trust model is v1:** registered + healthy + not revoked. There is no
+  transitive reputation or Sybil resistance yet.
 
 ---
 
@@ -171,6 +224,6 @@ The signing logic (`sign_registry` / `verify_registry`) lives in
 | Symptom | Fix |
 |---|---|
 | `--probe-proxies` reports no nodes | Registry URL wrong, or `operator_key` missing/mismatched |
-| "registry fetch failed" | Worker down, or signature/JSON malformed |
-| Node shows ❌ in probe | Relay not running — check `curl http://<ip>:8080/health` |
+| "registry fetch failed" | Registry file unreachable, or signature/JSON malformed |
+| Node shows ❌ in probe | Relay not running. Check `curl http://<ip>:8080/health` |
 | Node rejected / banned | It was revoked, or its destination allowlist/rate-limit tripped |

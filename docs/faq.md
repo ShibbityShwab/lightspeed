@@ -6,15 +6,15 @@
 
 ### Is LightSpeed really free?
 
-Yes. LightSpeed is free for personal, non-commercial use under the LightSpeed Software License. Commercial use requires a paid license — see [LICENSE](../LICENSE). You run your own proxy on a small VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
+Yes. LightSpeed is free for personal, non-commercial use under the LightSpeed Software License. Commercial use requires a paid license - see [LICENSE](../LICENSE). You run your own proxy on a small VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
 
 ### Will LightSpeed get me banned?
 
-No. LightSpeed uses the same class of network driver (WinDivert/nftables/pfctl) as ExitLag, WTFast, and NoPing. It does not modify game files, memory, or processes. All major anti-cheat systems (EAC, VAC, BattlEye, Riot Vanguard) permit this. Game servers see your real IP address — this is a transparent tunnel, not a VPN or anonymizer.
+No. LightSpeed uses the same class of network driver (WinDivert/nftables/pfctl) as ExitLag, WTFast, and NoPing. It does not modify game files, memory, or processes. All major anti-cheat systems (EAC, VAC, BattlEye, Riot Vanguard) permit this. Game servers see your real IP address - this is a transparent tunnel, not a VPN or anonymizer.
 
 ### Why does the interceptor need root/Administrator?
 
-Kernel-level packet interception requires elevated privileges — the same reason VPNs and firewalls need them. On Linux it uses nftables/iptables. On macOS it uses pfctl. On Windows it uses WinDivert (a signed kernel driver). Without root, you can still use redirect mode (`--game-server`).
+Kernel-level packet interception requires elevated privileges - the same reason VPNs and firewalls need them. On Linux it uses nftables/iptables. On macOS it uses pfctl. On Windows it uses WinDivert (a signed kernel driver). Without root, you can still use redirect mode (`--game-server`).
 
 ### What platforms are supported?
 
@@ -31,18 +31,18 @@ Kernel-level packet interception requires elevated privileges — the same reaso
 
 ### How does LightSpeed actually reduce ping?
 
-LightSpeed does **not** make your traffic go faster — packets can't outrun the speed of light. What it does is *proactively route* your traffic onto the fastest available path, avoiding congestion and needlessly long detours.
+LightSpeed does **not** make your traffic go faster - packets can't outrun the speed of light. What it does is *proactively route* your traffic onto the fastest available path, avoiding congestion and needlessly long detours.
 
-Your ISP sends packets along whatever path is cheapest for *them* — often congested or circuitous. LightSpeed sends your packets through a proxy in a major data center with direct backbone connections to game server regions. If that path is shorter or less congested than your ISP's default, your ping drops and stabilizes. Typical improvement: 10–40ms.
+Your ISP sends packets along whatever path is cheapest for *them* - often congested or circuitous. LightSpeed sends your packets through a proxy in a major data center with direct backbone connections to game server regions. If that path is shorter or less congested than your ISP's default, your ping drops and stabilizes. Typical improvement: 10-40ms.
 
 ### My ping went UP. Why?
 
 Two common reasons:
 
-1. **Wrong proxy location** — if the proxy is farther from the game server than your direct path, the extra hop adds latency. This is the most common cause. Rule of thumb: pick the proxy closest to the **game server**, not closest to you.
-2. **Poorly-connected proxy** — not all data centers are equal. A proxy only helps if that data center sits close to a major internet backbone or peering exchange. A cheap VPS in the "right" city but on a congested or residential upstream can be slower than your direct route.
+1. **Wrong proxy location** - if the proxy is farther from the game server than your direct path, the extra hop adds latency. This is the most common cause. Rule of thumb: pick the proxy closest to the **game server**, not closest to you.
+2. **Poorly-connected proxy** - not all data centers are equal. A proxy only helps if that data center sits close to a major internet backbone or peering exchange. A cheap VPS in the "right" city but on a congested or residential upstream can be slower than your direct route.
 
-LightSpeed can only optimize the route it's given. If you point it at a badly-placed proxy, your ping will go up — that's expected behavior, not a bug.
+LightSpeed can only optimize the route it's given. If you point it at a badly-placed proxy, your ping will go up - that's expected behavior, not a bug.
 
 ### Which proxy should I pick?
 
@@ -53,17 +53,17 @@ The proxy closest to the **game server region**. Examples:
 
 ### A note on routing reality (BGP)
 
-Real internet routing is governed by **BGP** (Border Gateway Protocol) — the contracts and policies ISPs and transit providers use to hand off traffic. Your packets don't travel in a straight line; they follow whatever path the BGP tables and peering agreements decide, and providers routinely prioritize or deprioritize certain routes for cost or policy reasons.
+Real internet routing is governed by **BGP** (Border Gateway Protocol) - the contracts and policies ISPs and transit providers use to hand off traffic. Your packets don't travel in a straight line; they follow whatever path the BGP tables and peering agreements decide, and providers routinely prioritize or deprioritize certain routes for cost or policy reasons.
 
 What that means for you:
 
-- A proxy only helps if it sits on a *better* BGP path than your home connection's default — typically a data center near a major backbone or peering point.
+- A proxy only helps if it sits on a *better* BGP path than your home connection's default - typically a data center near a major backbone or peering point.
 - "Closer on the map" doesn't always mean "faster on the wire."
-- Route-optimization tools (including LightSpeed) estimate and re-route, but the physical path is ultimately dictated by the networks in between — which neither you nor LightSpeed control.
+- Route-optimization tools (including LightSpeed) estimate and re-route, but the physical path is ultimately dictated by the networks in between - which neither you nor LightSpeed control.
 
 ### How fast is auto-detection?
 
-Usually 1–3 seconds after you connect to a game server. The interceptor watches for 3 packets to the same destination within 1.5 seconds before locking on.
+Usually 1-3 seconds after you connect to a game server. The interceptor watches for 3 packets to the same destination within 1.5 seconds before locking on.
 
 ---
 
@@ -71,7 +71,7 @@ Usually 1–3 seconds after you connect to a game server. The interceptor watche
 
 ### What is FEC?
 
-Forward Error Correction. The proxy sends a small amount of redundant data (~25%) alongside your packets. If a packet is lost, it can be reconstructed without retransmission. Much more efficient than ExitLag's packet duplication (which sends every packet 2–3 times, using 200–300% bandwidth).
+Forward Error Correction. The proxy sends a small amount of redundant data (~25%) alongside your packets. If a packet is lost, it can be reconstructed without retransmission. Much more efficient than ExitLag's packet duplication (which sends every packet 2-3 times, using 200-300% bandwidth).
 
 ### When should I enable it?
 
@@ -81,13 +81,19 @@ Enable if you have packet loss (micro-stutters, rubber-banding). Disable if your
 
 ## Running a Proxy
 
+### How do I get a proxy node?
+
+You don't have to do anything. LightSpeed ships with the community relay network as the default: five sponsor-funded relays (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo) that the client discovers automatically through a signed registry. The registry URL and the operator's public key are compiled into the client, so there is no setup and no config file needed.
+
+If you want to use a different registry, override it with `--registry <url>` or a `[registry]` block in `lightspeed.toml`. See the [Community Relay Network guide](community-network.md).
+
 ### Do I need to run my own proxy?
 
-Yes. LightSpeed is self-hosted — there's no shared network. You deploy a lightweight proxy (~500KB RAM) on any Linux VPS. See the [deployment guide](../infra/README.md).
+No. The community network is the default and works out of the box. Self-hosting is still fully supported if you want your own dedicated relay: deploy a lightweight proxy (~500KB RAM) on any Linux VPS. See the [deployment guide](../infra/README.md).
 
 ### How much does a proxy cost?
 
-A few dollars a month for a small VPS. The proxy binary uses ~500KB RAM, so even the smallest instance is plenty. LightSpeed itself has no fees — the VPS is the only cost.
+Nothing if you use the community network. If you self-host, a small VPS runs a few dollars a month, and the proxy binary uses ~500KB RAM, so even the smallest instance is plenty. LightSpeed itself has no fees.
 
 ### Can I share my proxy with friends?
 
@@ -132,11 +138,11 @@ Telemetry is **opt-in only** (`--telemetry` flag). When enabled, it collects ano
 
 ### Can I use LightSpeed with a VPN?
 
-Generally no — both try to intercept network traffic and will conflict. Disable your VPN before using LightSpeed.
+Generally no - both try to intercept network traffic and will conflict. Disable your VPN before using LightSpeed.
 
 ### Does LightSpeed work with Cloudflare WARP?
 
-Yes. Use `--warp` to enable WARP for the proxy leg of the connection. WARP can shave 5–10ms off local ISP routing. Combine with a proxy for maximum benefit.
+Yes. Use `--warp` to enable WARP for the proxy leg of the connection. WARP can shave 5-10ms off local ISP routing. Combine with a proxy for maximum benefit.
 
 ### Where do I report bugs?
 

@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 16 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 17 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -8,22 +8,28 @@ LightSpeed includes built-in profiles for 16 popular multiplayer games. Each pro
 
 | # | Game | CLI Flag | Default Ports | Anti-Cheat | Process Name |
 |---|------|----------|---------------|------------|-------------|
-| 1 | **Rust** | `--game rust` | 28015–28017 | EAC | `RustClient.exe` |
-| 2 | **CS2** | `--game cs2` | 27015–27050 | VAC | `cs2.exe` |
-| 3 | **Fortnite** | `--game fortnite` | 7000–9000 | EAC + BattlEye | `FortniteClient-Win64-Shipping.exe` |
-| 4 | **Dota 2** | `--game dota2` | 27015–27050 | VAC | `dota2.exe` |
-| 5 | **Apex Legends** | `--game apex` | 37000–37050 | EAC | `r5apex.exe` |
-| 6 | **Valorant** | `--game valorant` | 7000–7500 | Riot Vanguard | `VALORANT-Win64-Shipping.exe` |
-| 7 | **Overwatch 2** | `--game ow2` | 3478–6250 | Blizzard Warden | `Overwatch.exe` |
-| 8 | **League of Legends** | `--game lol` | 5000–5500 | Riot Vanguard | `League of Legends.exe` |
-| 9 | **PUBG: Battlegrounds** | `--game pubg` | 7000–17999 | BattlEye | `TslGame.exe` |
-| 10 | **MapleStory** | `--game maplestory` | 7575–8484 | BlackCipher (NGS) | `MapleStory.exe` |
-| 11 | **Genshin Impact** | `--game genshin` | 22101–42472 | None | `GenshinImpact.exe` |
-| 12 | **Rocket League** | `--game rocketleague` | 7000–9000 | EAC | `RocketLeague.exe` |
-| 13 | **World of Tanks** | `--game wot` | 12000–29999 | None | `WorldOfTanks.exe` |
-| 14 | **Dead by Daylight** | `--game deadbydaylight` | 27000–27050 | EAC | `DeadByDaylight-Win64-Shipping.exe` |
+| 1 | **Rust** | `--game rust` | 28015-28017 | EAC | `RustClient.exe` |
+| 2 | **CS2** | `--game cs2` | 27015-27050 | VAC | `cs2.exe` |
+| 3 | **Fortnite** | `--game fortnite` | 7000-9000 | EAC + BattlEye | `FortniteClient-Win64-Shipping.exe` |
+| 4 | **Dota 2** | `--game dota2` | 27015-27050 | VAC | `dota2.exe` |
+| 5 | **Apex Legends** | `--game apex` | 37000-37050 | EAC | `r5apex.exe` |
+| 6 | **Valorant** | `--game valorant` | 7000-7500 | Riot Vanguard | `VALORANT-Win64-Shipping.exe` |
+| 7 | **Overwatch 2** | `--game ow2` | 3478-6250 | Blizzard Warden | `Overwatch.exe` |
+| 8 | **League of Legends** | `--game lol` | 5000-5500 | Riot Vanguard | `League of Legends.exe` |
+| 9 | **PUBG: Battlegrounds** | `--game pubg` | 7000-17999 | BattlEye | `TslGame.exe` |
+| 10 | **MapleStory** | `--game maplestory` | 7575-8484 | BlackCipher (NGS) | `MapleStory.exe` |
+| 11 | **Genshin Impact** | `--game genshin` | 22101-42472 | None | `GenshinImpact.exe` |
+| 12 | **Rocket League** | `--game rocketleague` | 7000-9000 | EAC | `RocketLeague.exe` |
+| 13 | **World of Tanks** | `--game wot` | 12000-29999 | None | `WorldOfTanks.exe` |
+| 14 | **Dead by Daylight** | `--game deadbydaylight` | 27000-27050 | EAC | `DeadByDaylight-Win64-Shipping.exe` |
 | 15 | **Bodycam** | `--game bodycam` | 27000-27050 | None | `Bodycam-Win64-Shipping.exe` |
 | 16 | **CS:GO Legacy** | `--game csgo` | 27000-27050 | VAC | `csgo.exe` |
+| 17 | **Roblox** | `--game roblox` | 49152-65535 | Byfron (Hyperion) | `RobloxPlayerBeta.exe` |
+
+> **Roblox note:** Roblox has no native Linux client. On Linux, run it through
+> Wine/Proton, where the process name may appear truncated. Roblox picks its
+> outbound UDP source port from the high ephemeral range (49152-65535) per
+> server instance, so capture/intercept mode works better than redirect mode.
 
 ---
 
@@ -39,8 +45,9 @@ LightSpeed is compatible with all major anti-cheat systems:
 | **Riot Vanguard** | Valorant, League of Legends | ✅ Permitted |
 | **Blizzard Warden** | Overwatch 2 | ✅ Permitted |
 | **Nexon Game Security (NGS)** | MapleStory | ✅ Permitted |
+| **Byfron (Hyperion)** | Roblox | ✅ Permitted |
 
-LightSpeed uses standard OS-level network drivers (WinDivert, nftables, pfctl) — the same class used by commercial optimizers like ExitLag, WTFast, and NoPing. It does **not**:
+LightSpeed uses standard OS-level network drivers (WinDivert, nftables, pfctl) - the same class used by commercial optimizers like ExitLag, WTFast, and NoPing. It does **not**:
 - Modify game files or memory
 - Hook into game processes
 - Bypass kernel-level anti-cheat protection
