@@ -23,6 +23,7 @@
 //! - **Genshin Impact**: `GenshinImpact.exe`
 //! - **Rocket League**: `RocketLeague.exe`
 //! - **World of Tanks**: `WorldOfTanks.exe`
+//! - **Roblox**: `RobloxPlayerBeta.exe`
 //!
 //! ## Capture Filters
 //!
@@ -41,6 +42,7 @@ pub mod lol;
 pub mod maplestory;
 pub mod ow2;
 pub mod pubg;
+pub mod roblox;
 pub mod rocketleague;
 pub mod rust;
 pub mod valorant;
@@ -129,9 +131,10 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "maplestory" | "maple" => Ok(Box::new(maplestory::MapleStoryConfig)),
         "genshin" | "genshinimpact" | "genshin-impact" => Ok(Box::new(genshin::GenshinConfig)),
         "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
+        "roblox" => Ok(Box::new(roblox::RobloxConfig)),
         "wot" | "worldoftanks" | "world-of-tanks" => Ok(Box::new(wot::WotConfig)),
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot",
+            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot",
             name
         ),
     }
@@ -158,6 +161,7 @@ pub fn all_games() -> Vec<Box<dyn GameConfig>> {
         Box::new(maplestory::MapleStoryConfig),
         Box::new(genshin::GenshinConfig),
         Box::new(rocketleague::RocketLeagueConfig),
+        Box::new(roblox::RobloxConfig),
         Box::new(wot::WotConfig),
     ]
 }
@@ -229,6 +233,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         "GenshinImpact.exe",
         "RocketLeague.exe",
         "WorldOfTanks.exe",
+        "RobloxPlayerBeta.exe",
     ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
@@ -237,7 +242,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, wot"
+         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot"
     )
 }
 
@@ -379,6 +384,7 @@ mod tests {
         "rocketleague",
         "rocket-league",
         "rocket",
+        "roblox",
         "wot",
         "worldoftanks",
         "world-of-tanks",
@@ -567,6 +573,23 @@ mod tests {
         assert!(bodycam.uses_sdr());
         assert!(bodycam.typical_pps() > 0);
         assert_eq!(bodycam.anti_cheat(), "None");
+    }
+
+    #[test]
+    fn test_roblox_game_profile() {
+        // The Roblox profile must be registered in all_games() with the
+        // canonical process name and full high-ephemeral UDP range.
+        let roblox = all_games()
+            .into_iter()
+            .find(|g| g.name() == "Roblox")
+            .expect("Roblox must be registered in all_games()");
+        assert_eq!(roblox.name(), "Roblox");
+        assert!(roblox.process_names().contains(&"RobloxPlayerBeta.exe"));
+        assert_eq!(roblox.ports(), (49152, 65535));
+        assert_eq!(roblox.anti_cheat(), "Byfron (Hyperion)");
+        assert!(roblox.typical_pps() > 0);
+        let (lo, hi) = roblox.packet_size_range();
+        assert!(lo < hi, "packet_size_range lo must be < hi");
     }
 
     #[test]
