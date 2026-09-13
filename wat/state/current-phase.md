@@ -1,32 +1,37 @@
-# Current Phase — WF-018: v1.2.3 Post-Release Housekeeping
+# Current Phase — WF-019: v1.4.0 Community Relay Network Launch
 
-**Workflow:** WF-018
-**Agent:** RustDev + QAEngineer + NetEng
-**Status:** ✅ Code complete — pending `v1.2.3` tag/release
-**Last updated:** 2026-08-29
+**Workflow:** WF-019
+**Agent:** Architect + InfraDev + RustDev + QAEngineer
+**Status:** ✅ Code complete — pending `v1.4.0` tag/release
+**Last updated:** 2026-09-13
 
 ---
 
 ## Summary
 
-Housekeeping pass over GitHub feedback since v1.2.2. Fixed a critical auth
-regression and a WinDivert handle leak, added a game profile, and clarified
-installer docs.
+Launched a sponsor-funded, community-discoverable global relay network: 5 relays
+(Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo) advertised via a signed
+static registry on GitHub Pages. Clients now auto-discover the fastest path with
+zero configuration. Also added the Roblox game profile, fixed the GUI console
+window and installer shortcut, and refreshed the website with a Global Network
+section.
 
 | Item | Status |
 |------|--------|
-| Bug 1 — data-plane auth rejected 100% (issue #59) | ✅ Fixed |
-| Bug 2 — WinDivert `FWP_E_IN_USE` handle leak (issue #59) | ✅ Fixed (code) + documented |
-| Dead by Daylight profile (issue #51) | ✅ Added |
-| client-vs-GUI install confusion (#50, #58) | ✅ Docs clarified |
-| CS:GO Legacy (issue #60) | ⏳ Awaiting store page from reporter |
+| 5-relay network (fra + nrt provisioned) | ✅ Live + healthy |
+| Signed registry on GitHub Pages (5 nodes) | ✅ Signed + committed |
+| Zero-config client registry discovery | ✅ Wired + tested |
+| Roblox game profile (issue #64) | ✅ Added |
+| GUI console window (issue #68) | ✅ Fixed |
+| Installer Start Menu shortcut (issue #67) | ✅ Fixed |
+| Website Global Network section | ✅ Updated |
+| Issue triage (#50, #51, #58, #60 closed; #59, #62, #66 responded) | ✅ Done |
 
 ---
 
 ## Next Action
 
-1. **Tag and push `v1.2.3`** (cargo-dist CI builds + publishes the release).
-2. **Reply to open issues** (#59, #58, #50, #51, #60) with findings.
-3. **WF-019**: Consider a single "lightspeed" Windows installer bundling the
-   GUI + CLI (the GUI already embeds the client; a unified artifact would
-   further reduce install confusion).
+1. **Tag and push `v1.4.0`** (cargo-dist CI builds + publishes the release).
+2. Close #64, #68, #67 once the release ships.
+3. **WF-020** candidates: dynamic registry self-registration (Cloudflare Worker),
+   TCP game-traffic support (issue #66), Fortnite server re-detection (issue #59).

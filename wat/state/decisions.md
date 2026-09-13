@@ -262,3 +262,18 @@ Compiles cleanly on Linux (`cargo check -p lightspeed-gui`), merges without conf
 - `README.md`, `docs/user-guide.md`, `docs/supported-games.md`, `docs/troubleshooting.md`: "which file do I download" clarification + WinDivert troubleshooting.
 - Version bumped 1.2.2 → 1.2.3.
 **Alternatives Considered:** Making the proxy keep authorization after connection close (TTL-based re-auth) — rejected because revoke-on-disconnect is correct security semantics once the client holds the connection. Adding a `Drop` impl to the `windivert` crate upstream — rejected (external dep); explicit `close()` is the pragmatic fix.
+
+---
+
+### 2026-09-13: Sponsor-Funded Community Relay Network — COST_STUB Superseded for Relays
+
+**Agent:** Architect + InfraDev
+**Status:** Accepted (supersedes `[COST_STUB]` for relay infrastructure only)
+**Rationale:** A sponsor now funds the Vultr relay fleet, so the `[COST_STUB]` "$0 forever" mandate no longer applies to relay hosting specifically. LightSpeed launches a 5-relay global network (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo) that is community-discoverable via a signed static registry hosted on GitHub Pages (`https://shibbityshwab.github.io/lightspeed/registry.json`). The operator Ed25519 public key and registry URL are compiled into the client, so a fresh install with zero configuration auto-discovers and probes the community relays and selects the fastest path. The client and proxy software remain free/open-source, and the self-hosted model remains fully supported; only the relay hosting cost is sponsor-covered.
+**Impact:**
+- `client/src/registry.rs`: `DEFAULT_REGISTRY_URL` and `DEFAULT_OPERATOR_PUBKEY_B64` constants; `resolve_proxy_addr` falls back to registry discovery when no explicit proxy or configured servers are present.
+- `web/registry.json`: signed 5-node registry (Schema v1, Ed25519) served from GitHub Pages; operator private key lives at `~/.config/lightspeed/operator-key.pem` (PKCS8), never committed.
+- Two new relays provisioned on Vultr (Frankfurt `fra` + Tokyo `nrt`), mirroring the existing LA/NY/Singapore config (token auth on, destination allowlist per community policy).
+- Registry hosting is a static signed file (no Cloudflare Worker), keeping infrastructure cost at $0 and avoiding a new account dependency; the Worker in `infra/registry/` remains a reference for future dynamic self-registration.
+- The sponsor is not named in any public copy (release notes or website): the network is described as "community-hosted / sponsor-funded".
+**Alternatives Considered:** Cloudflare Worker registry (dynamic registration/revocation) — rejected for launch because it requires a Cloudflare account and wrangler credentials not available here, and the static signed file achieves client-side discovery at $0. Continuing to mandate $0 total cost including relays — rejected because the sponsor explicitly funds the fleet. Naming the sponsor publicly — rejected at the user's direction (no donor attribution).
