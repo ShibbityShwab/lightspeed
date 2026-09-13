@@ -108,6 +108,53 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
         }
         return Ok(selected.primary.data_addr);
     }
+
+    // Zero-config registry discovery: resolve relays from the signed community
+    // registry when no explicit proxy or configured servers are present. An
+    // explicit --registry / config.registry.url wins over the built-in default.
+    let registry_url = cli
+        .registry
+        .as_deref()
+        .or(config.registry.url.as_deref())
+        .unwrap_or(crate::registry::DEFAULT_REGISTRY_URL);
+    let operator_key = config
+        .registry
+        .operator_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .unwrap_or(crate::registry::DEFAULT_OPERATOR_PUBKEY_B64);
+    match crate::registry::discover_data_addrs(registry_url, operator_key, config.proxy.quic_port) {
+        Ok(addrs) if !addrs.is_empty() => {
+            let strategy = cli
+                .route_strategy
+                .as_deref()
+                .unwrap_or(config.route.strategy.as_str());
+            let game_server_addr = cli
+                .game_server
+                .as_ref()
+                .and_then(|s| parse_proxy_addr(s).ok())
+                .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
+            info!(
+                "🔍 Registry: {} relay(s) discovered; probing (strategy: {})...",
+                addrs.len(),
+                strategy
+            );
+            let selected =
+                select_best_proxy(&addrs, config.proxy.data_port, game_server_addr, strategy)
+                    .await?;
+            info!(
+                "🌐 Proxy (registry): {} [{}], {:.1}ms latency, strategy: {:?}",
+                selected.primary.data_addr,
+                selected.primary.id,
+                selected.primary.latency_us.unwrap_or(0) as f64 / 1000.0,
+                selected.strategy,
+            );
+            return Ok(selected.primary.data_addr);
+        }
+        Ok(_) => warn!("Registry returned no relays; falling back to default proxy"),
+        Err(e) => warn!("Registry discovery failed: {e}; falling back to default proxy"),
+    }
+
     let default = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 4434);
     warn!("No proxy specified, using default: {}", default);
     Ok(default)

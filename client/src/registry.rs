@@ -15,6 +15,13 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Default community registry URL used for zero-config proxy discovery, when
+/// the user supplies neither `--registry` nor a `registry.url` in their config.
+pub const DEFAULT_REGISTRY_URL: &str = "https://shibbityshwab.github.io/lightspeed/registry.json";
+
+/// Operator Ed25519 public key (base64) used to verify the default registry.
+pub const DEFAULT_OPERATOR_PUBKEY_B64: &str = "f5l9G2l4a3OrOX3NnWdMrNHQFbjOt27jN+st1z/J388=";
+
 /// A relay node listed in the registry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistryNode {
@@ -425,6 +432,59 @@ mod tests {
         assert!(validate_registry_url("https://192.168.1.1/nodes").is_err());
         assert!(validate_registry_url("https://[::1]/nodes").is_err());
         assert!(validate_registry_url("https://example.com/nodes").is_ok());
+    }
+
+    #[test]
+    fn test_discover_data_addrs_returns_expected_addr() {
+        let key_pair = new_key_pair();
+        let pubkey_b64 = b64(key_pair.public_key().as_ref());
+        let registry = sample_registry();
+        let expected_addr = registry.nodes[0].data_addr.clone();
+        let signed = sign_registry(&registry, &key_pair);
+
+        // discover_data_addrs() applies the SSRF URL guard (rejects plain-HTTP
+        // localhost), so exercise the same pipeline the zero-config fallback
+        // runs: fetch -> verify -> available_data_addrs.
+        let (url, handle) = serve_once(&serde_json::to_string(&signed).unwrap());
+        let fetched = fetch_registry_inner(&url, &pubkey_b64).unwrap();
+        let addrs: Vec<String> = available_data_addrs(&fetched)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        handle.join().unwrap();
+
+        assert_eq!(addrs, vec![expected_addr]);
+    }
+
+    #[test]
+    fn test_discover_data_addrs_rejects_tampered_signature() {
+        let key_pair = new_key_pair();
+        let pubkey_b64 = b64(key_pair.public_key().as_ref());
+        let mut signed = sign_registry(&sample_registry(), &key_pair);
+        signed.registry = signed.registry.replace("1.2.3.4:4434", "9.9.9.9:4434");
+
+        let (url, handle) = serve_once(&serde_json::to_string(&signed).unwrap());
+        assert!(fetch_registry_inner(&url, &pubkey_b64).is_err());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_default_registry_consts_are_valid() {
+        assert!(DEFAULT_REGISTRY_URL.starts_with("https://"));
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(DEFAULT_OPERATOR_PUBKEY_B64)
+            .expect("default operator key must be valid base64");
+        assert_eq!(decoded.len(), 32, "Ed25519 public keys are 32 bytes");
+    }
+
+    #[test]
+    fn test_web_registry_verifies_against_operator_key() {
+        let signed_json = std::fs::read_to_string("../web/registry.json").unwrap();
+        let signed: SignedRegistry = serde_json::from_str(&signed_json).unwrap();
+        let registry = verify_registry(&signed, DEFAULT_OPERATOR_PUBKEY_B64).unwrap();
+        assert_eq!(registry.schema_version, 1);
+        assert_eq!(registry.nodes.len(), 5);
+        assert!(registry.revoked.is_empty());
     }
 
     /// Serve `payload` exactly once over HTTP on an ephemeral local port.
