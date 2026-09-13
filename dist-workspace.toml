@@ -28,7 +28,9 @@ github-attestations = true
 source-tarball = false
 # main.wxs for the client is hand-edited to bundle WinDivert.dll + WinDivert64.sys
 # into the MSI (cargo-dist's `include` only populates archives, not MSIs).
-allow-dirty = ["msi"]
+# release.yml is also hand-edited (Discord announce + winget-releaser jobs), so
+# allow the generated GitHub workflow to be out of date too.
+allow-dirty = ["msi", "github"]
 # Ship a self-updater for shell installers (Linux/macOS). The updater uses the
 # axoupdater library; MSI installs on Windows cannot self-update and stay on
 # winget/manual updates.
