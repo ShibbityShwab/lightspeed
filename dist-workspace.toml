@@ -30,7 +30,7 @@ source-tarball = false
 # into the MSI (cargo-dist's `include` only populates archives, not MSIs).
 # release.yml is also hand-edited (Discord announce + winget-releaser jobs), so
 # allow the generated GitHub workflow to be out of date too.
-allow-dirty = ["msi", "github"]
+allow-dirty = ["msi", "ci"]
 # Ship a self-updater for shell installers (Linux/macOS). The updater uses the
 # axoupdater library; MSI installs on Windows cannot self-update and stay on
 # winget/manual updates.
