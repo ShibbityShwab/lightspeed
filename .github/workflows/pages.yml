@@ -6,6 +6,8 @@ on:
     paths:
       - 'web/**'
   workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
 
 permissions:
   contents: read
@@ -24,6 +26,8 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
+      - name: Generate live network stats
+        run: bash infra/scripts/network-stats.sh
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

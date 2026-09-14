@@ -106,7 +106,7 @@ curl -X POST https://<your-worker>/register \
   -H "x-registry-token: <invite-token>" \
   -H "content-type: application/json" \
   -d '{
-        "node_id": "proxy-ewr",
+        "node_id": "relay-ewr",
         "region": "us-east-1",
         "data_addr": "1.2.3.4:4434",
         "health_url": "http://1.2.3.4:8080/health",

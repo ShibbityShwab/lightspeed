@@ -53,7 +53,7 @@ ECHO_TARGETS = [
 # Built-in mesh nodes
 MESH_NODES = {
     # Add your own node IPs here — run setup-new-node.sh to provision them
-    # "proxy-us-west":  "YOUR_NODE_IP_1",
+    # "relay-us-west":  "YOUR_NODE_IP_1",
     # "relay-asia-se":  "YOUR_NODE_IP_2",
 }
 

@@ -1,10 +1,10 @@
 # LightSpeed capture/inject E2E tester for Rust (Facepunch)
-# Sends UDP packets to proxy-lax:28015 (Rust default port) and listens for
+# Sends UDP packets to relay-lax:28015 (Rust default port) and listens for
 # echoed replies injected back by the GUI's pcap injector.
 #
 # Run in a normal PowerShell window AFTER:
 #   1. lightspeed-gui.exe is open (as Admin), Rust selected, Auto-capture ACTIVE
-#   2. echo server is running on proxy-lax (handled by the agent via SSH)
+#   2. echo server is running on relay-lax (handled by the agent via SSH)
 
 $proxyIp = if ($env:LIGHTSPEED_PROXY) { $env:LIGHTSPEED_PROXY.Split(':')[0] } else { "YOUR_PROXY_IP" }
 $target = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Parse($proxyIp), 28015)

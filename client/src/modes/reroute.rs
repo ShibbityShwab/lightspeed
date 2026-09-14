@@ -96,7 +96,15 @@ pub async fn run_continuous_rerouting(
             _ = tokio::time::sleep(REROUTE_INTERVAL) => {}
         }
 
-        let route = match select_best_proxy(&servers, data_port, game_server, &strategy).await {
+        let route = match select_best_proxy(
+            &servers,
+            data_port,
+            control_port,
+            game_server,
+            &strategy,
+        )
+        .await
+        {
             Ok(r) => r,
             Err(_) => continue,
         };

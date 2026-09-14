@@ -46,7 +46,7 @@ BUILTIN_NODES='{}'
 #   "us-west-lax": {
 #     "health_url": "http://YOUR_NODE_IP_1:8080/health",
 #     "metrics_url": "http://YOUR_NODE_IP_1:8080/metrics",
-#     "node_id": "proxy-us-west",
+#     "node_id": "relay-us-west",
 #     "region": "us-west-lax"
 #   },
 #   "asia-sgp": {
@@ -67,7 +67,7 @@ fi
 if [ "$NODES" = '{}' ] || [ -z "$NODES" ]; then
     echo "⚠️  No nodes configured."
     echo "  Set LIGHTSPEED_NODES env var or edit BUILTIN_NODES in this script."
-    echo "  Example: LIGHTSPEED_NODES='{\"us-west-lax\":{\"health_url\":\"http://YOUR_IP:8080/health\",\"node_id\":\"proxy-us-west\"}}'"
+    echo "  Example: LIGHTSPEED_NODES='{\"us-west-lax\":{\"health_url\":\"http://YOUR_IP:8080/health\",\"node_id\":\"relay-us-west\"}}'"
     exit 1
 fi
 

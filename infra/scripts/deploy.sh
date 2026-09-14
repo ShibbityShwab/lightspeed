@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./deploy.sh                    # Deploy to all nodes
-#   ./deploy.sh proxy-lax          # Deploy to specific node
+#   ./deploy.sh relay-lax          # Deploy to specific node
 #   ./deploy.sh --build-only       # Just compile, don't deploy
 #
 # Prerequisites:
@@ -27,7 +27,7 @@ SERVICE_NAME="lightspeed-proxy"
 
 # Proxy mesh nodes.
 # Set LIGHTSPEED_NODES as a JSON object, or add entries to the NODES map below.
-# Example: export LIGHTSPEED_NODES='{"proxy-lax":{"ip":"1.2.3.4"}}'
+# Example: export LIGHTSPEED_NODES='{"relay-lax":{"ip":"1.2.3.4"}}'
 # Run setup-new-node.sh to provision a new node, then add it below.
 # Format: NODES["node-name"]="IP_ADDRESS"
 declare -A NODES
@@ -42,7 +42,7 @@ if [ -n "${LIGHTSPEED_NODES:-}" ]; then
 fi
 
 # Fallback defaults (placeholder — replace with your actual node IPs)
-# NODES["proxy-lax"]="YOUR_NODE_IP_1"    # us-west-lax
+# NODES["relay-lax"]="YOUR_NODE_IP_1"    # us-west-lax
 # NODES["relay-sgp"]="YOUR_NODE_IP_2"    # asia-sgp
 
 # Colors

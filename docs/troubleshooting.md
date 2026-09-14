@@ -89,7 +89,7 @@ netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action
 curl http://YOUR_PROXY_IP:8080/health
 
 # Expected response:
-# {"status":"ok","node_id":"proxy-1","uptime_secs":86400,...}
+# {"status":"ok","node_id":"relay-1","uptime_secs":86400,...}
 ```
 
 If unreachable:

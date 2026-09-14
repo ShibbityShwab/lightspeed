@@ -76,7 +76,7 @@ Note the control plane port `4433` is published alongside the data plane, and th
 Configure your nodes and run the deploy script:
 
 ```bash
-export LIGHTSPEED_NODES='{"proxy-1":{"ip":"1.2.3.4"},"proxy-2":{"ip":"5.6.7.8"}}'
+export LIGHTSPEED_NODES='{"relay-1":{"ip":"1.2.3.4"},"relay-2":{"ip":"5.6.7.8"}}'
 ./infra/scripts/deploy.sh
 ```
 
@@ -154,15 +154,11 @@ uses length-prefixed framing with a hard frame-size cap and connection limits.
 
 For best results, deploy 2-3 nodes in different regions. The client probes every configured proxy on startup and auto-selects the fastest route, so more regions means a better chance of a low-latency path to your game server.
 
-Typical RTT from each region to Bangkok:
-
-| Region | Typical RTT to Bangkok |
-|--------|----------------------|
-| Singapore | ~31 ms |
-| Tokyo | ~85 ms |
-| Los Angeles | ~206 ms |
-| Frankfurt | ~170 ms |
-| Sydney | ~115 ms |
+RTT depends on your location, ISP, and the game-server region, so measure it
+from your own connection instead of trusting a fixed table. Run
+`lightspeed --probe-proxies` to probe every relay in the signed registry and
+see real numbers for your network, then pick the region closest to the game
+server.
 
 Add all your proxies to the client config:
 

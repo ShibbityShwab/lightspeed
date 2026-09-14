@@ -248,7 +248,7 @@ for region_arg in "$@"; do
   [ -z "$COMPARTMENT" ] && COMPARTMENT=$(tenancy_ocid)
   [ -n "$COMPARTMENT" ] && [ "$COMPARTMENT" != "None" ] || { echo "Cannot resolve compartment; set OCI_COMPARTMENT_OCID"; exit 1; }
 
-  node_name="proxy-${region_arg}"
+  node_name="relay-${region_arg}"
   echo -e "\n${CYAN}Provisioning $node_name ($REGION)...${NC}"
 
   subnet=$(ensure_network)

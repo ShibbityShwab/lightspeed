@@ -46,7 +46,7 @@ use modes::{
     intercept_mode::run_intercept_mode,
     keepalive::run_keepalive_mode,
     live_test::run_live_test,
-    proxy_probe::{probe_all_proxies, select_best_proxy},
+    proxy_probe::{probe_labeled, select_best_proxy},
     smoke_test::run_smoke_test,
     tunnel_test::run_tunnel_test,
     watch_mode::run_watch_mode,
@@ -54,13 +54,24 @@ use modes::{
 use route::ProxyHealth;
 use tunnel::relay::UdpRelay;
 
+/// A resolved proxy choice plus the full set of candidate relay addresses it
+/// was discovered from, for feeding multipath/continuous rerouting.
+struct ResolvedProxy {
+    addr: SocketAddrV4,
+    servers: Vec<String>,
+}
+
 /// Resolve the proxy to use: explicit `--proxy`, else auto-select from
-/// configured servers, else a localhost dev default.
-async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Result<SocketAddrV4> {
+/// configured servers, else discover from the signed registry, else a
+/// localhost dev default.
+async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Result<ResolvedProxy> {
     if let Some(ref proxy_str) = cli.proxy {
         let addr = parse_proxy_addr(proxy_str)?;
         info!("🌐 Proxy (explicit): {}", addr);
-        return Ok(addr);
+        return Ok(ResolvedProxy {
+            addr,
+            servers: vec![proxy_str.clone()],
+        });
     }
     if !config.proxy.servers.is_empty() {
         let strategy = cli
@@ -80,6 +91,7 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
         let selected = select_best_proxy(
             &config.proxy.servers,
             config.proxy.data_port,
+            config.proxy.quic_port,
             game_server_addr,
             strategy,
         )
@@ -106,7 +118,10 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
                     .join(", ")
             );
         }
-        return Ok(selected.primary.data_addr);
+        return Ok(ResolvedProxy {
+            addr: selected.primary.data_addr,
+            servers: config.proxy.servers.clone(),
+        });
     }
 
     // Zero-config registry discovery: resolve relays from the signed community
@@ -123,8 +138,8 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
         .as_deref()
         .filter(|k| !k.is_empty())
         .unwrap_or(crate::registry::DEFAULT_OPERATOR_PUBKEY_B64);
-    match crate::registry::discover_data_addrs(registry_url, operator_key, config.proxy.quic_port) {
-        Ok(addrs) if !addrs.is_empty() => {
+    match crate::registry::discover_nodes(registry_url, operator_key, config.proxy.quic_port) {
+        Ok(nodes) if !nodes.is_empty() => {
             let strategy = cli
                 .route_strategy
                 .as_deref()
@@ -134,22 +149,36 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
                 .as_ref()
                 .and_then(|s| parse_proxy_addr(s).ok())
                 .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
+            let addrs: Vec<String> = nodes.iter().map(|(_, addr)| addr.clone()).collect();
             info!(
                 "🔍 Registry: {} relay(s) discovered; probing (strategy: {})...",
                 addrs.len(),
                 strategy
             );
-            let selected =
-                select_best_proxy(&addrs, config.proxy.data_port, game_server_addr, strategy)
-                    .await?;
+            let selected = select_best_proxy(
+                &addrs,
+                config.proxy.data_port,
+                config.proxy.quic_port,
+                game_server_addr,
+                strategy,
+            )
+            .await?;
+            let selected_id = nodes
+                .iter()
+                .find(|(_, addr)| addr == &selected.primary.data_addr.to_string())
+                .map(|(id, _)| id.clone())
+                .unwrap_or_else(|| selected.primary.id.clone());
             info!(
                 "🌐 Proxy (registry): {} [{}], {:.1}ms latency, strategy: {:?}",
                 selected.primary.data_addr,
-                selected.primary.id,
+                selected_id,
                 selected.primary.latency_us.unwrap_or(0) as f64 / 1000.0,
                 selected.strategy,
             );
-            return Ok(selected.primary.data_addr);
+            return Ok(ResolvedProxy {
+                addr: selected.primary.data_addr,
+                servers: addrs,
+            });
         }
         Ok(_) => warn!("Registry returned no relays; falling back to default proxy"),
         Err(e) => warn!("Registry discovery failed: {e}; falling back to default proxy"),
@@ -157,12 +186,15 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
 
     let default = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 4434);
     warn!("No proxy specified, using default: {}", default);
-    Ok(default)
+    Ok(ResolvedProxy {
+        addr: default,
+        servers: vec![],
+    })
 }
 
 /// Spawn the continuous re-routing loop when multiple relays are configured.
-fn start_continuous_rerouting(config: &config::Config, cli: &Cli) {
-    if config.proxy.servers.len() <= 1 {
+fn start_continuous_rerouting(servers: &[String], config: &config::Config, cli: &Cli) {
+    if servers.len() <= 1 {
         return;
     }
     let strategy = cli
@@ -176,7 +208,7 @@ fn start_continuous_rerouting(config: &config::Config, cli: &Cli) {
         .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
     let (_tx, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(crate::modes::reroute::run_continuous_rerouting(
-        config.proxy.servers.clone(),
+        servers.to_vec(),
         config.proxy.data_port,
         config.proxy.quic_port,
         game_server,
@@ -424,7 +456,8 @@ data_port = 4434
             .game
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("--watch requires --game <name>"))?;
-        let proxy_addr = resolve_proxy_addr(&cli, &config).await?;
+        let resolved = resolve_proxy_addr(&cli, &config).await?;
+        let proxy_addr = resolved.addr;
         let server_override = cli
             .server_addr
             .as_deref()
@@ -432,7 +465,7 @@ data_port = 4434
             .transpose()?;
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         crate::session::set_current_proxy(proxy_addr);
-        start_continuous_rerouting(&config, &cli);
+        start_continuous_rerouting(&resolved.servers, &config, &cli);
         return run_watch_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
@@ -814,7 +847,8 @@ data_port = 4434
             .game
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("--start-interceptor requires --game <name>"))?;
-        let proxy_addr = resolve_proxy_addr(&cli, &config).await?;
+        let resolved = resolve_proxy_addr(&cli, &config).await?;
+        let proxy_addr = resolved.addr;
 
         info!("🚀 Starting live interceptor mode");
         let server_override = match cli.server_addr.as_deref() {
@@ -823,7 +857,7 @@ data_port = 4434
         };
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         crate::session::set_current_proxy(proxy_addr);
-        start_continuous_rerouting(&config, &cli);
+        start_continuous_rerouting(&resolved.servers, &config, &cli);
         return run_intercept_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
@@ -904,35 +938,48 @@ data_port = 4434
     }
 
     // ── Proxy selection (explicit → auto-select → default) ────────
-    let proxy_addr = resolve_proxy_addr(&cli, &config).await?;
+    let resolved = resolve_proxy_addr(&cli, &config).await?;
+    let proxy_addr = resolved.addr;
     crate::session::set_current_proxy(proxy_addr);
-    start_continuous_rerouting(&config, &cli);
+    start_continuous_rerouting(&resolved.servers, &config, &cli);
 
     // ── --probe-proxies ───────────────────────────────────────────
     if cli.probe_proxies {
-        // Build the candidate server list: configured proxies + registry nodes.
-        let mut servers = config.proxy.servers.clone();
-        let registry_url = cli.registry.as_deref().or(config.registry.url.as_deref());
-        if let Some(url) = registry_url {
-            match config.registry.operator_key.as_deref() {
-                Some(key) if !key.is_empty() => {
-                    match crate::registry::discover_data_addrs(url, key, config.proxy.quic_port) {
-                        Ok(addrs) => {
-                            info!("🔍 Registry: {} relay(s) discovered", addrs.len());
-                            servers.extend(addrs);
-                        }
-                        Err(e) => warn!("Registry fetch failed: {e}"),
-                    }
-                }
-                _ => warn!("Registry URL set but no operator_key configured — skipping"),
+        // Build the labeled candidate list: configured proxies + registry nodes.
+        let mut candidates: Vec<(String, String)> = config
+            .proxy
+            .servers
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (format!("configured-{}", i), s.clone()))
+            .collect();
+
+        let registry_url = cli
+            .registry
+            .as_deref()
+            .or(config.registry.url.as_deref())
+            .unwrap_or(crate::registry::DEFAULT_REGISTRY_URL);
+        let operator_key = config
+            .registry
+            .operator_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .unwrap_or(crate::registry::DEFAULT_OPERATOR_PUBKEY_B64);
+        match crate::registry::discover_nodes(registry_url, operator_key, config.proxy.quic_port) {
+            Ok(nodes) if !nodes.is_empty() => {
+                info!("🔍 Registry: {} relay(s) discovered", nodes.len());
+                candidates.extend(nodes);
             }
+            Ok(_) => warn!("Registry returned no relays"),
+            Err(e) => warn!("Registry fetch failed: {e}"),
         }
 
-        if servers.is_empty() {
+        if candidates.is_empty() {
             warn!("No proxies configured or discovered");
         } else {
-            info!("🔍 Probing {} proxy candidate(s)...", servers.len());
-            let probes = probe_all_proxies(&servers, config.proxy.data_port).await;
+            info!("🔍 Probing {} proxy candidate(s)...", candidates.len());
+            let probes =
+                probe_labeled(&candidates, config.proxy.data_port, config.proxy.quic_port).await;
             info!("📊 Proxy Latency Report:");
             for node in &probes {
                 let status = match node.health {
@@ -1111,7 +1158,7 @@ data_port = 4434
                     info!("🚀 Starting live interceptor mode (kernel)");
                     crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
                     crate::session::set_current_proxy(proxy_addr);
-                    start_continuous_rerouting(&config, &cli);
+                    start_continuous_rerouting(&resolved.servers, &config, &cli);
                     return run_intercept_mode(
                         game_ref.name(),
                         proxy_addr,

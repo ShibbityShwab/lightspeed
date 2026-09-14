@@ -75,6 +75,7 @@ pub async fn run_live_test(
             .map(|(_, a)| a.to_string())
             .collect::<Vec<_>>(),
         data_port,
+        config.proxy.quic_port,
     )
     .await;
 

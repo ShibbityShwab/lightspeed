@@ -92,7 +92,7 @@ All metrics include `region` and `node_id` labels.
    ```yaml
    - targets: ["NEW_IP:8080"]
      labels:
-       node_id: "proxy-new"
+       node_id: "relay-new"
        region: "new-region"
        provider: "your-provider"
    ```

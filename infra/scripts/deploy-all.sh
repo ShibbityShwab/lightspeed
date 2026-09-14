@@ -27,7 +27,7 @@ fi
 NODES_JSON="${LIGHTSPEED_NODES:-{}}"
 if [ "$NODES_JSON" = "{}" ]; then
     echo "No nodes configured. Set LIGHTSPEED_NODES with a JSON object of node IPs."
-    echo 'Example: export LIGHTSPEED_NODES='\''{"proxy-lax":{"ip":"1.2.3.4","health_url":"http://1.2.3.4:8080/health"}}'\''
+    echo "Example: export LIGHTSPEED_NODES='{\"relay-lax\":{\"ip\":\"1.2.3.4\",\"health_url\":\"http://1.2.3.4:8080/health\"}}'"
     exit 1
 fi
 

@@ -42,7 +42,7 @@ Each user runs their own proxy nodes. This is an example of a 2-node setup:
 │                         Your Cloud VPS                           │
 │                                                                  │
 │  ┌────────────────────┐          ┌────────────────────┐         │
-│  │  proxy-us-west      │          │  proxy-asia-se      │         │
+│  │  relay-us-west      │          │  relay-asia-se      │         │
 │  │  <your-ip-1>        │◄────────▶│  <your-ip-2>        │         │
 │  │  US-West (LA)       │          │  Asia (Singapore)   │         │
 │  │                     │          │                     │         │
@@ -58,10 +58,10 @@ Each user runs their own proxy nodes. This is an example of a 2-node setup:
 │  Deployment: Native binary + systemd (no Docker overhead)        │
 └──────────────────────────────────────────────────────────────────┘
 
-Example benchmark (Bangkok → US-West LA):
-  Direct route:   ~206ms
-  Via SGP relay:  ~31ms + 178ms = ~209ms (relay adds latency here)
-  With WARP:      ~193ms (5-10ms improvement via Cloudflare NTT backbone)
+Latency depends on your own connection, not a fixed benchmark. A relay only
+helps when the route through it beats your ISP's default path to the game
+server, so the client probes every relay and picks the fastest for your
+connection. See live relay health at https://shibbityshwab.github.io/lightspeed/.
 ```
 
 ---

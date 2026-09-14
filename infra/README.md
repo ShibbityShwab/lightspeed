@@ -9,7 +9,7 @@
 │                     Your VPS (any provider)                  │
 │                                                              │
 │  ┌──────────────────┐          ┌──────────────────┐         │
-│  │  proxy-node-1     │          │  proxy-node-2     │         │
+│  │  relay-node-1     │          │  relay-node-2     │         │
 │  │  <your-ip-1>      │          │  <your-ip-2>      │         │
 │  │  Region A          │          │  Region B          │         │
 │  │                   │          │                   │         │
@@ -107,7 +107,7 @@ docker run -d --name ls-proxy -p 4434:4434/udp -p 8080:8080 ghcr.io/shibbityshwa
 
 ```bash
 # Configure your nodes
-export LIGHTSPEED_NODES='{"proxy-1":{"ip":"1.2.3.4"},"proxy-2":{"ip":"5.6.7.8"}}'
+export LIGHTSPEED_NODES='{"relay-1":{"ip":"1.2.3.4"},"relay-2":{"ip":"5.6.7.8"}}'
 
 # Deploy to all nodes
 ./infra/scripts/deploy.sh
@@ -158,7 +158,7 @@ All nodes expose `GET /health` on port 8080:
 ```json
 {
   "status": "ok",
-  "node_id": "proxy-1",
+  "node_id": "relay-1",
   "uptime_secs": 86400,
   "active_sessions": 3,
   "total_packets_relayed": 1234567

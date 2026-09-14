@@ -26,7 +26,7 @@ scrape_configs:
       # Example — replace with your own node IP(s)
       # - targets: ["YOUR_NODE_IP:8080"]
       #   labels:
-      #     node_id: "proxy-us-west"
+      #     node_id: "relay-us-west"
       #     region: "us-west-lax"
       #     provider: "your-provider"
       #     role: "primary"
@@ -34,7 +34,7 @@ scrape_configs:
       # Example second node
       # - targets: ["YOUR_NODE_IP_2:8080"]
       #   labels:
-      #     node_id: "proxy-asia-se"
+      #     node_id: "relay-asia-se"
       #     region: "asia-sgp"
       #     provider: "your-provider"
       #     role: "relay"

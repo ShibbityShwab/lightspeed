@@ -70,11 +70,31 @@ pub async fn probe_single_proxy(
 }
 
 /// Probe all configured proxy servers concurrently and return a `ProxyNode`
-/// list with measured latencies.
-pub async fn probe_all_proxies(servers: &[String], data_port: u16) -> Vec<ProxyNode> {
+/// list with measured latencies. Each node is labeled `proxy-{i}`.
+pub async fn probe_all_proxies(
+    servers: &[String],
+    data_port: u16,
+    quic_port: u16,
+) -> Vec<ProxyNode> {
+    let candidates: Vec<(String, String)> = servers
+        .iter()
+        .enumerate()
+        .map(|(i, server_str)| (format!("proxy-{}", i), server_str.clone()))
+        .collect();
+    probe_labeled(&candidates, data_port, quic_port).await
+}
+
+/// Probe a labeled list of proxy candidates concurrently and return a
+/// `ProxyNode` list with measured latencies. Each tuple is
+/// `(label, addr_str)`, and the resulting `ProxyNode.id` is the supplied label.
+pub async fn probe_labeled(
+    candidates: &[(String, String)],
+    data_port: u16,
+    quic_port: u16,
+) -> Vec<ProxyNode> {
     let mut handles = Vec::new();
 
-    for (i, server_str) in servers.iter().enumerate() {
+    for (id, server_str) in candidates {
         let addr = match parse_proxy_addr(server_str) {
             Ok(a) => {
                 // If the server string has no port component, use the config data_port
@@ -90,17 +110,16 @@ pub async fn probe_all_proxies(servers: &[String], data_port: u16) -> Vec<ProxyN
             }
         };
 
-        let id = format!("proxy-{}", i);
-        let server_str_clone = server_str.clone();
+        let id = id.clone();
         handles.push(tokio::spawn(async move {
             let latency = probe_single_proxy(addr, 3, 2000).await;
-            (id, addr, server_str_clone, latency)
+            (id, addr, latency)
         }));
     }
 
     let mut nodes = Vec::new();
     for handle in handles {
-        if let Ok((id, addr, _server_str, latency)) = handle.await {
+        if let Ok((id, addr, latency)) = handle.await {
             let health = match latency {
                 Some(us) if us < 500_000 => ProxyHealth::Healthy, // < 500 ms
                 Some(_) => ProxyHealth::Degraded,                 // ≥ 500 ms
@@ -110,7 +129,7 @@ pub async fn probe_all_proxies(servers: &[String], data_port: u16) -> Vec<ProxyN
             nodes.push(ProxyNode {
                 id,
                 data_addr: addr,
-                control_addr: SocketAddrV4::new(*addr.ip(), 4433),
+                control_addr: SocketAddrV4::new(*addr.ip(), quic_port),
                 region: "unknown".into(),
                 health,
                 latency_us: latency,
@@ -130,10 +149,11 @@ pub async fn probe_all_proxies(servers: &[String], data_port: u16) -> Vec<ProxyN
 pub async fn select_best_proxy(
     servers: &[String],
     data_port: u16,
+    quic_port: u16,
     game_server: SocketAddrV4,
     strategy: &str,
 ) -> anyhow::Result<SelectedRoute> {
-    let nodes = probe_all_proxies(servers, data_port).await;
+    let nodes = probe_all_proxies(servers, data_port, quic_port).await;
 
     if nodes.is_empty() {
         anyhow::bail!("No proxy servers could be resolved");

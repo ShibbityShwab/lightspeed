@@ -29,17 +29,17 @@ SSH_KEY_ID="${VPS_SSH_KEY_ID:-}"
 
 # ── Node name mapping ────────────────────────────────────────
 declare -A REGION_NAMES
-REGION_NAMES["ewr"]="proxy-ewr"      # New Jersey (US-East)
-REGION_NAMES["ams"]="proxy-ams"      # Amsterdam (EU-West)
-REGION_NAMES["nrt"]="proxy-nrt"      # Tokyo (Asia-NE)
-REGION_NAMES["lhr"]="proxy-lhr"      # London (EU)
-REGION_NAMES["fra"]="proxy-fra"      # Frankfurt (EU-Central)
-REGION_NAMES["atl"]="proxy-atl"      # Atlanta (US-Southeast)
-REGION_NAMES["mia"]="proxy-mia"      # Miami (US-Southeast)
-REGION_NAMES["ord"]="proxy-ord"      # Chicago (US-Central)
-REGION_NAMES["syd"]="proxy-syd"      # Sydney (Oceania)
-REGION_NAMES["blr"]="proxy-blr"      # Bangalore (India)
-REGION_NAMES["sao"]="proxy-sao"      # São Paulo (Brazil)
+REGION_NAMES["ewr"]="relay-ewr"      # New Jersey (US-East)
+REGION_NAMES["ams"]="relay-ams"      # Amsterdam (EU-West)
+REGION_NAMES["nrt"]="relay-nrt"      # Tokyo (Asia-NE)
+REGION_NAMES["lhr"]="relay-lhr"      # London (EU)
+REGION_NAMES["fra"]="relay-fra"      # Frankfurt (EU-Central)
+REGION_NAMES["atl"]="relay-atl"      # Atlanta (US-Southeast)
+REGION_NAMES["mia"]="relay-mia"      # Miami (US-Southeast)
+REGION_NAMES["ord"]="relay-ord"      # Chicago (US-Central)
+REGION_NAMES["syd"]="relay-syd"      # Sydney (Oceania)
+REGION_NAMES["blr"]="relay-blr"      # Bangalore (India)
+REGION_NAMES["sao"]="relay-sao"      # São Paulo (Brazil)
 
 # Colors
 GREEN='\033[0;32m'

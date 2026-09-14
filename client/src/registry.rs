@@ -123,6 +123,36 @@ pub fn available_data_addrs(registry: &Registry) -> Vec<&str> {
 }
 
 /// Fetch a registry, verify it, pre-pin the discovered relays' certificate
+/// fingerprints, and return the non-revoked nodes as `(node_id, data_addr)`
+/// pairs for feeding into the proxy probe/selection pipeline.
+pub fn discover_nodes(
+    url: &str,
+    operator_public_key_b64: &str,
+    control_port: u16,
+) -> anyhow::Result<Vec<(String, String)>> {
+    validate_registry_url(url)?;
+    discover_nodes_inner(url, operator_public_key_b64, control_port)
+}
+
+/// Fetch + verify a registry and return its `(node_id, data_addr)` pairs,
+/// without the SSRF URL guard (used by tests that serve a local registry over
+/// plain HTTP).
+fn discover_nodes_inner(
+    url: &str,
+    operator_public_key_b64: &str,
+    control_port: u16,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let registry = fetch_registry_inner(url, operator_public_key_b64)?;
+    pre_pin_nodes(&registry, control_port);
+    Ok(registry
+        .nodes
+        .iter()
+        .filter(|n| !is_revoked(&registry, n))
+        .map(|n| (n.node_id.clone(), n.data_addr.clone()))
+        .collect())
+}
+
+/// Fetch a registry, verify it, pre-pin the discovered relays' certificate
 /// fingerprints, and return the non-revoked nodes' data-plane addresses as
 /// owned "ip:port" strings.
 pub fn discover_data_addrs(
@@ -130,11 +160,9 @@ pub fn discover_data_addrs(
     operator_public_key_b64: &str,
     control_port: u16,
 ) -> anyhow::Result<Vec<String>> {
-    let registry = fetch_registry(url, operator_public_key_b64)?;
-    pre_pin_nodes(&registry, control_port);
-    Ok(available_data_addrs(&registry)
+    Ok(discover_nodes(url, operator_public_key_b64, control_port)?
         .into_iter()
-        .map(str::to_string)
+        .map(|(_, data_addr)| data_addr)
         .collect())
 }
 
@@ -262,6 +290,9 @@ fn enforce_freshness(registry: &Registry) -> anyhow::Result<()> {
 }
 
 fn registry_state_path() -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("LIGHTSPEED_REGISTRY_STATE") {
+        return std::path::PathBuf::from(path);
+    }
     if let Some(home) = std::env::var_os("HOME") {
         return std::path::PathBuf::from(home).join(".lightspeed-registry-state");
     }
@@ -469,6 +500,27 @@ mod tests {
     }
 
     #[test]
+    fn test_discover_nodes_returns_expected_pairs() {
+        let key_pair = new_key_pair();
+        let pubkey_b64 = b64(key_pair.public_key().as_ref());
+        let registry = sample_registry();
+        let expected = vec![(
+            registry.nodes[0].node_id.clone(),
+            registry.nodes[0].data_addr.clone(),
+        )];
+        let signed = sign_registry(&registry, &key_pair);
+
+        // discover_nodes() applies the SSRF URL guard (rejects plain-HTTP
+        // localhost), so exercise its unguarded inner pipeline, mirroring
+        // test_discover_data_addrs_returns_expected_addr.
+        let (url, handle) = serve_once(&serde_json::to_string(&signed).unwrap());
+        let nodes = discover_nodes_inner(&url, &pubkey_b64, 4433).unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(nodes, expected);
+    }
+
+    #[test]
     fn test_default_registry_consts_are_valid() {
         assert!(DEFAULT_REGISTRY_URL.starts_with("https://"));
         let decoded = base64::engine::general_purpose::STANDARD
@@ -487,9 +539,26 @@ mod tests {
         assert!(registry.revoked.is_empty());
     }
 
+    /// Point the rollback-freshness state file at a per-process temp file so
+    /// these tests are hermetic regardless of the developer's real
+    /// `~/.lightspeed-registry-state`.
+    fn isolate_registry_state() {
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let path = std::env::temp_dir().join(format!(
+                "lightspeed-registry-state-test-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&path);
+            std::env::set_var("LIGHTSPEED_REGISTRY_STATE", &path);
+        });
+    }
+
     /// Serve `payload` exactly once over HTTP on an ephemeral local port.
     /// Returns the URL and the server thread's join handle.
     fn serve_once(payload: &str) -> (String, std::thread::JoinHandle<()>) {
+        isolate_registry_state();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let payload = payload.to_string();

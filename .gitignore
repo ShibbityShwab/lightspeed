@@ -47,6 +47,9 @@ node_modules/
 *.key
 *.crt
 
+# Generated at deploy time from live relay health checks (infra/scripts/network-stats.sh)
+web/network-stats.json
+
 # AI assistant generated artifacts
 .omo/
 .cortexkit/

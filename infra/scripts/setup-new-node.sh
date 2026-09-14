@@ -10,8 +10,8 @@
 #   ./setup-new-node.sh <ip> <node-id> <region>
 #
 # Examples:
-#   ./setup-new-node.sh 1.2.3.4 proxy-ewr ewr
-#   ./setup-new-node.sh 5.6.7.8 proxy-ams ams
+#   ./setup-new-node.sh 1.2.3.4 relay-ewr ewr
+#   ./setup-new-node.sh 5.6.7.8 relay-ams ams
 #
 # Prerequisites:
 #   - SSH access to the node (key at ~/.ssh/id_ed25519)
@@ -25,8 +25,8 @@ if [ $# -lt 3 ]; then
     echo "Usage: $0 <ip> <node-id> <region>"
     echo ""
     echo "Examples:"
-    echo "  $0 1.2.3.4 proxy-ewr ewr    # New Jersey"
-    echo "  $0 5.6.7.8 proxy-ams ams    # Amsterdam"
+    echo "  $0 1.2.3.4 relay-ewr ewr    # New Jersey"
+    echo "  $0 5.6.7.8 relay-ams ams    # Amsterdam"
     echo ""
     echo "Create instances at: your provider dashboard"
     echo "  Type: Cloud Compute (Regular)"

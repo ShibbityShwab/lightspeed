@@ -234,6 +234,16 @@ img { max-width: 100%; display: block; }
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+.relay-status-pending { color: var(--text-dim); background: rgba(136, 136, 170, 0.1); border-color: var(--border); }
+.relay-status-pending .status-dot { background: var(--text-dim); box-shadow: none; animation: none; }
+.relay-status-degraded { color: var(--orange); background: rgba(253, 203, 110, 0.12); border-color: rgba(253, 203, 110, 0.25); }
+.relay-status-degraded .status-dot { background: var(--orange); box-shadow: 0 0 8px var(--orange); }
+.relay-status-offline { color: var(--red); background: rgba(255, 107, 107, 0.12); border-color: rgba(255, 107, 107, 0.25); }
+.relay-status-offline .status-dot { background: var(--red); box-shadow: 0 0 8px var(--red); animation: none; }
+.relay-meta {
+  margin-top: 12px; font-family: var(--mono); font-size: 0.72rem;
+  color: var(--text-dim); letter-spacing: 0.5px;
+}
 .network-stats { margin-bottom: 40px; }
 .network-note {
   max-width: 760px; margin: 0 auto; text-align: center;
@@ -286,6 +296,13 @@ img { max-width: 100%; display: block; }
 }
 .bench-bar-green { background: linear-gradient(90deg, var(--green), var(--cyan)); }
 .bench-bar-label { position: absolute; top: 12px; left: 0; font-size: 0.72rem; color: var(--text-dim); white-space: nowrap; }
+.relay-health-list { list-style: none; display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.relay-health-row { display: flex; align-items: baseline; gap: 8px; font-size: 0.85rem; color: var(--text); }
+.relay-health-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relay-health-status { font-family: var(--mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--green); }
+.relay-health-status.is-degraded { color: var(--orange); }
+.relay-health-status.is-down { color: var(--red); }
+.relay-health-uptime { font-family: var(--mono); font-size: 0.72rem; color: var(--text-dim); white-space: nowrap; }
 
 /* --- Compare / Why Section --- */
 .compare-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-bottom: 56px; }

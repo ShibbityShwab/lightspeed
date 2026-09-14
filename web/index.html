@@ -70,18 +70,18 @@
       </div>
       <div class="hero-stats">
         <div class="stat">
-          <span class="stat-value">5</span>
+          <span class="stat-value" data-stat="relay_count">--</span>
           <span class="stat-label">Community Relays</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
-          <span class="stat-value">0%</span>
-          <span class="stat-label">Packet Loss (E2E Tests)</span>
+          <span class="stat-value" data-stat="relays_online">--</span>
+          <span class="stat-label">Relays Online</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
-          <span class="stat-value">33ms</span>
-          <span class="stat-label">Best Relay RTT (SEA)</span>
+          <span class="stat-value" data-stat="area_count">--</span>
+          <span class="stat-label">Network Areas</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
@@ -156,47 +156,52 @@
   <section class="section" id="network">
     <div class="container">
       <h2 class="section-title">Global Network</h2>
-      <p class="section-subtitle">Five community-hosted relays across four regions (North America, Europe, AP-Southeast, AP-Northeast). Your client verifies the signed registry and auto-discovers the fastest path.</p>
+      <p class="section-subtitle">Community-hosted relays across North America, Europe, AP-Southeast, and AP-Northeast. Your client verifies the signed registry and auto-discovers the fastest path.</p>
       <div class="relay-grid">
-        <div class="relay-card">
+        <div class="relay-card" data-node-id="relay-lax-1">
           <div class="relay-flag">🇺🇸</div>
           <h3>Los Angeles</h3>
           <div class="relay-region">US-West</div>
-          <div class="relay-status"><span class="status-dot"></span>Online</div>
+          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
+          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
         </div>
-        <div class="relay-card">
+        <div class="relay-card" data-node-id="relay-ewr-1">
           <div class="relay-flag">🇺🇸</div>
           <h3>New Jersey</h3>
           <div class="relay-region">US-East</div>
-          <div class="relay-status"><span class="status-dot"></span>Online</div>
+          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
+          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
         </div>
-        <div class="relay-card">
+        <div class="relay-card" data-node-id="relay-fra">
           <div class="relay-flag">🇩🇪</div>
           <h3>Frankfurt</h3>
           <div class="relay-region">EU-Central</div>
-          <div class="relay-status"><span class="status-dot"></span>Online</div>
+          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
+          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
         </div>
-        <div class="relay-card">
+        <div class="relay-card" data-node-id="relay-sgp-1">
           <div class="relay-flag">🇸🇬</div>
           <h3>Singapore</h3>
           <div class="relay-region">AP-Southeast</div>
-          <div class="relay-status"><span class="status-dot"></span>Online</div>
+          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
+          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
         </div>
-        <div class="relay-card">
+        <div class="relay-card" data-node-id="relay-nrt">
           <div class="relay-flag">🇯🇵</div>
           <h3>Tokyo</h3>
           <div class="relay-region">AP-Northeast</div>
-          <div class="relay-status"><span class="status-dot"></span>Online</div>
+          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
+          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
         </div>
       </div>
       <div class="network-stats">
         <div class="stat">
-          <span class="stat-value">5</span>
+          <span class="stat-value" data-stat="relay_count">--</span>
           <span class="stat-label">Relay Nodes</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
-          <span class="stat-value">4</span>
+          <span class="stat-value" data-stat="area_count">--</span>
           <span class="stat-label">Regions</span>
         </div>
         <div class="stat-divider"></div>
@@ -214,7 +219,8 @@
         The network is community-hosted and sponsor-funded. Every relay is published in a
         <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">signed registry</a>,
         so your client verifies each node and picks the fastest path automatically. No manual proxy setup needed.
-        Relay status reflects the latest registry snapshot; we do not publish live latency numbers.
+        We publish live relay health (whether each node is up, not latency) from a periodically regenerated
+        snapshot. Last checked <time data-last-checked datetime="">--</time>.
       </p>
     </div>
   </section>
@@ -407,25 +413,32 @@
   <section class="section" id="benchmarks">
     <div class="container">
       <h2 class="section-title">Benchmarks</h2>
-      <p class="section-subtitle">Real numbers from our test suite. No cherry-picked results.</p>
+      <p class="section-subtitle">Real numbers from our test suite and live relay health checks. No cherry-picked results.</p>
       <div class="bench-grid">
         <div class="bench-card">
-          <h3>🌏 Singapore Relay</h3>
-          <div class="bench-value">33 <span class="bench-unit">ms</span></div>
-          <p>End-to-end relay RTT from Bangkok through Vultr SGP proxy. 0% packet loss, 1.2ms jitter.</p>
+          <h3>🌐 Network Status</h3>
+          <div class="bench-value"><span data-stat="relays_online">--</span> <span class="bench-unit">online</span></div>
+          <p>Scheduled health checks report whether each community relay is up. We publish uptime and version, not per-connection latency: latency depends on your ISP and route, so measure it from your own connection.</p>
           <div class="bench-bar">
-            <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
-            <span class="bench-bar-label">0% loss &middot; 1.2ms jitter &middot; tested live</span>
+            <div class="bench-bar-fill bench-bar-green bench-bar-live" id="network-health-bar" style="width: 0%"></div>
+            <span class="bench-bar-label">Last checked <time data-last-checked datetime="">--</time></span>
           </div>
         </div>
         <div class="bench-card">
-          <h3>🇺🇸 Los Angeles Relay</h3>
-          <div class="bench-value">208 <span class="bench-unit">ms</span></div>
-          <p>Full tunnel relay to US West Coast (Vultr LA). Consistent sub-1ms jitter, zero packet loss.</p>
+          <h3>🧩 Relay Software</h3>
+          <div class="bench-value" data-stat="software_versions">--</div>
+          <p>Version reported by the relays in the latest health snapshot. All nodes run the same signed build from the community network release.</p>
           <div class="bench-bar">
-            <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
-            <span class="bench-bar-label">0% loss &middot; 0.7ms jitter &middot; tested live</span>
+            <div class="bench-bar-fill" style="width: 100%"></div>
+            <span class="bench-bar-label">Reported by relay health checks</span>
           </div>
+        </div>
+        <div class="bench-card">
+          <h3>📍 Relay Health</h3>
+          <ul class="relay-health-list" id="relay-health-list">
+            <li class="relay-health-row"><span class="relay-health-name">Waiting for snapshot</span></li>
+          </ul>
+          <p>Location, status, and uptime from the latest snapshot.</p>
         </div>
         <div class="bench-card">
           <h3>🔧 FEC Recovery</h3>
@@ -457,10 +470,10 @@
         <div class="bench-card">
           <h3>🧪 Test Suite</h3>
           <div class="bench-value">200+ <span class="bench-unit">tests</span></div>
-          <p>Protocol tests (header, FEC, telemetry, zero-alloc API), integration tests across all 4 crates, plus E2E relay tests against 5 live community relays.</p>
+          <p>Protocol tests (header, FEC, telemetry, zero-alloc API), integration tests across all 4 crates, plus a local proxy + echo server E2E test in CI. The network status above comes from scheduled live relay health checks, not from CI.</p>
           <div class="bench-bar">
             <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
-            <span class="bench-bar-label">100% pass rate &middot; 5 live relays verified</span>
+            <span class="bench-bar-label">100% pass rate &middot; local proxy + echo E2E</span>
           </div>
         </div>
       </div>
@@ -601,7 +614,7 @@
   <section class="section section-accent" id="download">
     <div class="container">
       <h2 class="section-title">Download LightSpeed</h2>
-      <p class="section-subtitle">Grab v1.4.0, the latest release. Run it. That's the whole setup.</p>
+      <p class="section-subtitle">Grab v1.4.1, the latest release. Run it. That's the whole setup.</p>
       <div class="download-grid">
         <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
           <div class="download-icon">🪟</div>
