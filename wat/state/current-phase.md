@@ -1,37 +1,38 @@
-# Current Phase — WF-019: v1.4.0 Community Relay Network Launch
+# Current Phase — WF-020: v1.4.1 Relay Discovery + Naming Fixes
 
-**Workflow:** WF-019
-**Agent:** Architect + InfraDev + RustDev + QAEngineer
-**Status:** ✅ Code complete — pending `v1.4.0` tag/release
-**Last updated:** 2026-09-13
+**Workflow:** WF-020
+**Agent:** RustDev + QAEngineer + DevOps
+**Status:** ✅ Code complete — releasing `v1.4.1`
+**Last updated:** 2026-09-14
 
 ---
 
 ## Summary
 
-Launched a sponsor-funded, community-discoverable global relay network: 5 relays
-(Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo) advertised via a signed
-static registry on GitHub Pages. Clients now auto-discover the fastest path with
-zero configuration. Also added the Roblox game profile, fixed the GUI console
-window and installer shortcut, and refreshed the website with a Global Network
-section.
+Fixed community relay discovery, standardized fleet naming, and replaced the
+website's personal RTT numbers with live network-wide health stats, then cut
+v1.4.1. Zero-config `--probe-proxies` now finds all five relays (it previously
+fell back to nothing instead of the compiled-in registry), discovered relays
+feed the rerouting/multipath list, probes honor the configured control port and
+report real node IDs, and every node ID is `relay-*`.
 
 | Item | Status |
 |------|--------|
-| 5-relay network (fra + nrt provisioned) | ✅ Live + healthy |
-| Signed registry on GitHub Pages (5 nodes) | ✅ Signed + committed |
-| Zero-config client registry discovery | ✅ Wired + tested |
-| Roblox game profile (issue #64) | ✅ Added |
-| GUI console window (issue #68) | ✅ Fixed |
-| Installer Start Menu shortcut (issue #67) | ✅ Fixed |
-| Website Global Network section | ✅ Updated |
-| Issue triage (#50, #51, #58, #60 closed; #59, #62, #66 responded) | ✅ Done |
+| `--probe-proxies` zero-config fallback | ✅ Fixed |
+| Registry relays plumbed into rerouting/multipath | ✅ Fixed |
+| Probe control-port + real node IDs | ✅ Fixed |
+| Registry test isolation (`LIGHTSPEED_REGISTRY_STATE`) | ✅ Fixed |
+| Fleet + registry naming standardized on `relay-*` | ✅ Live + re-signed |
+| Live network stats (`network-stats.json` + Pages workflow) | ✅ Added |
+| `deploy-all.sh` unclosed quote | ✅ Fixed |
+| Registry re-signed with operator key | ✅ Verified |
 
 ---
 
 ## Next Action
 
-1. **Tag and push `v1.4.0`** (cargo-dist CI builds + publishes the release).
-2. Close #64, #68, #67 once the release ships.
-3. **WF-020** candidates: dynamic registry self-registration (Cloudflare Worker),
+1. **Tag and push `v1.4.1`** (cargo-dist CI builds + publishes the release).
+2. After the release publishes, optionally refresh `dist/aur/PKGBUILD`
+   (pkgver 1.3.2 -> 1.4.1 plus refreshed sha256 sums) for the AUR handoff.
+3. **WF-021** candidates: dynamic registry self-registration (Cloudflare Worker),
    TCP game-traffic support (issue #66), Fortnite server re-detection (issue #59).

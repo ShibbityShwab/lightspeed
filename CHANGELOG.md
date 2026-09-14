@@ -5,6 +5,22 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-09-14
+
+### Fixed
+- **Zero-config relay discovery (`--probe-proxies`)**: the probe/report path now falls back to the compiled-in community registry URL and operator key (like the normal tunnel path does), so a default-config client lists all community relays instead of reporting none.
+- **All discovered relays are used**: registry discovery results now feed the rerouting/multipath server list, so a zero-config client can use every relay instead of only the first selected one.
+- **Probe accuracy**: relay probes now honor the configured QUIC/control port (previously hardcoded to 4433) and report each relay's real `node_id`.
+- **Registry test isolation**: the registry fetch tests now use an isolated rollback-state path (`LIGHTSPEED_REGISTRY_STATE`), so a real `~/.lightspeed-registry-state` left by a live fetch no longer makes them fail.
+
+### Changed
+- **Consistent relay naming**: community node IDs are now `relay-*` everywhere (registry, provisioning scripts, docs). The published registry lists `relay-lax-1`, `relay-ewr-1`, `relay-sgp-1`, `relay-fra`, and `relay-nrt`.
+- **Website**: the landing page now shows live, network-wide relay stats generated from relay health checks (online count, version, uptime, last checked) instead of a single tester's personal RTT numbers.
+
+### Tooling
+- **`network-stats.sh`**: reads the signed registry, probes each relay's `/health`, and writes `web/network-stats.json`; the Pages workflow runs it on every deploy and every 6 hours.
+- **`deploy-all.sh`**: fixed an unclosed quote that made the script fail `bash -n`.
+
 ## [1.4.0] - 2026-09-13
 
 ### Added
