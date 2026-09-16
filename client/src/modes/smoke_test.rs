@@ -12,6 +12,7 @@
 //! successfully.
 
 use std::net::SocketAddrV4;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 pub async fn run_smoke_test(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
