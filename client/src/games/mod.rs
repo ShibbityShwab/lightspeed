@@ -76,6 +76,14 @@ pub trait GameConfig: Send + Sync {
         false
     }
 
+    /// Whether this game rotates through ephemeral server addresses/ports.
+    ///
+    /// When `true` the interceptor must not lock onto a pre-seeded server and
+    /// must re-detect on rotation. Defaults to `false` (existing behaviour).
+    fn dynamic_server(&self) -> bool {
+        false
+    }
+
     /// Typical packets per second for this game.
     fn typical_pps(&self) -> u32;
 
@@ -140,30 +148,63 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
     }
 }
 
+/// Canonical CLI key + display name for every supported game, in menu order.
+///
+/// This is the single source of truth: [`detect_game`] resolves the keys and
+/// [`all_games`] / [`all_game_keys`] derive from it. Register every new game
+/// here (the `games` tests enforce the 17-entry count and key/name agreement).
+pub const GAME_REGISTRY: &[(&str, &str)] = &[
+    ("fortnite", "Fortnite"),
+    ("cs2", "Counter-Strike 2"),
+    ("csgo", "Counter-Strike: Global Offensive (Legacy)"),
+    ("bodycam", "Bodycam"),
+    ("deadbydaylight", "Dead by Daylight"),
+    ("dota2", "Dota 2"),
+    ("rust", "Rust"),
+    ("valorant", "Valorant"),
+    ("apex", "Apex Legends"),
+    ("ow2", "Overwatch 2"),
+    ("lol", "League of Legends"),
+    ("pubg", "PUBG: Battlegrounds"),
+    ("maplestory", "MapleStory"),
+    ("genshin", "Genshin Impact"),
+    ("rocketleague", "Rocket League"),
+    ("roblox", "Roblox"),
+    ("wot", "World of Tanks"),
+];
+
+/// Return every CLI key paired with its display name.
+///
+/// Consumers (the GUI game list, `--list-games`) use this instead of
+/// hand-maintaining a parallel table. Derived from [`GAME_REGISTRY`], the same
+/// table [`detect_game`] resolves against.
+pub fn all_game_keys() -> Vec<(&'static str, &'static str)> {
+    GAME_REGISTRY.to_vec()
+}
+
 /// Return the full list of supported game configs.
 ///
 /// This is the canonical registry shared by `auto_detect` and `--list-games`.
-/// Register every new game profile here.
+/// Register every new game profile in [`GAME_REGISTRY`].
 pub fn all_games() -> Vec<Box<dyn GameConfig>> {
-    vec![
-        Box::new(fortnite::FortniteConfig),
-        Box::new(cs2::Cs2Config),
-        Box::new(csgo::CsgoConfig),
-        Box::new(bodycam::BodycamConfig),
-        Box::new(deadbydaylight::DeadByDaylightConfig),
-        Box::new(dota2::Dota2Config),
-        Box::new(rust::RustConfig),
-        Box::new(valorant::ValorantConfig),
-        Box::new(apex::ApexConfig),
-        Box::new(ow2::Ow2Config),
-        Box::new(lol::LolConfig),
-        Box::new(pubg::PubgConfig),
-        Box::new(maplestory::MapleStoryConfig),
-        Box::new(genshin::GenshinConfig),
-        Box::new(rocketleague::RocketLeagueConfig),
-        Box::new(roblox::RobloxConfig),
-        Box::new(wot::WotConfig),
-    ]
+    GAME_REGISTRY
+        .iter()
+        .filter_map(|(key, _)| detect_game(key).ok())
+        .collect()
+}
+
+/// Whether the game with the given display name rotates through ephemeral
+/// server addresses.
+///
+/// Resolves the profile from [`all_games`] by exact display name so a caller
+/// holding only `InterceptorConfig::game_name` can consult the same
+/// `dynamic_server()` flag without re-deriving CLI keys. Unknown names return
+/// `false`, preserving the legacy lock-onto-first-route behaviour.
+pub fn dynamic_server_for_name(name: &str) -> bool {
+    all_games()
+        .into_iter()
+        .find(|g| g.name() == name)
+        .is_some_and(|g| g.dynamic_server())
 }
 
 /// Match an observed process name against a known game process name.
@@ -401,6 +442,56 @@ mod tests {
                 "detect_game(\"{key}\") returned Err — did you forget to add it to detect_game()?"
             );
         }
+    }
+
+    #[test]
+    fn test_all_game_keys_has_seventeen_entries() {
+        assert_eq!(
+            all_game_keys().len(),
+            17,
+            "GAME_REGISTRY must stay in sync with the 17 supported games"
+        );
+    }
+
+    #[test]
+    fn test_all_game_keys_resolve_and_match_display_names() {
+        for (key, display) in all_game_keys() {
+            let game = detect_game(key)
+                .unwrap_or_else(|e| panic!("all_game_keys() key {key:?} is not detectable: {e}"));
+            assert_eq!(
+                game.name(),
+                display,
+                "display name drift for CLI key {key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_games_derives_from_registry() {
+        let games = all_games();
+        assert_eq!(games.len(), GAME_REGISTRY.len());
+        for (_, display) in GAME_REGISTRY {
+            assert!(
+                games.iter().any(|g| g.name() == *display),
+                "all_games() is missing {display:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dynamic_server_flag_defaults_false() {
+        assert!(fortnite::FortniteConfig.dynamic_server());
+        assert!(!rust::RustConfig.dynamic_server());
+        assert!(!cs2::Cs2Config.dynamic_server());
+        assert!(!valorant::ValorantConfig.dynamic_server());
+    }
+
+    #[test]
+    fn test_dynamic_server_for_name_matches_profiles() {
+        assert!(dynamic_server_for_name("Fortnite"));
+        assert!(!dynamic_server_for_name("Rust"));
+        assert!(!dynamic_server_for_name("Counter-Strike 2"));
+        assert!(!dynamic_server_for_name("Definitely Not A Game"));
     }
 
     #[test]

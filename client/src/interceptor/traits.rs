@@ -104,6 +104,16 @@ pub struct InterceptorConfig {
     pub fec_k: u8,
 }
 
+impl InterceptorConfig {
+    /// Whether the configured game rotates through ephemeral server addresses.
+    ///
+    /// Derived from the game profile by display name. Unknown names default to
+    /// `false`, preserving the legacy lock-onto-first-route behaviour.
+    pub fn dynamic_server(&self) -> bool {
+        crate::games::dynamic_server_for_name(&self.game_name)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Counters & stats
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,6 +141,8 @@ pub struct InterceptorCounters {
     /// is never held across an await point.  If that changes, migrate to
     /// `tokio::sync::Mutex` and make `snapshot()` async.
     pub detected_server: std::sync::Mutex<Option<SocketAddrV4>>,
+    /// Human-readable description of the most recent fatal error, if any.
+    pub last_error: std::sync::Mutex<Option<String>>,
 }
 
 impl Default for InterceptorCounters {
@@ -143,6 +155,7 @@ impl Default for InterceptorCounters {
             packets_from_proxy: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             detected_server: std::sync::Mutex::new(None),
+            last_error: std::sync::Mutex::new(None),
         }
     }
 }
@@ -158,6 +171,7 @@ impl InterceptorCounters {
             packets_from_proxy: self.packets_from_proxy.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             detected_server: self.detected_server.lock().map(|g| *g).unwrap_or(None),
+            last_error: self.last_error.lock().ok().and_then(|g| g.clone()),
             platform,
         }
     }
@@ -174,6 +188,8 @@ pub struct InterceptorStats {
     pub errors: u64,
     /// The game server address discovered at runtime (or pre-configured).
     pub detected_server: Option<SocketAddrV4>,
+    /// Description of the most recent fatal error, if any.
+    pub last_error: Option<String>,
     /// Platform name: `"WinDivert"`, `"nftables"`, `"pf"`, …
     pub platform: &'static str,
 }
@@ -294,5 +310,29 @@ impl TrafficInterceptor for UnsupportedInterceptor {
 
     fn check_availability(&self) -> Result<(), String> {
         Err(self.reason.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_for(game_name: &str) -> InterceptorConfig {
+        InterceptorConfig {
+            game_name: game_name.to_string(),
+            pid: None,
+            port_range: (1, 2),
+            initial_routes: vec![],
+            proxy_addr: "127.0.0.1:4434".parse().unwrap(),
+            fec_enabled: false,
+            fec_k: 4,
+        }
+    }
+
+    #[test]
+    fn dynamic_server_follows_the_game_profile() {
+        assert!(config_for("Fortnite").dynamic_server());
+        assert!(!config_for("Rust").dynamic_server());
+        assert!(!config_for("SmokeTest").dynamic_server());
     }
 }

@@ -25,6 +25,10 @@ use super::traits::{InterceptorConfig, InterceptorHandle, TrafficInterceptor};
 
 // Imports only needed when WinDivert is actually compiled in:
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use super::order::{effective_seeds, Decision, ServerTracker, TrackerConfig};
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use super::recovery::RecvBackoff;
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::traits::InterceptorCounters;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_udp};
@@ -102,8 +106,10 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
         let (port_lo, port_hi) = config.port_range;
         let config_proxy = config.proxy_addr;
-        let pre_known_server: Option<SocketAddrV4> =
-            config.initial_routes.first().map(|r| r.remote);
+        let dynamic_server = config.dynamic_server();
+        let route_set: Vec<SocketAddrV4> = config.initial_routes.iter().map(|r| r.remote).collect();
+        let seeds = effective_seeds(dynamic_server, &route_set);
+        let pre_known_server: Option<SocketAddrV4> = seeds.first().copied();
 
         // ── Build the WinDivert outbound filter ───────────────────────────
         //
@@ -248,19 +254,20 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let if_cache_ic = Arc::clone(&if_addr_cache);
             let itx = intercept_tx;
             let running_ic = Arc::clone(&running);
-            let pre_server = pre_known_server;
+            let seeds_ic = seeds;
 
             tracing::info!("🚀 Spawning intercept thread...");
             tokio::task::spawn_blocking(move || {
                 tracing::info!("🎯 Intercept thread started");
-                const DETECT_PKTS: u8 = 3;
-                const DETECT_WINDOW_MS: u128 = 1_500;
-                const STALE_SECS: u64 = 5;
+                const RECV_MAX_RETRIES: u32 = 5;
+                const RECV_BACKOFF_BASE: Duration = Duration::from_millis(10);
+                const RECV_BACKOFF_MAX: Duration = Duration::from_millis(400);
 
-                let mut learned_server: Option<SocketAddrV4> = pre_server;
-                // candidates: (addr, count, first_seen)
-                let mut candidates: Vec<(SocketAddrV4, u8, Instant)> = Vec::with_capacity(8);
-                let mut last_server_pkt: Option<Instant> = None;
+                let mut tracker = ServerTracker::new(TrackerConfig::default());
+                tracker.seed(&seeds_ic, Instant::now());
+                let mut reported_server: Option<SocketAddrV4> = pre_known_server;
+                let mut backoff =
+                    RecvBackoff::new(RECV_MAX_RETRIES, RECV_BACKOFF_BASE, RECV_BACKOFF_MAX);
                 let mut recv_buf = vec![0u8; 65535];
 
                 loop {
@@ -270,6 +277,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                     match wd_ic.recv(Some(&mut recv_buf)) {
                         Ok(pkt) => {
+                            backoff.on_success();
                             // Cache the interface index on the first outbound packet.
                             {
                                 let mut guard = if_cache_ic.lock().unwrap();
@@ -291,11 +299,17 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                             match parsed {
                                 Some((game_src, game_dst, payload)) => {
-                                    // ── Phase 1: server already locked ───────
-                                    if let Some(server) = learned_server {
-                                        let now = Instant::now();
-                                        if game_dst == server {
-                                            last_server_pkt = Some(now);
+                                    match tracker.observe(game_dst, Instant::now(), payload.len()) {
+                                        Decision::Tunnel(server) => {
+                                            if reported_server != Some(server) {
+                                                reported_server = Some(server);
+                                                if let Ok(mut g) =
+                                                    counters_ic.detected_server.lock()
+                                                {
+                                                    *g = Some(server);
+                                                }
+                                                tracing::info!("🔍 Locked game server: {}", server);
+                                            }
                                             counters_ic
                                                 .packets_intercepted
                                                 .fetch_add(1, Ordering::Relaxed);
@@ -308,74 +322,21 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                             {
                                                 break;
                                             }
-                                            continue;
                                         }
-
-                                        // Different destination — check staleness
-                                        let is_stale = last_server_pkt
-                                            .map(|t| {
-                                                now.duration_since(t)
-                                                    > Duration::from_secs(STALE_SECS)
-                                            })
-                                            .unwrap_or(false);
-
-                                        if is_stale {
-                                            tracing::info!(
-                                                "🔄 Server {} stale ({}s) — re-detecting",
-                                                server,
-                                                STALE_SECS
-                                            );
-                                            learned_server = None;
-                                            last_server_pkt = None;
-                                            candidates.clear();
+                                        Decision::PassThrough | Decision::StartDetection => {
+                                            let _ = wd_ic.send(&pkt);
+                                        }
+                                        Decision::ResetToDetection => {
+                                            tracing::info!("🔄 Locked server stale — re-detecting");
+                                            reported_server = None;
                                             if let Ok(mut g) = counters_ic.detected_server.lock() {
                                                 *g = None;
                                             }
-                                            // Reset interface cache for new session
                                             if let Ok(mut c) = if_cache_ic.lock() {
                                                 *c = None;
                                             }
-                                            // Fall through to Phase 2
-                                        } else {
-                                            // Non-game traffic (Steam query, etc.) — pass through
                                             let _ = wd_ic.send(&pkt);
-                                            continue;
                                         }
-                                    }
-
-                                    // ── Phase 2: debounce auto-detect ────────
-                                    // Pass packet through unchanged until we commit.
-                                    let _ = wd_ic.send(&pkt);
-
-                                    let now = Instant::now();
-                                    candidates.retain(|(_, _, t)| {
-                                        now.duration_since(*t).as_millis() < DETECT_WINDOW_MS
-                                    });
-
-                                    let mut committed = false;
-                                    if let Some(entry) =
-                                        candidates.iter_mut().find(|(addr, _, _)| *addr == game_dst)
-                                    {
-                                        entry.1 += 1;
-                                        if entry.1 >= DETECT_PKTS {
-                                            committed = true;
-                                        }
-                                    } else {
-                                        candidates.push((game_dst, 1, now));
-                                    }
-
-                                    if committed {
-                                        learned_server = Some(game_dst);
-                                        tracing::info!(
-                                            "🔍 Auto-detected server: {} ({} pkts in ≤{}ms)",
-                                            game_dst,
-                                            DETECT_PKTS,
-                                            DETECT_WINDOW_MS
-                                        );
-                                        if let Ok(mut g) = counters_ic.detected_server.lock() {
-                                            *g = Some(game_dst);
-                                        }
-                                        candidates.clear();
                                     }
                                 }
                                 None => {
@@ -385,11 +346,32 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             }
                         }
                         Err(e) => {
-                            if running_ic.load(Ordering::Relaxed) {
-                                tracing::warn!("WinDivert recv error: {e}");
-                                counters_ic.errors.fetch_add(1, Ordering::Relaxed);
+                            if !running_ic.load(Ordering::Relaxed) {
+                                break;
                             }
-                            break;
+                            counters_ic.errors.fetch_add(1, Ordering::Relaxed);
+                            match backoff.on_failure() {
+                                Some(delay) => {
+                                    tracing::warn!(
+                                        "WinDivert recv error (retry {}/{} in {:?}): {e}",
+                                        backoff.consecutive_failures(),
+                                        RECV_MAX_RETRIES,
+                                        delay
+                                    );
+                                    std::thread::sleep(delay);
+                                }
+                                None => {
+                                    let msg = format!(
+                                        "WinDivert recv failed {} times consecutively: {e}",
+                                        backoff.consecutive_failures()
+                                    );
+                                    tracing::error!("{msg}");
+                                    if let Ok(mut g) = counters_ic.last_error.lock() {
+                                        *g = Some(msg);
+                                    }
+                                    break;
+                                }
+                            }
                         }
                     }
                 }

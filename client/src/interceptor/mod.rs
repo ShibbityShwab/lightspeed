@@ -39,7 +39,9 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mock;
+pub mod order;
 pub mod process_scanner;
+pub mod recovery;
 pub mod traits;
 #[cfg(target_os = "windows")]
 pub mod windows;

@@ -60,6 +60,8 @@ pub struct WinDivertStats {
     /// Auto-detected game server address. Set once the first game packet is seen.
     /// `None` means no traffic seen yet (still waiting for game to connect).
     pub detected_server: std::sync::Mutex<Option<SocketAddrV4>>,
+    /// Human-readable description of the most recent fatal error, if any.
+    pub last_error: std::sync::Mutex<Option<String>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,6 +170,9 @@ mod inner {
     use std::time::{Duration, Instant};
 
     use tokio::net::UdpSocket;
+
+    use crate::interceptor::order::{Decision, ServerTracker, TrackerConfig};
+    use crate::interceptor::recovery::RecvBackoff;
 
     /// Run the WinDivert active redirect loop.
     ///
@@ -287,28 +292,17 @@ mod inner {
         tokio::task::spawn_blocking(move || {
             tracing::info!("WinDivert intercept thread started");
 
-            // In auto-detect mode this starts as None and is learned from traffic.
-            // In manual mode it is pre-populated and never changes.
-            let mut learned_server: Option<SocketAddrV4> = pre_known_server;
+            const RECV_MAX_RETRIES: u32 = 5;
+            const RECV_BACKOFF_BASE: Duration = Duration::from_millis(10);
+            const RECV_BACKOFF_MAX: Duration = Duration::from_millis(400);
 
-            // ── Debounced auto-detect state ───────────────────────────────
-            // We require N=3 packets to the SAME destination within T=1500ms
-            // before committing.  This prevents locking onto Steam master-server
-            // broadcasts on port 28015, which are one-shot queries that never
-            // generate a sustained packet stream.
-            //
-            // Each entry: (candidate_addr, packet_count, first_seen_instant)
-            const DETECT_THRESHOLD_PKTS: u8 = 3;
-            const DETECT_WINDOW_MS: u128 = 1500;
-            let mut candidates: Vec<(SocketAddrV4, u8, Instant)> = Vec::with_capacity(8);
-
-            // ── Stale-server detection ────────────────────────────────────
-            // If the locked server goes quiet for SERVER_STALE_SECS seconds
-            // (e.g., the user disconnected and joined a different server), we
-            // unlock and re-enter Phase 2 auto-detect so traffic to the new
-            // server flows through the tunnel automatically.
-            const SERVER_STALE_SECS: u64 = 5;
-            let mut last_server_pkt: Option<Instant> = None;
+            let mut tracker = ServerTracker::new(TrackerConfig::default());
+            if let Some(server) = pre_known_server {
+                tracker.seed(std::slice::from_ref(&server), Instant::now());
+            }
+            let mut reported_server: Option<SocketAddrV4> = pre_known_server;
+            let mut backoff =
+                RecvBackoff::new(RECV_MAX_RETRIES, RECV_BACKOFF_BASE, RECV_BACKOFF_MAX);
 
             // 65 535 bytes covers the largest possible IPv4 datagram.
             let mut recv_buf = vec![0u8; 65535];
@@ -320,6 +314,7 @@ mod inner {
                 // recv() is blocking — will return each captured packet.
                 match wd_ic.recv(Some(&mut recv_buf)) {
                     Ok(pkt) => {
+                        backoff.on_success();
                         let parsed: Option<(SocketAddrV4, SocketAddrV4, Vec<u8>)> =
                             parse_ipv4_udp(&pkt.data).map(|(src, dst, pl)| (src, dst, pl.to_vec()));
 
@@ -349,12 +344,15 @@ mod inner {
                                     }
                                 }
 
-                                // ── Phase 1: Server already locked ─────────
-                                if let Some(server) = learned_server {
-                                    let now = Instant::now();
-                                    if game_dst == server {
-                                        // It IS game→known_server traffic — tunnel it.
-                                        last_server_pkt = Some(now);
+                                match tracker.observe(game_dst, Instant::now(), payload_vec.len()) {
+                                    Decision::Tunnel(server) => {
+                                        if reported_server != Some(server) {
+                                            reported_server = Some(server);
+                                            if let Ok(mut guard) = stats_ic.detected_server.lock() {
+                                                *guard = Some(server);
+                                            }
+                                            tracing::info!("🔍 Locked game server: {}", server);
+                                        }
                                         stats_ic
                                             .packets_intercepted
                                             .fetch_add(1, Ordering::Relaxed);
@@ -367,88 +365,22 @@ mod inner {
                                         {
                                             break;
                                         }
-                                        continue;
                                     }
-
-                                    // Different destination inside port range.
-                                    // Check if the locked server has gone stale.
-                                    // `last_server_pkt = None` means server was auto-detected
-                                    // but never tunnelled (e.g. manual pre-known mode) — don't
-                                    // auto-reset those; they always pass through unchanged.
-                                    let is_stale = last_server_pkt
-                                        .map(|t| {
-                                            now.duration_since(t)
-                                                > Duration::from_secs(SERVER_STALE_SECS)
-                                        })
-                                        .unwrap_or(false);
-
-                                    if is_stale {
-                                        // Old server timed out — unlock and re-enter Phase 2
-                                        // so traffic to the new server is detected and tunnelled.
-                                        tracing::info!(
-                                            "🔄 Server {} stale ({}s silence) — re-entering detection",
-                                            server, SERVER_STALE_SECS,
-                                        );
-                                        learned_server = None;
-                                        last_server_pkt = None;
-                                        candidates.clear();
+                                    Decision::PassThrough | Decision::StartDetection => {
+                                        let _ = wd_ic.send(&pkt);
+                                    }
+                                    Decision::ResetToDetection => {
+                                        tracing::info!("🔄 Locked server stale — re-detecting");
+                                        reported_server = None;
                                         if let Ok(mut guard) = stats_ic.detected_server.lock() {
                                             *guard = None;
                                         }
-                                        // Also reset the interface cache so we re-learn the
-                                        // correct network adapter for the new session.
                                         {
                                             let mut cache_guard = if_cache_ic.lock().unwrap();
                                             *cache_guard = None;
                                         }
-                                        // Fall through to Phase 2 with this packet.
-                                    } else {
-                                        // Server still fresh — this is a different destination
-                                        // (e.g. Steam master-server query). Pass through unchanged.
                                         let _ = wd_ic.send(&pkt);
-                                        continue;
                                     }
-                                }
-
-                                // ── Phase 2: Auto-detect — debounce ────────
-                                // Pass ALL packets through unchanged until we commit;
-                                // the game session continues normally during detection.
-                                let _ = wd_ic.send(&pkt);
-
-                                let now = Instant::now();
-
-                                // Expire stale candidates older than the window.
-                                candidates.retain(|(_, _, t)| {
-                                    now.duration_since(*t).as_millis() < DETECT_WINDOW_MS
-                                });
-
-                                // Update or insert candidate entry for game_dst.
-                                let mut committed = false;
-                                if let Some(entry) =
-                                    candidates.iter_mut().find(|(addr, _, _)| *addr == game_dst)
-                                {
-                                    entry.1 += 1;
-                                    if entry.1 >= DETECT_THRESHOLD_PKTS {
-                                        committed = true;
-                                    }
-                                } else {
-                                    candidates.push((game_dst, 1, now));
-                                }
-
-                                if committed {
-                                    // Lock in the server.
-                                    learned_server = Some(game_dst);
-                                    tracing::info!(
-                                        "🔍 Auto-detected game server: {} ({} pkts in ≤{}ms)",
-                                        game_dst,
-                                        DETECT_THRESHOLD_PKTS,
-                                        DETECT_WINDOW_MS,
-                                    );
-                                    if let Ok(mut guard) = stats_ic.detected_server.lock() {
-                                        *guard = Some(game_dst);
-                                    }
-                                    candidates.clear();
-                                    let _ = game_src; // suppress unused warning
                                 }
                             }
                             None => {
@@ -458,11 +390,34 @@ mod inner {
                         }
                     }
                     Err(e) => {
-                        if running_ic.load(Ordering::Relaxed) {
-                            tracing::warn!("WinDivert recv error: {}", e);
-                            stats_ic.errors.fetch_add(1, Ordering::Relaxed);
+                        if !running_ic.load(Ordering::Relaxed) {
+                            break;
                         }
-                        break;
+                        stats_ic.errors.fetch_add(1, Ordering::Relaxed);
+                        match backoff.on_failure() {
+                            Some(delay) => {
+                                tracing::warn!(
+                                    "WinDivert recv error (retry {}/{} in {:?}): {}",
+                                    backoff.consecutive_failures(),
+                                    RECV_MAX_RETRIES,
+                                    delay,
+                                    e
+                                );
+                                std::thread::sleep(delay);
+                            }
+                            None => {
+                                let msg = format!(
+                                    "WinDivert recv failed {} times consecutively: {}",
+                                    backoff.consecutive_failures(),
+                                    e
+                                );
+                                tracing::error!("{}", msg);
+                                if let Ok(mut guard) = stats_ic.last_error.lock() {
+                                    *guard = Some(msg);
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -751,6 +706,10 @@ mod inner {
             fp,
             inj
         );
+
+        if let Some(msg) = stats.last_error.lock().ok().and_then(|guard| guard.clone()) {
+            anyhow::bail!(msg);
+        }
 
         Ok(())
     }

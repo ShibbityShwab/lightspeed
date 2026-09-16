@@ -39,6 +39,10 @@ impl GameConfig for FortniteConfig {
         "EasyAntiCheat (EAC)"
     }
 
+    fn dynamic_server(&self) -> bool {
+        true
+    }
+
     fn typical_pps(&self) -> u32 {
         // ~20-60 packets/sec depending on game state
         40
