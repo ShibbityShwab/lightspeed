@@ -2843,7 +2843,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-client"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -2877,7 +2877,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-gui"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "axoupdater",
@@ -2886,7 +2886,10 @@ dependencies = [
  "egui_plot",
  "lightspeed-client",
  "reqwest",
+ "rustls",
+ "serde_json",
  "tokio",
+ "toml 1.1.4+spec-1.1.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2897,7 +2900,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-protocol"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "bytes",
  "criterion",
@@ -2911,7 +2914,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-proxy"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "bytes",
