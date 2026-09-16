@@ -1,62 +1,63 @@
-# Current Phase: WF-021 v1.4.2 Community Feedback Fixes
+# Current Phase: WF-022 v1.4.3 Linux Interception + Security Patch
 
-**Workflow:** WF-021
+**Workflow:** WF-022
 **Agent:** RustDev + NetEng + QAEngineer + DevOps
-**Status:** Releasing `v1.4.2`
+**Status:** Releasing `v1.4.3`
 **Last updated:** 2026-09-16
 
 ---
 
 ## Summary
 
-Audited the post-v1.4.1 community feedback (issues #59, #62, #66; discussions
-#63, #69) plus live relay metrics, then shipped one release addressing every
-actionable report. The headline problem was that the relay fleet was healthy but
-almost unused: clients could not see the relays, and Fortnite stalled because the
-interceptor locked onto a dead lobby server.
+Two things drove this release. First, a rustls advisory (RUSTSEC-2026-0285) published
+on 2026-09-14 turned the Security Audit workflow red, so the patched rustls ships here.
+Second, an Oracle-assisted audit of the Linux interceptor found that Linux interception
+was effectively non-functional: server discovery broke on modern `ss`, the fallback mode
+blackholed matched traffic, and the receive thread spun a CPU core while idle. All are
+fixed, and server rotation is now followed.
 
-| Item | Source | Status |
-|------|--------|--------|
-| Windows GUI tray Quit left a zombie | #59 | Fixed |
-| GUI stacked multiple instances | #59 | Fixed |
-| GUI listed loopback placeholders instead of the real relays | #59, #69 | Fixed |
-| No GUI config reset / visibility | #59 | Fixed |
-| No QUIC/auth or relay usage diagnostics | #59 | Fixed |
-| GUI game list missing supported games | #59 | Fixed |
-| Fortnite locked onto the lobby server, live match not tunneled | #59 | Fixed |
-| Transient WinDivert recv error tore down the interceptor | #59 | Fixed |
-| `--probe-proxies` double fetch and invisible report | #59 | Fixed |
-| TCP-only games (Angels Online) cannot be accelerated | #66 | Documented, not implemented |
-| Requested profiles (Battlefield 6, Warface, Delta Force) | #63 | Under evaluation, no fabricated ports |
-| Example config + per-OS install guides | #59 | Added |
-| Windows CLI build (zip, unsupported) | #59 | Added |
+| Item | Status |
+|------|--------|
+| rustls 0.23.45 (RUSTSEC-2026-0285) | Fixed |
+| Linux: `ss -unp -a` + State-column-agnostic parser + `/proc/net/udp` fallback | Fixed |
+| Linux: destination-less rule removed (no more traffic blackhole) | Fixed |
+| Linux: recvmsg busy-spin replaced with `poll(2)` | Fixed |
+| Linux: server rotation via 5s scanner poll and a pure `RotationTracker` | Added |
+| Linux: teardown removes the currently installed rule | Fixed |
+| Linux: `--smoke-test` rewritten as a synthetic end-to-end test | Added |
+| Windows GUI fixes from v1.4.2 | Unchanged, still shipped |
 
 ---
 
 ## Verification
 
-- `cargo fmt --check`, `cargo clippy --workspace --all-targets --exclude lightspeed-gui`
-  clean for default, `quic`, `full`, and `ml`; `cargo clippy -p lightspeed-gui` clean.
-- `cargo test --workspace`: all suites pass (client 169, GUI 171, plus proxy/protocol).
-- Live fleet: `--probe-proxies` discovers all five relays in one pass with a stdout
-  report; `--test-control` registers a session; `--live-test` relays 5/5 packets with
-  payload match through `relay-sgp-1`.
-- `dist plan` lists `lightspeed-client-x86_64-pc-windows-msvc.zip` and the GUI
-  Windows assets at 1.4.2.
+- `cargo fmt --check` clean; `clippy --workspace --all-targets --exclude lightspeed-gui`
+  clean for default, `quic`, `full`, and `ml`; `clippy -p lightspeed-gui` clean.
+- `cargo test -p lightspeed-client`: 185 lib tests plus the bin target, all pass
+  (includes 7 `RotationTracker` cases and 8 `ss`/`/proc` parser fixtures).
+- Linux end-to-end, run under sudo against a live relay:
+  `sudo ./target/debug/lightspeed --smoke-test --proxy 45.77.32.236:4434` PASSED with
+  waiting state, exact-IP rule install, 5/5 relayed and 5/5 injected back with the
+  correct source, rotation to a second TEST-NET address with no post-swap traffic to the
+  old one, teardown of all `lightspeed_` tables, and an idle CPU sample of 0 ticks/s.
+- Live fleet unaffected: `--probe-proxies` finds all five relays, `--test-control`
+  registers a session, and no leaked nft tables remain.
+- `dist plan` lists the Windows client zip and GUI assets at 1.4.3.
 
-**Known verification gap:** the Windows GUI runtime (tray Quit, single instance,
-discovery) could not be executed on this host. The decision logic is unit tested with
-Linux-runnable tests, and Windows compilation is covered by the CI Windows jobs. This
-matches existing project policy for Windows-only code.
+**Known verification gap:** the Windows GUI runtime still cannot be executed on this
+host, so Windows behavior rests on the CI Windows jobs plus the Linux-runnable unit
+tests for shared decision logic. Real-game Linux validation (Fortnite under Proton) has
+not been performed; the synthetic end-to-end test is the current guard.
 
 ---
 
 ## Next Action
 
-1. Watch the `v1.4.2` release workflow to completion and confirm every asset publishes.
-2. Post-release: refresh `dist/aur/PKGBUILD` (pkgver plus sha256 sums) and
-   `dist/winget` for 1.4.2.
-3. Reply on issues #59, #62, #66 and discussions #69, #63 with the release link.
-4. **WF-022** candidates: dynamic registry self-registration; interceptor re-detection
-   on Linux; TCP game-traffic support (issue #66) if a design lands; F5 registry cert
-   pinning and binary release signing from the security backlog.
+1. Confirm the `v1.4.3` release publishes every asset.
+2. Refresh `dist/aur` (pkgver plus sha256, rebuild) and submit the winget 1.4.3 manifest
+   PR from the existing `ShibbityShwab/winget-pkgs` fork.
+3. Reply on the community threads with the v1.4.3 link.
+4. **WF-023** candidates: conntrack as a route source for unconnected game sockets
+   (Fortnite under Proton); per-generation handoff to remove the rotation silence gate;
+   NFQUEUE only if true pass-through is ever required; F5 registry cert pinning and
+   binary release signing from the security backlog.

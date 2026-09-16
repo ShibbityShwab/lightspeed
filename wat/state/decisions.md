@@ -327,3 +327,55 @@ one auditable release. Adding TCP game interception rejected for v1.4.2 because 
 interceptor and tunnel data plane are UDP-only end to end. Adding unverified game
 profiles rejected because invented ports and anti-cheat claims cause user-visible
 breakage.
+
+---
+
+### 2026-09-16: Linux Interception Repair and Server Rotation (v1.4.3)
+
+**Agent:** RustDev + NetEng + QAEngineer
+**Status:** Accepted
+**Rationale:** An Oracle-assisted audit, with kernel behavior verified on the build host,
+showed Linux interception was effectively non-functional. Three independent defects
+compounded: (1) `ss -unp` on iproute2 7.x no longer prints a State column, so the socket
+parser skipped every line, returned an empty list, and never reached the `/proc/net/udp`
+fallback, meaning no game server was ever discovered; (2) the destination-less fallback
+installed a redirect rule matching `0.0.0.0`/a port range and then tunneled to the
+post-NAT destination (`127.0.0.1`), which the relay rejects as private, silently dropping
+matched traffic; (3) the receive thread used a nonblocking socket and continued on EAGAIN,
+spinning a CPU core while idle. A fourth issue blocked rotation: deleting a redirect rule
+does not unhook an established flow, because the conntrack NAT mapping keeps redirecting
+it to the listener for 30 to 120 seconds, so a naive rule swap would misroute the old
+flow to the new server.
+
+**Key decisions:**
+- Reply injection works only from the socket bound to the redirect target port (conntrack
+  reverse-NAT), so a session keeps one stable listener port and always injects from it.
+- Rotation uses a conservative gate rather than a naive swap: move the exact-IP rule to a
+  new server only when the scanner reports it, the old server is absent from the routes,
+  and the old flow has been silent, all across two consecutive scans. This avoids the
+  misroute window without the complexity (and response-correlation requirements) of a
+  full per-generation handoff, which is deferred.
+- No rule is installed while no real server is known. Traffic flows normally instead of
+  being blackholed. `last_error` is reserved for genuine failures.
+- Reliability fixes ship in the same release because rotation is inert without the
+  scanner fix, and the busy-spin is a real, user-visible defect.
+
+**Impact:**
+- `client/src/interceptor/linux.rs` (waiting state, stable port, scanner poll, swap gate,
+  poll(2), teardown, removed dead `recover_original_dst`)
+- `client/src/interceptor/rotation.rs` (new pure, cross-platform decision logic)
+- `client/src/interceptor/process_scanner.rs` (`ss -unp -a`, State-agnostic parser,
+  `/proc` fallback)
+- `client/src/modes/smoke_test.rs` (synthetic end-to-end test)
+- `client/src/games/mod.rs` (`process_names_for_name`)
+- `client/Cargo.lock` and `Cargo.toml` (rustls 0.23.45 for RUSTSEC-2026-0285)
+- Version bumped 1.4.2 to 1.4.3.
+**Alternatives Considered:** TPROXY is invalid for locally generated traffic (mangle
+PREROUTING only); the `MARK` plus policy-routing workaround mutates host routing and can
+blackhole all traffic if cleanup fails. NFQUEUE would give true per-packet destination
+and pass-through but needs a netlink dependency and fail-open semantics. `SO_ORIGINAL_DST`
+returns ENOPROTOOPT for UDP on this kernel. conntrack is a materially better route source
+than `ss` for unconnected sockets and is the recommended v1.4.4 addition, but it is not
+required once the scanner loop works. Reusing the Windows `Decision::PassThrough` was
+rejected outright: on Linux the kernel has already consumed the datagram, so ignoring it
+means silent packet loss.
