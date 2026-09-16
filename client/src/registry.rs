@@ -61,6 +61,16 @@ pub struct SignedRegistry {
     pub signature: String,
 }
 
+/// A relay discovered from the signed registry: its node id and the
+/// data-plane address ("ip:port") game traffic is tunneled through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayInfo {
+    /// Registry node id (e.g. `relay-lax-1`).
+    pub node_id: String,
+    /// Data-plane address as `"ip:port"`.
+    pub addr: String,
+}
+
 /// Verify a signed registry against an operator Ed25519 public key (base64)
 /// and return the parsed, trusted registry. Fails on a bad signature, a bad
 /// key, or malformed JSON.
@@ -164,6 +174,36 @@ pub fn discover_data_addrs(
         .into_iter()
         .map(|(_, data_addr)| data_addr)
         .collect())
+}
+
+/// Discover community relays from a signed registry and return each
+/// non-revoked node's id and data-plane address ("ip:port").
+///
+/// This is the small public discovery API for embedders (e.g. the GUI). It
+/// applies the same SSRF URL guard, signature verification, rollback check,
+/// and certificate pre-pinning as [`discover_nodes`].
+pub fn discover_relays(
+    url: &str,
+    operator_public_key_b64: &str,
+    control_port: u16,
+) -> anyhow::Result<Vec<RelayInfo>> {
+    validate_registry_url(url)?;
+    discover_relays_inner(url, operator_public_key_b64, control_port)
+}
+
+/// Unguarded variant of [`discover_relays`] used by tests that serve a local
+/// registry over plain HTTP.
+fn discover_relays_inner(
+    url: &str,
+    operator_public_key_b64: &str,
+    control_port: u16,
+) -> anyhow::Result<Vec<RelayInfo>> {
+    Ok(
+        discover_nodes_inner(url, operator_public_key_b64, control_port)?
+            .into_iter()
+            .map(|(node_id, addr)| RelayInfo { node_id, addr })
+            .collect(),
+    )
 }
 
 /// Pre-pin the control-plane certificate fingerprint for each non-revoked
@@ -518,6 +558,30 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(nodes, expected);
+    }
+
+    #[test]
+    fn test_discover_relays_returns_expected_relays() {
+        let key_pair = new_key_pair();
+        let pubkey_b64 = b64(key_pair.public_key().as_ref());
+        let registry = sample_registry();
+        let expected = vec![RelayInfo {
+            node_id: registry.nodes[0].node_id.clone(),
+            addr: registry.nodes[0].data_addr.clone(),
+        }];
+        let signed = sign_registry(&registry, &key_pair);
+
+        let (url, handle) = serve_once(&serde_json::to_string(&signed).unwrap());
+        let relays = discover_relays_inner(&url, &pubkey_b64, 4433).unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(relays, expected);
+    }
+
+    #[test]
+    fn test_discover_relays_rejects_unsafe_url() {
+        assert!(discover_relays("http://example.com/nodes", "key", 4433).is_err());
+        assert!(discover_relays("https://127.0.0.1/nodes", "key", 4433).is_err());
     }
 
     #[test]

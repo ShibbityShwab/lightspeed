@@ -18,11 +18,12 @@ eula = false
 # dependency is `cfg(windows)`-gated, so non-Windows builds simply skip it.
 [package.metadata.dist]
 features = ["quic", "windivert-redirect"]
-# The GUI is the Windows entry point (it bundles this crate), so the CLI client
-# ships for Linux + macOS only.
+# The GUI is the primary Windows entry point, but the CLI client also ships a
+# Windows zip for headless/power users.
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
 ]

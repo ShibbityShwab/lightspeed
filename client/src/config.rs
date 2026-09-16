@@ -577,4 +577,40 @@ servers = [
         assert_eq!(deserialized.route.strategy, original.route.strategy);
         assert_eq!(deserialized.ml.min_samples, original.ml.min_samples);
     }
+
+    // ── Shipped example config ─────────────────────────────────────────
+
+    #[test]
+    fn test_example_config_parses_with_documented_defaults() {
+        let example = include_str!("../lightspeed.example.toml");
+        let config: Config = toml::from_str(example).expect("example config must parse");
+
+        assert_eq!(config.general.log_level, "info");
+        assert!(!config.general.telemetry);
+        assert!(config.general.interface.is_none());
+
+        assert_eq!(config.tunnel.keepalive_ms, 5000);
+        assert_eq!(config.tunnel.timeout_ms, 10000);
+        assert_eq!(config.tunnel.mtu, 1400);
+        assert_eq!(config.tunnel.transport, "udp");
+
+        assert!(config.proxy.servers.is_empty());
+        assert_eq!(config.proxy.quic_port, 4433);
+        assert_eq!(config.proxy.data_port, 4434);
+
+        assert!(config.registry.url.is_none());
+        assert!(config.registry.operator_key.is_none());
+
+        assert_eq!(config.route.strategy, "nearest");
+        assert!(!config.route.multipath);
+        assert_eq!(config.route.multipath_max_paths, 2);
+        assert_eq!(config.route.health_check_ms, 10000);
+        assert_eq!(config.route.max_failover, 3);
+
+        assert!(config.ml.model_path.is_none());
+        assert!(!config.ml.online_learning);
+        assert_eq!(config.ml.min_samples, 50);
+
+        assert_eq!(config.interception.mode, "auto");
+    }
 }

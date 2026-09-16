@@ -54,6 +54,9 @@ use modes::{
 use route::ProxyHealth;
 use tunnel::relay::UdpRelay;
 
+/// Default config template written by `--write-config`.
+const EXAMPLE_CONFIG: &str = include_str!("../lightspeed.example.toml");
+
 /// A resolved proxy choice plus the full set of candidate relay addresses it
 /// was discovered from, for feeding multipath/continuous rerouting.
 struct ResolvedProxy {
@@ -391,47 +394,9 @@ async fn main() -> anyhow::Result<()> {
         if std::path::Path::new(path).exists() {
             warn!("{} already exists — not overwriting", path);
         } else {
-            let default_config = r#"# LightSpeed configuration
-# See docs/user-guide.md for details.
-
-[proxy]
-# Your LightSpeed proxy node addresses (host:port).
-# Get these from your Vultr/Oracle cloud instances.
-# At least one proxy is required.
-servers = [
-    # "YOUR_PROXY_IP:4434",
-]
-
-# Data-plane port (UDP tunnel, shared by all proxy nodes).
-data_port = 4434
-
-# Control-plane port (QUIC, shared by all proxy nodes).
-# control_port = 4433
-
-[general]
-# Default game to optimize.
-# default_game = "rust"
-
-# Route selection strategy: "nearest" or "ml"
-# route_strategy = "nearest"
-
-# Enable Forward Error Correction for packet loss recovery.
-# fec = false
-
-# FEC block size (2-16). Lower = more redundancy.
-# fec_k = 4
-
-# Enable Cloudflare WARP for improved routing.
-# warp = false
-
-[telemetry]
-# Opt-in anonymous telemetry (p50/p95/p99 latency, jitter, FEC stats).
-# No IPs or PII are ever sent. See docs/privacy.md.
-# enabled = false
-"#;
-            std::fs::write(path, default_config)?;
+            std::fs::write(path, EXAMPLE_CONFIG)?;
             info!("📝 Wrote default config to {}", path);
-            info!("   Edit {} to add your proxy addresses, then run:", path);
+            info!("   Edit {} to set your proxy addresses, then run:", path);
             info!("   lightspeed --game rust");
         }
         return Ok(());
@@ -937,15 +902,13 @@ data_port = 4434
         }
     }
 
-    // ── Proxy selection (explicit → auto-select → default) ────────
-    let resolved = resolve_proxy_addr(&cli, &config).await?;
-    let proxy_addr = resolved.addr;
-    crate::session::set_current_proxy(proxy_addr);
-    start_continuous_rerouting(&resolved.servers, &config, &cli);
-
     // ── --probe-proxies ───────────────────────────────────────────
+    //
+    // Self-contained probe: build the labeled candidate list (configured
+    // proxies + registry nodes), fetch the registry once, probe once, print a
+    // report, and exit. It runs before `resolve_proxy_addr`/reroute setup so a
+    // probe never mutates global session state or spawns background tasks.
     if cli.probe_proxies {
-        // Build the labeled candidate list: configured proxies + registry nodes.
         let mut candidates: Vec<(String, String)> = config
             .proxy
             .servers
@@ -965,10 +928,10 @@ data_port = 4434
             .as_deref()
             .filter(|k| !k.is_empty())
             .unwrap_or(crate::registry::DEFAULT_OPERATOR_PUBKEY_B64);
-        match crate::registry::discover_nodes(registry_url, operator_key, config.proxy.quic_port) {
-            Ok(nodes) if !nodes.is_empty() => {
-                info!("🔍 Registry: {} relay(s) discovered", nodes.len());
-                candidates.extend(nodes);
+        match crate::registry::discover_relays(registry_url, operator_key, config.proxy.quic_port) {
+            Ok(relays) if !relays.is_empty() => {
+                info!("🔍 Registry: {} relay(s) discovered", relays.len());
+                candidates.extend(relays.into_iter().map(|relay| (relay.node_id, relay.addr)));
             }
             Ok(_) => warn!("Registry returned no relays"),
             Err(e) => warn!("Registry fetch failed: {e}"),
@@ -980,26 +943,39 @@ data_port = 4434
             info!("🔍 Probing {} proxy candidate(s)...", candidates.len());
             let probes =
                 probe_labeled(&candidates, config.proxy.data_port, config.proxy.quic_port).await;
+            // Plain-text report on stdout so it is visible even when the log
+            // filter hides the INFO target.
+            println!("📊 Proxy Latency Report:");
             info!("📊 Proxy Latency Report:");
             for node in &probes {
                 let status = match node.health {
-                    ProxyHealth::Healthy => "✅",
-                    ProxyHealth::Degraded => "⚠️",
-                    ProxyHealth::Unhealthy => "❌",
-                    ProxyHealth::Unknown => "❓",
+                    ProxyHealth::Healthy => "healthy",
+                    ProxyHealth::Degraded => "degraded",
+                    ProxyHealth::Unhealthy => "unhealthy",
+                    ProxyHealth::Unknown => "unknown",
                 };
                 let latency = node
                     .latency_us
                     .map(|us| format!("{:.1}ms", us as f64 / 1000.0))
                     .unwrap_or_else(|| "timeout".into());
+                println!(
+                    "   {} {} ({}) - {}",
+                    status, node.id, node.data_addr, latency
+                );
                 info!(
-                    "   {} {} ({}) — {}",
+                    "   {} {} ({}) - {}",
                     status, node.id, node.data_addr, latency
                 );
             }
         }
         return Ok(());
     }
+
+    // ── Proxy selection (explicit → auto-select → default) ────────
+    let resolved = resolve_proxy_addr(&cli, &config).await?;
+    let proxy_addr = resolved.addr;
+    crate::session::set_current_proxy(proxy_addr);
+    start_continuous_rerouting(&resolved.servers, &config, &cli);
 
     // ── --live-test ───────────────────────────────────────────────
     if cli.live_test {

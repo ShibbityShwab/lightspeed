@@ -1,0 +1,88 @@
+# LightSpeed client configuration
+#
+# Written by `lightspeed --write-config`. See docs/user-guide.md for details.
+# Every setting is optional: delete a line to fall back to its documented
+# default. Values shown below are the defaults.
+
+[proxy]
+# Relay addresses to tunnel game traffic through ("ip:port" or "host:port").
+# Leave empty to auto-discover the community relays from the signed registry.
+#
+# Community relay network (data-plane UDP port 4434):
+#   servers = [
+#     "207.246.106.36:4434",   # relay-lax-1 (Los Angeles)
+#     "207.246.124.117:4434",  # relay-ewr-1 (New Jersey)
+#     "45.77.32.236:4434",     # relay-sgp-1 (Singapore)
+#     "95.179.164.138:4434",   # relay-fra   (Frankfurt)
+#     "167.179.77.127:4434",   # relay-nrt   (Tokyo)
+#   ]
+servers = []
+
+# QUIC control-plane port (shared by all relays). Default: 4433.
+quic_port = 4433
+
+# UDP data-plane port (shared by all relays). Default: 4434.
+data_port = 4434
+
+[registry]
+# Signed node list used for zero-config discovery (must be https). Leave unset
+# to use the built-in community registry.
+# url = "https://shibbityshwab.github.io/lightspeed/registry.json"
+
+# Operator Ed25519 public key (base64) that signs the registry. Leave unset to
+# use the built-in operator key.
+# operator_key = ""
+
+[general]
+# Log verbosity: trace, debug, info, warn, error. Default: info.
+log_level = "info"
+
+# Opt-in anonymous telemetry (latency percentiles + FEC stats only, no PII).
+# See docs/privacy.md. Default: false.
+telemetry = false
+
+# Capture interface; auto-detected when unset.
+# interface = "eth0"
+
+[tunnel]
+# Keepalive interval in milliseconds. Default: 5000.
+keepalive_ms = 5000
+
+# Connection timeout in milliseconds. Default: 10000.
+timeout_ms = 10000
+
+# Maximum packet size (MTU). Default: 1400.
+mtu = 1400
+
+# Client-to-relay transport: "udp" (default) or "tcp".
+transport = "udp"
+
+[route]
+# Route selection strategy: "nearest" (default), "ml", or "multipath".
+strategy = "nearest"
+
+# Send on multiple relay paths and use the fastest. Default: false.
+multipath = false
+
+# Maximum simultaneous relay paths when multipath is enabled. Default: 2.
+multipath_max_paths = 2
+
+# Health-check interval in milliseconds. Default: 10000.
+health_check_ms = 10000
+
+# Maximum proxy failover attempts. Default: 3.
+max_failover = 3
+
+[ml]
+# Path to a pre-trained route model; unset trains on the fly.
+# model_path = "/path/to/model.bin"
+
+# Adapt the model in real time from live RTT samples. Default: false.
+online_learning = false
+
+# Minimum samples before an online model update. Default: 50.
+min_samples = 50
+
+[interception]
+# Interception backend: "auto" (default), "userspace", or "kernel".
+mode = "auto"

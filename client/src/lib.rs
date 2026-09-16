@@ -11,6 +11,7 @@ pub mod games;
 pub mod interceptor;
 
 pub use engine::{EngineStatus, LightSpeedEngine};
+pub use registry::{discover_relays, RelayInfo};
 
 pub(crate) mod capture;
 pub(crate) mod cli;
