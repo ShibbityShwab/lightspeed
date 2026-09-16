@@ -43,6 +43,11 @@ fixed, and server rotation is now followed.
 - Live fleet unaffected: `--probe-proxies` finds all five relays, `--test-control`
   registers a session, and no leaked nft tables remain.
 - `dist plan` lists the Windows client zip and GUI assets at 1.4.3.
+- Post-tag follow-up: master also carries `b6521f1`, which cfg-gates a Linux-only
+  `std::time::Duration` import in `smoke_test.rs`. That unused import broke the Windows
+  and macOS CI jobs under `RUSTFLAGS=-Dwarnings`. CI is fully green on `b6521f1`
+  (all ten jobs) and the Security Audit is green. The v1.4.3 release binaries are
+  unaffected because the release workflow does not enable `-Dwarnings`.
 
 **Known verification gap:** the Windows GUI runtime still cannot be executed on this
 host, so Windows behavior rests on the CI Windows jobs plus the Linux-runnable unit
