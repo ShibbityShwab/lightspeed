@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: ShibbityShwab.LightSpeed
+PackageVersion: 1.4.2
+InstallerType: msi
+Scope: machine
+UpgradeBehavior: install
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/ShibbityShwab/lightspeed/releases/download/v1.4.2/lightspeed-gui-x86_64-pc-windows-msvc.msi
+  InstallerSha256: 9D7A7890F906F5AF74E3A77147A50EA654E3A051AD9A259E31B3C5F7789370F0
+  InstallerSwitches:
+    Silent: /qn
+    SilentWithProgress: /qn
+    Custom: /norestart
+ManifestType: installer
+ManifestVersion: 1.6.0

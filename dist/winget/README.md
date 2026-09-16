@@ -6,8 +6,9 @@ community package repository.
 
 ## Manifest layout
 
-`manifests/s/ShibbityShwab/LightSpeed/1.3.2/` follows the current winget
-multi-file manifest schema (ManifestVersion 1.6.0):
+`manifests/s/ShibbityShwab/LightSpeed/1.4.2/` is the current manifest and follows
+the winget multi-file manifest schema (ManifestVersion 1.6.0). The `1.3.2`
+directory is kept for history:
 
 | File | ManifestType | Purpose |
 | --- | --- | --- |
@@ -19,11 +20,11 @@ multi-file manifest schema (ManifestVersion 1.6.0):
 path under `manifests/s/`.
 
 The installer URL points at the GitHub release asset:
-`https://github.com/ShibbityShwab/lightspeed/releases/download/v1.3.2/lightspeed-gui-x86_64-pc-windows-msvc.msi`
+`https://github.com/ShibbityShwab/lightspeed/releases/download/v1.4.2/lightspeed-gui-x86_64-pc-windows-msvc.msi`
 with the real `InstallerSha256`
-`34F0B93E11ABDAE741FA74F055E4C45E43EAF1B2B860EE2205DDBCDAE8C7E55F`
-(verified by downloading the v1.3.2 asset; the value matches the `.msi.sha256`
-sidecar cargo-dist uploads with the release).
+`9D7A7890F906F5AF74E3A77147A50EA654E3A051AD9A259E31B3C5F7789370F0`
+(verified against the `.msi.sha256` sidecar cargo-dist uploads with the
+release).
 
 Validation caveat: `winget validate` only runs on Windows and is not available
 in this repo's Linux toolchain. The manifests are validated by schema
@@ -38,7 +39,7 @@ LightSpeed repo, so the very first manifest cannot be opened by automation:
 
 1. Fork `https://github.com/microsoft/winget-pkgs`.
 2. Copy this version directory into the fork at
-   `manifests/s/ShibbityShwab/LightSpeed/1.3.2/` (create the folder if absent).
+   `manifests/s/ShibbityShwab/LightSpeed/1.4.2/` (create the folder if absent).
 3. Open a pull request. The winget-pkgs bot runs `winget validate` and the
    Microsoft.Winget.Create pipeline; fix anything it flags and keep the PR
    updated until it merges.
@@ -60,6 +61,11 @@ Required setup for the action:
   Actions (owner `ShibbityShwab`, repo `lightspeed`). The token lets the action
   open PRs as the repo, not as a personal account, so it keeps working
   unattended.
+
+  **Status at v1.4.2: this secret is NOT set.** The `winget-releaser` job in
+  `release.yml` gates on `env.WINGET_TOKEN != ''`, so it resolves to a clean
+  skip (the job reports success without publishing anything). Until the secret
+  is added, new versions must be submitted manually using the steps above.
 - Pin `uses: vedantmgoyal2009/winget-releaser@v2` (or the current major) and
   set `with: identifier: ShibbityShwab.LightSpeed`.
 
