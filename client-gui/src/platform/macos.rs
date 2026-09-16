@@ -6,7 +6,7 @@
 //! and Rust port detection via `pgrep` + `lsof`.
 
 use crate::app::{TrayState, STEAM_SERVICE_PORTS};
-use crate::platform::{self, Platform, TrayHandle};
+use crate::platform::{self, Platform, QuitFlag, TrayHandle};
 use eframe::egui;
 
 /// No-op tray handle for macOS (no menu-bar integration yet).
@@ -30,7 +30,7 @@ pub struct MacosPlatform;
 impl Platform for MacosPlatform {
     type Tray = MacosTray;
 
-    fn new_tray() -> Self::Tray {
+    fn new_tray(_quit: QuitFlag) -> Self::Tray {
         MacosTray
     }
 

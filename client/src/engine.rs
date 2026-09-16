@@ -39,6 +39,18 @@ pub struct EngineStatus {
     /// Used to prevent old tasks from overwriting status after reconnect.
     pub keepalive_generation: u64,
 
+    // ── Control-plane registration ────────────────────────────────
+    /// Whether the relay's QUIC control plane accepted a session registration.
+    pub control_registered: bool,
+    /// Registry node id of the relay the control plane registered with
+    /// (`relay-lax-1`, …). Set by the GUI; `None` when unknown.
+    pub node_id: Option<String>,
+    /// Session token returned by the relay's control plane.
+    pub session_token: Option<u32>,
+    /// User-facing reason registration has not succeeded (`None` while
+    /// pending or registered).
+    pub registration_error: Option<String>,
+
     // ── Redirect / game routing ───────────────────────────────────
     /// Whether a game redirect is actively running.
     pub redirect_active: bool,
@@ -177,14 +189,34 @@ impl LightSpeedEngine {
             s.packets_received = 0;
             s.rtt_history.clear();
             s.latest_rtt_ms = 0.0;
+            s.control_registered = false;
+            s.node_id = None;
+            s.session_token = None;
+            s.registration_error = None;
             s.keepalive_generation
         };
         let status = Arc::clone(&self.status);
         self.rt
             .spawn(run_keepalive(proxy_addr, status, rx, generation));
+        self.spawn_registration(proxy_addr);
+    }
+
+    /// Record the registry node id of the relay currently selected by the GUI.
+    pub fn set_node_id(&mut self, node_id: Option<String>) {
+        if let Ok(mut s) = self.status.write() {
+            s.node_id = node_id;
+        }
+    }
+
+    /// Spawn the QUIC control-plane registration task, recording its outcome
+    /// in the shared status instead of discarding it.
+    fn spawn_registration(&self, proxy_addr: SocketAddrV4) {
+        let status = Arc::clone(&self.status);
         self.rt.spawn(async move {
-            // control port
-            let _ = crate::quic::register_session(proxy_addr, 4433).await;
+            let result = crate::quic::register_session(proxy_addr, 4433).await;
+            if let Ok(mut s) = status.write() {
+                apply_registration_result(&mut s, result);
+            }
         });
     }
 
@@ -237,13 +269,13 @@ impl LightSpeedEngine {
             s.redirect_fec_parity = 0;
             s.redirect_fec_recovered = 0;
             s.redirect_error = None;
+            s.control_registered = false;
+            s.session_token = None;
+            s.registration_error = None;
         }
 
         let status = Arc::clone(&self.status);
-        self.rt.spawn(async move {
-            // control port
-            let _ = crate::quic::register_session(proxy_addr, 4433).await;
-        });
+        self.spawn_registration(proxy_addr);
         self.rt.spawn(async move {
             // run_with_shutdown takes &self and is Send, but UdpRedirect isn't
             // Arc'd — we move it into the task.
@@ -343,15 +375,15 @@ impl LightSpeedEngine {
             s.capture_fec_recovered = 0;
             s.capture_error = None;
             s.capture_bpf = preview_bpf;
+            s.control_registered = false;
+            s.session_token = None;
+            s.registration_error = None;
         }
 
         let status = Arc::clone(&self.status);
         let proxy_id = proxy_addr.to_string();
 
-        self.rt.spawn(async move {
-            // control port
-            let _ = crate::quic::register_session(proxy_addr, 4433).await;
-        });
+        self.spawn_registration(proxy_addr);
         self.rt.spawn(async move {
             // game_box owned here; reference valid for the duration of the .await
             let game: Box<dyn crate::games::GameConfig> = game_box;
@@ -462,13 +494,13 @@ impl LightSpeedEngine {
             s.windivert_injected = 0;
             s.windivert_errors = 0;
             s.windivert_error = None;
+            s.control_registered = false;
+            s.session_token = None;
+            s.registration_error = None;
         }
 
         let status = Arc::clone(&self.status);
-        self.rt.spawn(async move {
-            // control port
-            let _ = crate::quic::register_session(proxy_addr, 4433).await;
-        });
+        self.spawn_registration(proxy_addr);
         self.rt.spawn(async move {
             match run_windivert_mode_with_shutdown(cfg, rx, Some(stat_slot)).await {
                 Ok(()) => tracing::info!("WinDivert redirect stopped cleanly"),
@@ -546,9 +578,13 @@ impl LightSpeedEngine {
             s.windivert_injected = 0;
             s.windivert_errors = 0;
             s.windivert_error = None;
+            s.control_registered = false;
+            s.session_token = None;
+            s.registration_error = None;
         }
 
         let status = Arc::clone(&self.status);
+        self.spawn_registration(proxy_addr);
         self.rt.spawn(async move {
             match run_windivert_mode_with_shutdown(cfg, rx, Some(stat_slot)).await {
                 Ok(()) => tracing::info!("WinDivert auto-redirect stopped cleanly"),
@@ -641,10 +677,7 @@ impl LightSpeedEngine {
             });
         let platform = interceptor.platform_name();
 
-        self.rt.spawn(async move {
-            // control port
-            let _ = crate::quic::register_session(proxy_addr, 4433).await;
-        });
+        self.spawn_registration(proxy_addr);
         // `start()` must run inside a Tokio runtime context: the WinDivert
         // backend calls `tokio::spawn`/`spawn_blocking`/`Handle::current()`,
         // which panic with "there is no reactor running" from a non-Tokio
@@ -665,6 +698,9 @@ impl LightSpeedEngine {
             s.interceptor_injected = 0;
             s.interceptor_errors = 0;
             s.interceptor_error = None;
+            s.control_registered = false;
+            s.session_token = None;
+            s.registration_error = None;
         }
 
         tracing::info!(
@@ -760,6 +796,23 @@ impl LightSpeedEngine {
     }
 }
 
+/// Record a `register_session` outcome in `status` so the UI can show whether
+/// the control plane accepted this client and which token it issued.
+fn apply_registration_result(status: &mut EngineStatus, result: Option<u32>) {
+    match result {
+        Some(token) => {
+            status.control_registered = true;
+            status.session_token = Some(token);
+            status.registration_error = None;
+        }
+        None => {
+            status.control_registered = false;
+            status.session_token = None;
+            status.registration_error = Some("control-plane registration failed".to_string());
+        }
+    }
+}
+
 impl Drop for LightSpeedEngine {
     fn drop(&mut self) {
         self.stop_interceptor();
@@ -851,5 +904,28 @@ async fn run_keepalive(
         if s.keepalive_generation == generation {
             s.connected = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_registration_result, EngineStatus};
+
+    #[test]
+    fn engine_registration_success_records_token() {
+        let mut status = EngineStatus::default();
+        apply_registration_result(&mut status, Some(0xdead_beef));
+        assert!(status.control_registered);
+        assert_eq!(status.session_token, Some(0xdead_beef));
+        assert_eq!(status.registration_error, None);
+    }
+
+    #[test]
+    fn engine_registration_failure_records_error() {
+        let mut status = EngineStatus::default();
+        apply_registration_result(&mut status, None);
+        assert!(!status.control_registered);
+        assert_eq!(status.session_token, None);
+        assert!(status.registration_error.is_some());
     }
 }

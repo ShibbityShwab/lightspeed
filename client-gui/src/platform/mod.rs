@@ -8,12 +8,18 @@
 
 use crate::app::TrayState;
 use eframe::egui;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
+/// Shared flag the tray sets when the user picks "Quit"; the frame loop turns
+/// it into a clean process exit.
+pub type QuitFlag = Arc<AtomicBool>;
 
 /// Actions returned by [`TrayHandle::poll_events`] that the app must handle
 /// because they need the Engine (owned by the app).
 ///
 /// Show-window and Quit actions are handled inside the tray (they only need
-/// the `egui::Context`) and never appear here.
+/// the `egui::Context` and the shared [`QuitFlag`) and never appear here.
 #[allow(dead_code)] // Connect/Disconnect only constructed on Windows (real tray)
 #[derive(Debug, PartialEq, Eq)]
 pub enum TrayAction {
@@ -33,12 +39,10 @@ pub trait TrayHandle: Send {
 
 /// Shared port-range look-up used by both Windows and Linux port-detection
 /// paths when live detection (netstat / ss) fails or is unavailable.
-pub fn default_port_range(game_idx: usize) -> (u16, u16) {
-    let (key, _, default_port) = crate::app::GAMES[game_idx];
+pub fn default_port_range(key: &str, default_port: u16) -> (u16, u16) {
     match key {
         "rust" => (28015, 30000),
-        "cs2" => (27015, 27100),
-        "dota2" => (27015, 27100),
+        "cs2" | "csgo" | "dota2" => (27015, 27100),
         "valorant" => (7000, 7500),
         "apex" => (37000, 37050),
         "lol" => (5000, 5500),
@@ -64,9 +68,8 @@ pub(crate) fn ports_to_range(ports: &[u16]) -> Option<(u16, u16)> {
 pub trait Platform {
     type Tray: TrayHandle;
 
-    fn new_tray() -> Self::Tray;
+    fn new_tray(quit: QuitFlag) -> Self::Tray;
     fn is_admin() -> bool;
-    #[allow(dead_code)]
     fn is_capture_available() -> bool;
     fn setup_fonts(ctx: &egui::Context);
 
@@ -85,13 +88,13 @@ pub trait Platform {
     /// falls back to `default_port_range()`.  Override `detect_rust_ports()`
     /// (or this method entirely) to add platform-specific detection.
     fn detect_game_ports(game_idx: usize) -> (u16, u16) {
-        let (key, _, _) = crate::app::GAMES[game_idx];
-        if key == "rust" {
+        let entry = &crate::app::games()[game_idx];
+        if entry.key == "rust" {
             if let Some(range) = Self::detect_rust_ports() {
                 return range;
             }
         }
-        default_port_range(game_idx)
+        default_port_range(entry.key, entry.default_port)
     }
 
     /// Platform-specific Rust port detection (tasklist+netstat on Windows,

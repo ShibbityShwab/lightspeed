@@ -20,6 +20,13 @@ tracing-appender = "0.2"
 anyhow = { workspace = true }
 axoupdater = "0.10.2"
 dirs = "6.0"
+# GUI config persistence (config.rs) and relay /health parsing (discovery.rs).
+serde_json = { workspace = true }
+toml = { workspace = true }
+# The GUI's tree enables both rustls providers (ring via the client's QUIC
+# stack, aws-lc-rs via reqwest/axoupdater), which makes rustls's automatic
+# provider selection panic on the first QUIC call. main.rs pins `ring`.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 eframe = { version = "0.36", features = ["default"] }
 egui_plot = "0.37"
 # axoupdater pulls reqwest with default-features = false and no TLS backend, so

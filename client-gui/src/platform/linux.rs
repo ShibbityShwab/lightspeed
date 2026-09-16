@@ -5,7 +5,7 @@
 //! `pgrep` + `ss`.
 
 use crate::app::{TrayState, STEAM_SERVICE_PORTS};
-use crate::platform::{self, Platform, TrayHandle};
+use crate::platform::{self, Platform, QuitFlag, TrayHandle};
 use eframe::egui;
 
 /// No-op tray handle for Linux (no standard system-tray on modern DEs).
@@ -28,7 +28,7 @@ pub struct LinuxPlatform;
 impl Platform for LinuxPlatform {
     type Tray = LinuxTray;
 
-    fn new_tray() -> Self::Tray {
+    fn new_tray(_quit: QuitFlag) -> Self::Tray {
         LinuxTray
     }
 

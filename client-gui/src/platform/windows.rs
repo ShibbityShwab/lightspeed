@@ -5,9 +5,10 @@
 //! `tasklist` + `netstat`.
 
 use std::cell::Cell;
+use std::sync::atomic::Ordering;
 
 use crate::app::{TrayState, STEAM_SERVICE_PORTS};
-use crate::platform::{self, Platform, TrayAction, TrayHandle};
+use crate::platform::{self, Platform, QuitFlag, TrayAction, TrayHandle};
 use eframe::egui;
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
@@ -40,11 +41,12 @@ pub struct WindowsTray {
     id_connect: MenuId,
     id_disconnect: MenuId,
     id_quit: MenuId,
+    quit: QuitFlag,
     last_state: Cell<TrayState>,
 }
 
 impl WindowsTray {
-    pub fn new() -> Self {
+    pub fn new(quit: QuitFlag) -> Self {
         let item_show = MenuItem::with_id(MENU_SHOW, "Show window", true, None);
         let item_connect = MenuItem::with_id(MENU_CONNECT, "Connect", true, None);
         let item_disconnect = MenuItem::with_id(MENU_DISCONNECT, "Disconnect", true, None);
@@ -79,6 +81,7 @@ impl WindowsTray {
             id_connect,
             id_disconnect,
             id_quit,
+            quit,
             last_state: Cell::new(TrayState::Disconnected),
         }
     }
@@ -97,7 +100,11 @@ impl TrayHandle for WindowsTray {
             } else if event.id == self.id_disconnect {
                 actions.push(TrayAction::Disconnect);
             } else if event.id == self.id_quit {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                // Tray Quit must terminate the process, not hide the window.
+                // The frame loop sees the flag, tears the engine down, and
+                // exits; the repaint wakes it immediately.
+                self.quit.store(true, Ordering::Relaxed);
+                ctx.request_repaint();
             }
         }
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -147,8 +154,8 @@ pub struct WindowsPlatform;
 impl Platform for WindowsPlatform {
     type Tray = WindowsTray;
 
-    fn new_tray() -> Self::Tray {
-        WindowsTray::new()
+    fn new_tray(quit: QuitFlag) -> Self::Tray {
+        WindowsTray::new(quit)
     }
 
     fn is_admin() -> bool {
