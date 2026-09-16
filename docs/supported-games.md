@@ -33,6 +33,28 @@ LightSpeed includes built-in profiles for 17 popular multiplayer games. Each pro
 
 ---
 
+## TCP-only games (not supported)
+
+LightSpeed accelerates **UDP game traffic only**. Its interceptor and tunnel operate on UDP, so a title whose gameplay runs entirely over TCP cannot be accelerated yet.
+
+A known example is **Angels Online Global**, which uses TCP ports 38201, 38304, 38501, and 38502 with the process `angel.dat`. Because that traffic is TCP, LightSpeed cannot route it. This is a protocol limitation, not a per-game setting.
+
+If a game uses UDP for gameplay and TCP only for login or patching, LightSpeed can still accelerate the UDP gameplay traffic. If the gameplay itself is TCP-only, it is out of scope for now.
+
+---
+
+## Community requests under evaluation
+
+The following titles have been requested by the community and are under evaluation:
+
+- Battlefield 6
+- Warface
+- Delta Force
+
+These are requests only. No support is promised, and no port ranges or anti-cheat compatibility claims are made for them at this time. If and when a profile ships, it will appear in the game list above.
+
+---
+
 ## Anti-Cheat Compatibility
 
 LightSpeed is compatible with all major anti-cheat systems:

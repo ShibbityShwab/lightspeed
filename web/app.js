@@ -130,6 +130,14 @@
     });
   }
 
+  function formatCount(value) {
+    if (typeof value !== 'number' || !isFinite(value) || value < 0) return '--';
+    if (value >= 1e9) return (value / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+    if (value >= 1e6) return (value / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (value >= 1e3) return (value / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+    return String(Math.floor(value));
+  }
+
   function renderRelayCards(relays) {
     const byId = {};
     relays.forEach(function (relay) {
@@ -152,6 +160,15 @@
 
       const uptimeEl = card.querySelector('[data-relay-uptime]');
       if (uptimeEl) uptimeEl.textContent = formatUptime(relay.uptime_secs);
+
+      const relayedEl = card.querySelector('[data-relay-packets-relayed]');
+      if (relayedEl) relayedEl.textContent = formatCount(relay.packets_relayed);
+
+      const droppedEl = card.querySelector('[data-relay-packets-dropped]');
+      if (droppedEl) droppedEl.textContent = formatCount(relay.packets_dropped);
+
+      const sessionsEl = card.querySelector('[data-relay-sessions]');
+      if (sessionsEl) sessionsEl.textContent = formatCount(relay.sessions_created);
     });
   }
 
@@ -177,9 +194,17 @@
       uptime.className = 'relay-health-uptime';
       uptime.textContent = formatUptime(relay.uptime_secs);
 
+      const packets = document.createElement('span');
+      packets.className = 'relay-health-packets';
+      packets.textContent = formatCount(relay.packets_relayed) + ' relayed';
+      packets.title = formatCount(relay.packets_relayed) + ' packets relayed, ' +
+        formatCount(relay.packets_dropped) + ' dropped, ' +
+        formatCount(relay.sessions_created) + ' sessions';
+
       row.appendChild(name);
       row.appendChild(state);
       row.appendChild(uptime);
+      row.appendChild(packets);
       list.appendChild(row);
     });
   }
@@ -207,6 +232,18 @@
     if (relays.length) {
       renderRelayCards(relays);
       renderRelayHealthList(relays);
+
+      let totalRelayed = 0;
+      let totalDropped = 0;
+      let totalSessions = 0;
+      relays.forEach(function (relay) {
+        if (typeof relay.packets_relayed === 'number') totalRelayed += relay.packets_relayed;
+        if (typeof relay.packets_dropped === 'number') totalDropped += relay.packets_dropped;
+        if (typeof relay.sessions_created === 'number') totalSessions += relay.sessions_created;
+      });
+      setStat('packets_relayed', formatCount(totalRelayed));
+      setStat('packets_dropped', formatCount(totalDropped));
+      setStat('sessions_created', formatCount(totalSessions));
     }
 
     const healthBar = document.getElementById('network-health-bar');

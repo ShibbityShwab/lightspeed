@@ -82,7 +82,7 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 |------|-------------|
 | `--list-interfaces` | List available network interfaces for capture |
 | `--list-games` | List supported games with default ports |
-| `--write-default-config` | Write a default `lightspeed.toml` to current directory |
+| `--write-config` | Write a documented `lightspeed.toml` to the current directory |
 | `--check` | Run environment checks (nftables, proxy, game detection) |
 | `--status` | Show detailed system state (OS, interceptor, games, nftables) |
 | `--benchmark` | Run latency benchmark (direct vs LightSpeed routing) |
@@ -110,8 +110,8 @@ lightspeed --demo
 # Environment check
 lightspeed --check
 
-# Write a default config
-lightspeed --write-default-config
+# Write a documented config
+lightspeed --write-config
 
 # Watch for game and auto-intercept
 sudo lightspeed --watch --game rust --proxy proxy.example.com:4434
@@ -137,6 +137,8 @@ health_port  = 8080    # HTTP health/metrics
 tcp_enabled = true
 tcp_max_connections = 256
 ```
+
+> On the **proxy** side the QUIC control-plane port is `[network] control_port`. On the **client** side the matching setting is `[proxy] quic_port`. Both default to 4433 and must agree.
 
 See [Deploy Proxy](deploy-proxy.md) for the full reference.
 

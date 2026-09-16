@@ -44,7 +44,7 @@ When you explicitly enable telemetry with the `--telemetry` flag, LightSpeed col
 | Session duration | 45 minutes | No |
 | Proxy region | "us-west" | No |
 | Game name | "rust" | No |
-| LightSpeed version | "0.5.1" | No |
+| LightSpeed version | "1.4.2" | No |
 
 **Explicitly NOT collected:** IP addresses, user identities, game account data, packet payloads.
 

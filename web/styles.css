@@ -244,6 +244,7 @@ img { max-width: 100%; display: block; }
   margin-top: 12px; font-family: var(--mono); font-size: 0.72rem;
   color: var(--text-dim); letter-spacing: 0.5px;
 }
+.relay-meta-packets { margin-top: 6px; font-size: 0.68rem; opacity: 0.85; }
 .network-stats { margin-bottom: 40px; }
 .network-note {
   max-width: 760px; margin: 0 auto; text-align: center;
@@ -303,6 +304,7 @@ img { max-width: 100%; display: block; }
 .relay-health-status.is-degraded { color: var(--orange); }
 .relay-health-status.is-down { color: var(--red); }
 .relay-health-uptime { font-family: var(--mono); font-size: 0.72rem; color: var(--text-dim); white-space: nowrap; }
+.relay-health-packets { font-family: var(--mono); font-size: 0.72rem; color: var(--text-dim); white-space: nowrap; }
 
 /* --- Compare / Why Section --- */
 .compare-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-bottom: 56px; }

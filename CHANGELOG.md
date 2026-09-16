@@ -5,6 +5,29 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-09-16
+
+### Fixed
+- **Windows GUI tray Quit**: choosing Quit from the tray menu now terminates the process cleanly instead of leaving a zombie behind.
+- **Single-instance guard**: launching the GUI a second time now shows an "already running" notice and exits instead of stacking another instance.
+- **Zero-config relay discovery in the GUI**: the GUI now performs the same registry discovery as the CLI and lists the real community relays, instead of showing loopback placeholders.
+- **GUI config persistence**: settings now persist across restarts, and a reset-to-defaults action restores the shipped defaults.
+- **GUI diagnostics**: the status view now reports QUIC/auth registration state and per-relay packet counters, so a failed registration or a stalled relay is visible instead of silent.
+- **GUI game list**: the game picker now covers every supported game profile.
+- **Fortnite dynamic-server re-detection**: when a match ends and the lobby rotates to a new server, the interceptor now re-detects the new server instead of stalling on the old one.
+- **Windows interceptor resilience**: transient WinDivert receive errors are retried instead of tearing the interceptor down.
+- **`--probe-proxies`**: now performs a single discovery/probe pass and prints a visible report, instead of repeating the pass or exiting silently.
+- **Docs**: corrected flag drift and refreshed stale references.
+
+### Added
+- **Example `lightspeed.toml`**: a documented example config ships with the release.
+- **Windows CLI build**: a Windows command-line zip is now published alongside the GUI (unsupported; the GUI is the recommended Windows path).
+- **Per-OS install guides**: dedicated Windows, macOS, and Linux quick-start guides.
+
+### Tooling
+- **Website**: the network section now renders per-relay packet counters (relayed and dropped) from the health snapshot.
+- **`network-stats.sh`**: the health snapshot now includes each relay's `sessions_created` count.
+
 ## [1.4.1] - 2026-09-14
 
 ### Fixed

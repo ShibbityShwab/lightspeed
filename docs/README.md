@@ -8,6 +8,9 @@ Welcome to the LightSpeed documentation wiki — synced from the [source repo](h
 
 | Document | Description |
 |----------|-------------|
+| [Install on Windows](install-windows) | GUI-first Windows setup (MSI + zip) |
+| [Install on macOS](install-macos) | CLI-first macOS setup (Intel + Apple Silicon) |
+| [Install on Linux](install-linux) | CLI-first Linux setup (x86_64 + ARM64) |
 | [User Guide](user-guide) | Step-by-step setup and usage |
 | [CLI Reference](CLI-REFERENCE) | All commands and flags |
 | [FAQ](faq) | Common questions and answers |

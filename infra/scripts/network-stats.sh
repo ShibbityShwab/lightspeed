@@ -103,7 +103,8 @@ while IFS= read -r node; do
                       then ($h.version | tostring) else null end),
             uptime_secs: (($h.uptime_secs? // 0) | tonumber? // 0 | floor),
             packets_relayed: (($h.packets_relayed? // 0) | tonumber? // 0 | floor),
-            packets_dropped: (($h.packets_dropped? // 0) | tonumber? // 0 | floor)
+            packets_dropped: (($h.packets_dropped? // 0) | tonumber? // 0 | floor),
+            sessions_created: (($h.sessions_created? // 0) | tonumber? // 0 | floor)
           }' 2>/dev/null || true)"
 
     if [ -n "$relay" ]; then

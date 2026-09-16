@@ -127,6 +127,59 @@ This is a known **WinDivert 2.2.x driver limitation on Windows 10/11** (upstream
 
 ---
 
+## Windows GUI Issues
+
+These apply to the `lightspeed-gui` app on Windows.
+
+### Quit did nothing and left a zombie process
+
+On versions before v1.4.2, choosing **Quit** from the tray menu could leave the process running in the background (a zombie), so the window closed but the engine kept running and a later launch behaved oddly. v1.4.2 fixes this: Quit now terminates the process cleanly.
+
+If you are on an older build and the process is stuck, end it manually:
+
+```powershell
+Get-Process lightspeed-gui -ErrorAction SilentlyContinue | Stop-Process
+```
+
+Then upgrade to v1.4.2 or later.
+
+### A second instance opens instead of focusing the first
+
+On versions before v1.4.2, launching the GUI twice stacked a second window and a second engine. v1.4.2 adds a single-instance guard: a second launch focuses the existing window instead of starting another instance.
+
+If you are on an older build and have multiple instances, close the extras from Task Manager.
+
+### No relays discovered
+
+The GUI discovers the community relays through the signed registry. If the relay list stays empty:
+
+1. Confirm you have internet access and that a firewall or VPN is not blocking outbound HTTPS to the registry.
+2. Check the GUI log (see below) for a registry fetch or signature-verification error.
+3. On the CLI build, run `lightspeed-client --probe-proxies` to see the discovery and probe report directly. If the CLI also finds nothing, the problem is network-side, not GUI-specific.
+4. Restart the GUI after fixing connectivity; discovery runs on startup.
+
+### How to find and open the GUI log
+
+The GUI writes its trace log to:
+
+```
+%LOCALAPPDATA%\Lightspeed\gui-trace.log
+```
+
+Paste that path into the File Explorer address bar to open the folder, then open `gui-trace.log` in any text editor. Attach it to a bug report.
+
+### "Heartbeat 0 in" in the log
+
+A line like `Heartbeat 0 in` means the engine has sent zero keepalive heartbeats in the current window. In practice it shows up when the client has not established a working control-plane connection yet, so no heartbeats have gone out. Common causes:
+
+- The client has not registered with a relay yet (check the registration line in the status view).
+- The selected relay is unreachable.
+- The interceptor has not started, so no session is active.
+
+Once registration succeeds and heartbeats start flowing, the counter climbs. If it stays at 0 while a relay shows healthy, run `lightspeed-client --test-control` to isolate whether the control plane is reachable.
+
+---
+
 ## Logs for Bug Reports
 
 Run with debug logging to capture detailed diagnostics:
