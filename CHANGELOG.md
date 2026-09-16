@@ -5,6 +5,21 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-09-16
+
+### Security
+- **rustls 0.23.45** (RUSTSEC-2026-0285, GHSA-2mjx-qc3c-rqvc): rustls accepted TLS 1.3 handshake messages sent at the wrong encryption level when they followed a key change in the same record. The handshake transcript stays authenticated, so a network attacker could not alter or complete a handshake, but the QUIC control plane now rejects those messages. Updates rustls 0.23.43 to 0.23.45 and rustls-webpki 0.103.13 to 0.103.15.
+
+### Fixed
+- **Linux: game server discovery was silently broken on modern distributions.** `ss -unp` no longer prints a State column on iproute2 7.x, so the socket parser skipped every line and reported no routes, and the `/proc/net/udp` fallback was never reached. The scanner now uses `ss -unp -a`, parses each line independently of the optional State column, and falls back to `/proc/net/udp` when `ss` yields nothing. Without this fix, Linux interception never found the game's server.
+- **Linux: removed a game-traffic blackhole.** The interceptor used to install a redirect rule matching `0.0.0.0` or a port range and then tunnel to the post-NAT destination, which resolves to `127.0.0.1`. The relay rejects private destinations, so matched traffic was silently dropped. The interceptor now waits, installs no rule, and lets traffic flow normally until a real server is known.
+- **Linux: the packet receive thread no longer busy-spins at 100% CPU while idle.** It blocks in `poll(2)` with a short timeout, and transient receive errors are retried with bounded backoff instead of tearing the interceptor down. The final error is surfaced through the status.
+- **Linux: follow a rotating game server.** The interceptor re-scans the game's UDP routes every 5 seconds and moves the exact-IP redirect rule to the new server, so a lobby-to-match rotation no longer leaves the match untunneled. The move is gated conservatively (new server reported, old server absent, old flow silent, across two consecutive scans) so an established connection is never misrouted.
+- **Linux: shutdown removes the rule that is actually installed** rather than only the one known at startup, so a redirect rule can no longer be left behind to hijack game traffic after the client exits.
+
+### Changed
+- **Linux `--smoke-test` is now a real end-to-end test.** It drives a synthetic game process over a never-routed TEST-NET address through a mock relay and asserts the full path: kernel redirect, tunnel, response injection, server rotation with no misrouting, teardown, and no idle CPU spin. Previously it only checked that an nftables rule appeared and disappeared.
+
 ## [1.4.2] - 2026-09-16
 
 ### Fixed
