@@ -2,34 +2,48 @@
 //!
 //! ## How it works
 //!
-//! 1. [`scan_for_games`](super::process_scanner::scan_for_games) discovers the game PID
-//!    and its active server connection (e.g. `1.2.3.4:28015`).
-//! 2. An iptables (or nftables) REDIRECT rule is added:
-//!    `OUTPUT -p udp -d <server_ip> --dport <server_port> -j REDIRECT --to-port <local>`
-//! 3. We bind a UDP socket on `<local>`.
-//! 4. The kernel redirected packets arrive on our socket with the **game's original
-//!    source port** preserved in `recvfrom`.
-//! 5. We build a `TunnelHeader` encoding `src = game_src`, `dst = known_server` and
-//!    forward to the LightSpeed proxy.
-//! 6. Proxy responses are forwarded back to `game_src` via a raw UDP send.
+//! 1. [`scan_for_games`](super::process_scanner::scan_for_games) discovers the
+//!    game PID and its active server routes. Only public (non-RFC1918) remote
+//!    addresses are candidates.
+//! 2. A nat OUTPUT REDIRECT rule matching the **exact** `ip daddr … udp dport …`
+//!    of the locked server sends those packets to a local listener.
+//! 3. A UDP socket bound to that listener port stays open for the whole
+//!    session. The kernel preserves the game's source address in `recvfrom`.
+//! 4. We build a `TunnelHeader(src = game_src, dst = locked_server)` and forward
+//!    to the LightSpeed proxy. The header destination is always the same value
+//!    the installed rule matches, so the two cannot diverge.
+//! 5. Proxy responses are injected back **from the listener socket**, which is
+//!    what lets conntrack reverse the original NAT and deliver the reply to the
+//!    connected game socket as if it came from the real server.
+//!
+//! Server discovery and rotation are driven by [`RotationTracker`] (see
+//! `rotation.rs`): a conservative gate swaps the rule only after the old server
+//! has stopped appearing in scans and has been silent, because deleting a
+//! REDIRECT rule does not unhook an already-established conntrack flow.
 //!
 //! ## Requires
 //! - Root / `CAP_NET_ADMIN`.
 //! - `iptables` or `nft` in `$PATH`.
 //! - Linux kernel ≥ 3.x.
 
+use std::io::Write;
 use std::net::SocketAddrV4;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use super::recovery::RecvBackoff;
+use super::rotation::{Action, RotationTracker, ROTATE_SCAN_INTERVAL};
 use super::traits::{
     InterceptorConfig, InterceptorCounters, InterceptorHandle, TrafficInterceptor,
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Struct
-// ─────────────────────────────────────────────────────────────────────────────
+const RECV_POLL_TIMEOUT_MS: libc::c_int = 200;
+const RECV_MAX_RETRIES: u32 = 5;
+const RECV_BACKOFF_BASE: Duration = Duration::from_millis(10);
+const RECV_BACKOFF_MAX: Duration = Duration::from_millis(500);
 
 pub struct NftablesInterceptor;
 
@@ -51,7 +65,6 @@ impl TrafficInterceptor for NftablesInterceptor {
     }
 
     fn check_availability(&self) -> Result<(), String> {
-        // Prefer nft; fall back to iptables.
         if which("nft").is_some() || which("iptables").is_some() {
             Ok(())
         } else {
@@ -64,74 +77,25 @@ impl TrafficInterceptor for NftablesInterceptor {
         use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
         use tokio::net::UdpSocket;
 
-        // ── Resolve the server address ────────────────────────────────────
-        //
-        // The ProcessScanner should have populated `initial_routes` before we get here.
-        // We require at least one route with a public remote address.
-        let server_addr = config
-            .initial_routes
-            .first()
-            .filter(|r| super::process_scanner::is_public_ipv4(*r.remote.ip()))
-            .map(|r| r.remote)
-            .unwrap_or_else(|| {
-                tracing::info!(
-                    "No server route discovered — using port-range fallback ({}-{})",
-                    config.port_range.0,
-                    config.port_range.1
-                );
-                std::net::SocketAddrV4::new(
-                    std::net::Ipv4Addr::new(0, 0, 0, 0),
-                    config.port_range.0,
-                )
-            });
-
         let config_proxy = config.proxy_addr;
         let fec_enabled = config.fec_enabled;
         let fec_k = config.fec_k;
+        let dynamic = config.dynamic_server();
+        let process_names = crate::games::process_names_for_name(&config.game_name);
+        let initial_routes: Vec<SocketAddrV4> =
+            config.initial_routes.iter().map(|r| r.remote).collect();
 
-        // ── Bind redirected-traffic listener ─────────────────────────────
-        // Pick an ephemeral local port for the REDIRECT target.
+        // ── Bind the stable redirected-traffic listener ───────────────────
         let listener_std = std::net::UdpSocket::bind("127.0.0.1:0")
             .map_err(|e| anyhow::anyhow!("Listener bind failed: {e}"))?;
         let local_port = listener_std.local_addr()?.port();
+        let rule_tag = format!("lightspeed_{local_port}");
 
-        // Enable IP_RECVORIGDSTADDR to recover original destination from
-        // redirected packets. Works on Linux >= 2.6.29, no conntrack needed.
-        {
-            use std::os::fd::AsRawFd;
-            let fd = listener_std.as_raw_fd();
-            let one: libc::c_int = 1;
-            // SAFETY: setsockopt SOL_IP/IP_TRANSPARENT with valid option value.
-            unsafe {
-                libc::setsockopt(
-                    fd,
-                    libc::SOL_IP,
-                    20,
-                    &one as *const _ as *const libc::c_void,
-                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-                );
-            }
-        }
-
-        tracing::info!(
-            "Linux interceptor: redirecting {} → localhost:{}",
-            server_addr,
-            local_port
-        );
-
-        // ── Install iptables REDIRECT rule ────────────────────────────────
-        let rule_tag = format!("lightspeed_{}", local_port);
-        add_iptables_redirect(server_addr, local_port, &rule_tag)?;
+        let mut installer = Installer::new(local_port, rule_tag.clone())?;
 
         let counters = Arc::new(InterceptorCounters::default());
-        {
-            let mut g = counters.detected_server.lock().unwrap();
-            *g = Some(server_addr);
-        }
-
         let running = Arc::new(AtomicBool::new(true));
 
-        // ── Shutdown handler ──────────────────────────────────────────────
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         {
             let running = Arc::clone(&running);
@@ -141,91 +105,27 @@ impl TrafficInterceptor for NftablesInterceptor {
             });
         }
 
-        // ── Tunnel socket (to/from proxy) ─────────────────────────────────
-        // Bind a std socket first, then convert to tokio — avoids block_on
-        // which panics if called from within an existing async runtime.
+        // ── Tunnel socket (client ↔ proxy) ────────────────────────────────
         let tunnel_std = std::net::UdpSocket::bind("0.0.0.0:0")
             .map_err(|e| anyhow::anyhow!("Tunnel socket bind: {e}"))?;
         tunnel_std.set_nonblocking(true)?;
         let tunnel_socket = Arc::new(UdpSocket::from_std(tunnel_std)?);
 
-        // Convert to tokio socket for the tunnel (proxy) side.
-        // For the listener side, we use raw recvmsg in a dedicated thread
-        // to capture CMSG data (IP_ORIGDSTADDR) for port-range auto-detect.
         listener_std.set_nonblocking(true)?;
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
 
-        // Channel for recvmsg thread → async loop
-        let (pkt_tx, mut pkt_rx) = tokio::sync::mpsc::channel::<(
-            Vec<u8>,
-            std::net::SocketAddrV4,
-            Option<std::net::SocketAddrV4>,
-        )>(256);
+        // ── Raw recvmsg thread for CMSG-free source recovery ──────────────
+        let (pkt_tx, mut pkt_rx) = tokio::sync::mpsc::channel::<(Vec<u8>, SocketAddrV4)>(256);
         {
-            use std::os::fd::AsRawFd;
-            let fd = listener_socket.as_raw_fd();
+            let recv_socket = Arc::clone(&listener_socket);
+            let counters_recv = Arc::clone(&counters);
             std::thread::spawn(move || {
-                let mut buf = vec![0u8; 65535];
-                let mut cmsg_buf = [0u8; 256];
-                loop {
-                    let mut iov = libc::iovec {
-                        iov_base: buf.as_mut_ptr() as *mut libc::c_void,
-                        iov_len: buf.len(),
-                    };
-                    // SAFETY: zeroed() on POD sockaddr_in; kernel overwrites all fields.
-                    let mut src_addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-                    // SAFETY: zeroed() on POD msghdr; pointers set below before recvmsg.
-                    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-                    msg.msg_name = &mut src_addr as *mut _ as *mut libc::c_void;
-                    msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
-                    msg.msg_iov = &mut iov;
-                    msg.msg_iovlen = 1;
-                    msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
-                    msg.msg_controllen = cmsg_buf.len();
-
-                    // SAFETY: recvmsg with valid msghdr, iovec, and cmsg buffer.
-                    let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
-                    if n < 0 {
-                        continue;
-                    } // EAGAIN on empty
-
-                    let src = std::net::SocketAddrV4::new(
-                        std::net::Ipv4Addr::from(u32::from_be(src_addr.sin_addr.s_addr)),
-                        u16::from_be(src_addr.sin_port),
-                    );
-
-                    // Parse CMSG for IP_ORIGDSTADDR
-                    // SAFETY: CMSG macros operate within the valid cmsg_buf from recvmsg.
-                    let orig_dst = unsafe {
-                        let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
-                        let mut dst = None;
-                        while !cmsg.is_null() {
-                            if (*cmsg).cmsg_level == libc::SOL_IP && (*cmsg).cmsg_type == 20 {
-                                let data = libc::CMSG_DATA(cmsg) as *const libc::sockaddr_in;
-                                let ip = u32::from_be((*data).sin_addr.s_addr);
-                                let port = u16::from_be((*data).sin_port);
-                                dst = Some(std::net::SocketAddrV4::new(
-                                    std::net::Ipv4Addr::from(ip),
-                                    port,
-                                ));
-                                break;
-                            }
-                            cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
-                        }
-                        dst
-                    };
-
-                    let data = buf[..n as usize].to_vec();
-                    if pkt_tx.blocking_send((data, src, orig_dst)).is_err() {
-                        break; // channel closed
-                    }
-                }
+                recv_loop(recv_socket.as_raw_fd(), pkt_tx, counters_recv);
             });
         }
 
         tracing::info!(
-            "⚡ Linux interceptor active — intercepting → {}",
-            server_addr
+            "Linux interceptor: redirect rule table '{rule_tag}' → 127.0.0.1:{local_port}"
         );
 
         // ── Keepalive task ────────────────────────────────────────────────
@@ -254,13 +154,12 @@ impl TrafficInterceptor for NftablesInterceptor {
             });
         }
 
-        // ── Stats logging task ────────────────────────────────────────
+        // ── Stats logging task ────────────────────────────────────────────
         {
             let counters_s = Arc::clone(&counters);
             let running_s = Arc::clone(&running);
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(10));
-                // Skip first tick (stats are all zero)
                 interval.tick().await;
                 while running_s.load(Ordering::Relaxed) {
                     interval.tick().await;
@@ -276,11 +175,9 @@ impl TrafficInterceptor for NftablesInterceptor {
             });
         }
 
-        // ── Main async loop ───────────────────────────────────────────────
+        // ── Rotation + tunnel main loop ───────────────────────────────────
         let counters_loop = Arc::clone(&counters);
         let running_loop = Arc::clone(&running);
-        let rule_tag_owned = rule_tag.clone();
-
         tokio::spawn(async move {
             let mut fec_encoder = if fec_enabled {
                 Some(lightspeed_protocol::FecEncoder::new(fec_k))
@@ -295,18 +192,21 @@ impl TrafficInterceptor for NftablesInterceptor {
             let mut seq: u16 = 0;
             let mut out_buf = vec![0u8; 65535];
             let mut in_buf = vec![0u8; 65535];
-
-            // Maps game ephemeral port → source SocketAddrV4 (for routing responses back).
             let mut game_src: Option<SocketAddrV4> = None;
 
-            // Debounce auto-detect state (port-range mode only).
-            // Tracks candidate server addresses and commits when one receives
-            // enough packets within the detection window.
-            const DETECT_PKTS: u8 = 3;
-            const DETECT_WINDOW_MS: u128 = 1_500;
-            let mut candidates: Vec<(std::net::SocketAddrV4, u8, std::time::Instant)> =
-                Vec::with_capacity(8);
-            let mut detected_server: Option<std::net::SocketAddrV4> = None;
+            let mut rotation = RotationTracker::new();
+            let mut scan_timer = tokio::time::interval_at(
+                tokio::time::Instant::now() + ROTATE_SCAN_INTERVAL,
+                ROTATE_SCAN_INTERVAL,
+            );
+            scan_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            // Immediate seed decision: static games may pre-lock a discovered
+            // route; dynamic games (e.g. Fortnite) start unlocked and wait for
+            // the first scanner interval.
+            let seeds = super::order::effective_seeds(dynamic, &initial_routes);
+            let action = rotation.on_scan(&seeds, Instant::now());
+            apply_action(action, &mut installer, &mut rotation, &counters_loop);
 
             loop {
                 if !running_loop.load(Ordering::Relaxed) {
@@ -316,56 +216,33 @@ impl TrafficInterceptor for NftablesInterceptor {
                 tokio::select! {
                     biased;
 
-                    // Game → Proxy (redirected packet arrives via recvmsg thread)
+                    _ = scan_timer.tick() => {
+                        let candidates = scan_candidates(&process_names, config_proxy);
+                        let action = rotation.on_scan(&candidates, Instant::now());
+                        tracing::info!(
+                            "🔍 rotation scan: candidates={candidates:?} action={action:?}"
+                        );
+                        apply_action(action, &mut installer, &mut rotation, &counters_loop);
+                    }
+
                     recv = pkt_rx.recv() => {
-                        let (data, src, recovered_dst) = match recv {
+                        let (data, src) = match recv {
                             Some(r) => r,
-                            None => break, // channel closed
+                            None => break,
                         };
                         let len = data.len();
                         out_buf[..len].copy_from_slice(&data);
 
                         if game_src.is_none() {
-                            tracing::info!("🎮 Game client detected at {} → {}", src, server_addr);
+                            tracing::info!("🎮 Game client detected at {src}");
                         }
                         game_src = Some(src);
+                        rotation.note_intercepted_packet(Instant::now());
 
-                        // Use recovered destination from CMSG (recvmsg thread).
-                        // NOTE: nftables REDIRECT sets IP_ORIGDSTADDR to the
-                        // post-NAT address, not the original. For true auto-detect,
-                        // use --server-addr or ensure the game is running so
-                        // ProcessScanner discovers the route.
-                        let actual_dst = if server_addr.ip().is_unspecified() {
-                            recovered_dst.unwrap_or(server_addr)
-                        } else {
-                            server_addr
+                        let Some(actual_dst) = installer.current() else {
+                            tracing::debug!("redirected packet with no installed rule — dropping");
+                            continue;
                         };
-
-                        // ── Debounce auto-detect (port-range mode only) ─────
-                        if server_addr.ip().is_unspecified() && detected_server.is_none() {
-                            let now = std::time::Instant::now();
-                            // Expire old candidates
-                            candidates.retain(|(_, _, t)| {
-                                now.duration_since(*t).as_millis() < DETECT_WINDOW_MS
-                            });
-                            // Increment or add candidate
-                            if let Some(entry) = candidates.iter_mut().find(|(a, _, _)| *a == actual_dst) {
-                                entry.1 += 1;
-                                if entry.1 >= DETECT_PKTS {
-                                    detected_server = Some(actual_dst);
-                                    tracing::info!(
-                                        "🔍 Auto-detected server: {} ({} pkts in ≤{}ms)",
-                                        actual_dst, DETECT_PKTS, DETECT_WINDOW_MS
-                                    );
-                                    if let Ok(mut g) = counters_loop.detected_server.lock() {
-                                        *g = Some(actual_dst);
-                                    }
-                                    candidates.clear();
-                                }
-                            } else {
-                                candidates.push((actual_dst, 1, now));
-                            }
-                        }
 
                         counters_loop.packets_intercepted.fetch_add(1, Ordering::Relaxed);
                         counters_loop.bytes_intercepted.fetch_add(len as u64, Ordering::Relaxed);
@@ -376,7 +253,6 @@ impl TrafficInterceptor for NftablesInterceptor {
                             .unwrap_or_default()
                             .as_micros() as u32;
 
-                        // Forward to proxy with TunnelHeader(src=game_src, dst=actual_dst)
                         if let Some(ref mut enc) = fec_encoder {
                             let block_id = enc.block_id();
                             let index = enc.current_index();
@@ -413,7 +289,6 @@ impl TrafficInterceptor for NftablesInterceptor {
                         seq = seq.wrapping_add(1);
                     }
 
-                    // Proxy → Game (inject response back to game)
                     resp = tokio::time::timeout(
                         Duration::from_millis(50),
                         tunnel_socket.recv_from(&mut in_buf),
@@ -436,10 +311,7 @@ impl TrafficInterceptor for NftablesInterceptor {
 
                         if header.is_keepalive() { continue; }
 
-                        let dest = match game_src {
-                            Some(gs) => gs,
-                            None => continue,
-                        };
+                        let Some(dest) = game_src else { continue };
 
                         let data: Option<bytes::Bytes> = if header.has_fec() {
                             if payload.len() < FEC_HEADER_SIZE { continue; }
@@ -478,16 +350,9 @@ impl TrafficInterceptor for NftablesInterceptor {
 
                         if let Some(d) = data {
                             if !d.is_empty() {
-                                // Send response back to game. The game expects this
-                                // to come FROM the server's IP:port — on Linux we
-                                // can send from a raw socket with spoofed src, but
-                                // the simpler approach (sending from tunnel socket) works
-                                // if the game doesn't validate the source IP strictly.
-                                //
-                                // For strict source-IP spoofing, use a raw IP socket
-                                // (requires CAP_NET_RAW). Here we use the listener socket
-                                // which will deliver from 127.0.0.1 — sufficient when
-                                // the game is on the local machine.
+                                // Inject from the listener socket: conntrack
+                                // reverse-NAT only rewrites replies sent from
+                                // the redirect target port.
                                 match listener_socket.send_to(&d, dest).await {
                                     Ok(_) => {
                                         counters_loop.packets_injected.fetch_add(1, Ordering::Relaxed);
@@ -504,8 +369,8 @@ impl TrafficInterceptor for NftablesInterceptor {
                 }
             }
 
-            // ── Cleanup: remove iptables rule ─────────────────────────────
-            remove_iptables_redirect(server_addr, local_port, &rule_tag_owned);
+            installer.teardown();
+            publish_detected(&counters_loop, None);
             tracing::info!("Linux interceptor loop exiting");
         });
 
@@ -518,146 +383,251 @@ impl TrafficInterceptor for NftablesInterceptor {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  iptables / nftables helpers
+//  Rotation helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Add an OUTPUT chain REDIRECT rule so packets destined for `server` are
-/// redirected to `local_port` on the loopback, where our listener sits.
-/// We tag the rule with a comment so we can find-and-delete it precisely.
-fn add_iptables_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow::Result<()> {
-    // Try nftables first, fall back to iptables.
-    if which("nft").is_some() {
-        return add_nft_redirect(server, local_port, tag);
+/// Collect the scanner's public remote routes, minus the proxy's own address.
+fn scan_candidates(process_names: &[&str], proxy: SocketAddrV4) -> Vec<SocketAddrV4> {
+    let mut out = Vec::new();
+    for process in super::process_scanner::scan_for_games(process_names) {
+        for route in process.routes {
+            let remote = route.remote;
+            if !super::process_scanner::is_public_ipv4(*remote.ip()) {
+                continue;
+            }
+            if remote.ip() == proxy.ip() {
+                continue;
+            }
+            if !out.contains(&remote) {
+                out.push(remote);
+            }
+        }
     }
-    add_ipt_redirect(server, local_port, tag)
+    out
 }
 
-fn remove_iptables_redirect(server: SocketAddrV4, local_port: u16, tag: &str) {
-    if which("nft").is_some() {
-        remove_nft_redirect(tag);
-    } else {
-        remove_ipt_redirect(server, local_port, tag);
+/// Apply a [`RotationTracker`] decision, re-synchronising the tracker when a
+/// rule transaction fails so `tracker.current()` never diverges from the rule.
+fn apply_action(
+    action: Action,
+    installer: &mut Installer,
+    rotation: &mut RotationTracker,
+    counters: &InterceptorCounters,
+) {
+    match action {
+        Action::Wait | Action::Keep => {}
+        Action::Install(server) => match installer.install(server) {
+            Ok(()) => publish_detected(counters, Some(server)),
+            Err(e) => {
+                record_failure(counters, format!("install {server}: {e}"));
+                rotation.reset();
+            }
+        },
+        Action::Swap(server) => match installer.swap(server) {
+            Ok(()) => publish_detected(counters, Some(server)),
+            Err(e) => {
+                record_failure(counters, format!("swap {server}: {e}"));
+                rotation.reset();
+            }
+        },
+        Action::Teardown => {
+            installer.teardown();
+            publish_detected(counters, None);
+        }
     }
 }
 
-/// nftables: create a temporary table + chain + rule.
-fn add_nft_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow::Result<()> {
-    // Build an nftables script. If the server address is a placeholder
-    // (0.0.0.0), use a port-range match instead of an exact IP match.
-    let match_clause = if server.ip().is_unspecified() {
-        format!(
-            "udp dport {}-{}",
-            server.port(),
-            server.port().saturating_add(100)
-        )
-    } else {
-        format!("ip daddr {} udp dport {}", server.ip(), server.port())
-    };
+fn publish_detected(counters: &InterceptorCounters, server: Option<SocketAddrV4>) {
+    let mut guard = counters.detected_server.lock().unwrap();
+    if *guard != server {
+        *guard = server;
+    }
+}
 
-    let script = format!(
-        "table ip {tag} {{\n\
-         chain output {{\n\
-             type nat hook output priority -100;\n\
-             {match_clause} redirect to :{local_port}\n\
-         }}\n\
-         }}\n",
-        tag = tag,
-        match_clause = match_clause,
-        local_port = local_port,
-    );
-    let out = std::process::Command::new("/usr/sbin/nft")
+fn record_failure(counters: &InterceptorCounters, message: String) {
+    tracing::warn!("Linux interceptor rule error: {message}");
+    counters.errors.fetch_add(1, Ordering::Relaxed);
+    *counters.last_error.lock().unwrap() = Some(message);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Rule installer
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum Backend {
+    Nft(PathBuf),
+    Iptables(PathBuf),
+}
+
+/// Owns the single REDIRECT rule for the session and tracks its current match.
+///
+/// The destination encoded in the tunnel header is read from
+/// [`Installer::current`], which is updated only after a rule transaction
+/// succeeds, keeping header destination and rule match in lock-step.
+struct Installer {
+    tag: String,
+    local_port: u16,
+    backend: Backend,
+    current: Option<SocketAddrV4>,
+}
+
+impl Installer {
+    fn new(local_port: u16, tag: String) -> anyhow::Result<Self> {
+        let backend = if let Some(path) = which("nft") {
+            Backend::Nft(path)
+        } else if let Some(path) = which("iptables") {
+            Backend::Iptables(path)
+        } else {
+            anyhow::bail!("Neither 'nft' nor 'iptables' found in PATH");
+        };
+        Ok(Self {
+            tag,
+            local_port,
+            backend,
+            current: None,
+        })
+    }
+
+    fn current(&self) -> Option<SocketAddrV4> {
+        self.current
+    }
+
+    fn install(&mut self, server: SocketAddrV4) -> anyhow::Result<()> {
+        match &self.backend {
+            Backend::Nft(nft) => {
+                nft_run(nft, &nft_install_script(server, self.local_port, &self.tag))?
+            }
+            Backend::Iptables(ipt) => ipt_add(ipt, server, self.local_port, &self.tag)?,
+        }
+        self.current = Some(server);
+        Ok(())
+    }
+
+    fn swap(&mut self, server: SocketAddrV4) -> anyhow::Result<()> {
+        match &self.backend {
+            Backend::Nft(nft) => {
+                nft_run(nft, &nft_swap_script(server, self.local_port, &self.tag))?
+            }
+            Backend::Iptables(ipt) => {
+                if let Some(previous) = self.current {
+                    ipt_del(ipt, previous, self.local_port, &self.tag);
+                }
+                ipt_add(ipt, server, self.local_port, &self.tag)?;
+            }
+        }
+        self.current = Some(server);
+        Ok(())
+    }
+
+    fn teardown(&mut self) {
+        let Some(previous) = self.current.take() else {
+            return;
+        };
+        match &self.backend {
+            Backend::Nft(nft) => nft_delete_table(nft, &self.tag),
+            Backend::Iptables(ipt) => ipt_del(ipt, previous, self.local_port, &self.tag),
+        }
+    }
+}
+
+fn nft_install_script(server: SocketAddrV4, local_port: u16, tag: &str) -> String {
+    format!(
+        "table ip {tag} {{\n chain output {{\n  type nat hook output priority -100; policy accept;\n  ip daddr {ip} udp dport {port} redirect to :{local_port}\n }}\n}}\n",
+        ip = server.ip(),
+        port = server.port(),
+    )
+}
+
+fn nft_swap_script(server: SocketAddrV4, local_port: u16, tag: &str) -> String {
+    format!(
+        "flush chain ip {tag} output\n\
+         add rule ip {tag} output ip daddr {ip} udp dport {port} redirect to :{local_port}\n",
+        ip = server.ip(),
+        port = server.port(),
+    )
+}
+
+fn nft_run(nft: &Path, script: &str) -> anyhow::Result<()> {
+    let mut child = std::process::Command::new(nft)
         .arg("-f")
         .arg("-")
         .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
-        .and_then(|mut child| {
-            use std::io::Write;
-            child.stdin.as_mut().unwrap().write_all(script.as_bytes())?;
-            child.wait_with_output()
-        })
-        .map_err(|e| anyhow::anyhow!("nft failed: {e}"))?;
-
-    if !out.status.success() {
-        anyhow::bail!(
-            "nft rule add failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        .map_err(|e| anyhow::anyhow!("nft failed to start: {e}"))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("nft stdin unavailable"))?;
+        stdin.write_all(script.as_bytes())?;
     }
-    tracing::info!("nftables: added redirect table '{}'", tag);
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        anyhow::bail!("nft: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
     Ok(())
 }
 
-fn remove_nft_redirect(tag: &str) {
-    let _ = std::process::Command::new("/usr/sbin/nft")
+fn nft_delete_table(nft: &Path, tag: &str) {
+    let removed = std::process::Command::new(nft)
         .args(["delete", "table", "ip", tag])
-        .output();
-    tracing::info!("nftables: removed redirect table '{}'", tag);
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if removed {
+        tracing::info!("nftables: removed redirect table '{tag}'");
+    }
 }
 
-/// iptables legacy: add a REDIRECT rule in nat OUTPUT.
-fn add_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow::Result<()> {
-    let out = std::process::Command::new("/usr/sbin/iptables")
-        .args([
-            "-t",
-            "nat",
-            "-A",
-            "OUTPUT",
-            "-p",
-            "udp",
-            "-d",
-            &server.ip().to_string(),
-            "--dport",
-            &server.port().to_string(),
-            "-m",
-            "comment",
-            "--comment",
-            tag,
-            "-j",
-            "REDIRECT",
-            "--to-port",
-            &local_port.to_string(),
-        ])
-        .output()
-        .map_err(|e| anyhow::anyhow!("iptables failed: {e}"))?;
+fn ipt_rule_args(server: SocketAddrV4, local_port: u16, tag: &str, op: &str) -> Vec<String> {
+    vec![
+        "-t".into(),
+        "nat".into(),
+        op.into(),
+        "OUTPUT".into(),
+        "-p".into(),
+        "udp".into(),
+        "-d".into(),
+        server.ip().to_string(),
+        "--dport".into(),
+        server.port().to_string(),
+        "-m".into(),
+        "comment".into(),
+        "--comment".into(),
+        tag.to_string(),
+        "-j".into(),
+        "REDIRECT".into(),
+        "--to-port".into(),
+        local_port.to_string(),
+    ]
+}
 
+fn ipt_add(ipt: &Path, server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow::Result<()> {
+    let out = std::process::Command::new(ipt)
+        .args(ipt_rule_args(server, local_port, tag, "-A"))
+        .output()
+        .map_err(|e| anyhow::anyhow!("iptables failed to start: {e}"))?;
     if !out.status.success() {
         anyhow::bail!(
             "iptables rule add failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    tracing::info!("iptables: added REDIRECT rule (tag={})", tag);
+    tracing::info!("iptables: added REDIRECT rule (tag={tag})");
     Ok(())
 }
 
-fn remove_ipt_redirect(server: SocketAddrV4, local_port: u16, tag: &str) {
-    let _ = std::process::Command::new("/usr/sbin/iptables")
-        .args([
-            "-t",
-            "nat",
-            "-D",
-            "OUTPUT",
-            "-p",
-            "udp",
-            "-d",
-            &server.ip().to_string(),
-            "--dport",
-            &server.port().to_string(),
-            "-m",
-            "comment",
-            "--comment",
-            tag,
-            "-j",
-            "REDIRECT",
-            "--to-port",
-            &local_port.to_string(),
-        ])
+fn ipt_del(ipt: &Path, server: SocketAddrV4, local_port: u16, tag: &str) {
+    let _ = std::process::Command::new(ipt)
+        .args(ipt_rule_args(server, local_port, tag, "-D"))
         .output();
-    tracing::info!("iptables: removed REDIRECT rule (tag={})", tag);
+    tracing::info!("iptables: removed REDIRECT rule (tag={tag})");
 }
 
 /// Return the full path to `cmd` if it exists in PATH.
-fn which(cmd: &str) -> Option<std::path::PathBuf> {
+fn which(cmd: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
             .map(|dir| dir.join(cmd))
@@ -666,88 +636,157 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SO_ORIGINAL_DST recovery
+//  Blocking receive loop
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Attempt to recover the original destination from a netfilter-redirected
-/// UDP packet via `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)`.
+/// Blocking `recvmsg` loop on a non-blocking listener fd.
 ///
-/// NOTE: SO_ORIGINAL_DST for UDP requires kernel support that may not be
-/// available (returns ENOPROTOOPT on many kernels). It works reliably for TCP
-/// but UDP support is kernel/config-dependent.
-///
-/// When this fails, use `--server-addr <ip:port>` to specify the game server,
-/// or ensure the game is running before starting the interceptor so the
-/// ProcessScanner can discover the route automatically.
-#[cfg(target_os = "linux")]
-fn recover_original_dst(fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4> {
-    // These constants are stable on Linux:
-    //   SOL_IP = 0
-    //   SO_ORIGINAL_DST = 80
-    // Use recvmsg(MSG_PEEK | MSG_DONTWAIT) with CMSG to recover
-    // IP_ORIGDSTADDR from redirected packets. Works without conntrack.
-    let mut cmsg_buf = [0u8; 256];
-    let mut iov = libc::iovec {
-        iov_base: cmsg_buf.as_mut_ptr() as *mut libc::c_void,
-        iov_len: 0,
-    };
-    // SAFETY: zeroed() on POD msghdr; pointers set below before recvmsg.
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
-    msg.msg_controllen = cmsg_buf.len();
+/// A short `poll` before each `recvmsg` keeps the thread idle instead of
+/// busy-spinning on EAGAIN. `RecvBackoff` is reserved for real socket errors;
+/// timeouts and WouldBlock are normal.
+fn recv_loop(
+    fd: libc::c_int,
+    tx: tokio::sync::mpsc::Sender<(Vec<u8>, SocketAddrV4)>,
+    counters: Arc<InterceptorCounters>,
+) {
+    let mut backoff = RecvBackoff::new(RECV_MAX_RETRIES, RECV_BACKOFF_BASE, RECV_BACKOFF_MAX);
+    let mut buf = vec![0u8; 65535];
 
-    if unsafe { libc::recvmsg(fd, &mut msg, libc::MSG_PEEK | libc::MSG_DONTWAIT) } < 0 {
-        return None;
-    }
+    loop {
+        if tx.is_closed() {
+            break;
+        }
 
-    unsafe {
-        let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
-        while !cmsg.is_null() {
-            if (*cmsg).cmsg_level == libc::SOL_IP && (*cmsg).cmsg_type == 20 {
-                let data = libc::CMSG_DATA(cmsg) as *const libc::sockaddr_in;
-                let ip = u32::from_be((*data).sin_addr.s_addr);
-                let port = u16::from_be((*data).sin_port);
-                return Some(std::net::SocketAddrV4::new(
-                    std::net::Ipv4Addr::from(ip),
-                    port,
-                ));
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `pollfd` is POD, the fd is a live UDP socket owned by the
+        // caller's Arc clone, and the timeout is a constant.
+        let ready = unsafe { libc::poll(&mut pollfd, 1, RECV_POLL_TIMEOUT_MS) };
+        if ready < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
             }
-            cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
+            if !handle_recv_failure(&mut backoff, &counters, format!("poll: {err}")) {
+                break;
+            }
+            continue;
+        }
+        if ready == 0 || pollfd.revents & libc::POLLIN == 0 {
+            continue;
+        }
+
+        let mut iov = libc::iovec {
+            iov_base: buf.as_mut_ptr() as *mut libc::c_void,
+            iov_len: buf.len(),
+        };
+        // SAFETY: zeroed() on POD sockaddr_in; the kernel overwrites it.
+        let mut src_addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        // SAFETY: zeroed() on POD msghdr; pointers set below before recvmsg.
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_name = &mut src_addr as *mut _ as *mut libc::c_void;
+        msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+
+        // SAFETY: recvmsg with a valid msghdr and iovec into `buf`.
+        let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            match err.kind() {
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted => continue,
+                _ => {
+                    if !handle_recv_failure(&mut backoff, &counters, format!("recvmsg: {err}")) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+        }
+        backoff.on_success();
+
+        let src = SocketAddrV4::new(
+            std::net::Ipv4Addr::from(u32::from_be(src_addr.sin_addr.s_addr)),
+            u16::from_be(src_addr.sin_port),
+        );
+        let data = buf[..n as usize].to_vec();
+        if tx.blocking_send((data, src)).is_err() {
+            break;
         }
     }
-    None
 }
 
-#[cfg(not(target_os = "linux"))]
-fn recover_original_dst(_fd: std::os::fd::RawFd) -> Option<std::net::SocketAddrV4> {
-    None
+/// Record one real receive failure. Returns `false` once the retry budget is
+/// exhausted, after publishing the fatal error to the counters.
+fn handle_recv_failure(
+    backoff: &mut RecvBackoff,
+    counters: &InterceptorCounters,
+    message: String,
+) -> bool {
+    counters.errors.fetch_add(1, Ordering::Relaxed);
+    match backoff.on_failure() {
+        Some(delay) => {
+            std::thread::sleep(delay);
+            true
+        }
+        None => {
+            *counters.last_error.lock().unwrap() = Some(message);
+            false
+        }
+    }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Tests
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
-    #[test]
-    fn recover_original_dst_invalid_fd_returns_none() {
-        // Using an obviously invalid fd should return None, not panic.
-        let result = recover_original_dst(-1);
-        assert!(result.is_none());
+    fn server() -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 9), 34568)
     }
 
     #[test]
-    fn recover_original_dst_bogus_fd_returns_none() {
-        // A valid-looking but non-socket fd should also return None.
-        let result = recover_original_dst(999999);
-        assert!(result.is_none());
+    fn nft_install_script_matches_exact_ip_without_placeholder() {
+        let script = nft_install_script(server(), 40000, "lightspeed_40000");
+        assert!(script.contains("ip daddr 203.0.113.9 udp dport 34568 redirect to :40000"));
+        assert!(script.contains("table ip lightspeed_40000"));
+        assert!(
+            !script.contains("0.0.0.0"),
+            "exact-IP rule must never match the unspecified address"
+        );
+        assert!(
+            !script.contains("dport 34568-"),
+            "exact-IP rule must never use a port range"
+        );
     }
 
     #[test]
-    fn port_range_fallback_placeholder_is_unspecified() {
-        // Verify the placeholder IP is 0.0.0.0 (triggers port-range nftables mode).
-        let placeholder = std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(0, 0, 0, 0), 28015);
-        assert!(placeholder.ip().is_unspecified());
-        assert_eq!(placeholder.port(), 28015);
+    fn nft_swap_script_flushes_then_adds_in_one_transaction() {
+        let script = nft_swap_script(server(), 40000, "lightspeed_40000");
+        let flush_at = script
+            .find("flush chain ip lightspeed_40000 output")
+            .unwrap();
+        let add_at = script.find("add rule ip lightspeed_40000 output").unwrap();
+        assert!(flush_at < add_at);
+        assert!(script.contains("ip daddr 203.0.113.9 udp dport 34568"));
+        assert!(!script.contains("0.0.0.0"));
+    }
+
+    #[test]
+    fn ipt_rule_args_are_exact_and_symmetric() {
+        let add = ipt_rule_args(server(), 40000, "tag", "-A");
+        let del = ipt_rule_args(server(), 40000, "tag", "-D");
+        assert!(add.contains(&"-A".to_string()));
+        assert!(del.contains(&"-D".to_string()));
+        assert!(add.contains(&"203.0.113.9".to_string()));
+        assert!(!add.contains(&"0.0.0.0".to_string()));
+        assert_eq!(add.len(), del.len());
     }
 }

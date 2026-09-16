@@ -324,56 +324,64 @@ fn parse_local_remote_windows(local: &str, remote: &str) -> Option<(u16, Ipv4Add
 /// directly shows PID in its output.
 #[cfg(target_os = "linux")]
 fn list_udp_linux() -> Vec<(Ipv4Addr, u16, u16, u32)> {
-    // Try `ss -unp` first (fast, shows PID directly).
+    // An empty `ss` result falls back to `/proc/net/udp`, never to an empty vec.
     if let Some(sockets) = list_udp_linux_ss() {
-        return sockets;
+        if !sockets.is_empty() {
+            return sockets;
+        }
     }
-    // Fallback: parse /proc/net/udp + /proc/<pid>/fd inode matching.
     list_udp_linux_proc()
 }
 
-/// `ss -unp` output.  Example for connected UDP:
+/// `ss -unp -a` output.  Example for connected UDP:
 /// ```text
 /// ESTAB  0  0  192.168.1.5:54321  1.2.3.4:28015  users:(("RustClient",pid=1234,fd=5))
 /// ```
+///
+/// `iproute2` ≥ 7.2 omits the `State` column unless `-a` is passed, so the
+/// parser deliberately keys off the `users:(...)` token rather than a fixed
+/// column index.
 #[cfg(target_os = "linux")]
 fn list_udp_linux_ss() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
     let output = std::process::Command::new("ss")
-        .args(["-unp"])
+        .args(["-unp", "-a"])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
 
-    let mut result = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        // Skip header
-        if line.starts_with("Netid") || line.starts_with("State") {
-            continue;
-        }
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        // Columns: State RecvQ SendQ LocalAddr:Port PeerAddr:Port users:(...)
-        if parts.len() < 5 {
-            continue;
-        }
-        // Only ESTAB (connected) UDP sockets
-        if !parts[0].eq_ignore_ascii_case("ESTAB") {
-            continue;
-        }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(parse_ss_line)
+            .collect(),
+    )
+}
 
-        let local_str = parts[3];
-        let remote_str = parts[4];
-        let users_str = parts.get(5).copied().unwrap_or("");
-
-        // Extract PID from users field: `users:(("proc",pid=N,fd=M))`
-        let pid = extract_pid_from_ss_users(users_str)?;
-
-        let (local_port, remote_ip, remote_port) = parse_addr_port_linux(local_str, remote_str)?;
-
-        result.push((remote_ip, remote_port, local_port, pid));
+/// Parse one `ss -unp -a` row, independent of whether the optional `State`
+/// column is present.
+///
+/// The `users:(("prog",pid=N,fd=M))` token is the anchor: the two tokens
+/// immediately before it are the local and peer addresses. Returns `None` for
+/// the header row, rows without process info, and IPv6/`*` addresses.
+#[cfg(target_os = "linux")]
+fn parse_ss_line(line: &str) -> Option<(Ipv4Addr, u16, u16, u32)> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.is_empty() || parts[0].starts_with("Netid") || parts[0] == "State" {
+        return None;
     }
-    Some(result)
+
+    let users_idx = parts.iter().position(|p| p.starts_with("users:("))?;
+    if users_idx < 2 {
+        return None;
+    }
+    let local_str = parts[users_idx - 2];
+    let remote_str = parts[users_idx - 1];
+    let pid = extract_pid_from_ss_users(parts[users_idx])?;
+    let (local_port, remote_ip, remote_port) = parse_addr_port_linux(local_str, remote_str)?;
+
+    Some((remote_ip, remote_port, local_port, pid))
 }
 
 #[cfg(target_os = "linux")]
@@ -389,11 +397,11 @@ fn extract_pid_from_ss_users(s: &str) -> Option<u32> {
 
 #[cfg(target_os = "linux")]
 fn parse_addr_port_linux(local: &str, remote: &str) -> Option<(u16, Ipv4Addr, u16)> {
-    // Format: "ip:port" or "[::1]:port"  — we only care about IPv4.
+    // Format: "ip:port", "ip%iface:port", or "[::1]:port" — IPv4 only.
     let local_port = local.rsplit(':').next()?.parse::<u16>().ok()?;
 
     let colon = remote.rfind(':')?;
-    let rip_str = &remote[..colon];
+    let rip_str = remote[..colon].split('%').next()?;
     let rport_str = &remote[colon + 1..];
     let remote_port: u16 = rport_str.parse().ok()?;
     let remote_ip: Ipv4Addr = rip_str
@@ -415,47 +423,37 @@ fn list_udp_linux_proc() -> Vec<(Ipv4Addr, u16, u16, u32)> {
     // Build inode → PID map from /proc/<pid>/fd symlinks
     let inode_pid = build_inode_pid_map();
 
-    let mut result = Vec::new();
-    for line in udp_content.lines().skip(1) {
-        // Fields: sl local_address rem_address st tx:rx tr tm inode ...
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() < 10 {
-            continue;
-        }
-        let status = fields[3]; // "01" = ESTABLISHED, "07" = CLOSE (listening)
-        if status == "07" {
-            continue;
-        }
+    udp_content
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            parse_proc_udp_entry(&fields, &inode_pid)
+        })
+        .collect()
+}
 
-        let local_hex = fields[1];
-        let remote_hex = fields[2];
-        let inode_str = fields[9];
-        let inode: u64 = match inode_str.parse() {
-            Ok(i) => i,
-            Err(_) => continue,
-        };
-
-        let pid = match inode_pid.get(&inode) {
-            Some(&p) => p,
-            None => continue,
-        };
-
-        let (local_ip, local_port) = match parse_hex_addr(local_hex) {
-            Some(v) => v,
-            None => continue,
-        };
-        let (remote_ip, remote_port) = match parse_hex_addr(remote_hex) {
-            Some(v) => v,
-            None => continue,
-        };
-
-        if !is_public_ipv4(remote_ip) {
-            continue;
-        }
-        let _ = local_ip;
-        result.push((remote_ip, remote_port, local_port, pid));
+/// Parse one `/proc/net/udp` row into `(remote_ip, remote_port, local_port, pid)`.
+///
+/// Fields: `sl local_address rem_address st tx:rx tr tm inode …`. `st == "07"`
+/// is a listening socket and is skipped; the owning PID comes from the inode
+/// map built from `/proc/<pid>/fd` symlinks.
+#[cfg(target_os = "linux")]
+fn parse_proc_udp_entry(
+    fields: &[&str],
+    inode_pid: &std::collections::HashMap<u64, u32>,
+) -> Option<(Ipv4Addr, u16, u16, u32)> {
+    if fields.len() < 10 || fields[3] == "07" {
+        return None;
     }
-    result
+    let (_, local_port) = parse_hex_addr(fields[1])?;
+    let (remote_ip, remote_port) = parse_hex_addr(fields[2])?;
+    if !is_public_ipv4(remote_ip) {
+        return None;
+    }
+    let inode: u64 = fields[9].parse().ok()?;
+    let pid = *inode_pid.get(&inode)?;
+    Some((remote_ip, remote_port, local_port, pid))
 }
 
 /// Linux: build `inode → pid` map by iterating `/proc/<pid>/fd` symlinks.
@@ -611,5 +609,103 @@ mod tests {
         let (ip, port) = result.unwrap();
         assert_eq!(ip, std::net::Ipv4Addr::new(127, 0, 0, 1));
         assert_eq!(port, 53);
+    }
+
+    // ── `ss -unp -a` parser fixtures ───────────────────────────────────
+
+    #[cfg(target_os = "linux")]
+    const SS_WITH_STATE: &str = r#"ESTAB  0  0  192.168.1.5:54321  203.0.113.9:34568  users:(("FortniteClient-",pid=4242,fd=5))"#;
+
+    /// iproute2 ≥ 7.2 omits the State column unless `-a` is passed.
+    #[cfg(target_os = "linux")]
+    const SS_WITHOUT_STATE: &str =
+        r#"0  0  192.168.1.5:54321  203.0.113.9:34568  users:(("FortniteClient-",pid=4242,fd=5))"#;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_ss_line_with_state_column() {
+        let (ip, rport, lport, pid) = super::parse_ss_line(SS_WITH_STATE).unwrap();
+        assert_eq!(ip, std::net::Ipv4Addr::new(203, 0, 113, 9));
+        assert_eq!(rport, 34568);
+        assert_eq!(lport, 54321);
+        assert_eq!(pid, 4242);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_ss_line_without_state_column() {
+        let (ip, rport, lport, pid) = super::parse_ss_line(SS_WITHOUT_STATE).unwrap();
+        assert_eq!(ip, std::net::Ipv4Addr::new(203, 0, 113, 9));
+        assert_eq!(rport, 34568);
+        assert_eq!(lport, 54321);
+        assert_eq!(pid, 4242);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_ss_line_strips_device_suffix() {
+        let line =
+            r#"ESTAB 0 0 192.168.1.5%eth0:54321 203.0.113.9%eth0:34568 users:(("p",pid=99,fd=3))"#;
+        let (ip, rport, _, pid) = super::parse_ss_line(line).unwrap();
+        assert_eq!(ip, std::net::Ipv4Addr::new(203, 0, 113, 9));
+        assert_eq!(rport, 34568);
+        assert_eq!(pid, 99);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_ss_line_skips_headers_and_non_ipv4() {
+        assert!(super::parse_ss_line(
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process"
+        )
+        .is_none());
+        assert!(
+            super::parse_ss_line("Recv-Q Send-Q Local Address:Port Peer Address:Port Process")
+                .is_none()
+        );
+        assert!(super::parse_ss_line(
+            r#"ESTAB 0 0 [::1]:54321 [::1]:34568 users:(("p",pid=7,fd=1))"#
+        )
+        .is_none());
+    }
+
+    // ── /proc/net/udp parser fixtures ──────────────────────────────────
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_proc_udp_entry_connected_public() {
+        use std::collections::HashMap;
+        let mut inode_pid = HashMap::new();
+        inode_pid.insert(12345u64, 4242u32);
+        // 0100007F:1F90 = 127.0.0.1:8080, 08080808:86A8 = 8.8.8.8:34472
+        let line = "   0: 0100007F:1F90 08080808:86A8 01 00000000:00000000 00:00000000 00000000  0 0 12345 1 0000000000000000 0";
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (ip, rport, lport, pid) = super::parse_proc_udp_entry(&fields, &inode_pid).unwrap();
+        assert_eq!(ip, std::net::Ipv4Addr::new(8, 8, 8, 8));
+        assert_eq!(rport, 0x86A8);
+        assert_eq!(lport, 0x1F90);
+        assert_eq!(pid, 4242);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_proc_udp_entry_filters_listening_and_private() {
+        use std::collections::HashMap;
+        let mut inode_pid = HashMap::new();
+        inode_pid.insert(12345u64, 4242u32);
+        // st = 07 (listening).
+        let listen = "0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 12345 1 0 0";
+        let lf: Vec<&str> = listen.split_whitespace().collect();
+        assert!(super::parse_proc_udp_entry(&lf, &inode_pid).is_none());
+
+        // Public-looking socket but an inode that maps to no PID is skipped.
+        let unknown = "1: 0100007F:1F90 08080808:86A8 01 00000000:00000000 00:00000000 00000000 0 0 99999 1 0 0";
+        let uf: Vec<&str> = unknown.split_whitespace().collect();
+        assert!(super::parse_proc_udp_entry(&uf, &inode_pid).is_none());
+
+        // RFC1918 remote address (0101A8C0 little-endian = 192.168.1.1).
+        let private = "2: 0100007F:1F90 0101A8C0:1F90 01 00000000:00000000 00:00000000 00000000 0 0 12345 1 0 0";
+        let pf: Vec<&str> = private.split_whitespace().collect();
+        assert!(super::parse_proc_udp_entry(&pf, &inode_pid).is_none());
     }
 }

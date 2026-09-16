@@ -49,6 +49,7 @@ pub mod valorant;
 pub mod wot;
 
 use std::net::Ipv4Addr;
+use std::sync::OnceLock;
 
 use crate::tunnel::capture::CaptureFilter;
 
@@ -205,6 +206,35 @@ pub fn dynamic_server_for_name(name: &str) -> bool {
         .into_iter()
         .find(|g| g.name() == name)
         .is_some_and(|g| g.dynamic_server())
+}
+
+/// Resolve a game's process names from its exact display name.
+///
+/// Mirrors [`dynamic_server_for_name`]: the profile is found in [`all_games`]
+/// by display name, so a caller holding only `InterceptorConfig::game_name`
+/// can recover the same process-name list the profile declares. The names are
+/// compile-time string literals; profiles are leaked once behind a cache so
+/// those literals can be returned as `&'static str` without per-call copying.
+/// Unknown names return an empty vec.
+pub fn process_names_for_name(display_name: &str) -> Vec<&'static str> {
+    process_name_table()
+        .iter()
+        .find(|(name, _)| *name == display_name)
+        .map(|(_, names)| names.clone())
+        .unwrap_or_default()
+}
+
+fn process_name_table() -> &'static Vec<(&'static str, Vec<&'static str>)> {
+    static TABLE: OnceLock<Vec<(&'static str, Vec<&'static str>)>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        all_games()
+            .into_iter()
+            .map(|game| {
+                let game: &'static dyn GameConfig = Box::leak(game);
+                (game.name(), game.process_names().to_vec())
+            })
+            .collect()
+    })
 }
 
 /// Match an observed process name against a known game process name.
@@ -484,6 +514,25 @@ mod tests {
         assert!(!rust::RustConfig.dynamic_server());
         assert!(!cs2::Cs2Config.dynamic_server());
         assert!(!valorant::ValorantConfig.dynamic_server());
+    }
+
+    #[test]
+    fn test_process_names_for_name_matches_profiles() {
+        assert_eq!(
+            process_names_for_name("Fortnite"),
+            vec!["FortniteClient-Win64-Shipping.exe"]
+        );
+        assert!(process_names_for_name("Rust").contains(&"RustClient.exe"));
+        assert!(process_names_for_name("Definitely Not A Game").is_empty());
+
+        let cs2 = all_games()
+            .into_iter()
+            .find(|g| g.name() == "Counter-Strike 2")
+            .expect("Counter-Strike 2 must be registered");
+        assert_eq!(
+            process_names_for_name("Counter-Strike 2"),
+            cs2.process_names().to_vec()
+        );
     }
 
     #[test]

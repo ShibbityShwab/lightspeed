@@ -42,6 +42,7 @@ pub mod mock;
 pub mod order;
 pub mod process_scanner;
 pub mod recovery;
+pub mod rotation;
 pub mod traits;
 #[cfg(target_os = "windows")]
 pub mod windows;
