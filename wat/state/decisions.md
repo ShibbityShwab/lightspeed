@@ -277,3 +277,53 @@ Compiles cleanly on Linux (`cargo check -p lightspeed-gui`), merges without conf
 - Registry hosting is a static signed file (no Cloudflare Worker), keeping infrastructure cost at $0 and avoiding a new account dependency; the Worker in `infra/registry/` remains a reference for future dynamic self-registration.
 - The sponsor is not named in any public copy (release notes or website): the network is described as "community-hosted / sponsor-funded".
 **Alternatives Considered:** Cloudflare Worker registry (dynamic registration/revocation) — rejected for launch because it requires a Cloudflare account and wrangler credentials not available here, and the static signed file achieves client-side discovery at $0. Continuing to mandate $0 total cost including relays — rejected because the sponsor explicitly funds the fleet. Naming the sponsor publicly — rejected at the user's direction (no donor attribution).
+
+---
+
+### 2026-09-16: v1.4.2 Community Feedback Release
+
+**Agent:** RustDev + NetEng + QAEngineer + DevOps
+**Status:** Accepted
+**Rationale:** After v1.4.1 the community reported that the Windows GUI was unusable
+(issue #59) and that only two relays appeared (discussion #69). Live metrics showed
+zero packets relayed across the whole fleet, so the problem was client-side: the GUI
+never performed registry discovery, and the Fortnite interceptor locked onto a dead
+lobby server. One release addresses every actionable report rather than dribbling out
+patches.
+
+**Key decisions:**
+- Fortnite server rotation is fixed with a pure `ServerTracker`
+  (`client/src/interceptor/order.rs`) that both WinDivert paths share. A pre-seeded
+  server anchors the stale timer at seed time so it expires instead of pinning the
+  session to a dead address. `dynamic_server()` games skip the seed entirely.
+- Transient WinDivert `recv` errors are retried with bounded backoff
+  (`client/src/interceptor/recovery.rs`) instead of destroying the handle and tunnel;
+  the final error is surfaced through `InterceptorStats::last_error`.
+- The GUI discovers relays on a background thread via `registry::discover_relays()`
+  and replaces the loopback placeholders. Registration state and relay `/health`
+  counters are now visible.
+- A second GUI instance shows an "already running" notice and exits rather than
+  stacking processes; tray Quit now actually terminates.
+- TCP-only games are explicitly out of scope (issue #66): LightSpeed accelerates UDP
+  only. The limitation is documented rather than faked with a profile.
+- Requested game profiles (Battlefield 6, Warface, Delta Force) are not added without
+  citable port and anti-cheat facts.
+- The Windows CLI now ships as a zip (unsupported); the GUI stays the Windows path.
+- The rustls ring provider is pinned in the GUI: the tree enables both ring and
+  aws-lc-rs, which made automatic provider selection panic on the first QUIC call.
+
+**Impact:**
+- `client/src/interceptor/{order,recovery,mod,traits,windows}.rs`,
+  `client/src/capture/windivert_redirect.rs`, `client/src/games/{mod,fortnite}.rs`
+- `client/src/registry.rs` (`discover_relays`/`RelayInfo`), `client/src/main.rs`
+  (single-pass probe plus stdout report), `client/Cargo.toml` (Windows target),
+  `client/lightspeed.example.toml`
+- `client-gui/**` (discovery, config, single instance, diagnostics, game list)
+- `docs/**` (install guides, TCP-only guidance, troubleshooting), `web/**`,
+  `infra/scripts/network-stats.sh`
+- Version bumped 1.4.1 to 1.4.2.
+**Alternatives Considered:** Splitting into several patch releases rejected in favour of
+one auditable release. Adding TCP game interception rejected for v1.4.2 because the
+interceptor and tunnel data plane are UDP-only end to end. Adding unverified game
+profiles rejected because invented ports and anti-cheat claims cause user-visible
+breakage.
