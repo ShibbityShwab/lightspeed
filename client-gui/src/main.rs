@@ -79,7 +79,7 @@ fn run() -> anyhow::Result<()> {
     let native_options = eframe::NativeOptions {
         renderer: renderer_from_env(),
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([460.0, 420.0])
+            .with_inner_size([520.0, 660.0])
             .with_min_inner_size([340.0, 280.0])
             .with_title("⚡ LightSpeed"),
         ..Default::default()
