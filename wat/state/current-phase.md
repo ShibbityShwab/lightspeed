@@ -1,9 +1,9 @@
 # Current Phase: WF-023 Windows GUI Startup + WinDivert Teardown (community feedback)
 
-**Workflow:** WF-023
+**Workflow:** WF-023 (plus WF-025 observability, below)
 **Agent:** RustDev + QAEngineer + DevOps
 **Status:** Implemented, pending release
-**Last updated:** 2026-09-18
+**Last updated:** 2026-09-19
 
 ---
 
@@ -127,3 +127,40 @@ the `gpu-switch` script documents, leaving the dGPU unbound until a reboot.
 3. WF-024 candidates: fix the `--live-test` exit code and the no-`quic` stub;
    `--repair-windivert` recovery command; registry cert pinning (F5) and binary
    release signing (C2) from the security backlog.
+
+---
+
+## WF-025: Observability overhaul (2026-09-19)
+
+**Workflow:** WF-025
+**Agent:** Sisyphus (Oracle design review + parallel explore/plan/implementation agents)
+**Status:** Implemented on `feat/observability-overhaul`, pending review/release
+
+Motivated by a live production probe that showed the proxy's observability was
+partly hollow: the latency histogram was never populated, `fec_data_packets_total`
+was always 0, `packets_dropped` conflated unauthenticated scanning with real loss,
+the rate limiter never fired, telemetry reported a hardcoded game id and empty
+country, and the six-hourly stats snapshot had no history.
+
+Delivered (atomic commits `e7d90d8`..`44b4a5b`):
+
+| Item | Change |
+|------|--------|
+| Response listener | Exactly one listener per session (was two) |
+| Session lifetime | `last_activity` refreshed on traffic (was creation-only) |
+| Drop semantics | `DropReason` categories + 7 flat `/health` fields; site shows "Packets Filtered" + "Upstream Loss" |
+| FEC counter | `fec_data_packets_total` now incremented |
+| Latency | Proxy-observed upstream response lag, non-cumulative buckets, 2s bound, discarded counter |
+| Rate limiting | Per-IP aggregate tier (5000 pps / 5 MB/s, 65536 cap) + `check_at`; dead `max_connections` removed |
+| Game ids | Protocol registry extended to all 18 games with key/id helpers |
+| Telemetry | Client sends real game id + locale country; proxy aggregates by (game, country), k>=3 |
+| History | Orphan `stats` branch, reset-safe bounded (360) history via `append-history.sh` |
+
+**Verification:** full CI-parity locally (fmt, clippy `-Dwarnings`, release build,
+17/17 test binaries, feature matrix `quic`/`full`/`ml`); live `/health` and
+`/metrics` exercised; telemetry POST x3 rendered `game="cs2",country="US"`;
+temp-repo stats + history fixture produced 2 snapshots with the 7 drop fields.
+
+**Known gaps:** the optional trend UI (`network-history.json` visualization) was not
+built; `protocol/src/framing.rs` has a pre-existing isolated-crate clippy warning
+(`use std::io` unused without the `tokio` feature) that the workspace build does not hit.

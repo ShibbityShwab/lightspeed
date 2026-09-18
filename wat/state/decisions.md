@@ -379,3 +379,49 @@ than `ss` for unconnected sockets and is the recommended v1.4.4 addition, but it
 required once the scanner loop works. Reusing the Windows `Decision::PassThrough` was
 rejected outright: on Linux the kernel has already consumed the datagram, so ignoring it
 means silent packet loss.
+
+### 2026-09-19: Observability overhaul (honest metrics, latency, telemetry, history)
+
+**Agent:** Sisyphus (orchestrated; Oracle design review, explore/plan agents)
+**Status:** Accepted (branch `feat/observability-overhaul`)
+**Rationale:** Live production data showed the proxy's observability was partly hollow or
+misleading: `record_latency` had no caller so the latency histogram was always empty;
+`fec_data_packets_total` was never incremented; `packets_dropped` was almost entirely
+unauthenticated scanning and abuse blocks, not loss, yet the public site labelled it
+"Packets Dropped"; the rate limiter keyed on IP+source port so rotating ports never
+tripped it (`rate_limit_hits_total == 0` in production); opt-in telemetry sent a
+hardcoded `game_id = 0` and empty country and the proxy discarded the payload; and the
+once-per-six-hours stats snapshot overwrote itself so no trend history existed.
+**Key decisions:**
+- Latency measures proxy-observed upstream response lag (monotonic send stamp before the
+  forward, single `swap(0)` on the first response) and is documented as NOT client RTT;
+  samples outside `(0, 2s]` are discarded and counted. The histogram stores per-bucket
+  deltas and `to_prometheus` renders the cumulative series (the previous code accumulated
+  twice).
+- `packets_dropped` stays the sum of all reasons; a `DropReason` enum adds category
+  counters (malformed, fec_malformed, session_setup, relay_send_errors) alongside the
+  existing auth/abuse/rate-limit counters. `/health` and the stats script expose all
+  seven, and the website now says "Packets Filtered" plus an "Upstream Loss" tile.
+- The rate limiter is two-tier: the existing per-flow limiter plus a per-IP aggregate
+  (5000 pps / 5 MB/s, 65536-IP cap, fail closed). Both windows are debited only when both
+  allow. The per-IP subset counter is a subset, not a second bump of the combined counter.
+- Telemetry is aggregated in a bounded `Mutex<HashMap<(game_id, country), cell>>` (1024
+  cells, k>=3 emission floor). Percentiles are summed as mean-of-medians with that caveat
+  in the HELP text; game/country are aggregation labels, never PII.
+- History lives on an orphan `stats` branch: the Pages workflow generates the snapshot,
+  appends a reset-safe bounded (360) history, commits it, and deploys the artifact. The
+  reset rule treats any counter decrease as a relay restart so cumulative totals never
+  regress.
+- Two correctness bugs were fixed first because they corrupted the session metrics:
+  response listeners were spawned twice per session, and `last_activity` was never
+  refreshed so sessions expired 300s after creation regardless of traffic.
+**Impact:** `proxy/src/{metrics,relay,health,rate_limit,config}.rs`,
+`protocol/src/control.rs`, `client/src/{telemetry,main,modes/keepalive}.rs`,
+`client/src/games/mod.rs`, `infra/scripts/{network-stats,append-history,test_append_history}.sh`,
+`.github/workflows/pages.yml`, `web/{index.html,app.js}`, `.gitignore`,
+`client/Cargo.toml` (sys-locale), plus new `proxy/tests/integration_latency.rs`.
+**Alternatives Considered:** Client-RTT echo via the tunnel header timestamp was rejected
+(duplicates the keepalive measurement and needs protocol semantics changes); true
+percentile aggregation from per-client percentiles is statistically invalid, so only sums
+and counts are exposed; committing generated stats to `master` or an actions cache was
+rejected for repo noise and eviction risk respectively, so an orphan branch holds history.
