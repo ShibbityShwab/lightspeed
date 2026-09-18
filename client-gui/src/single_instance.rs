@@ -3,7 +3,7 @@
 //! Launching two GUIs would mean two engines, two tray icons, and two
 //! registry/health pollers racing over the same relays. The guard is acquired
 //! before any other startup work in `main`; when it fails, the second process
-//! shows a short notice and exits 0 without touching the engine or tray.
+//! shows a short notice and exits 2 without touching the engine or tray.
 //!
 //! - Windows: a named mutex (`Local\` namespace, per session). The kernel
 //!   releases it when the process dies, so a crash never leaves a stale lock.
@@ -61,7 +61,7 @@ pub fn force_requested(args: &[String], env_force: bool) -> bool {
     env_force || args.iter().any(|arg| arg == "--force")
 }
 
-/// A guard that owns nothing — used when the check is bypassed.
+/// A guard that owns nothing, used when the check is bypassed.
 fn unguarded() -> InstanceOutcome {
     #[cfg(windows)]
     {
@@ -78,7 +78,7 @@ pub fn show_already_running_notice() {
     let message = "LightSpeed is already running.\n\n\
                    Look for the \u{26a1} icon in the system tray, or the open \
                    LightSpeed window.";
-    tracing::info!("Second instance detected — showing notice and exiting");
+    tracing::info!("Second instance detected, showing notice and exiting");
     #[cfg(windows)]
     message_box(message);
     #[cfg(not(windows))]

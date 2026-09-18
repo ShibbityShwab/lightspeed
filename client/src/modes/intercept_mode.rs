@@ -107,7 +107,7 @@ pub async fn run_intercept_mode(
     let stopped = handle.stop_and_wait(Duration::from_secs(3));
     if !stopped {
         warn!(
-            "⚠️  Interceptor teardown did not complete within 3s — \
+            "⚠️  Interceptor teardown did not complete within 3s; \
              platform filter/handles may still be closing"
         );
     }

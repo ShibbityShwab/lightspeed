@@ -233,7 +233,7 @@ impl PlatformTeardown {
 ///
 /// Dropping this handle calls `stop()` (it sends the shutdown signal and
 /// releases any thread parked in a blocking platform receive) but does NOT
-/// block — background tasks clean up asynchronously. Call
+/// block: background tasks clean up asynchronously. Call
 /// [`stop_and_wait`](Self::stop_and_wait) when the caller must know the
 /// platform resources were actually released.
 pub struct InterceptorHandle {

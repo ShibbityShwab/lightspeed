@@ -20,7 +20,7 @@ pub fn log_file() -> PathBuf {
     data_dir().join("gui-trace.log")
 }
 
-/// `gui-crash.log` — panic/fatal records written by [`crate::crash`].
+/// `gui-crash.log`: panic/fatal records written by [`crate::crash`].
 pub fn crash_log() -> PathBuf {
     data_dir().join("gui-crash.log")
 }

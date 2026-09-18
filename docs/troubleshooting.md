@@ -118,14 +118,14 @@ Recent LightSpeed builds close both the capture and inject handles on every orde
 
 If you still hit it:
 
-1. **Quit gracefully and wait a moment** — use the CLI Ctrl+C or the GUI's **Quit**, then give the handles a second or two to close before relaunching.
+1. **Quit gracefully and wait a moment**: use the CLI Ctrl+C or the GUI's **Quit**, then give the handles a second or two to close before relaunching.
 2. **Stop the WinDivert service** (avoids a reboot in some cases; note the driver is shared with other WinDivert apps such as ExitLag):
    ```powershell
    sc stop windivert
    ```
-3. **Full shutdown, not restart** — Windows "Restart" can reuse the kernel session that holds the stale state; a full **Shutdown → power on** clears it.
+3. **Full shutdown, not restart**: Windows "Restart" can reuse the kernel session that holds the stale state; a full **Shutdown → power on** clears it.
 
-> **Tip:** On v1.2.2 and earlier, a separate bug (data-plane auth rejecting all packets — issue #59) froze the connection and forced users to repeatedly kill the client, which is what triggered most `FWP_E_IN_USE` reports. That auth bug is fixed in v1.2.3.
+> **Tip:** On v1.2.2 and earlier, a separate bug (data-plane auth rejecting all packets, issue #59) froze the connection and forced users to repeatedly kill the client, which is what triggered most `FWP_E_IN_USE` reports. That auth bug is fixed in v1.2.3.
 
 ---
 

@@ -16,7 +16,7 @@ fn stop_active_interceptor(active: &mut Option<InterceptorHandle>) {
     if let Some(mut handle) = active.take() {
         if !handle.stop_and_wait(Duration::from_secs(3)) {
             warn!(
-                "⚠️  Interceptor teardown did not complete within 3s — \
+                "⚠️  Interceptor teardown did not complete within 3s; \
                  platform filter/handles may still be closing"
             );
         }
@@ -99,7 +99,7 @@ pub async fn run_watch_mode(
 
                         match interceptor.start(config) {
                             Ok(handle) => {
-                                info!("✅ Interceptor active — optimizing {}\n", game_name);
+                                info!("✅ Interceptor active, optimizing {}\n", game_name);
                                 active = Some(handle);
                                 state = State::Intercepting;
                             }
@@ -107,7 +107,7 @@ pub async fn run_watch_mode(
                                 info!("❌ Interceptor start failed: {}\n", e);
                                 tokio::select! {
                                     _ = &mut ctrl_c => {
-                                        info!("🛑 Shutdown requested — stopping");
+                                        info!("🛑 Shutdown requested, stopping");
                                         return Ok(());
                                     }
                                     _ = tokio::time::sleep(Duration::from_secs(5)) => {}
@@ -118,7 +118,7 @@ pub async fn run_watch_mode(
                     None => {
                         tokio::select! {
                             _ = &mut ctrl_c => {
-                                info!("🛑 Shutdown requested — stopping");
+                                info!("🛑 Shutdown requested, stopping");
                                 return Ok(());
                             }
                             _ = tokio::time::sleep(Duration::from_secs(2)) => {}
@@ -129,7 +129,7 @@ pub async fn run_watch_mode(
             State::Intercepting => {
                 tokio::select! {
                     _ = &mut ctrl_c => {
-                        info!("🛑 Shutdown requested — stopping interceptor...");
+                        info!("🛑 Shutdown requested, stopping interceptor...");
                         stop_active_interceptor(&mut active);
                         return Ok(());
                     }
@@ -137,7 +137,7 @@ pub async fn run_watch_mode(
                 }
 
                 if crate::interceptor::process_scanner::find_game_process(&process_refs).is_none() {
-                    info!("👋 {} exited — stopping interceptor\n", game_name);
+                    info!("👋 {} exited, stopping interceptor\n", game_name);
                     stop_active_interceptor(&mut active);
                     state = State::Polling;
                 }
