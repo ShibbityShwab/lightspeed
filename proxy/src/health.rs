@@ -31,6 +31,13 @@ pub struct HealthResponse {
     pub node_id: String,
     pub packets_relayed: u64,
     pub packets_dropped: u64,
+    pub drops_malformed: u64,
+    pub drops_auth_rejected: u64,
+    pub drops_abuse_blocked: u64,
+    pub drops_rate_limited: u64,
+    pub drops_fec_malformed: u64,
+    pub drops_session_setup: u64,
+    pub drops_relay_send_errors: u64,
     pub bytes_relayed: u64,
     pub fec_recoveries: u64,
     pub sessions_created: u64,
@@ -185,6 +192,15 @@ pub async fn run_health_server(
                         node_id: node_id.clone(),
                         packets_relayed: metrics.packets_relayed.load(Ordering::Relaxed),
                         packets_dropped: metrics.packets_dropped.load(Ordering::Relaxed),
+                        drops_malformed: metrics.drops_malformed.load(Ordering::Relaxed),
+                        drops_auth_rejected: metrics.auth_rejections.load(Ordering::Relaxed),
+                        drops_abuse_blocked: metrics.abuse_blocks.load(Ordering::Relaxed),
+                        drops_rate_limited: metrics.rate_limit_hits.load(Ordering::Relaxed),
+                        drops_fec_malformed: metrics.drops_fec_malformed.load(Ordering::Relaxed),
+                        drops_session_setup: metrics.drops_session_setup.load(Ordering::Relaxed),
+                        drops_relay_send_errors: metrics
+                            .drops_relay_send_errors
+                            .load(Ordering::Relaxed),
                         bytes_relayed: metrics.bytes_relayed.load(Ordering::Relaxed),
                         fec_recoveries: metrics.fec_recoveries.load(Ordering::Relaxed),
                         sessions_created: metrics.sessions_created.load(Ordering::Relaxed),
@@ -272,5 +288,44 @@ mod tests {
         assert_eq!(decoded.game_id, 2);
         assert_eq!(decoded.client_country, "TH");
         assert_eq!(decoded.sample_count, 120);
+    }
+
+    #[test]
+    fn test_health_has_flat_drop_fields() {
+        let response = HealthResponse {
+            status: "healthy",
+            version: env!("CARGO_PKG_VERSION"),
+            active_connections: 0,
+            uptime_secs: 0,
+            region: "us-west".to_string(),
+            node_id: "local-test".to_string(),
+            packets_relayed: 0,
+            packets_dropped: 28,
+            drops_malformed: 1,
+            drops_auth_rejected: 2,
+            drops_abuse_blocked: 3,
+            drops_rate_limited: 4,
+            drops_fec_malformed: 5,
+            drops_session_setup: 6,
+            drops_relay_send_errors: 7,
+            bytes_relayed: 0,
+            fec_recoveries: 0,
+            sessions_created: 0,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        for key in [
+            "drops_malformed",
+            "drops_auth_rejected",
+            "drops_abuse_blocked",
+            "drops_rate_limited",
+            "drops_fec_malformed",
+            "drops_session_setup",
+            "drops_relay_send_errors",
+        ] {
+            assert!(
+                json.contains(&format!("\"{key}\"")),
+                "missing {key}: {json}"
+            );
+        }
     }
 }

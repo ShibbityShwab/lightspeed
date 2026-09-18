@@ -55,7 +55,7 @@ const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
-use super::metrics::ProxyMetrics;
+use super::metrics::{DropReason, ProxyMetrics};
 use super::rate_limit::{RateLimitResult, RateLimiter};
 
 /// How responses are written back to a client.
@@ -550,14 +550,12 @@ async fn process_inbound_packet(
             RateLimitResult::Allowed => {}
             RateLimitResult::PacketRateExceeded => {
                 trace!(client = %client_addr, "Rate limited (PPS)");
-                metrics.record_drop();
-                metrics.record_rate_limit();
+                metrics.record_drop(DropReason::RateLimit);
                 return false;
             }
             RateLimitResult::BandwidthExceeded => {
                 trace!(client = %client_addr, "Rate limited (BPS)");
-                metrics.record_drop();
-                metrics.record_rate_limit();
+                metrics.record_drop(DropReason::RateLimit);
                 return false;
             }
         }
@@ -568,7 +566,7 @@ async fn process_inbound_packet(
         Ok(result) => result,
         Err(e) => {
             debug!(client = %client_addr, error = %e, "Invalid tunnel packet");
-            metrics.record_drop();
+            metrics.record_drop(DropReason::Malformed);
             return false;
         }
     };
@@ -596,8 +594,7 @@ async fn process_inbound_packet(
                 token = header.session_token,
                 "Unauthorized: invalid IP or session token"
             );
-            metrics.record_drop();
-            metrics.record_auth_rejection();
+            metrics.record_drop(DropReason::Auth);
             return false;
         }
     }
@@ -627,8 +624,7 @@ async fn process_inbound_packet(
                     dest = %game_server,
                     "Blocked: private/internal destination"
                 );
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
             AbuseCheckResult::DestinationNotAllowed => {
@@ -637,26 +633,22 @@ async fn process_inbound_packet(
                     dest = %game_server,
                     "Blocked: destination not in allowlist"
                 );
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
             AbuseCheckResult::Banned => {
                 trace!(client = %client_addr, "Blocked: client is banned");
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
             AbuseCheckResult::ReflectionDetected => {
                 warn!(client = %client_addr, "Blocked: reflection attack detected");
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
             AbuseCheckResult::AmplificationDetected => {
                 warn!(client = %client_addr, "Blocked: amplification detected");
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
         }
@@ -666,7 +658,7 @@ async fn process_inbound_packet(
     let (fec_hdr, game_payload) = if is_fec {
         if payload.len() < FEC_HEADER_SIZE {
             debug!(client = %client_addr, "FEC packet too short");
-            metrics.record_drop();
+            metrics.record_drop(DropReason::FecMalformed);
             return false;
         }
         let mut fec_slice: &[u8] = &payload[..FEC_HEADER_SIZE];
@@ -674,7 +666,7 @@ async fn process_inbound_packet(
             Some(fh) => (Some(fh), &payload[FEC_HEADER_SIZE..]),
             None => {
                 debug!(client = %client_addr, "Invalid FEC header");
-                metrics.record_drop();
+                metrics.record_drop(DropReason::FecMalformed);
                 return false;
             }
         }
@@ -693,7 +685,7 @@ async fn process_inbound_packet(
         Ok(s) => s,
         Err(e) => {
             warn!(client = %client_addr, error = %e, "Failed to create session");
-            metrics.record_drop();
+            metrics.record_drop(DropReason::SessionSetup);
             return false;
         }
     };
@@ -751,6 +743,7 @@ async fn process_inbound_packet(
             return false; // Don't forward parity to game server
         } else {
             // Data packet with FEC: track in decoder, then forward game_payload
+            metrics.record_fec_data();
             let data_bytes = bytes::Bytes::copy_from_slice(game_payload);
             let mut decoder = session.fec_decoder.lock().await;
             decoder.receive_data(fh, data_bytes);
@@ -789,7 +782,7 @@ async fn process_inbound_packet(
                 error = %e,
                 "Failed to forward to game server"
             );
-            metrics.record_drop();
+            metrics.record_drop(DropReason::RelaySendError);
         }
     }
 
