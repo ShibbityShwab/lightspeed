@@ -544,7 +544,7 @@ impl ProxyMetrics {
         ));
 
         out.push_str(
-            "# HELP lightspeed_relay_latency_discarded_total Latency samples discarded as unusable (no forward marker, zero lag, or beyond the 2s bound)\n",
+            "# HELP lightspeed_relay_latency_discarded_total Paired latency samples discarded as unusable (zero lag or beyond the 2s bound); responses with no pending forward are not sampled and are not counted\n",
         );
         out.push_str("# TYPE lightspeed_relay_latency_discarded_total counter\n");
         out.push_str(&format!(

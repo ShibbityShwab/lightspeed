@@ -766,6 +766,7 @@ async fn process_inbound_packet(
                     }
                     Err(e) => {
                         session.pending_forward_us.store(0, Ordering::Relaxed);
+                        metrics.record_drop(DropReason::RelaySendError);
                         debug!(client = %client_addr, error = %e, "Failed to forward recovered packet");
                     }
                 }
