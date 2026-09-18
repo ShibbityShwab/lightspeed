@@ -62,17 +62,21 @@ automatically.
 
 Required setup for the action:
 
-- A `WINGET_TOKEN` secret: a fine-grained PAT scoped to
-  `microsoft/winget-pkgs` with **Pull requests: write** and **Contents: read**
-  on that repository only. Add it under repo Settings > Secrets and variables >
-  Actions (owner `ShibbityShwab`, repo `lightspeed`). The token lets the action
-  open PRs as the repo, not as a personal account, so it keeps working
-  unattended.
+- A `WINGET_TOKEN` secret: a **classic** personal access token with the single
+  `public_repo` scope. Fine-grained PATs do NOT work here: opening the PR
+  against `microsoft/winget-pkgs` requires the token's resource owner to match
+  the repository owner (Microsoft), which needs Microsoft org membership, so
+  the action fails with `403 Resource not accessible by personal access token`
+  (vedantmgoyal9/winget-releaser#172). Add it under repo Settings > Secrets and
+  variables > Actions (owner `ShibbityShwab`, repo `lightspeed`). Because
+  `public_repo` is broad (write to every public repository the account can
+  access), set an expiry and rotate it.
 
-  **Status at v1.4.2: this secret is NOT set.** The `winget-releaser` job in
-  `release.yml` gates on `env.WINGET_TOKEN != ''`, so it resolves to a clean
-  skip (the job reports success without publishing anything). Until the secret
-  is added, new versions must be submitted manually using the steps above.
+  **Status at v1.4.4: this secret IS set** (classic `public_repo` PAT named
+  `lightspeed-winget`, 90-day expiry). The `winget-releaser` job in
+  `release.yml` reads it. The package must already exist in
+  `microsoft/winget-pkgs` before the job can publish an update, so the first
+  submission must merge first (see the PRs linked above).
 - Pin `uses: vedantmgoyal2009/winget-releaser@v2` (or the current major) and
   set `with: identifier: ShibbityShwab.LightSpeed`.
 
