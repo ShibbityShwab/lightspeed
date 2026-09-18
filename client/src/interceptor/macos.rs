@@ -25,8 +25,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::teardown::TeardownAck;
 use super::traits::{
-    InterceptorConfig, InterceptorCounters, InterceptorHandle, TrafficInterceptor,
+    InterceptorConfig, InterceptorCounters, InterceptorHandle, PlatformTeardown, TrafficInterceptor,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -124,6 +125,11 @@ impl TrafficInterceptor for PfInterceptor {
                 running.store(false, Ordering::Relaxed);
             });
         }
+
+        // The tunnel task removes the pf anchor when it exits, so
+        // `stop_and_wait` must wait for its acknowledgement before the caller
+        // lets the process exit.
+        let (teardown_tx, teardown_ack) = TeardownAck::new(1);
 
         // ── Sockets ───────────────────────────────────────────────────────
         let tunnel_std = std::net::UdpSocket::bind("0.0.0.0:0")
@@ -339,9 +345,15 @@ impl TrafficInterceptor for PfInterceptor {
             // Cleanup
             remove_pf_anchor(&anchor_owned);
             tracing::info!("macOS pf interceptor loop exiting");
+            let _ = teardown_tx.send(());
         });
 
-        Ok(InterceptorHandle::new(shutdown_tx, counters, "pfctl", None))
+        Ok(InterceptorHandle::new(
+            shutdown_tx,
+            counters,
+            "pfctl",
+            Some(PlatformTeardown::new(|| {}, teardown_ack)),
+        ))
     }
 }
 

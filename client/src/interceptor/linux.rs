@@ -36,8 +36,9 @@ use std::time::{Duration, Instant};
 
 use super::recovery::RecvBackoff;
 use super::rotation::{Action, RotationTracker, ROTATE_SCAN_INTERVAL};
+use super::teardown::TeardownAck;
 use super::traits::{
-    InterceptorConfig, InterceptorCounters, InterceptorHandle, TrafficInterceptor,
+    InterceptorConfig, InterceptorCounters, InterceptorHandle, PlatformTeardown, TrafficInterceptor,
 };
 
 const RECV_POLL_TIMEOUT_MS: libc::c_int = 200;
@@ -104,6 +105,11 @@ impl TrafficInterceptor for NftablesInterceptor {
                 running.store(false, Ordering::Relaxed);
             });
         }
+
+        // The rotation+tunnel task performs the nftables teardown when it
+        // exits, so `stop_and_wait` must wait for its acknowledgement before
+        // the caller lets the process exit.
+        let (teardown_tx, teardown_ack) = TeardownAck::new(1);
 
         // ── Tunnel socket (client ↔ proxy) ────────────────────────────────
         let tunnel_std = std::net::UdpSocket::bind("0.0.0.0:0")
@@ -372,13 +378,14 @@ impl TrafficInterceptor for NftablesInterceptor {
             installer.teardown();
             publish_detected(&counters_loop, None);
             tracing::info!("Linux interceptor loop exiting");
+            let _ = teardown_tx.send(());
         });
 
         Ok(InterceptorHandle::new(
             shutdown_tx,
             counters,
             "nftables/iptables",
-            None,
+            Some(PlatformTeardown::new(|| {}, teardown_ack)),
         ))
     }
 }
