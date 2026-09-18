@@ -2853,7 +2853,7 @@ name = "lightspeed-client"
 version = "1.4.3"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bincode",
  "bytes",
  "chrono",
