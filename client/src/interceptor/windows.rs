@@ -8,8 +8,10 @@
 //! ## Improvements over legacy `windivert_redirect.rs`
 //!
 //! - Implements the OOP [`TrafficInterceptor`] trait.
-//! - When a game PID is known, the WinDivert filter includes `processId == N`
-//!   giving **zero false positives** even on shared game-server ports.
+//! - The network-layer WinDivert filter matches by port range (WinDivert only
+//!   supports `processId` at the Flow layer, not the Network layer), and always
+//!   excludes the proxy's own address so the client's tunnel traffic is never
+//!   intercepted.
 //! - Routes pre-seeded from [`ProcessScanner`] let the engine skip the
 //!   debounce accumulation window: interception starts with the first packet.
 //! - Stale-server timeout unchanged (5 s) — still auto-resets on map change.
@@ -166,6 +168,12 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 }
             },
         };
+
+        // Never intercept the client's own tunnel traffic. The broad port-range
+        // filter also matches the QUIC control and keepalive packets addressed
+        // to the proxy; without this exclusion the auto-detect tracker locks the
+        // proxy's own address as the "game server".
+        let out_filter = format!("{out_filter} and ip.DstAddr != {}", config_proxy.ip());
 
         tracing::info!("🔀 WinDivert intercept filter: {}", out_filter);
 
