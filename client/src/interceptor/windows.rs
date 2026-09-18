@@ -29,7 +29,11 @@ use super::order::{effective_seeds, Decision, ServerTracker, TrackerConfig};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::recovery::RecvBackoff;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use super::traits::InterceptorCounters;
+use super::teardown::{recv_should_break, TeardownAck};
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use super::traits::{InterceptorCounters, PlatformTeardown};
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use super::windivert_handle::{is_fwp_in_use, OwnedHandle};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_udp};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -40,6 +44,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use std::time::Duration;
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use windivert_sys::address::WINDIVERT_ADDRESS;
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use windivert_sys::{WinDivertFlags, WinDivertLayer, WinDivertShutdownMode};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Struct
@@ -100,9 +108,6 @@ impl TrafficInterceptor for WinDivertInterceptor {
         use std::collections::HashMap;
         use std::time::Instant;
         use tokio::net::UdpSocket;
-        use windivert::address::WinDivertAddress;
-        use windivert::layer::NetworkLayer;
-        use windivert::prelude::{CloseAction, WinDivert, WinDivertFlags, WinDivertPacket};
 
         let (port_lo, port_hi) = config.port_range;
         let config_proxy = config.proxy_addr;
@@ -166,13 +171,18 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
         // Open intercept handle (captures matching outbound packets).
         tracing::info!("⚡ Opening WinDivert intercept handle...");
-        let wd_intercept = match WinDivert::network(&out_filter, 0, WinDivertFlags::new()) {
+        let wd_intercept = match OwnedHandle::open(
+            &out_filter,
+            WinDivertLayer::Network,
+            0,
+            WinDivertFlags::new(),
+        ) {
             Ok(h) => {
                 tracing::info!("✅ WinDivert intercept handle opened successfully");
-                h
+                Arc::new(h)
             }
             Err(e) => {
-                tracing::error!("❌ WinDivert intercept open failed: {}", e);
+                log_open_failure("intercept", &e);
                 return Err(anyhow::anyhow!(
                     "WinDivert open failed (need Admin + WinDivert64.sys loaded): {e}"
                 ));
@@ -181,23 +191,23 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
         // Open inject handle (no filter — write-only for injecting inbound spoofs).
         tracing::info!("⚡ Opening WinDivert inject handle...");
-        let wd_inject = match WinDivert::network("false", 0, WinDivertFlags::new()) {
-            Ok(h) => {
-                tracing::info!("✅ WinDivert inject handle opened successfully");
-                h
-            }
-            Err(e) => {
-                tracing::error!("❌ WinDivert inject open failed: {}", e);
-                // Close the already-open intercept handle before returning.
-                let mut wd_intercept = wd_intercept;
-                let _ = wd_intercept.close(CloseAction::Nothing);
-                return Err(anyhow::anyhow!("WinDivert inject handle failed: {e}"));
-            }
-        };
+        let wd_inject =
+            match OwnedHandle::open("false", WinDivertLayer::Network, 0, WinDivertFlags::new()) {
+                Ok(h) => {
+                    tracing::info!("✅ WinDivert inject handle opened successfully");
+                    Arc::new(h)
+                }
+                Err(e) => {
+                    log_open_failure("inject", &e);
+                    // Close the already-open intercept handle before returning.
+                    let _ = wd_intercept.close();
+                    return Err(anyhow::anyhow!("WinDivert inject handle failed: {e}"));
+                }
+            };
 
-        let wd_intercept = Arc::new(wd_intercept);
-        let wd_inject = Arc::new(wd_inject);
-        tracing::info!("✅ WinDivert handles wrapped in Arc");
+        // Both handles are open: any later setup error must release them.
+        let mut setup_guard =
+            HandleShutdownGuard::new(Arc::clone(&wd_intercept), Arc::clone(&wd_inject));
 
         // Shared state
         let counters = Arc::new(InterceptorCounters::default());
@@ -212,7 +222,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
         }
 
         // Interface address cache
-        let if_addr_cache: Arc<std::sync::Mutex<Option<WinDivertAddress<NetworkLayer>>>> =
+        let if_addr_cache: Arc<std::sync::Mutex<Option<WINDIVERT_ADDRESS>>> =
             Arc::new(std::sync::Mutex::new(None));
 
         // Channels
@@ -220,6 +230,12 @@ impl TrafficInterceptor for WinDivertInterceptor {
             tokio::sync::mpsc::channel::<(SocketAddrV4, SocketAddrV4, Vec<u8>)>(512);
         let (inject_tx, inject_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(512);
         tracing::info!("✅ Channels created");
+
+        // Each owner thread sends one ack when it can no longer touch its
+        // WinDivert handle, so `stop_and_wait` can close deterministically.
+        // The third ack is the tunnel task, which also removes the firewall
+        // rule, so teardown does not finish before the rule is gone.
+        let (ack_tx, teardown_ack) = TeardownAck::new(3);
 
         // ── Shutdown signal ──────────────────────────────────────────────
         // Keep tokio::sync::oneshot for InterceptorHandle compatibility, but
@@ -255,6 +271,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let itx = intercept_tx;
             let running_ic = Arc::clone(&running);
             let seeds_ic = seeds;
+            let ack_ic = ack_tx.clone();
 
             tracing::info!("🚀 Spawning intercept thread...");
             tokio::task::spawn_blocking(move || {
@@ -275,27 +292,39 @@ impl TrafficInterceptor for WinDivertInterceptor {
                         break;
                     }
 
-                    match wd_ic.recv(Some(&mut recv_buf)) {
-                        Ok(pkt) => {
+                    match wd_ic.recv(&mut recv_buf) {
+                        Ok((len, addr)) => {
                             backoff.on_success();
-                            // Cache the interface index on the first outbound packet.
+                            let data = &recv_buf[..len];
+
+                            // Cache the interface index on the first outbound
+                            // packet. The copy is mutated for injection; `addr`
+                            // stays untouched so re-injection keeps the
+                            // original outbound direction and checksums.
                             {
-                                let mut guard = if_cache_ic.lock().unwrap();
+                                let mut guard = if_cache_ic
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                                 if guard.is_none() {
-                                    let mut cached = pkt.address.clone();
+                                    let mut cached = addr;
                                     cached.set_outbound(false);
-                                    cached.set_ip_checksum(false);
-                                    cached.set_udp_checksum(false);
+                                    cached.set_ipchecksum(false);
+                                    cached.set_udpchecksum(false);
+                                    // SAFETY: [Category 8 - FFI] `addr` came from
+                                    // a successful network-layer `WinDivertRecv`,
+                                    // so the driver initialized the `Network`
+                                    // union member. This reads one plain `u32`
+                                    // from that `#[repr(C)]` union.
+                                    let if_idx = unsafe { cached.union_field.Network.interface_id };
                                     tracing::info!(
-                                        "🔗 WinDivert: cached inject interface IfIdx={}",
-                                        cached.interface_index()
+                                        "🔗 WinDivert: cached inject interface IfIdx={if_idx}"
                                     );
                                     *guard = Some(cached);
                                 }
                             }
 
-                            let parsed = parse_ipv4_udp(&pkt.data)
-                                .map(|(src, dst, pl)| (src, dst, pl.to_vec()));
+                            let parsed =
+                                parse_ipv4_udp(data).map(|(src, dst, pl)| (src, dst, pl.to_vec()));
 
                             match parsed {
                                 Some((game_src, game_dst, payload)) => {
@@ -324,7 +353,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                             }
                                         }
                                         Decision::PassThrough | Decision::StartDetection => {
-                                            let _ = wd_ic.send(&pkt);
+                                            let _ = wd_ic.send(data, &addr);
                                         }
                                         Decision::ResetToDetection => {
                                             tracing::info!("🔄 Locked server stale — re-detecting");
@@ -335,18 +364,19 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                             if let Ok(mut c) = if_cache_ic.lock() {
                                                 *c = None;
                                             }
-                                            let _ = wd_ic.send(&pkt);
+                                            let _ = wd_ic.send(data, &addr);
                                         }
                                     }
                                 }
                                 None => {
                                     // Non-IPv4/UDP — re-inject unchanged.
-                                    let _ = wd_ic.send(&pkt);
+                                    let _ = wd_ic.send(data, &addr);
                                 }
                             }
                         }
                         Err(e) => {
-                            if !running_ic.load(Ordering::Relaxed) {
+                            let raw = e.raw_os_error().unwrap_or(0);
+                            if recv_should_break(running_ic.load(Ordering::Relaxed), raw) {
                                 break;
                             }
                             counters_ic.errors.fetch_add(1, Ordering::Relaxed);
@@ -375,13 +405,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                         }
                     }
                 }
-                // Explicitly close the WinDivert handle — the `windivert` crate
-                // has no Drop impl, so without this the WFP filter/callout is
-                // never unregistered, leaking state that causes FWP_E_IN_USE
-                // (0x8032000A) on subsequent runs.
-                if let Ok(mut handle) = Arc::try_unwrap(wd_ic) {
-                    let _ = handle.close(CloseAction::Nothing);
-                }
+                // The owner closes the handle only after every owner thread
+                // sends this ack, so the thread must not touch it afterwards.
+                let _ = ack_ic.send(());
                 tracing::info!("WinDivert intercept thread exiting");
             });
         }
@@ -394,6 +420,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let counters_inj = Arc::clone(&counters);
             let if_cache_inj = Arc::clone(&if_addr_cache);
             let running_inj = Arc::clone(&running);
+            let ack_inj = ack_tx.clone();
 
             tokio::task::spawn_blocking(move || {
                 tracing::info!("🎯 Inject thread started");
@@ -401,19 +428,15 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     match inject_rx.recv_timeout(Duration::from_millis(100)) {
                         Ok(raw) => {
                             let addr = {
-                                let guard = if_cache_inj.lock().unwrap();
+                                let guard = if_cache_inj
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                                 match guard.as_ref() {
-                                    Some(a) => a.clone(),
-                                    // SAFETY: WinDivertAddress::new() for NetworkLayer allocates
-                                    // a zeroed address struct; no unsafe memory access.
-                                    None => unsafe { WinDivertAddress::<NetworkLayer>::new() },
+                                    Some(a) => *a,
+                                    None => WINDIVERT_ADDRESS::default(),
                                 }
                             };
-                            let pkt = WinDivertPacket {
-                                data: std::borrow::Cow::Owned(raw),
-                                address: addr,
-                            };
-                            match wd_inj.send(&pkt) {
+                            match wd_inj.send(&raw, &addr) {
                                 Ok(_) => {
                                     counters_inj
                                         .packets_injected
@@ -433,9 +456,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
-                if let Ok(mut handle) = Arc::try_unwrap(wd_inj) {
-                    let _ = handle.close(CloseAction::Nothing);
-                }
+                // The owner closes the handle only after every owner thread
+                // sends this ack, so the thread must not touch it afterwards.
+                let _ = ack_inj.send(());
                 tracing::info!("WinDivert inject thread exiting");
             });
         }
@@ -509,6 +532,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let fec_enabled = config.fec_enabled;
             let fec_k = config.fec_k;
             let running_loop = Arc::clone(&running);
+            let ack_loop = ack_tx.clone();
 
             tokio::spawn(async move {
                 let mut fec_encoder = if fec_enabled {
@@ -670,11 +694,101 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                 // Cleanup
                 remove_fw_rule(tunnel_port);
+                // This ack also covers the firewall rule removal, so
+                // `stop_and_wait` does not return before the rule is gone.
+                let _ = ack_loop.send(());
                 tracing::info!("WinDivert tunnel task exiting");
             });
         }
 
-        Ok(InterceptorHandle::new(shutdown_tx, counters, "WinDivert"))
+        // `stop()` shuts both directions down: `Recv` releases the intercept
+        // thread parked in `recv`, and `Send` releases the inject thread if it
+        // is parked in a full `WinDivertSend` queue. Both owner threads then
+        // ack, so the session can be waited on and the handles closed
+        // deterministically.
+        let teardown = PlatformTeardown::new(
+            {
+                let wd_ic = Arc::clone(&wd_intercept);
+                let wd_inj = Arc::clone(&wd_inject);
+                move || {
+                    if let Err(e) = wd_ic.shutdown(WinDivertShutdownMode::Recv) {
+                        tracing::warn!("WinDivert intercept shutdown failed: {e}");
+                    }
+                    if let Err(e) = wd_inj.shutdown(WinDivertShutdownMode::Send) {
+                        tracing::warn!("WinDivert inject shutdown failed: {e}");
+                    }
+                }
+            },
+            teardown_ack,
+        );
+
+        setup_guard.disarm();
+        Ok(InterceptorHandle::new(
+            shutdown_tx,
+            counters,
+            "WinDivert",
+            Some(teardown),
+        ))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Handle lifecycle helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Shuts both WinDivert handles down unless disarmed.
+///
+/// `start` opens both handles before it binds the tunnel socket and spawns the
+/// async tunnel task. If any of that setup fails, `Drop` shuts the handles
+/// down; the owner threads then exit and the last `Arc<OwnedHandle>` drop
+/// closes the handle, so a failed start cannot leak WFP state. On success
+/// `disarm` hands the handles to the running session.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+struct HandleShutdownGuard {
+    intercept: Arc<OwnedHandle>,
+    inject: Arc<OwnedHandle>,
+    armed: bool,
+}
+
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+impl HandleShutdownGuard {
+    fn new(intercept: Arc<OwnedHandle>, inject: Arc<OwnedHandle>) -> Self {
+        Self {
+            intercept,
+            inject,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+impl Drop for HandleShutdownGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let _ = self.intercept.shutdown(WinDivertShutdownMode::Both);
+        let _ = self.inject.shutdown(WinDivertShutdownMode::Both);
+    }
+}
+
+/// Log a WinDivert open failure, calling out stale WFP state when the OS
+/// reports `FWP_E_IN_USE` so the fix (cold shutdown or killing the stale
+/// process) is visible next to the raw error.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn log_open_failure(handle_role: &str, err: &std::io::Error) {
+    if is_fwp_in_use(err) {
+        tracing::error!(
+            "❌ WinDivert {handle_role} open failed: {err}. A previous LightSpeed run \
+             left its WFP filter/callout registered; do a full cold shutdown or close \
+             the stale LightSpeed process, then try again."
+        );
+    } else {
+        tracing::error!("❌ WinDivert {handle_role} open failed: {err}");
     }
 }
 

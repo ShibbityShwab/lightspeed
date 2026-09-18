@@ -14,7 +14,9 @@
 use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
+use super::teardown::TeardownAck;
 use tokio::sync::oneshot;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -198,14 +200,52 @@ pub struct InterceptorStats {
 //  Live handle returned by start()
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Platform-specific teardown wiring for a running interceptor.
+///
+/// A platform-neutral [`InterceptorHandle`] cannot release a WinDivert receive
+/// thread parked in a blocking `recv`, and it cannot know when every owner
+/// thread has stopped touching the driver handle. A backend that has those
+/// needs bundles them here:
+///
+/// - `unblock` releases the parked thread (for example `WinDivertShutdown`).
+///   It runs at most once, from [`InterceptorHandle::stop`].
+/// - `ack` completes when every owner thread confirmed it can no longer touch
+///   the handle, so the driver state can be released deterministically.
+///
+/// Backends without blocking receive threads (Linux, macOS, mock) pass `None`
+/// to [`InterceptorHandle::new`] and keep the signalling-only behaviour.
+pub struct PlatformTeardown {
+    unblock: Box<dyn FnOnce() + Send>,
+    ack: TeardownAck,
+}
+
+impl PlatformTeardown {
+    /// Bundle an unblock hook with the acknowledgement of its owner threads.
+    pub(super) fn new(unblock: impl FnOnce() + Send + 'static, ack: TeardownAck) -> Self {
+        Self {
+            unblock: Box::new(unblock),
+            ack,
+        }
+    }
+}
+
 /// Handle to an active interceptor session, returned by `TrafficInterceptor::start()`.
 ///
-/// Dropping this handle calls `stop()` (sends the shutdown signal) but does
-/// NOT block — background tasks clean up asynchronously.
+/// Dropping this handle calls `stop()` (it sends the shutdown signal and
+/// releases any thread parked in a blocking platform receive) but does NOT
+/// block — background tasks clean up asynchronously. Call
+/// [`stop_and_wait`](Self::stop_and_wait) when the caller must know the
+/// platform resources were actually released.
 pub struct InterceptorHandle {
     shutdown_tx: Option<oneshot::Sender<()>>,
     pub counters: Arc<InterceptorCounters>,
     platform: &'static str,
+    /// Releases a thread parked in a blocking platform receive. Taken on the
+    /// first `stop()`, so it never runs twice.
+    unblock: Option<Box<dyn FnOnce() + Send>>,
+    /// Completes once every platform owner thread acknowledged that it stopped
+    /// touching its handle.
+    teardown_ack: Option<TeardownAck>,
 }
 
 impl InterceptorHandle {
@@ -213,11 +253,18 @@ impl InterceptorHandle {
         shutdown_tx: oneshot::Sender<()>,
         counters: Arc<InterceptorCounters>,
         platform: &'static str,
+        teardown: Option<PlatformTeardown>,
     ) -> Self {
+        let (unblock, teardown_ack) = match teardown {
+            Some(teardown) => (Some(teardown.unblock), Some(teardown.ack)),
+            None => (None, None),
+        };
         Self {
             shutdown_tx: Some(shutdown_tx),
             counters,
             platform,
+            unblock,
+            teardown_ack,
         }
     }
 
@@ -226,10 +273,33 @@ impl InterceptorHandle {
         self.counters.snapshot(self.platform)
     }
 
-    /// Send the shutdown signal.  Background tasks will exit gracefully.
+    /// Send the shutdown signal and release any thread parked in a blocking
+    /// platform receive. Background tasks exit asynchronously; use
+    /// [`stop_and_wait`](Self::stop_and_wait) to wait for them.
     pub fn stop(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
+        }
+        // Taking the hook here means mixing `stop()` and `stop_and_wait()`
+        // still runs it exactly once.
+        if let Some(unblock) = self.unblock.take() {
+            unblock();
+        }
+    }
+
+    /// Stop intercepting and wait up to `timeout` for every platform owner
+    /// thread to release its handle.
+    ///
+    /// Returns `true` immediately when the platform needs no teardown
+    /// acknowledgement (Linux, macOS, mock), and `true` when every owner
+    /// thread acknowledged within `timeout`. Returns `false` on timeout: a
+    /// platform thread may still be touching its handle, so the caller must
+    /// not assume the kernel filter was released.
+    pub fn stop_and_wait(&mut self, timeout: Duration) -> bool {
+        self.stop();
+        match self.teardown_ack.take() {
+            Some(ack) => ack.wait(timeout),
+            None => true,
         }
     }
 
@@ -315,6 +385,8 @@ impl TrafficInterceptor for UnsupportedInterceptor {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+
     use super::*;
 
     fn config_for(game_name: &str) -> InterceptorConfig {
@@ -329,10 +401,90 @@ mod tests {
         }
     }
 
+    fn handle_with(teardown: Option<PlatformTeardown>) -> InterceptorHandle {
+        let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+        InterceptorHandle::new(
+            shutdown_tx,
+            Arc::new(InterceptorCounters::default()),
+            "test",
+            teardown,
+        )
+    }
+
     #[test]
     fn dynamic_server_follows_the_game_profile() {
         assert!(config_for("Fortnite").dynamic_server());
         assert!(!config_for("Rust").dynamic_server());
         assert!(!config_for("SmokeTest").dynamic_server());
+    }
+
+    #[test]
+    fn stop_and_wait_without_teardown_returns_true() {
+        let mut handle = handle_with(None);
+        assert!(handle.stop_and_wait(Duration::from_millis(50)));
+        assert!(!handle.is_active());
+    }
+
+    #[test]
+    fn stop_and_wait_waits_for_the_owner_thread_to_ack() {
+        let (ack_tx, ack) = TeardownAck::new(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let owner = std::thread::spawn(move || {
+            let _ = release_rx.recv();
+            let _ = ack_tx.send(());
+        });
+        let teardown = PlatformTeardown::new(
+            move || {
+                let _ = release_tx.send(());
+            },
+            ack,
+        );
+        let mut handle = handle_with(Some(teardown));
+
+        assert!(handle.stop_and_wait(Duration::from_millis(500)));
+
+        owner.join().expect("owner thread must finish");
+    }
+
+    #[test]
+    fn unblock_hook_runs_exactly_once_across_stop_and_stop_and_wait() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_hook = Arc::clone(&calls);
+        let (ack_tx, ack) = TeardownAck::new(1);
+        let teardown = PlatformTeardown::new(
+            move || {
+                calls_hook.fetch_add(1, Ordering::Relaxed);
+                let _ = ack_tx.send(());
+            },
+            ack,
+        );
+        let mut handle = handle_with(Some(teardown));
+
+        handle.stop();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "stop() must run the unblock hook"
+        );
+
+        assert!(handle.stop_and_wait(Duration::from_millis(50)));
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "the unblock hook must never run twice"
+        );
+    }
+
+    #[test]
+    fn stop_and_wait_returns_false_when_the_ack_never_arrives() {
+        let (ack_tx, ack) = TeardownAck::new(1);
+        let teardown = PlatformTeardown::new(|| {}, ack);
+        let mut handle = handle_with(Some(teardown));
+
+        assert!(!handle.stop_and_wait(Duration::from_millis(30)));
+
+        // The sender stayed alive for the whole wait, so the failure is the
+        // timeout, not an early channel disconnect.
+        drop(ack_tx);
     }
 }

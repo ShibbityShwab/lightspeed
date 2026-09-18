@@ -30,8 +30,8 @@ pub struct MacosPlatform;
 impl Platform for MacosPlatform {
     type Tray = MacosTray;
 
-    fn new_tray(_quit: QuitFlag) -> Self::Tray {
-        MacosTray
+    fn new_tray(_quit: QuitFlag) -> Option<Self::Tray> {
+        Some(MacosTray)
     }
 
     fn is_admin() -> bool {

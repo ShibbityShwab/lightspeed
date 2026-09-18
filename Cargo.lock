@@ -1385,6 +1385,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "egui_glow",
+ "glow",
  "glutin",
  "glutin-winit",
  "image",
@@ -2873,6 +2874,8 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "windivert",
+ "windivert-sys",
+ "windows 0.48.0",
 ]
 
 [[package]]

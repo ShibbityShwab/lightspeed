@@ -378,6 +378,7 @@ impl TrafficInterceptor for NftablesInterceptor {
             shutdown_tx,
             counters,
             "nftables/iptables",
+            None,
         ))
     }
 }

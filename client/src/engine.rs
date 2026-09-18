@@ -152,6 +152,14 @@ pub struct LightSpeedEngine {
     capture_stat_slot: Option<CaptureStatSlot>,
     /// Shutdown sender for active WinDivert redirect task.
     windivert_shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Completion acknowledgement from the active WinDivert redirect task.
+    ///
+    /// The task sends on this channel once its `RedirectTeardown` has closed
+    /// both WinDivert handles, so [`Self::stop_windivert`] can wait a bounded
+    /// time before the GUI's `Quit` (`std::process::exit`) tears the process
+    /// down. `None` when no redirect task was spawned (for example on
+    /// non-Windows builds).
+    windivert_done_rx: Option<std::sync::mpsc::Receiver<()>>,
     /// Slot filled by the WinDivert task with live stat Arc handles.
     windivert_stat_slot: Option<WinDivertStatSlot>,
     /// Live handle for the OOP TrafficInterceptor (multiplatform MITM).
@@ -170,6 +178,7 @@ impl LightSpeedEngine {
             capture_shutdown_tx: None,
             capture_stat_slot: None,
             windivert_shutdown_tx: None,
+            windivert_done_rx: None,
             windivert_stat_slot: None,
             interceptor_handle: None,
         }
@@ -484,6 +493,8 @@ impl LightSpeedEngine {
 
         let (tx, rx) = oneshot::channel();
         self.windivert_shutdown_tx = Some(tx);
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        self.windivert_done_rx = Some(done_rx);
 
         {
             let mut s = self.status.write().unwrap();
@@ -514,6 +525,9 @@ impl LightSpeedEngine {
             if let Ok(mut s) = status.write() {
                 s.windivert_active = false;
             }
+            // Reached only after `run_windivert_mode_with_shutdown` returned,
+            // which means `RedirectTeardown` already closed both handles.
+            let _ = done_tx.send(());
         });
 
         Ok(())
@@ -568,6 +582,8 @@ impl LightSpeedEngine {
 
         let (tx, rx) = oneshot::channel();
         self.windivert_shutdown_tx = Some(tx);
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        self.windivert_done_rx = Some(done_rx);
 
         {
             let mut s = self.status.write().unwrap();
@@ -598,6 +614,9 @@ impl LightSpeedEngine {
             if let Ok(mut s) = status.write() {
                 s.windivert_active = false;
             }
+            // Reached only after `run_windivert_mode_with_shutdown` returned,
+            // which means `RedirectTeardown` already closed both handles.
+            let _ = done_tx.send(());
         });
 
         Ok(())
@@ -616,10 +635,19 @@ impl LightSpeedEngine {
         Err("WinDivert redirect requires Windows + windivert-redirect feature".to_string())
     }
 
-    /// Stop the WinDivert redirect task (if running).
+    /// Stop the WinDivert redirect task (if running) and wait a bounded time
+    /// for it to confirm that both WinDivert handles were closed.
     pub fn stop_windivert(&mut self) {
         if let Some(tx) = self.windivert_shutdown_tx.take() {
             let _ = tx.send(());
+        }
+        let done =
+            wait_for_redirect_ack(self.windivert_done_rx.take(), Duration::from_millis(1500));
+        if !done {
+            tracing::warn!(
+                "WinDivert redirect did not acknowledge shutdown within 1500ms; \
+                 handles may still be closing"
+            );
         }
         self.windivert_stat_slot = None;
         if let Ok(mut s) = self.status.write() {
@@ -714,10 +742,17 @@ impl LightSpeedEngine {
         Ok(())
     }
 
-    /// Stop the OOP interceptor (if running).
+    /// Stop the OOP interceptor (if running), waiting a bounded time for the
+    /// platform owner threads to release their handles.
     pub fn stop_interceptor(&mut self) {
         if let Some(mut h) = self.interceptor_handle.take() {
-            h.stop();
+            let stopped = h.stop_and_wait(Duration::from_millis(1500));
+            if !stopped {
+                tracing::warn!(
+                    "Interceptor teardown did not complete within 1500ms; \
+                     platform filter/handles may still be closing"
+                );
+            }
         }
         if let Ok(mut s) = self.status.write() {
             s.interceptor_active = false;
@@ -810,6 +845,22 @@ fn apply_registration_result(status: &mut EngineStatus, result: Option<u32>) {
             status.session_token = None;
             status.registration_error = Some("control-plane registration failed".to_string());
         }
+    }
+}
+
+/// Bounded wait for the WinDivert redirect task's completion acknowledgement.
+///
+/// `None` means no redirect task is running, so there is nothing to wait for.
+/// A disconnected channel means the task already ended without sending (for
+/// example it panicked), so its handles are gone too. Only a live sender that
+/// stays silent past `timeout` yields `false`.
+fn wait_for_redirect_ack(ack: Option<std::sync::mpsc::Receiver<()>>, timeout: Duration) -> bool {
+    match ack {
+        Some(rx) => !matches!(
+            rx.recv_timeout(timeout),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        None => true,
     }
 }
 
@@ -909,7 +960,71 @@ async fn run_keepalive(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_registration_result, EngineStatus};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use super::{apply_registration_result, wait_for_redirect_ack, EngineStatus, LightSpeedEngine};
+
+    fn test_engine() -> LightSpeedEngine {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("tokio runtime for engine test");
+        LightSpeedEngine::new(rt.handle().clone())
+    }
+
+    #[test]
+    fn stop_windivert_returns_promptly_when_ack_already_fired() {
+        let mut engine = test_engine();
+        let (done_tx, done_rx) = mpsc::channel();
+        done_tx.send(()).expect("send pre-fired ack");
+        engine.windivert_done_rx = Some(done_rx);
+
+        let started = Instant::now();
+        engine.stop_windivert();
+
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "an already-fired ack must not stall stop_windivert"
+        );
+    }
+
+    #[test]
+    fn stop_windivert_waits_for_delayed_ack() {
+        let mut engine = test_engine();
+        let (done_tx, done_rx) = mpsc::channel();
+        engine.windivert_done_rx = Some(done_rx);
+
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = done_tx.send(());
+        });
+
+        let started = Instant::now();
+        engine.stop_windivert();
+        let elapsed = started.elapsed();
+        worker.join().expect("ack thread must finish");
+
+        assert!(
+            elapsed >= Duration::from_millis(150),
+            "stop_windivert returned in {elapsed:?} without waiting for the ack"
+        );
+    }
+
+    #[test]
+    fn wait_for_redirect_ack_reports_timeout_without_hanging() {
+        let (_done_tx, done_rx) = mpsc::channel();
+        let started = Instant::now();
+
+        let completed = wait_for_redirect_ack(Some(done_rx), Duration::from_millis(80));
+
+        assert!(!completed, "a silent live sender must time out");
+        assert!(started.elapsed() >= Duration::from_millis(70));
+    }
+
+    #[test]
+    fn wait_for_redirect_ack_without_task_is_immediate() {
+        assert!(wait_for_redirect_ack(None, Duration::from_millis(80)));
+    }
 
     #[test]
     fn engine_registration_success_records_token() {

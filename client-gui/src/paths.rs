@@ -20,6 +20,11 @@ pub fn log_file() -> PathBuf {
     data_dir().join("gui-trace.log")
 }
 
+/// `gui-crash.log` — panic/fatal records written by [`crate::crash`].
+pub fn crash_log() -> PathBuf {
+    data_dir().join("gui-crash.log")
+}
+
 /// User-editable config directory (`%APPDATA%\light-speed` on Windows,
 /// `~/.config/light-speed` elsewhere).
 pub fn config_dir() -> PathBuf {
@@ -51,7 +56,7 @@ pub fn open_in_os(path: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_file, log_file};
+    use super::{config_file, crash_log, log_file};
 
     #[test]
     fn log_file_lives_under_the_data_dir() {
@@ -61,5 +66,10 @@ mod tests {
     #[test]
     fn config_file_lives_under_the_config_dir() {
         assert!(config_file().ends_with("light-speed/config.toml"));
+    }
+
+    #[test]
+    fn crash_log_lives_under_the_data_dir() {
+        assert!(crash_log().ends_with("Lightspeed/gui-crash.log"));
     }
 }

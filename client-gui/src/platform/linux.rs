@@ -28,8 +28,8 @@ pub struct LinuxPlatform;
 impl Platform for LinuxPlatform {
     type Tray = LinuxTray;
 
-    fn new_tray(_quit: QuitFlag) -> Self::Tray {
-        LinuxTray
+    fn new_tray(_quit: QuitFlag) -> Option<Self::Tray> {
+        Some(LinuxTray)
     }
 
     fn is_admin() -> bool {

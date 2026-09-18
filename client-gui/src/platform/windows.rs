@@ -5,7 +5,7 @@
 //! `tasklist` + `netstat`.
 
 use std::cell::Cell;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::app::{TrayState, STEAM_SERVICE_PORTS};
 use crate::platform::{self, Platform, QuitFlag, TrayAction, TrayHandle};
@@ -21,6 +21,9 @@ const MENU_SHOW: &str = "show";
 const MENU_CONNECT: &str = "connect";
 const MENU_DISCONNECT: &str = "disconnect";
 const MENU_QUIT: &str = "quit";
+
+/// Set once the tray icon exists; read by `has_system_tray`.
+static TRAY_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
 /// SAFETY: `TrayIcon` uses `Rc<RefCell<…>>` internally on Windows, which is
 /// SAFETY: `WindowsTray` is only ever created and accessed on the main
@@ -46,7 +49,7 @@ pub struct WindowsTray {
 }
 
 impl WindowsTray {
-    pub fn new(quit: QuitFlag) -> Self {
+    pub fn new(quit: QuitFlag) -> Option<Self> {
         let item_show = MenuItem::with_id(MENU_SHOW, "Show window", true, None);
         let item_connect = MenuItem::with_id(MENU_CONNECT, "Connect", true, None);
         let item_disconnect = MenuItem::with_id(MENU_DISCONNECT, "Disconnect", true, None);
@@ -66,16 +69,25 @@ impl WindowsTray {
         let _ = menu.append(&item_quit);
 
         // Start gray (disconnected) — will update on first frame via tray state machine.
-        let icon = lightning_icon(160, 160, 160);
+        let Some(icon) = lightning_icon(160, 160, 160) else {
+            tracing::warn!("Tray icon image unavailable; continuing without a system tray");
+            return None;
+        };
 
-        let icon = TrayIconBuilder::new()
+        let icon = match TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("\u{26a1} LightSpeed \u{2014} disconnected")
             .with_icon(icon)
             .build()
-            .expect("Failed to create tray icon");
+        {
+            Ok(icon) => icon,
+            Err(e) => {
+                tracing::warn!("Failed to create tray icon ({e}); continuing without a tray");
+                return None;
+            }
+        };
 
-        WindowsTray {
+        Some(WindowsTray {
             icon,
             id_show,
             id_connect,
@@ -83,7 +95,7 @@ impl WindowsTray {
             id_quit,
             quit,
             last_state: Cell::new(TrayState::Disconnected),
-        }
+        })
     }
 }
 
@@ -140,7 +152,9 @@ impl TrayHandle for WindowsTray {
             TrayState::Error => "\u{26a1} LightSpeed \u{2014} error".into(),
         };
 
-        let _ = self.icon.set_icon(Some(lightning_icon(r, g, b)));
+        if let Some(icon) = lightning_icon(r, g, b) {
+            let _ = self.icon.set_icon(Some(icon));
+        }
         let _ = self.icon.set_tooltip(Some(&tooltip));
     }
 }
@@ -154,8 +168,13 @@ pub struct WindowsPlatform;
 impl Platform for WindowsPlatform {
     type Tray = WindowsTray;
 
-    fn new_tray(quit: QuitFlag) -> Self::Tray {
-        WindowsTray::new(quit)
+    fn new_tray(quit: QuitFlag) -> Option<Self::Tray> {
+        let tray = WindowsTray::new(quit);
+        TRAY_AVAILABLE.store(tray.is_some(), Ordering::SeqCst);
+        if tray.is_none() {
+            tracing::warn!("System tray unavailable; closing the window will exit the app");
+        }
+        tray
     }
 
     fn is_admin() -> bool {
@@ -184,7 +203,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn has_system_tray() -> bool {
-        true
+        TRAY_AVAILABLE.load(Ordering::SeqCst)
     }
 
     fn detect_rust_ports() -> Option<(u16, u16)> {
@@ -206,7 +225,7 @@ impl Platform for WindowsPlatform {
 
 // ── Icon generation ──────────────────────────────────────────────────────────
 
-fn lightning_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
+fn lightning_icon(r: u8, g: u8, b: u8) -> Option<tray_icon::Icon> {
     const SIZE: usize = 32;
     let poly: [(f32, f32); 6] = [
         (0.55, 0.02),
@@ -231,8 +250,13 @@ fn lightning_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
             }
         }
     }
-    tray_icon::Icon::from_rgba(rgba, SIZE as u32, SIZE as u32)
-        .expect("Failed to build tray icon from RGBA data")
+    match tray_icon::Icon::from_rgba(rgba, SIZE as u32, SIZE as u32) {
+        Ok(icon) => Some(icon),
+        Err(e) => {
+            tracing::warn!("Failed to build tray icon from RGBA data: {e}");
+            None
+        }
+    }
 }
 
 fn point_in_poly(px: f32, py: f32, poly: &[(f32, f32)]) -> bool {
