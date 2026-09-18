@@ -59,6 +59,7 @@ LightSpeed now runs a **community relay network**: five sponsor-funded relays in
 | Dead by Daylight | `--game deadbydaylight` | EAC | ✅ |
 | Bodycam | `--game bodycam` | None | ✅ |
 | Roblox | `--game roblox` | Byfron (Hyperion) | ✅ |
+| Project Zomboid | `--game zomboid` | None | ✅ |
 
 📖 **[Full Game List →](docs/supported-games.md)**
 

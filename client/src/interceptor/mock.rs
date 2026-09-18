@@ -103,7 +103,7 @@ impl TrafficInterceptor for MockInterceptor {
             stop_count.fetch_add(1, Ordering::Relaxed);
         });
 
-        Ok(InterceptorHandle::new(shutdown_tx, counters, "mock"))
+        Ok(InterceptorHandle::new(shutdown_tx, counters, "mock", None))
     }
 }
 

@@ -341,7 +341,7 @@ impl TrafficInterceptor for PfInterceptor {
             tracing::info!("macOS pf interceptor loop exiting");
         });
 
-        Ok(InterceptorHandle::new(shutdown_tx, counters, "pfctl"))
+        Ok(InterceptorHandle::new(shutdown_tx, counters, "pfctl", None))
     }
 }
 

@@ -68,16 +68,21 @@ pub(crate) fn ports_to_range(ports: &[u16]) -> Option<(u16, u16)> {
 pub trait Platform {
     type Tray: TrayHandle;
 
-    fn new_tray(quit: QuitFlag) -> Self::Tray;
+    /// Build the platform tray, or `None` when it is unavailable.
+    ///
+    /// Returning `None` (instead of panicking) lets the app keep running
+    /// without a tray and makes closing the window exit instead of hiding it.
+    fn new_tray(quit: QuitFlag) -> Option<Self::Tray>;
     fn is_admin() -> bool;
     fn is_capture_available() -> bool;
     fn setup_fonts(ctx: &egui::Context);
 
     /// Whether this platform has a real, recoverable system tray.
     ///
-    /// Only Windows does in this build; Linux and macOS use a stub tray, so
-    /// the close-intercept and "Hide to tray" affordance are skipped there
-    /// (hiding would leave the window unrecoverable).
+    /// On Windows this reflects whether the icon was actually created (a
+    /// failed tray is not recoverable); Linux and macOS use a stub tray and
+    /// always return `false`, so the close-intercept and "Hide to tray"
+    /// affordance are skipped there (hiding would strand the window).
     fn has_system_tray() -> bool {
         false
     }

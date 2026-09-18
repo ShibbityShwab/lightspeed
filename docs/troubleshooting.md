@@ -112,18 +112,20 @@ The interceptor seizes packets before the game can receive responses, and the in
 
 ### "WinDivert open failed" / `FWP_E_IN_USE` (0x8032000A) on Windows
 
-After LightSpeed (or any WinDivert app) is **force-killed** (`taskkill /f`, a crash, or Ctrl+C on the console), the Windows Filtering Platform (WFP) can be left holding stale WinDivert callout/filter state. The next `WinDivertOpen` then fails with `FWP_E_IN_USE` even though no process is visibly using WinDivert.
+WinDivert registers a WFP callout/filter for each open handle. If a handle is never closed, that filter state lingers, and the next `WinDivertOpen` fails with `FWP_E_IN_USE` (0x8032000A) even though no process is visibly using WinDivert.
 
-This is a known **WinDivert 2.2.x driver limitation on Windows 10/11** (upstream issues basil00/WinDivert#196, #294), not a LightSpeed bug. Fixes:
+Recent LightSpeed builds close both the capture and inject handles on every orderly shutdown path, including Ctrl+C in `--watch` and `--start-interceptor` and **Quit** in the GUI, and the receive loop is unblocked with `WinDivertShutdown` before the close so teardown is deterministic. A hard kill (`taskkill /f`, a crash, or closing the console window) can still leave the WinDivert 2.2.x driver with stale state; that is an upstream driver limitation (basil00/WinDivert#294, #406) that userspace cannot clear once the process is gone.
 
-1. **Full shutdown, not restart** — Windows 11 "Restart" reuses the kernel session that holds the stale state; you need a full **Shutdown → power on** to clear it.
-2. **Stop the WinDivert service** (avoids a reboot in some cases):
+If you still hit it:
+
+1. **Quit gracefully and wait a moment** — use the CLI Ctrl+C or the GUI's **Quit**, then give the handles a second or two to close before relaunching.
+2. **Stop the WinDivert service** (avoids a reboot in some cases; note the driver is shared with other WinDivert apps such as ExitLag):
    ```powershell
    sc stop windivert
    ```
-3. **Quit LightSpeed gracefully** instead of killing it — use the GUI's **Quit** or let the CLI's Ctrl+C handler run; the v1.2.3 client now explicitly closes its WinDivert handles on shutdown, which avoids accumulating stale state.
+3. **Full shutdown, not restart** — Windows "Restart" can reuse the kernel session that holds the stale state; a full **Shutdown → power on** clears it.
 
-> **Tip:** On v1.2.2 and earlier, a separate bug (data-plane auth rejecting all packets — issue #59) froze the connection and forced users to repeatedly kill the client, which is what triggered most `FWP_E_IN_USE` reports. That auth bug is fixed in v1.2.3, so you should no longer need to force-kill the client in normal use.
+> **Tip:** On v1.2.2 and earlier, a separate bug (data-plane auth rejecting all packets — issue #59) froze the connection and forced users to repeatedly kill the client, which is what triggered most `FWP_E_IN_USE` reports. That auth bug is fixed in v1.2.3.
 
 ---
 
@@ -145,9 +147,7 @@ Then upgrade to v1.4.2 or later.
 
 ### A second instance opens instead of focusing the first
 
-On versions before v1.4.2, launching the GUI twice stacked a second window and a second engine. v1.4.2 adds a single-instance guard: a second launch focuses the existing window instead of starting another instance.
-
-If you are on an older build and have multiple instances, close the extras from Task Manager.
+On versions before v1.4.2, launching the GUI twice stacked a second window and a second engine. The GUI now holds a single-instance guard: a second launch shows a brief "LightSpeed is already running" notice and exits instead of starting another engine. To force a second instance anyway (for diagnostics), pass `--force` or set `LIGHTSPEED_GUI_FORCE=1`.
 
 ### No relays discovered
 

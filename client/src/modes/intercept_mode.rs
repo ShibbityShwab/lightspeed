@@ -20,8 +20,9 @@
 //! ```
 
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::time::Duration;
 
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::interceptor::{build_config_for_game, create_interceptor, Route, TransportProtocol};
 
@@ -103,7 +104,13 @@ pub async fn run_intercept_mode(
     info!("🛑 Shutting down interceptor...");
 
     // ── Cleanup ─────────────────────────────────────────────────────
-    handle.stop();
+    let stopped = handle.stop_and_wait(Duration::from_secs(3));
+    if !stopped {
+        warn!(
+            "⚠️  Interceptor teardown did not complete within 3s — \
+             platform filter/handles may still be closing"
+        );
+    }
     info!("✅ Interceptor stopped — firewall rules removed");
 
     Ok(())

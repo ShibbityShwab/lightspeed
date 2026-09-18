@@ -173,6 +173,56 @@ mod inner {
 
     use crate::interceptor::order::{Decision, ServerTracker, TrackerConfig};
     use crate::interceptor::recovery::RecvBackoff;
+    use crate::interceptor::teardown::{recv_should_break, TeardownAck};
+    use crate::interceptor::windivert_handle::{is_fwp_in_use, OwnedHandle};
+    use windivert_sys::address::WINDIVERT_ADDRESS;
+    use windivert_sys::{WinDivertFlags, WinDivertLayer, WinDivertShutdownMode};
+
+    /// Upper bound on the owner-thread acknowledgement wait during teardown.
+    const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+    /// Deterministic teardown for the redirect's two WinDivert handles.
+    ///
+    /// Dropping the guard stops both owner threads (running flag plus
+    /// `WinDivertShutdown`), waits for their acks, and closes the handles. It
+    /// runs on every exit path, including `?` returns before the tunnel loop,
+    /// so a failed setup cannot leak WFP state.
+    struct RedirectTeardown {
+        intercept: Arc<OwnedHandle>,
+        inject: Arc<OwnedHandle>,
+        running: Arc<AtomicBool>,
+        ack: TeardownAck,
+    }
+
+    impl Drop for RedirectTeardown {
+        fn drop(&mut self) {
+            self.running.store(false, Ordering::Relaxed);
+            let _ = self.intercept.shutdown(WinDivertShutdownMode::Recv);
+            let _ = self.inject.shutdown(WinDivertShutdownMode::Send);
+            if !self.ack.wait(TEARDOWN_TIMEOUT) {
+                tracing::warn!(
+                    "WinDivert redirect: owner threads did not stop within {TEARDOWN_TIMEOUT:?}"
+                );
+            }
+            let _ = self.intercept.close();
+            let _ = self.inject.close();
+        }
+    }
+
+    /// Log a WinDivert open failure, calling out stale WFP state when the OS
+    /// reports `FWP_E_IN_USE` so the fix (cold shutdown or killing the stale
+    /// process) is visible next to the raw error.
+    fn log_open_failure(err: &std::io::Error) {
+        if is_fwp_in_use(err) {
+            tracing::error!(
+                "❌ WinDivert open failed: {err}. A previous LightSpeed run left its \
+                 WFP filter/callout registered; do a full cold shutdown or close the \
+                 stale LightSpeed process, then try again."
+            );
+        } else {
+            tracing::error!("❌ WinDivert open failed: {err}");
+        }
+    }
 
     /// Run the WinDivert active redirect loop.
     ///
@@ -192,9 +242,6 @@ mod inner {
         use lightspeed_protocol::{
             build_fec_data_packet, build_fec_parity_packet, decode_fec_payload, FecHeader,
         };
-        use windivert::address::WinDivertAddress;
-        use windivert::layer::NetworkLayer;
-        use windivert::prelude::{WinDivert, WinDivertFlags, WinDivertPacket};
 
         let pre_known_server = cfg.server_addr;
         let proxy_addr = cfg.proxy_addr;
@@ -237,23 +284,33 @@ mod inner {
         tracing::info!("   Outbound WinDivert filter: {}", out_filter);
 
         // Open WinDivert handle for outbound interception
-        let wd_intercept =
-            WinDivert::network(&out_filter, 0, WinDivertFlags::new()).map_err(|e| {
-                anyhow::anyhow!(
-                    "WinDivert open failed (need Administrator + WinDivert64.sys): {}",
-                    e
-                )
-            })?;
+        let wd_intercept = match OwnedHandle::open(
+            &out_filter,
+            WinDivertLayer::Network,
+            0,
+            WinDivertFlags::new(),
+        ) {
+            Ok(h) => Arc::new(h),
+            Err(e) => {
+                log_open_failure(&e);
+                return Err(anyhow::anyhow!(
+                    "WinDivert open failed (need Administrator + WinDivert64.sys): {e}"
+                ));
+            }
+        };
 
         // Open WinDivert handle for injection (no filter — only used for sending).
         // IMPORTANT: do NOT set sniff flag here — sniff makes the handle read-only
         // and WinDivertSend() will silently fail, meaning game never gets responses.
-        let wd_inject = WinDivert::network("false", 0, WinDivertFlags::new())
-            .map_err(|e| anyhow::anyhow!("WinDivert inject handle open failed: {}", e))?;
-
-        // Wrap handles in Arc so they can be moved into spawn_blocking closures
-        let wd_intercept = Arc::new(wd_intercept);
-        let wd_inject = Arc::new(wd_inject);
+        let wd_inject =
+            match OwnedHandle::open("false", WinDivertLayer::Network, 0, WinDivertFlags::new()) {
+                Ok(h) => Arc::new(h),
+                Err(e) => {
+                    log_open_failure(&e);
+                    let _ = wd_intercept.close();
+                    return Err(anyhow::anyhow!("WinDivert inject handle open failed: {e}"));
+                }
+            };
 
         // Channels between blocking WinDivert threads and async tunnel task
         // intercept_tx: (game_src, game_dst, payload_vec)
@@ -269,10 +326,19 @@ mod inner {
         // (with Outbound=false) so spoofed server→game responses are delivered on
         // the correct network adapter.  A zeroed address (IfIdx=0) is almost never
         // the LAN adapter, causing WinDivert to silently drop injected packets.
-        let if_addr_cache: Arc<std::sync::Mutex<Option<WinDivertAddress<NetworkLayer>>>> =
+        let if_addr_cache: Arc<std::sync::Mutex<Option<WINDIVERT_ADDRESS>>> =
             Arc::new(std::sync::Mutex::new(None));
 
         let running = Arc::new(AtomicBool::new(true));
+
+        let (ack_tx, teardown_ack) = TeardownAck::new(2);
+        // Released on every exit path, including early `?` returns below.
+        let _teardown = RedirectTeardown {
+            intercept: Arc::clone(&wd_intercept),
+            inject: Arc::clone(&wd_inject),
+            running: Arc::clone(&running),
+            ack: teardown_ack,
+        };
 
         // ── Shutdown watcher ─────────────────────────────────────────────
         {
@@ -289,6 +355,7 @@ mod inner {
         let stats_ic = Arc::clone(&stats);
         let if_cache_ic = Arc::clone(&if_addr_cache);
         let itx = intercept_tx;
+        let ack_ic = ack_tx.clone();
         tokio::task::spawn_blocking(move || {
             tracing::info!("WinDivert intercept thread started");
 
@@ -312,33 +379,44 @@ mod inner {
                     break;
                 }
                 // recv() is blocking — will return each captured packet.
-                match wd_ic.recv(Some(&mut recv_buf)) {
-                    Ok(pkt) => {
+                match wd_ic.recv(&mut recv_buf) {
+                    Ok((len, addr)) => {
                         backoff.on_success();
+                        let data = &recv_buf[..len];
                         let parsed: Option<(SocketAddrV4, SocketAddrV4, Vec<u8>)> =
-                            parse_ipv4_udp(&pkt.data).map(|(src, dst, pl)| (src, dst, pl.to_vec()));
+                            parse_ipv4_udp(data).map(|(src, dst, pl)| (src, dst, pl.to_vec()));
 
                         match parsed {
                             Some((game_src, game_dst, payload_vec)) => {
                                 // ── Cache the interface index on first outbound packet ──
-                                // The WinDivertAddress from an intercepted outbound packet
-                                // contains the real LAN adapter IfIdx.  We clone it, flip
+                                // The address from an intercepted outbound packet contains
+                                // the real LAN adapter IfIdx.  We copy it, set
                                 // Outbound=false, and store it so the inject thread can
                                 // deliver spoofed server→game responses on the correct
                                 // interface instead of the zeroed IfIdx=0 default which
                                 // almost always resolves to the wrong adapter and causes
                                 // WinDivert to silently drop all injected packets.
                                 {
-                                    let mut guard = if_cache_ic.lock().unwrap();
+                                    let mut guard = if_cache_ic
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                                     if guard.is_none() {
-                                        let mut cached = pkt.address.clone();
+                                        let mut cached = addr;
                                         cached.set_outbound(false); // inbound direction for inject
-                                        cached.set_ip_checksum(false); // let WinDivert recompute
-                                        cached.set_udp_checksum(false); // let WinDivert recompute
+                                        cached.set_ipchecksum(false); // let WinDivert recompute
+                                        cached.set_udpchecksum(false); // let WinDivert recompute
+
+                                        // SAFETY: [Category 8 - FFI] `addr` came from a
+                                        // successful network-layer `WinDivertRecv`, so the
+                                        // driver initialized the `Network` union member.
+                                        // These read two plain `u32`s from that
+                                        // `#[repr(C)]` union.
+                                        let if_idx =
+                                            unsafe { cached.union_field.Network.interface_id };
+                                        let sub_if_idx =
+                                            unsafe { cached.union_field.Network.subinterface_id };
                                         tracing::info!(
-                                            "🔗 Cached inject interface: IfIdx={} SubIfIdx={}",
-                                            cached.interface_index(),
-                                            cached.subinterface_index(),
+                                            "🔗 Cached inject interface: IfIdx={if_idx} SubIfIdx={sub_if_idx}"
                                         );
                                         *guard = Some(cached);
                                     }
@@ -367,7 +445,7 @@ mod inner {
                                         }
                                     }
                                     Decision::PassThrough | Decision::StartDetection => {
-                                        let _ = wd_ic.send(&pkt);
+                                        let _ = wd_ic.send(data, &addr);
                                     }
                                     Decision::ResetToDetection => {
                                         tracing::info!("🔄 Locked server stale — re-detecting");
@@ -376,21 +454,24 @@ mod inner {
                                             *guard = None;
                                         }
                                         {
-                                            let mut cache_guard = if_cache_ic.lock().unwrap();
+                                            let mut cache_guard = if_cache_ic
+                                                .lock()
+                                                .unwrap_or_else(|poisoned| poisoned.into_inner());
                                             *cache_guard = None;
                                         }
-                                        let _ = wd_ic.send(&pkt);
+                                        let _ = wd_ic.send(data, &addr);
                                     }
                                 }
                             }
                             None => {
                                 // Non-IPv4/UDP — re-inject unchanged.
-                                let _ = wd_ic.send(&pkt);
+                                let _ = wd_ic.send(data, &addr);
                             }
                         }
                     }
                     Err(e) => {
-                        if !running_ic.load(Ordering::Relaxed) {
+                        let raw = e.raw_os_error().unwrap_or(0);
+                        if recv_should_break(running_ic.load(Ordering::Relaxed), raw) {
                             break;
                         }
                         stats_ic.errors.fetch_add(1, Ordering::Relaxed);
@@ -421,6 +502,9 @@ mod inner {
                     }
                 }
             }
+            // The owner closes the handle only after every owner thread sends
+            // this ack, so the thread must not touch it afterwards.
+            let _ = ack_ic.send(());
             tracing::info!("WinDivert intercept thread exiting");
         });
 
@@ -429,6 +513,7 @@ mod inner {
         let running_inj = Arc::clone(&running);
         let stats_inj = Arc::clone(&stats);
         let if_cache_inj = Arc::clone(&if_addr_cache);
+        let ack_inj = ack_tx.clone();
         tokio::task::spawn_blocking(move || {
             // Use a std mpsc receiver so we can do recv_timeout to check running flag
             tracing::info!("WinDivert inject thread started");
@@ -442,24 +527,20 @@ mod inner {
                         // drop injected packets, starving the game of server replies.
                         // Fall back to zeroed addr only if no outbound traffic seen yet.
                         let addr = {
-                            let guard = if_cache_inj.lock().unwrap();
+                            let guard = if_cache_inj
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
                             match guard.as_ref() {
-                                Some(a) => a.clone(),
+                                Some(a) => *a,
                                 None => {
                                     tracing::debug!(
                                         "inject: interface not cached yet, using zeroed addr"
                                     );
-                                    // SAFETY: zeroed WinDivertAddress is a valid (if suboptimal)
-                                    // fallback; the inject will succeed on loopback-capable configs.
-                                    unsafe { WinDivertAddress::<NetworkLayer>::new() }
+                                    WINDIVERT_ADDRESS::default()
                                 }
                             }
                         };
-                        let pkt = WinDivertPacket {
-                            data: std::borrow::Cow::Owned(raw_pkt),
-                            address: addr,
-                        };
-                        match wd_inj.send(&pkt) {
+                        match wd_inj.send(&raw_pkt, &addr) {
                             Ok(_) => {
                                 stats_inj.packets_injected.fetch_add(1, Ordering::Relaxed);
                             }
@@ -477,6 +558,9 @@ mod inner {
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
+            // The owner closes the handle only after every owner thread sends
+            // this ack, so the thread must not touch it afterwards.
+            let _ = ack_inj.send(());
             tracing::info!("WinDivert inject thread exiting");
         });
 

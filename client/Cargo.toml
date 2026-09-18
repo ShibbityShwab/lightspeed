@@ -51,7 +51,7 @@ ml = ["dep:linfa", "dep:linfa-linear", "dep:ndarray", "dep:bincode"]
 # WinDivert packet interception. Windows-only at runtime, but safe to enable on
 # any target — the `windivert` dependency is `cfg(windows)`-gated, so non-Windows
 # builds skip it (verified: `cargo check --features windivert-redirect` on Linux).
-windivert-redirect = ["dep:windivert"]
+windivert-redirect = ["dep:windivert", "dep:windivert-sys", "dep:windows"]
 # Enable all features
 full = ["quic", "pcap-capture", "ml"]  # windivert-redirect excluded (Windows-only)
 
@@ -86,6 +86,13 @@ rand = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 windivert = { version = "0.6", optional = true, features = ["vendored"] }
+# Raw FFI used by `interceptor::windivert_handle` for an owned handle whose
+# `shutdown(&self)` can unblock a concurrent blocking recv. The `windows` types
+# must match windivert-sys's own 0.48 dependency so `HANDLE` is the same type.
+# `vendored` reaches windivert-sys through the `windivert` dependency above, so
+# it is intentionally not repeated here.
+windivert-sys = { version = "0.10", optional = true }
+windows = { version = "0.48", optional = true, default-features = false, features = ["Win32_Foundation"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

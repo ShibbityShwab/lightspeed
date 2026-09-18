@@ -124,7 +124,7 @@ struct HealthProbe {
 pub struct LightSpeedApp<P: Platform> {
     engine: Arc<Mutex<LightSpeedEngine>>,
     status: EngineStatus,
-    tray: P::Tray,
+    tray: Option<P::Tray>,
     quit: QuitFlag,
 
     // ── Proxy connection ─────────────────────────────────────────────────
@@ -165,6 +165,7 @@ pub struct LightSpeedApp<P: Platform> {
 impl<P: Platform> LightSpeedApp<P> {
     pub fn new(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) -> Self {
         let tray = P::new_tray(Arc::clone(&quit));
+        tracing::info!("system tray created: {}", tray.is_some());
         let status = engine.lock().unwrap().snapshot();
 
         let auto_detected_game = try_auto_detect_game();
@@ -228,6 +229,14 @@ impl<P: Platform> LightSpeedApp<P> {
         // the list a moment later without dropping the connection.
         app.connect_selected();
         app
+    }
+
+    /// Whether hide-to-tray is recoverable.
+    ///
+    /// `self.tray` is `Some` for the Linux/macOS stubs too, so combine it with
+    /// `Platform::has_system_tray()` to avoid hiding with no way back.
+    fn tray_available(&self) -> bool {
+        self.tray.is_some() && P::has_system_tray()
     }
 
     fn selected_entry(&self) -> Option<&ProxyEntry> {
@@ -398,7 +407,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // the process down, X hides to the tray where a real tray exists.
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         match close_decision(
-            P::has_system_tray(),
+            self.tray_available(),
             self.quit.load(Ordering::Relaxed),
             close_requested,
         ) {
@@ -416,7 +425,11 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         }
 
         // ── Poll tray events ─────────────────────────────────────────────
-        for action in self.tray.poll_events(&ctx) {
+        let tray_actions = match &self.tray {
+            Some(tray) => tray.poll_events(&ctx),
+            None => Vec::new(),
+        };
+        for action in tray_actions {
             match action {
                 TrayAction::Connect => self.connect_selected(),
                 TrayAction::Disconnect => {
@@ -458,8 +471,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 TrayState::Disconnected
             };
 
-            self.tray
-                .set_state(new_tray_state, self.status.latest_rtt_ms);
+            if let Some(tray) = &self.tray {
+                tray.set_state(new_tray_state, self.status.latest_rtt_ms);
+            }
         }
 
         // ── Main panel ────────────────────────────────────────────────────
@@ -1459,7 +1473,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     {
                         paths::open_in_os(&paths::log_file());
                     }
-                    if P::has_system_tray() && ui.small_button("Hide to tray").clicked() {
+                    if self.tray_available() && ui.small_button("Hide to tray").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     }
                 });

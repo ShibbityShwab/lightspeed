@@ -43,7 +43,10 @@ pub mod order;
 pub mod process_scanner;
 pub mod recovery;
 pub mod rotation;
+pub mod teardown;
 pub mod traits;
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+pub mod windivert_handle;
 #[cfg(target_os = "windows")]
 pub mod windows;
 

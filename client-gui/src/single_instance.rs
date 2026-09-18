@@ -32,7 +32,18 @@ pub enum InstanceOutcome {
 }
 
 /// Acquire the process-wide single-instance guard.
+///
+/// `--force` on the command line or `LIGHTSPEED_GUI_FORCE=1` in the
+/// environment bypasses the guard entirely (logged, so it is never silent).
 pub fn acquire() -> InstanceOutcome {
+    let args: Vec<String> = std::env::args().collect();
+    let env_force = std::env::var("LIGHTSPEED_GUI_FORCE")
+        .map(|value| value == "1")
+        .unwrap_or(false);
+    if force_requested(&args, env_force) {
+        tracing::warn!("Single-instance guard bypassed (--force or LIGHTSPEED_GUI_FORCE=1)");
+        return unguarded();
+    }
     #[cfg(windows)]
     {
         acquire_named_mutex(MUTEX_NAME)
@@ -40,6 +51,25 @@ pub fn acquire() -> InstanceOutcome {
     #[cfg(not(windows))]
     {
         acquire_lock_file(&crate::paths::data_dir().join("instance.lock"))
+    }
+}
+
+/// Whether the user explicitly asked to skip the single-instance guard.
+///
+/// Pure so it is unit-testable on every platform.
+pub fn force_requested(args: &[String], env_force: bool) -> bool {
+    env_force || args.iter().any(|arg| arg == "--force")
+}
+
+/// A guard that owns nothing — used when the check is bypassed.
+fn unguarded() -> InstanceOutcome {
+    #[cfg(windows)]
+    {
+        InstanceOutcome::Acquired(InstanceGuard { mutex: 0 })
+    }
+    #[cfg(not(windows))]
+    {
+        InstanceOutcome::Acquired(InstanceGuard { _lock: None })
     }
 }
 
@@ -66,6 +96,10 @@ const MUTEX_NAME: &str = "Local\\LightSpeed-GUI-Single-Instance";
 #[cfg(windows)]
 fn acquire_named_mutex(name: &str) -> InstanceOutcome {
     let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    // Clear this thread's last-error first: a stale non-zero value could
+    // otherwise masquerade as ERROR_ALREADY_EXISTS below.
+    // SAFETY: `SetLastError` only writes the calling thread's error slot.
+    unsafe { win::SetLastError(0) };
     // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call;
     // a null SECURITY_ATTRIBUTES requests the default descriptor.
     let handle = unsafe { win::CreateMutexW(std::ptr::null_mut(), 0, wide.as_ptr()) };
@@ -108,6 +142,7 @@ mod win {
             name: *const u16,
         ) -> *mut c_void;
         pub fn GetLastError() -> u32;
+        pub fn SetLastError(error: u32);
         pub fn CloseHandle(handle: *mut c_void) -> i32;
     }
 
@@ -126,6 +161,7 @@ fn message_box(message: &str) {
 
     const MB_OK: u32 = 0x0000_0000;
     const MB_ICONINFORMATION: u32 = 0x0000_0040;
+    const MB_TOPMOST: u32 = 0x0004_0000;
 
     let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
     let text = wide(message);
@@ -137,7 +173,7 @@ fn message_box(message: &str) {
             std::ptr::null_mut(),
             text.as_ptr(),
             caption.as_ptr(),
-            MB_OK | MB_ICONINFORMATION,
+            MB_OK | MB_ICONINFORMATION | MB_TOPMOST,
         );
     }
 }
@@ -214,10 +250,22 @@ fn notice_window(message: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::force_requested;
     #[cfg(not(windows))]
     use super::{acquire_lock_file, InstanceOutcome};
     #[cfg(windows)]
     use super::{acquire_named_mutex, InstanceOutcome};
+
+    #[test]
+    fn force_requested_accepts_the_flag_or_the_environment() {
+        let plain = vec!["lightspeed-gui".to_string()];
+        assert!(!force_requested(&plain, false));
+        assert!(force_requested(&plain, true));
+
+        let flagged = vec!["lightspeed-gui".to_string(), "--force".to_string()];
+        assert!(force_requested(&flagged, false));
+        assert!(force_requested(&flagged, true));
+    }
 
     #[cfg(not(windows))]
     fn unique_lock_path(tag: &str) -> std::path::PathBuf {
