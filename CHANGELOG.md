@@ -5,6 +5,22 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Windows GUI: startup failures are no longer silent.** The GUI is built with `windows_subsystem = "windows"`, so a panic or a returned error produced no window and no output. It now installs a panic hook that writes `%LOCALAPPDATA%\Lightspeed\gui-crash.log` and shows a native message box, initializes logging before the single-instance guard (falling back to a temp file or a discard sink when the log path is unwritable), and reports a fatal startup error in a dialog instead of exiting silently (issue #59).
+- **Windows GUI: the single-instance guard was hardened.** `SetLastError(0)` is called before `CreateMutexW` so a stale last-error cannot be mistaken for `ERROR_ALREADY_EXISTS`; the "already running" path logs and exits with a distinct code and a topmost notice; `--force` or `LIGHTSPEED_GUI_FORCE=1` bypasses the guard for diagnostics.
+- **Windows GUI: a failed system tray no longer kills or strands the app.** Tray creation is fallible; when it fails the window still opens and closing it exits instead of hiding with no way back. The eframe renderer can be overridden with `LIGHTSPEED_GUI_RENDERER=glow|wgpu` for machines where wgpu adapter creation fails.
+- **Windows: WinDivert handles are now closed on every stop path.** `--watch` had no Ctrl+C handling, the receive thread parked in a blocking `WinDivertRecv` that an `AtomicBool` could not wake, and the legacy GUI redirect backend never closed its handles at all. Handles are now owned directly, unblocked with `WinDivertShutdown`, closed after an explicit owner-thread acknowledgement, and the GUI's Quit waits (bounded) for teardown. This addresses the recurring `FWP_E_IN_USE` (0x8032000A) relaunch failure (issue #59).
+- **Windows: actionable `FWP_E_IN_USE` message** when a handle open fails, and firewall rule removal is covered by the teardown acknowledgement so it is no longer left behind on a graceful stop.
+
+### Documentation
+- Corrected the `FWP_E_IN_USE` troubleshooting guidance (the earlier "CLI Ctrl+C handler" claim was wrong for `--watch`) and corrected the single-instance behaviour description.
+- Registered **Project Zomboid** (`--game zomboid`, UDP 16261-16262) in the supported-games table and README (PR #72).
+
+### Dependencies
+- base64 0.22 to 0.23 (PR #61) and the patch group: toml, clap, quinn, rcgen, eframe, reqwest (PR #73).
+
 ## [1.4.3] - 2026-09-16
 
 ### Security

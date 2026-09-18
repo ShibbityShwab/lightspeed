@@ -1,68 +1,78 @@
-# Current Phase: WF-022 v1.4.3 Linux Interception + Security Patch
+# Current Phase: WF-023 Windows GUI Startup + WinDivert Teardown (community feedback)
 
-**Workflow:** WF-022
-**Agent:** RustDev + NetEng + QAEngineer + DevOps
-**Status:** Releasing `v1.4.3`
-**Last updated:** 2026-09-16
+**Workflow:** WF-023
+**Agent:** RustDev + QAEngineer + DevOps
+**Status:** Implemented, pending release
+**Last updated:** 2026-09-18
 
 ---
 
 ## Summary
 
-Two things drove this release. First, a rustls advisory (RUSTSEC-2026-0285) published
-on 2026-09-14 turned the Security Audit workflow red, so the patched rustls ships here.
-Second, an Oracle-assisted audit of the Linux interceptor found that Linux interception
-was effectively non-functional: server discovery broke on modern `ss`, the fallback mode
-blackholed matched traffic, and the receive thread spun a CPU core while idle. All are
-fixed, and server rotation is now followed.
+This workflow responds to the open feedback on the repo. The driving report is issue #59
+(Yughaa): the v1.4.3 GUI does not launch at all on Windows, and the CLI still fails with
+`FWP_E_IN_USE` (0x8032000A) on the relaunch after a clean Ctrl+C.
+
+Root causes found by an Oracle-assisted audit plus four parallel explorer agents:
+
+1. **GUI silent death.** `lightspeed-gui` is built with `windows_subsystem = "windows"`,
+   so a panic or a returned `Err` produces no window and no output. The v1.4.2 GUI
+   overhaul added the only new Windows-specific pre-window early-exit: the named-mutex
+   single-instance guard, which read `GetLastError` without a `SetLastError(0)` reset and
+   exited silently on the already-running path.
+2. **WinDivert handle leak.** `--watch` had no Ctrl+C handling, so Ctrl+C was a hard
+   kill; the receive thread parked in a blocking `WinDivertRecv` that an `AtomicBool`
+   cannot wake (the `windivert` 0.6 wrapper has no `Drop` and its `shutdown` takes
+   `&mut self`); the only close path was `Arc::try_unwrap`, which is unreachable while a
+   thread blocks; and the legacy `capture/windivert_redirect.rs` backend (the GUI Boost
+   path) never closed either handle.
 
 | Item | Status |
 |------|--------|
-| rustls 0.23.45 (RUSTSEC-2026-0285) | Fixed |
-| Linux: `ss -unp -a` + State-column-agnostic parser + `/proc/net/udp` fallback | Fixed |
-| Linux: destination-less rule removed (no more traffic blackhole) | Fixed |
-| Linux: recvmsg busy-spin replaced with `poll(2)` | Fixed |
-| Linux: server rotation via 5s scanner poll and a pure `RotationTracker` | Added |
-| Linux: teardown removes the currently installed rule | Fixed |
-| Linux: `--smoke-test` rewritten as a synthetic end-to-end test | Added |
-| Windows GUI fixes from v1.4.2 | Unchanged, still shipped |
+| GUI: panic hook + `gui-crash.log` + native error dialog | Added |
+| GUI: logging initialized before the guard, non-fatal with temp/sink fallback | Fixed |
+| GUI: `SetLastError(0)` before `CreateMutexW`, distinct exit code, `--force` bypass | Fixed |
+| GUI: fallible tray so a tray failure cannot kill or strand the app | Fixed |
+| GUI: `LIGHTSPEED_GUI_RENDERER=glow\|wgpu` escape hatch (glow feature added) | Added |
+| Client: owned raw WinDivert handle (`&self` methods, `Drop` shuts down + closes) | Added |
+| Client: `WinDivertShutdown` unblocks the parked recv; owner-thread teardown ack | Fixed |
+| Client: both WinDivert backends close both handles on every stop path | Fixed |
+| Client: `--watch`/`--start-interceptor` handle Ctrl+C and wait for teardown | Fixed |
+| Client: GUI Quit waits (bounded) for interceptor and redirect teardown | Fixed |
+| Client: firewall rule removal covered by the teardown ack | Fixed |
+| Docs: corrected `FWP_E_IN_USE` guidance and single-instance description | Fixed |
+| Project Zomboid profile registered in docs (PR #72) | Added |
+| Dependabot base64 0.23 + patch group (PRs #61, #73) | Ready to merge |
 
 ---
 
 ## Verification
 
-- `cargo fmt --check` clean; `clippy --workspace --all-targets --exclude lightspeed-gui`
-  clean for default, `quic`, `full`, and `ml`; `clippy -p lightspeed-gui` clean.
-- `cargo test -p lightspeed-client`: 185 lib tests plus the bin target, all pass
-  (includes 7 `RotationTracker` cases and 8 `ss`/`/proc` parser fixtures).
-- Linux end-to-end, run under sudo against a live relay:
-  `sudo ./target/debug/lightspeed --smoke-test --proxy 45.77.32.236:4434` PASSED with
-  waiting state, exact-IP rule install, 5/5 relayed and 5/5 injected back with the
-  correct source, rotation to a second TEST-NET address with no post-swap traffic to the
-  old one, teardown of all `lightspeed_` tables, and an idle CPU sample of 0 ticks/s.
-- Live fleet unaffected: `--probe-proxies` finds all five relays, `--test-control`
-  registers a session, and no leaked nft tables remain.
-- `dist plan` lists the Windows client zip and GUI assets at 1.4.3.
-- Post-tag follow-up: master also carries `b6521f1`, which cfg-gates a Linux-only
-  `std::time::Duration` import in `smoke_test.rs`. That unused import broke the Windows
-  and macOS CI jobs under `RUSTFLAGS=-Dwarnings`. CI is fully green on `b6521f1`
-  (all ten jobs) and the Security Audit is green. The v1.4.3 release binaries are
-  unaffected because the release workflow does not enable `-Dwarnings`.
+- `cargo fmt --all --check` clean; `RUSTFLAGS="-Dwarnings" cargo clippy --workspace
+  --all-targets --exclude lightspeed-gui` clean for default, `quic`, `full`, and `ml`;
+  `RUSTFLAGS="-Dwarnings" cargo clippy -p lightspeed-gui --all-targets` clean.
+- `cargo test --workspace --exclude lightspeed-gui`: all 16 test binaries pass, 0 failed
+  (client lib 203 tests, including 10 new `teardown` cases and 4 new `InterceptorHandle`
+  stop/ack cases; 6 new engine ack cases). `cargo test -p lightspeed-gui`: 43 pass.
+- GUI exercised headlessly on Linux under Xvfb: starts, writes the crash-safe trace log,
+  discovers the five community relays, connects and registers a QUIC session, and stays
+  alive. A forced second instance is detected by the guard.
+- Windows-only code (the full WinDivert impls and the GUI tray/guard FFI) cannot be
+  compiled on this host; it is verified by source review against `windivert-sys` 0.10 /
+  `windows` 0.48 and must be confirmed by the `windows-test` and `windows-gui` CI jobs.
 
-**Known verification gap:** the Windows GUI runtime still cannot be executed on this
-host, so Windows behavior rests on the CI Windows jobs plus the Linux-runnable unit
-tests for shared decision logic. Real-game Linux validation (Fortnite under Proton) has
-not been performed; the synthetic end-to-end test is the current guard.
+**Known verification gap:** real Windows runtime behaviour (WinDivert `recv` unblock,
+close-after-ack, tray failure, message-box panic reporting) rests on the CI Windows build
+plus the Linux-runnable unit tests for the shared decision and teardown logic. A real
+Windows run on the reporter's machine is the final confirmation.
 
 ---
 
 ## Next Action
 
-1. Confirm the `v1.4.3` release publishes every asset.
-2. Refresh `dist/aur` (pkgver plus sha256, rebuild) and submit the winget 1.4.3 manifest
-   PR from the existing `ShibbityShwab/winget-pkgs` fork.
-3. Reply on the community threads with the v1.4.3 link.
-4. **WF-023** candidates: conntrack as a route source for unconnected game sockets
-   (Fortnite under Proton); per-generation handoff to remove the rotation silence gate;
-   NFQUEUE only if true pass-through is ever required; F5 registry cert pinning and
-   binary release signing from the security backlog.
+1. Push the branch, open a PR, and confirm `windows-test` and `windows-gui` are green.
+2. Merge PR #72 (Project Zomboid), then the dependabot PRs #61 and #73.
+3. Cut a patch release (v1.4.4) and reply on issue #59 with the release link.
+4. Close #62 (reactor crash fixed in v1.4.2) and answer #66 (TCP-only game, documented).
+5. WF-024 candidates: `--repair-windivert` recovery command; registry cert pinning (F5)
+   and binary release signing (C2) from the security backlog.

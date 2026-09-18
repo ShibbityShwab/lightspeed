@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 17 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 18 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -25,6 +25,7 @@ LightSpeed includes built-in profiles for 17 popular multiplayer games. Each pro
 | 15 | **Bodycam** | `--game bodycam` | 27000-27050 | None | `Bodycam-Win64-Shipping.exe` |
 | 16 | **CS:GO Legacy** | `--game csgo` | 27000-27050 | VAC | `csgo.exe` |
 | 17 | **Roblox** | `--game roblox` | 49152-65535 | Byfron (Hyperion) | `RobloxPlayerBeta.exe` |
+| 18 | **Project Zomboid** | `--game zomboid` | 16261-16262 | None | `ProjectZomboid64.exe` |
 
 > **Roblox note:** Roblox has no native Linux client. On Linux, run it through
 > Wine/Proton, where the process name may appear truncated. Roblox picks its
