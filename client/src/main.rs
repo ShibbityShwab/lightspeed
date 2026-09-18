@@ -669,22 +669,28 @@ async fn main() -> anyhow::Result<()> {
                     };
                 }
             };
-            // Quick connectivity check — send a keepalive and wait briefly
-            match std::net::UdpSocket::bind("0.0.0.0:0") {
-                Ok(sock) => {
-                    sock.set_read_timeout(Some(std::time::Duration::from_millis(500)))
-                        .ok();
-                    let hdr = lightspeed_protocol::TunnelHeader::keepalive(0, 0)
-                        .with_session_token(crate::session::session_token());
-                    if sock.send_to(&hdr.encode_to_array(), proxy_addr).is_ok() {
-                        info!("   ✅ Proxy {} — UDP reachable", proxy_addr);
-                    } else {
-                        warn!("   ❌ Proxy {} — send failed", proxy_addr);
-                        all_ok = false;
-                    }
+            // Quick connectivity check: send a keepalive and wait for the
+            // proxy's echo. A bare `send_to` success is meaningless for UDP
+            // (connectionless), so a dead proxy would otherwise pass.
+            let probe = || -> Result<u128, String> {
+                let sock = std::net::UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
+                sock.set_read_timeout(Some(std::time::Duration::from_millis(1000)))
+                    .map_err(|e| e.to_string())?;
+                let hdr = lightspeed_protocol::TunnelHeader::keepalive(1, 0)
+                    .with_session_token(crate::session::session_token());
+                let started = std::time::Instant::now();
+                sock.send_to(&hdr.encode_to_array(), proxy_addr)
+                    .map_err(|e| e.to_string())?;
+                let mut buf = [0u8; 512];
+                match sock.recv_from(&mut buf) {
+                    Ok(_) => Ok(started.elapsed().as_millis()),
+                    Err(e) => Err(e.to_string()),
                 }
+            };
+            match probe() {
+                Ok(ms) => info!("   ✅ Proxy {} — reachable (echo {}ms)", proxy_addr, ms),
                 Err(e) => {
-                    warn!("   ❌ Cannot bind local socket: {}", e);
+                    warn!("   ❌ Proxy {} — no echo within 1s ({})", proxy_addr, e);
                     all_ok = false;
                 }
             }

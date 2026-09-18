@@ -60,6 +60,39 @@ impl Default for NftablesInterceptor {
     }
 }
 
+/// Verify this process can actually install kernel rules.
+///
+/// `check_availability` only proves `nft`/`iptables` is installed; without
+/// root or `CAP_NET_ADMIN` every rule transaction fails. Probing here makes
+/// `start()` fail fast with an actionable message instead of running forever
+/// with no rule installed (which looked like a working session).
+fn probe_net_admin() -> anyhow::Result<()> {
+    let (program, args): (&str, &[&str]) = if which("nft").is_some() {
+        ("nft", &["list", "tables"])
+    } else {
+        ("iptables", &["-S"])
+    };
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| anyhow::anyhow!("cannot run {program}: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lower = stderr.to_lowercase();
+    if lower.contains("permission")
+        || lower.contains("not permitted")
+        || lower.contains("must be root")
+    {
+        Err(anyhow::anyhow!(
+            "kernel interception needs root or CAP_NET_ADMIN; re-run with sudo"
+        ))
+    } else {
+        Err(anyhow::anyhow!("{program} unavailable: {}", stderr.trim()))
+    }
+}
+
 impl TrafficInterceptor for NftablesInterceptor {
     fn platform_name(&self) -> &'static str {
         "nftables/iptables"
@@ -77,6 +110,8 @@ impl TrafficInterceptor for NftablesInterceptor {
         use bytes::BytesMut;
         use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
         use tokio::net::UdpSocket;
+
+        probe_net_admin()?;
 
         let config_proxy = config.proxy_addr;
         let fec_enabled = config.fec_enabled;
