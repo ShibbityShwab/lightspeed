@@ -115,6 +115,9 @@ jobs:
       - name: Build GUI (release)
         run: cargo build --release -p lightspeed-gui
 
+      - name: Test GUI
+        run: cargo test -p lightspeed-gui
+
   benchmarks:
     name: Benchmark Regression
     runs-on: ubuntu-latest

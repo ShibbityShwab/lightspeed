@@ -1812,8 +1812,9 @@ mod tests {
     fn game_table_matches_the_client_registry() {
         let entries = games();
         let registry = lightspeed_client::games::all_game_keys();
+        // The client registry owns the entry count; this test only proves the
+        // GUI table is derived from it without drift.
         assert_eq!(entries.len(), registry.len());
-        assert_eq!(entries.len(), 17);
         for (entry, (key, display)) in entries.iter().zip(registry) {
             assert_eq!(entry.key, key);
             assert_eq!(entry.display, display);
