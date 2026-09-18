@@ -55,7 +55,7 @@ const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
-use super::metrics::{DropReason, ProxyMetrics};
+use super::metrics::{upstream_lag, DropReason, ProxyMetrics};
 use super::rate_limit::{RateLimitResult, RateLimiter};
 
 /// How responses are written back to a client.
@@ -147,6 +147,14 @@ pub struct ClientSession {
     /// Microseconds since [`Self::started_at`] at the last activity, or 0 if
     /// the session has seen no traffic yet.  Written via [`Self::touch`].
     last_activity_us: AtomicU64,
+    /// Microseconds since [`Self::started_at`] when the client packet currently
+    /// awaiting a response was forwarded to the game server, or 0 when no
+    /// forward is outstanding.  Written immediately before the upstream
+    /// `send_to` for the normal and FEC-recovery paths, and cleared by the
+    /// first response read on the session socket via `swap(0)`, so at most one
+    /// latency sample is attributed per forward.  Refers to the most recent
+    /// forward; a subsequent forward overwrites it.
+    pub pending_forward_us: AtomicU64,
     /// Response sequence counter (FEC responses).
     pub response_seq: AtomicU16,
     /// Last client packet sequence seen (echoed in non-FEC responses so the
@@ -326,6 +334,7 @@ impl RelayEngine {
             bytes_relayed: 0,
             started_at: Instant::now(),
             last_activity_us: AtomicU64::new(0),
+            pending_forward_us: AtomicU64::new(0),
             response_seq: AtomicU16::new(0),
             last_client_seq: AtomicU16::new(0),
             fec_enabled,
@@ -725,6 +734,10 @@ async fn process_inbound_packet(
                     recovered_len = recovered.len(),
                     "🔧 FEC recovered lost packet on proxy"
                 );
+                session.pending_forward_us.store(
+                    session.started_at.elapsed().as_micros() as u64,
+                    Ordering::Relaxed,
+                );
                 match session
                     .outbound_socket
                     .send_to(&recovered, game_server)
@@ -734,6 +747,7 @@ async fn process_inbound_packet(
                         metrics.record_relay(sent as u64);
                     }
                     Err(e) => {
+                        session.pending_forward_us.store(0, Ordering::Relaxed);
                         debug!(client = %client_addr, error = %e, "Failed to forward recovered packet");
                     }
                 }
@@ -751,6 +765,12 @@ async fn process_inbound_packet(
     }
 
     // ── Forward the raw game payload to the game server ─────────
+    // Stamp the monotonic send time before the await so the response listener
+    // can measure the upstream lag when the matching response arrives.
+    session.pending_forward_us.store(
+        session.started_at.elapsed().as_micros() as u64,
+        Ordering::Relaxed,
+    );
     match session
         .outbound_socket
         .send_to(game_payload, game_server)
@@ -776,6 +796,7 @@ async fn process_inbound_packet(
             abuse.record_outbound(*client_addr.ip(), sent as u64);
         }
         Err(e) => {
+            session.pending_forward_us.store(0, Ordering::Relaxed);
             debug!(
                 client = %client_addr,
                 game_server = %game_server,
@@ -948,6 +969,18 @@ pub async fn run_session_response_listener(
                             continue;
                         }
                         session.touch();
+
+                        // Record proxy-observed upstream lag exactly once per
+                        // forward: `swap(0)` claims the pending marker so later
+                        // unprompted server ticks cannot produce samples.
+                        let now = session.started_at.elapsed().as_micros() as u64;
+                        let marker = session.pending_forward_us.swap(0, Ordering::Relaxed);
+                        if marker != 0 {
+                            match upstream_lag(now, marker) {
+                                Some(lag) => metrics.record_latency(lag),
+                                None => metrics.record_latency_discarded(),
+                            }
+                        }
                         len
                     }
                     Err(e) => {

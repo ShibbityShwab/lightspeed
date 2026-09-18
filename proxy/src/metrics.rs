@@ -29,6 +29,35 @@ const LATENCY_BUCKETS_US: &[u64] = &[
 /// length and the rendered series can never drift apart.
 const N_BUCKETS: usize = LATENCY_BUCKETS_US.len();
 
+/// Largest proxy-observed upstream lag accepted as a real sample (microseconds).
+///
+/// A marker older than this is stale (the response never came, or the forward
+/// metadata outlived its session) and would poison the average, so it is
+/// discarded instead of recorded.
+const MAX_UPSTREAM_LAG_US: u64 = 2_000_000;
+
+/// Compute a proxy-observed upstream response lag from two monotonic microsecond
+/// timestamps.
+///
+/// `marker_us` is the session-clock time at which a client packet was forwarded
+/// to the game server; `now_us` is the session-clock time at which the next
+/// response was read on that same socket. Returns `None` when there is no
+/// usable sample: no marker was set (`marker_us == 0`), the response is not
+/// strictly later than the forward (zero or negative lag), or the gap exceeds
+/// [`MAX_UPSTREAM_LAG_US`]. The difference uses `saturating_sub` so it can
+/// never underflow.
+pub fn upstream_lag(now_us: u64, marker_us: u64) -> Option<u64> {
+    if marker_us == 0 || now_us <= marker_us {
+        return None;
+    }
+    let lag = now_us.saturating_sub(marker_us);
+    if lag > MAX_UPSTREAM_LAG_US {
+        None
+    } else {
+        Some(lag)
+    }
+}
+
 /// Why the relay dropped a packet.
 ///
 /// Every drop increments [`ProxyMetrics::packets_dropped`] (the honest sum of
@@ -67,6 +96,8 @@ pub struct ProxyMetrics {
     pub relay_latency_sum_us: AtomicU64,
     /// Number of latency samples.
     pub relay_latency_count: AtomicU64,
+    /// Latency samples rejected as unusable (no marker, zero lag, or > 2s).
+    pub latency_discarded: AtomicU64,
 
     // ── FEC metrics ─────────────────────────────────────────────
     /// Total FEC parity packets received.
@@ -136,6 +167,7 @@ impl ProxyMetrics {
             packets_dropped: AtomicU64::new(0),
             relay_latency_sum_us: AtomicU64::new(0),
             relay_latency_count: AtomicU64::new(0),
+            latency_discarded: AtomicU64::new(0),
             fec_parity_received: AtomicU64::new(0),
             fec_recoveries: AtomicU64::new(0),
             fec_data_packets: AtomicU64::new(0),
@@ -203,6 +235,16 @@ impl ProxyMetrics {
                 break;
             }
         }
+    }
+
+    /// Record a latency sample that could not be used.
+    ///
+    /// This happens when a response arrives with no matching forward marker,
+    /// when the measured gap is zero, or when the gap exceeds the 2s sanity
+    /// bound. The sample is counted here rather than fed to
+    /// [`Self::record_latency`] so a stale marker cannot distort the histogram.
+    pub fn record_latency_discarded(&self) {
+        self.latency_discarded.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record FEC parity packet received.
@@ -320,7 +362,7 @@ impl ProxyMetrics {
 
         // ── Latency ─────────────────────────────────────────────
         out.push_str(
-            "# HELP lightspeed_relay_latency_avg_us Average relay latency in microseconds\n",
+            "# HELP lightspeed_relay_latency_avg_us Average proxy-observed upstream response lag in microseconds (time from forwarding a client packet to the game server until the next response is read on that session socket; NOT client RTT)\n",
         );
         out.push_str("# TYPE lightspeed_relay_latency_avg_us gauge\n");
         out.push_str(&format!(
@@ -331,7 +373,7 @@ impl ProxyMetrics {
 
         // Latency histogram
         out.push_str(
-            "# HELP lightspeed_relay_latency_us Relay latency histogram in microseconds\n",
+            "# HELP lightspeed_relay_latency_us Proxy-observed upstream response lag histogram in microseconds (NOT client RTT)\n",
         );
         out.push_str("# TYPE lightspeed_relay_latency_us histogram\n");
         let total_count = self.relay_latency_count.load(Ordering::Relaxed);
@@ -357,6 +399,16 @@ impl ProxyMetrics {
         out.push_str(&format!(
             "lightspeed_relay_latency_us_count{{{}}} {}\n",
             labels, total_count
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_relay_latency_discarded_total Latency samples discarded as unusable (no forward marker, zero lag, or beyond the 2s bound)\n",
+        );
+        out.push_str("# TYPE lightspeed_relay_latency_discarded_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_relay_latency_discarded_total{{{}}} {}\n",
+            labels,
+            self.latency_discarded.load(Ordering::Relaxed)
         ));
 
         // ── FEC metrics ─────────────────────────────────────────
@@ -634,6 +686,42 @@ mod tests {
         assert!(output.contains("lightspeed_fec_data_packets_total"));
         assert!(output.contains(
             "lightspeed_fec_data_packets_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+    }
+
+    #[test]
+    fn test_upstream_lag_bounds() {
+        // A sane positive lag is reported as-is.
+        assert_eq!(upstream_lag(100, 50), Some(50));
+        // Zero lag (response in the same microsecond) is not a usable sample.
+        assert_eq!(upstream_lag(50, 50), None);
+        // No marker recorded (0) means nothing was forwarded.
+        assert_eq!(upstream_lag(3_000_000, 0), None);
+        assert_eq!(upstream_lag(100, 0), None);
+        // The 2s bound is inclusive; anything older is discarded.
+        assert_eq!(upstream_lag(2_000_001, 1), Some(2_000_000));
+        assert_eq!(upstream_lag(2_000_002, 1), None);
+    }
+
+    #[test]
+    fn test_latency_help_is_upstream_lag() {
+        let m = ProxyMetrics::new();
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(
+            output.contains("upstream response lag"),
+            "latency HELP text must describe proxy-observed upstream response lag"
+        );
+    }
+
+    #[test]
+    fn test_latency_discarded_counter_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_latency_discarded();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_relay_latency_discarded_total{region=\"test\",node_id=\"test-node\"} 1"
         ));
     }
 }
