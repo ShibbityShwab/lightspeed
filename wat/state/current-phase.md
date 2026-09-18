@@ -94,8 +94,18 @@ Bugs found and fixed during the audit:
 - Linux `--start-interceptor` ran forever without root (74dfbc6).
 - `--check` reported a dead proxy as reachable (74dfbc6).
 - GUI default window clipped the "BOOST MY GAME" button (0e75ca3).
+- Windows: the WinDivert port-range filter also matched the client's own QUIC
+  to the proxy, and the auto-detect tracker locked the proxy's address as the
+  "game server", tunnelling the client's own traffic to itself (ee22be9).
+  Found with a connected-UDP synthetic game on the VM; after the fix the
+  interceptor locks the real game server (45.77.32.236:9999) and the client
+  port (28015) with packets flowing through the relay.
 
 Known issues left open (documented, not release blockers):
+- Windows network-layer filtering cannot match `processId` (WinDivert supports
+  it only at the Flow layer), so a broad-port-range game like Fortnite uses
+  port-range interception plus debounce. The proxy address is now excluded, but
+  other apps' UDP inside the range can still be intercepted briefly.
 - `--test-control`/`--test-tunnel` print a stub success when built without the
   `quic` feature (release builds have `quic`).
 - `--live-test` exits 0 even when a phase fails (manual diagnostic only).
