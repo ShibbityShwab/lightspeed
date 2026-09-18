@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, SocketAddrV4};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -158,6 +158,43 @@ pub struct ClientSession {
     /// FEC decoder for inbound packets (client → proxy).
     /// Protected by tokio Mutex since it's accessed from the inbound loop.
     pub fec_decoder: tokio::sync::Mutex<FecDecoder>,
+    /// Idempotent claim flag for the response-listener task.
+    ///
+    /// `false` → no listener owns this session yet; `true` → one has been
+    /// spawned.  Only the site that flips this from `false` to `true` may
+    /// spawn [`run_session_response_listener`], which guarantees exactly one
+    /// listener per session.
+    listener_started: AtomicBool,
+    /// Number of times [`ClientSession::claim_response_listener`] has won.
+    /// Always 0 or 1; used by tests to prove single registration.
+    listeners_spawned: AtomicU64,
+}
+
+impl ClientSession {
+    /// Claim ownership of this session's response-listener task.
+    ///
+    /// Returns `true` for exactly one caller; every subsequent caller gets
+    /// `false`.  Only the winning caller may spawn
+    /// [`run_session_response_listener`] for this session.
+    pub fn claim_response_listener(&self) -> bool {
+        if self
+            .listener_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.listeners_spawned.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Number of response listeners successfully claimed for this session.
+    ///
+    /// Always 0 or 1; exposed so tests can prove single registration.
+    pub fn response_listeners_spawned(&self) -> u64 {
+        self.listeners_spawned.load(Ordering::Relaxed)
+    }
 }
 
 /// The relay engine — manages all active tunnel sessions.
@@ -168,6 +205,14 @@ pub struct RelayEngine {
     max_sessions: usize,
     /// Session timeout (no activity).
     session_timeout: Duration,
+    /// Join handles for response-listener tasks spawned outside the manager.
+    ///
+    /// The immediate spawn in [`process_inbound_packet`] is otherwise detached,
+    /// so its handle is parked here and the periodic manager aborts it once the
+    /// session disappears.  Without this, an expired session (no FIN) would leak
+    /// its listener task forever.  Manager-created handles stay in the manager's
+    /// local `known_sessions`, which it already aborts.
+    listener_handles: Arc<tokio::sync::Mutex<HashMap<SocketAddrV4, tokio::task::JoinHandle<()>>>>,
 }
 
 impl RelayEngine {
@@ -177,6 +222,7 @@ impl RelayEngine {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             max_sessions,
             session_timeout: Duration::from_secs(300), // 5 min
+            listener_handles: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -250,6 +296,8 @@ impl RelayEngine {
             fec_enabled,
             fec_k,
             fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
+            listener_started: AtomicBool::new(false),
+            listeners_spawned: AtomicU64::new(0),
         });
 
         let mut sessions = self.sessions.write().await;
@@ -276,6 +324,37 @@ impl RelayEngine {
             keep
         });
         before - sessions.len()
+    }
+
+    /// Park a response-listener join handle so the session manager can abort
+    /// it after the session is removed.
+    ///
+    /// If a stale handle already exists for `addr` (client address reused after
+    /// an expiry that fired no cancellation), it is aborted first so it cannot
+    /// outlive its session.
+    pub async fn register_listener_handle(
+        &self,
+        addr: SocketAddrV4,
+        handle: tokio::task::JoinHandle<()>,
+    ) {
+        let mut handles = self.listener_handles.lock().await;
+        if let Some(previous) = handles.insert(addr, handle) {
+            previous.abort();
+        }
+    }
+
+    /// Abort and forget every parked listener handle whose session is no longer
+    /// active.
+    pub async fn reap_listener_handles(&self, active: &HashMap<SocketAddrV4, Arc<ClientSession>>) {
+        let mut handles = self.listener_handles.lock().await;
+        handles.retain(|addr, handle| {
+            if active.contains_key(addr) {
+                true
+            } else {
+                handle.abort();
+                false
+            }
+        });
     }
 }
 
@@ -579,15 +658,22 @@ async fn process_inbound_packet(
         }
     };
 
-    // Immediately spawn response listener for new sessions
+    // Immediately spawn the response listener for a brand-new session. The
+    // claim is idempotent, so if the periodic manager won the race this site
+    // must not spawn a second listener. We park our handle in the engine
+    // registry (rather than dropping it) so the manager can abort it when the
+    // session is later removed.
     if is_new {
         metrics.record_session_created();
-        let session_clone = Arc::clone(&session);
-        let metrics_clone = Arc::clone(metrics);
-        tokio::spawn(async move {
-            run_session_response_listener(session_clone, metrics_clone).await;
-        });
-        info!(client = %client_addr, fec = is_fec, "Response listener spawned immediately");
+        if session.claim_response_listener() {
+            let session_clone = Arc::clone(&session);
+            let metrics_clone = Arc::clone(metrics);
+            let handle = tokio::spawn(async move {
+                run_session_response_listener(session_clone, metrics_clone).await;
+            });
+            engine.register_listener_handle(client_addr, handle).await;
+            info!(client = %client_addr, fec = is_fec, "Response listener spawned immediately");
+        }
     }
 
     // ── Handle FEC parity packets ───────────────────────────────
@@ -1032,9 +1118,15 @@ pub async fn run_session_manager(
             }
         });
 
-        // Start response listeners for new sessions
+        // Abort immediately-spawned listeners whose sessions are gone. Their
+        // handles are parked in the engine registry, not in `known_sessions`.
+        engine.reap_listener_handles(&active).await;
+
+        // Start response listeners for sessions no earlier site claimed. The
+        // idempotent claim means a session whose immediate listener already won
+        // is skipped here, so exactly one listener runs per session.
         for (addr, session) in active.iter() {
-            if !known_sessions.contains_key(addr) {
+            if !known_sessions.contains_key(addr) && session.claim_response_listener() {
                 let session = Arc::clone(session);
                 let metrics = Arc::clone(&metrics);
 
@@ -1215,6 +1307,30 @@ mod tests {
         assert!(!is_new2);
         assert_eq!(engine.active_sessions().await, 1);
         assert_eq!(session.client_addr, session2.client_addr);
+    }
+
+    #[tokio::test]
+    async fn test_response_listener_claimed_once() {
+        let engine = RelayEngine::new(10);
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+
+        let (sess, is_new) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(is_new);
+
+        assert!(
+            sess.claim_response_listener(),
+            "first claim must win the response listener"
+        );
+        assert!(
+            !sess.claim_response_listener(),
+            "second claim must be rejected"
+        );
+        assert_eq!(sess.response_listeners_spawned(), 1);
     }
 
     #[tokio::test]
