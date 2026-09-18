@@ -41,6 +41,64 @@ pub mod game_id {
     pub const LOL: u8 = 8;
     /// Krafton's PUBG: Battlegrounds (battle-royale).
     pub const PUBG: u8 = 9;
+    /// Valve's Counter-Strike: Global Offensive (legacy build).
+    pub const CSGO: u8 = 10;
+    /// Nexon's MapleStory (side-scrolling MMORPG).
+    pub const MAPLESTORY: u8 = 11;
+    /// HoYoverse's Genshin Impact (open-world action RPG).
+    pub const GENSHIN: u8 = 12;
+    /// Psyonix's Rocket League (vehicular soccer).
+    pub const ROCKETLEAGUE: u8 = 13;
+    /// Wargaming's World of Tanks (vehicle combat MMO).
+    pub const WOT: u8 = 14;
+    /// Behaviour Interactive's Dead by Daylight (asymmetric horror).
+    pub const DEADBYDAYLIGHT: u8 = 15;
+    /// Reissad Studio's Bodycam (first-person shooter).
+    pub const BODYCAM: u8 = 16;
+    /// Roblox Corporation's Roblox (user-generated game platform).
+    pub const ROBLOX: u8 = 17;
+    /// The Indie Stone's Project Zomboid (isometric survival).
+    pub const ZOMBOID: u8 = 18;
+
+    /// Canonical CLI key mapped to its wire id, ordered by ascending id.
+    ///
+    /// Keys byte-match the client's canonical `--game` CLI strings. [`UNKNOWN`]
+    /// (0) is reserved and therefore has no entry here.
+    pub const GAME_IDS: &[(&str, u8)] = &[
+        ("fortnite", FORTNITE),
+        ("cs2", CS2),
+        ("dota2", DOTA2),
+        ("rust", RUST),
+        ("valorant", VALORANT),
+        ("apex", APEX),
+        ("ow2", OVERWATCH2),
+        ("lol", LOL),
+        ("pubg", PUBG),
+        ("csgo", CSGO),
+        ("maplestory", MAPLESTORY),
+        ("genshin", GENSHIN),
+        ("rocketleague", ROCKETLEAGUE),
+        ("wot", WOT),
+        ("deadbydaylight", DEADBYDAYLIGHT),
+        ("bodycam", BODYCAM),
+        ("roblox", ROBLOX),
+        ("zomboid", ZOMBOID),
+    ];
+
+    /// Resolve a CLI game key to its wire id, or [`UNKNOWN`] when absent.
+    pub fn id_for_key(key: &str) -> u8 {
+        GAME_IDS
+            .iter()
+            .find_map(|(candidate, id)| (*candidate == key).then_some(*id))
+            .unwrap_or(UNKNOWN)
+    }
+
+    /// Resolve a wire id back to its CLI game key, if it maps to a real game.
+    pub fn key_for_id(id: u8) -> Option<&'static str> {
+        GAME_IDS
+            .iter()
+            .find_map(|(key, candidate)| (*candidate == id).then_some(*key))
+    }
 }
 
 /// Disconnect reason codes.
@@ -451,5 +509,78 @@ mod tests {
             result,
             Err(ControlDecodeError::BufferTooSmall { .. })
         ));
+    }
+
+    #[test]
+    fn test_game_ids_unique_and_stable() {
+        assert_eq!(game_id::GAME_IDS.len(), 18, "every real game needs one id");
+
+        // Each id 1..=18 must appear exactly once (0 stays reserved for UNKNOWN).
+        let mut seen = [0u8; 19];
+        for (key, id) in game_id::GAME_IDS.iter().copied() {
+            assert!(
+                (1..=18).contains(&id),
+                "key {key:?} has out-of-range id {id}"
+            );
+            assert_eq!(seen[id as usize], 0, "duplicate id {id}");
+            seen[id as usize] += 1;
+        }
+        for id in 1..=18u8 {
+            assert_eq!(seen[id as usize], 1, "id {id} missing or duplicated");
+        }
+
+        assert_eq!(game_id::FORTNITE, 1);
+        assert_eq!(game_id::CS2, 2);
+        assert_eq!(game_id::DOTA2, 3);
+        assert_eq!(game_id::RUST, 4);
+        assert_eq!(game_id::VALORANT, 5);
+        assert_eq!(game_id::APEX, 6);
+        assert_eq!(game_id::OVERWATCH2, 7);
+        assert_eq!(game_id::LOL, 8);
+        assert_eq!(game_id::PUBG, 9);
+        assert_eq!(game_id::CSGO, 10);
+        assert_eq!(game_id::MAPLESTORY, 11);
+        assert_eq!(game_id::GENSHIN, 12);
+        assert_eq!(game_id::ROCKETLEAGUE, 13);
+        assert_eq!(game_id::WOT, 14);
+        assert_eq!(game_id::DEADBYDAYLIGHT, 15);
+        assert_eq!(game_id::BODYCAM, 16);
+        assert_eq!(game_id::ROBLOX, 17);
+        assert_eq!(game_id::ZOMBOID, 18);
+    }
+
+    #[test]
+    fn test_id_for_key_roundtrip() {
+        for (key, id) in game_id::GAME_IDS.iter().copied() {
+            assert_eq!(game_id::id_for_key(key), id, "id_for_key({key:?})");
+            assert_eq!(game_id::key_for_id(id), Some(key), "key_for_id({id})");
+        }
+        assert_eq!(game_id::id_for_key("minecraft"), game_id::UNKNOWN);
+        assert!(game_id::key_for_id(250).is_none());
+    }
+
+    #[test]
+    fn test_game_ids_prefix_unchanged() {
+        // The nine original games keep the exact ids they shipped with.
+        let legacy: &[(&str, u8)] = &[
+            ("fortnite", game_id::FORTNITE),
+            ("cs2", game_id::CS2),
+            ("dota2", game_id::DOTA2),
+            ("rust", game_id::RUST),
+            ("valorant", game_id::VALORANT),
+            ("apex", game_id::APEX),
+            ("ow2", game_id::OVERWATCH2),
+            ("lol", game_id::LOL),
+            ("pubg", game_id::PUBG),
+        ];
+        for (key, id) in legacy.iter().copied() {
+            assert_eq!(game_id::id_for_key(key), id);
+            assert_eq!(game_id::key_for_id(id), Some(key));
+        }
+        // They are also the first nine entries, in ascending id order.
+        for (index, &(key, id)) in game_id::GAME_IDS.iter().take(9).enumerate() {
+            assert_eq!(id, (index as u8) + 1);
+            assert_eq!(key, legacy[index].0);
+        }
     }
 }
