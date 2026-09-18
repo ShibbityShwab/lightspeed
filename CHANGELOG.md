@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-09-19
+
 ### Fixed
 - **Windows: the WinDivert intercept filter no longer catches the client's own tunnel traffic.** The network-layer filter is port-range only, so for a broad-range game such as Fortnite it also matched the QUIC control and keepalive packets addressed to the proxy; the auto-detect tracker then locked the proxy's own address as the "game server" and the client's tunnel traffic was tunneled to itself. The filter now always excludes the proxy address.
 - **Linux and macOS: kernel redirect rules are now removed on shutdown.** `--start-interceptor` and `--watch` released the nftables table / pf anchor only if the background task happened to finish before the process exited; on Ctrl+C the process exited first, leaving the redirect rule installed (which kept hijacking the game server address to a closed port). Both backends now acknowledge teardown, and `stop_and_wait` blocks until the rule is gone.
