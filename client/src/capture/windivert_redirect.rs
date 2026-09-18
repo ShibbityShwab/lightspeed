@@ -197,12 +197,15 @@ mod inner {
     impl Drop for RedirectTeardown {
         fn drop(&mut self) {
             self.running.store(false, Ordering::Relaxed);
-            let _ = self.intercept.shutdown(WinDivertShutdownMode::Recv);
-            let _ = self.inject.shutdown(WinDivertShutdownMode::Send);
+            let _ = self.intercept.shutdown(WinDivertShutdownMode::Both);
+            let _ = self.inject.shutdown(WinDivertShutdownMode::Both);
             if !self.ack.wait(TEARDOWN_TIMEOUT) {
                 tracing::warn!(
-                    "WinDivert redirect: owner threads did not stop within {TEARDOWN_TIMEOUT:?}"
+                    "WinDivert redirect: owner threads did not stop within {TEARDOWN_TIMEOUT:?}; \
+                     leaving the handles open so a thread still inside a WinDivert call cannot \
+                     race a recycled handle"
                 );
+                return;
             }
             let _ = self.intercept.close();
             let _ = self.inject.close();

@@ -719,10 +719,13 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 let wd_ic = Arc::clone(&wd_intercept);
                 let wd_inj = Arc::clone(&wd_inject);
                 move || {
-                    if let Err(e) = wd_ic.shutdown(WinDivertShutdownMode::Recv) {
+                    // The intercept handle is used for both recv and send
+                    // (pass-through re-injection), so shut down both directions
+                    // to release a thread parked in either call.
+                    if let Err(e) = wd_ic.shutdown(WinDivertShutdownMode::Both) {
                         tracing::warn!("WinDivert intercept shutdown failed: {e}");
                     }
-                    if let Err(e) = wd_inj.shutdown(WinDivertShutdownMode::Send) {
+                    if let Err(e) = wd_inj.shutdown(WinDivertShutdownMode::Both) {
                         tracing::warn!("WinDivert inject shutdown failed: {e}");
                     }
                 }

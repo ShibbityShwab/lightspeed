@@ -105,13 +105,14 @@ pub async fn run_intercept_mode(
 
     // ── Cleanup ─────────────────────────────────────────────────────
     let stopped = handle.stop_and_wait(Duration::from_secs(3));
-    if !stopped {
+    if stopped {
+        info!("✅ Interceptor stopped, firewall rules removed");
+    } else {
         warn!(
             "⚠️  Interceptor teardown did not complete within 3s; \
              platform filter/handles may still be closing"
         );
     }
-    info!("✅ Interceptor stopped — firewall rules removed");
 
     Ok(())
 }
