@@ -6,6 +6,7 @@
 //!
 //! All metrics are designed for free-tier monitoring (no external services needed).
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -35,6 +36,91 @@ const N_BUCKETS: usize = LATENCY_BUCKETS_US.len();
 /// metadata outlived its session) and would poison the average, so it is
 /// discarded instead of recorded.
 const MAX_UPSTREAM_LAG_US: u64 = 2_000_000;
+
+/// Hard cap on the number of distinct `(game, country)` telemetry cells.
+///
+/// The client-controlled `game_id` and `client_country` labels decide the key,
+/// so an unbounded map would let a client grow proxy memory without limit.
+/// Reports that would create a cell past this cap are counted as rejected.
+pub const MAX_TELEMETRY_CELLS: usize = 1024;
+
+/// Minimum number of reports a cell must hold before it is emitted.
+///
+/// This is a k-anonymity floor: emitting a cell backed by one or two reports
+/// could correlate a small population back to an individual client, so such
+/// cells are withheld until the population is large enough.
+pub const MIN_TELEMETRY_CELL_REPORTS: u64 = 3;
+
+/// Aggregated opt-in telemetry for one `(game_id, normalized country)` pair.
+///
+/// Percentile fields are *sums* of the values individual clients reported
+/// (each client's own median/percentile). Dividing a sum by `reports` yields
+/// the mean of the clients' reported values, not a population percentile.
+#[derive(Debug, Default, Clone)]
+pub struct TelemetryCell {
+    /// Number of reports aggregated into this cell.
+    pub reports: u64,
+    /// Sum of the reports' `sample_count` values.
+    pub samples: u64,
+    /// Sum of the reports' `p50_ms` values.
+    pub p50_sum_ms: f64,
+    /// Sum of the reports' `p95_ms` values.
+    pub p95_sum_ms: f64,
+    /// Sum of the reports' `p99_ms` values.
+    pub p99_sum_ms: f64,
+    /// Sum of the reports' `jitter_ms` values.
+    pub jitter_sum_ms: f64,
+    /// Sum of the reports' `fec_recoveries` values.
+    pub fec_recoveries: u64,
+    /// Sum of the reports' `fec_losses` values.
+    pub fec_losses: u64,
+}
+
+/// Bounded per-`(game, country)` telemetry aggregator.
+///
+/// Keyed by the raw numeric `game_id` (so unknown ids stay distinct) and the
+/// normalized two-letter country. Counters accumulate on ingest; the map is
+/// capped at [`TelemetryAggregator::max_cells`], after which new keys are
+/// counted in `rejected` instead of inserted.
+#[derive(Debug)]
+pub struct TelemetryAggregator {
+    /// Per-cell aggregates, keyed by `(game_id, normalized country)`.
+    pub cells: HashMap<(u8, String), TelemetryCell>,
+    /// Reports dropped because the cell cap was reached.
+    pub rejected: u64,
+    /// Maximum number of distinct cells retained.
+    pub max_cells: usize,
+}
+
+impl Default for TelemetryAggregator {
+    fn default() -> Self {
+        Self {
+            cells: HashMap::new(),
+            rejected: 0,
+            max_cells: MAX_TELEMETRY_CELLS,
+        }
+    }
+}
+
+/// Normalize a client-supplied country into a safe, bounded label value.
+///
+/// Trims surrounding whitespace, keeps only ASCII alphabetic characters,
+/// uppercases them, and returns the result only when it is exactly two letters.
+/// Anything else (empty, longer, digits, punctuation) collapses to `"XX"` so a
+/// client cannot inject arbitrary label text or high-cardinality values.
+fn normalize_country(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .filter(char::is_ascii_alphabetic)
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if cleaned.len() == 2 {
+        cleaned
+    } else {
+        "XX".to_string()
+    }
+}
 
 /// Compute a proxy-observed upstream response lag from two monotonic microsecond
 /// timestamps.
@@ -144,8 +230,9 @@ pub struct ProxyMetrics {
     pub inbound_packets_received: AtomicU64,
 
     // ── Telemetry ────────────────────────────────────────────────
-    /// Total opt-in anonymous telemetry reports received from clients.
-    pub telemetry_reports_total: AtomicU64,
+    /// Bounded aggregation of opt-in client telemetry, keyed by
+    /// `(game_id, normalized country)`.
+    pub telemetry: std::sync::Mutex<TelemetryAggregator>,
 
     // ── Latency histogram buckets ───────────────────────────────
     /// Per-bucket (non-cumulative) relay latency counts.
@@ -189,7 +276,7 @@ impl ProxyMetrics {
             sessions_expired: AtomicU64::new(0),
             inbound_batches_total: AtomicU64::new(0),
             inbound_packets_received: AtomicU64::new(0),
-            telemetry_reports_total: AtomicU64::new(0),
+            telemetry: std::sync::Mutex::new(TelemetryAggregator::default()),
             latency_buckets: Default::default(),
             start_time: Instant::now(),
         }
@@ -301,8 +388,40 @@ impl ProxyMetrics {
     }
 
     /// Record an anonymous opt-in telemetry report received from a client.
-    pub fn record_telemetry_report(&self) {
-        self.telemetry_reports_total.fetch_add(1, Ordering::Relaxed);
+    ///
+    /// The report is normalized and folded into its `(game_id, country)` cell.
+    /// When the cell map is already at [`TelemetryAggregator::max_cells`] and
+    /// this report would create a new key, it is counted in `rejected` instead.
+    pub fn record_telemetry_report(&self, report: &lightspeed_protocol::TelemetryReport) {
+        let country = normalize_country(&report.client_country);
+        let key = (report.game_id, country);
+        let mut agg = self
+            .telemetry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !agg.cells.contains_key(&key) && agg.cells.len() >= agg.max_cells {
+            agg.rejected += 1;
+            return;
+        }
+        let cell = agg.cells.entry(key).or_default();
+        cell.reports += 1;
+        cell.samples += u64::from(report.sample_count);
+        cell.p50_sum_ms += f64::from(report.p50_ms);
+        cell.p95_sum_ms += f64::from(report.p95_ms);
+        cell.p99_sum_ms += f64::from(report.p99_ms);
+        cell.jitter_sum_ms += f64::from(report.jitter_ms);
+        cell.fec_recoveries += u64::from(report.fec_recoveries);
+        cell.fec_losses += u64::from(report.fec_losses);
+    }
+
+    /// Build a collector whose telemetry map is capped at `max_cells`.
+    ///
+    /// Test-only: production always uses [`MAX_TELEMETRY_CELLS`].
+    #[cfg(test)]
+    pub fn with_max_telemetry_cells(max_cells: usize) -> Self {
+        let metrics = Self::new();
+        metrics.telemetry.lock().unwrap().max_cells = max_cells;
+        metrics
     }
 
     /// Record one inbound receive batch containing `n` packets.
@@ -586,16 +705,117 @@ impl ProxyMetrics {
             self.inbound_packets_received.load(Ordering::Relaxed)
         ));
 
-        // ── Telemetry counter ───────────────────────────────────
+        // ── Client telemetry (aggregated, k-anonymized) ─────────
+        // HELP/TYPE headers are emitted unconditionally so the family is
+        // discoverable before the k-anonymity floor is reached.
         out.push_str(
-            "# HELP lightspeed_telemetry_reports_total Anonymous client telemetry reports received\n",
+            "# HELP lightspeed_telemetry_reports_total Anonymous opt-in client telemetry reports, aggregated by game and country\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_reports_total counter\n");
-        out.push_str(&format!(
-            "lightspeed_telemetry_reports_total{{{}}} {}\n",
-            labels,
-            self.telemetry_reports_total.load(Ordering::Relaxed)
-        ));
+        out.push_str(
+            "# HELP lightspeed_telemetry_samples_total Sum of client-reported RTT sample counts per telemetry cell\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_samples_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_p50_ms_sum Sum of client-reported p50 values (ms); _sum/_count is the mean of client medians, not a population p50\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_p50_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_p50_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_p95_ms_sum Sum of client-reported p95 values (ms); _sum/_count is the mean of client p95s, not a population p95\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_p95_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_p95_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_p99_ms_sum Sum of client-reported p99 values (ms); _sum/_count is the mean of client p99s, not a population p99\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_p99_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_p99_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_jitter_ms_sum Sum of client-reported jitter values (ms); _sum/_count is the mean of client jitter values, not a population statistic\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_jitter_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_jitter_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_fec_recoveries_total Sum of client-reported FEC recoveries\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_fec_recoveries_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_fec_losses_total Sum of client-reported FEC losses\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_fec_losses_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_rejected_total Telemetry reports dropped because the per-(game,country) cell cap was reached\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_rejected_total counter\n");
+
+        {
+            // Recover from a poisoned lock rather than panicking: a metrics
+            // scrape must never bring down the health server.
+            let agg = self
+                .telemetry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            out.push_str(&format!(
+                "lightspeed_telemetry_rejected_total{{{}}} {}\n",
+                labels, agg.rejected
+            ));
+            for ((game_id, country), cell) in &agg.cells {
+                if cell.reports < MIN_TELEMETRY_CELL_REPORTS {
+                    continue;
+                }
+                let game = lightspeed_protocol::game_id::key_for_id(*game_id).unwrap_or("unknown");
+                let cell_labels = format!("{},game=\"{}\",country=\"{}\"", labels, game, country);
+                out.push_str(&format!(
+                    "lightspeed_telemetry_reports_total{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_samples_total{{{}}} {}\n",
+                    cell_labels, cell.samples
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p50_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.p50_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p50_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p95_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.p95_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p95_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p99_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.p99_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p99_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_jitter_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.jitter_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_jitter_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_fec_recoveries_total{{{}}} {}\n",
+                    cell_labels, cell.fec_recoveries
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_fec_losses_total{{{}}} {}\n",
+                    cell_labels, cell.fec_losses
+                ));
+            }
+        }
 
         // ── Build info ──────────────────────────────────────────
         out.push_str("# HELP lightspeed_build_info Build information\n");
@@ -816,5 +1036,132 @@ mod tests {
         assert!(output.contains(
             "lightspeed_rate_limit_overflow_total{region=\"test\",node_id=\"test-node\"} 1"
         ));
+    }
+
+    fn report(game_id: u8, country: &str) -> lightspeed_protocol::TelemetryReport {
+        lightspeed_protocol::TelemetryReport {
+            game_id,
+            client_country: country.to_string(),
+            p50_ms: 30.0,
+            p95_ms: 50.0,
+            p99_ms: 80.0,
+            jitter_ms: 2.0,
+            sample_count: 100,
+            fec_recoveries: 1,
+            fec_losses: 0,
+            client_version: "1.4.4".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_telemetry_aggregator_sums_and_counts() {
+        let m = ProxyMetrics::new();
+
+        let mut second = report(2, "us ");
+        second.sample_count = 200;
+        second.p50_ms = 40.0;
+        second.p95_ms = 60.0;
+        second.p99_ms = 90.0;
+        second.jitter_ms = 3.0;
+        second.fec_recoveries = 2;
+        second.fec_losses = 1;
+
+        let mut third = report(2, "us ");
+        third.sample_count = 300;
+        third.p50_ms = 50.0;
+        third.p95_ms = 70.0;
+        third.p99_ms = 100.0;
+        third.jitter_ms = 4.0;
+        third.fec_recoveries = 3;
+        third.fec_losses = 2;
+
+        m.record_telemetry_report(&report(2, "us "));
+        m.record_telemetry_report(&second);
+        m.record_telemetry_report(&third);
+
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(output.contains(
+            "lightspeed_telemetry_reports_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_samples_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 600"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_p50_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 120.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_p50_ms_count{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
+        ));
+        // Distinct jitter and FEC values must sum, not overwrite.
+        assert!(output.contains(
+            "lightspeed_telemetry_jitter_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 9.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_fec_recoveries_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 6"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_fec_losses_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
+        ));
+    }
+
+    #[test]
+    fn test_telemetry_normalization() {
+        let m = ProxyMetrics::new();
+
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(2, " usa "));
+        }
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(2, "th"));
+        }
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(2, ""));
+        }
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(250, "th"));
+        }
+
+        let output = m.to_prometheus("test", "test-node");
+
+        // " usa " and "" both collapse to XX; "th" uppercases to TH; 3-letter
+        // codes are rejected outright.
+        assert!(output.contains("game=\"cs2\",country=\"XX\""));
+        assert!(output.contains("game=\"cs2\",country=\"TH\""));
+        assert!(output.contains("game=\"unknown\",country=\"TH\""));
+        assert!(!output.contains("country=\"USA\""));
+        assert!(!output.contains("country=\"us \""));
+    }
+
+    #[test]
+    fn test_telemetry_cell_cap_overflows() {
+        let m = ProxyMetrics::with_max_telemetry_cells(2);
+
+        m.record_telemetry_report(&report(1, "US"));
+        m.record_telemetry_report(&report(2, "US"));
+        // Third distinct cell is over the cap and must be rejected, not stored.
+        m.record_telemetry_report(&report(3, "US"));
+
+        assert_eq!(m.telemetry.lock().unwrap().cells.len(), 2);
+        assert_eq!(m.telemetry.lock().unwrap().rejected, 1);
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_telemetry_rejected_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+        assert!(!output.contains("game=\"dota2\""));
+    }
+
+    #[test]
+    fn test_telemetry_cells_below_k_are_suppressed() {
+        let m = ProxyMetrics::new();
+        m.record_telemetry_report(&report(2, "US"));
+
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(
+            !output.contains("game=\"cs2\",country=\"US\""),
+            "a cell below the k-anonymity floor must not be emitted"
+        );
     }
 }

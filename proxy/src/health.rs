@@ -70,6 +70,36 @@ fn parse_request_path(raw: &[u8]) -> &str {
     }
 }
 
+/// Parse, validate, and aggregate one opt-in telemetry POST body.
+///
+/// The body must be a JSON [`TelemetryReport`]. Parse and validation failures
+/// are logged at `warn` with their specific cause and returned as a static
+/// message the caller maps to HTTP 400. On success the report is folded into
+/// the bounded aggregator and `Ok(())` is returned.
+pub fn ingest_telemetry(metrics: &ProxyMetrics, body: &[u8]) -> Result<(), &'static str> {
+    let report: TelemetryReport = match serde_json::from_slice(body) {
+        Ok(report) => report,
+        Err(e) => {
+            warn!("Telemetry JSON parse error: {}", e);
+            return Err("invalid telemetry JSON");
+        }
+    };
+    if let Err(e) = report.validate() {
+        warn!("Telemetry report invalid: {}", e);
+        return Err(e);
+    }
+    debug!(
+        game_id = report.game_id,
+        country = %report.client_country,
+        p50 = report.p50_ms,
+        p99 = report.p99_ms,
+        samples = report.sample_count,
+        "Telemetry report ingested"
+    );
+    metrics.record_telemetry_report(&report);
+    Ok(())
+}
+
 /// Run the HTTP health check + metrics server.
 pub async fn run_health_server(
     bind_addr: String,
@@ -136,34 +166,13 @@ pub async fn run_health_server(
                     return;
                 }
 
-                // Deserialise the anonymised report.
-                match serde_json::from_slice::<TelemetryReport>(body_slice) {
-                    Ok(report) => {
-                        if let Err(e) = report.validate() {
-                            warn!("Telemetry report invalid: {}", e);
-                            let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                            let _ = stream.write_all(resp.as_bytes()).await;
-                        } else {
-                            metrics.record_telemetry_report();
-                            debug!(
-                                game_id = report.game_id,
-                                country = %report.client_country,
-                                p50 = report.p50_ms,
-                                p99 = report.p99_ms,
-                                samples = report.sample_count,
-                                "Telemetry report ingested"
-                            );
-                            let resp =
-                                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                            let _ = stream.write_all(resp.as_bytes()).await;
-                        }
+                let resp = match ingest_telemetry(&metrics, body_slice) {
+                    Ok(()) => "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    Err(_) => {
+                        "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                     }
-                    Err(e) => {
-                        warn!("Telemetry JSON parse error: {}", e);
-                        let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                    }
-                }
+                };
+                let _ = stream.write_all(resp.as_bytes()).await;
                 let _ = stream.shutdown().await;
                 return;
             }
@@ -327,5 +336,27 @@ mod tests {
                 "missing {key}: {json}"
             );
         }
+    }
+
+    #[test]
+    fn test_ingest_telemetry_valid_invalid() {
+        let m = ProxyMetrics::new();
+        let valid = br#"{"game_id":2,"client_country":"us","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":100,"fec_recoveries":1,"fec_losses":0,"client_version":"1.4.4"}"#;
+
+        assert!(ingest_telemetry(&m, valid).is_ok());
+        {
+            let agg = m.telemetry.lock().unwrap();
+            assert_eq!(agg.cells.len(), 1);
+            let cell = agg.cells.values().next().unwrap();
+            assert_eq!(cell.reports, 1);
+        }
+
+        // p95 < p50 is rejected by TelemetryReport::validate.
+        let bad_percentile = br#"{"game_id":2,"client_country":"us","p50_ms":100.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":100,"fec_recoveries":1,"fec_losses":0,"client_version":"1.4.4"}"#;
+        assert!(ingest_telemetry(&m, bad_percentile).is_err());
+
+        assert!(ingest_telemetry(&m, b"not json at all").is_err());
+        // Failed ingests must not create cells.
+        assert_eq!(m.telemetry.lock().unwrap().cells.len(), 1);
     }
 }
