@@ -9,29 +9,96 @@ on:
   schedule:
     - cron: '0 */6 * * *'
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  snapshot:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Fetch prior history
+        run: |
+          git fetch origin stats --depth=1 || true
+          mkdir -p .stats
+          (git show origin/stats:web/network-history.json > .stats/history.json 2>/dev/null || echo '{"version":1,"generated_at":0,"snapshots":[]}' > .stats/history.json)
+
+      - name: Generate live network stats
+        run: bash infra/scripts/network-stats.sh
+
+      - name: Append snapshot to history
+        run: bash infra/scripts/append-history.sh .stats/history.json web/network-stats.json web/network-history.json
+
+      - name: Commit history to stats branch
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          git config user.name "lightspeed-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          WORKTREE="$(mktemp -d)"
+          git worktree add --detach "$WORKTREE"
+
+          pushd "$WORKTREE"
+          if git show-ref --verify --quiet refs/remotes/origin/stats; then
+            git checkout -B stats origin/stats
+          else
+            git checkout --orphan stats
+          fi
+
+          mkdir -p web
+          cp "$GITHUB_WORKSPACE/web/network-history.json" web/network-history.json
+          git add web/network-history.json
+
+          if git diff --cached --quiet; then
+            echo "No history changes to commit"
+            popd
+            git worktree remove --force "$WORKTREE" || true
+            exit 0
+          fi
+
+          git commit -m "chore: update network history snapshot"
+
+          pushed=0
+          for attempt in 1 2 3; do
+            if git push origin HEAD:stats; then
+              echo "Pushed stats branch on attempt $attempt"
+              pushed=1
+              break
+            fi
+            echo "Push attempt $attempt failed; rebasing onto origin/stats"
+            git pull --rebase origin stats || true
+          done
+
+          popd
+          git worktree remove --force "$WORKTREE" || true
+
+          if [ "$pushed" -ne 1 ]; then
+            echo "Failed to push stats branch after 3 attempts" >&2
+            exit 1
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: snapshot
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
-      - name: Generate live network stats
-        run: bash infra/scripts/network-stats.sh
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: web
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
