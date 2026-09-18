@@ -142,10 +142,11 @@ pub struct ClientSession {
     pub packets_relayed: u64,
     /// Bytes relayed in this session.
     pub bytes_relayed: u64,
-    /// Session start time.
+    /// Session start time (monotonic epoch for all session durations).
     pub started_at: Instant,
-    /// Last activity time.
-    pub last_activity: Instant,
+    /// Microseconds since [`Self::started_at`] at the last activity, or 0 if
+    /// the session has seen no traffic yet.  Written via [`Self::touch`].
+    last_activity_us: AtomicU64,
     /// Response sequence counter (FEC responses).
     pub response_seq: AtomicU16,
     /// Last client packet sequence seen (echoed in non-FEC responses so the
@@ -195,6 +196,31 @@ impl ClientSession {
     pub fn response_listeners_spawned(&self) -> u64 {
         self.listeners_spawned.load(Ordering::Relaxed)
     }
+
+    /// Refresh this session's activity clock.
+    ///
+    /// Stores the current instant, as microseconds since [`Self::started_at`],
+    /// into the lock-free activity field.  Safe to call concurrently from the
+    /// inbound packet path and the response listener; a load racing a store on
+    /// [`Ordering::Relaxed`] can only observe a slightly stale timestamp, which
+    /// is harmless for an advisory liveness check.
+    pub fn touch(&self) {
+        self.last_activity_us.store(
+            self.started_at.elapsed().as_micros() as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Microseconds of idle time since this session's last activity.
+    ///
+    /// Computed in the monotonic [`Self::started_at`] clock as
+    /// `now_micros - last_activity_us`.  A never-touched session reports its
+    /// full age (the stored value is 0), and the subtraction saturates at zero
+    /// so a timestamp that appears to be in the future can never underflow.
+    pub fn idle_micros(&self) -> u64 {
+        (self.started_at.elapsed().as_micros() as u64)
+            .saturating_sub(self.last_activity_us.load(Ordering::Relaxed))
+    }
 }
 
 /// The relay engine — manages all active tunnel sessions.
@@ -216,12 +242,21 @@ pub struct RelayEngine {
 }
 
 impl RelayEngine {
-    /// Create a new relay engine.
+    /// Create a new relay engine with the default 300 s session timeout.
     pub fn new(max_sessions: usize) -> Self {
+        Self::new_with_timeout(max_sessions, Duration::from_secs(300)) // 5 min
+    }
+
+    /// Create a new relay engine with an explicit session timeout.
+    ///
+    /// Test seam: production code uses [`Self::new`] and its fixed 300 s
+    /// timeout, while unit tests pass a short timeout so session expiry can be
+    /// exercised without sleeping for minutes.
+    pub fn new_with_timeout(max_sessions: usize, session_timeout: Duration) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             max_sessions,
-            session_timeout: Duration::from_secs(300), // 5 min
+            session_timeout,
             listener_handles: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
@@ -290,7 +325,7 @@ impl RelayEngine {
             packets_relayed: 0,
             bytes_relayed: 0,
             started_at: Instant::now(),
-            last_activity: Instant::now(),
+            last_activity_us: AtomicU64::new(0),
             response_seq: AtomicU16::new(0),
             last_client_seq: AtomicU16::new(0),
             fec_enabled,
@@ -312,13 +347,18 @@ impl RelayEngine {
     }
 
     /// Clean up expired sessions.
+    ///
+    /// A session expires once its idle time (see [`ClientSession::idle_micros`])
+    /// reaches the configured timeout.  Dropping a session cancels its token so
+    /// any response-listener task parked on it exits promptly.
     pub async fn cleanup_expired(&self) -> usize {
         let timeout = self.session_timeout;
         let mut sessions = self.sessions.write().await;
         let before = sessions.len();
         sessions.retain(|addr, session| {
-            let keep = session.last_activity.elapsed() < timeout;
+            let keep = session.idle_micros() < timeout.as_micros() as u64;
             if !keep {
+                session.cancel.cancel();
                 info!(client = %addr, "Session expired after {:?}", session.started_at.elapsed());
             }
             keep
@@ -737,6 +777,7 @@ async fn process_inbound_packet(
             session
                 .last_client_seq
                 .store(header.sequence, Ordering::Relaxed);
+            session.touch();
 
             let mut abuse = abuse_detector.lock().await;
             abuse.record_outbound(*client_addr.ip(), sent as u64);
@@ -913,6 +954,7 @@ pub async fn run_session_response_listener(
                         if src_addr.ip() != std::net::IpAddr::from(*session.game_server.ip()) {
                             continue;
                         }
+                        session.touch();
                         len
                     }
                     Err(e) => {
@@ -1365,6 +1407,38 @@ mod tests {
             .get_or_create_session(client2, server, false, 4, test_udp_sender().await)
             .await
             .is_err());
+    }
+
+    /// Activity must extend a session's lifetime: a session touched halfway
+    /// through the timeout window survives the first sweep, then expires after
+    /// a full idle window with no further touches.
+    #[tokio::test]
+    async fn test_cleanup_expired_uses_refreshed_activity() {
+        let engine = RelayEngine::new_with_timeout(10, Duration::from_millis(60));
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+
+        let (session, is_new) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(is_new);
+
+        // Touch halfway through the window: a refreshed session stays alive.
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        session.touch();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(
+            engine.cleanup_expired().await,
+            0,
+            "an activity touch must extend the session lifetime"
+        );
+
+        // No further traffic: a full idle window now expires it.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert_eq!(engine.cleanup_expired().await, 1);
+        assert_eq!(engine.active_sessions().await, 0);
     }
 
     #[tokio::test]
