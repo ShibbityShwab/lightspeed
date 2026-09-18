@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Linux and macOS: kernel redirect rules are now removed on shutdown.** `--start-interceptor` and `--watch` released the nftables table / pf anchor only if the background task happened to finish before the process exited; on Ctrl+C the process exited first, leaving the redirect rule installed (which kept hijacking the game server address to a closed port). Both backends now acknowledge teardown, and `stop_and_wait` blocks until the rule is gone.
+- **Linux: `--start-interceptor` fails fast without root.** It previously logged a warning, then ran forever with no rule installed (`nft` reports "Operation not permitted"), so the session looked active while nothing was intercepted. `start()` now probes `CAP_NET_ADMIN` and returns "kernel interception needs root or CAP_NET_ADMIN; re-run with sudo".
+- **`--check` no longer reports a dead proxy as reachable.** The proxy check only tested `send_to`, which always succeeds for UDP; it now sends a keepalive and waits up to 1s for the proxy echo, and fails the check when none arrives.
+- **GUI: the default window is tall enough to show "BOOST MY GAME".** At the previous 460x420 default the primary action was clipped with no scroll, so it was unreachable without resizing. The default is now 520x660.
 - **Windows GUI: startup failures are no longer silent.** The GUI is built with `windows_subsystem = "windows"`, so a panic or a returned error produced no window and no output. It now installs a panic hook that writes `%LOCALAPPDATA%\Lightspeed\gui-crash.log` and shows a native message box, initializes logging before the single-instance guard (falling back to a temp file or a discard sink when the log path is unwritable), and reports a fatal startup error in a dialog instead of exiting silently (issue #59).
 - **Windows GUI: the single-instance guard was hardened.** `SetLastError(0)` is called before `CreateMutexW` so a stale last-error cannot be mistaken for `ERROR_ALREADY_EXISTS`; the "already running" path logs and exits with a distinct code and a topmost notice; `--force` or `LIGHTSPEED_GUI_FORCE=1` bypasses the guard for diagnostics.
 - **Windows GUI: a failed system tray no longer kills or strands the app.** Tray creation is fallible; when it fails the window still opens and closing it exits instead of hiding with no way back. The eframe renderer can be overridden with `LIGHTSPEED_GUI_RENDERER=glow|wgpu` for machines where wgpu adapter creation fails.
@@ -16,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 - Corrected the `FWP_E_IN_USE` troubleshooting guidance (the earlier "CLI Ctrl+C handler" claim was wrong for `--watch`) and corrected the single-instance behaviour description.
+- Fixed the `--live-test` echo flag in the CLI reference (`--echo-server`, not `--echo-addr`).
 - Registered **Project Zomboid** (`--game zomboid`, UDP 16261-16262) in the supported-games table and README (PR #72).
 
 ### Dependencies

@@ -68,11 +68,52 @@ Windows run on the reporter's machine is the final confirmation.
 
 ---
 
+## Pre-release audit (2026-09-18)
+
+Ran a functional audit on both platforms before any release, per the owner's
+request. Everything below was exercised for real, not just built.
+
+Verified working:
+- Linux CLI: `--version`, `--list-games` (18), `--list-interfaces`, `--check`
+  (user and root), `--status`, `--probe-proxies` (5 relays), `--test-control`
+  (QUIC register + ping), `--live-test` (4/4 phases with `--fec`, data relay
+  5/5 payload match), `--smoke-test` (full synthetic E2E, teardown, 0 leftover
+  nftables tables), `--start-interceptor` + Ctrl+C, `--watch` + Ctrl+C,
+  `--demo`, `--benchmark`, `--scan-processes`, `--intercept`, `--write-config`.
+- Linux GUI under Xvfb: launch, discovery, QUIC registration, Boost (engages
+  the nftables interceptor), Stop Boost, window-close Quit, clean teardown.
+- Windows CLI in the VM: all read-only/network commands, `--test-control`,
+  `--live-test` (4/4 phases), `--start-interceptor` + Ctrl+C (3/3 clean),
+  `--write-config`, `--scan-processes`, `--intercept`, `--check`.
+- Windows GUI in the VM: launch, discovery, registration, Boost (engages the
+  WinDivert interceptor, firewall rule added), Stop Boost (rule removed,
+  threads exit), single-instance guard, crash log path.
+
+Bugs found and fixed during the audit:
+- Linux/macOS leaked the kernel redirect rule on Ctrl+C (commit 0d3499f).
+- Linux `--start-interceptor` ran forever without root (74dfbc6).
+- `--check` reported a dead proxy as reachable (74dfbc6).
+- GUI default window clipped the "BOOST MY GAME" button (0e75ca3).
+
+Known issues left open (documented, not release blockers):
+- `--test-control`/`--test-tunnel` print a stub success when built without the
+  `quic` feature (release builds have `quic`).
+- `--live-test` exits 0 even when a phase fails (manual diagnostic only).
+- `config.general.log_level` is parsed but not applied to CLI logging.
+- The GUI never calls `start_windivert`/`start_capture`, so those UI branches
+  are unreachable; "Disconnect Boost Server" stops the relay loop but not an
+  active interceptor (separate "Stop Boost").
+
+Host note: the audit's VM shutdown hit the known RDNA4 `vfio_pci_remove` fault
+the `gpu-switch` script documents, leaving the dGPU unbound until a reboot.
+
+---
+
 ## Next Action
 
-1. Push the branch, open a PR, and confirm `windows-test` and `windows-gui` are green.
-2. Merge PR #72 (Project Zomboid), then the dependabot PRs #61 and #73.
-3. Cut a patch release (v1.4.4) and reply on issue #59 with the release link.
-4. Close #62 (reactor crash fixed in v1.4.2) and answer #66 (TCP-only game, documented).
-5. WF-024 candidates: `--repair-windivert` recovery command; registry cert pinning (F5)
-   and binary release signing (C2) from the security backlog.
+1. Reboot the host to restore the RX 9070 XT to `amdgpu` after the VM stop left
+   it unbound (the vfio-pci teardown fault).
+2. The owner decides on a v1.4.4 release (all audit fixes are on `master`).
+3. WF-024 candidates: fix the `--live-test` exit code and the no-`quic` stub;
+   `--repair-windivert` recovery command; registry cert pinning (F5) and binary
+   release signing (C2) from the security backlog.

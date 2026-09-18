@@ -27,7 +27,7 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | `--tunnel-test` | Send test packets to verify proxy connectivity |
 | `--quic-test` | Test QUIC control plane (connect, register, ping, disconnect) |
 | `--live-test` | Run comprehensive integration test against configured proxies |
-| `--echo-addr <ADDR>` | Echo server for `--live-test` data relay phase |
+| `--echo-server <ADDR>` | Echo server for `--live-test` data relay and FEC phases |
 | `--demo` | Interactive demonstration of architecture and latency projections |
 | `--smoke-test` | Full E2E smoke test (starts echo server + interceptor, needs root) |
 
@@ -102,7 +102,7 @@ lightspeed --game cs2 --proxy proxy.example.com:4434 --fec
 lightspeed --probe-proxies
 
 # Live test against a proxy
-lightspeed --live-test --echo-addr proxy.example.com:9999
+lightspeed --live-test --echo-server proxy.example.com:9999
 
 # Run the demo
 lightspeed --demo
