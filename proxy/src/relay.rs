@@ -567,6 +567,24 @@ async fn process_inbound_packet(
                 metrics.record_drop(DropReason::RateLimit);
                 return false;
             }
+            RateLimitResult::IpPacketRateExceeded => {
+                trace!(client = %client_addr, "Rate limited (per-IP PPS)");
+                metrics.record_drop(DropReason::RateLimit);
+                metrics.record_rate_limit_ip();
+                return false;
+            }
+            RateLimitResult::IpBandwidthExceeded => {
+                trace!(client = %client_addr, "Rate limited (per-IP BPS)");
+                metrics.record_drop(DropReason::RateLimit);
+                metrics.record_rate_limit_ip();
+                return false;
+            }
+            RateLimitResult::IpTableFull => {
+                trace!(client = %client_addr, "Rate limit table full");
+                metrics.record_drop(DropReason::RateLimit);
+                metrics.record_rate_limit_overflow();
+                return false;
+            }
         }
     }
 

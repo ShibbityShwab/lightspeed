@@ -83,9 +83,16 @@ pub struct RateLimitConfig {
     #[serde(default = "default_bps_limit")]
     pub max_bps_per_client: u64,
 
-    /// Maximum total connections.
-    #[serde(default = "default_max_connections")]
-    pub max_connections: usize,
+    /// Maximum aggregate packets per second across all source ports for one
+    /// client IP. Bounds the per-IP tier, which protects against source-port
+    /// rotation that defeats the per-flow tier.
+    #[serde(default = "default_pps_per_ip")]
+    pub max_pps_per_ip: u64,
+
+    /// Maximum aggregate bandwidth (bytes/sec) across all source ports for one
+    /// client IP.
+    #[serde(default = "default_bps_per_ip")]
+    pub max_bps_per_ip: u64,
 }
 
 /// Metrics export configuration.
@@ -174,9 +181,12 @@ fn default_pps_limit() -> u64 {
 fn default_bps_limit() -> u64 {
     1_000_000
 } // 1 MB/s
-fn default_max_connections() -> usize {
-    200
+fn default_pps_per_ip() -> u64 {
+    5000
 }
+fn default_bps_per_ip() -> u64 {
+    5_000_000
+} // 5 MB/s
 fn default_true() -> bool {
     true
 }
@@ -218,7 +228,8 @@ impl Default for RateLimitConfig {
         Self {
             max_pps_per_client: default_pps_limit(),
             max_bps_per_client: default_bps_limit(),
-            max_connections: default_max_connections(),
+            max_pps_per_ip: default_pps_per_ip(),
+            max_bps_per_ip: default_bps_per_ip(),
         }
     }
 }
@@ -269,5 +280,21 @@ health_port = 9000
         assert_eq!(config.network.data_port, 5555);
         assert_eq!(config.network.health_port, 9000);
         assert_eq!(config.network.control_port, 4433);
+    }
+
+    #[test]
+    fn test_rate_limit_unknown_key_ignored_and_ip_defaults() {
+        // A config file written before `max_connections` was removed must still
+        // parse: serde ignores unknown keys.
+        let config: ProxyConfig = toml::from_str(
+            r#"
+[rate_limit]
+max_connections = 5
+"#,
+        )
+        .expect("TOML containing the removed max_connections key must still parse");
+
+        assert_eq!(config.rate_limit.max_pps_per_ip, 5000);
+        assert_eq!(config.rate_limit.max_bps_per_ip, 5_000_000);
     }
 }

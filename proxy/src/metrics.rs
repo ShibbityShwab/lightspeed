@@ -114,6 +114,11 @@ pub struct ProxyMetrics {
     pub abuse_blocks: AtomicU64,
     /// Rate limit hits.
     pub rate_limit_hits: AtomicU64,
+    /// Rate limit hits attributed to the per-IP aggregate tier. A subset of
+    /// `rate_limit_hits`.
+    pub rate_limit_ip_hits: AtomicU64,
+    /// Packets rejected because the per-IP tracking table was full (fail closed).
+    pub rate_limit_overflow: AtomicU64,
     /// Packets dropped because the tunnel header was malformed.
     pub drops_malformed: AtomicU64,
     /// Packets dropped because FEC framing was malformed.
@@ -174,6 +179,8 @@ impl ProxyMetrics {
             auth_rejections: AtomicU64::new(0),
             abuse_blocks: AtomicU64::new(0),
             rate_limit_hits: AtomicU64::new(0),
+            rate_limit_ip_hits: AtomicU64::new(0),
+            rate_limit_overflow: AtomicU64::new(0),
             drops_malformed: AtomicU64::new(0),
             drops_fec_malformed: AtomicU64::new(0),
             drops_session_setup: AtomicU64::new(0),
@@ -275,6 +282,22 @@ impl ProxyMetrics {
     /// Record rate limit hit.
     pub fn record_rate_limit(&self) {
         self.rate_limit_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a rate limit hit attributed to the per-IP aggregate tier.
+    ///
+    /// This is a subset counter. The combined `rate_limit_hits` (and
+    /// `packets_dropped`) are already incremented exactly once by
+    /// [`Self::record_drop`] with [`DropReason::RateLimit`], so incrementing the
+    /// combined counter here as well would double count an IP-tier drop and
+    /// break the invariant that the category counters sum to `packets_dropped`.
+    pub fn record_rate_limit_ip(&self) {
+        self.rate_limit_ip_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a packet rejected because the per-IP tracking table was full.
+    pub fn record_rate_limit_overflow(&self) {
+        self.rate_limit_overflow.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record an anonymous opt-in telemetry report received from a client.
@@ -459,6 +482,26 @@ impl ProxyMetrics {
             "lightspeed_rate_limit_hits_total{{{}}} {}\n",
             labels,
             self.rate_limit_hits.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_rate_limit_ip_hits_total Rate limit hits from the per-IP aggregate tier\n",
+        );
+        out.push_str("# TYPE lightspeed_rate_limit_ip_hits_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_rate_limit_ip_hits_total{{{}}} {}\n",
+            labels,
+            self.rate_limit_ip_hits.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_rate_limit_overflow_total Packets rejected because the per-IP rate limit table was full\n",
+        );
+        out.push_str("# TYPE lightspeed_rate_limit_overflow_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_rate_limit_overflow_total{{{}}} {}\n",
+            labels,
+            self.rate_limit_overflow.load(Ordering::Relaxed)
         ));
 
         out.push_str(
@@ -722,6 +765,56 @@ mod tests {
         let output = m.to_prometheus("test", "test-node");
         assert!(output.contains(
             "lightspeed_relay_latency_discarded_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+    }
+
+    #[test]
+    fn test_rate_limit_ip_hits_and_combined() {
+        let m = ProxyMetrics::new();
+        // An IP-tier drop is recorded like any other rate-limit drop (combined
+        // counter + packets_dropped), plus the per-IP subset marker.
+        m.record_drop(DropReason::RateLimit);
+        m.record_rate_limit_ip();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_rate_limit_ip_hits_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+        // The subset marker must not also bump the combined counter.
+        assert!(output
+            .contains("lightspeed_rate_limit_hits_total{region=\"test\",node_id=\"test-node\"} 1"));
+        assert_eq!(m.packets_dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_ip_tier_drop_preserves_sum_identity() {
+        let m = ProxyMetrics::new();
+        // Simulate an IP-tier rejection exactly as relay.rs records it. If the
+        // per-IP marker also bumped the combined counter, the categories would
+        // exceed packets_dropped.
+        m.record_drop(DropReason::RateLimit);
+        m.record_rate_limit_ip();
+
+        let categories = m.drops_malformed.load(Ordering::Relaxed)
+            + m.auth_rejections.load(Ordering::Relaxed)
+            + m.abuse_blocks.load(Ordering::Relaxed)
+            + m.rate_limit_hits.load(Ordering::Relaxed)
+            + m.drops_fec_malformed.load(Ordering::Relaxed)
+            + m.drops_session_setup.load(Ordering::Relaxed)
+            + m.drops_relay_send_errors.load(Ordering::Relaxed);
+
+        assert_eq!(categories, m.packets_dropped.load(Ordering::Relaxed));
+        assert_eq!(m.rate_limit_ip_hits.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_rate_limit_overflow_counter_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_rate_limit_overflow();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_rate_limit_overflow_total{region=\"test\",node_id=\"test-node\"} 1"
         ));
     }
 }
