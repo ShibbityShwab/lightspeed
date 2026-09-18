@@ -1187,10 +1187,21 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── Spawn periodic telemetry flush (every 15 min) ─────────────
+    let game_id = cli
+        .game
+        .as_deref()
+        .map(lightspeed_protocol::game_id::id_for_key)
+        .unwrap_or(lightspeed_protocol::game_id::UNKNOWN);
+    let telemetry_ctx = telemetry::TelemetryContext {
+        game_id,
+        country: telemetry::detect_country(),
+    };
+
     if let Some(ref tc) = telemetry_collector {
         let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
         // TelemetryCollector is Arc-backed; .clone() shares the same ring buffer.
-        telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, 0, "".to_string());
+        // The context is cloned so the shutdown flush below can reuse it.
+        telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, telemetry_ctx.clone());
     }
 
     // ── Keepalive mode ────────────────────────────────────────────
@@ -1202,6 +1213,7 @@ async fn main() -> anyhow::Result<()> {
         online_learner,
         keepalive_timestamps,
         telemetry_collector,
+        telemetry_ctx,
     )
     .await
 }

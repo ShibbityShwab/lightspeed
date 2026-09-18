@@ -520,6 +520,23 @@ mod tests {
         }
     }
 
+    /// Cross-crate completeness guard: every canonical CLI key the client
+    /// advertises in [`GAME_REGISTRY`] must resolve to a real wire id in the
+    /// protocol's append-only registry. A missing entry means telemetry would
+    /// silently report `UNKNOWN` for that game. Fix by adding the key in
+    /// `protocol/src/control.rs` (do not weaken this test).
+    #[test]
+    fn test_every_registry_key_resolves_to_game_id() {
+        for (key, display) in GAME_REGISTRY {
+            let id = lightspeed_protocol::game_id::id_for_key(key);
+            assert_ne!(
+                id,
+                lightspeed_protocol::game_id::UNKNOWN,
+                "GAME_REGISTRY key {key:?} ({display:?}) is missing from the protocol GAME_IDS registry"
+            );
+        }
+    }
+
     #[test]
     fn test_dynamic_server_flag_defaults_false() {
         assert!(fortnite::FortniteConfig.dynamic_server());

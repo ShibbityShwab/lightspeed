@@ -13,7 +13,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::ml;
-use crate::telemetry::TelemetryCollector;
+use crate::telemetry::{TelemetryCollector, TelemetryContext};
 use crate::tunnel::relay::UdpRelay;
 
 /// Run the keepalive (idle) mode.
@@ -22,6 +22,9 @@ use crate::tunnel::relay::UdpRelay;
 ///
 /// `telemetry` — if `Some`, RTT samples from keepalive echoes are recorded
 /// and flushed to the proxy on shutdown (opt-in, no PII).
+///
+/// `telemetry_ctx` — the active game id and locale-derived country copied into
+/// that shutdown report so it carries the same values as the periodic flushes.
 pub async fn run_keepalive_mode(
     relay: UdpRelay,
     proxy_addr: SocketAddrV4,
@@ -30,6 +33,7 @@ pub async fn run_keepalive_mode(
     online_learner: Arc<tokio::sync::Mutex<ml::online::OnlineLearner>>,
     keepalive_timestamps: Arc<tokio::sync::Mutex<HashMap<u16, std::time::Instant>>>,
     telemetry: Option<Arc<TelemetryCollector>>,
+    telemetry_ctx: TelemetryContext,
 ) -> anyhow::Result<()> {
     let stats = Arc::clone(&relay.stats);
 
@@ -178,7 +182,8 @@ pub async fn run_keepalive_mode(
     // ── Final telemetry flush ─────────────────────────────────────
     if let Some(ref tc) = telemetry {
         let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
-        tc.flush(&proxy_host, 0, "").await;
+        tc.flush(&proxy_host, telemetry_ctx.game_id, &telemetry_ctx.country)
+            .await;
         info!("📡 Telemetry flushed");
     }
 
