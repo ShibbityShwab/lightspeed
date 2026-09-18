@@ -47,6 +47,7 @@ pub mod rocketleague;
 pub mod rust;
 pub mod valorant;
 pub mod wot;
+pub mod zomboid;
 
 use std::net::Ipv4Addr;
 use std::sync::OnceLock;
@@ -142,8 +143,11 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
         "roblox" => Ok(Box::new(roblox::RobloxConfig)),
         "wot" | "worldoftanks" | "world-of-tanks" => Ok(Box::new(wot::WotConfig)),
+        "zomboid" | "projectzomboid" | "project-zomboid" | "pz" => {
+            Ok(Box::new(zomboid::ZomboidConfig))
+        }
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot",
+            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid",
             name
         ),
     }
@@ -153,7 +157,7 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
 ///
 /// This is the single source of truth: [`detect_game`] resolves the keys and
 /// [`all_games`] / [`all_game_keys`] derive from it. Register every new game
-/// here (the `games` tests enforce the 17-entry count and key/name agreement).
+/// here (the `games` tests enforce the 18-entry count and key/name agreement).
 pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("fortnite", "Fortnite"),
     ("cs2", "Counter-Strike 2"),
@@ -172,6 +176,7 @@ pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("rocketleague", "Rocket League"),
     ("roblox", "Roblox"),
     ("wot", "World of Tanks"),
+    ("zomboid", "Project Zomboid"),
 ];
 
 /// Return every CLI key paired with its display name.
@@ -305,6 +310,8 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         "RocketLeague.exe",
         "WorldOfTanks.exe",
         "RobloxPlayerBeta.exe",
+        "ProjectZomboid64.exe",
+        "ProjectZomboid",
     ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
@@ -313,7 +320,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot"
+         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid"
     )
 }
 
@@ -459,6 +466,11 @@ mod tests {
         "wot",
         "worldoftanks",
         "world-of-tanks",
+        // Project Zomboid
+        "zomboid",
+        "projectzomboid",
+        "project-zomboid",
+        "pz",
     ];
 
     #[test]
@@ -475,11 +487,11 @@ mod tests {
     }
 
     #[test]
-    fn test_all_game_keys_has_seventeen_entries() {
+    fn test_all_game_keys_has_eighteen_entries() {
         assert_eq!(
             all_game_keys().len(),
-            17,
-            "GAME_REGISTRY must stay in sync with the 17 supported games"
+            18,
+            "GAME_REGISTRY must stay in sync with the 18 supported games"
         );
     }
 
@@ -729,6 +741,25 @@ mod tests {
         assert_eq!(roblox.anti_cheat(), "Byfron (Hyperion)");
         assert!(roblox.typical_pps() > 0);
         let (lo, hi) = roblox.packet_size_range();
+        assert!(lo < hi, "packet_size_range lo must be < hi");
+    }
+
+    #[test]
+    fn test_zomboid_game_profile() {
+        // The Project Zomboid profile must be registered in all_games() with
+        // its canonical process names and UDP port range.
+        let zomboid = all_games()
+            .into_iter()
+            .find(|g| g.name() == "Project Zomboid")
+            .expect("Project Zomboid must be registered in all_games()");
+        assert_eq!(zomboid.name(), "Project Zomboid");
+        assert!(zomboid.process_names().contains(&"ProjectZomboid64.exe"));
+        assert_eq!(zomboid.ports(), (16261, 16262));
+        assert_eq!(zomboid.redirect_port(), 16261);
+        assert_eq!(zomboid.anti_cheat(), "None");
+        assert!(!zomboid.uses_sdr());
+        assert!(zomboid.typical_pps() > 0);
+        let (lo, hi) = zomboid.packet_size_range();
         assert!(lo < hi, "packet_size_range lo must be < hi");
     }
 

@@ -48,6 +48,7 @@ pub fn default_port_range(key: &str, default_port: u16) -> (u16, u16) {
         "lol" => (5000, 5500),
         "pubg" => (7777, 7843),
         "bodycam" => (27000, 27050),
+        "zomboid" => (16261, 16262),
         _ => (default_port, default_port),
     }
 }
