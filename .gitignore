@@ -50,6 +50,9 @@ node_modules/
 # Generated at deploy time from live relay health checks (infra/scripts/network-stats.sh)
 web/network-stats.json
 
+# Bounded network-stats history (infra/scripts/append-history.sh; persisted on the stats branch)
+web/network-history.json
+
 # AI assistant generated artifacts
 .omo/
 .cortexkit/
