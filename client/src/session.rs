@@ -1,13 +1,15 @@
-//! # Data-Plane Session Token
+//! # Data-Plane Session Tokens
 //!
-//! Holds the session token assigned by the proxy during QUIC registration.
+//! Holds the session token(s) assigned by the proxy during QUIC registration.
 //! The token is stamped into every outbound data-plane packet header so the
 //! proxy can authenticate the client when `require_auth` is enabled.
 //!
-//! A process-global atomic is used because a client process has exactly one
-//! active proxy session: the control plane sets it once after registration and
-//! every data-plane send reads it. It defaults to `0`, which the proxy accepts
-//! only when `require_auth = false` (unregistered dev mode).
+//! A single-path client has one default token. A multipath client sends to
+//! several relays, each of which authorizes its own token, so an explicit token
+//! can be registered per relay address. Lookups are a lock-free scan over fixed
+//! atomic slots, keeping the per-packet read path free of any mutex. The
+//! default is `0`, which the proxy accepts only when `require_auth = false`
+//! (unregistered dev mode).
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -15,8 +17,118 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::route::multipath::MultipathState;
 
-/// The current data-plane session token (0 = unregistered).
-static SESSION_TOKEN: AtomicU32 = AtomicU32::new(0);
+/// Maximum per-path token slots. Multipath uses at most three relays plus the
+/// current proxy; eight leaves headroom while keeping the lock-free scan cheap.
+const MAX_TOKEN_PATHS: usize = 8;
+
+/// Process-global token store: one single-path default plus per-relay entries.
+///
+/// Reads are lock-free atomic loads over fixed slots (no mutex on the packet
+/// path); `write_lock` only serializes writers among themselves.
+struct TokenStore {
+    /// The single-path default (0 = unregistered).
+    default: AtomicU32,
+    /// Packed relay address `ip << 16 | port`, 0 = empty. Published with
+    /// `Release` after `tokens`, so an `Acquire` match also observes its token.
+    paths: [AtomicU64; MAX_TOKEN_PATHS],
+    /// Per-path tokens, parallel to `paths`. Zero tokens are never stored.
+    tokens: [AtomicU32; MAX_TOKEN_PATHS],
+    /// Serializes writers only; readers never lock.
+    write_lock: Mutex<()>,
+}
+
+impl TokenStore {
+    const fn new() -> Self {
+        Self {
+            default: AtomicU32::new(0),
+            paths: [const { AtomicU64::new(0) }; MAX_TOKEN_PATHS],
+            tokens: [const { AtomicU32::new(0) }; MAX_TOKEN_PATHS],
+            write_lock: Mutex::new(()),
+        }
+    }
+
+    /// Pack a relay address with the same encoding as `CURRENT_PROXY`.
+    fn pack(addr: SocketAddrV4) -> u64 {
+        (u64::from(u32::from(*addr.ip())) << 16) | u64::from(addr.port())
+    }
+
+    fn default_token(&self) -> u32 {
+        self.default.load(Ordering::Relaxed)
+    }
+
+    fn set_default(&self, token: u32) {
+        self.default.store(token, Ordering::Relaxed);
+    }
+
+    fn set_path(&self, addr: SocketAddrV4, token: u32) {
+        if token == 0 {
+            return;
+        }
+        let packed = Self::pack(addr);
+        let _writer = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (path, slot) in self.paths.iter().zip(self.tokens.iter()) {
+            if path.load(Ordering::Relaxed) == packed {
+                slot.store(token, Ordering::Relaxed);
+                return;
+            }
+        }
+        for (path, slot) in self.paths.iter().zip(self.tokens.iter()) {
+            if path.load(Ordering::Relaxed) == 0 {
+                slot.store(token, Ordering::Relaxed);
+                path.store(packed, Ordering::Release);
+                return;
+            }
+        }
+        // All slots busy (unreachable at MAX_TOKEN_PATHS = 8): evict slot 0,
+        // clearing the key first so readers never pair it with the new token.
+        self.paths[0].store(0, Ordering::Release);
+        self.tokens[0].store(token, Ordering::Relaxed);
+        self.paths[0].store(packed, Ordering::Release);
+    }
+
+    fn path(&self, addr: SocketAddrV4) -> u32 {
+        let packed = Self::pack(addr);
+        for (path, slot) in self.paths.iter().zip(self.tokens.iter()) {
+            if path.load(Ordering::Acquire) == packed {
+                return slot.load(Ordering::Relaxed);
+            }
+        }
+        self.default_token()
+    }
+
+    fn clear_path(&self, addr: SocketAddrV4) {
+        let packed = Self::pack(addr);
+        let _writer = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (path, slot) in self.paths.iter().zip(self.tokens.iter()) {
+            if path.load(Ordering::Relaxed) == packed {
+                path.store(0, Ordering::Release);
+                slot.store(0, Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+
+    fn reset_all(&self) {
+        let _writer = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (path, slot) in self.paths.iter().zip(self.tokens.iter()) {
+            path.store(0, Ordering::Relaxed);
+            slot.store(0, Ordering::Relaxed);
+        }
+        self.default.store(0, Ordering::Relaxed);
+    }
+}
+
+/// The process-global data-plane token store.
+static TOKENS: TokenStore = TokenStore::new();
 
 /// The current relay destination (0 = unset). Packed as `ip << 16 | port` so a
 /// single lock-free atomic can be read on the per-packet hot path. The
@@ -33,14 +145,36 @@ fn multipath() -> &'static Mutex<MultipathState> {
     MULTIPATH.get_or_init(|| Mutex::new(MultipathState::new(1024)))
 }
 
-/// Set the session token after a successful QUIC registration.
+/// Set the single-path session token after a successful QUIC registration.
 pub fn set_session_token(token: u32) {
-    SESSION_TOKEN.store(token, Ordering::Relaxed);
+    TOKENS.set_default(token);
 }
 
-/// Get the current session token (0 when unregistered).
+/// Get the single-path session token (0 when unregistered).
 pub fn session_token() -> u32 {
-    SESSION_TOKEN.load(Ordering::Relaxed)
+    TOKENS.default_token()
+}
+
+/// Register the token a specific relay authorized for this client. A zero
+/// token is ignored so an unregistered update cannot clobber a valid token.
+pub fn set_path_token(path: SocketAddrV4, token: u32) {
+    TOKENS.set_path(path, token);
+}
+
+/// Get the token for a relay: its explicit per-path token when registered,
+/// otherwise the single-path default (0 when unregistered).
+pub fn path_token(path: SocketAddrV4) -> u32 {
+    TOKENS.path(path)
+}
+
+/// Drop the explicit token for a relay so lookups fall back to the default.
+pub fn clear_path_token(path: SocketAddrV4) {
+    TOKENS.clear_path(path);
+}
+
+/// Clear every token, per-path and default. Shutdown only.
+pub fn reset_all_tokens() {
+    TOKENS.reset_all();
 }
 
 /// Set the current relay destination.
@@ -139,13 +273,66 @@ pub fn send_destinations(
 mod tests {
     use super::*;
 
+    /// The test harness runs `#[test]`s in parallel and the token store is
+    /// process-global, so tests that mutate it take this lock to stay
+    /// deterministic.
+    static TOKEN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn token_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        TOKEN_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn test_session_token_set_get() {
+        let _guard = token_test_guard();
         assert_eq!(session_token(), 0);
         set_session_token(0xAB);
         assert_eq!(session_token(), 0xAB);
         set_session_token(0);
         assert_eq!(session_token(), 0);
+    }
+
+    #[test]
+    fn per_path_token_roundtrip() {
+        let _guard = token_test_guard();
+        reset_all_tokens();
+        set_session_token(0xAA);
+        let path_a = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 7), 4434);
+        let path_b = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 8), 4434);
+
+        set_path_token(path_a, 0x11);
+        set_path_token(path_b, 0x22);
+
+        // Two paths hold distinct tokens.
+        assert_eq!(path_token(path_a), 0x11);
+        assert_eq!(path_token(path_b), 0x22);
+        // Per-path writes leave the single-path default untouched.
+        assert_eq!(session_token(), 0xAA);
+
+        clear_path_token(path_a);
+        // A path with no explicit entry falls back to the single-path default.
+        assert_eq!(path_token(path_a), 0xAA);
+        assert_eq!(path_token(path_b), 0x22);
+
+        reset_all_tokens();
+        assert_eq!(path_token(path_a), 0);
+        assert_eq!(session_token(), 0);
+    }
+
+    #[test]
+    fn zero_does_not_overwrite_valid() {
+        let _guard = token_test_guard();
+        reset_all_tokens();
+        let path = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 5), 4434);
+
+        set_path_token(path, 0x1234);
+        assert_eq!(path_token(path), 0x1234);
+
+        // A zero token means "unregistered" and must never clobber a valid one.
+        set_path_token(path, 0);
+        assert_eq!(path_token(path), 0x1234);
     }
 
     #[test]
