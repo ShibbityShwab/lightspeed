@@ -222,10 +222,12 @@ pub fn multipath_record_response(seq: u16, source: SocketAddr, latency_us: u64) 
         return false;
     }
     if m.is_duplicate(seq) {
-        m.record_loss(source_v4);
+        m.record_duplicate(source_v4);
+        crate::telemetry::paths::record_relay_response(source_v4, latency_us, true);
         return true;
     }
     m.record_win(source_v4, latency_us);
+    crate::telemetry::paths::record_relay_response(source_v4, latency_us, false);
     false
 }
 

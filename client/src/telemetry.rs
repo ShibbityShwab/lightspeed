@@ -22,7 +22,7 @@
 //! does not need an HTTP library dependency.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
@@ -32,75 +32,16 @@ use tracing::{debug, warn};
 
 use lightspeed_protocol::TelemetryReport;
 
+pub(crate) mod context;
+pub(crate) mod paths;
+
+use context::TelemetryContext;
+
 /// Maximum RTT samples retained in the rolling window before a flush.
 const RING_CAPACITY: usize = 1024;
 
 /// How often to flush telemetry while the tunnel is running.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(60 * 15); // 15 minutes
-
-/// Session-scoped values attached to every telemetry report.
-///
-/// Built once at startup (after game selection) and threaded through both the
-/// periodic flush task and the shutdown flush so every report carries the real
-/// active game and a locale-derived country instead of placeholders.
-///
-/// This struct is never serialised — only its fields are copied into the
-/// [`TelemetryReport`] at flush time, so it adds no PII to the wire format.
-#[derive(Clone, Debug)]
-pub struct TelemetryContext {
-    /// Wire game id for the active game (`0` / `UNKNOWN` when none selected).
-    pub game_id: u8,
-    /// Two-letter ISO 3166-1 alpha-2 country derived from the OS locale, or an
-    /// empty string when the locale exposes no usable territory.
-    pub country: String,
-}
-
-/// Extract a two-letter territory code from a BCP-47-style locale string.
-///
-/// Takes the first subtag after the language (the segment following the first
-/// `-` or `_`), keeps only ASCII alphabetic characters, uppercases it, and
-/// returns it only when exactly two letters remain. Anything else yields an
-/// empty string. This is deliberately not a full locale parser: it exists to
-/// surface the common `en-US` / `th_TH` territory without pulling in ICU data.
-///
-/// ```text
-/// "en-US"    -> "US"
-/// "th_TH"    -> "TH"
-/// "en"       -> ""
-/// ""         -> ""
-/// "en-us-x"  -> "US"
-/// ```
-pub fn normalize_locale_territory(locale: &str) -> String {
-    let rest = match locale.find(['-', '_']) {
-        Some(idx) => &locale[idx + 1..],
-        None => return String::new(),
-    };
-    let territory: String = rest
-        .split(['-', '_'])
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .filter(|c| c.is_ascii_alphabetic())
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    if territory.len() == 2 {
-        territory
-    } else {
-        String::new()
-    }
-}
-
-/// Detect the user's country from the operating system locale.
-///
-/// Reads [`sys_locale::get_locale`] and normalises it with
-/// [`normalize_locale_territory`]. Returns an empty string when the OS reports
-/// no locale or the locale exposes no two-letter territory. Only the OS locale
-/// is consulted — no IP address or other identifying signal is used.
-pub fn detect_country() -> String {
-    sys_locale::get_locale()
-        .map(|locale| normalize_locale_territory(&locale))
-        .unwrap_or_default()
-}
 
 /// Shared RTT sample ring buffer + FEC counters.
 ///
@@ -110,6 +51,7 @@ pub fn detect_country() -> String {
 #[derive(Clone)]
 pub struct TelemetryCollector {
     inner: Arc<Mutex<Inner>>,
+    paths: Arc<StdMutex<paths::PathInner>>,
     fec_recoveries: Arc<AtomicU32>,
     fec_losses: Arc<AtomicU32>,
 }
@@ -126,6 +68,7 @@ impl TelemetryCollector {
             inner: Arc::new(Mutex::new(Inner {
                 samples: Vec::with_capacity(RING_CAPACITY),
             })),
+            paths: Arc::new(StdMutex::new(paths::PathInner::default())),
             fec_recoveries: Arc::new(AtomicU32::new(0)),
             fec_losses: Arc::new(AtomicU32::new(0)),
         }
@@ -190,6 +133,12 @@ impl TelemetryCollector {
         // Drain samples after reading.
         inner.samples.clear();
 
+        let route_legs = self
+            .paths
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain_observations();
+
         Some(TelemetryReport {
             game_id,
             client_country: country.to_string(),
@@ -201,7 +150,7 @@ impl TelemetryCollector {
             fec_recoveries: recoveries,
             fec_losses: losses,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
-            route_legs: vec![],
+            route_legs,
         })
     }
 
@@ -311,76 +260,4 @@ pub fn print_disclosure() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_normalize_locale_territory() {
-        assert_eq!(normalize_locale_territory("en-US"), "US");
-        assert_eq!(normalize_locale_territory("th_TH"), "TH");
-        assert_eq!(normalize_locale_territory("en"), "");
-        assert_eq!(normalize_locale_territory(""), "");
-        assert_eq!(normalize_locale_territory("en-us-x"), "US");
-    }
-
-    #[tokio::test]
-    async fn test_telemetry_percentiles() {
-        let collector = TelemetryCollector::new();
-        // Feed 100 samples: 1..=100 ms
-        for i in 1u32..=100 {
-            collector.record_rtt(i as f64).await;
-        }
-
-        let report = collector.build_report(1, "TH").await.unwrap();
-        assert_eq!(report.sample_count, 100);
-        // p50 ≈ 50 ms (sorted index 50 of 0..=99)
-        assert!((report.p50_ms - 50.0).abs() < 2.0, "p50={}", report.p50_ms);
-        // p95 ≈ 95 ms
-        assert!((report.p95_ms - 95.0).abs() < 2.0, "p95={}", report.p95_ms);
-        // p99 ≈ 99 ms
-        assert!((report.p99_ms - 99.0).abs() < 2.0, "p99={}", report.p99_ms);
-    }
-
-    #[tokio::test]
-    async fn test_telemetry_drains_after_flush() {
-        let collector = TelemetryCollector::new();
-        collector.record_rtt(30.0).await;
-        collector.record_rtt(40.0).await;
-
-        let r1 = collector.build_report(0, "").await;
-        assert!(r1.is_some());
-        assert_eq!(r1.unwrap().sample_count, 2);
-
-        // Second build should return None — samples were drained.
-        let r2 = collector.build_report(0, "").await;
-        assert!(r2.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_fec_counters_reset_after_build() {
-        let collector = TelemetryCollector::new();
-        collector.record_rtt(20.0).await;
-        collector.record_fec_recovery();
-        collector.record_fec_recovery();
-        collector.record_fec_loss();
-
-        let report = collector.build_report(1, "US").await.unwrap();
-        assert_eq!(report.fec_recoveries, 2);
-        assert_eq!(report.fec_losses, 1);
-
-        // Counters reset after build.
-        assert_eq!(collector.fec_recoveries.load(Ordering::Relaxed), 0);
-        assert_eq!(collector.fec_losses.load(Ordering::Relaxed), 0);
-    }
-
-    #[tokio::test]
-    async fn test_ring_buffer_capped_at_capacity() {
-        let collector = TelemetryCollector::new();
-        // Overfill the ring buffer by 10 slots.
-        for i in 0..(RING_CAPACITY + 10) {
-            collector.record_rtt(i as f64).await;
-        }
-        let inner = collector.inner.lock().await;
-        assert_eq!(inner.samples.len(), RING_CAPACITY);
-    }
-}
+mod tests;

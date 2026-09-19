@@ -153,6 +153,11 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
                 .and_then(|s| parse_proxy_addr(s).ok())
                 .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
             let addrs: Vec<String> = nodes.iter().map(|(_, addr)| addr.clone()).collect();
+            for (id, addr) in &nodes {
+                if let Ok(a) = parse_proxy_addr(addr) {
+                    telemetry::paths::register_relay_node(a, id);
+                }
+            }
             info!(
                 "🔍 Registry: {} relay(s) discovered; probing (strategy: {})...",
                 addrs.len(),
@@ -245,7 +250,9 @@ async fn main() -> anyhow::Result<()> {
     let telemetry_collector: Option<Arc<TelemetryCollector>> = if cli.telemetry && !cli.no_telemetry
     {
         telemetry::print_disclosure();
-        Some(Arc::new(TelemetryCollector::new()))
+        let collector = Arc::new(TelemetryCollector::new());
+        telemetry::paths::install_global_collector(collector.as_ref());
+        Some(collector)
     } else {
         None
     };
@@ -1192,9 +1199,9 @@ async fn main() -> anyhow::Result<()> {
         .as_deref()
         .map(lightspeed_protocol::game_id::id_for_key)
         .unwrap_or(lightspeed_protocol::game_id::UNKNOWN);
-    let telemetry_ctx = telemetry::TelemetryContext {
+    let telemetry_ctx = telemetry::context::TelemetryContext {
         game_id,
-        country: telemetry::detect_country(),
+        country: telemetry::context::detect_country(),
     };
 
     if let Some(ref tc) = telemetry_collector {

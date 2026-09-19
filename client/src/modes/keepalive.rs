@@ -13,7 +13,8 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::ml;
-use crate::telemetry::{TelemetryCollector, TelemetryContext};
+use crate::telemetry::context::TelemetryContext;
+use crate::telemetry::TelemetryCollector;
 use crate::tunnel::relay::UdpRelay;
 
 /// Run the keepalive (idle) mode.
@@ -114,6 +115,10 @@ pub async fn run_keepalive_mode(
                                         // Record into opt-in telemetry (if enabled)
                                         if let Some(ref tc) = telemetry_recv {
                                             tc.record_rtt(latency_ms).await;
+                                            tc.record_path_rtt(
+                                                &crate::telemetry::paths::relay_label(proxy_addr),
+                                                latency_ms,
+                                            );
                                         }
                                         let mut learner = learner_ref.lock().await;
                                         learner.record_and_maybe_retrain(
