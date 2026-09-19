@@ -2942,6 +2942,7 @@ dependencies = [
  "dirs",
  "eframe",
  "egui_plot",
+ "image",
  "lightspeed-client",
  "reqwest",
  "rustls",

@@ -1,4 +1,9 @@
-# ⚡ LightSpeed
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/assets/brand/lightspeed-logo-inverse.svg">
+    <img alt="LightSpeed - free game network optimizer" src="web/assets/brand/lightspeed-logo.svg" width="340">
+  </picture>
+</h1>
 
 **Reduce your ping. Free. Forever.**
 

@@ -3,25 +3,104 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
   <title>LightSpeed - Free Game Network Optimizer</title>
-  <meta name="description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
+  <meta name="description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with automatic relay discovery and ML-based route selection.">
   <meta name="theme-color" content="#0a0a1a">
+  <link rel="canonical" href="https://shibbityshwab.github.io/lightspeed/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <!-- Open Graph -->
   <meta property="og:title" content="LightSpeed - Free Game Network Optimizer">
-  <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source AI-powered routing for competitive gamers.">
+  <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://shibbityshwab.github.io/lightspeed">
+  <meta property="og:url" content="https://shibbityshwab.github.io/lightspeed/">
+  <meta property="og:site_name" content="LightSpeed">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://shibbityshwab.github.io/lightspeed/assets/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="LightSpeed: Reduce your ping. Free. Forever.">
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LightSpeed - Free Game Network Optimizer">
+  <meta name="twitter:description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
+  <meta name="twitter:image" content="https://shibbityshwab.github.io/lightspeed/assets/og-image.png">
+  <!-- Structured data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "LightSpeed",
+    "description": "Open-source game network optimizer that routes game traffic through the fastest path to reduce and stabilize ping.",
+    "url": "https://shibbityshwab.github.io/lightspeed/",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "Windows, macOS, Linux",
+    "license": "https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "sameAs": "https://github.com/ShibbityShwab/lightspeed"
+  }
+  </script>
 </head>
-<body>
+<body id="top">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- Inline icon sprite: 24x24 stroke icons, currentColor. The bolt logo is an original LightSpeed mark. -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="ls-tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a1a38"/><stop offset="1" stop-color="#0a0a1a"/></linearGradient>
+      <linearGradient id="ls-mark" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#a29bfe"/><stop offset="1" stop-color="#00cec9"/></linearGradient>
+      <radialGradient id="ls-glow" cx="0.5" cy="0.46" r="0.62"><stop offset="0" stop-color="#6c5ce7" stop-opacity="0.45"/><stop offset="1" stop-color="#6c5ce7" stop-opacity="0"/></radialGradient>
+    </defs>
+    <symbol id="i-logo" viewBox="0 0 32 32">
+      <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7" fill="url(#ls-tile)" stroke="#2f2f52" stroke-width="1.5"/>
+      <circle cx="16" cy="15" r="13.5" fill="url(#ls-glow)"/>
+      <path d="M6.55 4.75 H14.65 V20.05 H20.05 L25.45 25 L22.75 27.25 H6.55 Z" fill="url(#ls-mark)"/>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 3 20 12 6 21z"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></symbol>
+    <symbol id="i-gamepad" viewBox="0 0 24 24"><path d="M6 11h4"/><path d="M8 9v4"/><path d="M15 12h.01"/><path d="M18 10h.01"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+    <symbol id="i-map-pin" viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></symbol>
+    <symbol id="i-life-buoy" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/><circle cx="12" cy="12" r="4"/></symbol>
+    <symbol id="i-timer" viewBox="0 0 24 24"><path d="M10 2h4"/><path d="m12 14 3-3"/><circle cx="12" cy="14" r="8"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/><path d="M6.453 15h11.094"/><path d="M8.5 2h7"/></symbol>
+    <symbol id="i-badge-dollar" viewBox="0 0 24 24"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></symbol>
+  </svg>
+
   <!-- Navigation -->
-  <nav class="nav" id="nav">
+  <nav class="nav" id="nav" aria-label="Main">
     <div class="nav-inner">
-      <a href="#" class="nav-logo">
-        <span class="logo-icon">⚡</span>
+      <a href="#top" class="nav-logo">
+        <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><use href="#i-logo"></use></svg>
         <span class="logo-text">LightSpeed</span>
       </a>
       <div class="nav-links" id="nav-links">
@@ -31,862 +110,976 @@
         <a href="#benchmarks">Benchmarks</a>
         <a href="route-visualizer/">Route Visualizer</a>
         <a href="#faq">FAQ</a>
-        <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">
+          <svg class="icon icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg> GitHub
+        </a>
         <a href="#download" class="btn btn-sm btn-primary">Download</a>
       </div>
-      <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu">
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Open menu" aria-controls="nav-links" aria-expanded="false">
         <span></span><span></span><span></span>
       </button>
     </div>
   </nav>
 
-  <!-- Hero -->
-  <section class="hero">
-    <div class="hero-bg">
-      <div class="grid-lines"></div>
-      <div class="glow glow-1"></div>
-      <div class="glow glow-2"></div>
-    </div>
-    <div class="container hero-content">
-      <div class="hero-badge">Open Source &middot; Zero Cost &middot; AI-Powered</div>
-      <h1 class="hero-title">
-        Reduce your ping.<br>
-        <span class="gradient-text">Free. Forever.</span>
-      </h1>
-      <p class="hero-subtitle">
-        LightSpeed is an open-source network optimizer that routes your game traffic
-        through the fastest path using AI-powered proxy selection. No subscriptions.
-        No data harvesting. Just lower latency.
-      </p>
-      <div class="hero-actions">
-        <a href="#download" class="btn btn-lg btn-primary">
-          <span class="btn-icon">↓</span>
-          Download for Free
-        </a>
-        <a href="https://github.com/ShibbityShwab/lightspeed" class="btn btn-lg btn-outline" target="_blank" rel="noopener">
-          <span class="btn-icon">★</span>
-          Star on GitHub
-        </a>
-      </div>
-      <div class="hero-stats">
-        <div class="stat">
-          <span class="stat-value" data-stat="relay_count">--</span>
-          <span class="stat-label">Community Relays</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value" data-stat="relays_online">--</span>
-          <span class="stat-label">Relays Online</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value" data-stat="area_count">--</span>
-          <span class="stat-label">Network Areas</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value">$0</span>
-          <span class="stat-label">Cost Forever</span>
-        </div>
-      </div>
-    </div>
-  </section>
+  <main id="main">
 
-  <!-- How It Works -->
-  <section class="section" id="how-it-works">
-    <div class="container">
-      <h2 class="section-title">How It Works</h2>
-      <p class="section-subtitle">Three steps. That's it. No accounts, no config files, no BS.</p>
-      <div class="steps">
-        <div class="step">
-          <div class="step-number">1</div>
-          <div class="step-icon">🎮</div>
-          <h3>Launch LightSpeed</h3>
-          <p>Run the lightweight client before your game. It auto-detects 17 built-in profiles: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, and more.</p>
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero-bg" aria-hidden="true"></div>
+      <div class="container hero-content">
+        <div class="hero-copy">
+          <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
+          <h1 class="hero-title">
+            Reduce your ping.<br>
+            <span class="gradient-text">Free. Forever.</span>
+          </h1>
+          <p class="hero-subtitle">
+            LightSpeed is an open-source network optimizer that routes your game traffic
+            through the fastest path using ML-based proxy selection. No subscriptions.
+            No data harvesting. Just lower latency.
+          </p>
+          <div class="hero-actions">
+            <a href="#download" class="btn btn-lg btn-primary">
+              <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-download"></use></svg>
+              Download for Free
+            </a>
+            <a href="https://github.com/ShibbityShwab/lightspeed" class="btn btn-lg btn-outline" target="_blank" rel="noopener">
+              <svg class="icon icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg>
+              Star on GitHub
+            </a>
+          </div>
+          <dl class="hero-stats">
+            <div class="stat">
+              <dt class="stat-label">Cost forever</dt>
+              <dd class="stat-value">$0</dd>
+            </div>
+            <div class="stat">
+              <dt class="stat-label">Game profiles</dt>
+              <dd class="stat-value">18</dd>
+            </div>
+            <div class="stat">
+              <dt class="stat-label">Typical ping gain</dt>
+              <dd class="stat-value">10-40 ms</dd>
+            </div>
+          </dl>
         </div>
-        <div class="step-arrow">→</div>
-        <div class="step">
-          <div class="step-number">2</div>
-          <div class="step-icon">🧠</div>
-          <h3>AI Picks Your Route</h3>
-          <p>Our ML model analyzes latency, jitter, and packet loss across your proxy nodes to find the fastest path in under 1ms.</p>
-        </div>
-        <div class="step-arrow">→</div>
-        <div class="step">
-          <div class="step-number">3</div>
-          <div class="step-icon">⚡</div>
-          <h3>Play with Lower Ping</h3>
-          <p>Your game traffic is transparently rerouted. No packet modification, no anti-cheat issues, just faster packets.</p>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="route-card">
+            <div class="route-card-top">
+              <span class="route-card-label">Live route</span>
+              <span class="route-card-ping"><span class="ping-dot"></span>12 ms</span>
+            </div>
+            <svg class="route-map" viewBox="0 0 360 190" focusable="false">
+              <defs>
+                <linearGradient id="route-line" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#6c5ce7"/>
+                  <stop offset="0.55" stop-color="#00cec9"/>
+                  <stop offset="1" stop-color="#00d68f"/>
+                </linearGradient>
+              </defs>
+              <path class="route-direct" d="M38 152 C 120 150, 250 60, 322 38"/>
+              <path class="route-path" d="M38 152 C 92 62, 250 58, 322 38"/>
+              <circle class="route-node" cx="38" cy="152" r="7"/>
+              <circle class="route-node route-node-mid" cx="182" cy="76" r="5"/>
+              <circle class="route-node" cx="322" cy="38" r="7"/>
+            </svg>
+            <div class="route-card-stops">
+              <span>Your PC</span>
+              <span>Relay LAX</span>
+              <span>Game server</span>
+            </div>
+            <div class="route-card-foot">
+              <span>Encapsulation +0.162 ms</span>
+              <span class="route-card-tag">Example</span>
+            </div>
+          </div>
         </div>
       </div>
+    </section>
 
-      <!-- Architecture Diagram -->
-      <div class="arch-diagram">
-        <div class="arch-title">Under the Hood</div>
-        <div class="arch-flow">
-          <div class="arch-node arch-client">
-            <div class="arch-node-icon">💻</div>
-            <div class="arch-node-label">Your PC</div>
-            <div class="arch-node-detail">LightSpeed Client</div>
+    <!-- How It Works -->
+    <section class="section" id="how-it-works">
+      <div class="container">
+        <p class="section-eyebrow">Setup</p>
+        <h2 class="section-title">How It Works</h2>
+        <p class="section-subtitle">Three steps. That's it. No accounts, no config files, no BS.</p>
+        <div class="steps">
+          <div class="step">
+            <div class="step-badge">
+              <svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-play"></use></svg>
+              <span class="step-number" aria-hidden="true">1</span>
+            </div>
+            <h3>Launch LightSpeed</h3>
+            <p>Run the lightweight client before your game. It auto-detects 18 built-in profiles: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, and Project Zomboid.</p>
           </div>
-          <div class="arch-arrow">
-            <span class="arch-arrow-label">UDP / TCP Tunnel</span>
-            <div class="arch-arrow-line"></div>
+          <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
+          <div class="step">
+            <div class="step-badge">
+              <svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-route"></use></svg>
+              <span class="step-number" aria-hidden="true">2</span>
+            </div>
+            <h3>ML Picks Your Route</h3>
+            <p>The ML model analyzes latency, jitter, and packet loss across your proxy nodes, then selects the fastest path in a single inference pass, measured in microseconds at runtime.</p>
           </div>
-          <div class="arch-node arch-proxy">
-            <div class="arch-node-icon">🌐</div>
-            <div class="arch-node-label">Proxy Node</div>
-            <div class="arch-node-detail">AI-Selected Route</div>
-          </div>
-          <div class="arch-arrow">
-            <span class="arch-arrow-label">Native UDP</span>
-            <div class="arch-arrow-line"></div>
-          </div>
-          <div class="arch-node arch-server">
-            <div class="arch-node-icon">🎯</div>
-            <div class="arch-node-label">Game Server</div>
-            <div class="arch-node-detail">Fortnite / CS2 / Dota</div>
+          <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
+          <div class="step">
+            <div class="step-badge">
+              <svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-gauge"></use></svg>
+              <span class="step-number" aria-hidden="true">3</span>
+            </div>
+            <h3>Play with Lower Ping</h3>
+            <p>Your game traffic is transparently rerouted with no packet modification, designed for anti-cheat compatibility. Just faster packets.</p>
           </div>
         </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- Global Network -->
-  <section class="section" id="network">
-    <div class="container">
-      <h2 class="section-title">Global Network</h2>
-      <p class="section-subtitle">Community-hosted relays across North America, Europe, AP-Southeast, and AP-Northeast. Your client verifies the signed registry and auto-discovers the fastest path.</p>
-      <div class="relay-grid">
-        <div class="relay-card" data-node-id="relay-lax-1">
-          <div class="relay-flag">🇺🇸</div>
-          <h3>Los Angeles</h3>
-          <div class="relay-region">US-West</div>
-          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
-          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
-        </div>
-        <div class="relay-card" data-node-id="relay-ewr-1">
-          <div class="relay-flag">🇺🇸</div>
-          <h3>New Jersey</h3>
-          <div class="relay-region">US-East</div>
-          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
-          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
-        </div>
-        <div class="relay-card" data-node-id="relay-fra">
-          <div class="relay-flag">🇩🇪</div>
-          <h3>Frankfurt</h3>
-          <div class="relay-region">EU-Central</div>
-          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
-          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
-        </div>
-        <div class="relay-card" data-node-id="relay-sgp-1">
-          <div class="relay-flag">🇸🇬</div>
-          <h3>Singapore</h3>
-          <div class="relay-region">AP-Southeast</div>
-          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
-          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
-        </div>
-        <div class="relay-card" data-node-id="relay-nrt">
-          <div class="relay-flag">🇯🇵</div>
-          <h3>Tokyo</h3>
-          <div class="relay-region">AP-Northeast</div>
-          <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
-          <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
+        <!-- Architecture diagram -->
+        <div class="arch-diagram">
+          <h3 class="arch-title">Under the Hood</h3>
+          <div class="arch-flow">
+            <div class="arch-node arch-client">
+              <span class="arch-node-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-monitor"></use></svg></span>
+              <span class="arch-node-label">Your PC</span>
+              <span class="arch-node-detail">Client + interceptor</span>
+            </div>
+            <div class="arch-link" aria-hidden="true">
+              <span class="arch-link-label">UDP / TCP tunnel</span>
+              <span class="arch-link-line"></span>
+            </div>
+            <div class="arch-node arch-proxy">
+              <span class="arch-node-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-server"></use></svg></span>
+              <span class="arch-node-label">Proxy Node</span>
+              <span class="arch-node-detail">Relay on a backbone route</span>
+            </div>
+            <div class="arch-link" aria-hidden="true">
+              <span class="arch-link-label">Native UDP</span>
+              <span class="arch-link-line"></span>
+            </div>
+            <div class="arch-node arch-server">
+              <span class="arch-node-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-gamepad"></use></svg></span>
+              <span class="arch-node-label">Game Server</span>
+              <span class="arch-node-detail">Fortnite / CS2 / Dota</span>
+            </div>
+          </div>
+          <p class="arch-note">Encapsulation adds +0.162 ms. Measured on localhost in the archived MVP benchmark with the earlier header; not a general latency guarantee.</p>
         </div>
       </div>
-      <div class="network-stats">
-        <div class="stat">
-          <span class="stat-value" data-stat="relay_count">--</span>
-          <span class="stat-label">Relay Nodes</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value" data-stat="area_count">--</span>
-          <span class="stat-label">Regions</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value">18</span>
-          <span class="stat-label">Game Profiles</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value">✓</span>
-          <span class="stat-label">Signed Registry</span>
-        </div>
-      </div>
-      <div class="network-stats">
-        <div class="stat">
-          <span class="stat-value" data-stat="packets_relayed">--</span>
-          <span class="stat-label">Packets Relayed</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value" data-stat="packets_dropped">--</span>
-          <span class="stat-label">Packets Filtered</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value" data-stat="drops_relay_send_errors">--</span>
-          <span class="stat-label">Upstream Loss</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-value" data-stat="sessions_created">--</span>
-          <span class="stat-label">Sessions</span>
-        </div>
-      </div>
-      <p class="network-note">
-        The network is community-hosted and sponsor-funded. Every relay is published in a
-        <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">signed registry</a>,
-        so your client verifies each node and picks the fastest path automatically. No manual proxy setup needed.
-        We publish live relay health (whether each node is up, not latency) from a periodically regenerated
-        snapshot. Last checked <time data-last-checked datetime="">--</time>.
-      </p>
+    </section>
 
-      <!-- Network Trends (bounded snapshot history) -->
-      <div class="trends" id="network-trends">
-        <h3 class="trends-title">Network Trends</h3>
-        <p class="trends-subtitle">
-          Trends are plotted from the collector's bounded snapshot history (up to 360 points) published
-          alongside the live snapshot. Metrics the history does not carry are left blank, never estimated.
+    <!-- Global Network -->
+    <section class="section section-dark" id="network">
+      <div class="container">
+        <p class="section-eyebrow">Infrastructure</p>
+        <h2 class="section-title">Global Network</h2>
+        <p class="section-subtitle">Community-hosted relays across North America, Europe, AP-Southeast, and AP-Northeast. Your client verifies the signed registry and auto-discovers the fastest path.</p>
+        <div class="relay-grid">
+          <article class="relay-card" data-node-id="relay-lax-1">
+            <div class="relay-head">
+              <span class="node-chip" aria-hidden="true">LAX</span>
+              <div>
+                <h3>Los Angeles</h3>
+                <div class="relay-region">US-West</div>
+              </div>
+            </div>
+            <div class="relay-status relay-status-pending"><span class="status-dot" aria-hidden="true"></span><span data-relay-status>Checking</span></div>
+            <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
+            <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
+          </article>
+          <article class="relay-card" data-node-id="relay-ewr-1">
+            <div class="relay-head">
+              <span class="node-chip" aria-hidden="true">EWR</span>
+              <div>
+                <h3>New Jersey</h3>
+                <div class="relay-region">US-East</div>
+              </div>
+            </div>
+            <div class="relay-status relay-status-pending"><span class="status-dot" aria-hidden="true"></span><span data-relay-status>Checking</span></div>
+            <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
+            <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
+          </article>
+          <article class="relay-card" data-node-id="relay-fra">
+            <div class="relay-head">
+              <span class="node-chip" aria-hidden="true">FRA</span>
+              <div>
+                <h3>Frankfurt</h3>
+                <div class="relay-region">EU-Central</div>
+              </div>
+            </div>
+            <div class="relay-status relay-status-pending"><span class="status-dot" aria-hidden="true"></span><span data-relay-status>Checking</span></div>
+            <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
+            <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
+          </article>
+          <article class="relay-card" data-node-id="relay-sgp-1">
+            <div class="relay-head">
+              <span class="node-chip" aria-hidden="true">SGP</span>
+              <div>
+                <h3>Singapore</h3>
+                <div class="relay-region">AP-Southeast</div>
+              </div>
+            </div>
+            <div class="relay-status relay-status-pending"><span class="status-dot" aria-hidden="true"></span><span data-relay-status>Checking</span></div>
+            <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
+            <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
+          </article>
+          <article class="relay-card" data-node-id="relay-nrt">
+            <div class="relay-head">
+              <span class="node-chip" aria-hidden="true">NRT</span>
+              <div>
+                <h3>Tokyo</h3>
+                <div class="relay-region">AP-Northeast</div>
+              </div>
+            </div>
+            <div class="relay-status relay-status-pending"><span class="status-dot" aria-hidden="true"></span><span data-relay-status>Checking</span></div>
+            <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
+            <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
+          </article>
+        </div>
+
+        <div class="stats-panel" aria-live="polite">
+          <div class="stats-row">
+            <div class="stat">
+              <span class="stat-value" data-stat="relay_count">--</span>
+              <span class="stat-label">Relay Nodes</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value" data-stat="relays_online">--</span>
+              <span class="stat-label">Relays Online</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value" data-stat="area_count">--</span>
+              <span class="stat-label">Regions</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">18</span>
+              <span class="stat-label">Game Profiles</span>
+            </div>
+          </div>
+          <div class="stats-row">
+            <div class="stat">
+              <span class="stat-value" data-stat="packets_relayed">--</span>
+              <span class="stat-label">Packets Relayed</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value" data-stat="packets_dropped">--</span>
+              <span class="stat-label">Packets Filtered</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value" data-stat="drops_relay_send_errors">--</span>
+              <span class="stat-label">Upstream Loss</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value" data-stat="sessions_created">--</span>
+              <span class="stat-label">Sessions</span>
+            </div>
+          </div>
+        </div>
+        <p class="sr-only" role="status" id="snapshot-status"></p>
+
+        <p class="network-note">
+          The network is community-hosted and sponsor-funded. Every relay is published in a
+          <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">signed registry</a>,
+          so your client verifies each node and picks the fastest path automatically. No manual proxy setup needed.
+          We publish live relay health (whether each node is up, not latency) from a periodically regenerated
+          snapshot. Last checked <time data-last-checked datetime="">--</time>.
         </p>
-        <div class="trends-grid" id="trends-grid" data-trends-grid></div>
-        <div class="trends-empty" id="trends-empty" data-trends-empty hidden>
-          <p data-trends-empty-message>No network history has been published yet.</p>
-        </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- Supported Games -->
-  <section class="section section-dark" id="games">
-    <div class="container">
-      <h2 class="section-title">Supported Games</h2>
-      <p class="section-subtitle">Built-in profiles for 18 games. Drop-in and play.</p>
-      <div class="games-grid">
-        <div class="game-card">
-          <div class="game-icon">🔫</div>
-          <h3>Fortnite</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 9000-9100</span>
-            <span class="game-tag">EasyAntiCheat</span>
-          </div>
-          <p>Full support for all Fortnite server regions. Compatible with EasyAntiCheat, with no modifications to game packets.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🎯</div>
-          <h3>Counter-Strike 2</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 27015-27050</span>
-            <span class="game-tag">VAC</span>
-          </div>
-          <p>Optimized for CS2's tick-sensitive networking. VAC-safe: we only reroute, never modify packets.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🐉</div>
-          <h3>Dota 2</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 27015-27200</span>
-            <span class="game-tag">VAC</span>
-          </div>
-          <p>Works with all Dota 2 regions including SEA, India, and South America. Valve network compatible.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🔥</div>
-          <h3>Rust</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 28015-28017</span>
-            <span class="game-tag">EAC + Facepunch</span>
-          </div>
-          <p>Direct UDP to community and official servers, no Steam Datagram Relay, ideal for LightSpeed proxying. Compatible with EAC and Facepunch Anti-Hack.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">⚔️</div>
-          <h3>Valorant</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 7000-7500</span>
-            <span class="game-tag">Riot Vanguard</span>
-          </div>
-          <p>Direct UDP to Riot's regional servers worldwide. LightSpeed only reroutes packets transparently, fully compatible with Riot Vanguard's kernel-level anti-cheat.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🎽</div>
-          <h3>Apex Legends</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 37000-37050</span>
-            <span class="game-tag">EasyAntiCheat</span>
-          </div>
-          <p>Direct UDP to EA's data-centre servers across NA, EU, Asia, and OCE. No Steam relay layer, which makes it straightforward to proxy. EAC-safe transparent routing.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🦸</div>
-          <h3>Overwatch 2</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 5060-5062</span>
-            <span class="game-tag">Warden</span>
-          </div>
-          <p>Supports all Blizzard regional servers. Blizzard's game traffic uses direct UDP, so transparent rerouting works seamlessly alongside Warden anti-cheat.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🏆</div>
-          <h3>League of Legends</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 5500</span>
-            <span class="game-tag">Riot Vanguard</span>
-          </div>
-          <p>Works across all Riot regional servers (NA, EUW, EUNE, KR, etc.). Fully compatible with Riot Vanguard: we only change the route, never the payload.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🪖</div>
-          <h3>PUBG</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 7777</span>
-            <span class="game-tag">BattlEye</span>
-          </div>
-          <p>Supports all PUBG server regions. Direct UDP to Krafton servers, with no relay layers. Transparent tunneling is fully compatible with BattlEye.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🍁</div>
-          <h3>MapleStory</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 7575-7599</span>
-            <span class="game-tag">BlackCipher NGS</span>
-          </div>
-          <p>Direct UDP to Nexon's regional servers worldwide. Transparent routing is compatible with BlackCipher's kernel-level anti-cheat.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">✨</div>
-          <h3>Genshin Impact</h3>
-          <div class="game-details">
-            <span class="game-tag">TCP 12451</span>
-            <span class="game-tag">Action Combat</span>
-          </div>
-          <p>TCP-tunneled traffic to HoYoverse regional servers. No kernel anti-cheat, just clean, low-latency routing for action combat.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🏎️</div>
-          <h3>Rocket League</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 27015-27050</span>
-            <span class="game-tag">EasyAntiCheat</span>
-          </div>
-          <p>Direct UDP to Psyonix servers across all regions. EAC-compatible transparent routing with no packet modification and no relay layers.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🎖️</div>
-          <h3>World of Tanks</h3>
-          <div class="game-details">
-            <span class="game-tag">TCP 20010</span>
-            <span class="game-tag">Wargaming</span>
-          </div>
-          <p>TCP-tunneled traffic to Wargaming regional servers. No kernel anti-cheat, so route optimization is straightforward for tank combat.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">💣</div>
-          <h3>CS:GO Legacy</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 27000-27050</span>
-            <span class="game-tag">VAC</span>
-          </div>
-          <p>Legacy CS:GO servers still accept direct UDP. VAC-safe transparent routing, same as CS2. Some servers use Steam Datagram Relay, so auto-detection picks the direct path when one exists.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">👻</div>
-          <h3>Dead by Daylight</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 27000-27050</span>
-            <span class="game-tag">EasyAntiCheat</span>
-          </div>
-          <p>Direct UDP to Behaviour Interactive's dedicated servers across all regions. EAC-compatible transparent routing with no packet modification.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">📷</div>
-          <h3>Bodycam</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 27000-27050</span>
-            <span class="game-tag">Steam P2P</span>
-          </div>
-          <p>Peer-to-peer over Steam with no kernel anti-cheat. LightSpeed reroutes the Steam datagram traffic onto a cleaner path to your peers.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-        <div class="game-card">
-          <div class="game-icon">🧱</div>
-          <h3>Roblox</h3>
-          <div class="game-details">
-            <span class="game-tag">UDP 49152-65535</span>
-            <span class="game-tag">Byfron (Hyperion)</span>
-          </div>
-          <p>Direct UDP to Roblox's regional game servers on a high ephemeral source port. Transparent forwarding stays compatible with Byfron (Hyperion), since packets are never modified.</p>
-          <div class="game-status game-status-ready">✓ Ready</div>
-        </div>
-      </div>
-      <p class="games-more">
-        Don't see your game?
-        <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game →</a>
-      </p>
-    </div>
-  </section>
-
-  <!-- Benchmarks -->
-  <section class="section" id="benchmarks">
-    <div class="container">
-      <h2 class="section-title">Benchmarks</h2>
-      <p class="section-subtitle">Real numbers from our test suite and live relay health checks. No cherry-picked results.</p>
-      <div class="bench-grid">
-        <div class="bench-card">
-          <h3>🌐 Network Status</h3>
-          <div class="bench-value"><span data-stat="relays_online">--</span> <span class="bench-unit">online</span></div>
-          <p>Scheduled health checks report whether each community relay is up. We publish uptime and version, not per-connection latency: latency depends on your ISP and route, so measure it from your own connection.</p>
-          <div class="bench-bar">
-            <div class="bench-bar-fill bench-bar-green bench-bar-live" id="network-health-bar" style="width: 0%"></div>
-            <span class="bench-bar-label">Last checked <time data-last-checked datetime="">--</time></span>
-          </div>
-        </div>
-        <div class="bench-card">
-          <h3>🧩 Relay Software</h3>
-          <div class="bench-value" data-stat="software_versions">--</div>
-          <p>Version reported by the relays in the latest health snapshot. All nodes run the same signed build from the community network release.</p>
-          <div class="bench-bar">
-            <div class="bench-bar-fill" style="width: 100%"></div>
-            <span class="bench-bar-label">Reported by relay health checks</span>
-          </div>
-        </div>
-        <div class="bench-card">
-          <h3>📍 Relay Health</h3>
-          <ul class="relay-health-list" id="relay-health-list">
-            <li class="relay-health-row"><span class="relay-health-name">Waiting for snapshot</span></li>
-          </ul>
-          <p>Location, status, and uptime from the latest snapshot.</p>
-        </div>
-        <div class="bench-card">
-          <h3>🔧 FEC Recovery</h3>
-          <div class="bench-value">25<span class="bench-unit">%</span> overhead</div>
-          <p>XOR-based Forward Error Correction recovers lost packets with just 25% bandwidth overhead. ExitLag uses 200-300%.</p>
-          <div class="bench-bar">
-            <div class="bench-bar-fill" style="width: 25%"></div>
-            <span class="bench-bar-label">25% vs ExitLag's 200-300%</span>
-          </div>
-        </div>
-        <div class="bench-card">
-          <h3>🌐 WARP Boost</h3>
-          <div class="bench-value">5-10 <span class="bench-unit">ms</span></div>
-          <p>Optional Cloudflare WARP integration routes through NTT backbone, bypassing ISP routing inefficiencies. Free.</p>
-          <div class="bench-bar">
-            <div class="bench-bar-fill bench-bar-green" style="width: 90%"></div>
-            <span class="bench-bar-label">Auto-detected &middot; MASQUE protocol</span>
-          </div>
-        </div>
-        <div class="bench-card">
-          <h3>⚡ Tunnel Overhead</h3>
-          <div class="bench-value">162 <span class="bench-unit">μs</span></div>
-          <p>Protocol encapsulation adds just 0.162ms. 20-byte header + optional 4-byte FEC extension.</p>
-          <div class="bench-bar">
-            <div class="bench-bar-fill" style="width: 3%"></div>
-            <span class="bench-bar-label">0.162ms (imperceptible)</span>
-          </div>
-        </div>
-        <div class="bench-card">
-          <h3>🧪 Test Suite</h3>
-          <div class="bench-value">200+ <span class="bench-unit">tests</span></div>
-          <p>Protocol tests (header, FEC, telemetry, zero-alloc API), integration tests across all 4 crates, plus a local proxy + echo server E2E test in CI. The network status above comes from scheduled live relay health checks, not from CI.</p>
-          <div class="bench-bar">
-            <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
-            <span class="bench-bar-label">100% pass rate &middot; local proxy + echo E2E</span>
+        <!-- Network Trends (bounded snapshot history) -->
+        <div class="trends" id="network-trends">
+          <h3 class="trends-title">Network Trends</h3>
+          <p class="trends-subtitle">
+            Trends are plotted from the collector's bounded snapshot history (up to 360 points) published
+            alongside the live snapshot. Metrics the history does not carry are left blank, never estimated.
+          </p>
+          <div class="trends-grid" id="trends-grid" data-trends-grid></div>
+          <div class="trends-empty" id="trends-empty" data-trends-empty hidden>
+            <p data-trends-empty-message>No network history has been published yet.</p>
           </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Why LightSpeed -->
-  <section class="section section-dark" id="why">
-    <div class="container">
-      <h2 class="section-title">Why LightSpeed?</h2>
-      <p class="section-subtitle">We're not another ExitLag clone. Here's what makes us different.</p>
-      <div class="compare-grid">
-        <div class="compare-card">
-          <div class="compare-icon">💸</div>
-          <h3>Actually Free</h3>
-          <p>Not "free trial" free. Not "freemium" free. Free as in <strong>zero dollars forever</strong>. The community relay network is community-hosted and sponsor-funded, and you can still run your own proxy on free-tier cloud VPS credits. No middleman, no subscription, no hidden cost. Ever.</p>
-        </div>
-        <div class="compare-card">
-          <div class="compare-icon">🔓</div>
-          <h3>Open Source</h3>
-          <p>Every line of code is on GitHub. Audit it, fork it, improve it. No black boxes, no mystery binaries, no trust-us-bro security.</p>
-        </div>
-        <div class="compare-card">
-          <div class="compare-icon">🧠</div>
-          <h3>AI-Powered</h3>
-          <p>Our ML model learns which route is fastest based on real latency data, time of day, and network conditions. Not just "pick the closest server."</p>
-        </div>
-        <div class="compare-card">
-          <div class="compare-icon">🛡️</div>
-          <h3>Anti-Cheat Safe</h3>
-          <p>We never modify game packets. LightSpeed only changes the <em>route</em> your packets take. The content is untouched. Compatible with EAC, VAC, and Vanguard.</p>
-        </div>
-        <div class="compare-card">
-          <div class="compare-icon">🔒</div>
-          <h3>Privacy First</h3>
-          <p>No accounts. No telemetry (unless you opt in). No data harvesting. We don't even know who you are, and we like it that way.</p>
-        </div>
-        <div class="compare-card">
-          <div class="compare-icon">🦀</div>
-          <h3>Built in Rust</h3>
-          <p>Blazing fast, memory-safe, zero-cost abstractions. The entire stack (client, proxy, protocol) is pure Rust with async Tokio and QUIC.</p>
-        </div>
-        <div class="compare-card">
-          <div class="compare-icon">🔐</div>
-          <h3>Token Authenticated</h3>
-          <p>Clients register over a QUIC control plane and stamp a session token into every data-plane packet. The proxy validates <code>(IP, token)</code> per packet. Unregistered senders are dropped. <code>require_auth</code> is on by default.</p>
-        </div>
-        <div class="compare-card">
-          <div class="compare-icon">🔌</div>
-          <h3>TCP Fallback</h3>
-          <p>The client ↔ proxy tunnel defaults to UDP, but switches to TCP (<code>--tcp</code>) on networks that block UDP: hotels, coffee shops, restrictive ISPs. Same low-overhead optimization, broader compatibility.</p>
-        </div>
-      </div>
-
-      <!-- Comparison Table -->
-      <div class="compare-table-wrapper">
-        <table class="compare-table">
-          <thead>
-            <tr>
-              <th></th>
-              <th class="compare-us">LightSpeed</th>
-              <th>ExitLag</th>
-              <th>WTFast</th>
-              <th>Mudfish</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Price</td>
-              <td class="compare-us"><strong>$0/forever</strong></td>
-              <td>$6.50/mo</td>
-              <td>$9.99/mo</td>
-              <td>Pay-per-use</td>
-            </tr>
-            <tr>
-              <td>Open Source</td>
-              <td class="compare-us">✅ Full</td>
-              <td>❌</td>
-              <td>❌</td>
-              <td>❌</td>
-            </tr>
-            <tr>
-              <td>AI Routing</td>
-              <td class="compare-us">✅ ML Model</td>
-              <td>⚠️ Basic</td>
-              <td>⚠️ Basic</td>
-              <td>❌</td>
-            </tr>
-            <tr>
-              <td>Privacy</td>
-              <td class="compare-us">✅ No accounts</td>
-              <td>⚠️ Account required</td>
-              <td>⚠️ Account required</td>
-              <td>⚠️ Account required</td>
-            </tr>
-            <tr>
-              <td>Self-Hostable</td>
-              <td class="compare-us">✅</td>
-              <td>❌</td>
-              <td>❌</td>
-              <td>❌</td>
-            </tr>
-            <tr>
-              <td>Packet Recovery (FEC)</td>
-              <td class="compare-us">✅ 25% overhead</td>
-              <td>⚠️ 200-300% (duplication)</td>
-              <td>❌</td>
-              <td>❌</td>
-            </tr>
-            <tr>
-              <td>WARP Integration</td>
-              <td class="compare-us">✅ Auto-detect</td>
-              <td>❌</td>
-              <td>❌</td>
-              <td>❌</td>
-            </tr>
-            <tr>
-              <td>Token Authentication</td>
-              <td class="compare-us">✅ Per-packet</td>
-              <td>❌</td>
-              <td>❌</td>
-              <td>❌</td>
-            </tr>
-            <tr>
-              <td>TCP Tunnel</td>
-              <td class="compare-us">✅ <code>--tcp</code></td>
-              <td>❌</td>
-              <td>❌</td>
-              <td>❌</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- Download -->
-  <section class="section section-accent" id="download">
-    <div class="container">
-      <h2 class="section-title">Download LightSpeed</h2>
-      <p class="section-subtitle">Grab <span data-release-tag>the latest release</span>. Run it. That's the whole setup.</p>
-
-      <div class="download-primary">
-        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="btn btn-lg btn-primary" id="primary-download">
-          <span class="btn-icon">↓</span>
-          <span id="primary-download-label">Download LightSpeed</span>
-        </a>
-        <p class="download-primary-note" id="primary-download-note">Detecting your platform...</p>
-      </div>
-
-      <div class="download-grid">
-        <div class="download-card">
-          <div class="download-icon">🪟</div>
-          <h3>Windows</h3>
-          <p>Windows 10/11 &middot; x64</p>
-          <ul class="download-links">
-            <li>
-              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.msi">
-                <span class="download-link-label">GUI installer (MSI)</span>
-                <span class="download-filename">lightspeed-gui-x86_64-pc-windows-msvc.msi</span>
-              </a>
-            </li>
-            <li>
-              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.zip">
-                <span class="download-link-label">GUI app (ZIP)</span>
-                <span class="download-filename">lightspeed-gui-x86_64-pc-windows-msvc.zip</span>
-              </a>
-            </li>
-            <li>
-              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-pc-windows-msvc.zip">
-                <span class="download-link-label">CLI client (ZIP)</span>
-                <span class="download-filename">lightspeed-client-x86_64-pc-windows-msvc.zip</span>
-              </a>
-            </li>
-          </ul>
-        </div>
-
-        <div class="download-card">
-          <div class="download-icon">🍎</div>
-          <h3>macOS</h3>
-          <p>macOS 12+ &middot; CLI client</p>
-          <ul class="download-links">
-            <li>
-              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-apple-darwin.tar.xz">
-                <span class="download-link-label">Apple Silicon (M-series)</span>
-                <span class="download-filename">lightspeed-client-aarch64-apple-darwin.tar.xz</span>
-              </a>
-            </li>
-            <li>
-              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-apple-darwin.tar.xz">
-                <span class="download-link-label">Intel Mac</span>
-                <span class="download-filename">lightspeed-client-x86_64-apple-darwin.tar.xz</span>
-              </a>
-            </li>
-          </ul>
-        </div>
-
-        <div class="download-card">
-          <div class="download-icon">🐧</div>
-          <h3>Linux</h3>
-          <p>x64 &amp; ARM64 &middot; GUI + CLI</p>
-          <ul class="download-links">
-            <li>
-              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz">
-                <span class="download-link-label">GUI app (x64)</span>
-                <span class="download-filename">lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz</span>
-              </a>
-            </li>
-            <li>
-              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz">
-                <span class="download-link-label">CLI client (x64)</span>
-                <span class="download-filename">lightspeed-client-x86_64-unknown-linux-gnu.tar.xz</span>
-              </a>
-            </li>
-            <li>
-              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz">
-                <span class="download-link-label">CLI client (ARM64)</span>
-                <span class="download-filename">lightspeed-client-aarch64-unknown-linux-gnu.tar.xz</span>
-              </a>
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      <div class="download-methods">
-        <h3 class="download-methods-title">Standard install methods</h3>
-        <div class="method-grid">
-          <div class="method-card">
-            <div class="method-head">
-              <h4>Windows Package Manager</h4>
-              <span class="method-badge">Coming soon</span>
+    <!-- Supported Games -->
+    <section class="section" id="games">
+      <div class="container">
+        <p class="section-eyebrow">Compatibility</p>
+        <h2 class="section-title">Supported Games</h2>
+        <p class="section-subtitle">Built-in profiles for 18 games. Drop-in and play.</p>
+        <div class="games-grid">
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">FN</span>
+              <h3>Fortnite</h3>
             </div>
-            <p>The winget manifest is submitted and awaiting review. The MSI above is the same build.</p>
-            <div class="code-copy">
-              <code class="code-block">winget install ShibbityShwab.LightSpeed</code>
-              <button class="copy-btn" type="button" aria-label="Copy winget command">Copy</button>
+            <div class="game-details">
+              <span class="game-tag">UDP 1024-65535</span>
+              <span class="game-tag">EasyAntiCheat</span>
             </div>
+            <p>Full support for all Fortnite server regions. Compatible with EasyAntiCheat, with no modifications to game packets.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">CS2</span>
+              <h3>Counter-Strike 2</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27015-27050</span>
+              <span class="game-tag">VAC</span>
+            </div>
+            <p>Optimized for CS2's tick-sensitive networking. VAC-safe: we only reroute, never modify packets.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">D2</span>
+              <h3>Dota 2</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27015-27050</span>
+              <span class="game-tag">VAC</span>
+            </div>
+            <p>Works with all Dota 2 regions including SEA, India, and South America. Valve network compatible.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">RS</span>
+              <h3>Rust</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 28015-28017</span>
+              <span class="game-tag">EAC + Facepunch</span>
+            </div>
+            <p>Direct UDP to community and official servers, no Steam Datagram Relay, ideal for LightSpeed proxying. Compatible with EAC and Facepunch Anti-Hack.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-danger" aria-hidden="true">VAL</span>
+              <h3>Valorant</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7000-7500</span>
+              <span class="game-tag">Riot Vanguard</span>
+            </div>
+            <p>Direct UDP to Riot's regional servers worldwide. LightSpeed only reroutes packets transparently, fully compatible with Riot Vanguard's kernel-level anti-cheat.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">APX</span>
+              <h3>Apex Legends</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 37000-37050</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>Direct UDP to EA's data-centre servers across NA, EU, Asia, and OCE. No Steam relay layer, which makes it straightforward to proxy. EAC-safe transparent routing.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">OW2</span>
+              <h3>Overwatch 2</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 3478-6250</span>
+              <span class="game-tag">Warden</span>
+            </div>
+            <p>Supports all Blizzard regional servers. Blizzard's game traffic uses direct UDP, so transparent rerouting works seamlessly alongside Warden anti-cheat.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">LoL</span>
+              <h3>League of Legends</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 5000-5500</span>
+              <span class="game-tag">Riot Vanguard</span>
+            </div>
+            <p>Works across all Riot regional servers (NA, EUW, EUNE, KR, etc.). Fully compatible with Riot Vanguard: we only change the route, never the payload.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">PUBG</span>
+              <h3>PUBG</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7000-17999</span>
+              <span class="game-tag">BattlEye</span>
+            </div>
+            <p>Supports all PUBG server regions. Direct UDP to Krafton servers, with no relay layers. Transparent tunneling is fully compatible with BattlEye.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">MS</span>
+              <h3>MapleStory</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7575-8484</span>
+              <span class="game-tag">BlackCipher NGS</span>
+            </div>
+            <p>Direct UDP to Nexon's regional servers worldwide. Transparent routing is compatible with BlackCipher's user-mode anti-tamper.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">GI</span>
+              <h3>Genshin Impact</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 22101-42472</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>UDP traffic to HoYoverse regional servers. No kernel anti-cheat, just clean, low-latency routing for action combat.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-danger" aria-hidden="true">RL</span>
+              <h3>Rocket League</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7000-9000</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>Direct UDP to Psyonix servers across all regions. EAC-compatible transparent routing with no packet modification and no relay layers.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">WoT</span>
+              <h3>World of Tanks</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 12000-29999</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>UDP traffic to Wargaming regional servers. No kernel anti-cheat, so route optimization is straightforward for tank combat.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">CSGO</span>
+              <h3>CS:GO Legacy</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27000-27050</span>
+              <span class="game-tag">VAC</span>
+            </div>
+            <p>Legacy CS:GO servers still accept direct UDP. VAC-safe transparent routing, same as CS2. Some servers use Steam Datagram Relay, so auto-detection picks the direct path when one exists.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-danger" aria-hidden="true">DBD</span>
+              <h3>Dead by Daylight</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27000-27050</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>Direct UDP to Behaviour Interactive's dedicated servers across all regions. EAC-compatible transparent routing with no packet modification.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">BC</span>
+              <h3>Bodycam</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27000-27050</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>Peer-to-peer over Steam with no kernel anti-cheat. LightSpeed reroutes the Steam datagram traffic onto a cleaner path to your peers.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">RBX</span>
+              <h3>Roblox</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 49152-65535</span>
+              <span class="game-tag">Byfron (Hyperion)</span>
+            </div>
+            <p>Direct UDP to Roblox's regional game servers on a high ephemeral source port. Transparent forwarding stays compatible with Byfron (Hyperion), since packets are never modified.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">PZ</span>
+              <h3>Project Zomboid</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 16261-16262</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>Direct UDP to community and dedicated servers. No client anti-cheat, so transparent rerouting is straightforward for co-op survival.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+        </div>
+        <p class="games-more">
+          Don't see your game?
+          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a>
+        </p>
+      </div>
+    </section>
+
+    <!-- Benchmarks -->
+    <section class="section section-dark" id="benchmarks">
+      <div class="container">
+        <p class="section-eyebrow">Performance</p>
+        <h2 class="section-title">Benchmarks</h2>
+        <p class="section-subtitle">Real numbers from our test suite and live relay health checks. No cherry-picked results.</p>
+        <div class="bench-grid">
+          <article class="bench-card">
+            <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-activity"></use></svg> Network Status</h3>
+            <div class="bench-value"><span data-stat="relays_online">--</span> <span class="bench-unit">online</span></div>
+            <p>Scheduled health checks report whether each community relay is up. We publish uptime and version, not per-connection latency: latency depends on your ISP and route, so measure it from your own connection.</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill bench-bar-green bench-bar-live" id="network-health-bar" style="width: 0%"></div>
+            </div>
+            <p class="bench-bar-label">Last checked <time data-last-checked datetime="">--</time></p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-package"></use></svg> Relay Software</h3>
+            <div class="bench-value" data-stat="software_versions">--</div>
+            <p>Version reported by the relays in the latest health snapshot. All nodes run the same signed build from the community network release.</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 100%"></div>
+            </div>
+            <p class="bench-bar-label">Reported by relay health checks</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-map-pin"></use></svg> Relay Health</h3>
+            <ul class="relay-health-list" id="relay-health-list">
+              <li class="relay-health-row"><span class="relay-health-name">Waiting for snapshot</span></li>
+            </ul>
+            <p>Location, status, and uptime from the latest snapshot.</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-life-buoy"></use></svg> FEC Recovery</h3>
+            <div class="bench-value">25<span class="bench-unit">%</span> overhead</div>
+            <p>XOR-based Forward Error Correction recovers lost packets with just 25% bandwidth overhead. ExitLag uses 200-300%.</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 25%"></div>
+            </div>
+            <p class="bench-bar-label">25% vs ExitLag's 200-300%</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-gauge"></use></svg> WARP Boost</h3>
+            <div class="bench-value">5-10 <span class="bench-unit">ms</span></div>
+            <p>Optional Cloudflare WARP integration routes through NTT backbone, bypassing ISP routing inefficiencies. Free.</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill bench-bar-green" style="width: 90%"></div>
+            </div>
+            <p class="bench-bar-label">Auto-detected &middot; MASQUE protocol</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-timer"></use></svg> Tunnel Overhead</h3>
+            <div class="bench-value">162 <span class="bench-unit">μs</span></div>
+            <p>Protocol encapsulation adds just 0.162ms. 24-byte header plus an optional 4-byte FEC extension. Measured on localhost in the archived MVP benchmark, not a general guarantee.</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 3%"></div>
+            </div>
+            <p class="bench-bar-label">0.162ms (imperceptible)</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-flask"></use></svg> Test Suite</h3>
+            <div class="bench-value">200+ <span class="bench-unit">tests</span></div>
+            <p>Protocol tests (header, FEC, telemetry, zero-alloc API), integration tests across all 4 crates, plus a local proxy + echo server E2E test in CI. The network status above comes from scheduled live relay health checks, not from CI.</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
+            </div>
+            <p class="bench-bar-label">100% pass rate &middot; local proxy + echo E2E</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Why LightSpeed -->
+    <section class="section" id="why">
+      <div class="container">
+        <p class="section-eyebrow">Why LightSpeed</p>
+        <h2 class="section-title">Why LightSpeed?</h2>
+        <p class="section-subtitle">We're not another ExitLag clone. Here's what makes us different.</p>
+        <div class="compare-grid">
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-badge-dollar"></use></svg></div>
+            <h3>Actually Free</h3>
+            <p>Not "free trial" free. Not "freemium" free. Free as in <strong>zero dollars forever</strong>. The community relay network is community-hosted and sponsor-funded, and you can still run your own proxy on free-tier cloud VPS credits. No middleman, no subscription, no hidden cost. Ever.</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-unlock"></use></svg></div>
+            <h3>Open Source</h3>
+            <p>Every line of code is on GitHub. Audit it, fork it, improve it. No black boxes, no mystery binaries, no trust-us-bro security.</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-sparkles"></use></svg></div>
+            <h3>ML-Powered</h3>
+            <p>The model learns which route is fastest from real latency data, time of day, and network conditions. Not just "pick the closest server."</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-shield-check"></use></svg></div>
+            <h3>Designed for Anti-Cheat Compatibility</h3>
+            <p>LightSpeed never modifies game packets or memory. It only changes the <em>route</em> your packets take, and the payload is untouched. It is built to work alongside EAC, VAC, and Vanguard without triggering their detection models.</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
+            <h3>Privacy First</h3>
+            <p>No account and no telemetry by default. The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay.</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
+            <h3>Built in Rust</h3>
+            <p>Fast, memory-safe, zero-cost abstractions. The entire stack (client, proxy, protocol) is pure Rust with async Tokio and QUIC.</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-key"></use></svg></div>
+            <h3>Token Authenticated</h3>
+            <p>Clients register over a QUIC control plane and stamp a session token into every data-plane packet. The proxy validates <code>(IP, token)</code> per packet. Unregistered senders are dropped. <code>require_auth</code> is on by default.</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-plug"></use></svg></div>
+            <h3>TCP Fallback</h3>
+            <p>The client to proxy tunnel defaults to UDP, but switches to TCP (<code>--tcp</code>) on networks that block UDP: hotels, coffee shops, restrictive ISPs. Same low-overhead optimization, broader compatibility.</p>
+          </div>
+        </div>
+
+        <!-- Comparison Table -->
+        <div class="compare-table-wrapper">
+          <table class="compare-table">
+            <caption class="sr-only">Feature comparison between LightSpeed and other route optimizers</caption>
+            <thead>
+              <tr>
+                <th scope="col"><span class="sr-only">Feature</span></th>
+                <th scope="col" class="compare-us">LightSpeed</th>
+                <th scope="col">ExitLag</th>
+                <th scope="col">WTFast</th>
+                <th scope="col">Mudfish</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Price</th>
+                <td class="compare-us"><strong>$0/forever</strong></td>
+                <td>$6.50/mo</td>
+                <td>$9.99/mo</td>
+                <td>Pay-per-use</td>
+              </tr>
+              <tr>
+                <th scope="row">Open Source</th>
+                <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>Full</span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">ML Routing</th>
+                <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>ML Model</span></td>
+                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Basic</span></td>
+                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Basic</span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Privacy</th>
+                <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>No accounts</span></td>
+                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Account required</span></td>
+                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Account required</span></td>
+                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Account required</span></td>
+              </tr>
+              <tr>
+                <th scope="row">Self-Hostable</th>
+                <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Packet Recovery (FEC)</th>
+                <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>25% overhead</span></td>
+                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>200-300% (duplication)</span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">WARP Integration</th>
+                <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>Auto-detect</span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Token Authentication</th>
+                <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>Per-packet</span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">TCP Tunnel</th>
+                <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span><code>--tcp</code></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download -->
+    <section class="section section-accent" id="download">
+      <div class="container">
+        <p class="section-eyebrow">Install</p>
+        <h2 class="section-title">Download LightSpeed</h2>
+        <p class="section-subtitle">Grab <span data-release-tag>the latest release</span>. Run it. That's the whole setup.</p>
+
+        <div class="download-primary">
+          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="btn btn-lg btn-primary" id="primary-download">
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-download"></use></svg>
+            <span id="primary-download-label">Download LightSpeed</span>
+          </a>
+          <p class="download-primary-note" id="primary-download-note">Detecting your platform...</p>
+        </div>
+
+        <div class="download-grid">
+          <div class="download-card">
+            <div class="download-icon"><svg class="icon icon-xl" aria-hidden="true" focusable="false"><use href="#i-monitor"></use></svg></div>
+            <h3>Windows</h3>
+            <p>Windows 10/11 &middot; x64</p>
+            <ul class="download-links">
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.msi">
+                  <span class="download-link-label">GUI installer (MSI)</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-gui-x86_64-pc-windows-msvc.msi</span>
+                </a>
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.zip">
+                  <span class="download-link-label">GUI app (ZIP)</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-gui-x86_64-pc-windows-msvc.zip</span>
+                </a>
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-pc-windows-msvc.zip">
+                  <span class="download-link-label">CLI client (ZIP)</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-client-x86_64-pc-windows-msvc.zip</span>
+                </a>
+              </li>
+            </ul>
           </div>
 
-          <div class="method-card">
-            <div class="method-head">
-              <h4>Homebrew (macOS &amp; Linux)</h4>
-            </div>
-            <p>Tap the formula once, then install and upgrade with brew.</p>
-            <div class="code-copy">
-              <code class="code-block">brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed</code>
-              <button class="copy-btn" type="button" aria-label="Copy brew tap command">Copy</button>
-            </div>
-            <div class="code-copy">
-              <code class="code-block">brew install ShibbityShwab/lightspeed/lightspeed</code>
-              <button class="copy-btn" type="button" aria-label="Copy brew install command">Copy</button>
-            </div>
+          <div class="download-card">
+            <div class="download-icon"><svg class="icon icon-xl" aria-hidden="true" focusable="false"><use href="#i-laptop"></use></svg></div>
+            <h3>macOS</h3>
+            <p>macOS 12+ &middot; CLI client</p>
+            <ul class="download-links">
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-apple-darwin.tar.xz">
+                  <span class="download-link-label">Apple Silicon (M-series)</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-client-aarch64-apple-darwin.tar.xz</span>
+                </a>
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-apple-darwin.tar.xz">
+                  <span class="download-link-label">Intel Mac</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-client-x86_64-apple-darwin.tar.xz</span>
+                </a>
+              </li>
+            </ul>
           </div>
 
-          <div class="method-card">
-            <div class="method-head">
-              <h4>Arch Linux (AUR)</h4>
-            </div>
-            <p>Install the prebuilt binary package with your AUR helper.</p>
-            <div class="code-copy">
-              <code class="code-block">yay -S lightspeed-bin</code>
-              <button class="copy-btn" type="button" aria-label="Copy AUR command">Copy</button>
-            </div>
+          <div class="download-card">
+            <div class="download-icon"><svg class="icon icon-xl" aria-hidden="true" focusable="false"><use href="#i-terminal"></use></svg></div>
+            <h3>Linux</h3>
+            <p>x64 &amp; ARM64 &middot; GUI + CLI</p>
+            <ul class="download-links">
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz">
+                  <span class="download-link-label">GUI app (x64)</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz</span>
+                </a>
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz">
+                  <span class="download-link-label">CLI client (x64)</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-client-x86_64-unknown-linux-gnu.tar.xz</span>
+                </a>
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz">
+                  <span class="download-link-label">CLI client (ARM64)</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-client-aarch64-unknown-linux-gnu.tar.xz</span>
+                </a>
+              </li>
+            </ul>
           </div>
+        </div>
 
-          <div class="method-card">
-            <div class="method-head">
-              <h4>Linux shell installer</h4>
+        <div class="download-methods">
+          <h3 class="download-methods-title">Standard install methods</h3>
+          <div class="method-grid">
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Windows Package Manager</h4>
+                <span class="method-badge">Coming soon</span>
+              </div>
+              <p>The winget manifest is submitted and awaiting review. The MSI above is the same build.</p>
+              <div class="code-copy">
+                <code class="code-block">winget install ShibbityShwab.LightSpeed</code>
+                <button class="copy-btn" type="button" aria-label="Copy winget command">Copy</button>
+              </div>
             </div>
-            <p>One line for the CLI client, or the same for the GUI app.</p>
-            <div class="code-copy">
-              <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-installer.sh | sh</code>
-              <button class="copy-btn" type="button" aria-label="Copy CLI installer command">Copy</button>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Homebrew (macOS &amp; Linux)</h4>
+              </div>
+              <p>Tap the formula once, then install and upgrade with brew.</p>
+              <div class="code-copy">
+                <code class="code-block">brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed</code>
+                <button class="copy-btn" type="button" aria-label="Copy brew tap command">Copy</button>
+              </div>
+              <div class="code-copy">
+                <code class="code-block">brew install ShibbityShwab/lightspeed/lightspeed</code>
+                <button class="copy-btn" type="button" aria-label="Copy brew install command">Copy</button>
+              </div>
             </div>
-            <div class="code-copy">
-              <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-installer.sh | sh</code>
-              <button class="copy-btn" type="button" aria-label="Copy GUI installer command">Copy</button>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Arch Linux (AUR)</h4>
+                <span class="method-badge">Coming soon</span>
+              </div>
+              <p>Packaging is prepared. The package is not yet published to the AUR; this command will work once it is.</p>
+              <div class="code-copy">
+                <code class="code-block">yay -S lightspeed-bin</code>
+                <button class="copy-btn" type="button" aria-label="Copy AUR command">Copy</button>
+              </div>
+            </div>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Linux shell installer</h4>
+              </div>
+              <p>One line for the CLI client, or the same for the GUI app.</p>
+              <div class="code-copy">
+                <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-installer.sh | sh</code>
+                <button class="copy-btn" type="button" aria-label="Copy CLI installer command">Copy</button>
+              </div>
+              <div class="code-copy">
+                <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-installer.sh | sh</code>
+                <button class="copy-btn" type="button" aria-label="Copy GUI installer command">Copy</button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <p class="download-relay">
-        Running a relay node? Grab the proxy build for
-        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> or
-        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>.
-        Everything else lives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">GitHub Releases</a>.
-      </p>
-    </div>
-  </section>
+        <p class="sr-only" role="status" id="copy-status"></p>
 
-  <!-- FAQ -->
-  <section class="section" id="faq">
-    <div class="container">
-      <h2 class="section-title">FAQ</h2>
-      <div class="faq-grid">
-        <details class="faq-item">
-          <summary>How is this free? What's the catch?</summary>
-          <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data because we don't collect it.</p>
-        </details>
-        <details class="faq-item">
-          <summary>Will this get me banned?</summary>
-          <p>No. LightSpeed works like a VPN but only for game traffic. We never modify, inject, or inspect your game packets. We only change the <em>network route</em> they take. This is compatible with EasyAntiCheat (Fortnite), VAC (CS2/Dota 2), and other anti-cheat systems. Route optimization tools like ExitLag have been used for years without bans.</p>
-        </details>
-        <details class="faq-item">
-          <summary>How much will this actually reduce my ping?</summary>
-          <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut 10-50ms off your ping. If your ISP already has optimal routing, the improvement may be minimal. The AI model picks the best route, or direct if that's fastest.</p>
-        </details>
-        <details class="faq-item">
-          <summary>Does LightSpeed make my internet faster?</summary>
-          <p>No. LightSpeed can't make your traffic go faster. It can't outrun physics. What it does is <strong>proactively route</strong> your traffic onto the fastest available path, avoiding congestion and needlessly long routes. If your ISP already has a clean route, or your proxy is badly placed, you'll see little to no improvement.</p>
-        </details>
-        <details class="faq-item">
-          <summary>Why is my ping higher when I use a proxy?</summary>
-          <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>game server</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">Route Visualizer</a>.</p>
-        </details>
-        <details class="faq-item">
-          <summary>What games are supported?</summary>
-          <p>Currently 17 games: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, and Roblox all have built-in profiles. Just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
-        </details>
-        <details class="faq-item">
-          <summary>Is my data safe?</summary>
-          <p>We don't collect any data by default. No accounts, no registration, no telemetry. If you opt-in to anonymous latency reporting, we collect only aggregate network metrics (ping times, not your identity or game data). All traffic passes through unencrypted to avoid adding overhead. We document this transparently.</p>
-        </details>
-        <details class="faq-item">
-          <summary>How do I get a proxy node?</summary>
-          <p>The easiest path is to do nothing: the default client experience uses the community relay network, and your client auto-discovers the fastest relay from the <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">signed registry</a>. If you want to run your own node instead, spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
-        </details>
-        <details class="faq-item">
-          <summary>Why Rust?</summary>
-          <p>Rust gives us the performance of C/C++ with memory safety guarantees. For a latency-critical network tool that handles thousands of packets per second, we need zero-overhead abstractions. Rust's async ecosystem (Tokio) and QUIC libraries (quinn) are world-class.</p>
-        </details>
-        <details class="faq-item">
-          <summary>How does the AI routing work?</summary>
-          <p>We train a Random Forest model on network latency data with 11 features: current latency, historical p50/p95, jitter, packet loss, hop count, time of day, proxy load, and geographic distance. The model predicts which proxy route will be fastest and switches in under 1ms. It achieves R²=0.95 accuracy on our test data.</p>
-        </details>
+        <p class="download-relay">
+          Running a relay node? Grab the proxy build for
+          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> or
+          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>.
+          Everything else lives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">GitHub Releases</a>.
+        </p>
       </div>
-    </div>
-  </section>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section" id="faq">
+      <div class="container">
+        <p class="section-eyebrow">Questions</p>
+        <h2 class="section-title">FAQ</h2>
+        <div class="faq-grid">
+          <details class="faq-item">
+            <summary>How is this free? What's the catch?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data because we don't collect it.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Will this get me banned?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>LightSpeed is designed to be compatible with major anti-cheat systems: it does not modify game files or memory, does not hook game processes, and does not hide your IP. Route optimizers in this class have been used for years. That said, anti-cheat policy and terms of service are set by each publisher and can change at any time, so no tool can guarantee a ban will never occur. Check the relevant game's terms before you play.</p>
+          </details>
+          <details class="faq-item">
+            <summary>How much will this actually reduce my ping?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut 10-40ms off your ping. If your ISP already has optimal routing, the improvement may be minimal. The model picks the best route, or direct if that's fastest.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Does LightSpeed make my internet faster?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>No. LightSpeed can't make your traffic go faster. It can't outrun physics. What it does is <strong>proactively route</strong> your traffic onto the fastest available path, avoiding congestion and needlessly long routes. If your ISP already has a clean route, or your proxy is badly placed, you'll see little to no improvement.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Why is my ping higher when I use a proxy?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>game server</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">Route Visualizer</a>.</p>
+          </details>
+          <details class="faq-item">
+            <summary>What games are supported?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>Currently 18 games: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, and Project Zomboid all have built-in profiles. Just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Is my data safe?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>We don't collect any data by default. No accounts, no registration, no telemetry. If you opt-in to anonymous latency reporting, we collect only aggregate network metrics (ping times, not your identity or game data). All traffic passes through unencrypted to avoid adding overhead. We document this transparently.</p>
+          </details>
+          <details class="faq-item">
+            <summary>How do I get a proxy node?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>The easiest path is to do nothing: the default client experience uses the community relay network, and your client auto-discovers the fastest relay from the <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">signed registry</a>. If you want to run your own node instead, spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Why Rust?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>Rust gives us the performance of C/C++ with memory safety guarantees. For a latency-critical network tool that handles thousands of packets per second, we need zero-overhead abstractions. Rust's async ecosystem (Tokio) and QUIC libraries (quinn) are world-class.</p>
+          </details>
+          <details class="faq-item">
+            <summary>How does the ML routing work?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
+            <p>We train a Random Forest model on network latency data with 11 features: current latency, historical p50/p95, jitter, packet loss, hop count, time of day, proxy load, and geographic distance. The model predicts which proxy route will be fastest in a single inference pass, measured in microseconds at runtime. The model reports its own R², MAE, and RMSE against a held-out test split each time it trains; the figure varies with the training data, so we do not publish a fixed number.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+  </main>
 
   <!-- Community / Footer -->
   <footer class="footer">
     <div class="container">
       <div class="footer-grid">
         <div class="footer-brand">
-          <span class="logo-icon">⚡</span>
-          <span class="logo-text">LightSpeed</span>
+          <div class="footer-logo">
+            <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><use href="#i-logo"></use></svg>
+            <span class="logo-text">LightSpeed</span>
+          </div>
           <p>Open-source game network optimizer.<br>Reduce your ping. Free. Forever.</p>
         </div>
-        <div class="footer-links">
-          <h4>Project</h4>
-          <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">GitHub</a>
+        <nav class="footer-links" aria-label="Project">
+          <h3>Project</h3>
+          <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener"><svg class="icon icon-xs icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg> GitHub</a>
           <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">Releases</a>
           <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/architecture.md" target="_blank" rel="noopener">Architecture</a>
           <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/protocol.md" target="_blank" rel="noopener">Protocol Spec</a>
-        </div>
-        <div class="footer-links">
-          <h4>Community</h4>
+        </nav>
+        <nav class="footer-links" aria-label="Community">
+          <h3>Community</h3>
           <a href="https://github.com/ShibbityShwab/lightspeed/discussions" target="_blank" rel="noopener">Discussions</a>
           <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Report a Bug</a>
           <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a Game</a>
-        </div>
-        <div class="footer-links">
-          <h4>Legal</h4>
+        </nav>
+        <nav class="footer-links" aria-label="Legal">
+          <h3>Legal</h3>
           <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE" target="_blank" rel="noopener">License</a>
           <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/security-audit-mvp.md" target="_blank" rel="noopener">Security Audit</a>
-        </div>
+        </nav>
       </div>
+      <p class="footer-legal">LightSpeed is an independent, open-source project. It is not affiliated with, endorsed by, or sponsored by any game publisher, platform, storefront, or anti-cheat vendor. All game titles, company names, logos, and related marks are trademarks or registered trademarks of their respective owners and are used here only to identify the games the software supports. LightSpeed ships no third-party game artwork or logos.</p>
       <div class="footer-bottom">
-        <p>&copy; 2026 LightSpeed Contributors. Free for personal use. Built with 🦀 Rust and ❤️.</p>
+        <p>&copy; 2026 LightSpeed Contributors. Free for personal use. Built with Rust.</p>
       </div>
     </div>
   </footer>
 
-  <script src="app.js"></script>
+  <script src="app.js" defer></script>
 </body>
 </html>

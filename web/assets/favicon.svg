@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="LightSpeed">
+  <title>LightSpeed</title>
+  <defs>
+    <linearGradient id="ls-tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1a38"/>
+      <stop offset="1" stop-color="#0a0a1a"/>
+    </linearGradient>
+    <linearGradient id="ls-mark" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#a29bfe"/>
+      <stop offset="1" stop-color="#00cec9"/>
+    </linearGradient>
+    <radialGradient id="ls-glow" cx="0.5" cy="0.46" r="0.62">
+      <stop offset="0" stop-color="#6c5ce7" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#6c5ce7" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7" fill="url(#ls-tile)" stroke="#2f2f52" stroke-width="1.5"/>
+  <circle cx="16" cy="15" r="13.5" fill="url(#ls-glow)"/>
+  <path d="M6.55 4.75 H14.65 V20.05 H20.05 L25.45 25 L22.75 27.25 H6.55 Z" fill="url(#ls-mark)"/>
+</svg>
