@@ -1101,7 +1101,7 @@ mod tests {
         let current = current_handoff_status().expect("status recorded");
         assert_eq!(current.result, RESULT_OK);
         assert_eq!(current.sessions_transferred, 3);
-        assert!(current.supported);
+        assert_eq!(current.supported, SUPPORTED);
         assert_eq!(current.at_unix_ms, 1_700_000_000_000);
 
         let bytes = std::fs::read(&path).expect("result file written");
@@ -1109,7 +1109,7 @@ mod tests {
         assert_eq!(on_disk, current);
 
         let health = handoff_health();
-        assert!(health.supported);
+        assert_eq!(health.supported, SUPPORTED);
         assert_eq!(health.last, Some(current));
 
         std::env::remove_var(RESULT_PATH_ENV);
