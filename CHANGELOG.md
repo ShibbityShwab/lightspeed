@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-09-19
+
+### Fixed
+
+- The in-place handoff no longer fails with "cannot read handoff request: Permission denied".
+  The request file is now owned by the proxy's runtime user instead of root, which the
+  `DynamicUser` service could not read, so the first version-to-version handoff (1.5.0 to
+  1.6.0) rolled back on every relay.
+- `deploy.sh` now sets `[server] public_ip` on each relay through the new
+  `relay-install.sh --public-ip`, so relay-to-self sessions are filtered by an exact address
+  match rather than the control-port heuristic. It also ships `relay-updater.sh` through the
+  new `--updater` flag, so the self-updater no longer stays at its provisioning revision.
+- The Deploy Proxy workflow also triggers on changes to `relay-install.sh`,
+  `relay-updater.sh`, and `lib-nodes.sh`.
+
 ## [1.6.0] - 2026-09-19
 
 ### Demand-driven relay placement analysis
