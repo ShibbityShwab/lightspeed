@@ -96,8 +96,10 @@ impl Authenticator {
     ///
     /// `data_port` is the client's data-plane source port, or 0 when the client
     /// does not report one (the token is then bound to the principal only).
-    /// Any existing entries for the same principal are capped to a short
-    /// [`PREVIOUS_TOKEN_GRACE`] window so a reconnecting client can overlap.
+    /// An existing token for the same principal *and* data port is capped to a
+    /// short [`PREVIOUS_TOKEN_GRACE`] window so a reconnecting client can
+    /// overlap. A principal-only registration demotes nothing, because it
+    /// cannot prove it supersedes another client behind the same NAT.
     /// Fails closed when the table is full and the token is new.
     pub fn authorize(&mut self, principal: Ipv4Addr, data_port: u16, token: u32, now: Instant) {
         if !self.tokens.contains_key(&token) && self.tokens.len() >= self.max_entries {
@@ -108,10 +110,19 @@ impl Authenticator {
             return;
         }
 
-        let previous_deadline = now + PREVIOUS_TOKEN_GRACE;
-        for entry in self.tokens.values_mut() {
-            if entry.principal == principal && entry.expires_at > previous_deadline {
-                entry.expires_at = previous_deadline;
+        // Demote only a token that demonstrably belongs to the same client,
+        // identified by principal plus the reported data port. Demoting every
+        // same-principal token would let two clients behind one NAT truncate
+        // each other to the previous-token grace window.
+        if data_port != 0 {
+            let previous_deadline = now + PREVIOUS_TOKEN_GRACE;
+            for entry in self.tokens.values_mut() {
+                if entry.principal == principal
+                    && entry.bound_port == Some(data_port)
+                    && entry.expires_at > previous_deadline
+                {
+                    entry.expires_at = previous_deadline;
+                }
             }
         }
 
@@ -307,16 +318,16 @@ mod tests {
         let mut auth = Authenticator::new(true);
         let shared = ip(1);
         let t_old = t0();
-        auth.authorize(shared, 0, 111, t_old);
+        auth.authorize(shared, 40_000, 111, t_old);
 
         let t_new = t_old + Duration::from_secs(100);
-        auth.authorize(shared, 0, 222, t_new);
+        auth.authorize(shared, 40_000, 222, t_new);
 
         let within = t_new + PREVIOUS_TOKEN_GRACE - Duration::from_secs(1);
         let after = t_new + PREVIOUS_TOKEN_GRACE + Duration::from_secs(1);
-        assert!(auth.validate(shared, 0, 111, within));
-        assert!(!auth.validate(shared, 0, 111, after));
-        assert!(auth.validate(shared, 0, 222, after));
+        assert!(auth.validate(shared, 40_000, 111, within));
+        assert!(!auth.validate(shared, 40_000, 111, after));
+        assert!(auth.validate(shared, 40_000, 222, after));
     }
 
     #[test]
@@ -409,5 +420,51 @@ mod tests {
 
         auth.authorize(ip(1), 0, 111, now + Duration::from_secs(1));
         assert_eq!(auth.client_count(), 2);
+    }
+
+    #[test]
+    fn nat_peers_distinct_ports_do_not_demote_each_other() {
+        let mut auth = Authenticator::new(true);
+        let now = t0();
+        let shared = ip(1);
+
+        auth.authorize(shared, 40_001, 111, now);
+        // A second client behind the same NAT registers later on another port.
+        let later = now + Duration::from_secs(200);
+        auth.authorize(shared, 40_002, 222, later);
+
+        // The first client keeps its full TTL, not the shorter previous-token
+        // grace window that a same-principal demotion would impose.
+        let past_grace = now + PREVIOUS_TOKEN_GRACE + Duration::from_secs(1);
+        assert!(auth.validate(shared, 40_001, 111, past_grace));
+        assert!(auth.validate(
+            shared,
+            40_001,
+            111,
+            now + TOKEN_TTL - Duration::from_secs(1)
+        ));
+        assert!(!auth.validate(
+            shared,
+            40_001,
+            111,
+            now + TOKEN_TTL + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn principal_only_registration_demotes_nothing() {
+        let mut auth = Authenticator::new(true);
+        let now = t0();
+        let shared = ip(1);
+
+        auth.authorize(shared, 40_001, 111, now);
+        auth.authorize(shared, 0, 222, now);
+
+        assert!(auth.validate(
+            shared,
+            40_001,
+            111,
+            now + PREVIOUS_TOKEN_GRACE + Duration::from_secs(1)
+        ));
     }
 }
