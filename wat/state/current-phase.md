@@ -195,3 +195,42 @@ per relay.
 **Next:** push/merge the branch and cut a 1.5.0 release so the self-updater and the Pages
 stats reflect it; then use `collect-metrics.sh` + `analyze-mesh.sh` on live data to tune
 relay selection.
+
+---
+
+## WF-026: Demand-driven relay placement recommender (2026-09-19)
+
+**Workflow:** WF-026
+**Agent:** Architect / RustDev / InfraDev / QAEngineer
+**Status:** Implemented on `feat/relay-placement-recommender`, uncommitted, pending review + release
+
+Motivated by the owner's request to prioritize relay placement by where players actually play.
+Investigation found the WF-025 player-country telemetry is opt-in via the CLI `--telemetry`
+flag only, the GUI has no toggle, and production relays expose zero game/country series; the
+only country tags live were the relay location tags. The owner chose the demand-analysis plus
+region-recommender path with a player-region to game-server-region matrix, no infra spend, and
+no raw IP storage.
+
+Delivered:
+- Proxy-side transient country derivation (DB-IP Lite MMDB via `maxminddb`) aggregating
+  `(source_country, destination_country)` session counts with a k>=3 export floor, exposed as
+  `lightspeed_geo_*` on `/metrics`.
+- `infra/geo/` region and candidate catalogs plus `recommend-regions.sh`, which scores candidates
+  by demand-weighted coverage and redundancy and emits ADD/MOVE/NONE with a 3-run stability gate
+  and an INSUFFICIENT_DATA floor.
+- `collect-metrics.sh` coarsens country pairs to region pairs and persists them in the stats
+  branch history; `pages.yml` runs the recommender and commits `.stats/placement.json`.
+- Monthly `geoip-release.yml` publishes the pinned MMDB; `relay-updater.sh` and
+  `setup-new-node.sh` verify and sync it.
+- Privacy/FAQ/NOTICE describe the transient derivation and add the DB-IP attribution.
+
+**Verification:** CI parity locally (fmt, clippy default/quic/full/ml, workspace tests,
+`cargo deny`); bash suites 75/59/63/101/28 checks; live `/metrics` geo smoke; collector and
+recommender exercised end to end; reviewer pass on five blocker concerns.
+
+**Known gaps:** real history is roughly 60 sessions, so the recommender correctly reports
+INSUFFICIENT_DATA until the new proxy build and MMDB reach the fleet; the 64-cell cap is a growth
+guard that cannot trigger with the real 8-region catalog; MOVE target selection is region-agnostic.
+
+**Next:** review the branch, release the proxy build with geo, let `geoip-release.yml` publish the
+first MMDB, then let the relays self-update and start collecting demand.
