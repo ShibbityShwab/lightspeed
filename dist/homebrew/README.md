@@ -30,24 +30,27 @@ it; nothing else changes.
 
 ## Updating for a new release
 
-1. Set `version` to the new tag and update the four `url`/`sha256` values to the
-   matching `lightspeed-client-<triple>.tar.xz` assets.
-2. Refresh the sums straight from the release:
+This is automatic. On every tag, the `bump-homebrew` job in
+`.github/workflows/release.yml` runs `infra/scripts/bump-homebrew.sh <version>`,
+which rewrites `version` and the four `sha256` values from the release assets
+and commits the result to `master`.
 
-   ```sh
-   gh release view vX.Y.Z --repo ShibbityShwab/lightspeed --json assets \
-     -q '.assets[] | select(.name | test("lightspeed-client-.*\\.tar\\.xz$")) | "\(.name)  \(.digest | sub("sha256:"; ""))"'
-   ```
+To repair the formula by hand:
 
-3. Sanity check on a machine with Homebrew:
+```sh
+bash infra/scripts/bump-homebrew.sh X.Y.Z
+git diff -- Formula/lightspeed.rb
+```
 
-   ```sh
-   brew install --build-from-source --verbose ./Formula/lightspeed.rb
-   brew test lightspeed
-   ```
+Sanity check on a machine with Homebrew:
 
-   A binary-only formula like this is also checked by `brew audit --strict`
-   and `brew style`.
+```sh
+brew install --build-from-source --verbose ./Formula/lightspeed.rb
+brew test lightspeed
+```
+
+A binary-only formula like this is also checked by `brew audit --strict` and
+`brew style`.
 
 ## Why not a cask
 

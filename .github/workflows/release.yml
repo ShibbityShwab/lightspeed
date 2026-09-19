@@ -302,6 +302,37 @@ jobs:
             echo "no changelog section"
           fi
 
+  # Homebrew is tapped straight from this repo (no separate tap repository), so
+  # each release must move Formula/lightspeed.rb to the new version and sums.
+  # Committing it here keeps `brew install` current without a manual step.
+  bump-homebrew:
+    needs:
+      - plan
+      - host
+    if: ${{ always() && github.event_name == 'push' && needs.host.result == 'success' }}
+    permissions:
+      contents: write
+    runs-on: "ubuntu-22.04"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+      - name: Bump the Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash infra/scripts/bump-homebrew.sh "$VERSION"
+          if git diff --quiet -- Formula/lightspeed.rb; then
+            echo "formula already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/lightspeed.rb
+          git commit -m "chore(homebrew): bump to v${VERSION}"
+          git push origin HEAD:master
+
   announce:
     needs:
       - plan
