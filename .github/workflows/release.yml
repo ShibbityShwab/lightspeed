@@ -346,6 +346,10 @@ jobs:
     # still resolving to a clean skip on pull_request runs.
     if: ${{ always() && needs.host.result == 'success' }}
     runs-on: "ubuntu-22.04"
+    # The package has never been bootstrapped in microsoft/winget-pkgs, and
+    # winget-releaser cannot create the first version; until that manual
+    # bootstrap happens, do not fail the release on this optional publisher.
+    continue-on-error: true
     env:
       # secrets.* cannot be read inside an `if:`, so gate on the env var instead.
       WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
