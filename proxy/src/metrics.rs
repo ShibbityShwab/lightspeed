@@ -1050,6 +1050,7 @@ mod tests {
             fec_recoveries: 1,
             fec_losses: 0,
             client_version: "1.4.4".to_string(),
+            route_legs: vec![],
         }
     }
 

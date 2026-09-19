@@ -201,6 +201,7 @@ impl TelemetryCollector {
             fec_recoveries: recoveries,
             fec_losses: losses,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
+            route_legs: vec![],
         })
     }
 
