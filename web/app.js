@@ -699,6 +699,161 @@
       });
   }
 
+  // --- Download: platform detection, copy-to-clipboard, latest release tag ---
+  var RELEASE_DOWNLOAD_BASE = 'https://github.com/ShibbityShwab/lightspeed/releases/latest/download/';
+  var RELEASE_LATEST_PAGE = 'https://github.com/ShibbityShwab/lightspeed/releases/latest';
+
+  // Best artifact for each detected platform/arch pair. Windows ARM64 falls
+  // back to the x64 MSI (runs under emulation) and Linux ARM64 has no GUI
+  // build yet, so both resolve to the closest real asset.
+  function downloadTarget(platform, arch) {
+    if (platform === 'windows') {
+      return { asset: 'lightspeed-gui-x86_64-pc-windows-msvc.msi', label: 'Windows (x64)' };
+    }
+    if (platform === 'macos') {
+      if (arch === 'aarch64') {
+        return { asset: 'lightspeed-client-aarch64-apple-darwin.tar.xz', label: 'macOS (Apple Silicon)' };
+      }
+      return { asset: 'lightspeed-client-x86_64-apple-darwin.tar.xz', label: 'macOS (Intel)' };
+    }
+    if (platform === 'linux') {
+      if (arch === 'aarch64') {
+        return { asset: 'lightspeed-client-aarch64-unknown-linux-gnu.tar.xz', label: 'Linux (ARM64)' };
+      }
+      return { asset: 'lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz', label: 'Linux (x64)' };
+    }
+    return null;
+  }
+
+  function normalizePlatform(value) {
+    var v = String(value || '').toLowerCase();
+    if (v.indexOf('iphone') !== -1 || v.indexOf('ipad') !== -1 || v.indexOf('ipod') !== -1) return '';
+    if (v.indexOf('android') !== -1) return '';
+    if (v.indexOf('win') !== -1) return 'windows';
+    if (v.indexOf('mac') !== -1 || v.indexOf('darwin') !== -1) return 'macos';
+    if (v.indexOf('linux') !== -1 || v.indexOf('x11') !== -1 || v.indexOf('ubuntu') !== -1 || v.indexOf('fedora') !== -1) return 'linux';
+    return '';
+  }
+
+  function normalizeArch(value) {
+    var v = String(value || '').toLowerCase();
+    if (v === 'arm' || v.indexOf('arm64') !== -1 || v.indexOf('aarch64') !== -1 || v.indexOf('armv8') !== -1) return 'aarch64';
+    if (v.indexOf('x86') !== -1 || v.indexOf('x64') !== -1 || v.indexOf('amd64') !== -1 || v.indexOf('win64') !== -1 || v.indexOf('wow64') !== -1 || v.indexOf('intel') !== -1) return 'x86_64';
+    return '';
+  }
+
+  function detectPlatform() {
+    var nav = navigator;
+    var hints;
+    if (nav.userAgentData && typeof nav.userAgentData.getHighEntropyValues === 'function') {
+      hints = nav.userAgentData.getHighEntropyValues(['architecture', 'bitness'])
+        .then(function (values) {
+          return { platform: nav.userAgentData.platform, arch: values.architecture };
+        })
+        .catch(function () {
+          return { platform: nav.userAgentData.platform, arch: '' };
+        });
+    } else {
+      hints = Promise.resolve({ platform: nav.platform || '', arch: '' });
+    }
+    return hints.then(function (values) {
+      var platform = normalizePlatform(values.platform || nav.platform || '') ||
+        normalizePlatform(nav.userAgent || '');
+      var arch = normalizeArch(values.arch || '') || normalizeArch(nav.userAgent || '');
+      return { platform: platform, arch: arch };
+    });
+  }
+
+  function initDownload() {
+    var button = document.getElementById('primary-download');
+    var label = document.getElementById('primary-download-label');
+    var note = document.getElementById('primary-download-note');
+    if (!button) return;
+
+    function showFallback() {
+      button.href = RELEASE_LATEST_PAGE;
+      if (label) label.textContent = 'Download the latest release';
+      if (note) note.textContent = 'Pick your platform on GitHub Releases.';
+    }
+
+    detectPlatform().then(function (target) {
+      var best = downloadTarget(target.platform, target.arch);
+      if (!best) {
+        showFallback();
+        return;
+      }
+      button.href = RELEASE_DOWNLOAD_BASE + best.asset;
+      button.setAttribute('data-asset', best.asset);
+      if (label) label.textContent = 'Download for ' + best.label;
+      if (note) note.textContent = best.asset;
+    }).catch(showFallback);
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+      document.body.removeChild(area);
+      if (ok) resolve(); else reject(new Error('copy failed'));
+    });
+  }
+
+  function initCopyButtons() {
+    document.querySelectorAll('.copy-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var wrapper = btn.closest('.code-copy');
+        var code = wrapper ? wrapper.querySelector('code') : null;
+        if (!code) return;
+        var original = btn.textContent;
+        copyText(code.textContent.trim()).then(function () {
+          btn.textContent = 'Copied!';
+          btn.classList.add('copied');
+        }).catch(function () {
+          btn.textContent = 'Select + copy';
+        }).then(function () {
+          setTimeout(function () {
+            btn.textContent = original;
+            btn.classList.remove('copied');
+          }, 1600);
+        });
+      });
+    });
+  }
+
+  function loadLatestReleaseTag() {
+    var slots = document.querySelectorAll('[data-release-tag]');
+    if (!slots.length || !window.fetch) return;
+    fetch('https://api.github.com/repos/ShibbityShwab/lightspeed/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json' }
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error('releases/latest: HTTP ' + response.status);
+        return response.json();
+      })
+      .then(function (release) {
+        var tag = release && typeof release.tag_name === 'string' ? release.tag_name : '';
+        if (!tag) return;
+        slots.forEach(function (el) { el.textContent = tag; });
+      })
+      .catch(function () {
+        // Keep the versionless fallback copy that is already in the markup.
+      });
+  }
+
+  initDownload();
+  initCopyButtons();
+  loadLatestReleaseTag();
+
   loadNetworkStats();
   loadNetworkHistory();
 

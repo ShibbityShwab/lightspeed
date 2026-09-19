@@ -384,21 +384,72 @@ img { max-width: 100%; display: block; }
 .compare-us { background: rgba(108, 92, 231, 0.08) !important; color: var(--accent-light) !important; font-weight: 600 !important; }
 
 /* --- Download --- */
-.download-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 24px; margin-bottom: 36px; }
+.download-primary { text-align: center; margin-bottom: 44px; }
+.download-primary-note {
+  margin-top: 10px; font-family: var(--mono); font-size: 0.78rem;
+  color: var(--text-dim); word-break: break-all;
+}
+.download-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; margin-bottom: 48px; }
 .download-card {
-  display: block; padding: 32px 24px; text-align: center;
+  display: flex; flex-direction: column; padding: 28px 24px; text-align: center;
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--radius); transition: all 0.2s; color: var(--text);
 }
-.download-card:hover { transform: translateY(-4px); border-color: var(--accent); color: var(--text-bright); box-shadow: 0 8px 32px var(--accent-glow); }
+.download-card:hover { transform: translateY(-4px); border-color: var(--accent); box-shadow: 0 8px 32px var(--accent-glow); }
 .download-icon { font-size: 2.5rem; margin-bottom: 12px; }
 .download-card h3 { font-size: 1.15rem; font-weight: 700; color: var(--text-bright); margin-bottom: 4px; }
-.download-card p { font-size: 0.88rem; color: var(--text-dim); margin-bottom: 12px; }
-.download-filename { font-family: var(--mono); font-size: 0.75rem; color: var(--accent-light); }
-.download-alt { text-align: center; }
-.download-alt p { font-size: 0.9rem; color: var(--text-dim); margin-bottom: 12px; }
-.download-alt p + .code-block { margin-top: -4px; }
-.download-alt .code-block + p { margin-top: 18px; }
+.download-card > p { font-size: 0.88rem; color: var(--text-dim); margin-bottom: 16px; }
+.download-links { list-style: none; display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.download-link {
+  display: block; padding: 10px 12px;
+  background: var(--bg-alt); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); transition: all 0.2s;
+}
+.download-link:hover { border-color: var(--accent); background: var(--bg-card-hover); }
+.download-link-label { display: block; font-size: 0.82rem; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.download-link:hover .download-link-label { color: var(--accent-light); }
+.download-filename {
+  display: block; font-family: var(--mono); font-size: 0.72rem;
+  color: var(--accent-light); word-break: break-all;
+}
+.download-methods { margin-bottom: 36px; }
+.download-methods-title {
+  text-align: center; font-size: 1.15rem; font-weight: 700;
+  color: var(--text-bright); margin-bottom: 24px;
+}
+.method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.method-card {
+  padding: 22px 20px; text-align: left;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.method-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.method-card h4 { font-size: 0.98rem; font-weight: 700; color: var(--text-bright); }
+.method-card > p { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 14px; }
+.method-badge {
+  flex-shrink: 0; font-size: 0.66rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--orange);
+  background: rgba(253, 203, 110, 0.12); border: 1px solid rgba(253, 203, 110, 0.3);
+  border-radius: 999px; padding: 3px 10px;
+}
+.code-copy {
+  display: flex; align-items: stretch; overflow: hidden;
+  background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.code-copy + .code-copy { margin-top: 8px; }
+.code-copy .code-block {
+  flex: 1; min-width: 0; display: block; padding: 10px 14px;
+  background: transparent; border: none; border-radius: 0;
+  font-size: 0.76rem; text-align: left;
+}
+.copy-btn {
+  flex-shrink: 0; padding: 0 12px; cursor: pointer;
+  background: var(--bg-card); border: none; border-left: 1px solid var(--border);
+  color: var(--text-dim); font-family: var(--font); font-size: 0.72rem; font-weight: 600;
+  transition: all 0.2s;
+}
+.copy-btn:hover { background: var(--accent); color: #fff; }
+.copy-btn.copied { background: var(--green-dim); color: var(--green); }
+.download-relay { text-align: center; font-size: 0.9rem; color: var(--text-dim); }
 .code-block {
   display: inline-block; padding: 12px 20px; border-radius: var(--radius-sm);
   background: var(--bg-card); border: 1px solid var(--border);
@@ -471,6 +522,7 @@ img { max-width: 100%; display: block; }
   .bench-grid { grid-template-columns: 1fr; }
   .compare-grid { grid-template-columns: 1fr; }
   .download-grid { grid-template-columns: 1fr; }
+  .method-grid { grid-template-columns: 1fr; }
   .trends-grid { grid-template-columns: 1fr; }
   .footer-grid { grid-template-columns: 1fr 1fr; gap: 32px; }
 }
