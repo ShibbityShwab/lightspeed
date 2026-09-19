@@ -25,26 +25,6 @@ BINARY_NAME="lightspeed-proxy"
 REMOTE_BINARY="/usr/local/bin/${BINARY_NAME}"
 SERVICE_NAME="lightspeed-proxy"
 
-# Proxy mesh nodes.
-# Set LIGHTSPEED_NODES as a JSON object, or add entries to the NODES map below.
-# Example: export LIGHTSPEED_NODES='{"relay-lax":{"ip":"1.2.3.4"}}'
-# Run setup-new-node.sh to provision a new node, then add it below.
-# Format: NODES["node-name"]="IP_ADDRESS"
-declare -A NODES
-
-# Load from env var if available
-if [ -n "${LIGHTSPEED_NODES:-}" ]; then
-    # Parse LIGHTSPEED_NODES JSON to populate NODES (requires jq)
-    while IFS= read -r key; do
-        ip=$(echo "$LIGHTSPEED_NODES" | jq -r ".[$key].ip // .[$key]")
-        NODES["$key"]="$ip"
-    done < <(echo "$LIGHTSPEED_NODES" | jq -r 'keys[]')
-fi
-
-# Fallback defaults (placeholder — replace with your actual node IPs)
-# NODES["relay-lax"]="YOUR_NODE_IP_1"    # us-west-lax
-# NODES["relay-sgp"]="YOUR_NODE_IP_2"    # asia-sgp
-
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -54,6 +34,34 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# ── Resolve node inventory (fail closed) ─────────────────────
+# shellcheck source=lib-nodes.sh
+source "$SCRIPT_DIR/lib-nodes.sh"
+
+if ! NODES_JSON="$(lightspeed_resolve_nodes)"; then
+    echo -e "${RED}❌ No proxy node inventory available — refusing to deploy.${NC}" >&2
+    echo "   Set LIGHTSPEED_NODES or populate $LIGHTSPEED_REGISTRY_PATH." >&2
+    exit 1
+fi
+
+if [ "$(printf '%s' "$NODES_JSON" | jq 'length')" -eq 0 ]; then
+    echo -e "${RED}❌ Proxy node inventory is empty — refusing to deploy.${NC}" >&2
+    echo "   Set LIGHTSPEED_NODES or populate $LIGHTSPEED_REGISTRY_PATH." >&2
+    exit 1
+fi
+
+declare -A NODES
+declare -A REGION_TO_NODE
+NODE_NAMES=()
+while IFS=$'\t' read -r _name _region _ip; do
+    [ -n "$_name" ] || continue
+    NODES["$_name"]="$_ip"
+    NODE_NAMES+=("$_name")
+    if [ -n "$_region" ] && [ -z "${REGION_TO_NODE[$_region]:-}" ]; then
+        REGION_TO_NODE["$_region"]="$_name"
+    fi
+done < <(printf '%s' "$NODES_JSON" | jq -r '.[] | [.node_id, .region, .ip] | @tsv')
 
 # ── Parse args ───────────────────────────────────────────────
 TARGET_NODE=""
@@ -160,16 +168,18 @@ PASS=0
 FAIL=0
 
 if [ -n "$TARGET_NODE" ]; then
-    # Deploy to specific node
-    if [ -z "${NODES[$TARGET_NODE]:-}" ]; then
+    if [ -n "${NODES[$TARGET_NODE]:-}" ]; then
+        TARGET_NAME="$TARGET_NODE"
+    elif [ -n "${REGION_TO_NODE[$TARGET_NODE]:-}" ]; then
+        TARGET_NAME="${REGION_TO_NODE[$TARGET_NODE]}"
+    else
         echo -e "${RED}Unknown node: $TARGET_NODE${NC}"
-        echo "Available: ${!NODES[*]}"
+        echo "Available: ${NODE_NAMES[*]}"
         exit 1
     fi
-    deploy_node "$TARGET_NODE" "${NODES[$TARGET_NODE]}" && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
+    deploy_node "$TARGET_NAME" "${NODES[$TARGET_NAME]}" && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
 else
-    # Deploy to all nodes (rolling)
-    for name in "${!NODES[@]}"; do
+    for name in "${NODE_NAMES[@]}"; do
         deploy_node "$name" "${NODES[$name]}" && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
     done
 fi
