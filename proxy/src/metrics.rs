@@ -6,6 +6,7 @@
 //!
 //! All metrics are designed for free-tier monitoring (no external services needed).
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -22,7 +23,229 @@ const LATENCY_BUCKETS_US: &[u64] = &[
     250_000,   // 250ms
     500_000,   // 500ms
     1_000_000, // 1s
+    2_000_000, // 2s
 ];
+
+/// Number of latency histogram buckets, derived from the bounds so the array
+/// length and the rendered series can never drift apart.
+const N_BUCKETS: usize = LATENCY_BUCKETS_US.len();
+
+/// Largest proxy-observed upstream lag accepted as a real sample (microseconds).
+///
+/// A marker older than this is stale (the response never came, or the forward
+/// metadata outlived its session) and would poison the average, so it is
+/// discarded instead of recorded.
+const MAX_UPSTREAM_LAG_US: u64 = 2_000_000;
+
+/// Hard cap on the number of distinct `(game, country)` telemetry cells.
+///
+/// The client-controlled `game_id` and `client_country` labels decide the key,
+/// so an unbounded map would let a client grow proxy memory without limit.
+/// Reports that would create a cell past this cap are counted as rejected.
+pub const MAX_TELEMETRY_CELLS: usize = 1024;
+
+/// Minimum number of reports a cell must hold before it is emitted.
+///
+/// This is a k-anonymity floor: emitting a cell backed by one or two reports
+/// could correlate a small population back to an individual client, so such
+/// cells are withheld until the population is large enough.
+pub const MIN_TELEMETRY_CELL_REPORTS: u64 = 3;
+
+/// Aggregated opt-in telemetry for one `(game_id, normalized country)` pair.
+///
+/// Percentile fields are *sums* of the values individual clients reported
+/// (each client's own median/percentile). Dividing a sum by `reports` yields
+/// the mean of the clients' reported values, not a population percentile.
+#[derive(Debug, Default, Clone)]
+pub struct TelemetryCell {
+    /// Number of reports aggregated into this cell.
+    pub reports: u64,
+    /// Sum of the reports' `sample_count` values.
+    pub samples: u64,
+    /// Sum of the reports' `p50_ms` values.
+    pub p50_sum_ms: f64,
+    /// Sum of the reports' `p95_ms` values.
+    pub p95_sum_ms: f64,
+    /// Sum of the reports' `p99_ms` values.
+    pub p99_sum_ms: f64,
+    /// Sum of the reports' `jitter_ms` values.
+    pub jitter_sum_ms: f64,
+    /// Sum of the reports' `fec_recoveries` values.
+    pub fec_recoveries: u64,
+    /// Sum of the reports' `fec_losses` values.
+    pub fec_losses: u64,
+}
+
+/// Bounded per-`(game, country)` telemetry aggregator.
+///
+/// Keyed by the raw numeric `game_id` (so unknown ids stay distinct) and the
+/// normalized two-letter country. Counters accumulate on ingest; the map is
+/// capped at [`TelemetryAggregator::max_cells`], after which new keys are
+/// counted in `rejected` instead of inserted.
+#[derive(Debug)]
+pub struct TelemetryAggregator {
+    /// Per-cell aggregates, keyed by `(game_id, normalized country)`.
+    pub cells: HashMap<(u8, String), TelemetryCell>,
+    /// Reports dropped because the cell cap was reached.
+    pub rejected: u64,
+    /// Maximum number of distinct cells retained.
+    pub max_cells: usize,
+}
+
+impl Default for TelemetryAggregator {
+    fn default() -> Self {
+        Self {
+            cells: HashMap::new(),
+            rejected: 0,
+            max_cells: MAX_TELEMETRY_CELLS,
+        }
+    }
+}
+
+/// Aggregated opt-in telemetry for one `(relay, game_id, country)` path.
+///
+/// Every field is a sum or count over the individual clients' per-leg
+/// observations; no raw or per-client sample is retained. As with
+/// [`TelemetryCell`], `rtt_*_sum_ms / reports` is the mean of the values the
+/// clients reported for that leg, not a population percentile.
+#[derive(Debug, Default, Clone)]
+pub struct RouteTelemetryCell {
+    /// Number of leg observations folded into this cell.
+    pub reports: u64,
+    /// Sum of the legs' `samples` counts.
+    pub samples: u64,
+    /// Sum of the legs' `rtt_p50_ms` values.
+    pub rtt_p50_sum_ms: f64,
+    /// Sum of the legs' `rtt_p95_ms` values.
+    pub rtt_p95_sum_ms: f64,
+    /// Sum of the legs' `rtt_p99_ms` values.
+    pub rtt_p99_sum_ms: f64,
+    /// Sum of the legs' `jitter_ms` values.
+    pub jitter_sum_ms: f64,
+    /// Sum of the legs' `lost` counts.
+    pub lost: u64,
+    /// Sum of the legs' `recovered` counts.
+    pub recovered: u64,
+    /// Sum of the legs' `dedup_saved` counts.
+    pub dedup_saved: u64,
+}
+
+/// Bounded per-`(relay, game, country)` telemetry aggregator.
+///
+/// Keyed by the normalized relay id, the raw numeric `game_id`, and the
+/// normalized two-letter country. Counters accumulate on ingest; the map is
+/// capped at [`RouteTelemetryAggregator::max_cells`], after which new keys are
+/// counted in `rejected` instead of inserted.
+#[derive(Debug)]
+pub struct RouteTelemetryAggregator {
+    /// Per-cell aggregates, keyed by `(normalized relay, game_id, country)`.
+    pub cells: HashMap<(String, u8, String), RouteTelemetryCell>,
+    /// Leg observations dropped because the cell cap was reached.
+    pub rejected: u64,
+    /// Maximum number of distinct cells retained.
+    pub max_cells: usize,
+}
+
+impl Default for RouteTelemetryAggregator {
+    fn default() -> Self {
+        Self {
+            cells: HashMap::new(),
+            rejected: 0,
+            max_cells: MAX_TELEMETRY_CELLS,
+        }
+    }
+}
+
+/// Longest relay identifier accepted from a client.
+///
+/// Mirrors the protocol's `PathObservation` validation bound.
+const MAX_RELAY_ID_LEN: usize = 64;
+
+/// Normalize a client-supplied country into a safe, bounded label value.
+///
+/// Trims surrounding whitespace, keeps only ASCII alphabetic characters,
+/// uppercases them, and returns the result only when it is exactly two letters.
+/// Anything else (empty, longer, digits, punctuation) collapses to `"XX"` so a
+/// client cannot inject arbitrary label text or high-cardinality values.
+fn normalize_country(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .filter(char::is_ascii_alphabetic)
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if cleaned.len() == 2 {
+        cleaned
+    } else {
+        "XX".to_string()
+    }
+}
+
+/// Normalize a client-supplied relay id into a safe, bounded label value.
+///
+/// Returns `None` for anything that does not satisfy the protocol's relay-id
+/// charset (1..=64 bytes of ASCII alphanumerics or `.`, `_`, `-`). Accepted ids
+/// are lowercased so case variants cannot inflate the cell cardinality. This is
+/// a defense-in-depth re-check: the ingest boundary already runs
+/// [`lightspeed_protocol::TelemetryReport::validate`].
+fn normalize_relay(raw: &str) -> Option<String> {
+    if raw.is_empty() || raw.len() > MAX_RELAY_ID_LEN {
+        return None;
+    }
+    if !raw
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(raw.to_ascii_lowercase())
+}
+
+/// Compute a proxy-observed upstream response lag from two monotonic microsecond
+/// timestamps.
+///
+/// `marker_us` is the session-clock time at which a client packet was forwarded
+/// to the game server; `now_us` is the session-clock time at which the next
+/// response was read on that same socket. Returns `None` when there is no
+/// usable sample: no marker was set (`marker_us == 0`), the response is not
+/// strictly later than the forward (zero or negative lag), or the gap exceeds
+/// [`MAX_UPSTREAM_LAG_US`]. The difference uses `saturating_sub` so it can
+/// never underflow.
+pub fn upstream_lag(now_us: u64, marker_us: u64) -> Option<u64> {
+    if marker_us == 0 || now_us <= marker_us {
+        return None;
+    }
+    let lag = now_us.saturating_sub(marker_us);
+    if lag > MAX_UPSTREAM_LAG_US {
+        None
+    } else {
+        Some(lag)
+    }
+}
+
+/// Why the relay dropped a packet.
+///
+/// Every drop increments [`ProxyMetrics::packets_dropped`] (the honest sum of
+/// all reasons) exactly once and increments exactly one category counter, so
+/// the categories always partition the total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropReason {
+    /// Rejected by the per-client rate limiter (packet or byte rate).
+    RateLimit,
+    /// The tunnel header could not be decoded (bad version, length, or address).
+    Malformed,
+    /// Failed IP/session-token authentication.
+    Auth,
+    /// Blocked by the abuse detector: private destination, allowlist miss,
+    /// ban, reflection, or amplification.
+    Abuse,
+    /// FEC framing was invalid (payload too short or FEC header decode failed).
+    FecMalformed,
+    /// A relay session could not be created (for example the session cap).
+    SessionSetup,
+    /// Forwarding the payload to the game server failed at the socket.
+    RelaySendError,
+}
 
 /// Proxy metrics collector.
 pub struct ProxyMetrics {
@@ -38,6 +261,8 @@ pub struct ProxyMetrics {
     pub relay_latency_sum_us: AtomicU64,
     /// Number of latency samples.
     pub relay_latency_count: AtomicU64,
+    /// Latency samples rejected as unusable (no marker, zero lag, or > 2s).
+    pub latency_discarded: AtomicU64,
 
     // ── FEC metrics ─────────────────────────────────────────────
     /// Total FEC parity packets received.
@@ -54,6 +279,19 @@ pub struct ProxyMetrics {
     pub abuse_blocks: AtomicU64,
     /// Rate limit hits.
     pub rate_limit_hits: AtomicU64,
+    /// Rate limit hits attributed to the per-IP aggregate tier. A subset of
+    /// `rate_limit_hits`.
+    pub rate_limit_ip_hits: AtomicU64,
+    /// Packets rejected because the per-IP tracking table was full (fail closed).
+    pub rate_limit_overflow: AtomicU64,
+    /// Packets dropped because the tunnel header was malformed.
+    pub drops_malformed: AtomicU64,
+    /// Packets dropped because FEC framing was malformed.
+    pub drops_fec_malformed: AtomicU64,
+    /// Packets dropped because a relay session could not be created.
+    pub drops_session_setup: AtomicU64,
+    /// Packets dropped because forwarding to the game server failed.
+    pub drops_relay_send_errors: AtomicU64,
 
     // ── Session metrics ─────────────────────────────────────────
     /// Total sessions created (lifetime).
@@ -71,12 +309,16 @@ pub struct ProxyMetrics {
     pub inbound_packets_received: AtomicU64,
 
     // ── Telemetry ────────────────────────────────────────────────
-    /// Total opt-in anonymous telemetry reports received from clients.
-    pub telemetry_reports_total: AtomicU64,
+    /// Bounded aggregation of opt-in client telemetry, keyed by
+    /// `(game_id, normalized country)`.
+    pub telemetry: std::sync::Mutex<TelemetryAggregator>,
+    /// Bounded aggregation of per-route-leg client telemetry, keyed by
+    /// `(normalized relay, game_id, country)`.
+    pub route_telemetry: std::sync::Mutex<RouteTelemetryAggregator>,
 
     // ── Latency histogram buckets ───────────────────────────────
-    /// Counts per bucket for relay latency (cumulative).
-    latency_buckets: [AtomicU64; 11],
+    /// Per-bucket (non-cumulative) relay latency counts.
+    latency_buckets: [AtomicU64; N_BUCKETS],
 
     // ── Process start time ──────────────────────────────────────
     /// When the proxy started (for uptime gauge).
@@ -99,17 +341,25 @@ impl ProxyMetrics {
             packets_dropped: AtomicU64::new(0),
             relay_latency_sum_us: AtomicU64::new(0),
             relay_latency_count: AtomicU64::new(0),
+            latency_discarded: AtomicU64::new(0),
             fec_parity_received: AtomicU64::new(0),
             fec_recoveries: AtomicU64::new(0),
             fec_data_packets: AtomicU64::new(0),
             auth_rejections: AtomicU64::new(0),
             abuse_blocks: AtomicU64::new(0),
             rate_limit_hits: AtomicU64::new(0),
+            rate_limit_ip_hits: AtomicU64::new(0),
+            rate_limit_overflow: AtomicU64::new(0),
+            drops_malformed: AtomicU64::new(0),
+            drops_fec_malformed: AtomicU64::new(0),
+            drops_session_setup: AtomicU64::new(0),
+            drops_relay_send_errors: AtomicU64::new(0),
             sessions_created: AtomicU64::new(0),
             sessions_expired: AtomicU64::new(0),
             inbound_batches_total: AtomicU64::new(0),
             inbound_packets_received: AtomicU64::new(0),
-            telemetry_reports_total: AtomicU64::new(0),
+            telemetry: std::sync::Mutex::new(TelemetryAggregator::default()),
+            route_telemetry: std::sync::Mutex::new(RouteTelemetryAggregator::default()),
             latency_buckets: Default::default(),
             start_time: Instant::now(),
         }
@@ -121,9 +371,29 @@ impl ProxyMetrics {
         self.bytes_relayed.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// Record a dropped packet.
-    pub fn record_drop(&self) {
+    /// Record a dropped packet and its reason.
+    ///
+    /// Always increments `packets_dropped` (the sum of all reasons) and
+    /// exactly one category counter.
+    pub fn record_drop(&self, reason: DropReason) {
         self.packets_dropped.fetch_add(1, Ordering::Relaxed);
+        match reason {
+            DropReason::RateLimit => self.record_rate_limit(),
+            DropReason::Malformed => {
+                self.drops_malformed.fetch_add(1, Ordering::Relaxed);
+            }
+            DropReason::Auth => self.record_auth_rejection(),
+            DropReason::Abuse => self.record_abuse_block(),
+            DropReason::FecMalformed => {
+                self.drops_fec_malformed.fetch_add(1, Ordering::Relaxed);
+            }
+            DropReason::SessionSetup => {
+                self.drops_session_setup.fetch_add(1, Ordering::Relaxed);
+            }
+            DropReason::RelaySendError => {
+                self.drops_relay_send_errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     /// Record relay latency sample (with histogram).
@@ -132,12 +402,26 @@ impl ProxyMetrics {
             .fetch_add(latency_us, Ordering::Relaxed);
         self.relay_latency_count.fetch_add(1, Ordering::Relaxed);
 
-        // Update histogram buckets (cumulative)
+        // Store a per-bucket delta: increment ONLY the first bucket whose bound
+        // covers this sample. `to_prometheus` converts these deltas into the
+        // cumulative series Prometheus expects, so the two must not both
+        // accumulate.
         for (i, &bound) in LATENCY_BUCKETS_US.iter().enumerate() {
             if latency_us <= bound {
                 self.latency_buckets[i].fetch_add(1, Ordering::Relaxed);
+                break;
             }
         }
+    }
+
+    /// Record a latency sample that could not be used.
+    ///
+    /// This happens when a response arrives with no matching forward marker,
+    /// when the measured gap is zero, or when the gap exceeds the 2s sanity
+    /// bound. The sample is counted here rather than fed to
+    /// [`Self::record_latency`] so a stale marker cannot distort the histogram.
+    pub fn record_latency_discarded(&self) {
+        self.latency_discarded.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record FEC parity packet received.
@@ -170,9 +454,112 @@ impl ProxyMetrics {
         self.rate_limit_hits.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record a rate limit hit attributed to the per-IP aggregate tier.
+    ///
+    /// This is a subset counter. The combined `rate_limit_hits` (and
+    /// `packets_dropped`) are already incremented exactly once by
+    /// [`Self::record_drop`] with [`DropReason::RateLimit`], so incrementing the
+    /// combined counter here as well would double count an IP-tier drop and
+    /// break the invariant that the category counters sum to `packets_dropped`.
+    pub fn record_rate_limit_ip(&self) {
+        self.rate_limit_ip_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a packet rejected because the per-IP tracking table was full.
+    pub fn record_rate_limit_overflow(&self) {
+        self.rate_limit_overflow.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Record an anonymous opt-in telemetry report received from a client.
-    pub fn record_telemetry_report(&self) {
-        self.telemetry_reports_total.fetch_add(1, Ordering::Relaxed);
+    ///
+    /// The report is normalized and folded into its `(game_id, country)` cell.
+    /// When the cell map is already at [`TelemetryAggregator::max_cells`] and
+    /// this report would create a new key, it is counted in `rejected` instead.
+    pub fn record_telemetry_report(&self, report: &lightspeed_protocol::TelemetryReport) {
+        {
+            let country = normalize_country(&report.client_country);
+            let key = (report.game_id, country);
+            let mut agg = self
+                .telemetry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !agg.cells.contains_key(&key) && agg.cells.len() >= agg.max_cells {
+                agg.rejected += 1;
+            } else {
+                let cell = agg.cells.entry(key).or_default();
+                cell.reports += 1;
+                cell.samples += u64::from(report.sample_count);
+                cell.p50_sum_ms += f64::from(report.p50_ms);
+                cell.p95_sum_ms += f64::from(report.p95_ms);
+                cell.p99_sum_ms += f64::from(report.p99_ms);
+                cell.jitter_sum_ms += f64::from(report.jitter_ms);
+                cell.fec_recoveries += u64::from(report.fec_recoveries);
+                cell.fec_losses += u64::from(report.fec_losses);
+            }
+        }
+        self.record_route_legs(report.game_id, &report.client_country, &report.route_legs);
+    }
+
+    /// Fold a report's per-relay observations into the bounded per-path
+    /// aggregator, keyed by `(normalized relay, game_id, country)`.
+    ///
+    /// Legs whose relay id does not satisfy the protocol charset are skipped,
+    /// and a novel key past the cell cap is counted in `rejected` rather than
+    /// inserted.
+    pub fn record_route_legs(
+        &self,
+        game_id: u8,
+        raw_country: &str,
+        legs: &[lightspeed_protocol::telemetry::PathObservation],
+    ) {
+        if legs.is_empty() {
+            return;
+        }
+        let country = normalize_country(raw_country);
+        let mut agg = self
+            .route_telemetry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for leg in legs {
+            let Some(relay) = normalize_relay(&leg.relay) else {
+                continue;
+            };
+            let key = (relay, game_id, country.clone());
+            if !agg.cells.contains_key(&key) && agg.cells.len() >= agg.max_cells {
+                agg.rejected += 1;
+                continue;
+            }
+            let cell = agg.cells.entry(key).or_default();
+            cell.reports += 1;
+            cell.samples += u64::from(leg.samples);
+            cell.rtt_p50_sum_ms += f64::from(leg.rtt_p50_ms);
+            cell.rtt_p95_sum_ms += f64::from(leg.rtt_p95_ms);
+            cell.rtt_p99_sum_ms += f64::from(leg.rtt_p99_ms);
+            cell.jitter_sum_ms += f64::from(leg.jitter_ms);
+            cell.lost += u64::from(leg.lost);
+            cell.recovered += u64::from(leg.recovered);
+            cell.dedup_saved += u64::from(leg.dedup_saved);
+        }
+    }
+
+    /// Build a collector whose telemetry map is capped at `max_cells`.
+    ///
+    /// Test-only: production always uses [`MAX_TELEMETRY_CELLS`].
+    #[cfg(test)]
+    pub fn with_max_telemetry_cells(max_cells: usize) -> Self {
+        let metrics = Self::new();
+        metrics.telemetry.lock().unwrap().max_cells = max_cells;
+        metrics
+    }
+
+    /// Build a collector whose per-path telemetry map is capped at `max_cells`.
+    ///
+    /// Test-only: production always uses [`MAX_TELEMETRY_CELLS`].
+    #[cfg(test)]
+    pub fn with_max_route_telemetry_cells(max_cells: usize) -> Self {
+        let metrics = Self::new();
+        metrics.route_telemetry.lock().unwrap().max_cells = max_cells;
+        metrics
     }
 
     /// Record one inbound receive batch containing `n` packets.
@@ -255,7 +642,7 @@ impl ProxyMetrics {
 
         // ── Latency ─────────────────────────────────────────────
         out.push_str(
-            "# HELP lightspeed_relay_latency_avg_us Average relay latency in microseconds\n",
+            "# HELP lightspeed_relay_latency_avg_us Average proxy-observed upstream response lag in microseconds (time from forwarding a client packet to the game server until the next response is read on that session socket; NOT client RTT)\n",
         );
         out.push_str("# TYPE lightspeed_relay_latency_avg_us gauge\n");
         out.push_str(&format!(
@@ -266,7 +653,7 @@ impl ProxyMetrics {
 
         // Latency histogram
         out.push_str(
-            "# HELP lightspeed_relay_latency_us Relay latency histogram in microseconds\n",
+            "# HELP lightspeed_relay_latency_us Proxy-observed upstream response lag histogram in microseconds (NOT client RTT)\n",
         );
         out.push_str("# TYPE lightspeed_relay_latency_us histogram\n");
         let total_count = self.relay_latency_count.load(Ordering::Relaxed);
@@ -292,6 +679,16 @@ impl ProxyMetrics {
         out.push_str(&format!(
             "lightspeed_relay_latency_us_count{{{}}} {}\n",
             labels, total_count
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_relay_latency_discarded_total Paired latency samples discarded as unusable (zero lag or beyond the 2s bound); responses with no pending forward are not sampled and are not counted\n",
+        );
+        out.push_str("# TYPE lightspeed_relay_latency_discarded_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_relay_latency_discarded_total{{{}}} {}\n",
+            labels,
+            self.latency_discarded.load(Ordering::Relaxed)
         ));
 
         // ── FEC metrics ─────────────────────────────────────────
@@ -344,6 +741,66 @@ impl ProxyMetrics {
             self.rate_limit_hits.load(Ordering::Relaxed)
         ));
 
+        out.push_str(
+            "# HELP lightspeed_rate_limit_ip_hits_total Rate limit hits from the per-IP aggregate tier\n",
+        );
+        out.push_str("# TYPE lightspeed_rate_limit_ip_hits_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_rate_limit_ip_hits_total{{{}}} {}\n",
+            labels,
+            self.rate_limit_ip_hits.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_rate_limit_overflow_total Packets rejected because the per-IP rate limit table was full\n",
+        );
+        out.push_str("# TYPE lightspeed_rate_limit_overflow_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_rate_limit_overflow_total{{{}}} {}\n",
+            labels,
+            self.rate_limit_overflow.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_drops_malformed_total Packets dropped for a malformed tunnel header\n",
+        );
+        out.push_str("# TYPE lightspeed_drops_malformed_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_drops_malformed_total{{{}}} {}\n",
+            labels,
+            self.drops_malformed.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_drops_fec_malformed_total Packets dropped for malformed FEC framing\n",
+        );
+        out.push_str("# TYPE lightspeed_drops_fec_malformed_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_drops_fec_malformed_total{{{}}} {}\n",
+            labels,
+            self.drops_fec_malformed.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_drops_session_setup_total Packets dropped because the relay session could not be created\n",
+        );
+        out.push_str("# TYPE lightspeed_drops_session_setup_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_drops_session_setup_total{{{}}} {}\n",
+            labels,
+            self.drops_session_setup.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_drops_relay_send_errors_total Packets dropped because forwarding to the game server failed\n",
+        );
+        out.push_str("# TYPE lightspeed_drops_relay_send_errors_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_drops_relay_send_errors_total{{{}}} {}\n",
+            labels,
+            self.drops_relay_send_errors.load(Ordering::Relaxed)
+        ));
+
         // ── Session metrics ─────────────────────────────────────
         out.push_str(
             "# HELP lightspeed_sessions_created_total Total sessions created (lifetime)\n",
@@ -386,16 +843,238 @@ impl ProxyMetrics {
             self.inbound_packets_received.load(Ordering::Relaxed)
         ));
 
-        // ── Telemetry counter ───────────────────────────────────
+        // ── Client telemetry (aggregated, k-anonymized) ─────────
+        // HELP/TYPE headers are emitted unconditionally so the family is
+        // discoverable before the k-anonymity floor is reached.
         out.push_str(
-            "# HELP lightspeed_telemetry_reports_total Anonymous client telemetry reports received\n",
+            "# HELP lightspeed_telemetry_reports_total Anonymous opt-in client telemetry reports, aggregated by game and country\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_reports_total counter\n");
-        out.push_str(&format!(
-            "lightspeed_telemetry_reports_total{{{}}} {}\n",
-            labels,
-            self.telemetry_reports_total.load(Ordering::Relaxed)
-        ));
+        out.push_str(
+            "# HELP lightspeed_telemetry_samples_total Sum of client-reported RTT sample counts per telemetry cell\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_samples_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_p50_ms_sum Sum of client-reported p50 values (ms); _sum/_count is the mean of client medians, not a population p50\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_p50_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_p50_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_p95_ms_sum Sum of client-reported p95 values (ms); _sum/_count is the mean of client p95s, not a population p95\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_p95_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_p95_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_p99_ms_sum Sum of client-reported p99 values (ms); _sum/_count is the mean of client p99s, not a population p99\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_p99_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_p99_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_jitter_ms_sum Sum of client-reported jitter values (ms); _sum/_count is the mean of client jitter values, not a population statistic\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_jitter_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_jitter_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_fec_recoveries_total Sum of client-reported FEC recoveries\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_fec_recoveries_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_fec_losses_total Sum of client-reported FEC losses\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_fec_losses_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_rejected_total Telemetry reports dropped because the per-(game,country) cell cap was reached\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_rejected_total counter\n");
+
+        {
+            // Recover from a poisoned lock rather than panicking: a metrics
+            // scrape must never bring down the health server.
+            let agg = self
+                .telemetry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            out.push_str(&format!(
+                "lightspeed_telemetry_rejected_total{{{}}} {}\n",
+                labels, agg.rejected
+            ));
+            for ((game_id, country), cell) in &agg.cells {
+                if cell.reports < MIN_TELEMETRY_CELL_REPORTS {
+                    continue;
+                }
+                let game = lightspeed_protocol::game_id::key_for_id(*game_id).unwrap_or("unknown");
+                let cell_labels = format!("{},game=\"{}\",country=\"{}\"", labels, game, country);
+                out.push_str(&format!(
+                    "lightspeed_telemetry_reports_total{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_samples_total{{{}}} {}\n",
+                    cell_labels, cell.samples
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p50_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.p50_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p50_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p95_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.p95_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p95_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p99_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.p99_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_p99_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_jitter_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.jitter_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_jitter_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_fec_recoveries_total{{{}}} {}\n",
+                    cell_labels, cell.fec_recoveries
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_fec_losses_total{{{}}} {}\n",
+                    cell_labels, cell.fec_losses
+                ));
+            }
+        }
+
+        // ── Per-route-leg client telemetry (aggregated, k-anonymized) ──
+        // HELP/TYPE headers are emitted unconditionally so the family is
+        // discoverable before the k-anonymity floor is reached.
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_reports_total Anonymous opt-in client per-route-leg observations, aggregated by relay, game, and country\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_reports_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_samples_total Sum of client-reported RTT sample counts per route-leg cell\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_samples_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_rtt_p50_ms_sum Sum of client-reported per-leg p50 RTT values (ms); _sum/_count is the mean of client-reported leg medians, not a population p50\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p50_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p50_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_rtt_p95_ms_sum Sum of client-reported per-leg p95 RTT values (ms); _sum/_count is the mean of client-reported leg p95s, not a population p95\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p95_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p95_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_rtt_p99_ms_sum Sum of client-reported per-leg p99 RTT values (ms); _sum/_count is the mean of client-reported leg p99s, not a population p99\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p99_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p99_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_jitter_ms_sum Sum of client-reported per-leg jitter values (ms); _sum/_count is the mean of client-reported leg jitter values, not a population statistic\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_jitter_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_route_jitter_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_lost_total Sum of client-reported packets lost per route leg\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_lost_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_recovered_total Sum of client-reported packets recovered by FEC per route leg\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_recovered_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_dedup_saved_total Sum of client-reported duplicates suppressed per route leg\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_dedup_saved_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_rejected_total Route-leg observations dropped because the per-(relay,game,country) cell cap was reached\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_rejected_total counter\n");
+
+        {
+            let agg = self
+                .route_telemetry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            out.push_str(&format!(
+                "lightspeed_telemetry_route_rejected_total{{{}}} {}\n",
+                labels, agg.rejected
+            ));
+            for ((relay, game_id, country), cell) in &agg.cells {
+                if cell.reports < MIN_TELEMETRY_CELL_REPORTS {
+                    continue;
+                }
+                let game = lightspeed_protocol::game_id::key_for_id(*game_id).unwrap_or("unknown");
+                let cell_labels = format!(
+                    "{},game=\"{}\",country=\"{}\",relay=\"{}\"",
+                    labels, game, country, relay
+                );
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_reports_total{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_samples_total{{{}}} {}\n",
+                    cell_labels, cell.samples
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p50_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.rtt_p50_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p50_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p95_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.rtt_p95_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p95_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p99_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.rtt_p99_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p99_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_jitter_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.jitter_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_jitter_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_lost_total{{{}}} {}\n",
+                    cell_labels, cell.lost
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_recovered_total{{{}}} {}\n",
+                    cell_labels, cell.recovered
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_dedup_saved_total{{{}}} {}\n",
+                    cell_labels, cell.dedup_saved
+                ));
+            }
+        }
 
         // ── Build info ──────────────────────────────────────────
         out.push_str("# HELP lightspeed_build_info Build information\n");
@@ -419,7 +1098,7 @@ mod tests {
         let m = ProxyMetrics::new();
         m.record_relay(100);
         m.record_relay(200);
-        m.record_drop();
+        m.record_drop(DropReason::Malformed);
         m.record_latency(5000);
         m.record_latency(15000);
         m.record_fec_parity();
@@ -477,5 +1156,397 @@ mod tests {
         m.record_latency(1000);
         m.record_latency(3000);
         assert_eq!(m.avg_latency_us(), 2000.0);
+    }
+
+    #[test]
+    fn test_record_latency_is_non_cumulative() {
+        let m = ProxyMetrics::new();
+        m.record_latency(2000);
+
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(output.contains("le=\"5\"} 1"));
+        assert!(output.contains("le=\"1\"} 0"));
+        assert!(output.contains("le=\"+Inf\"} 1"));
+        // The sample belongs to exactly one bucket, so the rendered cumulative
+        // series must count it once at every larger bound, not once per bucket.
+        assert!(output.contains("le=\"10\"} 1"));
+    }
+
+    #[test]
+    fn test_drop_sum_identity() {
+        let m = ProxyMetrics::new();
+        for reason in [
+            DropReason::RateLimit,
+            DropReason::Malformed,
+            DropReason::Auth,
+            DropReason::Abuse,
+            DropReason::FecMalformed,
+            DropReason::SessionSetup,
+            DropReason::RelaySendError,
+        ] {
+            m.record_drop(reason);
+        }
+
+        let categories = m.drops_malformed.load(Ordering::Relaxed)
+            + m.auth_rejections.load(Ordering::Relaxed)
+            + m.abuse_blocks.load(Ordering::Relaxed)
+            + m.rate_limit_hits.load(Ordering::Relaxed)
+            + m.drops_fec_malformed.load(Ordering::Relaxed)
+            + m.drops_session_setup.load(Ordering::Relaxed)
+            + m.drops_relay_send_errors.load(Ordering::Relaxed);
+
+        assert_eq!(categories, m.packets_dropped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_fec_data_counter_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_fec_data();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains("lightspeed_fec_data_packets_total"));
+        assert!(output.contains(
+            "lightspeed_fec_data_packets_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+    }
+
+    #[test]
+    fn test_upstream_lag_bounds() {
+        // A sane positive lag is reported as-is.
+        assert_eq!(upstream_lag(100, 50), Some(50));
+        // Zero lag (response in the same microsecond) is not a usable sample.
+        assert_eq!(upstream_lag(50, 50), None);
+        // No marker recorded (0) means nothing was forwarded.
+        assert_eq!(upstream_lag(3_000_000, 0), None);
+        assert_eq!(upstream_lag(100, 0), None);
+        // The 2s bound is inclusive; anything older is discarded.
+        assert_eq!(upstream_lag(2_000_001, 1), Some(2_000_000));
+        assert_eq!(upstream_lag(2_000_002, 1), None);
+    }
+
+    #[test]
+    fn test_latency_help_is_upstream_lag() {
+        let m = ProxyMetrics::new();
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(
+            output.contains("upstream response lag"),
+            "latency HELP text must describe proxy-observed upstream response lag"
+        );
+    }
+
+    #[test]
+    fn test_latency_discarded_counter_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_latency_discarded();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_relay_latency_discarded_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+    }
+
+    #[test]
+    fn test_rate_limit_ip_hits_and_combined() {
+        let m = ProxyMetrics::new();
+        // An IP-tier drop is recorded like any other rate-limit drop (combined
+        // counter + packets_dropped), plus the per-IP subset marker.
+        m.record_drop(DropReason::RateLimit);
+        m.record_rate_limit_ip();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_rate_limit_ip_hits_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+        // The subset marker must not also bump the combined counter.
+        assert!(output
+            .contains("lightspeed_rate_limit_hits_total{region=\"test\",node_id=\"test-node\"} 1"));
+        assert_eq!(m.packets_dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_ip_tier_drop_preserves_sum_identity() {
+        let m = ProxyMetrics::new();
+        // Simulate an IP-tier rejection exactly as relay.rs records it. If the
+        // per-IP marker also bumped the combined counter, the categories would
+        // exceed packets_dropped.
+        m.record_drop(DropReason::RateLimit);
+        m.record_rate_limit_ip();
+
+        let categories = m.drops_malformed.load(Ordering::Relaxed)
+            + m.auth_rejections.load(Ordering::Relaxed)
+            + m.abuse_blocks.load(Ordering::Relaxed)
+            + m.rate_limit_hits.load(Ordering::Relaxed)
+            + m.drops_fec_malformed.load(Ordering::Relaxed)
+            + m.drops_session_setup.load(Ordering::Relaxed)
+            + m.drops_relay_send_errors.load(Ordering::Relaxed);
+
+        assert_eq!(categories, m.packets_dropped.load(Ordering::Relaxed));
+        assert_eq!(m.rate_limit_ip_hits.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_rate_limit_overflow_counter_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_rate_limit_overflow();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_rate_limit_overflow_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+    }
+
+    fn report(game_id: u8, country: &str) -> lightspeed_protocol::TelemetryReport {
+        lightspeed_protocol::TelemetryReport {
+            game_id,
+            client_country: country.to_string(),
+            p50_ms: 30.0,
+            p95_ms: 50.0,
+            p99_ms: 80.0,
+            jitter_ms: 2.0,
+            sample_count: 100,
+            fec_recoveries: 1,
+            fec_losses: 0,
+            client_version: "1.4.4".to_string(),
+            route_legs: vec![],
+        }
+    }
+
+    #[test]
+    fn test_telemetry_aggregator_sums_and_counts() {
+        let m = ProxyMetrics::new();
+
+        let mut second = report(2, "us ");
+        second.sample_count = 200;
+        second.p50_ms = 40.0;
+        second.p95_ms = 60.0;
+        second.p99_ms = 90.0;
+        second.jitter_ms = 3.0;
+        second.fec_recoveries = 2;
+        second.fec_losses = 1;
+
+        let mut third = report(2, "us ");
+        third.sample_count = 300;
+        third.p50_ms = 50.0;
+        third.p95_ms = 70.0;
+        third.p99_ms = 100.0;
+        third.jitter_ms = 4.0;
+        third.fec_recoveries = 3;
+        third.fec_losses = 2;
+
+        m.record_telemetry_report(&report(2, "us "));
+        m.record_telemetry_report(&second);
+        m.record_telemetry_report(&third);
+
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(output.contains(
+            "lightspeed_telemetry_reports_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_samples_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 600"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_p50_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 120.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_p50_ms_count{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
+        ));
+        // Distinct jitter and FEC values must sum, not overwrite.
+        assert!(output.contains(
+            "lightspeed_telemetry_jitter_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 9.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_fec_recoveries_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 6"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_fec_losses_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
+        ));
+    }
+
+    #[test]
+    fn test_telemetry_normalization() {
+        let m = ProxyMetrics::new();
+
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(2, " usa "));
+        }
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(2, "th"));
+        }
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(2, ""));
+        }
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(250, "th"));
+        }
+
+        let output = m.to_prometheus("test", "test-node");
+
+        // " usa " and "" both collapse to XX; "th" uppercases to TH; 3-letter
+        // codes are rejected outright.
+        assert!(output.contains("game=\"cs2\",country=\"XX\""));
+        assert!(output.contains("game=\"cs2\",country=\"TH\""));
+        assert!(output.contains("game=\"unknown\",country=\"TH\""));
+        assert!(!output.contains("country=\"USA\""));
+        assert!(!output.contains("country=\"us \""));
+    }
+
+    #[test]
+    fn test_telemetry_cell_cap_overflows() {
+        let m = ProxyMetrics::with_max_telemetry_cells(2);
+
+        m.record_telemetry_report(&report(1, "US"));
+        m.record_telemetry_report(&report(2, "US"));
+        // Third distinct cell is over the cap and must be rejected, not stored.
+        m.record_telemetry_report(&report(3, "US"));
+
+        assert_eq!(m.telemetry.lock().unwrap().cells.len(), 2);
+        assert_eq!(m.telemetry.lock().unwrap().rejected, 1);
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_telemetry_rejected_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+        assert!(!output.contains("game=\"dota2\""));
+    }
+
+    #[test]
+    fn test_telemetry_cells_below_k_are_suppressed() {
+        let m = ProxyMetrics::new();
+        m.record_telemetry_report(&report(2, "US"));
+
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(
+            !output.contains("game=\"cs2\",country=\"US\""),
+            "a cell below the k-anonymity floor must not be emitted"
+        );
+    }
+
+    fn fra_leg() -> lightspeed_protocol::telemetry::PathObservation {
+        lightspeed_protocol::telemetry::PathObservation {
+            relay: "relay-fra".to_string(),
+            rtt_p50_ms: 18.0,
+            rtt_p95_ms: 25.0,
+            rtt_p99_ms: 30.0,
+            jitter_ms: 1.2,
+            samples: 60,
+            lost: 3,
+            recovered: 2,
+            dedup_saved: 1,
+        }
+    }
+
+    fn ams_leg() -> lightspeed_protocol::telemetry::PathObservation {
+        lightspeed_protocol::telemetry::PathObservation {
+            relay: "relay-ams".to_string(),
+            rtt_p50_ms: 22.0,
+            rtt_p95_ms: 33.0,
+            rtt_p99_ms: 41.0,
+            jitter_ms: 2.0,
+            samples: 60,
+            lost: 5,
+            recovered: 4,
+            dedup_saved: 0,
+        }
+    }
+
+    /// Given: three reports, each carrying the same two route legs.
+    /// When: the reports are folded into the per-path aggregator.
+    /// Then: each relay becomes one cell whose sums are 3x the per-leg values,
+    /// and a novel relay past the cell cap is rejected instead of inserted.
+    #[test]
+    fn per_path_telemetry_aggregated_and_bounded() {
+        let m = ProxyMetrics::new();
+
+        for _ in 0..3 {
+            let mut r = report(2, "DE");
+            r.route_legs = vec![fra_leg(), ams_leg()];
+            m.record_telemetry_report(&r);
+        }
+
+        let output = m.to_prometheus("test", "test-node");
+
+        // relay-fra: 3 observations, sums are 3x per-leg values.
+        assert!(output.contains(
+            "lightspeed_telemetry_route_reports_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 3"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_samples_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 180"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p50_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 54.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p50_ms_count{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 3"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p95_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 75.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p99_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 90.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_jitter_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 3.6"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_lost_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 9"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_recovered_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 6"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_dedup_saved_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 3"
+        ));
+
+        // relay-ams is a distinct cell, not folded into relay-fra.
+        assert!(output.contains(
+            "lightspeed_telemetry_route_reports_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-ams\"} 3"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p99_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-ams\"} 123.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_lost_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-ams\"} 15"
+        ));
+
+        // Six leg observations over two distinct relay ids collapse to two cells.
+        assert_eq!(m.route_telemetry.lock().unwrap().cells.len(), 2);
+
+        // Bounded: past the cell cap, a novel relay is rejected, not inserted.
+        let capped = ProxyMetrics::with_max_route_telemetry_cells(1);
+        let mut first = report(2, "DE");
+        first.route_legs = vec![fra_leg()];
+        capped.record_telemetry_report(&first);
+        let mut second = report(2, "DE");
+        second.route_legs = vec![ams_leg()];
+        capped.record_telemetry_report(&second);
+        assert_eq!(capped.route_telemetry.lock().unwrap().cells.len(), 1);
+        assert_eq!(capped.route_telemetry.lock().unwrap().rejected, 1);
+    }
+
+    /// Given: a single report carrying one route leg.
+    /// When: the report is folded in.
+    /// Then: the per-relay cell stays under the k-anonymity floor and is withheld,
+    /// even though the route metric family itself is declared.
+    #[test]
+    fn per_path_cell_below_k_suppressed() {
+        let m = ProxyMetrics::new();
+        let mut r = report(2, "DE");
+        r.route_legs = vec![fra_leg()];
+        m.record_telemetry_report(&r);
+
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(
+            output.contains("lightspeed_telemetry_route_reports_total"),
+            "the route metric family must be declared"
+        );
+        assert!(
+            !output.contains("relay=\"relay-fra\""),
+            "a per-relay cell below the k-anonymity floor must not be emitted"
+        );
     }
 }

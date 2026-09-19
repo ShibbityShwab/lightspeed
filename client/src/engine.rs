@@ -138,11 +138,19 @@ pub struct EngineStatus {
 
 type Shared = Arc<RwLock<EngineStatus>>;
 
+/// Control-plane port used for relay registration when no override is set.
+///
+/// Matches the client config default (`proxy.quic_port`); self-hosted relays on
+/// another port call [`LightSpeedEngine::set_control_port`].
+pub const DEFAULT_CONTROL_PORT: u16 = 4433;
+
 /// Manages the keepalive loop, optional game redirect, and optional pcap capture.
 /// Designed for use from GUI code running outside a Tokio context.
 pub struct LightSpeedEngine {
     rt: Handle,
     status: Shared,
+    control_port: u16,
+    supervised_paths: Vec<SocketAddrV4>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     redirect_shutdown_tx: Option<oneshot::Sender<()>>,
     redirect_stats: Option<Arc<RedirectStats>>,
@@ -172,6 +180,8 @@ impl LightSpeedEngine {
         Self {
             rt,
             status: Arc::new(RwLock::new(EngineStatus::default())),
+            control_port: DEFAULT_CONTROL_PORT,
+            supervised_paths: Vec::new(),
             shutdown_tx: None,
             redirect_shutdown_tx: None,
             redirect_stats: None,
@@ -182,6 +192,19 @@ impl LightSpeedEngine {
             windivert_stat_slot: None,
             interceptor_handle: None,
         }
+    }
+
+    /// Override the QUIC control-plane port used for relay registration.
+    ///
+    /// Defaults to [`DEFAULT_CONTROL_PORT`]; call this before [`Self::connect`]
+    /// (or any `start_*` mode) to reach a self-hosted relay on another port.
+    pub fn set_control_port(&mut self, port: u16) {
+        self.control_port = port;
+    }
+
+    /// The control-plane port used for relay registration.
+    pub fn control_port(&self) -> u16 {
+        self.control_port
     }
 
     /// Start (or restart) the keepalive loop toward `proxy_addr`.
@@ -218,22 +241,37 @@ impl LightSpeedEngine {
     }
 
     /// Spawn the QUIC control-plane registration task, recording its outcome
-    /// in the shared status instead of discarding it.
-    fn spawn_registration(&self, proxy_addr: SocketAddrV4) {
+    /// in the shared status instead of discarding it. The relay is tracked so
+    /// [`Self::disconnect`] and mode switches can stop its reconnect supervisor.
+    fn spawn_registration(&mut self, proxy_addr: SocketAddrV4) {
+        if !self.supervised_paths.contains(&proxy_addr) {
+            self.supervised_paths.push(proxy_addr);
+        }
         let status = Arc::clone(&self.status);
+        let control_port = self.control_port;
         self.rt.spawn(async move {
-            let result = crate::quic::register_session(proxy_addr, 4433).await;
+            let result = crate::quic::register_session(proxy_addr, control_port).await;
             if let Ok(mut s) = status.write() {
                 apply_registration_result(&mut s, result);
             }
         });
     }
 
-    /// Stop the keepalive loop.
+    /// Stop every supervised relay registration this engine started, leaving
+    /// the data-plane tokens intact. Tokens survive a transient disconnect or
+    /// mode switch; only process shutdown calls `session::reset_all_tokens`.
+    fn stop_supervised(&mut self) {
+        for addr in self.supervised_paths.drain(..) {
+            crate::quic::stop_supervisor(addr);
+        }
+    }
+
+    /// Stop the keepalive loop and every supervised relay registration.
     pub fn disconnect(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
+        self.stop_supervised();
         if let Ok(mut s) = self.status.write() {
             s.connected = false;
         }
@@ -310,6 +348,7 @@ impl LightSpeedEngine {
         if let Some(tx) = self.redirect_shutdown_tx.take() {
             let _ = tx.send(());
         }
+        self.stop_supervised();
         self.redirect_stats = None;
         if let Ok(mut s) = self.status.write() {
             s.redirect_active = false;
@@ -438,6 +477,7 @@ impl LightSpeedEngine {
         if let Some(tx) = self.capture_shutdown_tx.take() {
             let _ = tx.send(());
         }
+        self.stop_supervised();
         self.capture_stat_slot = None;
         if let Ok(mut s) = self.status.write() {
             s.capture_active = false;
@@ -641,6 +681,7 @@ impl LightSpeedEngine {
         if let Some(tx) = self.windivert_shutdown_tx.take() {
             let _ = tx.send(());
         }
+        self.stop_supervised();
         let done =
             wait_for_redirect_ack(self.windivert_done_rx.take(), Duration::from_millis(1500));
         if !done {
@@ -745,6 +786,7 @@ impl LightSpeedEngine {
     /// Stop the OOP interceptor (if running), waiting a bounded time for the
     /// platform owner threads to release their handles.
     pub fn stop_interceptor(&mut self) {
+        self.stop_supervised();
         if let Some(mut h) = self.interceptor_handle.take() {
             let stopped = h.stop_and_wait(Duration::from_millis(1500));
             if !stopped {
@@ -914,7 +956,7 @@ async fn run_keepalive(
                         .unwrap_or_default()
                         .as_micros() as u32,
                 )
-                .with_session_token(crate::session::session_token());
+                .with_session_token(crate::session::path_token(proxy));
                 if socket.send_to(&hdr.encode_to_array(), proxy).await.is_ok() {
                     ts.insert(seq, Instant::now());
                     ts.retain(|_, t| t.elapsed() < Duration::from_secs(30));
@@ -963,13 +1005,24 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use super::{apply_registration_result, wait_for_redirect_ack, EngineStatus, LightSpeedEngine};
+    use super::{
+        apply_registration_result, wait_for_redirect_ack, EngineStatus, LightSpeedEngine,
+        DEFAULT_CONTROL_PORT,
+    };
 
     fn test_engine() -> LightSpeedEngine {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("tokio runtime for engine test");
         LightSpeedEngine::new(rt.handle().clone())
+    }
+
+    #[test]
+    fn control_port_defaults_and_can_be_overridden() {
+        let mut engine = test_engine();
+        assert_eq!(engine.control_port(), DEFAULT_CONTROL_PORT);
+        engine.set_control_port(8443);
+        assert_eq!(engine.control_port(), 8443);
     }
 
     #[test]

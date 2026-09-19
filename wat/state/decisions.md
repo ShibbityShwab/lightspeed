@@ -379,3 +379,129 @@ than `ss` for unconnected sockets and is the recommended v1.4.4 addition, but it
 required once the scanner loop works. Reusing the Windows `Decision::PassThrough` was
 rejected outright: on Linux the kernel has already consumed the datagram, so ignoring it
 means silent packet loss.
+
+### 2026-09-19: Observability overhaul (honest metrics, latency, telemetry, history)
+
+**Agent:** Sisyphus (orchestrated; Oracle design review, explore/plan agents)
+**Status:** Accepted (branch `feat/observability-overhaul`)
+**Rationale:** Live production data showed the proxy's observability was partly hollow or
+misleading: `record_latency` had no caller so the latency histogram was always empty;
+`fec_data_packets_total` was never incremented; `packets_dropped` was almost entirely
+unauthenticated scanning and abuse blocks, not loss, yet the public site labelled it
+"Packets Dropped"; the rate limiter keyed on IP+source port so rotating ports never
+tripped it (`rate_limit_hits_total == 0` in production); opt-in telemetry sent a
+hardcoded `game_id = 0` and empty country and the proxy discarded the payload; and the
+once-per-six-hours stats snapshot overwrote itself so no trend history existed.
+**Key decisions:**
+- Latency measures proxy-observed upstream response lag (monotonic send stamp before the
+  forward, single `swap(0)` on the first response) and is documented as NOT client RTT;
+  samples outside `(0, 2s]` are discarded and counted. The histogram stores per-bucket
+  deltas and `to_prometheus` renders the cumulative series (the previous code accumulated
+  twice).
+- `packets_dropped` stays the sum of all reasons; a `DropReason` enum adds category
+  counters (malformed, fec_malformed, session_setup, relay_send_errors) alongside the
+  existing auth/abuse/rate-limit counters. `/health` and the stats script expose all
+  seven, and the website now says "Packets Filtered" plus an "Upstream Loss" tile.
+- The rate limiter is two-tier: the existing per-flow limiter plus a per-IP aggregate
+  (5000 pps / 5 MB/s, 65536-IP cap, fail closed). Both windows are debited only when both
+  allow. The per-IP subset counter is a subset, not a second bump of the combined counter.
+- Telemetry is aggregated in a bounded `Mutex<HashMap<(game_id, country), cell>>` (1024
+  cells, k>=3 emission floor). Percentiles are summed as mean-of-medians with that caveat
+  in the HELP text; game/country are aggregation labels, never PII.
+- History lives on an orphan `stats` branch: the Pages workflow generates the snapshot,
+  appends a reset-safe bounded (360) history, commits it, and deploys the artifact. The
+  reset rule treats any counter decrease as a relay restart so cumulative totals never
+  regress.
+- Two correctness bugs were fixed first because they corrupted the session metrics:
+  response listeners were spawned twice per session, and `last_activity` was never
+  refreshed so sessions expired 300s after creation regardless of traffic.
+**Impact:** `proxy/src/{metrics,relay,health,rate_limit,config}.rs`,
+`protocol/src/control.rs`, `client/src/{telemetry,main,modes/keepalive}.rs`,
+`client/src/games/mod.rs`, `infra/scripts/{network-stats,append-history,test_append_history}.sh`,
+`.github/workflows/pages.yml`, `web/{index.html,app.js}`, `.gitignore`,
+`client/Cargo.toml` (sys-locale), plus new `proxy/tests/integration_latency.rs`.
+**Alternatives Considered:** Client-RTT echo via the tunnel header timestamp was rejected
+(duplicates the keepalive measurement and needs protocol semantics changes); true
+percentile aggregation from per-client percentiles is statistically invalid, so only sums
+and counts are exposed; committing generated stats to `master` or an actions cache was
+rejected for repo noise and eviction risk respectively, so an orphan branch holds history.
+
+## 2026-09-19 — Relay self-update with in-place handoff (WF-025)
+
+**Context:** relays must update themselves without forcing clients to reconnect. Building
+this exposed a prerequisite failure: the proxy revoked data-plane auth when the QUIC
+control connection closed, and the client's keepalive task never reconnected, so any
+relay restart permanently deauthorized every connected client until the process restarted.
+
+**Delivered (atomic commits, in order):** client supervised reconnect (races connection
+close vs the 15s ping, jittered backoff 250ms..=5s, re-registers, never zeroes a valid
+token) and per-relay token store; proxy auth rekeyed by token with IP(+optional data port)
+binding, 300s TTL refreshed on control keepalive, 120s transport revive grace, 30s
+previous-token window (demotion only for a matching principal AND data port), 5s sweep,
+fail-closed cap; per-path telemetry (client collects RTT/jitter/loss/FEC/dedup per relay,
+protocol carries `route_legs`, proxy aggregates by relay/game/country); data tooling
+(`lib-nodes.sh` reads the signed registry, `collect-metrics.sh` bounded reset-safe
+history, `analyze-mesh.sh` anomaly flags, web history trends); versioned release layout
+`/opt/lightspeed/releases/<v>` + `current` symlink with a reusable installer (staged
+binary checked before publish, health gate, rollback, prune keeping active+previous);
+systemd `Type=notify` + 30s watchdog (`sd_notify` implemented directly, no new dep);
+a verified self-updater (GitHub release, SHA-256 checked, flock, `update-state.json`) on
+an hourly jittered timer; `/health` update state; and Phase 2 in-place `execve` handoff.
+
+**Key decisions:**
+- Auth is token-keyed with an IP(+optional port) binding; re-registration demotes only a
+  same-principal, same-port token, so two clients behind one NAT never truncate each other.
+- Handoff is an in-place `execve` (NOT `SO_REUSEPORT`/eBPF): the old process clears
+  `FD_CLOEXEC` on the data listener and every per-session outbound UDP fd, writes a
+  root-owned manifest to `/run/lightspeed/handoff.json`, pre-validates the target in a
+  child that inherits those fds, announces control shutdown, then execs. The new binary
+  adopts the fds, rebuilds sessions with FRESH FEC decoders (a reset costs at most one
+  unrecovered packet per straddling block; stale parity cannot cross-contaminate because
+  block ids are checked), restores auth with remaining TTLs, re-anchors `Instant` fields
+  from stored ages, and binds control/health fresh. Global metrics, abuse/rate state, and
+  TCP sessions are intentionally not transferred; `pending_forward_us` is zeroed.
+- Failure is safe by construction: anything short of a clean pre-validation restores the
+  fd flags and keeps the old process serving; the installer commits the `current` symlink
+  only after `/health` reports the new version with a matching ok handoff id plus a soak,
+  and otherwise leaves the old process running (zero downtime) or rolls back to the
+  previous release if the new one goes unhealthy. Adoption requires the env var, so a
+  plain systemd restart cannot adopt. The first Phase-2 rollout is necessarily a blunt
+  restart because the running binary predates handoff support.
+**Impact:** `proxy/src/{main,relay,auth,health,handoff,notify,metrics}.rs`,
+`client/src/{quic,session,telemetry,tunnel,engine}.rs`, `protocol/src/{control,telemetry}.rs`,
+`infra/scripts/{relay-install,relay-updater,collect-metrics,analyze-mesh,lib-nodes,test_handoff_e2e}.sh`,
+`infra/systemd/*`, `.github/workflows/pages.yml`, `web/*`.
+**Alternatives Considered:** `SO_REUSEPORT` coexistence was rejected because plain
+reuseport rehashes existing 4-tuples on membership change and the per-process in-memory
+auth/control state splits across processes (a client's control plane and data plane can
+land on different binaries); eBPF `SK_REUSEPORT` steering fixes the split but adds
+kernel/root/build complexity and murky drain semantics. A stable front-supervisor was
+rejected for an extra userspace hop, a recursive update problem, and the
+response-source-port constraint. Serializing the FEC decoder was rejected as unnecessary
+after analysis showed a safe reset. **Verification:** a committed root-only E2E
+(`test_handoff_e2e.sh`) proves the same PID switching versions with a live session and the
+game server observing the same outbound source port across the exec.
+
+## 2026-09-19 — Fleet rollout to 1.5.0 (one-time restart)
+
+**Context:** the user approved rolling every relay to the new build and accepting one blunt
+restart per relay, after which updates are seamless handoffs.
+
+**What was done:** bumped the workspace version to 1.5.0 (which also stops the self-updater
+from comparing an unreleased build against the published v1.4.4). Added
+`infra/scripts/migrate-to-versioned.sh`, a one-time, idempotent migration for relays still
+running an in-place `/usr/local/bin` binary under a `Type=simple` unit: it seeds the running
+binary as a `<version>-legacy` release, points `current` at it so rollback has a target, and
+installs the canonical `Type=notify` unit (which adds `RuntimeDirectory=lightspeed`, needed
+for the handoff manifest/result/request files). It deliberately does not restart;
+`relay-install.sh` then performs the single health-gated restart. Rolled ewr first (lowest
+traffic), verified, then lax, sgp, fra, and nrt.
+
+**Result:** all five relays run 1.5.0, healthy, `Type=notify` with a 30s watchdog,
+`handoff.supported=true`, `current -> /opt/lightspeed/releases/1.5.0`, and the previous
+binary retained (`1.3.2-legacy`, plus nrt's `1.4.4-canary`). The new drop categories are
+already counting (sgp recorded auth-rejected drops). Every install was health-gated with
+automatic rollback available. Future releases are applied by the hourly self-updater through
+the in-place handoff, so no client reconnect is forced. **Note:** this first rollout was a
+blunt restart, so clients running a pre-reconnect client build may have needed a restart;
+the client shipped on this branch reconnects within seconds.

@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, SocketAddrV4};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -55,7 +55,9 @@ const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
-use super::metrics::ProxyMetrics;
+#[cfg(target_os = "linux")]
+use super::handoff::SessionSnapshot;
+use super::metrics::{upstream_lag, DropReason, ProxyMetrics};
 use super::rate_limit::{RateLimitResult, RateLimiter};
 
 /// How responses are written back to a client.
@@ -142,10 +144,19 @@ pub struct ClientSession {
     pub packets_relayed: u64,
     /// Bytes relayed in this session.
     pub bytes_relayed: u64,
-    /// Session start time.
+    /// Session start time (monotonic epoch for all session durations).
     pub started_at: Instant,
-    /// Last activity time.
-    pub last_activity: Instant,
+    /// Microseconds since [`Self::started_at`] at the last activity, or 0 if
+    /// the session has seen no traffic yet.  Written via [`Self::touch`].
+    last_activity_us: AtomicU64,
+    /// Microseconds since [`Self::started_at`] when the client packet currently
+    /// awaiting a response was forwarded to the game server, or 0 when no
+    /// forward is outstanding.  Written immediately before the upstream
+    /// `send_to` for the normal and FEC-recovery paths, and cleared by the
+    /// first response read on the session socket via `swap(0)`, so at most one
+    /// latency sample is attributed per forward.  Refers to the most recent
+    /// forward; a subsequent forward overwrites it.
+    pub pending_forward_us: AtomicU64,
     /// Response sequence counter (FEC responses).
     pub response_seq: AtomicU16,
     /// Last client packet sequence seen (echoed in non-FEC responses so the
@@ -158,6 +169,68 @@ pub struct ClientSession {
     /// FEC decoder for inbound packets (client → proxy).
     /// Protected by tokio Mutex since it's accessed from the inbound loop.
     pub fec_decoder: tokio::sync::Mutex<FecDecoder>,
+    /// Idempotent claim flag for the response-listener task.
+    ///
+    /// `false` → no listener owns this session yet; `true` → one has been
+    /// spawned.  Only the site that flips this from `false` to `true` may
+    /// spawn [`run_session_response_listener`], which guarantees exactly one
+    /// listener per session.
+    listener_started: AtomicBool,
+    /// Number of times [`ClientSession::claim_response_listener`] has won.
+    /// Always 0 or 1; used by tests to prove single registration.
+    listeners_spawned: AtomicU64,
+}
+
+impl ClientSession {
+    /// Claim ownership of this session's response-listener task.
+    ///
+    /// Returns `true` for exactly one caller; every subsequent caller gets
+    /// `false`.  Only the winning caller may spawn
+    /// [`run_session_response_listener`] for this session.
+    pub fn claim_response_listener(&self) -> bool {
+        if self
+            .listener_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.listeners_spawned.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Number of response listeners successfully claimed for this session.
+    ///
+    /// Always 0 or 1; exposed so tests can prove single registration.
+    pub fn response_listeners_spawned(&self) -> u64 {
+        self.listeners_spawned.load(Ordering::Relaxed)
+    }
+
+    /// Refresh this session's activity clock.
+    ///
+    /// Stores the current instant, as microseconds since [`Self::started_at`],
+    /// into the lock-free activity field.  Safe to call concurrently from the
+    /// inbound packet path and the response listener; a load racing a store on
+    /// [`Ordering::Relaxed`] can only observe a slightly stale timestamp, which
+    /// is harmless for an advisory liveness check.
+    pub fn touch(&self) {
+        self.last_activity_us.store(
+            self.started_at.elapsed().as_micros() as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Microseconds of idle time since this session's last activity.
+    ///
+    /// Computed in the monotonic [`Self::started_at`] clock as
+    /// `now_micros - last_activity_us`.  A never-touched session reports its
+    /// full age (the stored value is 0), and the subtraction saturates at zero
+    /// so a timestamp that appears to be in the future can never underflow.
+    pub fn idle_micros(&self) -> u64 {
+        (self.started_at.elapsed().as_micros() as u64)
+            .saturating_sub(self.last_activity_us.load(Ordering::Relaxed))
+    }
 }
 
 /// The relay engine — manages all active tunnel sessions.
@@ -168,16 +241,55 @@ pub struct RelayEngine {
     max_sessions: usize,
     /// Session timeout (no activity).
     session_timeout: Duration,
+    /// Join handles for response-listener tasks spawned outside the manager.
+    ///
+    /// The immediate spawn in [`process_inbound_packet`] is otherwise detached,
+    /// so its handle is parked here and the periodic manager aborts it once the
+    /// session disappears.  Without this, an expired session (no FIN) would leak
+    /// its listener task forever.  Manager-created handles stay in the manager's
+    /// local `known_sessions`, which it already aborts.
+    listener_handles: Arc<tokio::sync::Mutex<HashMap<SocketAddrV4, tokio::task::JoinHandle<()>>>>,
+    /// Set while an in-place handoff is staged: new sessions are refused but
+    /// existing sessions keep resolving.
+    handoff_frozen: AtomicBool,
 }
 
 impl RelayEngine {
-    /// Create a new relay engine.
+    /// Create a new relay engine with the default 300 s session timeout.
     pub fn new(max_sessions: usize) -> Self {
+        Self::new_with_timeout(max_sessions, Duration::from_secs(300)) // 5 min
+    }
+
+    /// Create a new relay engine with an explicit session timeout.
+    ///
+    /// Test seam: production code uses [`Self::new`] and its fixed 300 s
+    /// timeout, while unit tests pass a short timeout so session expiry can be
+    /// exercised without sleeping for minutes.
+    pub fn new_with_timeout(max_sessions: usize, session_timeout: Duration) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             max_sessions,
-            session_timeout: Duration::from_secs(300), // 5 min
+            session_timeout,
+            listener_handles: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            handoff_frozen: AtomicBool::new(false),
         }
+    }
+
+    /// Refuse new session creation while an in-place handoff is prepared.
+    ///
+    /// The window is milliseconds, and existing sessions keep resolving.
+    pub fn freeze_handoff(&self) {
+        self.handoff_frozen.store(true, Ordering::Release);
+    }
+
+    /// Resume accepting new sessions after a handoff attempt did not exec.
+    pub fn unfreeze_handoff(&self) {
+        self.handoff_frozen.store(false, Ordering::Release);
+    }
+
+    /// Whether new-session creation is currently frozen for a handoff.
+    pub fn is_handoff_frozen(&self) -> bool {
+        self.handoff_frozen.load(Ordering::Acquire)
     }
 
     /// Get the number of active sessions.
@@ -211,7 +323,11 @@ impl RelayEngine {
             }
         }
 
-        // Slow path: create new session
+        // Slow path: create new session. A staged handoff admits no new
+        // sessions, but the fast path above already served existing ones.
+        if self.is_handoff_frozen() {
+            anyhow::bail!("handoff in progress: refusing to create a new session");
+        }
         if !self.can_accept().await {
             anyhow::bail!("Max sessions ({}) reached", self.max_sessions);
         }
@@ -244,15 +360,28 @@ impl RelayEngine {
             packets_relayed: 0,
             bytes_relayed: 0,
             started_at: Instant::now(),
-            last_activity: Instant::now(),
+            last_activity_us: AtomicU64::new(0),
+            pending_forward_us: AtomicU64::new(0),
             response_seq: AtomicU16::new(0),
             last_client_seq: AtomicU16::new(0),
             fec_enabled,
             fec_k,
             fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
+            listener_started: AtomicBool::new(false),
+            listeners_spawned: AtomicU64::new(0),
         });
 
         let mut sessions = self.sessions.write().await;
+        // Re-check the freeze under the write lock: a request that passed the
+        // earlier check but stalled must not insert a session after the handoff
+        // snapshot was taken. Re-check for a concurrent creator so this insert
+        // cannot clobber an existing session.
+        if self.is_handoff_frozen() {
+            anyhow::bail!("handoff in progress: refusing to create a new session");
+        }
+        if let Some(existing) = sessions.get(&client_addr) {
+            return Ok((Arc::clone(existing), false));
+        }
         sessions.insert(client_addr, Arc::clone(&session));
 
         Ok((session, true))
@@ -264,18 +393,229 @@ impl RelayEngine {
     }
 
     /// Clean up expired sessions.
+    ///
+    /// A session expires once its idle time (see [`ClientSession::idle_micros`])
+    /// reaches the configured timeout.  Dropping a session cancels its token so
+    /// any response-listener task parked on it exits promptly.
     pub async fn cleanup_expired(&self) -> usize {
         let timeout = self.session_timeout;
         let mut sessions = self.sessions.write().await;
         let before = sessions.len();
         sessions.retain(|addr, session| {
-            let keep = session.last_activity.elapsed() < timeout;
+            let keep = session.idle_micros() < timeout.as_micros() as u64;
             if !keep {
+                session.cancel.cancel();
                 info!(client = %addr, "Session expired after {:?}", session.started_at.elapsed());
             }
             keep
         });
         before - sessions.len()
+    }
+
+    /// Park a response-listener join handle so the session manager can abort
+    /// it after the session is removed.
+    ///
+    /// If a stale handle already exists for `addr` (client address reused after
+    /// an expiry that fired no cancellation), it is aborted first so it cannot
+    /// outlive its session.
+    pub async fn register_listener_handle(
+        &self,
+        addr: SocketAddrV4,
+        handle: tokio::task::JoinHandle<()>,
+    ) {
+        let mut handles = self.listener_handles.lock().await;
+        if let Some(previous) = handles.insert(addr, handle) {
+            previous.abort();
+        }
+    }
+
+    /// Abort and forget every parked listener handle whose session is no longer
+    /// active.
+    pub async fn reap_listener_handles(&self, active: &HashMap<SocketAddrV4, Arc<ClientSession>>) {
+        let mut handles = self.listener_handles.lock().await;
+        handles.retain(|addr, handle| {
+            if active.contains_key(addr) {
+                true
+            } else {
+                handle.abort();
+                false
+            }
+        });
+    }
+
+    /// Snapshot every UDP session for an in-place handoff.
+    ///
+    /// FEC decoder state and `pending_forward_us` are intentionally not carried:
+    /// the decoder is rebuilt by the adopting process and the latency marker is
+    /// zeroed so no post-handoff response is charged a bogus lag.  TCP sessions
+    /// cannot survive an `execve` (their write half lives in this process) and
+    /// are skipped.
+    #[cfg(target_os = "linux")]
+    pub fn snapshot_handoff(&self, now: Instant) -> Vec<SessionSnapshot> {
+        use std::os::fd::AsRawFd;
+
+        let sessions = self.sessions.blocking_read();
+        let mut snapshots = Vec::with_capacity(sessions.len());
+        let mut tcp_skipped = 0usize;
+        for session in sessions.values() {
+            if session.sender.is_tcp() {
+                tcp_skipped += 1;
+                continue;
+            }
+            let age_us = now
+                .saturating_duration_since(session.started_at)
+                .as_micros() as u64;
+            let last_activity_us = session.last_activity_us.load(Ordering::Relaxed);
+            snapshots.push(SessionSnapshot {
+                client_addr: session.client_addr.to_string(),
+                game_server: session.game_server.to_string(),
+                outbound_fd: session.outbound_socket.as_raw_fd(),
+                fec_enabled: session.fec_enabled,
+                fec_k: session.fec_k,
+                age_us,
+                idle_us: age_us.saturating_sub(last_activity_us),
+                response_seq: session.response_seq.load(Ordering::Relaxed),
+                last_client_seq: session.last_client_seq.load(Ordering::Relaxed),
+                packets_relayed: session.packets_relayed,
+                bytes_relayed: session.bytes_relayed,
+            });
+        }
+        drop(sessions);
+        if tcp_skipped > 0 {
+            info!(
+                tcp_sessions_skipped = tcp_skipped,
+                "Handoff snapshot skipped TCP sessions"
+            );
+        }
+        snapshots
+    }
+
+    /// Adopt snapshotted sessions into this engine.
+    ///
+    /// Each snapshot's outbound fd is validated and adopted into a fresh
+    /// non-blocking socket, a new [`ClientSession`] is built (new FEC decoder,
+    /// new cancellation token, re-anchored age, preserved activity and
+    /// counters), and its response listener is spawned immediately.  An address
+    /// that already has a session, or whose fd fails validation, is skipped.
+    /// Returns the number of sessions installed.
+    #[cfg(target_os = "linux")]
+    pub async fn install_handoff_sessions(
+        &self,
+        snaps: &[SessionSnapshot],
+        data_socket: Arc<UdpSocket>,
+        metrics: Arc<ProxyMetrics>,
+    ) -> usize {
+        let mut installed = 0usize;
+        for snap in snaps {
+            let client_addr: SocketAddrV4 = match snap.client_addr.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    warn!(
+                        client = %snap.client_addr,
+                        "Skipping handoff session with unparseable client_addr"
+                    );
+                    crate::handoff::close_fd(snap.outbound_fd);
+                    continue;
+                }
+            };
+            let game_server: SocketAddrV4 = match snap.game_server.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    warn!(
+                        client = %snap.client_addr,
+                        "Skipping handoff session with unparseable game_server"
+                    );
+                    crate::handoff::close_fd(snap.outbound_fd);
+                    continue;
+                }
+            };
+
+            {
+                let sessions = self.sessions.read().await;
+                if sessions.contains_key(&client_addr) {
+                    debug!(
+                        client = %client_addr,
+                        "Handoff session address already active, skipping"
+                    );
+                    drop(sessions);
+                    crate::handoff::close_fd(snap.outbound_fd);
+                    continue;
+                }
+            }
+
+            let std_socket = match crate::handoff::adopt_std_udp(snap.outbound_fd) {
+                Ok(socket) => socket,
+                Err(e) => {
+                    warn!(
+                        client = %client_addr,
+                        fd = snap.outbound_fd,
+                        error = %e,
+                        "Skipping handoff session with invalid outbound fd"
+                    );
+                    continue;
+                }
+            };
+            let outbound_socket = match UdpSocket::from_std(std_socket) {
+                Ok(socket) => socket,
+                Err(e) => {
+                    warn!(
+                        client = %client_addr,
+                        error = %e,
+                        "Skipping handoff session: cannot register adopted socket"
+                    );
+                    continue;
+                }
+            };
+
+            // Seal the adopted fd here, where ownership is established, so the
+            // caller never touches fds of snapshots that were skipped/closed.
+            let _ = crate::handoff::set_cloexec(snap.outbound_fd);
+
+            let age = Duration::from_micros(snap.age_us);
+            let started_at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+            let session = Arc::new(ClientSession {
+                client_addr,
+                game_server,
+                outbound_socket: Arc::new(outbound_socket),
+                sender: ClientSender::Udp {
+                    socket: Arc::clone(&data_socket),
+                    addr: client_addr,
+                },
+                cancel: CancellationToken::new(),
+                packets_relayed: snap.packets_relayed,
+                bytes_relayed: snap.bytes_relayed,
+                started_at,
+                last_activity_us: AtomicU64::new(snap.age_us.saturating_sub(snap.idle_us)),
+                pending_forward_us: AtomicU64::new(0),
+                response_seq: AtomicU16::new(snap.response_seq),
+                last_client_seq: AtomicU16::new(snap.last_client_seq),
+                fec_enabled: snap.fec_enabled,
+                fec_k: snap.fec_k,
+                fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
+                listener_started: AtomicBool::new(false),
+                listeners_spawned: AtomicU64::new(0),
+            });
+
+            {
+                let mut sessions = self.sessions.write().await;
+                if sessions.contains_key(&client_addr) {
+                    continue;
+                }
+                sessions.insert(client_addr, Arc::clone(&session));
+            }
+
+            metrics.record_session_created();
+            if session.claim_response_listener() {
+                let session_clone = Arc::clone(&session);
+                let metrics_clone = Arc::clone(&metrics);
+                let handle = tokio::spawn(async move {
+                    run_session_response_listener(session_clone, metrics_clone).await;
+                });
+                self.register_listener_handle(client_addr, handle).await;
+            }
+            installed += 1;
+        }
+        installed
     }
 }
 
@@ -431,14 +771,36 @@ async fn process_inbound_packet(
             RateLimitResult::Allowed => {}
             RateLimitResult::PacketRateExceeded => {
                 trace!(client = %client_addr, "Rate limited (PPS)");
-                metrics.record_drop();
-                metrics.record_rate_limit();
+                metrics.record_drop(DropReason::RateLimit);
                 return false;
             }
             RateLimitResult::BandwidthExceeded => {
                 trace!(client = %client_addr, "Rate limited (BPS)");
-                metrics.record_drop();
-                metrics.record_rate_limit();
+                metrics.record_drop(DropReason::RateLimit);
+                return false;
+            }
+            RateLimitResult::IpPacketRateExceeded => {
+                trace!(client = %client_addr, "Rate limited (per-IP PPS)");
+                metrics.record_drop(DropReason::RateLimit);
+                metrics.record_rate_limit_ip();
+                return false;
+            }
+            RateLimitResult::IpBandwidthExceeded => {
+                trace!(client = %client_addr, "Rate limited (per-IP BPS)");
+                metrics.record_drop(DropReason::RateLimit);
+                metrics.record_rate_limit_ip();
+                return false;
+            }
+            RateLimitResult::IpTableFull => {
+                trace!(client = %client_addr, "Rate limit table full");
+                metrics.record_drop(DropReason::RateLimit);
+                metrics.record_rate_limit_overflow();
+                return false;
+            }
+            RateLimitResult::FlowTableFull => {
+                trace!(client = %client_addr, "Rate limit flow table full");
+                metrics.record_drop(DropReason::RateLimit);
+                metrics.record_rate_limit_overflow();
                 return false;
             }
         }
@@ -449,7 +811,7 @@ async fn process_inbound_packet(
         Ok(result) => result,
         Err(e) => {
             debug!(client = %client_addr, error = %e, "Invalid tunnel packet");
-            metrics.record_drop();
+            metrics.record_drop(DropReason::Malformed);
             return false;
         }
     };
@@ -471,14 +833,18 @@ async fn process_inbound_packet(
     // ── Security: Authentication check ──────────────────────────
     {
         let auth = authenticator.read().await;
-        if !auth.validate(client_addr.ip(), header.session_token) {
+        if !auth.validate(
+            *client_addr.ip(),
+            client_addr.port(),
+            header.session_token,
+            Instant::now(),
+        ) {
             debug!(
                 client = %client_addr,
                 token = header.session_token,
-                "Unauthorized: invalid IP or session token"
+                "Unauthorized: invalid principal, port, or session token"
             );
-            metrics.record_drop();
-            metrics.record_auth_rejection();
+            metrics.record_drop(DropReason::Auth);
             return false;
         }
     }
@@ -508,8 +874,7 @@ async fn process_inbound_packet(
                     dest = %game_server,
                     "Blocked: private/internal destination"
                 );
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
             AbuseCheckResult::DestinationNotAllowed => {
@@ -518,26 +883,22 @@ async fn process_inbound_packet(
                     dest = %game_server,
                     "Blocked: destination not in allowlist"
                 );
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
             AbuseCheckResult::Banned => {
                 trace!(client = %client_addr, "Blocked: client is banned");
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
             AbuseCheckResult::ReflectionDetected => {
                 warn!(client = %client_addr, "Blocked: reflection attack detected");
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
             AbuseCheckResult::AmplificationDetected => {
                 warn!(client = %client_addr, "Blocked: amplification detected");
-                metrics.record_drop();
-                metrics.record_abuse_block();
+                metrics.record_drop(DropReason::Abuse);
                 return false;
             }
         }
@@ -547,7 +908,7 @@ async fn process_inbound_packet(
     let (fec_hdr, game_payload) = if is_fec {
         if payload.len() < FEC_HEADER_SIZE {
             debug!(client = %client_addr, "FEC packet too short");
-            metrics.record_drop();
+            metrics.record_drop(DropReason::FecMalformed);
             return false;
         }
         let mut fec_slice: &[u8] = &payload[..FEC_HEADER_SIZE];
@@ -555,7 +916,7 @@ async fn process_inbound_packet(
             Some(fh) => (Some(fh), &payload[FEC_HEADER_SIZE..]),
             None => {
                 debug!(client = %client_addr, "Invalid FEC header");
-                metrics.record_drop();
+                metrics.record_drop(DropReason::FecMalformed);
                 return false;
             }
         }
@@ -574,20 +935,27 @@ async fn process_inbound_packet(
         Ok(s) => s,
         Err(e) => {
             warn!(client = %client_addr, error = %e, "Failed to create session");
-            metrics.record_drop();
+            metrics.record_drop(DropReason::SessionSetup);
             return false;
         }
     };
 
-    // Immediately spawn response listener for new sessions
+    // Immediately spawn the response listener for a brand-new session. The
+    // claim is idempotent, so if the periodic manager won the race this site
+    // must not spawn a second listener. We park our handle in the engine
+    // registry (rather than dropping it) so the manager can abort it when the
+    // session is later removed.
     if is_new {
         metrics.record_session_created();
-        let session_clone = Arc::clone(&session);
-        let metrics_clone = Arc::clone(metrics);
-        tokio::spawn(async move {
-            run_session_response_listener(session_clone, metrics_clone).await;
-        });
-        info!(client = %client_addr, fec = is_fec, "Response listener spawned immediately");
+        if session.claim_response_listener() {
+            let session_clone = Arc::clone(&session);
+            let metrics_clone = Arc::clone(metrics);
+            let handle = tokio::spawn(async move {
+                run_session_response_listener(session_clone, metrics_clone).await;
+            });
+            engine.register_listener_handle(client_addr, handle).await;
+            info!(client = %client_addr, fec = is_fec, "Response listener spawned immediately");
+        }
     }
 
     // ── Handle FEC parity packets ───────────────────────────────
@@ -607,6 +975,10 @@ async fn process_inbound_packet(
                     recovered_len = recovered.len(),
                     "🔧 FEC recovered lost packet on proxy"
                 );
+                session.pending_forward_us.store(
+                    session.started_at.elapsed().as_micros() as u64,
+                    Ordering::Relaxed,
+                );
                 match session
                     .outbound_socket
                     .send_to(&recovered, game_server)
@@ -616,6 +988,8 @@ async fn process_inbound_packet(
                         metrics.record_relay(sent as u64);
                     }
                     Err(e) => {
+                        session.pending_forward_us.store(0, Ordering::Relaxed);
+                        metrics.record_drop(DropReason::RelaySendError);
                         debug!(client = %client_addr, error = %e, "Failed to forward recovered packet");
                     }
                 }
@@ -625,6 +999,7 @@ async fn process_inbound_packet(
             return false; // Don't forward parity to game server
         } else {
             // Data packet with FEC: track in decoder, then forward game_payload
+            metrics.record_fec_data();
             let data_bytes = bytes::Bytes::copy_from_slice(game_payload);
             let mut decoder = session.fec_decoder.lock().await;
             decoder.receive_data(fh, data_bytes);
@@ -632,6 +1007,12 @@ async fn process_inbound_packet(
     }
 
     // ── Forward the raw game payload to the game server ─────────
+    // Stamp the monotonic send time before the await so the response listener
+    // can measure the upstream lag when the matching response arrives.
+    session.pending_forward_us.store(
+        session.started_at.elapsed().as_micros() as u64,
+        Ordering::Relaxed,
+    );
     match session
         .outbound_socket
         .send_to(game_payload, game_server)
@@ -651,18 +1032,20 @@ async fn process_inbound_packet(
             session
                 .last_client_seq
                 .store(header.sequence, Ordering::Relaxed);
+            session.touch();
 
             let mut abuse = abuse_detector.lock().await;
             abuse.record_outbound(*client_addr.ip(), sent as u64);
         }
         Err(e) => {
+            session.pending_forward_us.store(0, Ordering::Relaxed);
             debug!(
                 client = %client_addr,
                 game_server = %game_server,
                 error = %e,
                 "Failed to forward to game server"
             );
-            metrics.record_drop();
+            metrics.record_drop(DropReason::RelaySendError);
         }
     }
 
@@ -826,6 +1209,19 @@ pub async fn run_session_response_listener(
                         // server (off-path injection guard).
                         if src_addr.ip() != std::net::IpAddr::from(*session.game_server.ip()) {
                             continue;
+                        }
+                        session.touch();
+
+                        // Record proxy-observed upstream lag exactly once per
+                        // forward: `swap(0)` claims the pending marker so later
+                        // unprompted server ticks cannot produce samples.
+                        let now = session.started_at.elapsed().as_micros() as u64;
+                        let marker = session.pending_forward_us.swap(0, Ordering::Relaxed);
+                        if marker != 0 {
+                            match upstream_lag(now, marker) {
+                                Some(lag) => metrics.record_latency(lag),
+                                None => metrics.record_latency_discarded(),
+                            }
                         }
                         len
                     }
@@ -997,6 +1393,7 @@ pub async fn run_session_manager(
     abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
     metrics: Arc<ProxyMetrics>,
     rate_limiter: Arc<tokio::sync::Mutex<RateLimiter>>,
+    authenticator: Arc<RwLock<Authenticator>>,
 ) {
     let mut known_sessions: HashMap<SocketAddrV4, tokio::task::JoinHandle<()>> = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -1020,6 +1417,9 @@ pub async fn run_session_manager(
         }
         rate_limiter.lock().await.cleanup();
 
+        // Drop auth entries past their TTL/grace deadline (see auth::sweep).
+        authenticator.write().await.sweep(Instant::now());
+
         // Remove join handles for sessions that no longer exist
         let sessions_lock = engine.sessions();
         let active = sessions_lock.read().await;
@@ -1032,9 +1432,15 @@ pub async fn run_session_manager(
             }
         });
 
-        // Start response listeners for new sessions
+        // Abort immediately-spawned listeners whose sessions are gone. Their
+        // handles are parked in the engine registry, not in `known_sessions`.
+        engine.reap_listener_handles(&active).await;
+
+        // Start response listeners for sessions no earlier site claimed. The
+        // idempotent claim means a session whose immediate listener already won
+        // is skipped here, so exactly one listener runs per session.
         for (addr, session) in active.iter() {
-            if !known_sessions.contains_key(addr) {
+            if !known_sessions.contains_key(addr) && session.claim_response_listener() {
                 let session = Arc::clone(session);
                 let metrics = Arc::clone(&metrics);
 
@@ -1187,6 +1593,23 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn test_snapshot(client_addr: &str, game_server: &str, outbound_fd: i32) -> SessionSnapshot {
+        SessionSnapshot {
+            client_addr: client_addr.to_string(),
+            game_server: game_server.to_string(),
+            outbound_fd,
+            fec_enabled: false,
+            fec_k: 4,
+            age_us: 1,
+            idle_us: 1,
+            response_seq: 0,
+            last_client_seq: 0,
+            packets_relayed: 0,
+            bytes_relayed: 0,
+        }
+    }
+
     #[tokio::test]
     async fn test_relay_engine_session_lifecycle() {
         let engine = RelayEngine::new(10);
@@ -1215,6 +1638,30 @@ mod tests {
         assert!(!is_new2);
         assert_eq!(engine.active_sessions().await, 1);
         assert_eq!(session.client_addr, session2.client_addr);
+    }
+
+    #[tokio::test]
+    async fn test_response_listener_claimed_once() {
+        let engine = RelayEngine::new(10);
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+
+        let (sess, is_new) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(is_new);
+
+        assert!(
+            sess.claim_response_listener(),
+            "first claim must win the response listener"
+        );
+        assert!(
+            !sess.claim_response_listener(),
+            "second claim must be rejected"
+        );
+        assert_eq!(sess.response_listeners_spawned(), 1);
     }
 
     #[tokio::test]
@@ -1249,6 +1696,80 @@ mod tests {
             .get_or_create_session(client2, server, false, 4, test_udp_sender().await)
             .await
             .is_err());
+    }
+
+    /// The freeze guard refuses new sessions while an existing session keeps
+    /// resolving, then admits new sessions again once unpacked.
+    #[tokio::test]
+    async fn freeze_handoff_refuses_new_sessions_but_serves_existing() {
+        let engine = RelayEngine::new(10);
+        let client = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), 40_010);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_017);
+        let other = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 8), 40_011);
+        let sender = test_udp_sender().await;
+
+        let (_, is_new) = engine
+            .get_or_create_session(client, server, false, 4, sender.clone())
+            .await
+            .unwrap();
+        assert!(is_new);
+
+        engine.freeze_handoff();
+        assert!(engine.is_handoff_frozen());
+
+        let (_, is_new) = engine
+            .get_or_create_session(client, server, false, 4, sender.clone())
+            .await
+            .unwrap();
+        assert!(!is_new, "existing session must keep resolving while frozen");
+
+        assert!(
+            engine
+                .get_or_create_session(other, server, false, 4, sender.clone())
+                .await
+                .is_err(),
+            "new session must be refused while frozen"
+        );
+
+        engine.unfreeze_handoff();
+        assert!(!engine.is_handoff_frozen());
+        let (_, is_new) = engine
+            .get_or_create_session(other, server, false, 4, sender)
+            .await
+            .unwrap();
+        assert!(is_new, "new sessions resume after unfreeze");
+    }
+
+    /// Activity must extend a session's lifetime: a session touched halfway
+    /// through the timeout window survives the first sweep, then expires after
+    /// a full idle window with no further touches.
+    #[tokio::test]
+    async fn test_cleanup_expired_uses_refreshed_activity() {
+        let engine = RelayEngine::new_with_timeout(10, Duration::from_millis(60));
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+
+        let (session, is_new) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(is_new);
+
+        // Touch halfway through the window: a refreshed session stays alive.
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        session.touch();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(
+            engine.cleanup_expired().await,
+            0,
+            "an activity touch must extend the session lifetime"
+        );
+
+        // No further traffic: a full idle window now expires it.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert_eq!(engine.cleanup_expired().await, 1);
+        assert_eq!(engine.active_sessions().await, 0);
     }
 
     #[tokio::test]
@@ -1357,5 +1878,138 @@ mod tests {
             "Expected {} packets via recvmmsg, got {}",
             N, received
         );
+    }
+
+    /// Snapshot a UDP session, then adopt it into a fresh engine and verify the
+    /// client, game server, FEC parameters, counters, and single response
+    /// listener are all reconstructed.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn handoff_snapshot_and_install_reconstruct_udp_sessions() {
+        let engine = Arc::new(RelayEngine::new(10));
+        let client = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 5), 40_000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_015);
+
+        let (session, is_new) = engine
+            .get_or_create_session(client, server, true, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(is_new);
+        session.touch();
+
+        let snapshotter = Arc::clone(&engine);
+        let snapshots =
+            tokio::task::spawn_blocking(move || snapshotter.snapshot_handoff(Instant::now()))
+                .await
+                .unwrap();
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].client_addr, client.to_string());
+        assert_eq!(snapshots[0].game_server, server.to_string());
+        assert!(snapshots[0].fec_enabled);
+        assert_eq!(snapshots[0].fec_k, 4);
+        assert!(snapshots[0].idle_us <= snapshots[0].age_us);
+
+        // Simulate an `execve`: the outgoing process image disappears, so its
+        // reactor registration is gone and the fd stays open for the adopter.
+        // `into_std` deregisters the socket; forgetting the std handle keeps the
+        // fd alive instead of closing it as the old session is torn down.
+        drop(session);
+        let original = engine.sessions().write().await.remove(&client).unwrap();
+        let original = Arc::try_unwrap(original).unwrap();
+        let outbound = Arc::try_unwrap(original.outbound_socket).unwrap();
+        std::mem::forget(outbound.into_std().unwrap());
+
+        let adopted = RelayEngine::new(10);
+        let data_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let metrics = Arc::new(ProxyMetrics::new());
+
+        let installed = adopted
+            .install_handoff_sessions(&snapshots, data_socket, metrics)
+            .await;
+        assert_eq!(installed, 1);
+
+        let sessions = adopted.sessions();
+        let guard = sessions.read().await;
+        let restored = guard.get(&client).expect("client session installed");
+        assert_eq!(restored.game_server, server);
+        assert!(restored.fec_enabled);
+        assert_eq!(restored.fec_k, 4);
+        assert_eq!(restored.response_listeners_spawned(), 1);
+        assert_eq!(restored.pending_forward_us.load(Ordering::Relaxed), 0);
+    }
+
+    /// TCP sessions cannot survive an `execve`; they must be skipped.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn handoff_snapshot_skips_tcp_sessions() {
+        let engine = Arc::new(RelayEngine::new(10));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener_addr = listener.local_addr().unwrap();
+        let connect = tokio::net::TcpStream::connect(listener_addr);
+        let (accepted, connected) = tokio::join!(listener.accept(), connect);
+        let (server_stream, _) = accepted.unwrap();
+        let _client_stream = connected.unwrap();
+        let (_read, write) = server_stream.into_split();
+
+        let sender = ClientSender::Tcp {
+            write: Arc::new(tokio::sync::Mutex::new(write)),
+            cancel: CancellationToken::new(),
+        };
+        let client = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 6), 40_001);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_016);
+        engine
+            .get_or_create_session(client, server, false, 4, sender)
+            .await
+            .unwrap();
+
+        let snapshotter = Arc::clone(&engine);
+        let snapshots =
+            tokio::task::spawn_blocking(move || snapshotter.snapshot_handoff(Instant::now()))
+                .await
+                .unwrap();
+
+        assert!(snapshots.is_empty(), "TCP sessions must be skipped");
+    }
+
+    /// A snapshot that is skipped before adoption (here: an unparseable client
+    /// address) must have its outbound fd closed rather than leaked. A private
+    /// pipe is used as the fd so the close is observable through EPIPE.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn install_handoff_sessions_closes_outbound_fd_for_skipped_snapshot() {
+        let mut pipe_fds = [0 as libc::c_int; 2];
+        // SAFETY: `pipe` writes two valid descriptors into the array.
+        assert_eq!(unsafe { libc::pipe(pipe_fds.as_mut_ptr()) }, 0);
+        let (read_end, write_end) = (pipe_fds[0], pipe_fds[1]);
+
+        let engine = RelayEngine::new(10);
+        let data_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let metrics = Arc::new(ProxyMetrics::new());
+        let snaps = vec![test_snapshot(
+            "not-an-address",
+            "198.51.100.9:27015",
+            read_end,
+        )];
+
+        let installed = engine
+            .install_handoff_sessions(&snaps, data_socket, metrics)
+            .await;
+        assert_eq!(installed, 0);
+        assert_eq!(engine.active_sessions().await, 0);
+
+        // The read end was closed, so the write end has no reader: EPIPE.
+        let byte = [0u8; 1];
+        // SAFETY: `write_end` is a live pipe descriptor and `byte` has length 1.
+        let rc =
+            unsafe { libc::write(write_end, byte.as_ptr() as *const libc::c_void, byte.len()) };
+        let write_errno = std::io::Error::last_os_error();
+        assert_eq!(
+            rc, -1,
+            "a skipped snapshot's outbound fd must be closed, not leaked"
+        );
+        assert_eq!(write_errno.raw_os_error(), Some(libc::EPIPE));
+        // SAFETY: `write_end` is still owned by this test.
+        unsafe { libc::close(write_end) };
     }
 }

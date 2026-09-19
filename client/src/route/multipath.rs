@@ -7,6 +7,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddrV4;
 
+/// Maximum RTT samples retained per path for local quality reporting.
+const LEG_RTT_CAPACITY: usize = 256;
+
 /// Multipath configuration.
 #[derive(Debug, Clone)]
 pub struct MultipathConfig {
@@ -37,6 +40,8 @@ pub struct PathStats {
     pub total: u64,
     /// Exponential moving average of latency (microseconds).
     pub ema_latency_us: f64,
+    /// Duplicate responses suppressed on this path.
+    pub dedup_saved: u32,
 }
 
 /// The multipath engine: holds the active paths, dedupes responses by a key,
@@ -109,9 +114,11 @@ impl MultipathState {
         };
     }
 
-    /// Record that `addr` delivered a non-winning response.
-    pub fn record_loss(&mut self, addr: SocketAddrV4) {
-        self.stats.entry(addr).or_default().total += 1;
+    /// Record that `addr` delivered a duplicate (non-winning) response.
+    pub fn record_duplicate(&mut self, addr: SocketAddrV4) {
+        let s = self.stats.entry(addr).or_default();
+        s.total += 1;
+        s.dedup_saved = s.dedup_saved.saturating_add(1);
     }
 
     /// The path with the most wins (None when no responses seen yet).
@@ -174,5 +181,18 @@ mod tests {
         assert_eq!(m.winning_path(), Some(a1)); // a1 has 2 wins
         assert_eq!(m.stats().get(&a1).unwrap().wins, 2);
         assert_eq!(m.stats().get(&a2).unwrap().total, 1);
+    }
+
+    #[test]
+    fn test_record_duplicate_tracks_dedup_without_changing_total() {
+        let mut m = MultipathState::new(16);
+        let a1 = addr(1, 1, 1, 1);
+        m.set_paths(vec![a1, addr(2, 2, 2, 2)]);
+        m.record_win(a1, 100);
+        m.record_duplicate(a1);
+        let s = m.stats().get(&a1).unwrap();
+        assert_eq!(s.wins, 1);
+        assert_eq!(s.total, 2);
+        assert_eq!(s.dedup_saved, 1);
     }
 }

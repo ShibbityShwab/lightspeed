@@ -64,6 +64,19 @@ struct ResolvedProxy {
     servers: Vec<String>,
 }
 
+/// Zeroes the process-global data-plane tokens when the client exits.
+///
+/// A supervised reconnect or mode switch must preserve the last relay-issued
+/// token, so tokens are cleared only here, at the single explicit process
+/// shutdown point, never on a transient disconnect.
+struct TokenResetOnShutdown;
+
+impl Drop for TokenResetOnShutdown {
+    fn drop(&mut self) {
+        crate::session::reset_all_tokens();
+    }
+}
+
 /// Resolve the proxy to use: explicit `--proxy`, else auto-select from
 /// configured servers, else discover from the signed registry, else a
 /// localhost dev default.
@@ -153,6 +166,11 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
                 .and_then(|s| parse_proxy_addr(s).ok())
                 .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
             let addrs: Vec<String> = nodes.iter().map(|(_, addr)| addr.clone()).collect();
+            for (id, addr) in &nodes {
+                if let Ok(a) = parse_proxy_addr(addr) {
+                    telemetry::paths::register_relay_node(a, id);
+                }
+            }
             info!(
                 "🔍 Registry: {} relay(s) discovered; probing (strategy: {})...",
                 addrs.len(),
@@ -245,7 +263,9 @@ async fn main() -> anyhow::Result<()> {
     let telemetry_collector: Option<Arc<TelemetryCollector>> = if cli.telemetry && !cli.no_telemetry
     {
         telemetry::print_disclosure();
-        Some(Arc::new(TelemetryCollector::new()))
+        let collector = Arc::new(TelemetryCollector::new());
+        telemetry::paths::install_global_collector(collector.as_ref());
+        Some(collector)
     } else {
         None
     };
@@ -255,6 +275,8 @@ async fn main() -> anyhow::Result<()> {
         warn!("Config not found ({}), using defaults", e);
         config::Config::default()
     });
+
+    let _token_reset = TokenResetOnShutdown;
 
     // ── Transport selection (UDP default, TCP opt-in) ─────────────
     let use_tcp = cli.tcp || config.tunnel.transport.eq_ignore_ascii_case("tcp");
@@ -1187,10 +1209,21 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── Spawn periodic telemetry flush (every 15 min) ─────────────
+    let game_id = cli
+        .game
+        .as_deref()
+        .map(lightspeed_protocol::game_id::id_for_key)
+        .unwrap_or(lightspeed_protocol::game_id::UNKNOWN);
+    let telemetry_ctx = telemetry::context::TelemetryContext {
+        game_id,
+        country: telemetry::context::detect_country(),
+    };
+
     if let Some(ref tc) = telemetry_collector {
         let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
         // TelemetryCollector is Arc-backed; .clone() shares the same ring buffer.
-        telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, 0, "".to_string());
+        // The context is cloned so the shutdown flush below can reuse it.
+        telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, telemetry_ctx.clone());
     }
 
     // ── Keepalive mode ────────────────────────────────────────────
@@ -1202,6 +1235,7 @@ async fn main() -> anyhow::Result<()> {
         online_learner,
         keepalive_timestamps,
         telemetry_collector,
+        telemetry_ctx,
     )
     .await
 }

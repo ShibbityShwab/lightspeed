@@ -7,6 +7,7 @@
 //! The async helpers are gated behind the `tokio` feature so the protocol crate
 //! can be used without a Tokio runtime (e.g. pure encode/decode benches).
 
+#[cfg(feature = "tokio")]
 use std::io;
 
 #[cfg(feature = "tokio")]

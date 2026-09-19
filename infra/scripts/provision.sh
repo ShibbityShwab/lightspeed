@@ -27,6 +27,20 @@ PLAN="vc2-1c-1gb"  # $6/mo — 1 vCPU, 1GB RAM, 25GB SSD (cheapest with IPv4)
 OS_ID=2136          # Ubuntu 24.04 LTS
 SSH_KEY_ID="${VPS_SSH_KEY_ID:-}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes"
+RELAY_INSTALLER="$SCRIPT_DIR/relay-install.sh"
+UPDATER="$SCRIPT_DIR/relay-updater.sh"
+SYSTEMD_DIR="$SCRIPT_DIR/../systemd"
+
+if [ -n "${LIGHTSPEED_VERSION:-}" ]; then
+    RELEASE_VERSION="$LIGHTSPEED_VERSION"
+else
+    RELEASE_VERSION="$(date -u +%Y%m%dT%H%M%SZ)-$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || printf 'nogit')"
+fi
+
 # ── Node name mapping ────────────────────────────────────────
 declare -A REGION_NAMES
 REGION_NAMES["ewr"]="relay-ewr"      # New Jersey (US-East)
@@ -66,6 +80,40 @@ get_ssh_keys() {
     api GET "ssh-keys" | jq -r '.ssh_keys[0].id'
 }
 
+# Install the provided binary as the node's first versioned release.
+install_first_release() {
+    local ip="$1"
+    local binary="$PROJECT_ROOT/target/release/lightspeed-proxy"
+    if [ ! -f "$binary" ] || [ ! -f "$RELAY_INSTALLER" ]; then
+        echo "  No local binary/installer; run deploy.sh to install the first release."
+        return 0
+    fi
+    echo "  Installing first release ($RELEASE_VERSION)..."
+    scp $SSH_OPTS -i "$SSH_KEY" "$binary" "root@$ip:/tmp/lightspeed-proxy.staged" || return 1
+    scp $SSH_OPTS -i "$SSH_KEY" "$RELAY_INSTALLER" "root@$ip:/tmp/lightspeed-relay-install.sh" || return 1
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip" \
+        "bash /tmp/lightspeed-relay-install.sh --binary /tmp/lightspeed-proxy.staged --version '$RELEASE_VERSION'" || return 1
+
+    # Install the self-updater and enable its timer once a release is live.
+    if [ ! -f "$UPDATER" ] || [ ! -f "$SYSTEMD_DIR/lightspeed-update.service" ] \
+        || [ ! -f "$SYSTEMD_DIR/lightspeed-update.timer" ]; then
+        echo "  Updater/unit files missing; self-update timer not installed."
+        return 0
+    fi
+    scp $SSH_OPTS -i "$SSH_KEY" "$UPDATER" "root@$ip:/tmp/lightspeed-relay-updater.sh" || return 1
+    scp $SSH_OPTS -i "$SSH_KEY" "$SYSTEMD_DIR/lightspeed-update.service" "root@$ip:/tmp/lightspeed-update.service" || return 1
+    scp $SSH_OPTS -i "$SSH_KEY" "$SYSTEMD_DIR/lightspeed-update.timer" "root@$ip:/tmp/lightspeed-update.timer" || return 1
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip" \
+        "install -d /usr/local/lib/lightspeed && \
+         install -m 0755 /tmp/lightspeed-relay-install.sh /usr/local/lib/lightspeed/relay-install.sh && \
+         install -m 0755 /tmp/lightspeed-relay-updater.sh /usr/local/lib/lightspeed/relay-updater.sh && \
+         install -m 0644 /tmp/lightspeed-update.service /etc/systemd/system/lightspeed-update.service && \
+         install -m 0644 /tmp/lightspeed-update.timer /etc/systemd/system/lightspeed-update.timer && \
+         systemctl daemon-reload && \
+         systemctl enable --now lightspeed-update.timer" || return 1
+    echo "  Self-update timer enabled."
+}
+
 # ── Deploy script (runs on new instance via startup script) ──
 STARTUP_SCRIPT='#!/bin/bash
 set -euo pipefail
@@ -76,15 +124,16 @@ sleep 5
 # Install dependencies
 apt-get update -qq && apt-get install -y -qq curl jq
 
-# Create user and directories
+# Create user and directories, plus the versioned release layout
 useradd -r -s /bin/false lightspeed 2>/dev/null || true
 mkdir -p /etc/lightspeed
+install -d /opt/lightspeed/releases
 
-# Download latest proxy binary from GitHub release (or GHCR)
-# For now, placeholder — will be replaced by SCP deploy
-echo "LightSpeed proxy node provisioned. Run deploy.sh to install binary."
+# The first versioned release is installed over SSH by provision.sh after the
+# instance boots (relay-install.sh), which also repoints /opt/lightspeed/current.
+echo "LightSpeed proxy node provisioned. First release installs via relay-install.sh."
 
-# Create systemd service
+# Create systemd service (runs the active version via the current symlink)
 cat > /etc/systemd/system/lightspeed-proxy.service << "UNIT"
 [Unit]
 Description=LightSpeed Proxy Server
@@ -92,11 +141,17 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
 DynamicUser=yes
-ExecStart=/usr/local/bin/lightspeed-proxy --config /etc/lightspeed/proxy.toml --data-bind 0.0.0.0:4434 --control-bind 0.0.0.0:4433 --health-bind 0.0.0.0:8080
-Restart=always
-RestartSec=5
+StateDirectory=lightspeed
+RuntimeDirectory=lightspeed
+RuntimeDirectoryMode=0750
+Environment=LIGHTSPEED_TLS_DIR=/var/lib/lightspeed/tls
+ExecStart=/opt/lightspeed/current/lightspeed-proxy --config /etc/lightspeed/proxy.toml --data-bind 0.0.0.0:4434 --control-bind 0.0.0.0:4433 --health-bind 0.0.0.0:8080
+Restart=on-failure
+RestartSec=2
 LimitNOFILE=65535
 
 # Security hardening
@@ -217,9 +272,13 @@ for region in "$@"; do
             echo "    NODES[\"$node_name\"]=\"$IP\""
             echo ""
             echo "  Deploy proxy:"
-            echo "    scp lightspeed-proxy root@$IP:/usr/local/bin/"
-            echo "    scp proxy.toml root@$IP:/etc/lightspeed/proxy.toml"
-            echo "    ssh root@$IP 'systemctl start lightspeed-proxy'"
+            echo "    ./infra/scripts/deploy.sh $node_name"
+            echo ""
+            if install_first_release "$IP"; then
+                echo "  ✅ First release installed and healthy"
+            else
+                echo "  ⚠️  First release install failed; run deploy.sh"
+            fi
             break
         fi
 

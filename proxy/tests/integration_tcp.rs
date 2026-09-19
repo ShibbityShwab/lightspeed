@@ -57,7 +57,7 @@ async fn start_tcp_relay(require_auth: bool, dev_mode: bool) -> TestTcpRelay {
     let rate_limiter = Arc::new(tokio::sync::Mutex::new(RateLimiter::new(RateLimitConfig {
         max_pps_per_client: 10_000,
         max_bps_per_client: 10_000_000,
-        max_connections: 200,
+        ..Default::default()
     })));
     let metrics = Arc::new(ProxyMetrics::new());
     let engine = Arc::new(RelayEngine::new(100));

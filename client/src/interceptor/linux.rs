@@ -364,8 +364,13 @@ impl TrafficInterceptor for NftablesInterceptor {
                             let d = &payload[FEC_HEADER_SIZE..];
                             let dec = fec_decoders.entry(src_addr).or_default();
                             if fh.is_parity() {
-                                dec.receive_parity(&fh, bytes::Bytes::copy_from_slice(d))
-                                    .map(|(_, r)| r)
+                                let recovered = dec
+                                    .receive_parity(&fh, bytes::Bytes::copy_from_slice(d))
+                                    .map(|(_, r)| r);
+                                if recovered.is_some() {
+                                    crate::telemetry::paths::record_relay_recovery(src_addr);
+                                }
+                                recovered
                             } else {
                                 let b = bytes::Bytes::copy_from_slice(d);
                                 dec.receive_data(&fh, b.clone());

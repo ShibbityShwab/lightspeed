@@ -37,19 +37,33 @@ There are three supported ways to get a node running. Full, step-by-step instruc
 
 ### Option A: Native binary + systemd (recommended)
 
-Build the proxy, copy it to the VPS, install a systemd unit, and enable it:
+Relays use a **versioned release layout** so a bad binary can always be rolled back:
+
+```
+/opt/lightspeed/releases/<version>/lightspeed-proxy   # one immutable dir per version
+/opt/lightspeed/current -> releases/<version>         # active release (symlink)
+```
+
+The systemd unit runs `/opt/lightspeed/current/lightspeed-proxy`, so switching versions is an atomic `ln -sfn` repoint, not an in-place file swap. The three most recent releases are kept; older ones are pruned only after a new release is activated and passes its health gate.
+
+For a fresh node, use the one-shot setup script (it uploads the binary, writes the config and unit, installs the first release, and verifies health):
 
 ```bash
 # Build locally
 cargo build --release -p lightspeed-proxy
 
-# Copy binary and config to the VPS
-scp target/release/lightspeed-proxy root@YOUR_VPS_IP:/usr/local/bin/
-scp proxy/proxy.toml.default root@YOUR_VPS_IP:/etc/lightspeed/proxy.toml
-
-# Install and start the systemd service (see infra/README.md for the full unit)
-ssh root@YOUR_VPS_IP 'systemctl daemon-reload && systemctl enable --now lightspeed-proxy'
+# Provision the node (ip, node-id, region)
+bash infra/scripts/setup-new-node.sh YOUR_VPS_IP relay-1 us-east
 ```
+
+The same layout is used under the hood by `relay-install.sh`, which you can also run directly on a node to install a staged binary:
+
+```bash
+# On the relay, with a staged binary already on disk
+bash relay-install.sh --binary /tmp/lightspeed-proxy.staged --version 20260101T000000Z-abc1234
+```
+
+`relay-install.sh` verifies the file is an executable ELF for the host arch, runs `--check` against `/etc/lightspeed/proxy.toml`, repoints `current`, restarts the service, and polls `/health` for up to 15s. If the new release never becomes healthy it repoints `current` back to the previous release, restarts, and exits non-zero.
 
 This is the recommended path: ~500KB RAM, sandboxed with `DynamicUser`, `ProtectSystem=strict`, and `NoNewPrivileges`.
 
@@ -215,22 +229,37 @@ Check that the firewall allows TCP `8080` and that the service is actually runni
 ### Binary not starting
 
 ```bash
-# Check permissions
-ls -la /usr/local/bin/lightspeed-proxy
+# Which release is active, and what exists on disk
+readlink -f /opt/lightspeed/current
+ls -la /opt/lightspeed/current/lightspeed-proxy /opt/lightspeed/releases/
 
 # Verify the config parses
 cat /etc/lightspeed/proxy.toml
 ```
 
-A missing or malformed config is the usual culprit. Confirm the config file exists at the path passed to `--config`.
+A missing or malformed config is the usual culprit. Confirm the config file exists at the path passed to `--config`. If a recent deploy left the node unhealthy, `current` will have been rolled back to the previous release automatically; check `readlink -f /opt/lightspeed/current` to see which version is running.
 
 ### Updating the proxy
 
 Rebuild and redeploy using the scripts in **[`infra/scripts/`](../infra/scripts/)**:
 
 ```bash
-cargo build --release -p lightspeed-proxy
-./infra/scripts/deploy.sh
+./infra/scripts/deploy.sh                 # all nodes
+./infra/scripts/deploy.sh relay-nrt       # one node
 ```
 
-For a single node, `deploy.sh` rebuilds, copies the binary, and restarts the service. For a mesh, `deploy-all.sh` rolls the update out across every configured node.
+`deploy.sh` builds the binary, uploads it to a staging path on each relay, and runs `relay-install.sh` over SSH. Each deploy gets a unique release version (a UTC timestamp plus the short git SHA; override with `LIGHTSPEED_VERSION`), so the previous version is preserved:
+
+- `relay-install.sh` refuses to activate a binary that is not an executable ELF for the host arch, or whose `--check` fails.
+- Activation is an atomic repoint of `/opt/lightspeed/current`, followed by a `/health` poll of up to 15s.
+- On a failed health gate the installer repoints `current` back to the previous release, restarts the service, and exits non-zero, so a bad deploy leaves the node running the last known-good version.
+- The newest 3 releases are retained; older ones are pruned only after a healthy activation.
+
+For a mesh-wide rollout, `deploy-all.sh` iterates the node inventory. To roll a node back manually, repoint the symlink and restart:
+
+```bash
+ln -sfn /opt/lightspeed/releases/<previous-version> /opt/lightspeed/current
+systemctl restart lightspeed-proxy
+```
+
+The installer's layout/rollback logic is covered by `infra/scripts/test_relay_install.sh`, which runs it against a fixture root with `systemctl`, `curl`, and `file` stubbed out.

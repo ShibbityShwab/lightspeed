@@ -153,6 +153,7 @@ impl UdpRelay {
             transport.set_proxy(proxy_addr);
         }
         let transport = self.transport.as_ref().ok_or(TunnelError::NotConnected)?;
+        let path_token = crate::session::path_token(proxy_addr);
 
         // Get sequence numbers upfront to avoid borrow conflicts
         let seq = self.next_sequence();
@@ -163,7 +164,7 @@ impl UdpRelay {
             let k_size = index.max(2); // k_size for FEC header
 
             let header = TunnelHeader::new_fec(seq, now_us(), orig_src, orig_dst)
-                .with_session_token(crate::session::session_token());
+                .with_session_token(path_token);
             let fec_hdr = FecHeader::data(block_id, index, k_size);
             let pkt_buf = build_fec_data_packet(&header, &fec_hdr, payload);
 
@@ -186,7 +187,7 @@ impl UdpRelay {
             if let Some(parity_bytes) = parity {
                 let parity_seq = self.next_sequence();
                 let parity_header = TunnelHeader::new_fec(parity_seq, now_us(), orig_src, orig_dst)
-                    .with_session_token(crate::session::session_token());
+                    .with_session_token(path_token);
                 let parity_fec = FecHeader::parity(block_id, k_size);
                 let parity_buf =
                     build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
@@ -208,8 +209,8 @@ impl UdpRelay {
             Ok(sent)
         } else {
             // ── Non-FEC mode: original behavior ─────────────────
-            let header = TunnelHeader::new(seq, now_us(), orig_src, orig_dst)
-                .with_session_token(crate::session::session_token());
+            let header =
+                TunnelHeader::new(seq, now_us(), orig_src, orig_dst).with_session_token(path_token);
             let packet = header.encode_with_payload(payload);
 
             let sent = transport.send(&packet).await?;
@@ -238,8 +239,8 @@ impl UdpRelay {
         let transport = self.transport.as_ref().ok_or(TunnelError::NotConnected)?;
 
         let seq = self.next_sequence();
-        let header = TunnelHeader::keepalive(seq, now_us())
-            .with_session_token(crate::session::session_token());
+        let path_token = crate::session::path_token(proxy_addr);
+        let header = TunnelHeader::keepalive(seq, now_us()).with_session_token(path_token);
         let packet = header.encode_to_array();
 
         transport.send(&packet).await?;
@@ -328,8 +329,9 @@ impl UdpRelay {
                 let transport = self.transport.as_ref().ok_or(TunnelError::NotConnected)?;
                 let seq = self.next_sequence();
                 let dummy_addr = SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0);
+                let path_token = crate::session::path_token(proxy_addr);
                 let header = TunnelHeader::new_fec(seq, now_us(), dummy_addr, dummy_addr)
-                    .with_session_token(crate::session::session_token());
+                    .with_session_token(path_token);
                 let fec_hdr = FecHeader::parity(block_id, 0);
                 let buf = build_fec_parity_packet(&header, &fec_hdr, &parity_bytes);
 
@@ -348,5 +350,58 @@ impl UdpRelay {
     /// Close the relay transport.
     pub fn close(&mut self) {
         self.transport = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+    use std::time::Duration;
+
+    use tokio::net::UdpSocket;
+
+    use super::*;
+
+    #[test]
+    fn send_to_proxy_stamps_the_destination_path_token() {
+        let _guard = crate::session::token_test_guard();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        rt.block_on(async {
+            let receiver = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind receiver");
+            let proxy_addr = match receiver.local_addr().expect("receiver addr") {
+                std::net::SocketAddr::V4(v4) => v4,
+                std::net::SocketAddr::V6(_) => panic!("expected IPv4"),
+            };
+            crate::session::set_session_token(0xDEAD_BEEF);
+            crate::session::set_path_token(proxy_addr, 0x1234_5678);
+
+            let mut relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+            relay.bind().await.expect("bind relay");
+            let src = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000);
+            let dst = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 40001);
+            relay
+                .send_to_proxy(b"payload", src, dst, proxy_addr)
+                .await
+                .expect("send through tunnel");
+
+            let mut buf = vec![0u8; 2048];
+            let (n, _) = tokio::time::timeout(Duration::from_secs(2), receiver.recv_from(&mut buf))
+                .await
+                .expect("tunnel packet within 2s")
+                .expect("receive tunnel packet");
+            let (header, _) = TunnelHeader::decode_with_payload(&buf[..n]).expect("decode header");
+            assert_eq!(
+                header.session_token, 0x1234_5678,
+                "the data plane must stamp the destination's per-path token, not the default"
+            );
+
+            crate::session::reset_all_tokens();
+        });
     }
 }

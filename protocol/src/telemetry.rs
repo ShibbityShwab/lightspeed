@@ -19,6 +19,45 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum number of per-path observations a single report may carry.
+pub const MAX_ROUTE_LEGS: usize = 8;
+
+/// A bounded, anonymised observation of a single relay leg.
+///
+/// The `relay` field is a stable registry node identifier (for example
+/// `"relay-fra"`), never a raw address, so no network location is disclosed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PathObservation {
+    /// Stable relay identifier from the registry ("relay-fra"); never a raw
+    /// address.
+    #[serde(default)]
+    pub relay: String,
+    /// Median round-trip latency observed on this leg (ms).
+    #[serde(default)]
+    pub rtt_p50_ms: f32,
+    /// 95th-percentile round-trip latency observed on this leg (ms).
+    #[serde(default)]
+    pub rtt_p95_ms: f32,
+    /// 99th-percentile round-trip latency observed on this leg (ms).
+    #[serde(default)]
+    pub rtt_p99_ms: f32,
+    /// Average of |consecutive RTT deltas| on this leg (ms).
+    #[serde(default)]
+    pub jitter_ms: f32,
+    /// Number of RTT samples this leg observation is based on.
+    #[serde(default)]
+    pub samples: u32,
+    /// Packets observed lost on this leg.
+    #[serde(default)]
+    pub lost: u32,
+    /// Packets recovered by FEC on this leg.
+    #[serde(default)]
+    pub recovered: u32,
+    /// Duplicate packets suppressed by the dedup window on this leg.
+    #[serde(default)]
+    pub dedup_saved: u32,
+}
+
 /// Anonymised latency report sent by opt-in clients after each session or
 /// every 15 minutes of continuous use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +96,12 @@ pub struct TelemetryReport {
     // ── Client version (for compatibility tracking only) ─────────────────────
     /// SemVer string of the `lightspeed` client binary.
     pub client_version: String,
+
+    // ── Per-path observations (opt-in multipath quality reporting) ───────────
+    /// Bounded per-relay observations.  An empty vector is valid (single-path
+    /// clients omit this entirely).
+    #[serde(default)]
+    pub route_legs: Vec<PathObservation>,
 }
 
 impl TelemetryReport {
@@ -84,6 +129,42 @@ impl TelemetryReport {
         if self.client_version.len() > 32 {
             return Err("client_version too long");
         }
+        if self.route_legs.len() > MAX_ROUTE_LEGS {
+            return Err("too many route_legs");
+        }
+        for leg in &self.route_legs {
+            if leg.relay.is_empty() || leg.relay.len() > 64 {
+                return Err("route_leg relay id must be 1..=64 chars");
+            }
+            if !leg
+                .relay
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+            {
+                return Err("route_leg relay id contains invalid characters");
+            }
+            let rtts = [
+                leg.rtt_p50_ms,
+                leg.rtt_p95_ms,
+                leg.rtt_p99_ms,
+                leg.jitter_ms,
+            ];
+            if rtts.iter().any(|v| !v.is_finite()) {
+                return Err("route_leg latency must be finite");
+            }
+            if rtts.iter().any(|v| *v < 0.0) {
+                return Err("route_leg latency must be non-negative");
+            }
+            if leg.rtt_p95_ms < leg.rtt_p50_ms {
+                return Err("route_leg rtt_p95 less than rtt_p50");
+            }
+            if leg.rtt_p99_ms < leg.rtt_p95_ms {
+                return Err("route_leg rtt_p99 less than rtt_p95");
+            }
+            if leg.samples == 0 {
+                return Err("route_leg samples must be positive");
+            }
+        }
         Ok(())
     }
 }
@@ -105,6 +186,7 @@ mod tests {
             fec_recoveries: 3,
             fec_losses: 0,
             client_version: "0.4.0-dev".to_string(),
+            route_legs: vec![],
         };
 
         let json = serde_json::to_string(&report).unwrap();
@@ -130,6 +212,7 @@ mod tests {
             fec_recoveries: 0,
             fec_losses: 0,
             client_version: "0.4.0".to_string(),
+            route_legs: vec![],
         };
         assert!(report.validate().is_ok());
     }
@@ -147,6 +230,7 @@ mod tests {
             fec_recoveries: 0,
             fec_losses: 0,
             client_version: "0.4.0".to_string(),
+            route_legs: vec![],
         };
         assert!(report.validate().is_err());
     }
@@ -164,6 +248,7 @@ mod tests {
             fec_recoveries: 0,
             fec_losses: 0,
             client_version: "0.4.0".to_string(),
+            route_legs: vec![],
         };
         assert!(report.validate().is_err());
     }
@@ -182,6 +267,17 @@ mod tests {
             fec_recoveries: 1,
             fec_losses: 0,
             client_version: "0.4.0".to_string(),
+            route_legs: vec![PathObservation {
+                relay: "relay-fra".to_string(),
+                rtt_p50_ms: 18.0,
+                rtt_p95_ms: 25.0,
+                rtt_p99_ms: 30.0,
+                jitter_ms: 1.2,
+                samples: 60,
+                lost: 3,
+                recovered: 2,
+                dedup_saved: 1,
+            }],
         };
         let json = serde_json::to_string(&report).unwrap();
         assert!(
@@ -199,6 +295,100 @@ mod tests {
         assert!(
             !json.contains("host"),
             "Hostname must not appear in telemetry JSON"
+        );
+    }
+
+    #[test]
+    fn test_per_path_report_roundtrip() {
+        let report = TelemetryReport {
+            game_id: 1,
+            client_country: "DE".to_string(),
+            p50_ms: 20.0,
+            p95_ms: 30.0,
+            p99_ms: 40.0,
+            jitter_ms: 1.5,
+            sample_count: 120,
+            fec_recoveries: 2,
+            fec_losses: 1,
+            client_version: "0.5.0".to_string(),
+            route_legs: vec![
+                PathObservation {
+                    relay: "relay-fra".to_string(),
+                    rtt_p50_ms: 18.0,
+                    rtt_p95_ms: 25.0,
+                    rtt_p99_ms: 30.0,
+                    jitter_ms: 1.2,
+                    samples: 60,
+                    lost: 3,
+                    recovered: 2,
+                    dedup_saved: 1,
+                },
+                PathObservation {
+                    relay: "relay-ams".to_string(),
+                    rtt_p50_ms: 22.0,
+                    rtt_p95_ms: 33.0,
+                    rtt_p99_ms: 41.0,
+                    jitter_ms: 2.0,
+                    samples: 60,
+                    lost: 5,
+                    recovered: 4,
+                    dedup_saved: 0,
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: TelemetryReport = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.route_legs.len(), 2);
+        assert_eq!(decoded.route_legs, report.route_legs);
+    }
+
+    #[test]
+    fn test_route_legs_bounds() {
+        let base_leg = PathObservation {
+            relay: "relay-fra".to_string(),
+            rtt_p50_ms: 18.0,
+            rtt_p95_ms: 25.0,
+            rtt_p99_ms: 30.0,
+            jitter_ms: 1.2,
+            samples: 60,
+            lost: 0,
+            recovered: 0,
+            dedup_saved: 0,
+        };
+        let base = |legs: Vec<PathObservation>| TelemetryReport {
+            game_id: 1,
+            client_country: "DE".to_string(),
+            p50_ms: 20.0,
+            p95_ms: 30.0,
+            p99_ms: 40.0,
+            jitter_ms: 1.5,
+            sample_count: 120,
+            fec_recoveries: 0,
+            fec_losses: 0,
+            client_version: "0.5.0".to_string(),
+            route_legs: legs,
+        };
+
+        let too_many = vec![base_leg.clone(); MAX_ROUTE_LEGS + 1];
+        assert!(
+            base(too_many).validate().is_err(),
+            "more than MAX_ROUTE_LEGS legs must be rejected"
+        );
+
+        let mut empty_relay = base_leg.clone();
+        empty_relay.relay = String::new();
+        assert!(
+            base(vec![empty_relay]).validate().is_err(),
+            "empty relay id must be rejected"
+        );
+
+        let mut bad_order = base_leg.clone();
+        bad_order.rtt_p95_ms = bad_order.rtt_p50_ms - 1.0;
+        assert!(
+            base(vec![bad_order]).validate().is_err(),
+            "rtt_p95 below rtt_p50 must be rejected"
         );
     }
 }

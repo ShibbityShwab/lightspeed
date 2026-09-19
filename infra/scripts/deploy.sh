@@ -2,13 +2,20 @@
 # ──────────────────────────────────────────────────────────────
 # LightSpeed — Deploy Updated Proxy to Mesh Nodes
 #
-# Cross-compiles the proxy binary for Linux x86_64, uploads via
-# SCP, and restarts the systemd service on each node.
+# Cross-compiles the proxy binary for Linux x86_64, uploads it to a
+# staging path on each node, then runs relay-install.sh over SSH. The
+# installer drops the binary into /opt/lightspeed/releases/<version>/,
+# repoints /opt/lightspeed/current atomically, restarts systemd, and
+# health-gates the result (rolling back on failure).
 #
 # Usage:
 #   ./deploy.sh                    # Deploy to all nodes
 #   ./deploy.sh relay-lax          # Deploy to specific node
 #   ./deploy.sh --build-only       # Just compile, don't deploy
+#
+# Environment:
+#   LIGHTSPEED_VERSION   Override the release version (default: UTC
+#                        timestamp + short git SHA, unique per deploy).
 #
 # Prerequisites:
 #   - SSH key at ~/.ssh/lightspeed_deploy (or set DEPLOY_SSH_KEY)
@@ -22,28 +29,8 @@ SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/lightspeed_deploy}"
 SSH_USER="${DEPLOY_SSH_USER:-root}"
 SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes"
 BINARY_NAME="lightspeed-proxy"
-REMOTE_BINARY="/usr/local/bin/${BINARY_NAME}"
-SERVICE_NAME="lightspeed-proxy"
-
-# Proxy mesh nodes.
-# Set LIGHTSPEED_NODES as a JSON object, or add entries to the NODES map below.
-# Example: export LIGHTSPEED_NODES='{"relay-lax":{"ip":"1.2.3.4"}}'
-# Run setup-new-node.sh to provision a new node, then add it below.
-# Format: NODES["node-name"]="IP_ADDRESS"
-declare -A NODES
-
-# Load from env var if available
-if [ -n "${LIGHTSPEED_NODES:-}" ]; then
-    # Parse LIGHTSPEED_NODES JSON to populate NODES (requires jq)
-    while IFS= read -r key; do
-        ip=$(echo "$LIGHTSPEED_NODES" | jq -r ".[$key].ip // .[$key]")
-        NODES["$key"]="$ip"
-    done < <(echo "$LIGHTSPEED_NODES" | jq -r 'keys[]')
-fi
-
-# Fallback defaults (placeholder — replace with your actual node IPs)
-# NODES["relay-lax"]="YOUR_NODE_IP_1"    # us-west-lax
-# NODES["relay-sgp"]="YOUR_NODE_IP_2"    # asia-sgp
+REMOTE_STAGING="/tmp/${BINARY_NAME}.staged"
+REMOTE_INSTALLER="/tmp/lightspeed-relay-install.sh"
 
 # Colors
 GREEN='\033[0;32m'
@@ -54,6 +41,35 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+RELAY_INSTALLER="$SCRIPT_DIR/relay-install.sh"
+
+# ── Resolve node inventory (fail closed) ─────────────────────
+# shellcheck source=lib-nodes.sh
+source "$SCRIPT_DIR/lib-nodes.sh"
+
+if ! NODES_JSON="$(lightspeed_resolve_nodes)"; then
+    echo -e "${RED}❌ No proxy node inventory available — refusing to deploy.${NC}" >&2
+    echo "   Set LIGHTSPEED_NODES or populate $LIGHTSPEED_REGISTRY_PATH." >&2
+    exit 1
+fi
+
+if [ "$(printf '%s' "$NODES_JSON" | jq 'length')" -eq 0 ]; then
+    echo -e "${RED}❌ Proxy node inventory is empty — refusing to deploy.${NC}" >&2
+    echo "   Set LIGHTSPEED_NODES or populate $LIGHTSPEED_REGISTRY_PATH." >&2
+    exit 1
+fi
+
+declare -A NODES
+declare -A REGION_TO_NODE
+NODE_NAMES=()
+while IFS=$'\t' read -r _name _region _ip; do
+    [ -n "$_name" ] || continue
+    NODES["$_name"]="$_ip"
+    NODE_NAMES+=("$_name")
+    if [ -n "$_region" ] && [ -z "${REGION_TO_NODE[$_region]:-}" ]; then
+        REGION_TO_NODE["$_region"]="$_name"
+    fi
+done < <(printf '%s' "$NODES_JSON" | jq -r '.[] | [.node_id, .region, .ip] | @tsv')
 
 # ── Parse args ───────────────────────────────────────────────
 TARGET_NODE=""
@@ -70,7 +86,7 @@ echo "⚡ LightSpeed Proxy — Proxy Deployment"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── Step 1: Build ────────────────────────────────────────────
-echo -e "\n${CYAN}[1/3] Building release binary...${NC}"
+echo -e "\n${CYAN}[1/4] Building release binary...${NC}"
 
 cd "$PROJECT_ROOT"
 
@@ -103,8 +119,29 @@ if [ "$BUILD_ONLY" = true ]; then
     exit 0
 fi
 
-# ── Step 2: Verify SSH ───────────────────────────────────────
-echo -e "\n${CYAN}[2/3] Verifying SSH access...${NC}"
+# ── Step 2: Release version ──────────────────────────────────
+if [ -n "${LIGHTSPEED_VERSION:-}" ]; then
+    VERSION="$LIGHTSPEED_VERSION"
+else
+    VERSION="$(date -u +%Y%m%dT%H%M%SZ)-$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || printf 'nogit')"
+fi
+
+case "$VERSION" in
+    *[!A-Za-z0-9._-]*|.|..)
+        echo -e "${RED}❌ Invalid LIGHTSPEED_VERSION: '$VERSION' (allowed: A-Za-z0-9._-)${NC}" >&2
+        exit 1
+        ;;
+esac
+
+if [ ! -f "$RELAY_INSTALLER" ]; then
+    echo -e "${RED}❌ Relay installer not found: $RELAY_INSTALLER${NC}" >&2
+    exit 1
+fi
+
+echo -e "  Release version: ${VERSION}"
+
+# ── Step 3: Verify SSH ───────────────────────────────────────
+echo -e "\n${CYAN}[3/4] Verifying SSH access...${NC}"
 
 if [ ! -f "$SSH_KEY" ]; then
     echo -e "${RED}❌ SSH key not found: $SSH_KEY${NC}"
@@ -114,8 +151,8 @@ fi
 
 chmod 600 "$SSH_KEY" 2>/dev/null || true
 
-# ── Step 3: Deploy to nodes ─────────────────────────────────
-echo -e "\n${CYAN}[3/3] Deploying to nodes...${NC}"
+# ── Step 4: Deploy to nodes ─────────────────────────────────
+echo -e "\n${CYAN}[4/4] Deploying to nodes...${NC}"
 
 deploy_node() {
     local name="$1"
@@ -127,31 +164,28 @@ deploy_node() {
     local pre_health
     pre_health=$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'v{d.get(\"version\",\"?\")}, up {d.get(\"uptime_secs\",0)}s')" 2>/dev/null || echo "unreachable")
 
-    # Upload binary
-    if ! scp $SSH_OPTS -i "$SSH_KEY" "$BINARY_PATH" "${SSH_USER}@${ip}:/tmp/${BINARY_NAME}.new" 2>/dev/null; then
-        echo -e "${RED}❌ SCP failed${NC}"
+    # Upload the staged binary and the reusable installer.
+    if ! scp $SSH_OPTS -i "$SSH_KEY" "$BINARY_PATH" \
+            "${SSH_USER}@${ip}:${REMOTE_STAGING}" 2>/dev/null; then
+        echo -e "${RED}❌ SCP (binary) failed${NC}"
         return 1
     fi
 
-    # Stop service, swap binary, start service
-    ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${ip}" bash -s <<'REMOTE_SCRIPT'
-set -e
-systemctl stop lightspeed-proxy 2>/dev/null || true
-mv /tmp/lightspeed-proxy.new /usr/local/bin/lightspeed-proxy
-chmod +x /usr/local/bin/lightspeed-proxy
-systemctl start lightspeed-proxy
-sleep 2
-systemctl is-active lightspeed-proxy >/dev/null
-REMOTE_SCRIPT
+    if ! scp $SSH_OPTS -i "$SSH_KEY" "$RELAY_INSTALLER" \
+            "${SSH_USER}@${ip}:${REMOTE_INSTALLER}" 2>/dev/null; then
+        echo -e "${RED}❌ SCP (installer) failed${NC}"
+        return 1
+    fi
 
-    if [ $? -eq 0 ]; then
-        # Post-deploy health check
-        sleep 3
+    # Versioned, health-gated activation with automatic rollback.
+    if ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${ip}" \
+            "bash ${REMOTE_INSTALLER} --binary ${REMOTE_STAGING} --version '${VERSION}'"; then
+        sleep 2
         local post_health
         post_health=$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'v{d.get(\"version\",\"?\")}, up {d.get(\"uptime_secs\",0)}s')" 2>/dev/null || echo "starting...")
         echo -e "${GREEN}✅ OK${NC}  [${pre_health}] → [${post_health}]"
     else
-        echo -e "${RED}❌ Service failed to start${NC}"
+        echo -e "${RED}❌ Install/health gate failed (rolled back)${NC}"
         return 1
     fi
 }
@@ -160,16 +194,18 @@ PASS=0
 FAIL=0
 
 if [ -n "$TARGET_NODE" ]; then
-    # Deploy to specific node
-    if [ -z "${NODES[$TARGET_NODE]:-}" ]; then
+    if [ -n "${NODES[$TARGET_NODE]:-}" ]; then
+        TARGET_NAME="$TARGET_NODE"
+    elif [ -n "${REGION_TO_NODE[$TARGET_NODE]:-}" ]; then
+        TARGET_NAME="${REGION_TO_NODE[$TARGET_NODE]}"
+    else
         echo -e "${RED}Unknown node: $TARGET_NODE${NC}"
-        echo "Available: ${!NODES[*]}"
+        echo "Available: ${NODE_NAMES[*]}"
         exit 1
     fi
-    deploy_node "$TARGET_NODE" "${NODES[$TARGET_NODE]}" && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
+    deploy_node "$TARGET_NAME" "${NODES[$TARGET_NAME]}" && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
 else
-    # Deploy to all nodes (rolling)
-    for name in "${!NODES[@]}"; do
+    for name in "${NODE_NAMES[@]}"; do
         deploy_node "$name" "${NODES[$name]}" && PASS=$((PASS+1)) || FAIL=$((FAIL+1))
     done
 fi

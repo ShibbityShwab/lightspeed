@@ -1,0 +1,20 @@
+[Unit]
+Description=LightSpeed proxy self-updater (verified, health-gated)
+Documentation=https://github.com/ShibbityShwab/lightspeed
+After=network-online.target lightspeed-proxy.service
+Wants=network-online.target
+ConditionPathExists=/usr/local/lib/lightspeed/relay-updater.sh
+ConditionPathExists=/opt/lightspeed/current/lightspeed-proxy
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/lightspeed/relay-updater.sh
+# The updater writes /opt/lightspeed and restarts lightspeed-proxy, so it runs
+# as root. ProtectSystem=full (not strict) leaves /run and /var writable, which
+# `systemctl` needs to reach the service manager.
+User=root
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/lightspeed /var/lib/lightspeed /var/lock

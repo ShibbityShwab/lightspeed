@@ -164,7 +164,7 @@
           <div class="relay-region">US-West</div>
           <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
           <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> dropped &middot; <span data-relay-sessions>--</span> sessions</div>
+          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
         </div>
         <div class="relay-card" data-node-id="relay-ewr-1">
           <div class="relay-flag">🇺🇸</div>
@@ -172,7 +172,7 @@
           <div class="relay-region">US-East</div>
           <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
           <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> dropped &middot; <span data-relay-sessions>--</span> sessions</div>
+          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
         </div>
         <div class="relay-card" data-node-id="relay-fra">
           <div class="relay-flag">🇩🇪</div>
@@ -180,7 +180,7 @@
           <div class="relay-region">EU-Central</div>
           <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
           <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> dropped &middot; <span data-relay-sessions>--</span> sessions</div>
+          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
         </div>
         <div class="relay-card" data-node-id="relay-sgp-1">
           <div class="relay-flag">🇸🇬</div>
@@ -188,7 +188,7 @@
           <div class="relay-region">AP-Southeast</div>
           <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
           <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> dropped &middot; <span data-relay-sessions>--</span> sessions</div>
+          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
         </div>
         <div class="relay-card" data-node-id="relay-nrt">
           <div class="relay-flag">🇯🇵</div>
@@ -196,7 +196,7 @@
           <div class="relay-region">AP-Northeast</div>
           <div class="relay-status relay-status-pending"><span class="status-dot"></span><span data-relay-status>Checking</span></div>
           <div class="relay-meta">v<span data-relay-version>--</span> &middot; up <span data-relay-uptime>--</span></div>
-          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> dropped &middot; <span data-relay-sessions>--</span> sessions</div>
+          <div class="relay-meta relay-meta-packets"><span data-relay-packets-relayed>--</span> relayed &middot; <span data-relay-packets-dropped>--</span> filtered &middot; <span data-relay-sessions>--</span> sessions</div>
         </div>
       </div>
       <div class="network-stats">
@@ -211,7 +211,7 @@
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
-          <span class="stat-value">17</span>
+          <span class="stat-value">18</span>
           <span class="stat-label">Game Profiles</span>
         </div>
         <div class="stat-divider"></div>
@@ -228,7 +228,12 @@
         <div class="stat-divider"></div>
         <div class="stat">
           <span class="stat-value" data-stat="packets_dropped">--</span>
-          <span class="stat-label">Packets Dropped</span>
+          <span class="stat-label">Packets Filtered</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value" data-stat="drops_relay_send_errors">--</span>
+          <span class="stat-label">Upstream Loss</span>
         </div>
         <div class="stat-divider"></div>
         <div class="stat">
@@ -243,6 +248,19 @@
         We publish live relay health (whether each node is up, not latency) from a periodically regenerated
         snapshot. Last checked <time data-last-checked datetime="">--</time>.
       </p>
+
+      <!-- Network Trends (bounded snapshot history) -->
+      <div class="trends" id="network-trends">
+        <h3 class="trends-title">Network Trends</h3>
+        <p class="trends-subtitle">
+          Trends are plotted from the collector's bounded snapshot history (up to 360 points) published
+          alongside the live snapshot. Metrics the history does not carry are left blank, never estimated.
+        </p>
+        <div class="trends-grid" id="trends-grid" data-trends-grid></div>
+        <div class="trends-empty" id="trends-empty" data-trends-empty hidden>
+          <p data-trends-empty-message>No network history has been published yet.</p>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -250,7 +268,7 @@
   <section class="section section-dark" id="games">
     <div class="container">
       <h2 class="section-title">Supported Games</h2>
-      <p class="section-subtitle">Built-in profiles for 17 games. Drop-in and play.</p>
+      <p class="section-subtitle">Built-in profiles for 18 games. Drop-in and play.</p>
       <div class="games-grid">
         <div class="game-card">
           <div class="game-icon">🔫</div>

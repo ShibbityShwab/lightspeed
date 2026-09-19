@@ -13,6 +13,8 @@
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 TIMEOUT=5
 SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes"
 PASS=0
@@ -36,38 +38,19 @@ for arg in "$@"; do
     esac
 done
 
-# ── Built-in node list ───────────────────────────────────────
-# Set LIGHTSPEED_NODES env var with your node IPs, or edit this fallback.
-# Format: JSON object keyed by region name.
-# Run setup-new-node.sh to provision a node; it will print the JSON to add here.
-BUILTIN_NODES='{}'
-# Example (replace with your own IPs):
-# BUILTIN_NODES='{
-#   "us-west-lax": {
-#     "health_url": "http://YOUR_NODE_IP_1:8080/health",
-#     "metrics_url": "http://YOUR_NODE_IP_1:8080/metrics",
-#     "node_id": "relay-us-west",
-#     "region": "us-west-lax"
-#   },
-#   "asia-sgp": {
-#     "health_url": "http://YOUR_NODE_IP_2:8080/health",
-#     "metrics_url": "http://YOUR_NODE_IP_2:8080/metrics",
-#     "node_id": "relay-asia-se",
-#     "region": "asia-sgp"
-#   }
-# }'
+# ── Resolve node list (registry by default; LIGHTSPEED_NODES overrides) ──
+# shellcheck source=lib-nodes.sh
+source "$SCRIPT_DIR/lib-nodes.sh"
 
-# ── Resolve node list ───────────────────────────────────────
-if [ -n "${LIGHTSPEED_NODES:-}" ]; then
-    NODES="$LIGHTSPEED_NODES"
-else
-    NODES="$BUILTIN_NODES"
+if ! NODES_JSON="$(lightspeed_resolve_nodes)"; then
+    echo "⚠️  No nodes configured."
+    echo "  Set LIGHTSPEED_NODES env var or populate $LIGHTSPEED_REGISTRY_PATH."
+    exit 1
 fi
 
-if [ "$NODES" = '{}' ] || [ -z "$NODES" ]; then
+if [ "$(printf '%s' "$NODES_JSON" | jq 'length')" -eq 0 ]; then
     echo "⚠️  No nodes configured."
-    echo "  Set LIGHTSPEED_NODES env var or edit BUILTIN_NODES in this script."
-    echo "  Example: LIGHTSPEED_NODES='{\"us-west-lax\":{\"health_url\":\"http://YOUR_IP:8080/health\",\"node_id\":\"relay-us-west\"}}'"
+    echo "  Set LIGHTSPEED_NODES env var or populate $LIGHTSPEED_REGISTRY_PATH."
     exit 1
 fi
 
@@ -79,11 +62,13 @@ fi
 JSON_RESULTS="[]"
 
 # ── Check each node ─────────────────────────────────────────
-for region in $(echo "$NODES" | jq -r 'keys[]'); do
+while IFS= read -r node; do
+    if [ -z "$node" ]; then continue; fi
     TOTAL=$((TOTAL + 1))
-    node_id=$(echo "$NODES" | jq -r ".\"$region\".node_id")
-    health_url=$(echo "$NODES" | jq -r ".\"$region\".health_url")
-    metrics_url=$(echo "$NODES" | jq -r ".\"$region\".metrics_url // empty")
+    node_id=$(printf '%s' "$node" | jq -r '.node_id // ""')
+    region=$(printf '%s' "$node" | jq -r '.region // ""')
+    health_url=$(printf '%s' "$node" | jq -r '.health_url // ""')
+    metrics_url=$(printf '%s' "$node" | jq -r '.metrics_url // ""')
 
     if [ "$JSON_OUTPUT" = false ]; then
         printf "%-12s %-20s " "$region" "$node_id"
@@ -129,7 +114,7 @@ for region in $(echo "$NODES" | jq -r 'keys[]'); do
         # Build JSON result
         JSON_RESULTS=$(echo "$JSON_RESULTS" | jq --arg r "$region" --arg n "$node_id" --arg s "$node_state" \
             --arg c "$h_conns" --arg u "$h_uptime" --arg p "$h_pkts" --arg v "$h_version" \
-            '. + [{"region": $r, "node_id": $n, "status": $s, "connections": ($c|tonumber // 0), "uptime_secs": ($u|tonumber // 0), "packets_relayed": ($p|tonumber // 0), "version": $v}]')
+            '. + [{"region": $r, "node_id": $n, "status": $s, "connections": ($c|tonumber? // 0), "uptime_secs": ($u|tonumber? // 0), "packets_relayed": ($p|tonumber? // 0), "version": $v}]')
     else
         if [ "$JSON_OUTPUT" = false ]; then
             printf "${RED}❌ DOWN${NC}     (no response within ${TIMEOUT}s)\n"
@@ -138,7 +123,7 @@ for region in $(echo "$NODES" | jq -r 'keys[]'); do
         JSON_RESULTS=$(echo "$JSON_RESULTS" | jq --arg r "$region" --arg n "$node_id" \
             '. + [{"region": $r, "node_id": $n, "status": "down", "connections": 0, "uptime_secs": 0, "packets_relayed": 0, "version": "unknown"}]')
     fi
-done
+done < <(printf '%s' "$NODES_JSON" | jq -c '.[]?')
 
 # ── Summary ─────────────────────────────────────────────────
 if [ "$JSON_OUTPUT" = true ]; then

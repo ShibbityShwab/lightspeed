@@ -104,6 +104,13 @@ while IFS= read -r node; do
             uptime_secs: (($h.uptime_secs? // 0) | tonumber? // 0 | floor),
             packets_relayed: (($h.packets_relayed? // 0) | tonumber? // 0 | floor),
             packets_dropped: (($h.packets_dropped? // 0) | tonumber? // 0 | floor),
+            drops_malformed: (($h.drops_malformed? // 0) | tonumber? // 0 | floor),
+            drops_auth_rejected: (($h.drops_auth_rejected? // 0) | tonumber? // 0 | floor),
+            drops_abuse_blocked: (($h.drops_abuse_blocked? // 0) | tonumber? // 0 | floor),
+            drops_rate_limited: (($h.drops_rate_limited? // 0) | tonumber? // 0 | floor),
+            drops_fec_malformed: (($h.drops_fec_malformed? // 0) | tonumber? // 0 | floor),
+            drops_session_setup: (($h.drops_session_setup? // 0) | tonumber? // 0 | floor),
+            drops_relay_send_errors: (($h.drops_relay_send_errors? // 0) | tonumber? // 0 | floor),
             sessions_created: (($h.sessions_created? // 0) | tonumber? // 0 | floor)
           }' 2>/dev/null || true)"
 
