@@ -202,7 +202,7 @@ relay selection.
 
 **Workflow:** WF-026
 **Agent:** Architect / RustDev / InfraDev / QAEngineer
-**Status:** Implemented on `feat/relay-placement-recommender`, uncommitted, pending review + release
+**Status:** Shipped. Merged via PR #90, released as v1.6.0, deployed to all five production relays, and the MMDB is published (`geoip-2026-09`) and synced. v1.6.1 hardens the deploy path: handoff request ownership, automatic `[server] public_ip`, and shipping `relay-updater.sh`.
 
 Motivated by the owner's request to prioritize relay placement by where players actually play.
 Investigation found the WF-025 player-country telemetry is opt-in via the CLI `--telemetry`
@@ -232,5 +232,6 @@ recommender exercised end to end; reviewer pass on five blocker concerns.
 INSUFFICIENT_DATA until the new proxy build and MMDB reach the fleet; the 64-cell cap is a growth
 guard that cannot trigger with the real 8-region catalog; MOVE target selection is region-agnostic.
 
-**Next:** review the branch, release the proxy build with geo, let `geoip-release.yml` publish the
-first MMDB, then let the relays self-update and start collecting demand.
+**Next:** let demand accumulate. The Pages recommender runs every 6h and currently reports
+INSUFFICIENT_DATA (no geo cells reach the k>=3 floor yet). Once volume grows it will name the
+best next region to deploy and test; any actual relay add or move remains a human decision.
