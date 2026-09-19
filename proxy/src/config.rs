@@ -25,6 +25,10 @@ pub struct ProxyConfig {
     /// Metrics settings.
     #[serde(default)]
     pub metrics: MetricsConfig,
+
+    /// Proxy-side IP-to-country aggregation settings.
+    #[serde(default)]
+    pub geo: GeoConfig,
 }
 
 /// Network bind configuration.
@@ -70,6 +74,24 @@ pub struct ServerConfig {
     /// Maximum concurrent client tunnels.
     #[serde(default = "default_max_clients")]
     pub max_clients: usize,
+
+    /// Public IP of this relay. When set, a session whose destination is this
+    /// address is a self-tunnel and is excluded from geo aggregation.
+    #[serde(default)]
+    pub public_ip: Option<String>,
+}
+
+/// Proxy-side IP-to-country aggregation configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeoConfig {
+    /// Aggregate proxy-observed session country pairs into metrics.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Path to a MaxMind DB (MMDB) country database. The file is read fully
+    /// into memory, so it may be replaced on disk while the proxy runs.
+    #[serde(default = "default_geo_mmdb_path")]
+    pub mmdb_path: String,
 }
 
 /// Rate limiting configuration.
@@ -199,6 +221,19 @@ fn default_tcp_max_connections() -> usize {
 fn default_tcp_read_timeout() -> u64 {
     10
 }
+fn default_geo_mmdb_path() -> String {
+    "/opt/lightspeed/geoip/dbip-country-lite.mmdb".into()
+}
+
+/// Whether an environment flag value means "on".
+///
+/// Empty and the usual falsy spellings are off; any other value is on.
+fn env_flag_truthy(raw: &str) -> bool {
+    !matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "" | "0" | "false" | "no" | "off"
+    )
+}
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -206,6 +241,16 @@ impl Default for ServerConfig {
             node_id: default_node_id(),
             region: default_region(),
             max_clients: default_max_clients(),
+            public_ip: None,
+        }
+    }
+}
+
+impl Default for GeoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mmdb_path: default_geo_mmdb_path(),
         }
     }
 }
@@ -253,6 +298,31 @@ impl ProxyConfig {
         let config: ProxyConfig = toml::from_str(&content)?;
         Ok(config)
     }
+
+    /// Apply environment overrides on top of the loaded configuration.
+    ///
+    /// `LIGHTSPEED_GEO_DISABLED` (truthy) disables geo aggregation, and
+    /// `LIGHTSPEED_GEO_MMDB_PATH` overrides the database path. Applied after
+    /// [`Self::load`] so an operator can toggle geo without editing the file.
+    pub fn apply_env_overrides(&mut self) {
+        self.apply_env_overrides_with(|key| std::env::var(key).ok());
+    }
+
+    /// [`Self::apply_env_overrides`] with an injected environment lookup so
+    /// tests never touch process-global environment state.
+    pub fn apply_env_overrides_with<F>(&mut self, get: F)
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        if let Some(raw) = get("LIGHTSPEED_GEO_DISABLED") {
+            self.geo.enabled = !env_flag_truthy(&raw);
+        }
+        if let Some(path) = get("LIGHTSPEED_GEO_MMDB_PATH") {
+            if !path.trim().is_empty() {
+                self.geo.mmdb_path = path;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -296,5 +366,49 @@ max_connections = 5
 
         assert_eq!(config.rate_limit.max_pps_per_ip, 5000);
         assert_eq!(config.rate_limit.max_bps_per_ip, 5_000_000);
+    }
+
+    #[test]
+    fn test_parse_geo_section_and_public_ip() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+[server]
+public_ip = "203.0.113.7"
+
+[geo]
+enabled   = false
+mmdb_path = "/tmp/custom.mmdb"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.server.public_ip.as_deref(), Some("203.0.113.7"));
+        assert!(!config.geo.enabled);
+        assert_eq!(config.geo.mmdb_path, "/tmp/custom.mmdb");
+    }
+
+    #[test]
+    fn test_geo_defaults_and_optional_public_ip() {
+        let config: ProxyConfig = toml::from_str("").unwrap();
+
+        assert!(config.server.public_ip.is_none());
+        assert!(config.geo.enabled);
+        assert_eq!(
+            config.geo.mmdb_path,
+            "/opt/lightspeed/geoip/dbip-country-lite.mmdb"
+        );
+    }
+
+    #[test]
+    fn test_geo_env_overrides() {
+        let mut config = ProxyConfig::default();
+        config.apply_env_overrides_with(|key| match key {
+            "LIGHTSPEED_GEO_DISABLED" => Some("1".to_string()),
+            "LIGHTSPEED_GEO_MMDB_PATH" => Some("/tmp/env.mmdb".to_string()),
+            _ => None,
+        });
+
+        assert!(!config.geo.enabled);
+        assert_eq!(config.geo.mmdb_path, "/tmp/env.mmdb");
     }
 }

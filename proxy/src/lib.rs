@@ -7,6 +7,7 @@ pub mod abuse;
 pub mod auth;
 pub mod config;
 pub mod control;
+pub mod geo;
 pub mod handoff;
 pub mod health;
 pub mod metrics;

@@ -5,6 +5,9 @@
 node_id     = "proxy-dev"
 region      = "local"
 max_clients = 100
+# Public IP of this relay. When set, sessions destined to this address are
+# treated as self-tunnels and excluded from geo aggregation.
+# public_ip = "203.0.113.7"
 
 [network]
 data_port    = 4434
@@ -27,3 +30,9 @@ max_connections    = 200
 [metrics]
 enabled       = true
 interval_secs = 10
+
+[geo]
+# Proxy-side IP-to-country session aggregation. Only two-letter country codes
+# are exported; no raw IP is stored or logged.
+enabled   = true
+mmdb_path = "/opt/lightspeed/geoip/dbip-country-lite.mmdb"
