@@ -92,3 +92,22 @@ Notes that apply to every future release:
 - The MSI is per-machine and bundles the WinDivert kernel driver; those facts
   are encoded as `Scope: machine` and a machine-scope product. Keep them when
   bumping versions.
+
+## Status at v1.5.0
+
+- The current manifest is `manifests/s/ShibbityShwab/LightSpeed/1.5.0/`
+  (`InstallerSha256 B2F3CD90684F17DAA6BB06FD3B97BCDDFA35C364E1541236E555C51EF5D43F97`,
+  taken from the v1.5.0 `lightspeed-gui-x86_64-pc-windows-msvc.msi`). The
+  `1.4.4`, `1.4.3`, `1.4.2`, and `1.3.2` directories are kept for history.
+- Bootstrap: `microsoft/winget-pkgs#435790` (1.4.3) is open, the CLA is signed,
+  and its validation checks pass; it is waiting on a community moderator. The
+  package is created when that PR merges.
+- `microsoft/winget-pkgs#437292` (1.4.4) was closed as a duplicate: a package
+  cannot be created by two simultaneous first-version PRs.
+- After the bootstrap merges, publish 1.5.0 by re-running the `winget-releaser`
+  job on the v1.5.0 release run (its tag predates the package, so the job needs
+  a re-run) or by letting the next release tag publish. From then on the
+  automation keeps winget current.
+- The `winget-releaser` job in `release.yml` keeps `continue-on-error: true`
+  only until that first merge; remove it once the package exists so a genuine
+  publisher failure is visible again.
