@@ -102,4 +102,19 @@ fi
 "$SYSTEMCTL" daemon-reload
 "$SYSTEMCTL" enable "$SERVICE_NAME" >/dev/null 2>&1 || true
 
+# 3. Install the self-updater when the caller staged its files (idempotent).
+if [ -f /tmp/lightspeed-relay-updater.sh ] && [ -f /tmp/lightspeed-relay-install.sh ] \
+   && [ -f /tmp/lightspeed-update.service ] && [ -f /tmp/lightspeed-update.timer ]; then
+    install -d /usr/local/lib/lightspeed
+    install -m 0755 /tmp/lightspeed-relay-install.sh /usr/local/lib/lightspeed/relay-install.sh
+    install -m 0755 /tmp/lightspeed-relay-updater.sh /usr/local/lib/lightspeed/relay-updater.sh
+    install -m 0644 /tmp/lightspeed-update.service /etc/systemd/system/lightspeed-update.service
+    install -m 0644 /tmp/lightspeed-update.timer /etc/systemd/system/lightspeed-update.timer
+    "$SYSTEMCTL" daemon-reload
+    "$SYSTEMCTL" enable --now lightspeed-update.timer >/dev/null 2>&1 || true
+    log "installed the self-update timer"
+else
+    log "self-updater files not staged in /tmp; skipping timer install"
+fi
+
 log "ready: run relay-install.sh (or the updater) to activate a release"
