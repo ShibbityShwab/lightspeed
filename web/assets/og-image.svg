@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="LightSpeed: Reduce your ping. Free. Forever.">
+  <title>LightSpeed: Reduce your ping. Free. Forever.</title>
+  <defs>
+    <linearGradient id="og-tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1a38"/>
+      <stop offset="1" stop-color="#0a0a1a"/>
+    </linearGradient>
+    <radialGradient id="og-mark-glow" cx="0.5" cy="0.44" r="0.62">
+      <stop offset="0" stop-color="#6c5ce7" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#6c5ce7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="og-markgrad" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#a29bfe"/>
+      <stop offset="1" stop-color="#00cec9"/>
+    </linearGradient>
+    <linearGradient id="og-bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a29bfe"/>
+      <stop offset="0.45" stop-color="#6c5ce7"/>
+      <stop offset="1" stop-color="#00cec9"/>
+    </linearGradient>
+    <linearGradient id="og-head" x1="0" y1="0" x2="1" y2="0.2">
+      <stop offset="0" stop-color="#a29bfe"/>
+      <stop offset="1" stop-color="#00cec9"/>
+    </linearGradient>
+    <radialGradient id="og-glow-purple" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6c5ce7" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#6c5ce7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="og-glow-cyan" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#00cec9" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#00cec9" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="og-grid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <path d="M60 0 H0 V60" fill="none" stroke="#6c5ce7" stroke-opacity="0.07" stroke-width="1"/>
+    </pattern>
+    <g id="og-mark">
+      <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7" fill="url(#og-tile)" stroke="#2f2f52" stroke-width="1.5"/>
+      <circle cx="16" cy="15" r="13.5" fill="url(#og-mark-glow)"/>
+      <path d="M6.55 4.75 H14.65 V20.05 H20.05 L25.45 25 L22.75 27.25 H6.55 Z" fill="url(#og-markgrad)"/>
+    </g>
+  </defs>
+
+  <rect width="1200" height="630" fill="#0a0a1a"/>
+  <rect width="1200" height="630" fill="url(#og-grid)"/>
+  <rect x="-260" y="-320" width="1000" height="900" fill="url(#og-glow-purple)"/>
+  <rect x="620" y="160" width="860" height="760" fill="url(#og-glow-cyan)"/>
+  <rect x="0" y="0" width="1200" height="5" fill="url(#og-bar)"/>
+
+  <circle cx="950" cy="315" r="200" fill="none" stroke="#23233f" stroke-width="1.5" stroke-dasharray="3 11" stroke-linecap="round"/>
+  <circle cx="768.7" cy="230.5" r="5" fill="#a29bfe"/>
+  <circle cx="1131.3" cy="230.5" r="4.5" fill="#00cec9"/>
+  <circle cx="950" cy="515" r="5" fill="#00d68f"/>
+
+  <use href="#og-mark" xlink:href="#og-mark" transform="translate(780 145) scale(10.625)"/>
+
+  <g font-family="Inter, 'Fira Sans', 'DejaVu Sans', sans-serif">
+    <text x="162" y="116" font-size="30" font-weight="700" fill="#f2f2fa" letter-spacing="0.4">LightSpeed</text>
+    <text x="90" y="320" font-size="78" font-weight="700" fill="#f2f2fa" letter-spacing="-1">Reduce your ping.</text>
+    <text x="90" y="420" font-size="78" font-weight="700" fill="url(#og-head)" letter-spacing="-1">Free. Forever.</text>
+    <text x="90" y="492" font-size="30" font-weight="400" fill="#b4b4cc">Open-source game network optimizer</text>
+  </g>
+
+  <rect x="90" y="530" width="530" height="58" rx="29" fill="#6c5ce7" fill-opacity="0.12" stroke="#a29bfe" stroke-opacity="0.35" stroke-width="1.5"/>
+  <circle cx="124" cy="559" r="6" fill="#00d68f"/>
+  <text x="146" y="567" font-family="'JetBrains Mono', 'JetBrainsMono Nerd Font', 'DejaVu Sans Mono', monospace" font-size="22" fill="#a29bfe">shibbityshwab.github.io/lightspeed</text>
+</svg>

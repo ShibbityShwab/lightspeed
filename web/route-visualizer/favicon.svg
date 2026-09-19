@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="LightSpeed">
+  <rect width="64" height="64" rx="14" fill="#07070f"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="13.5" fill="none" stroke="#23233f"/>
+  <path d="M37 7 L17 36 h12 L27 57 L47 28 H35 Z" fill="#6c5ce7"/>
+  <path d="M37 7 L17 36 h12 L27 57 L47 28 H35 Z" fill="none" stroke="#7d6ff0" stroke-width="1" stroke-linejoin="round" opacity="0.6"/>
+</svg>

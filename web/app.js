@@ -1,63 +1,88 @@
 // LightSpeed Landing Page - app.js
-// Minimal JS: mobile nav, scroll animations, nav background
+// Vanilla JS: mobile nav, scroll effects, live stats, trends, download detection.
 
 (function () {
   'use strict';
 
+  var prefersReduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
   // --- Mobile Nav Toggle ---
-  const toggle = document.getElementById('nav-toggle');
-  const navLinks = document.getElementById('nav-links');
+  var toggle = document.getElementById('nav-toggle');
+  var navLinks = document.getElementById('nav-links');
+
+  function setNavOpen(open) {
+    if (!toggle || !navLinks) return;
+    navLinks.classList.toggle('open', open);
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  }
+
+  function isNavOpen() {
+    return !!(navLinks && navLinks.classList.contains('open'));
+  }
+
   if (toggle && navLinks) {
-    toggle.addEventListener('click', () => {
-      navLinks.classList.toggle('open');
-      toggle.classList.toggle('active');
+    toggle.addEventListener('click', function () {
+      setNavOpen(!isNavOpen());
     });
-    // Close on link click
-    navLinks.querySelectorAll('a').forEach(link => {
-      link.addEventListener('click', () => {
-        navLinks.classList.remove('open');
-        toggle.classList.remove('active');
-      });
+    navLinks.querySelectorAll('a').forEach(function (link) {
+      link.addEventListener('click', function () { setNavOpen(false); });
     });
-  }
-
-  // --- Scroll: Nav background solidify ---
-  const nav = document.getElementById('nav');
-  if (nav) {
-    window.addEventListener('scroll', () => {
-      if (window.scrollY > 80) {
-        nav.style.background = 'rgba(10, 10, 26, 0.97)';
-      } else {
-        nav.style.background = 'rgba(10, 10, 26, 0.85)';
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isNavOpen()) {
+        setNavOpen(false);
+        toggle.focus();
       }
-    }, { passive: true });
+    });
+    var mobileNav = window.matchMedia ? window.matchMedia('(max-width: 860px)') : null;
+    if (mobileNav && mobileNav.addEventListener) {
+      mobileNav.addEventListener('change', function (e) {
+        if (!e.matches) setNavOpen(false);
+      });
+    }
   }
 
-  // --- Scroll: Fade-in elements ---
-  const faders = document.querySelectorAll('.step, .game-card, .bench-card, .compare-card, .download-card, .faq-item, .relay-card');
-  if (faders.length && 'IntersectionObserver' in window) {
-    faders.forEach(el => el.classList.add('fade-in'));
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
+  // --- Scroll: nav solidifies past the fold (rAF-throttled, class-based) ---
+  var nav = document.getElementById('nav');
+  if (nav) {
+    var navTicking = false;
+    var syncNav = function () {
+      nav.classList.toggle('is-scrolled', window.scrollY > 80);
+      navTicking = false;
+    };
+    window.addEventListener('scroll', function () {
+      if (navTicking) return;
+      navTicking = true;
+      window.requestAnimationFrame(syncNav);
+    }, { passive: true });
+    syncNav();
+  }
+
+  // --- Scroll: fade-in elements (skipped entirely under reduced motion) ---
+  var faders = document.querySelectorAll('.step, .game-card, .bench-card, .compare-card, .download-card, .faq-item, .relay-card');
+  if (!prefersReduced && faders.length && 'IntersectionObserver' in window) {
+    faders.forEach(function (el) { el.classList.add('fade-in'); });
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
         if (entry.isIntersecting) {
           entry.target.classList.add('visible');
           observer.unobserve(entry.target);
         }
       });
     }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
-    faders.forEach(el => observer.observe(el));
+    faders.forEach(function (el) { observer.observe(el); });
   }
 
-  // --- Animate benchmark bars on scroll ---
-  const benchBars = document.querySelectorAll('.bench-bar-fill:not(.bench-bar-live)');
-  if (benchBars.length && 'IntersectionObserver' in window) {
-    benchBars.forEach(bar => {
-      const targetWidth = bar.style.width;
+  // --- Animate benchmark bars on scroll (instant under reduced motion) ---
+  var benchBars = document.querySelectorAll('.bench-bar-fill:not(.bench-bar-live)');
+  if (benchBars.length && 'IntersectionObserver' in window && !prefersReduced) {
+    benchBars.forEach(function (bar) {
+      var targetWidth = bar.style.width;
       bar.style.width = '0%';
-      const barObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
+      var barObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
           if (entry.isIntersecting) {
-            setTimeout(() => { bar.style.width = targetWidth; }, 200);
+            setTimeout(function () { bar.style.width = targetWidth; }, 200);
             barObserver.unobserve(entry.target);
           }
         });
@@ -66,13 +91,22 @@
     });
   }
 
-  // --- Smooth scroll for anchor links (fallback) ---
-  document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+  // --- Smooth scroll for anchor links ---
+  document.querySelectorAll('a[href^="#"]').forEach(function (anchor) {
     anchor.addEventListener('click', function (e) {
-      const target = document.querySelector(this.getAttribute('href'));
-      if (target) {
-        e.preventDefault();
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      var href = this.getAttribute('href');
+      if (!href || href === '#') return;
+      var target = null;
+      try {
+        target = document.querySelector(href);
+      } catch (err) {
+        target = null;
+      }
+      if (!target) return;
+      e.preventDefault();
+      target.scrollIntoView({ behavior: prefersReduced ? 'auto' : 'smooth', block: 'start' });
+      if (window.history && window.history.pushState) {
+        window.history.pushState(null, '', href);
       }
     });
   });
@@ -81,9 +115,9 @@
   function formatUptime(secs) {
     if (typeof secs !== 'number' || !isFinite(secs) || secs < 0) return '--';
     if (secs < 60) return '<1m';
-    const days = Math.floor(secs / 86400);
-    const hours = Math.floor((secs % 86400) / 3600);
-    const mins = Math.floor((secs % 3600) / 60);
+    var days = Math.floor(secs / 86400);
+    var hours = Math.floor((secs % 86400) / 3600);
+    var mins = Math.floor((secs % 3600) / 60);
     if (days > 0) return days + 'd ' + hours + 'h';
     if (hours > 0) return hours + 'h ' + mins + 'm';
     return mins + 'm';
@@ -91,7 +125,7 @@
 
   function formatTimestamp(epochSecs, style) {
     if (style === 'relative') {
-      const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSecs);
+      var diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSecs);
       if (diff < 60) return 'just now';
       if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
       if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
@@ -109,8 +143,24 @@
     });
   }
 
+  function updateSnapshotStatus(message) {
+    var el = document.getElementById('snapshot-status');
+    if (el) el.textContent = message;
+  }
+
+  // Relay node ids encode airport-style codes: relay-lax-1 -> LAX, relay-fra -> FRA.
+  function nodeCode(nodeId) {
+    var parts = String(nodeId || '').split('-').filter(Boolean);
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === 'relay') continue;
+      if (/^\d+$/.test(parts[i])) continue;
+      return parts[i].toUpperCase().slice(0, 3);
+    }
+    return 'NODE';
+  }
+
   function relayStatus(status) {
-    const value = String(status || '').toLowerCase();
+    var value = String(status || '').toLowerCase();
     if (value === 'healthy' || value === 'online' || value === 'up') {
       return { label: 'Online', state: 'healthy', cardClass: 'relay-status' };
     }
@@ -121,8 +171,8 @@
   }
 
   function renderLastChecked(epochSecs) {
-    const absolute = formatTimestamp(epochSecs, 'absolute');
-    const iso = new Date(epochSecs * 1000).toISOString();
+    var absolute = formatTimestamp(epochSecs, 'absolute');
+    var iso = new Date(epochSecs * 1000).toISOString();
     document.querySelectorAll('[data-last-checked]').forEach(function (el) {
       el.textContent = formatTimestamp(epochSecs, 'relative');
       el.setAttribute('datetime', iso);
@@ -139,68 +189,76 @@
   }
 
   function renderRelayCards(relays) {
-    const byId = {};
+    var byId = {};
     relays.forEach(function (relay) {
       if (relay && relay.node_id) byId[relay.node_id] = relay;
     });
     document.querySelectorAll('[data-node-id]').forEach(function (card) {
-      const relay = byId[card.getAttribute('data-node-id')];
+      var relay = byId[card.getAttribute('data-node-id')];
       if (!relay) return;
-      const status = relayStatus(relay.status);
+      var status = relayStatus(relay.status);
 
-      const statusEl = card.querySelector('.relay-status');
+      var chip = card.querySelector('.node-chip');
+      if (chip) chip.textContent = nodeCode(relay.node_id);
+
+      var statusEl = card.querySelector('.relay-status');
       if (statusEl) {
         statusEl.className = status.cardClass;
-        const label = statusEl.querySelector('[data-relay-status]');
+        var label = statusEl.querySelector('[data-relay-status]');
         if (label) label.textContent = status.label;
       }
 
-      const versionEl = card.querySelector('[data-relay-version]');
+      var versionEl = card.querySelector('[data-relay-version]');
       if (versionEl && relay.version) versionEl.textContent = relay.version;
 
-      const uptimeEl = card.querySelector('[data-relay-uptime]');
+      var uptimeEl = card.querySelector('[data-relay-uptime]');
       if (uptimeEl) uptimeEl.textContent = formatUptime(relay.uptime_secs);
 
-      const relayedEl = card.querySelector('[data-relay-packets-relayed]');
+      var relayedEl = card.querySelector('[data-relay-packets-relayed]');
       if (relayedEl) relayedEl.textContent = formatCount(relay.packets_relayed);
 
-      const droppedEl = card.querySelector('[data-relay-packets-dropped]');
+      var droppedEl = card.querySelector('[data-relay-packets-dropped]');
       if (droppedEl) droppedEl.textContent = formatCount(relay.packets_dropped);
 
-      const sessionsEl = card.querySelector('[data-relay-sessions]');
+      var sessionsEl = card.querySelector('[data-relay-sessions]');
       if (sessionsEl) sessionsEl.textContent = formatCount(relay.sessions_created);
     });
   }
 
   function renderRelayHealthList(relays) {
-    const list = document.getElementById('relay-health-list');
+    var list = document.getElementById('relay-health-list');
     if (!list || !relays.length) return;
     list.textContent = '';
     relays.forEach(function (relay) {
-      const status = relayStatus(relay.status);
+      var status = relayStatus(relay.status);
 
-      const row = document.createElement('li');
+      var row = document.createElement('li');
       row.className = 'relay-health-row';
 
-      const name = document.createElement('span');
-      name.className = 'relay-health-name';
-      name.textContent = (relay.flag ? relay.flag + ' ' : '') + (relay.location || relay.node_id);
+      var chip = document.createElement('span');
+      chip.className = 'node-chip node-chip-sm';
+      chip.textContent = nodeCode(relay.node_id);
 
-      const state = document.createElement('span');
+      var name = document.createElement('span');
+      name.className = 'relay-health-name';
+      name.textContent = relay.location || relay.node_id;
+
+      var state = document.createElement('span');
       state.className = 'relay-health-status is-' + status.state;
       state.textContent = status.label;
 
-      const uptime = document.createElement('span');
+      var uptime = document.createElement('span');
       uptime.className = 'relay-health-uptime';
       uptime.textContent = formatUptime(relay.uptime_secs);
 
-      const packets = document.createElement('span');
+      var packets = document.createElement('span');
       packets.className = 'relay-health-packets';
       packets.textContent = formatCount(relay.packets_relayed) + ' relayed';
       packets.title = formatCount(relay.packets_relayed) + ' packets relayed, ' +
         formatCount(relay.packets_dropped) + ' filtered, ' +
         formatCount(relay.sessions_created) + ' sessions';
 
+      row.appendChild(chip);
       row.appendChild(name);
       row.appendChild(state);
       row.appendChild(uptime);
@@ -212,31 +270,34 @@
   function renderNetworkStats(stats) {
     if (!stats || typeof stats !== 'object') return;
 
-    const relayCount = typeof stats.relay_count === 'number' ? stats.relay_count : null;
-    const healthyCount = typeof stats.healthy_count === 'number' ? stats.healthy_count : null;
+    var relayCount = typeof stats.relay_count === 'number' ? stats.relay_count : null;
+    var healthyCount = typeof stats.healthy_count === 'number' ? stats.healthy_count : null;
 
     if (relayCount !== null) setStat('relay_count', String(relayCount));
     if (typeof stats.area_count === 'number') setStat('area_count', String(stats.area_count));
     if (relayCount !== null && healthyCount !== null) {
       setStat('relays_online', healthyCount + '/' + relayCount);
+      updateSnapshotStatus('Relay snapshot updated: ' + healthyCount + ' of ' + relayCount + ' relays online.');
+    } else {
+      updateSnapshotStatus('Relay snapshot updated.');
     }
 
-    const versions = Array.isArray(stats.software_versions) ? stats.software_versions : [];
+    var versions = Array.isArray(stats.software_versions) ? stats.software_versions : [];
     if (versions.length) {
       setStat('software_versions', versions.map(function (v) { return 'v' + v; }).join(', '));
     }
 
     if (typeof stats.generated_at === 'number') renderLastChecked(stats.generated_at);
 
-    const relays = Array.isArray(stats.relays) ? stats.relays : [];
+    var relays = Array.isArray(stats.relays) ? stats.relays : [];
     if (relays.length) {
       renderRelayCards(relays);
       renderRelayHealthList(relays);
 
-      let totalRelayed = 0;
-      let totalDropped = 0;
-      let totalUpstreamLoss = 0;
-      let totalSessions = 0;
+      var totalRelayed = 0;
+      var totalDropped = 0;
+      var totalUpstreamLoss = 0;
+      var totalSessions = 0;
       relays.forEach(function (relay) {
         if (typeof relay.packets_relayed === 'number') totalRelayed += relay.packets_relayed;
         if (typeof relay.packets_dropped === 'number') totalDropped += relay.packets_dropped;
@@ -249,9 +310,9 @@
       setStat('sessions_created', formatCount(totalSessions));
     }
 
-    const healthBar = document.getElementById('network-health-bar');
+    var healthBar = document.getElementById('network-health-bar');
     if (healthBar && relayCount && healthyCount !== null) {
-      const pct = Math.max(0, Math.min(100, Math.round((healthyCount / relayCount) * 100)));
+      var pct = Math.max(0, Math.min(100, Math.round((healthyCount / relayCount) * 100)));
       healthBar.style.width = pct + '%';
     }
   }
@@ -266,12 +327,13 @@
       .then(renderNetworkStats)
       .catch(function () {
         // Snapshot unavailable: keep the neutral placeholders.
+        updateSnapshotStatus('Live relay snapshot is unavailable right now. Placeholders are shown.');
       });
   }
 
   // --- Network history trends (bounded snapshot history) ---
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var TREND_COLORS = ['#a29bfe', '#00cec9', '#00d68f', '#fdcb6e', '#ff6b6b', '#74b9ff', '#fd79a8', '#ffeaa7'];
+  var TREND_COLORS = ['#a29bfe', '#00cec9', '#00d68f', '#fdcb6e', '#ff6b6b', '#7d6ff0', '#8a8aa8', '#f2f2fa'];
   var MAX_TREND_RELAYS = 8;
   var trendUid = 0;
 
@@ -702,6 +764,8 @@
   // --- Download: platform detection, copy-to-clipboard, latest release tag ---
   var RELEASE_DOWNLOAD_BASE = 'https://github.com/ShibbityShwab/lightspeed/releases/latest/download/';
   var RELEASE_LATEST_PAGE = 'https://github.com/ShibbityShwab/lightspeed/releases/latest';
+  var RELEASE_TAG_KEY = 'lightspeed:release-tag';
+  var RELEASE_TAG_TTL_MS = 60 * 60 * 1000;
 
   // Best artifact for each detected platform/arch pair. Windows ARM64 falls
   // back to the x64 MSI (runs under emulation) and Linux ARM64 has no GUI
@@ -809,6 +873,7 @@
   }
 
   function initCopyButtons() {
+    var statusEl = document.getElementById('copy-status');
     document.querySelectorAll('.copy-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var wrapper = btn.closest('.code-copy');
@@ -818,8 +883,10 @@
         copyText(code.textContent.trim()).then(function () {
           btn.textContent = 'Copied!';
           btn.classList.add('copied');
+          if (statusEl) statusEl.textContent = 'Copied: ' + code.textContent.trim();
         }).catch(function () {
           btn.textContent = 'Select + copy';
+          if (statusEl) statusEl.textContent = 'Copy failed. Select the command and copy it manually.';
         }).then(function () {
           setTimeout(function () {
             btn.textContent = original;
@@ -832,7 +899,42 @@
 
   function loadLatestReleaseTag() {
     var slots = document.querySelectorAll('[data-release-tag]');
-    if (!slots.length || !window.fetch) return;
+    if (!slots.length) return;
+
+    function applyTag(tag) {
+      slots.forEach(function (el) { el.textContent = tag; });
+    }
+
+    function readCache() {
+      try {
+        var raw = sessionStorage.getItem(RELEASE_TAG_KEY);
+        if (!raw) return null;
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.tag === 'string' && typeof parsed.at === 'number' &&
+            (Date.now() - parsed.at) < RELEASE_TAG_TTL_MS) {
+          return parsed.tag;
+        }
+      } catch (err) {
+        // Storage unavailable: fall through to the network fetch.
+      }
+      return null;
+    }
+
+    function writeCache(tag) {
+      try {
+        sessionStorage.setItem(RELEASE_TAG_KEY, JSON.stringify({ tag: tag, at: Date.now() }));
+      } catch (err) {
+        // Storage unavailable: nothing to do.
+      }
+    }
+
+    var cached = readCache();
+    if (cached) {
+      applyTag(cached);
+      return;
+    }
+
+    if (!window.fetch) return;
     fetch('https://api.github.com/repos/ShibbityShwab/lightspeed/releases/latest', {
       headers: { Accept: 'application/vnd.github+json' }
     })
@@ -843,7 +945,8 @@
       .then(function (release) {
         var tag = release && typeof release.tag_name === 'string' ? release.tag_name : '';
         if (!tag) return;
-        slots.forEach(function (el) { el.textContent = tag; });
+        applyTag(tag);
+        writeCache(tag);
       })
       .catch(function () {
         // Keep the versionless fallback copy that is already in the markup.

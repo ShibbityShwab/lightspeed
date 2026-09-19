@@ -1,4 +1,4 @@
-# ⚡ LightSpeed Tunnel Protocol v1/v2
+# <picture><source media="(prefers-color-scheme: dark)" srcset="../web/assets/brand/lightspeed-mark-inverse.svg"><img src="../web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> LightSpeed Tunnel Protocol v1/v2
 
 > Last updated: 2026-08-18 — v1.2.0: adds TCP framing (client→proxy leg), session_token stamping
 

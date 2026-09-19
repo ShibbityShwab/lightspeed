@@ -143,6 +143,7 @@ pub struct LightSpeedApp<P: Platform> {
     // ── System state ──────────────────────────────────────────────────────
     is_admin: bool,
     fonts_setup: bool,
+    header_icon: Option<egui::TextureHandle>,
 
     // ── Advanced panel toggle ─────────────────────────────────────────────
     show_advanced: bool,
@@ -213,6 +214,7 @@ impl<P: Platform> LightSpeedApp<P> {
             auto_detected_game,
             is_admin,
             fonts_setup: false,
+            header_icon: None,
             show_advanced: false,
             boost_start: None,
             custom_port_input: String::new(),
@@ -397,10 +399,12 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        // One-time first-frame setup: platform-specific fonts.
+        // One-time first-frame setup: platform-specific fonts and the
+        // branded header mark texture.
         if !self.fonts_setup {
             self.fonts_setup = true;
             P::setup_fonts(&ctx);
+            self.header_icon = brand_mark_texture(&ctx);
         }
 
         // Tray Quit and the window X are deliberately different: Quit tears
@@ -485,7 +489,13 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 .show(ui, |ui| {
             // ── Header ───────────────────────────────────────────────────
             ui.horizontal(|ui| {
-                ui.heading("⚡ LightSpeed");
+                if let Some(mark) = &self.header_icon {
+                    ui.add(
+                        egui::Image::from_texture(mark)
+                            .fit_to_exact_size(egui::vec2(22.0, 22.0)),
+                    );
+                }
+                ui.heading("LightSpeed");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (label, colour) = if self.status.connected {
                         ("• Connected", egui::Color32::from_rgb(80, 200, 120))
@@ -1685,6 +1695,24 @@ fn try_auto_detect_game() -> Option<String> {
         }
         Err(_) => None,
     }
+}
+
+/// Decode the embedded brand tile into a texture for the header.
+///
+/// A decode failure is logged and treated as absent so the header falls back
+/// to plain text.
+fn brand_mark_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    const MARK_PNG: &[u8] = include_bytes!("../../web/assets/brand/icon-256.png");
+    let rgba = match image::load_from_memory(MARK_PNG) {
+        Ok(decoded) => decoded.to_rgba8(),
+        Err(e) => {
+            tracing::warn!("could not decode header brand mark: {e}");
+            return None;
+        }
+    };
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    Some(ctx.load_texture("lightspeed-brand-mark", image, egui::TextureOptions::LINEAR))
 }
 
 /// What the frame loop should do about a window close or a tray Quit.

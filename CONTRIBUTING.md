@@ -1,4 +1,4 @@
-# Contributing to LightSpeed ⚡
+# <picture><source media="(prefers-color-scheme: dark)" srcset="web/assets/brand/lightspeed-mark-inverse.svg"><img src="web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> Contributing to LightSpeed
 
 Thanks for your interest in making LightSpeed better! This is an open-source project and contributions of all kinds are welcome — code, bug reports, game requests, proxy hosting, and documentation.
 

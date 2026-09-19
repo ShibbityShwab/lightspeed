@@ -76,12 +76,19 @@ fn run() -> anyhow::Result<()> {
 
     let quit: platform::QuitFlag = Arc::new(AtomicBool::new(false));
 
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size([520.0, 660.0])
+        .with_min_inner_size([340.0, 280.0])
+        .with_title("LightSpeed");
+    // A failed icon decode must not abort startup.
+    let viewport = match window_icon() {
+        Some(icon) => viewport.with_icon(icon),
+        None => viewport,
+    };
+
     let native_options = eframe::NativeOptions {
         renderer: renderer_from_env(),
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([520.0, 660.0])
-            .with_min_inner_size([340.0, 280.0])
-            .with_title("⚡ LightSpeed"),
+        viewport,
         ..Default::default()
     };
 
@@ -89,7 +96,7 @@ fn run() -> anyhow::Result<()> {
     let quit_for_closure = Arc::clone(&quit);
     tracing::info!("entering eframe::run_native");
     eframe::run_native(
-        "⚡ LightSpeed",
+        "LightSpeed",
         native_options,
         Box::new(move |_cc: &eframe::CreationContext<'_>| {
             let app = app::LightSpeedApp::<platform::CurrentPlatform>::new(
@@ -106,6 +113,27 @@ fn run() -> anyhow::Result<()> {
     engine.lock().unwrap().disconnect();
     rt.shutdown_timeout(std::time::Duration::from_secs(2));
     Ok(())
+}
+
+/// Decode the embedded brand PNG into the window and taskbar icon.
+///
+/// A decode failure is logged and treated as "no icon" so a bad asset can
+/// never stop the window from opening.
+fn window_icon() -> Option<egui::IconData> {
+    const ICON_PNG: &[u8] = include_bytes!("../../web/assets/brand/icon-256.png");
+    let rgba = match image::load_from_memory(ICON_PNG) {
+        Ok(decoded) => decoded.to_rgba8(),
+        Err(e) => {
+            tracing::warn!("could not decode window icon: {e}");
+            return None;
+        }
+    };
+    let (width, height) = rgba.dimensions();
+    Some(egui::IconData {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    })
 }
 
 /// Initialize tracing without ever panicking.

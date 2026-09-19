@@ -1,4 +1,4 @@
-# ⚡ LightSpeed — Self-Hosted Proxy Deployment
+# <picture><source media="(prefers-color-scheme: dark)" srcset="../web/assets/brand/lightspeed-mark-inverse.svg"><img src="../web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> LightSpeed - Self-Hosted Proxy Deployment
 
 > Deploy a lightweight proxy mesh on any Linux VPS — ~500KB RAM per node.
 

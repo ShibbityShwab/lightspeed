@@ -1,4 +1,4 @@
-# ⚡ LightSpeed Architecture
+# <picture><source media="(prefers-color-scheme: dark)" srcset="../web/assets/brand/lightspeed-mark-inverse.svg"><img src="../web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> LightSpeed Architecture
 
 > Last updated: 2026-08-18 — Reflects v1.0.0–v1.2.0: installer pipeline (cargo-dist), self-hosted proxy model, token authentication, TCP tunnel, configurable ports, 13-game support
 

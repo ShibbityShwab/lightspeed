@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://shibbityshwab.github.io/lightspeed/sitemap.xml

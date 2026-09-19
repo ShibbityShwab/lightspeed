@@ -221,7 +221,7 @@ fn notice_window(message: &str) {
     impl eframe::App for Notice {
         fn ui(&mut self, ui: &mut eframe::egui::Ui, _frame: &mut eframe::Frame) {
             eframe::egui::CentralPanel::default().show(ui, |ui| {
-                ui.heading("\u{26a1} LightSpeed");
+                ui.heading("LightSpeed");
                 ui.add_space(4.0);
                 ui.label(&self.message);
                 ui.add_space(8.0);
@@ -237,12 +237,12 @@ fn notice_window(message: &str) {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([380.0, 160.0])
             .with_resizable(false)
-            .with_title("\u{26a1} LightSpeed"),
+            .with_title("LightSpeed"),
         ..Default::default()
     };
     let message = message.to_string();
     let _ = eframe::run_native(
-        "\u{26a1} LightSpeed",
+        "LightSpeed",
         options,
         Box::new(move |_cc| Ok(Box::new(Notice { message }))),
     );
