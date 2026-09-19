@@ -27,7 +27,7 @@ set -euo pipefail
 # ── Configuration ────────────────────────────────────────────
 SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/lightspeed_deploy}"
 SSH_USER="${DEPLOY_SSH_USER:-root}"
-SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes"
+SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
 BINARY_NAME="lightspeed-proxy"
 REMOTE_STAGING="/tmp/${BINARY_NAME}.staged"
 REMOTE_INSTALLER="/tmp/lightspeed-relay-install.sh"
