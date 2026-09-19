@@ -52,6 +52,29 @@ fn order_by_win_rate(paths: Vec<SocketAddrV4>) -> Vec<SocketAddrV4> {
     ranked.into_iter().map(|(p, _)| p).collect()
 }
 
+/// Register a supervisor for every newly active relay and stop supervisors for
+/// relays that dropped out of the active set. Registration is idempotent per
+/// relay and each supervisor carries a generation, so a stale task can never
+/// overwrite a newer one.
+fn sync_supervisors(
+    supervised: &mut Vec<SocketAddrV4>,
+    active: &[SocketAddrV4],
+    control_port: u16,
+) {
+    for addr in active {
+        if !supervised.contains(addr) {
+            crate::quic::ensure_registration(*addr, control_port);
+        }
+    }
+    for addr in supervised.iter() {
+        if !active.contains(addr) {
+            crate::quic::stop_supervisor(*addr);
+        }
+    }
+    supervised.clear();
+    supervised.extend_from_slice(active);
+}
+
 fn log_multipath_stats() {
     let stats = crate::session::multipath_stats();
     if stats.is_empty() {
@@ -89,6 +112,7 @@ pub async fn run_continuous_rerouting(
 ) {
     let mut current = crate::session::current_proxy();
     let mut current_latency: Option<u64> = None;
+    let mut supervised_paths: Vec<SocketAddrV4> = Vec::new();
 
     loop {
         tokio::select! {
@@ -115,7 +139,9 @@ pub async fn run_continuous_rerouting(
             let mut paths = vec![best.data_addr];
             paths.extend(route.backups.iter().map(|b| b.data_addr));
             paths.truncate(max_paths as usize);
-            crate::session::set_multipath_paths(order_by_win_rate(paths));
+            let paths = order_by_win_rate(paths);
+            sync_supervisors(&mut supervised_paths, &paths, control_port);
+            crate::session::set_multipath_paths(paths);
             log_multipath_stats();
         }
 

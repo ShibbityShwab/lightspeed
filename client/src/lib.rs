@@ -27,3 +27,13 @@ pub(crate) mod session;
 pub(crate) mod telemetry;
 pub(crate) mod tunnel;
 pub(crate) mod warp;
+
+/// Control-plane surface exposed for integration tests only: `quic` and
+/// `session` are crate-private, so `client/tests/` needs this narrow re-export
+/// to drive a real registration and observe the per-relay token.
+#[cfg(feature = "quic")]
+#[doc(hidden)]
+pub mod test_support {
+    pub use crate::quic::register_session;
+    pub use crate::session::{path_token, session_token};
+}
