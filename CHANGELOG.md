@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- Authors: every release entry ends with a `### Community` section crediting
+     the humans and reporters behind the changes (code contributors, issue
+     reporters, dependency-bump bots). See the 1.5.0 entry for the format. -->
+
 ## [1.5.0] - 2026-09-19
 
 ### Relay operators: one-time restart, then seamless updates
@@ -92,6 +96,11 @@ stays on the previous release, and a bad install rolls back automatically.
   the pre-validation child and the final `execve` use that descriptor, closing a
   validate-then-exec race. Duplicate file descriptors are rejected.
 - The rate-limiter and auth tables are capped and fail closed.
+
+### Community
+- @devgrunge (Alexander Marcondes Junior) added the **Project Zomboid** profile (PR #72).
+- @Yughaa reported issue #59, which the WinDivert and GUI fixes above address.
+- Dependabot kept the dependency tree current (#61, #73).
 
 ## [1.4.4] - 2026-09-19
 

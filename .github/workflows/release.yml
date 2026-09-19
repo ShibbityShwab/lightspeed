@@ -286,6 +286,22 @@ jobs:
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
+      # cargo-dist's generated body repeats an Install/Download/checksum block
+      # for every package. GitHub already lists the artifacts, so replace the
+      # body with the changelog section for this version. When there is no
+      # changelog section, leave cargo-dist's body in place.
+      - name: "Trim release notes to the changelog"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash infra/scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/release-notes.txt"
+          if [ -s "$RUNNER_TEMP/release-notes.txt" ]; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.txt"
+          else
+            echo "no changelog section"
+          fi
+
   announce:
     needs:
       - plan

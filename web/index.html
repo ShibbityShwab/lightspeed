@@ -653,36 +653,154 @@
   <section class="section section-accent" id="download">
     <div class="container">
       <h2 class="section-title">Download LightSpeed</h2>
-      <p class="section-subtitle">Grab v1.4.1, the latest release. Run it. That's the whole setup.</p>
+      <p class="section-subtitle">Grab <span data-release-tag>the latest release</span>. Run it. That's the whole setup.</p>
+
+      <div class="download-primary">
+        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="btn btn-lg btn-primary" id="primary-download">
+          <span class="btn-icon">↓</span>
+          <span id="primary-download-label">Download LightSpeed</span>
+        </a>
+        <p class="download-primary-note" id="primary-download-note">Detecting your platform...</p>
+      </div>
+
       <div class="download-grid">
-        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
+        <div class="download-card">
           <div class="download-icon">🪟</div>
           <h3>Windows</h3>
-          <p>Windows 10/11 x64</p>
-          <span class="download-filename">lightspeed-windows-x64.exe</span>
-        </a>
-        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
-          <div class="download-icon">🐧</div>
-          <h3>Linux</h3>
-          <p>x64 / ARM64</p>
-          <span class="download-filename">lightspeed-linux-x64</span>
-        </a>
-        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="download-card">
+          <p>Windows 10/11 &middot; x64</p>
+          <ul class="download-links">
+            <li>
+              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.msi">
+                <span class="download-link-label">GUI installer (MSI)</span>
+                <span class="download-filename">lightspeed-gui-x86_64-pc-windows-msvc.msi</span>
+              </a>
+            </li>
+            <li>
+              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.zip">
+                <span class="download-link-label">GUI app (ZIP)</span>
+                <span class="download-filename">lightspeed-gui-x86_64-pc-windows-msvc.zip</span>
+              </a>
+            </li>
+            <li>
+              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-pc-windows-msvc.zip">
+                <span class="download-link-label">CLI client (ZIP)</span>
+                <span class="download-filename">lightspeed-client-x86_64-pc-windows-msvc.zip</span>
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <div class="download-card">
           <div class="download-icon">🍎</div>
           <h3>macOS</h3>
-          <p>Intel &amp; Apple Silicon</p>
-          <span class="download-filename">lightspeed-macos-universal</span>
-        </a>
+          <p>macOS 12+ &middot; CLI client</p>
+          <ul class="download-links">
+            <li>
+              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-apple-darwin.tar.xz">
+                <span class="download-link-label">Apple Silicon (M-series)</span>
+                <span class="download-filename">lightspeed-client-aarch64-apple-darwin.tar.xz</span>
+              </a>
+            </li>
+            <li>
+              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-apple-darwin.tar.xz">
+                <span class="download-link-label">Intel Mac</span>
+                <span class="download-filename">lightspeed-client-x86_64-apple-darwin.tar.xz</span>
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <div class="download-card">
+          <div class="download-icon">🐧</div>
+          <h3>Linux</h3>
+          <p>x64 &amp; ARM64 &middot; GUI + CLI</p>
+          <ul class="download-links">
+            <li>
+              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz">
+                <span class="download-link-label">GUI app (x64)</span>
+                <span class="download-filename">lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz</span>
+              </a>
+            </li>
+            <li>
+              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz">
+                <span class="download-link-label">CLI client (x64)</span>
+                <span class="download-filename">lightspeed-client-x86_64-unknown-linux-gnu.tar.xz</span>
+              </a>
+            </li>
+            <li>
+              <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz">
+                <span class="download-link-label">CLI client (ARM64)</span>
+                <span class="download-filename">lightspeed-client-aarch64-unknown-linux-gnu.tar.xz</span>
+              </a>
+            </li>
+          </ul>
+        </div>
       </div>
-      <div class="download-alt">
-        <p>One-line install (Linux / macOS):</p>
-        <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-installer.sh | sh</code>
-        <p>One-line install (Windows PowerShell):</p>
-        <code class="code-block">irm https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-installer.ps1 | iex</code>
-        <p>MSI installers and per-platform archives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">GitHub Releases</a>.</p>
-        <p>Or build from source:</p>
-        <code class="code-block">git clone https://github.com/ShibbityShwab/lightspeed.git && cd lightspeed && cargo build --release</code>
+
+      <div class="download-methods">
+        <h3 class="download-methods-title">Standard install methods</h3>
+        <div class="method-grid">
+          <div class="method-card">
+            <div class="method-head">
+              <h4>Windows Package Manager</h4>
+              <span class="method-badge">Coming soon</span>
+            </div>
+            <p>The winget manifest is submitted and awaiting review. The MSI above is the same build.</p>
+            <div class="code-copy">
+              <code class="code-block">winget install ShibbityShwab.LightSpeed</code>
+              <button class="copy-btn" type="button" aria-label="Copy winget command">Copy</button>
+            </div>
+          </div>
+
+          <div class="method-card">
+            <div class="method-head">
+              <h4>Homebrew (macOS &amp; Linux)</h4>
+            </div>
+            <p>Tap the formula once, then install and upgrade with brew.</p>
+            <div class="code-copy">
+              <code class="code-block">brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed</code>
+              <button class="copy-btn" type="button" aria-label="Copy brew tap command">Copy</button>
+            </div>
+            <div class="code-copy">
+              <code class="code-block">brew install ShibbityShwab/lightspeed/lightspeed</code>
+              <button class="copy-btn" type="button" aria-label="Copy brew install command">Copy</button>
+            </div>
+          </div>
+
+          <div class="method-card">
+            <div class="method-head">
+              <h4>Arch Linux (AUR)</h4>
+            </div>
+            <p>Install the prebuilt binary package with your AUR helper.</p>
+            <div class="code-copy">
+              <code class="code-block">yay -S lightspeed-bin</code>
+              <button class="copy-btn" type="button" aria-label="Copy AUR command">Copy</button>
+            </div>
+          </div>
+
+          <div class="method-card">
+            <div class="method-head">
+              <h4>Linux shell installer</h4>
+            </div>
+            <p>One line for the CLI client, or the same for the GUI app.</p>
+            <div class="code-copy">
+              <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-installer.sh | sh</code>
+              <button class="copy-btn" type="button" aria-label="Copy CLI installer command">Copy</button>
+            </div>
+            <div class="code-copy">
+              <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-installer.sh | sh</code>
+              <button class="copy-btn" type="button" aria-label="Copy GUI installer command">Copy</button>
+            </div>
+          </div>
+        </div>
       </div>
+
+      <p class="download-relay">
+        Running a relay node? Grab the proxy build for
+        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> or
+        <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>.
+        Everything else lives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">GitHub Releases</a>.
+      </p>
     </div>
   </section>
 
