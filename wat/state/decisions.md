@@ -425,3 +425,59 @@ once-per-six-hours stats snapshot overwrote itself so no trend history existed.
 percentile aggregation from per-client percentiles is statistically invalid, so only sums
 and counts are exposed; committing generated stats to `master` or an actions cache was
 rejected for repo noise and eviction risk respectively, so an orphan branch holds history.
+
+## 2026-09-19 — Relay self-update with in-place handoff (WF-025)
+
+**Context:** relays must update themselves without forcing clients to reconnect. Building
+this exposed a prerequisite failure: the proxy revoked data-plane auth when the QUIC
+control connection closed, and the client's keepalive task never reconnected, so any
+relay restart permanently deauthorized every connected client until the process restarted.
+
+**Delivered (atomic commits, in order):** client supervised reconnect (races connection
+close vs the 15s ping, jittered backoff 250ms..=5s, re-registers, never zeroes a valid
+token) and per-relay token store; proxy auth rekeyed by token with IP(+optional data port)
+binding, 300s TTL refreshed on control keepalive, 120s transport revive grace, 30s
+previous-token window (demotion only for a matching principal AND data port), 5s sweep,
+fail-closed cap; per-path telemetry (client collects RTT/jitter/loss/FEC/dedup per relay,
+protocol carries `route_legs`, proxy aggregates by relay/game/country); data tooling
+(`lib-nodes.sh` reads the signed registry, `collect-metrics.sh` bounded reset-safe
+history, `analyze-mesh.sh` anomaly flags, web history trends); versioned release layout
+`/opt/lightspeed/releases/<v>` + `current` symlink with a reusable installer (staged
+binary checked before publish, health gate, rollback, prune keeping active+previous);
+systemd `Type=notify` + 30s watchdog (`sd_notify` implemented directly, no new dep);
+a verified self-updater (GitHub release, SHA-256 checked, flock, `update-state.json`) on
+an hourly jittered timer; `/health` update state; and Phase 2 in-place `execve` handoff.
+
+**Key decisions:**
+- Auth is token-keyed with an IP(+optional port) binding; re-registration demotes only a
+  same-principal, same-port token, so two clients behind one NAT never truncate each other.
+- Handoff is an in-place `execve` (NOT `SO_REUSEPORT`/eBPF): the old process clears
+  `FD_CLOEXEC` on the data listener and every per-session outbound UDP fd, writes a
+  root-owned manifest to `/run/lightspeed/handoff.json`, pre-validates the target in a
+  child that inherits those fds, announces control shutdown, then execs. The new binary
+  adopts the fds, rebuilds sessions with FRESH FEC decoders (a reset costs at most one
+  unrecovered packet per straddling block; stale parity cannot cross-contaminate because
+  block ids are checked), restores auth with remaining TTLs, re-anchors `Instant` fields
+  from stored ages, and binds control/health fresh. Global metrics, abuse/rate state, and
+  TCP sessions are intentionally not transferred; `pending_forward_us` is zeroed.
+- Failure is safe by construction: anything short of a clean pre-validation restores the
+  fd flags and keeps the old process serving; the installer commits the `current` symlink
+  only after `/health` reports the new version with a matching ok handoff id plus a soak,
+  and otherwise leaves the old process running (zero downtime) or rolls back to the
+  previous release if the new one goes unhealthy. Adoption requires the env var, so a
+  plain systemd restart cannot adopt. The first Phase-2 rollout is necessarily a blunt
+  restart because the running binary predates handoff support.
+**Impact:** `proxy/src/{main,relay,auth,health,handoff,notify,metrics}.rs`,
+`client/src/{quic,session,telemetry,tunnel,engine}.rs`, `protocol/src/{control,telemetry}.rs`,
+`infra/scripts/{relay-install,relay-updater,collect-metrics,analyze-mesh,lib-nodes,test_handoff_e2e}.sh`,
+`infra/systemd/*`, `.github/workflows/pages.yml`, `web/*`.
+**Alternatives Considered:** `SO_REUSEPORT` coexistence was rejected because plain
+reuseport rehashes existing 4-tuples on membership change and the per-process in-memory
+auth/control state splits across processes (a client's control plane and data plane can
+land on different binaries); eBPF `SK_REUSEPORT` steering fixes the split but adds
+kernel/root/build complexity and murky drain semantics. A stable front-supervisor was
+rejected for an extra userspace hop, a recursive update problem, and the
+response-source-port constraint. Serializing the FEC decoder was rejected as unnecessary
+after analysis showed a safe reset. **Verification:** a committed root-only E2E
+(`test_handoff_e2e.sh`) proves the same PID switching versions with a live session and the
+game server observing the same outbound source port across the exec.

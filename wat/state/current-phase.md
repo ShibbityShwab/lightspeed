@@ -164,3 +164,28 @@ temp-repo stats + history fixture produced 2 snapshots with the 7 drop fields.
 **Known gaps:** the optional trend UI (`network-history.json` visualization) was not
 built; `protocol/src/framing.rs` has a pre-existing isolated-crate clippy warning
 (`use std::io` unused without the `tokio` feature) that the workspace build does not hit.
+
+---
+
+# WF-025 — Relay self-update (Phase 0-2)
+
+**Status:** Implemented on `feat/observability-overhaul`, unpushed, pending review/merge.
+
+Delivered: client supervised control reconnect and per-relay token store; token-keyed
+proxy auth with TTL/grace; per-path telemetry collection + aggregation; the mesh data
+tooling (registry inventory, bounded reset-safe collector, analyzer, web trends); a
+versioned release layout with a health-gated installer and rollback; systemd
+`Type=notify` + watchdog; a verified self-updater on a timer; `/health` update state; and
+in-place `execve` handoff (manifest + fd adoption + session/auth transfer) that keeps
+existing client flows alive across a binary swap.
+
+**Verification:** full CI parity (fmt, clippy `-Dwarnings`, release build, 23 test
+binaries, `quic`/`full`/`ml`); installer self-test 86 checks, updater 46;
+`test_handoff_e2e.sh` (root) proves same-PID 1.4.4->1.4.5 with a live session and a
+preserved outbound source port; a real canary installed on relay-nrt (healthy,
+`current -> releases/1.4.4-canary-8bac681`, previous release retained).
+
+**Next:** re-run the final reviewer gate's findings if any; roll the handoff-capable
+build + `RuntimeDirectory` unit out to the fleet (the first rollout is a blunt restart);
+then use `collect-metrics.sh` + `analyze-mesh.sh` to inspect live per-path data and tune
+relay selection.
