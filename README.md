@@ -101,8 +101,22 @@ LightSpeed ships three packages. **You only need one**:
 
 > **Why is there both a "client" and a "gui"?** The GUI (`lightspeed-gui`) is a standalone app that already contains the client engine. Grab it for the easiest experience. The CLI (`lightspeed-client`) is for headless/power users and for macOS, where the GUI is untested. You never need to install both.
 
+### Package Managers
+
+| Platform | Command |
+|----------|---------|
+| **Windows** | `winget install ShibbityShwab.LightSpeed` (package submitted, pending review) |
+| **macOS and Linux** | `brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed && brew install ShibbityShwab/lightspeed/lightspeed` |
+| **Arch Linux** | `yay -S lightspeed-bin` (AUR, pending first publish) |
+
+### One-line Install (Linux and macOS)
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-installer.sh | sh
+```
+
 ### Pre-built Binaries
-Download from **[Releases](https://github.com/ShibbityShwab/lightspeed/releases)** - Windows, Linux, macOS.
+Download from **[Releases](https://github.com/ShibbityShwab/lightspeed/releases)** - Windows, Linux, macOS. The [website](https://shibbityshwab.github.io/lightspeed/#download) offers one-click downloads that pick the right artifact for your OS and CPU.
 
 ### Build from Source
 ```bash
