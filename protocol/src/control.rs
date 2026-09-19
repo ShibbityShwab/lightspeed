@@ -10,6 +10,7 @@
 //! Payload format: `[1 byte: message type] [type-specific fields]`
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // ── Message type tags ───────────────────────────────────────────────
@@ -113,7 +114,7 @@ pub mod disconnect_reason {
 // ── Control message enum ────────────────────────────────────────────
 
 /// A control-plane message exchanged over QUIC.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ControlMessage {
     /// Client → Proxy: latency probe.
     Ping {
@@ -135,6 +136,10 @@ pub enum ControlMessage {
         protocol_version: u8,
         /// Game being optimized (see [`game_id`]).
         game: u8,
+        /// Client's data-plane source port, or 0 when the client does not
+        /// report one. A non-zero value binds the session to that port.
+        #[serde(default)]
+        data_port: u16,
     },
 
     /// Proxy → Client: registration accepted.
@@ -207,10 +212,17 @@ impl ControlMessage {
             Self::Register {
                 protocol_version,
                 game,
+                data_port,
             } => {
                 buf.put_u8(MSG_REGISTER);
                 buf.put_u8(*protocol_version);
                 buf.put_u8(*game);
+                // The data port is a trailing extension: emit it only when the
+                // client reports one, so a client that does not keeps the
+                // original 3-byte wire form.
+                if *data_port != 0 {
+                    buf.put_u16(*data_port);
+                }
             }
             Self::RegisterAck {
                 session_id,
@@ -283,9 +295,14 @@ impl ControlMessage {
                 ensure_remaining(buf, 2)?;
                 let protocol_version = buf.get_u8();
                 let game = buf.get_u8();
+                // data_port is optional: a client that predates the extension
+                // sends no trailing bytes and defaults to 0 (principal-only
+                // binding).
+                let data_port = if buf.len() >= 2 { buf.get_u16() } else { 0 };
                 Ok(Self::Register {
                     protocol_version,
                     game,
+                    data_port,
                 })
             }
             MSG_REGISTER_ACK => {
@@ -438,10 +455,44 @@ mod tests {
         let msg = ControlMessage::Register {
             protocol_version: 1,
             game: game_id::FORTNITE,
+            data_port: 41234,
         };
         let encoded = msg.encode();
         let decoded = ControlMessage::decode(&encoded).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn test_register_legacy_wire_form_decodes_without_data_port() {
+        // A client that predates the data_port extension sends only the type,
+        // protocol version, and game id.
+        let legacy = [MSG_REGISTER, 1, game_id::CS2];
+        let decoded = ControlMessage::decode(&legacy).unwrap();
+        assert_eq!(
+            decoded,
+            ControlMessage::Register {
+                protocol_version: 1,
+                game: game_id::CS2,
+                data_port: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn test_register_zero_data_port_keeps_short_wire_form() {
+        let msg = ControlMessage::Register {
+            protocol_version: 1,
+            game: game_id::RUST,
+            data_port: 0,
+        };
+        assert_eq!(msg.encode().len(), 3, "zero data_port must stay lenient");
+
+        let msg = ControlMessage::Register {
+            protocol_version: 1,
+            game: game_id::RUST,
+            data_port: 4434,
+        };
+        assert_eq!(msg.encode().len(), 5, "non-zero data_port is appended");
     }
 
     #[test]

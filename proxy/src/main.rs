@@ -237,8 +237,16 @@ async fn main() -> anyhow::Result<()> {
         let abuse_detector = Arc::clone(&abuse_detector);
         let metrics = Arc::clone(&metrics);
         let rate_limiter = Arc::clone(&rate_limiter);
+        let authenticator = Arc::clone(&authenticator);
         tokio::spawn(async move {
-            relay::run_session_manager(engine, abuse_detector, metrics, rate_limiter).await;
+            relay::run_session_manager(
+                engine,
+                abuse_detector,
+                metrics,
+                rate_limiter,
+                authenticator,
+            )
+            .await;
         })
     };
 

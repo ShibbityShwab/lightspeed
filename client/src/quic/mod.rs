@@ -124,6 +124,7 @@ mod inner {
             let register = ControlMessage::Register {
                 protocol_version: PROTOCOL_VERSION,
                 game,
+                data_port: 0,
             };
             register
                 .write_to(&mut send)

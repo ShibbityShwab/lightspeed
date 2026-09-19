@@ -11,7 +11,7 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use lightspeed_proxy::abuse::{AbuseConfig, AbuseDetector};
 use lightspeed_proxy::auth::Authenticator;
@@ -170,10 +170,10 @@ async fn test_auth_accepts_valid_token() {
     })
     .await;
 
-    // Authorize localhost with token 42
+    // Authorize localhost with token 42 (no data port -> principal-only bind)
     {
         let mut auth = relay.authenticator.write().await;
-        auth.authorize(Ipv4Addr::LOCALHOST, 42);
+        auth.authorize(Ipv4Addr::LOCALHOST, 0, 42, Instant::now());
     }
 
     let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -213,7 +213,7 @@ async fn test_invalid_token_rejected() {
     // Authorize with token 42
     {
         let mut auth = relay.authenticator.write().await;
-        auth.authorize(Ipv4Addr::LOCALHOST, 42);
+        auth.authorize(Ipv4Addr::LOCALHOST, 0, 42, Instant::now());
     }
 
     let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();

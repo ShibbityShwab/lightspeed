@@ -621,11 +621,16 @@ async fn process_inbound_packet(
     // ── Security: Authentication check ──────────────────────────
     {
         let auth = authenticator.read().await;
-        if !auth.validate(client_addr.ip(), header.session_token) {
+        if !auth.validate(
+            *client_addr.ip(),
+            client_addr.port(),
+            header.session_token,
+            Instant::now(),
+        ) {
             debug!(
                 client = %client_addr,
                 token = header.session_token,
-                "Unauthorized: invalid IP or session token"
+                "Unauthorized: invalid principal, port, or session token"
             );
             metrics.record_drop(DropReason::Auth);
             return false;
@@ -1176,6 +1181,7 @@ pub async fn run_session_manager(
     abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
     metrics: Arc<ProxyMetrics>,
     rate_limiter: Arc<tokio::sync::Mutex<RateLimiter>>,
+    authenticator: Arc<RwLock<Authenticator>>,
 ) {
     let mut known_sessions: HashMap<SocketAddrV4, tokio::task::JoinHandle<()>> = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -1198,6 +1204,9 @@ pub async fn run_session_manager(
             abuse.cleanup();
         }
         rate_limiter.lock().await.cleanup();
+
+        // Drop auth entries past their TTL/grace deadline (see auth::sweep).
+        authenticator.write().await.sweep(Instant::now());
 
         // Remove join handles for sessions that no longer exist
         let sessions_lock = engine.sessions();

@@ -24,10 +24,15 @@ mod inner {
     use lightspeed_protocol::control::{disconnect_reason, ControlMessage};
     use lightspeed_protocol::PROTOCOL_VERSION;
 
-    use crate::auth::Authenticator;
+    use crate::auth::{Authenticator, EXPLICIT_REVOKE_GRACE, TRANSPORT_REVOKE_GRACE};
     use crate::config::ProxyConfig;
 
     // ── Types ───────────────────────────────────────────────────────
+
+    /// The data-plane token issued to a QUIC connection, shared across the
+    /// connection's streams so keepalive refresh and close-time revoke reach
+    /// the same token the Register handler issued.
+    type ConnectionToken = Arc<tokio::sync::Mutex<Option<u32>>>;
 
     /// A connected client session on the control plane.
     #[derive(Debug, Clone)]
@@ -217,14 +222,17 @@ mod inner {
         state: Arc<ControlState>,
     ) -> anyhow::Result<()> {
         let remote = conn.remote_address();
+        let issued_token: ConnectionToken = Arc::new(tokio::sync::Mutex::new(None));
 
         // Accept bidirectional streams from the client
         loop {
             match conn.accept_bi().await {
                 Ok((send, recv)) => {
                     let state = Arc::clone(&state);
+                    let issued_token = Arc::clone(&issued_token);
                     tokio::spawn(async move {
-                        if let Err(e) = handle_stream(send, recv, remote, state).await {
+                        if let Err(e) = handle_stream(send, recv, remote, state, issued_token).await
+                        {
                             debug!("Stream handler error for {}: {}", remote, e);
                         }
                     });
@@ -240,19 +248,29 @@ mod inner {
             }
         }
 
-        // Remove any session this connection registered and revoke data-plane
-        // auth. Sessions are keyed by session_id (generated during Register
-        // inside a stream handler), so clean up by matching the remote address.
-        state
-            .sessions
-            .write()
-            .await
-            .retain(|_, s| s.remote_addr != remote);
-
-        // Revoke data-plane authorization for this client's IP
-        if let Some(ipv4) = extract_ipv4(&remote) {
+        // Collect every token issued to this connection before dropping its
+        // sessions, then revoke with a reconnect grace instead of deleting, so
+        // a client that reconnects immediately is not deauthorized mid-flight.
+        let mut issued = Vec::new();
+        {
+            let mut sessions = state.sessions.write().await;
+            sessions.retain(|_, s| {
+                let keep = s.remote_addr != remote;
+                if !keep {
+                    issued.push(s.session_token);
+                }
+                keep
+            });
+        }
+        if let Some(token) = issued_token.lock().await.take() {
+            issued.push(token);
+        }
+        if !issued.is_empty() {
+            let now = Instant::now();
             let mut auth = state.authenticator.write().await;
-            auth.revoke(&ipv4);
+            for token in issued {
+                auth.revoke(token, now, TRANSPORT_REVOKE_GRACE);
+            }
         }
 
         Ok(())
@@ -264,9 +282,10 @@ mod inner {
         mut recv: quinn::RecvStream,
         remote: SocketAddr,
         state: Arc<ControlState>,
+        issued_token: ConnectionToken,
     ) -> anyhow::Result<()> {
         while let Some(msg) = ControlMessage::read_from(&mut recv).await? {
-            let response = process_message(msg, remote, &state).await;
+            let response = process_message(msg, remote, &state, &issued_token).await;
             if let Some(resp) = response {
                 resp.write_to(&mut send).await?;
             }
@@ -280,9 +299,20 @@ mod inner {
         msg: ControlMessage,
         remote: SocketAddr,
         state: &ControlState,
+        issued_token: &ConnectionToken,
     ) -> Option<ControlMessage> {
         match msg {
             ControlMessage::Ping { timestamp_us } => {
+                // A live control connection is evidence the client is still
+                // present: extend its data-plane token so it never expires.
+                let token = { *issued_token.lock().await };
+                if let Some(token) = token {
+                    state
+                        .authenticator
+                        .write()
+                        .await
+                        .refresh(token, Instant::now());
+                }
                 let now_us = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -297,6 +327,7 @@ mod inner {
             ControlMessage::Register {
                 protocol_version,
                 game,
+                data_port,
             } => {
                 if protocol_version != PROTOCOL_VERSION {
                     warn!(
@@ -332,13 +363,20 @@ mod inner {
 
                 state.sessions.write().await.insert(session_id, session);
 
-                // Authorize client's IP on the data plane
+                // Authorize this token on the data plane. The register data port
+                // pins the token when non-zero; a client that omits it keeps
+                // principal-only binding.
                 if let Some(ipv4) = extract_ipv4(&remote) {
-                    let mut auth = state.authenticator.write().await;
-                    auth.authorize(ipv4, session_token);
+                    state.authenticator.write().await.authorize(
+                        ipv4,
+                        data_port,
+                        session_token,
+                        Instant::now(),
+                    );
+                    *issued_token.lock().await = Some(session_token);
                     info!(
-                        "Registered client {} → session {} token={} (game={})",
-                        remote, session_id, session_token, game
+                        "Registered client {} → session {} token={} (game={}, data_port={})",
+                        remote, session_id, session_token, game, data_port
                     );
                 } else {
                     warn!(
@@ -358,10 +396,15 @@ mod inner {
             ControlMessage::Disconnect { reason } => {
                 info!("Client {} disconnecting (reason={})", remote, reason);
 
-                // Revoke data-plane auth
-                if let Some(ipv4) = extract_ipv4(&remote) {
-                    let mut auth = state.authenticator.write().await;
-                    auth.revoke(&ipv4);
+                // Explicit disconnect gets a short grace; abuse bans use
+                // `Authenticator::ban` for immediate removal.
+                let token = issued_token.lock().await.take();
+                if let Some(token) = token {
+                    state.authenticator.write().await.revoke(
+                        token,
+                        Instant::now(),
+                        EXPLICIT_REVOKE_GRACE,
+                    );
                 }
 
                 None

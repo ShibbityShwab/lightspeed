@@ -158,6 +158,7 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
         let register = ControlMessage::Register {
             protocol_version: PROTOCOL_VERSION,
             game: game_id::CS2,
+            data_port: 0,
         };
         register.write_to(&mut send).await?;
 
@@ -233,6 +234,7 @@ async fn test_message_roundtrip_encoding() {
         ControlMessage::Register {
             protocol_version: PROTOCOL_VERSION,
             game: game_id::FORTNITE,
+            data_port: 4434,
         },
         ControlMessage::RegisterAck {
             session_id: 999,
