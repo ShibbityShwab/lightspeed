@@ -801,6 +801,29 @@ async fn run_handoff_sequence(
         anyhow::bail!("{detail}");
     }
 
+    // (a2) Bind every check to the exact inode that will be executed. The fd
+    // stays open (FD_CLOEXEC cleared below) and both the pre-validator and the
+    // final exec address the target through /proc/self/fd/<fd>, so a path swap
+    // between hashing and exec cannot change what runs. A failure here is a
+    // refusal: never fall back to the raw path.
+    let (binary_file, verified_sha) = match handoff::open_verified_binary(&req) {
+        Ok(verified) => verified,
+        Err(e) => {
+            record_rejected("handoff request rejected", &e, Some(&req));
+            anyhow::bail!("handoff request rejected: {e}");
+        }
+    };
+    let binary_fd = binary_file.as_raw_fd();
+    let exec_path = format!("/proc/self/fd/{binary_fd}");
+    if let Err(e) = std::fs::metadata(&exec_path) {
+        record_rejected(
+            "handoff request rejected",
+            &format!("/proc/self/fd is unusable: {e}"),
+            Some(&req),
+        );
+        anyhow::bail!("cannot execute via {exec_path}: {e}");
+    }
+
     // (b) Freeze new-session creation for the millisecond snapshot window.
     engine.freeze_handoff();
 
@@ -818,10 +841,10 @@ async fn run_handoff_sequence(
 
     let manifest = handoff::HandoffManifest {
         schema_version: handoff::HANDOFF_SCHEMA_VERSION,
-        handoff_id: handoff::new_handoff_id(),
+        handoff_id: req.handoff_id.clone(),
         from_version: env!("CARGO_PKG_VERSION").to_string(),
         to_version: req.version.clone(),
-        to_sha256: req.sha256.clone(),
+        to_sha256: verified_sha.clone(),
         created_at_unix_ms: handoff::now_unix_ms(),
         data_fd: data_socket.as_raw_fd(),
         tcp_fd: None,
@@ -843,20 +866,33 @@ async fn run_handoff_sequence(
 
     let fds: Vec<std::os::fd::RawFd> = std::iter::once(manifest.data_fd)
         .chain(manifest.sessions.iter().map(|s| s.outbound_fd))
+        .chain(std::iter::once(binary_fd))
         .collect();
     if let Err(e) = stage_fds_for_exec(&fds) {
         record_failed("cannot stage fds for exec", &format!("{e:#}"), &manifest);
         anyhow::bail!("cannot stage fds for exec: {e:#}");
     }
 
-    // (e) Pre-validate the target in a child that inherits the staged fds.
-    let binary = req.binary_path.clone();
+    // (e) Pre-validate the target, through the verified fd, in a child that
+    // inherits the staged fds.
+    let validate_target = exec_path.clone();
     let validate_path = manifest_path.clone();
-    let validated = tokio::task::spawn_blocking(move || {
-        run_prevalidate(&binary, &validate_path, std::time::Duration::from_secs(3))
+    let joined = tokio::task::spawn_blocking(move || {
+        run_prevalidate(
+            &validate_target,
+            &validate_path,
+            std::time::Duration::from_secs(3),
+        )
     })
-    .await
-    .map_err(|e| anyhow::anyhow!("handoff validator task failed: {e}"))?;
+    .await;
+    let validated = match joined {
+        Ok(result) => result,
+        Err(e) => {
+            restore_cloexec(&fds);
+            record_failed("handoff validator task failed", &e.to_string(), &manifest);
+            anyhow::bail!("handoff validator task failed: {e}");
+        }
+    };
     if let Err(e) = validated {
         restore_cloexec(&fds);
         record_failed(
@@ -878,7 +914,7 @@ async fn run_handoff_sequence(
     }
 
     let argv = handoff_argv();
-    let mut command = std::process::Command::new(&req.binary_path);
+    let mut command = std::process::Command::new(&exec_path);
     if argv.len() > 1 {
         command.args(&argv[1..]);
     }
@@ -892,10 +928,11 @@ async fn run_handoff_sequence(
         &exec_error.to_string(),
         &manifest,
     );
-    Err(anyhow::anyhow!(
-        "exec {} failed: {exec_error}",
-        req.binary_path
-    ))
+    // The control plane has already been shut down, so this process can no
+    // longer serve. Exit non-zero (after the status is recorded) so systemd
+    // restarts the still-current old release instead of leaving a process with
+    // a dead control plane running.
+    std::process::exit(1);
 }
 
 /// Clear `FD_CLOEXEC` on every fd and verify it took; restore all on failure.

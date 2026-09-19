@@ -33,9 +33,18 @@ OLD_BIN="$REPO/target/debug/lightspeed-proxy"
 
 TMP="$(mktemp -d /tmp/ls-handoff-e2e.XXXXXX)"
 DPORT=15434; CPORT=15433; HPORT=18084
+RUN_DIR="/run/lightspeed"
+RUN_DIR_EXISTED=0
+if [ -e "$RUN_DIR" ]; then RUN_DIR_EXISTED=1; fi
 cleanup() {
     for p in "$HPORT" "$DPORT" "$CPORT"; do fuser -k -n udp "$p" 2>/dev/null || true; done
-    rm -rf "$TMP" /run/lightspeed
+    # Remove only the files this test writes; never blow away a pre-existing
+    # /run/lightspeed that other state may live in.
+    rm -f "$RUN_DIR/handoff-request.json" "$RUN_DIR/handoff.json" "$RUN_DIR/handoff-result.json"
+    if [ "$RUN_DIR_EXISTED" -eq 0 ]; then
+        rmdir "$RUN_DIR" 2>/dev/null || true
+    fi
+    rm -rf "$TMP"
 }
 trap cleanup EXIT
 
@@ -121,11 +130,12 @@ for _ in range(80):
     time.sleep(0.25)
 if not after: print("FAIL: version did not switch to 1.4.5"); print(open(f"{tmp}/proxy.log").read()[-2000:]); proc.kill(); sys.exit(1)
 last=(after.get("handoff") or {}).get("last") or {}
-print(f"  after exec: pid={proc.pid} version={after.get('version')} result={last.get('result')} sessions={last.get('sessions_transferred')}")
+print(f"  after exec: pid={proc.pid} version={after.get('version')} result={last.get('result')} sessions={last.get('sessions_transferred')} handoff_id={last.get('handoff_id')}")
 client.sendto(pkt(b"after",2),DATA); r2,_=client.recvfrom(2048)
 if r2[24:]!=b"after": print("FAIL: post-handoff roundtrip"); proc.kill(); sys.exit(1)
-same_pid=proc.pid==pid; same_port=seen[0][1]==seen[-1][1]
-ok = same_pid and same_port and last.get("result")=="ok" and int(last.get("sessions_transferred") or 0)>=1
+same_pid=proc.pid==pid; same_port=seen[0][1]==seen[-1][1]; same_id=last.get("handoff_id")=="e2e"
+if not same_id: print(f"FAIL: handoff_id not propagated (got {last.get('handoff_id')!r}, want 'e2e')")
+ok = same_pid and same_port and same_id and last.get("result")=="ok" and int(last.get("sessions_transferred") or 0)>=1
 print(f"  post-handoff roundtrip ok; outbound src port {seen[0][1]} -> {seen[-1][1]}")
 proc.terminate()
 try: proc.wait(timeout=5)

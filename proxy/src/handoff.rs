@@ -14,7 +14,7 @@
 //! cap and schema check, validate untrusted fds, and verify a handoff request's
 //! binary before it is ever executed.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -410,6 +410,23 @@ pub fn set_cloexec(fd: std::os::fd::RawFd) -> std::io::Result<()> {
     set_fd_flag(fd, true)
 }
 
+/// Close a raw fd that is being abandoned before adoption.
+///
+/// Only call this for a descriptor this process still owns and has not yet
+/// handed to a wrapper. Closing a descriptor already owned by a [`std::net::UdpSocket`]
+/// (or any RAII owner) would double-close it.
+#[cfg(target_os = "linux")]
+pub fn close_fd(fd: std::os::fd::RawFd) {
+    if fd < 0 {
+        return;
+    }
+    // SAFETY: `close` only releases the descriptor table entry `fd`. An invalid
+    // or already-closed descriptor returns `EBADF` without touching memory.
+    unsafe {
+        libc::close(fd);
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn set_fd_flag(fd: std::os::fd::RawFd, cloexec: bool) -> std::io::Result<()> {
     // SAFETY: `fcntl(F_GETFD)` only reads the descriptor flags of `fd` and has
@@ -526,21 +543,70 @@ pub fn adopt_std_udp(fd: std::os::fd::RawFd) -> std::io::Result<std::net::UdpSoc
     Ok(socket)
 }
 
-/// Lowercase-hex SHA-256 of the file at `path`.
-pub fn sha256_file(path: &Path) -> anyhow::Result<String> {
+/// Lowercase-hex SHA-256 of every byte read from `reader`.
+pub fn sha256_reader(mut reader: impl Read) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
 
-    let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
-        let n = file.read(&mut buf)?;
+        let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
         hasher.update(&buf[..n]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Lowercase-hex SHA-256 of the file at `path`.
+pub fn sha256_file(path: &Path) -> anyhow::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    Ok(sha256_reader(&mut file)?)
+}
+
+/// Open the requested binary and bind every check to the exact inode that will
+/// be executed, closing the hash-then-execute TOCTOU window.
+///
+/// `std::fs::File::open` opens `O_RDONLY | O_CLOEXEC`, so the returned handle
+/// owns a private descriptor. The descriptor is `fstat`-checked (regular file,
+/// not group/world writable, root-owned) and the SHA-256 is computed from the
+/// same descriptor's contents, never re-resolved by path. The caller must clear
+/// `FD_CLOEXEC` on [`std::os::fd::AsRawFd::as_raw_fd`] and execute
+/// `/proc/self/fd/<fd>` so the kernel runs the verified inode, not a path that
+/// could be swapped after the check. On any failure the returned `Err` is a
+/// refusal: callers must never fall back to executing the raw path.
+#[cfg(target_os = "linux")]
+pub fn open_verified_binary(req: &HandoffRequest) -> Result<(std::fs::File, String), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut file = std::fs::File::open(&req.binary_path)
+        .map_err(|e| format!("cannot open binary_path {}: {e}", req.binary_path))?;
+
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("binary metadata: {e}"))?;
+    if !metadata.is_file() {
+        return Err("binary_path is not a regular file".to_string());
+    }
+    if metadata.mode() & 0o022 != 0 {
+        return Err("binary is group/world writable".to_string());
+    }
+
+    let actual = sha256_reader(&mut file).map_err(|e| format!("cannot hash binary: {e}"))?;
+    if !actual.eq_ignore_ascii_case(&req.sha256) {
+        return Err(format!(
+            "sha256 mismatch: expected {}, got {actual}",
+            req.sha256
+        ));
+    }
+    if metadata.uid() != 0 {
+        return Err("binary is not root-owned".to_string());
+    }
+
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("cannot rewind verified binary: {e}"))?;
+    Ok((file, actual))
 }
 
 /// Validate an untrusted [`HandoffRequest`] before acting on it.
@@ -652,12 +718,28 @@ pub fn check_adoption_identity(
 /// Validate the data fd and every carried session's outbound fd.
 ///
 /// The adopting process runs this before taking ownership of any fd, so a
-/// manifest that names a regular file, a closed fd, or a non-UDP socket is
-/// refused without partial adoption.
+/// manifest that names a regular file, a closed fd, a non-UDP socket, or the
+/// same fd twice is refused without partial adoption. A duplicate fd would be
+/// adopted as two owners and double-closed.
 #[cfg(target_os = "linux")]
 pub fn validate_manifest_fds(manifest: &HandoffManifest) -> Result<(), String> {
+    use std::collections::HashSet;
+
+    let mut seen: HashSet<std::os::fd::RawFd> = HashSet::with_capacity(1 + manifest.sessions.len());
+    if !seen.insert(manifest.data_fd) {
+        return Err(format!(
+            "duplicate fd {} in handoff manifest",
+            manifest.data_fd
+        ));
+    }
     validate_udp_fd(manifest.data_fd).map_err(|e| format!("data_fd {}: {e}", manifest.data_fd))?;
     for snap in &manifest.sessions {
+        if !seen.insert(snap.outbound_fd) {
+            return Err(format!(
+                "duplicate fd {} in handoff manifest (outbound_fd for client {})",
+                snap.outbound_fd, snap.client_addr
+            ));
+        }
         validate_udp_fd(snap.outbound_fd).map_err(|e| {
             format!(
                 "outbound_fd {} for client {}: {e}",
@@ -722,6 +804,22 @@ mod tests {
                 bound_port: 40000,
                 ttl_ms_remaining: 120_000,
             }],
+        }
+    }
+
+    fn sample_session(outbound_fd: i32, client_addr: &str) -> SessionSnapshot {
+        SessionSnapshot {
+            client_addr: client_addr.to_string(),
+            game_server: "198.51.100.9:27015".to_string(),
+            outbound_fd,
+            fec_enabled: false,
+            fec_k: 4,
+            age_us: 1,
+            idle_us: 1,
+            response_seq: 0,
+            last_client_seq: 0,
+            packets_relayed: 0,
+            bytes_relayed: 0,
         }
     }
 
@@ -881,6 +979,78 @@ mod tests {
             sha256_file(&path).unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn close_fd_releases_a_descriptor_without_affecting_others() {
+        close_fd(-1);
+
+        let mut fds = [0 as libc::c_int; 2];
+        // SAFETY: `pipe` writes two valid descriptors into the array.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (read_end, write_end) = (fds[0], fds[1]);
+
+        close_fd(write_end);
+
+        let mut buf = [0u8; 1];
+        // SAFETY: `read_end` is a live descriptor and `buf` has capacity 1.
+        let n = unsafe { libc::read(read_end, buf.as_mut_ptr() as *mut libc::c_void, 1) };
+        assert_eq!(n, 0, "closing the write end makes the read end report EOF");
+        // SAFETY: `read_end` is still owned by this test.
+        unsafe { libc::close(read_end) };
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn open_verified_binary_binds_its_checks_to_the_opened_fd() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("verify-bin");
+        let path = dir.join("lightspeed-proxy");
+        std::fs::write(&path, b"#!/bin/true\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let mut request = sample_request();
+        request.binary_path = path.to_string_lossy().into_owned();
+
+        let err = open_verified_binary(&request).unwrap_err();
+        assert!(err.contains("sha256"), "unexpected error: {err}");
+
+        if unsafe { libc::geteuid() } != 0 {
+            request.sha256 = sha256_file(&path).unwrap();
+            let err = open_verified_binary(&request).unwrap_err();
+            assert!(err.contains("root-owned"), "unexpected error: {err}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn validate_manifest_fds_rejects_duplicate_fds() {
+        use std::os::fd::AsRawFd;
+
+        let data = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let out_a = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let out_b = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let data_fd = data.as_raw_fd();
+        let a_fd = out_a.as_raw_fd();
+        let b_fd = out_b.as_raw_fd();
+
+        let mut manifest = sample_manifest(HANDOFF_SCHEMA_VERSION);
+        manifest.data_fd = data_fd;
+        manifest.sessions = vec![
+            sample_session(a_fd, "203.0.113.5:40000"),
+            sample_session(b_fd, "203.0.113.6:40001"),
+        ];
+        assert!(validate_manifest_fds(&manifest).is_ok());
+
+        manifest.sessions[1].outbound_fd = a_fd;
+        let err = validate_manifest_fds(&manifest).unwrap_err();
+        assert!(err.contains("duplicate"), "unexpected error: {err}");
+
+        manifest.sessions[1].outbound_fd = data_fd;
+        let err = validate_manifest_fds(&manifest).unwrap_err();
+        assert!(err.contains("duplicate"), "unexpected error: {err}");
     }
 
     /// Serializes env-var mutation across parallel tests.

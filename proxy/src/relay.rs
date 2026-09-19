@@ -372,6 +372,16 @@ impl RelayEngine {
         });
 
         let mut sessions = self.sessions.write().await;
+        // Re-check the freeze under the write lock: a request that passed the
+        // earlier check but stalled must not insert a session after the handoff
+        // snapshot was taken. Re-check for a concurrent creator so this insert
+        // cannot clobber an existing session.
+        if self.is_handoff_frozen() {
+            anyhow::bail!("handoff in progress: refusing to create a new session");
+        }
+        if let Some(existing) = sessions.get(&client_addr) {
+            return Ok((Arc::clone(existing), false));
+        }
         sessions.insert(client_addr, Arc::clone(&session));
 
         Ok((session, true))
@@ -504,6 +514,7 @@ impl RelayEngine {
                         client = %snap.client_addr,
                         "Skipping handoff session with unparseable client_addr"
                     );
+                    crate::handoff::close_fd(snap.outbound_fd);
                     continue;
                 }
             };
@@ -514,6 +525,7 @@ impl RelayEngine {
                         client = %snap.client_addr,
                         "Skipping handoff session with unparseable game_server"
                     );
+                    crate::handoff::close_fd(snap.outbound_fd);
                     continue;
                 }
             };
@@ -525,6 +537,8 @@ impl RelayEngine {
                         client = %client_addr,
                         "Handoff session address already active, skipping"
                     );
+                    drop(sessions);
+                    crate::handoff::close_fd(snap.outbound_fd);
                     continue;
                 }
             }
@@ -1575,6 +1589,23 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn test_snapshot(client_addr: &str, game_server: &str, outbound_fd: i32) -> SessionSnapshot {
+        SessionSnapshot {
+            client_addr: client_addr.to_string(),
+            game_server: game_server.to_string(),
+            outbound_fd,
+            fec_enabled: false,
+            fec_k: 4,
+            age_us: 1,
+            idle_us: 1,
+            response_seq: 0,
+            last_client_seq: 0,
+            packets_relayed: 0,
+            bytes_relayed: 0,
+        }
+    }
+
     #[tokio::test]
     async fn test_relay_engine_session_lifecycle() {
         let engine = RelayEngine::new(10);
@@ -1935,5 +1966,46 @@ mod tests {
                 .unwrap();
 
         assert!(snapshots.is_empty(), "TCP sessions must be skipped");
+    }
+
+    /// A snapshot that is skipped before adoption (here: an unparseable client
+    /// address) must have its outbound fd closed rather than leaked. A private
+    /// pipe is used as the fd so the close is observable through EPIPE.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn install_handoff_sessions_closes_outbound_fd_for_skipped_snapshot() {
+        let mut pipe_fds = [0 as libc::c_int; 2];
+        // SAFETY: `pipe` writes two valid descriptors into the array.
+        assert_eq!(unsafe { libc::pipe(pipe_fds.as_mut_ptr()) }, 0);
+        let (read_end, write_end) = (pipe_fds[0], pipe_fds[1]);
+
+        let engine = RelayEngine::new(10);
+        let data_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let metrics = Arc::new(ProxyMetrics::new());
+        let snaps = vec![test_snapshot(
+            "not-an-address",
+            "198.51.100.9:27015",
+            read_end,
+        )];
+
+        let installed = engine
+            .install_handoff_sessions(&snaps, data_socket, metrics)
+            .await;
+        assert_eq!(installed, 0);
+        assert_eq!(engine.active_sessions().await, 0);
+
+        // The read end was closed, so the write end has no reader: EPIPE.
+        let byte = [0u8; 1];
+        // SAFETY: `write_end` is a live pipe descriptor and `byte` has length 1.
+        let rc =
+            unsafe { libc::write(write_end, byte.as_ptr() as *const libc::c_void, byte.len()) };
+        let write_errno = std::io::Error::last_os_error();
+        assert_eq!(
+            rc, -1,
+            "a skipped snapshot's outbound fd must be closed, not leaked"
+        );
+        assert_eq!(write_errno.raw_os_error(), Some(libc::EPIPE));
+        // SAFETY: `write_end` is still owned by this test.
+        unsafe { libc::close(write_end) };
     }
 }
