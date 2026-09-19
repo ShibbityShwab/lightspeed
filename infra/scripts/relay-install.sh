@@ -19,7 +19,11 @@
 #
 # Usage:
 #   relay-install.sh --binary /tmp/lightspeed-proxy.staged --version <ver>
-#                    [--handoff | --no-handoff]
+#                    [--handoff | --no-handoff] [--force]
+#
+# A same-version install is a no-op: when `current` already points at a
+# release whose label equals <ver>, the installer logs and exits 0 without
+# touching the layout. Pass --force to reinstall anyway.
 #
 # Activation mode (default: auto):
 #   auto         in-place handoff when /health reports handoff.supported=true,
@@ -90,12 +94,14 @@ fail() { printf 'relay-install: ERROR: %s\n' "$*" >&2; }
 BINARY_PATH=""
 VERSION=""
 HANDOFF_MODE="auto"
+FORCE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --binary)     BINARY_PATH="${2:-}"; shift 2 ;;
         --version)    VERSION="${2:-}"; shift 2 ;;
         --handoff)    HANDOFF_MODE="handoff"; shift ;;
         --no-handoff) HANDOFF_MODE="restart"; shift ;;
+        --force)      FORCE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown argument: $1"; usage >&2; exit 2 ;;
     esac
@@ -174,6 +180,12 @@ active_release() {
     if [ -n "$target" ] && [ -d "$target" ]; then
         printf '%s' "$target"
     fi
+}
+
+# Active release's version label (its directory name), or empty when there is
+# no active `current` (first install or a legacy layout).
+running_version() {
+    basename "$(active_release)"
 }
 
 # Atomically repoint `current`; returns non-zero if the target is missing.
@@ -519,6 +531,13 @@ prune_releases() {
 
 # ── Main flow ────────────────────────────────────────────────
 PREV_RELEASE="$(active_release)"
+
+# Same-version no-op: `current` already names the target. Empty on a first
+# install, so this never fires there. --force bypasses it.
+if [ "$FORCE" -eq 0 ] && [ "$(running_version)" = "$VERSION" ]; then
+    log "already at $VERSION; nothing to do (pass --force to reinstall)"
+    exit 0
+fi
 
 printf 'relay-install: version=%s binary=%s\n' "$VERSION" "$BINARY_PATH"
 

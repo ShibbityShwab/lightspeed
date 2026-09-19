@@ -15,9 +15,10 @@
 #   (d) running the same install twice is idempotent
 #   (e) a release whose --check fails is never activated and never left behind
 #   (f) a non-ELF staged file is rejected before any layout change
-#   (g) a same-version reinstall whose --check fails leaves the active binary
-#       byte-identical and exits non-zero
-#   (h) a same-version reinstall whose --check passes replaces the binary
+#   (g) a same-version reinstall (with --force) whose --check fails leaves the
+#       active binary byte-identical and exits non-zero
+#   (h) a same-version reinstall (with --force) whose --check passes replaces
+#       the binary
 #   (i) no `.staged.*` temp files remain after either path
 #   (j) a supported handoff writes the request, sends SIGUSR2, soaks the new
 #       version, and only then repoints `current` and prunes
@@ -25,9 +26,13 @@
 #   (l) a handoff that never happens leaves `current` on the old release and
 #       exits non-zero without a restart (zero downtime)
 #   (m) a handoff that comes up then fails the soak rolls back and restarts
-#   (n) a same-version install never hands off (the proxy refuses it)
+#   (n) a same-version install (with --force) never hands off (the proxy
+#       refuses it)
 #   (o) --no-handoff forces the restart path even when handoff is available
 #   (p) --handoff refuses to signal a proxy that does not advertise support
+#   (q) a same-version install without --force is a clean no-op: exits 0,
+#       restarts nothing, writes no handoff request, and touches no bytes
+#   (r) --force reinstalls the same version through the normal activation path
 #
 # Usage: bash infra/scripts/test_relay_install.sh
 # Exits 0 and prints "relay-install: all assertions passed" on success.
@@ -384,7 +389,7 @@ cp "$ACTIVE_BIN_G" "$TMP/active-before-g"
 STAGED_G="$TMP/staged-g"
 make_binary_marked "$STAGED_G" 1 "g marker: check fails"
 assert_diff_bytes "$TMP/active-before-g" "$STAGED_G" "(g) staged binary differs from active"
-if run_install "v1" "$STAGED_G"; then rc=0; else rc=$?; fi
+if run_install "v1" "$STAGED_G" --force; then rc=0; else rc=$?; fi
 assert_rc_nonzero "$rc" "(g) same-version failed --check exits non-zero"
 assert_same_bytes "$TMP/active-before-g" "$ACTIVE_BIN_G" \
     "(g) active binary is byte-identical after failed same-version reinstall"
@@ -401,7 +406,7 @@ ACTIVE_BIN_H="$ROOT/releases/v1/lightspeed-proxy"
 cp "$ACTIVE_BIN_H" "$TMP/active-before-h"
 STAGED_H="$TMP/staged-h"
 make_binary_marked "$STAGED_H" 0 "h marker: check passes"
-if run_install "v1" "$STAGED_H"; then rc=0; else rc=$?; fi
+if run_install "v1" "$STAGED_H" --force; then rc=0; else rc=$?; fi
 assert_rc_zero "$rc" "(h) same-version passing --check exits 0"
 assert_diff_bytes "$TMP/active-before-h" "$ACTIVE_BIN_H" \
     "(h) active binary was replaced by the same-version reinstall"
@@ -519,7 +524,7 @@ printf 'OLD\n' > "$FIXTURE/curl_script"
 STAGED_N="$TMP/staged-n"
 make_binary_marked "$STAGED_N" 0 "n marker: same version"
 SOAK_SECS=0
-if run_install "1.4.4" "$STAGED_N"; then rc=0; else rc=$?; fi
+if run_install "1.4.4" "$STAGED_N" --force; then rc=0; else rc=$?; fi
 assert_rc_zero "$rc" "(n) same-version install exits 0"
 assert_not_grep "$FIXTURE/systemctl.log" "SIGUSR2" "(n) same version sends no SIGUSR2"
 if [ -e "$HANDOFF_REQ" ]; then
@@ -564,6 +569,56 @@ assert_not_grep "$FIXTURE/systemctl.log" "SIGUSR2" \
     "(p) --handoff sends no SIGUSR2 to an unsupported proxy"
 assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.3" \
     "(p) --handoff leaves current untouched when it cannot proceed"
+
+# ── (q) same-version install is a clean no-op ────────────────
+reset_fixture
+seed_release "1.5.0" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.5.0" "$ROOT/current"
+printf '1.5.0\n' > "$FIXTURE/old_version"
+ACTIVE_BIN_Q="$ROOT/releases/1.5.0/lightspeed-proxy"
+cp "$ACTIVE_BIN_Q" "$TMP/active-before-q"
+STAGED_Q="$TMP/staged-q"
+make_binary_marked "$STAGED_Q" 0 "q marker: same-version no-op"
+if run_install "1.5.0" "$STAGED_Q"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(q) same-version install exits 0"
+assert_same_bytes "$TMP/active-before-q" "$ACTIVE_BIN_Q" \
+    "(q) active binary untouched by the no-op"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.5.0" \
+    "(q) current unchanged by the no-op"
+assert_not_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" \
+    "(q) no systemd restart on the no-op"
+assert_not_grep "$FIXTURE/systemctl.log" "daemon-reload" \
+    "(q) no daemon-reload on the no-op"
+assert_not_grep "$FIXTURE/systemctl.log" "SIGUSR2" \
+    "(q) no handoff signal on the no-op"
+if [ -e "$HANDOFF_REQ" ]; then
+    note_fail "(q) no-op wrote a handoff request"
+else
+    note_pass
+fi
+assert_grep "$OUT" "already at 1.5.0; nothing to do" "(q) no-op is reported"
+assert_no_staged "(q) no staged temp file remains"
+
+# ── (r) --force reinstalls the same version through activation ──
+reset_fixture
+seed_release "1.5.0" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.5.0" "$ROOT/current"
+ACTIVE_BIN_R="$ROOT/releases/1.5.0/lightspeed-proxy"
+cp "$ACTIVE_BIN_R" "$TMP/active-before-r"
+STAGED_R="$TMP/staged-r"
+make_binary_marked "$STAGED_R" 0 "r marker: forced same-version reinstall"
+SOAK_SECS=0
+if run_install "1.5.0" "$STAGED_R" --force; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(r) --force same-version install exits 0"
+assert_diff_bytes "$TMP/active-before-r" "$ACTIVE_BIN_R" \
+    "(r) --force replaced the active binary"
+assert_same_bytes "$STAGED_R" "$ACTIVE_BIN_R" \
+    "(r) active binary matches the forced staged binary"
+assert_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" \
+    "(r) --force proceeds through the restart activation"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.5.0" \
+    "(r) current still on the release"
+assert_no_staged "(r) no staged temp file remains"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
