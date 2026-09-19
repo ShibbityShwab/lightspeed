@@ -21,9 +21,10 @@ if [ ! -f "$changelog" ]; then
   exit 2
 fi
 
-awk -v ver="$version" '
-  BEGIN { pat = "^## \\[" ver "\\]" }
-  $0 ~ pat { found = 1 }
-  found && /^## \[/ && $0 !~ pat { exit }
+# Match the heading by literal string prefix (index), not a regex, so a version
+# containing regex metacharacters (the dots in 1.5.0) is matched exactly.
+awk -v pat="## [$version]" '
+  index($0, pat) == 1 { found = 1 }
+  found && /^## \[/ && index($0, pat) != 1 { exit }
   found { print }
 ' "$changelog"
