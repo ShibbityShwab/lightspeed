@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodically self-update the LightSpeed proxy
+Documentation=https://github.com/ShibbityShwab/lightspeed
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10m
+Persistent=true
+Unit=lightspeed-update.service
+
+[Install]
+WantedBy=timers.target

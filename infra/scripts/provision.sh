@@ -32,6 +32,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes"
 RELAY_INSTALLER="$SCRIPT_DIR/relay-install.sh"
+UPDATER="$SCRIPT_DIR/relay-updater.sh"
+SYSTEMD_DIR="$SCRIPT_DIR/../systemd"
 
 if [ -n "${LIGHTSPEED_VERSION:-}" ]; then
     RELEASE_VERSION="$LIGHTSPEED_VERSION"
@@ -90,7 +92,26 @@ install_first_release() {
     scp $SSH_OPTS -i "$SSH_KEY" "$binary" "root@$ip:/tmp/lightspeed-proxy.staged" || return 1
     scp $SSH_OPTS -i "$SSH_KEY" "$RELAY_INSTALLER" "root@$ip:/tmp/lightspeed-relay-install.sh" || return 1
     ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip" \
-        "bash /tmp/lightspeed-relay-install.sh --binary /tmp/lightspeed-proxy.staged --version '$RELEASE_VERSION'"
+        "bash /tmp/lightspeed-relay-install.sh --binary /tmp/lightspeed-proxy.staged --version '$RELEASE_VERSION'" || return 1
+
+    # Install the self-updater and enable its timer once a release is live.
+    if [ ! -f "$UPDATER" ] || [ ! -f "$SYSTEMD_DIR/lightspeed-update.service" ] \
+        || [ ! -f "$SYSTEMD_DIR/lightspeed-update.timer" ]; then
+        echo "  Updater/unit files missing; self-update timer not installed."
+        return 0
+    fi
+    scp $SSH_OPTS -i "$SSH_KEY" "$UPDATER" "root@$ip:/tmp/lightspeed-relay-updater.sh" || return 1
+    scp $SSH_OPTS -i "$SSH_KEY" "$SYSTEMD_DIR/lightspeed-update.service" "root@$ip:/tmp/lightspeed-update.service" || return 1
+    scp $SSH_OPTS -i "$SSH_KEY" "$SYSTEMD_DIR/lightspeed-update.timer" "root@$ip:/tmp/lightspeed-update.timer" || return 1
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip" \
+        "install -d /usr/local/lib/lightspeed && \
+         install -m 0755 /tmp/lightspeed-relay-install.sh /usr/local/lib/lightspeed/relay-install.sh && \
+         install -m 0755 /tmp/lightspeed-relay-updater.sh /usr/local/lib/lightspeed/relay-updater.sh && \
+         install -m 0644 /tmp/lightspeed-update.service /etc/systemd/system/lightspeed-update.service && \
+         install -m 0644 /tmp/lightspeed-update.timer /etc/systemd/system/lightspeed-update.timer && \
+         systemctl daemon-reload && \
+         systemctl enable --now lightspeed-update.timer" || return 1
+    echo "  Self-update timer enabled."
 }
 
 # ── Deploy script (runs on new instance via startup script) ──

@@ -52,6 +52,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BINARY="$PROJECT_ROOT/target/release/lightspeed-proxy"
 RELAY_INSTALLER="$SCRIPT_DIR/relay-install.sh"
+UPDATER="$SCRIPT_DIR/relay-updater.sh"
+SYSTEMD_DIR="$SCRIPT_DIR/../systemd"
 
 if [ -n "${LIGHTSPEED_VERSION:-}" ]; then
     RELEASE_VERSION="$LIGHTSPEED_VERSION"
@@ -99,13 +101,24 @@ fi
 echo "  SSH OK"
 
 # ── Step 3: Upload binary ────────────────────────────────────
-echo -e "\n${CYAN}[3/6] Uploading binary and installer...${NC}"
+echo -e "\n${CYAN}[3/6] Uploading binary, installer, and updater...${NC}"
 if [ ! -f "$RELAY_INSTALLER" ]; then
     echo -e "${RED}Relay installer not found at $RELAY_INSTALLER${NC}"
     exit 1
 fi
+if [ ! -f "$UPDATER" ]; then
+    echo -e "${RED}Relay updater not found at $UPDATER${NC}"
+    exit 1
+fi
+if [ ! -f "$SYSTEMD_DIR/lightspeed-update.service" ] || [ ! -f "$SYSTEMD_DIR/lightspeed-update.timer" ]; then
+    echo -e "${RED}Update units not found under $SYSTEMD_DIR${NC}"
+    exit 1
+fi
 scp $SSH_OPTS -i "$SSH_KEY" "$BINARY" "$SSH_USER@$NODE_IP:/tmp/lightspeed-proxy.staged"
 scp $SSH_OPTS -i "$SSH_KEY" "$RELAY_INSTALLER" "$SSH_USER@$NODE_IP:/tmp/lightspeed-relay-install.sh"
+scp $SSH_OPTS -i "$SSH_KEY" "$UPDATER" "$SSH_USER@$NODE_IP:/tmp/lightspeed-relay-updater.sh"
+scp $SSH_OPTS -i "$SSH_KEY" "$SYSTEMD_DIR/lightspeed-update.service" "$SSH_USER@$NODE_IP:/tmp/lightspeed-update.service"
+scp $SSH_OPTS -i "$SSH_KEY" "$SYSTEMD_DIR/lightspeed-update.timer" "$SSH_USER@$NODE_IP:/tmp/lightspeed-update.timer"
 echo "  Uploaded"
 
 # ── Step 4: Configure node ───────────────────────────────────
@@ -187,6 +200,18 @@ systemctl daemon-reload
 systemctl enable lightspeed-proxy
 
 bash /tmp/lightspeed-relay-install.sh --binary /tmp/lightspeed-proxy.staged --version "$RELEASE_VERSION"
+
+# Install the self-updater and its systemd unit+timer. relay-updater.sh
+# resolves relay-install.sh from its own directory, and the unit's
+# ConditionPathExists guards mean the timer only fires once a release is live.
+install -d /usr/local/lib/lightspeed
+install -m 0755 /tmp/lightspeed-relay-install.sh /usr/local/lib/lightspeed/relay-install.sh
+install -m 0755 /tmp/lightspeed-relay-updater.sh /usr/local/lib/lightspeed/relay-updater.sh
+install -m 0644 /tmp/lightspeed-update.service /etc/systemd/system/lightspeed-update.service
+install -m 0644 /tmp/lightspeed-update.timer /etc/systemd/system/lightspeed-update.timer
+systemctl daemon-reload
+systemctl enable --now lightspeed-update.timer
+echo "Self-update timer enabled"
 
 echo "Service installed and activated"
 REMOTE
