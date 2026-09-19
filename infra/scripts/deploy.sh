@@ -14,8 +14,8 @@
 #   ./deploy.sh --build-only       # Just compile, don't deploy
 #
 # Environment:
-#   LIGHTSPEED_VERSION   Override the release version (default: UTC
-#                        timestamp + short git SHA, unique per deploy).
+#   LIGHTSPEED_VERSION   Override the release version (default: the built
+#                        binary's own version; an override must equal it).
 #
 # Prerequisites:
 #   - SSH key at ~/.ssh/lightspeed_deploy (or set DEPLOY_SSH_KEY)
@@ -120,10 +120,19 @@ if [ "$BUILD_ONLY" = true ]; then
 fi
 
 # ── Step 2: Release version ──────────────────────────────────
-if [ -n "${LIGHTSPEED_VERSION:-}" ]; then
-    VERSION="$LIGHTSPEED_VERSION"
-else
-    VERSION="$(date -u +%Y%m%dT%H%M%SZ)-$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || printf 'nogit')"
+# The label must equal the binary's own version: the in-place handoff checks
+# that the requested version matches the new binary's compiled version, and a
+# mismatch makes the handoff refuse it. Deriving the label from the binary also
+# lets a redeploy of the same version no-op instead of reinstalling.
+BINARY_VERSION="$("$BINARY_PATH" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*' | head -1 || true)"
+if [ -n "${LIGHTSPEED_VERSION:-}" ] && [ "$LIGHTSPEED_VERSION" != "$BINARY_VERSION" ]; then
+    echo -e "${RED}❌ LIGHTSPEED_VERSION '$LIGHTSPEED_VERSION' must equal the binary version '$BINARY_VERSION' for in-place handoff${NC}" >&2
+    exit 1
+fi
+VERSION="${LIGHTSPEED_VERSION:-$BINARY_VERSION}"
+if [ -z "$VERSION" ]; then
+    echo -e "${RED}❌ Could not determine the release version from $BINARY_PATH${NC}" >&2
+    exit 1
 fi
 
 case "$VERSION" in
