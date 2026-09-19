@@ -15,6 +15,7 @@
 use lightspeed_proxy::abuse;
 use lightspeed_proxy::auth;
 use lightspeed_proxy::config;
+use lightspeed_proxy::handoff;
 use lightspeed_proxy::health;
 use lightspeed_proxy::metrics;
 use lightspeed_proxy::notify;
@@ -24,6 +25,12 @@ use lightspeed_proxy::relay;
 #[cfg(feature = "quic")]
 use lightspeed_proxy::control;
 
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use clap::Parser;
@@ -67,6 +74,14 @@ struct Cli {
     /// Developer mode: skip destination IP validation.
     #[arg(long, default_value_t = false)]
     dev: bool,
+
+    /// Print the handoff manifest schema version and exit.
+    #[arg(long, default_value_t = false)]
+    handoff_schema: bool,
+
+    /// Validate a handoff manifest (schema, self version/sha, fds) and exit.
+    #[arg(long, value_name = "MANIFEST_PATH")]
+    handoff_validate: Option<String>,
 }
 
 /// Maximum time to wait for the control plane to announce shutdown.
@@ -105,9 +120,40 @@ fn bind_all(data: &str, control: &str, health: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Validate a handoff manifest without binding or serving: schema, that the
+/// manifest targets this exact binary (version + sha256), and every fd.
+fn run_handoff_validate(manifest_path: &str) -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let manifest = handoff::read_manifest(std::path::Path::new(manifest_path))?;
+        let self_sha = handoff::sha256_file(std::path::Path::new("/proc/self/exe"))?;
+        handoff::check_adoption_identity(&manifest, env!("CARGO_PKG_VERSION"), &self_sha)
+            .map_err(|e| anyhow::anyhow!("adoption identity check failed: {e}"))?;
+        handoff::validate_manifest_fds(&manifest)
+            .map_err(|e| anyhow::anyhow!("fd validation failed: {e}"))?;
+        println!("handoff manifest {manifest_path} is valid");
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = manifest_path;
+        anyhow::bail!("handoff validation is only supported on Linux")
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Handoff-only modes are side-effect free: they print or validate and exit
+    // before any logging or binding, so they never serve.
+    if cli.handoff_schema {
+        println!("{}", handoff::HANDOFF_SCHEMA_VERSION);
+        return Ok(());
+    }
+    if let Some(manifest_path) = cli.handoff_validate.as_deref() {
+        return run_handoff_validate(manifest_path);
+    }
 
     // ── --check / --bind-check mode ─────────────────────────────
     if cli.check || cli.bind_check {
@@ -240,11 +286,6 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Initialize shared state
-    let authenticator = Arc::new(RwLock::new(auth::Authenticator::new(
-        config.security.require_auth,
-    )));
-
     let abuse_config = abuse::AbuseConfig {
         dev_mode: cli.dev,
         max_amplification_ratio: config.security.max_amplification_ratio,
@@ -266,16 +307,34 @@ async fn main() -> anyhow::Result<()> {
         config.rate_limit.clone(),
     )));
     let metrics = Arc::new(metrics::ProxyMetrics::new());
-    let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
+    #[cfg(target_os = "linux")]
+    let proxy_started_at_unix_ms = handoff::now_unix_ms();
 
-    // Bind every serving plane before spawning any task, so a bind failure
-    // aborts startup instead of leaving a half-started service that has
-    // already announced readiness to systemd.
-    let data_socket = Arc::new(
-        UdpSocket::bind(&data_bind)
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to bind data plane on {data_bind}: {e}"))?,
-    );
+    // Data plane, auth table, and engine: adopt them from a handoff manifest
+    // when the environment requests it, otherwise start fresh and bind the data
+    // socket. Adoption is env-only so a plain systemd restart never adopts.
+    let (authenticator, engine, data_socket) = match handoff::manifest_path_from_env() {
+        Some(path) => {
+            info!("Adopting in-place handoff from {}", path.display());
+            adopt_handoff(&path, &config, &metrics).await.map_err(|e| {
+                anyhow::anyhow!("handoff adoption from {} failed: {e:#}", path.display())
+            })?
+        }
+        None => {
+            let authenticator = Arc::new(RwLock::new(auth::Authenticator::new(
+                config.security.require_auth,
+            )));
+            let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
+            // Bind every serving plane before spawning any task, so a bind
+            // failure aborts startup instead of leaving a half-started service
+            // that has already announced readiness to systemd.
+            let data_socket =
+                Arc::new(UdpSocket::bind(&data_bind).await.map_err(|e| {
+                    anyhow::anyhow!("failed to bind data plane on {data_bind}: {e}")
+                })?);
+            (authenticator, engine, data_socket)
+        }
+    };
     info!("Data plane socket bound to {}", data_socket.local_addr()?);
 
     #[cfg(feature = "quic")]
@@ -376,7 +435,7 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "quic")]
     let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::watch::channel(false);
     #[cfg(feature = "quic")]
-    let mut control_handle = tokio::spawn(control_server.run(control_shutdown_rx));
+    let mut control_handle = Some(tokio::spawn(control_server.run(control_shutdown_rx)));
 
     #[cfg(not(feature = "quic"))]
     info!("QUIC control plane disabled (compile with --features quic)");
@@ -467,8 +526,50 @@ async fn main() -> anyhow::Result<()> {
 
     info!("⚡ LightSpeed Proxy running — press Ctrl+C to stop");
 
-    // Wait for shutdown signal
-    wait_for_shutdown_signal().await?;
+    #[cfg(unix)]
+    let mut sigusr2 =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined2())?;
+
+    // Wait for a shutdown signal, or attempt an in-place handoff on SIGUSR2.
+    // A handoff that does not exec leaves this process serving and waits again.
+    loop {
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                result = wait_for_shutdown_signal() => {
+                    result?;
+                    break;
+                }
+                _ = sigusr2.recv() => {
+                    info!("SIGUSR2 received: attempting in-place handoff");
+                    #[cfg(target_os = "linux")]
+                    {
+                        attempt_handoff(
+                            &engine,
+                            &authenticator,
+                            &data_socket,
+                            proxy_started_at_unix_ms,
+                            #[cfg(feature = "quic")]
+                            &control_shutdown_tx,
+                            #[cfg(feature = "quic")]
+                            &mut control_handle,
+                        )
+                        .await;
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        attempt_handoff_unsupported().await;
+                    }
+                    info!("Handoff attempt finished; proxy continues to serve");
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            wait_for_shutdown_signal().await?;
+            break;
+        }
+    }
     info!("⚡ Shutdown signal received");
 
     // Tell systemd we are shutting down before any task is aborted.
@@ -492,20 +593,404 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Bounded wait for the control plane to announce shutdown and close its
-    // endpoint. A hung client must not be able to hang the whole shutdown.
+    // endpoint. A hung client must not be able to hang the whole shutdown. A
+    // handoff attempt may already have consumed and stopped it.
     #[cfg(feature = "quic")]
-    match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut control_handle).await {
-        Ok(Ok(())) => info!("Control plane announced shutdown and closed"),
-        Ok(Err(e)) => tracing::warn!("Control plane task failed during shutdown: {}", e),
-        Err(_) => {
-            tracing::warn!(
-                "Control plane shutdown exceeded {:?}; aborting",
-                SHUTDOWN_TIMEOUT
-            );
-            control_handle.abort();
+    if let Some(mut handle) = control_handle.take() {
+        match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut handle).await {
+            Ok(Ok(())) => info!("Control plane announced shutdown and closed"),
+            Ok(Err(e)) => tracing::warn!("Control plane task failed during shutdown: {}", e),
+            Err(_) => {
+                tracing::warn!(
+                    "Control plane shutdown exceeded {:?}; aborting",
+                    SHUTDOWN_TIMEOUT
+                );
+                handle.abort();
+            }
         }
     }
 
     info!("⚡ LightSpeed Proxy shut down cleanly");
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  In-place handoff
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Adopt a manifest from the previous process instead of binding the data fd.
+///
+/// The manifest is fully validated (schema, that it targets this exact binary,
+/// and every fd) before anything is taken over, so a failure returns an error
+/// and exits non-zero without partial serving.
+#[cfg(target_os = "linux")]
+async fn adopt_handoff(
+    manifest_path: &std::path::Path,
+    config: &config::ProxyConfig,
+    metrics: &Arc<metrics::ProxyMetrics>,
+) -> anyhow::Result<(
+    Arc<RwLock<auth::Authenticator>>,
+    Arc<relay::RelayEngine>,
+    Arc<UdpSocket>,
+)> {
+    let manifest = handoff::read_manifest(manifest_path)?;
+    let self_sha = handoff::sha256_file(std::path::Path::new("/proc/self/exe"))?;
+    handoff::check_adoption_identity(&manifest, env!("CARGO_PKG_VERSION"), &self_sha)
+        .map_err(|e| anyhow::anyhow!("adoption identity check failed: {e}"))?;
+    handoff::validate_manifest_fds(&manifest)
+        .map_err(|e| anyhow::anyhow!("adopted fd validation failed: {e}"))?;
+
+    let data_socket = Arc::new(UdpSocket::from_std(handoff::adopt_std_udp(
+        manifest.data_fd,
+    )?)?);
+
+    let authenticator = Arc::new(RwLock::new(auth::Authenticator::new(
+        config.security.require_auth,
+    )));
+    authenticator
+        .write()
+        .await
+        .restore(&manifest.auth, std::time::Instant::now());
+
+    let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
+    let installed = engine
+        .install_handoff_sessions(
+            &manifest.sessions,
+            Arc::clone(&data_socket),
+            Arc::clone(metrics),
+        )
+        .await;
+
+    handoff::set_cloexec(manifest.data_fd)?;
+    for snap in &manifest.sessions {
+        handoff::set_cloexec(snap.outbound_fd)?;
+    }
+
+    info!(
+        sessions = installed,
+        auth_tokens = manifest.auth.len(),
+        "Adopted handoff state"
+    );
+    handoff::record_handoff_status(handoff::HandoffStatus::ok(
+        &manifest.handoff_id,
+        &manifest.from_version,
+        &manifest.to_version,
+        installed as u64,
+        handoff::now_unix_ms(),
+    ));
+
+    Ok((authenticator, engine, data_socket))
+}
+
+/// Handoff adoption is a Linux-only `execve` capability.
+#[cfg(not(target_os = "linux"))]
+async fn adopt_handoff(
+    manifest_path: &std::path::Path,
+    _config: &config::ProxyConfig,
+    _metrics: &Arc<metrics::ProxyMetrics>,
+) -> anyhow::Result<(
+    Arc<RwLock<auth::Authenticator>>,
+    Arc<relay::RelayEngine>,
+    Arc<UdpSocket>,
+)> {
+    anyhow::bail!(
+        "handoff adoption is only supported on Linux (manifest {})",
+        manifest_path.display()
+    )
+}
+
+/// One handoff attempt: never let a failure end the process.
+#[cfg(target_os = "linux")]
+async fn attempt_handoff(
+    engine: &Arc<relay::RelayEngine>,
+    authenticator: &Arc<RwLock<auth::Authenticator>>,
+    data_socket: &Arc<UdpSocket>,
+    proxy_started_at_unix_ms: u64,
+    #[cfg(feature = "quic")] control_shutdown_tx: &tokio::sync::watch::Sender<bool>,
+    #[cfg(feature = "quic")] control_handle: &mut Option<tokio::task::JoinHandle<()>>,
+) {
+    static IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+    if IN_PROGRESS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        tracing::warn!("handoff already in progress; ignoring SIGUSR2");
+        return;
+    }
+
+    #[cfg(feature = "quic")]
+    let outcome = {
+        run_handoff_sequence(
+            engine,
+            authenticator,
+            data_socket,
+            proxy_started_at_unix_ms,
+            control_shutdown_tx,
+            control_handle,
+        )
+        .await
+    };
+    #[cfg(not(feature = "quic"))]
+    let outcome = {
+        run_handoff_sequence(engine, authenticator, data_socket, proxy_started_at_unix_ms).await
+    };
+
+    if let Err(e) = outcome {
+        tracing::warn!(error = %e, "handoff attempt failed; continuing to serve");
+    }
+    engine.unfreeze_handoff();
+    IN_PROGRESS.store(false, Ordering::Release);
+}
+
+/// SIGUSR2 handoff is unavailable off Linux; record a rejection, keep serving.
+#[cfg(all(unix, not(target_os = "linux")))]
+async fn attempt_handoff_unsupported() {
+    handoff::record_handoff_status(handoff::HandoffStatus::rejected(
+        "in-place handoff is only supported on Linux",
+        handoff::now_unix_ms(),
+    ));
+}
+
+#[cfg(target_os = "linux")]
+fn record_rejected(context: &str, detail: &str, req: Option<&handoff::HandoffRequest>) {
+    let mut status =
+        handoff::HandoffStatus::rejected(format!("{context}: {detail}"), handoff::now_unix_ms());
+    if let Some(req) = req {
+        status = status.with_request(req);
+    }
+    handoff::record_handoff_status(status);
+}
+
+#[cfg(target_os = "linux")]
+fn record_failed(context: &str, detail: &str, manifest: &handoff::HandoffManifest) {
+    handoff::record_handoff_status(
+        handoff::HandoffStatus::failed(format!("{context}: {detail}"), handoff::now_unix_ms())
+            .with_manifest(manifest),
+    );
+}
+
+/// Stage one attempt: validate the request, snapshot, write the manifest, then
+/// pre-validate and exec the new binary. It only returns on failure, having
+/// restored every staged fd and recorded the result.
+#[cfg(target_os = "linux")]
+async fn run_handoff_sequence(
+    engine: &Arc<relay::RelayEngine>,
+    authenticator: &Arc<RwLock<auth::Authenticator>>,
+    data_socket: &Arc<UdpSocket>,
+    proxy_started_at_unix_ms: u64,
+    #[cfg(feature = "quic")] control_shutdown_tx: &tokio::sync::watch::Sender<bool>,
+    #[cfg(feature = "quic")] control_handle: &mut Option<tokio::task::JoinHandle<()>>,
+) -> anyhow::Result<()> {
+    // (a) Read and validate the root-owned request.
+    let req = match handoff::read_request(std::path::Path::new(handoff::DEFAULT_REQUEST_PATH)) {
+        Ok(req) => req,
+        Err(e) => {
+            record_rejected("cannot read handoff request", &format!("{e:#}"), None);
+            anyhow::bail!("cannot read handoff request: {e:#}");
+        }
+    };
+    if let Err(e) =
+        handoff::validate_request(&req, &handoff::releases_root(), handoff::now_unix_ms())
+    {
+        record_rejected("handoff request rejected", &e, Some(&req));
+        anyhow::bail!("handoff request rejected: {e}");
+    }
+    if req.version == env!("CARGO_PKG_VERSION") {
+        let detail = format!("request version {} equals the running version", req.version);
+        record_rejected("handoff request rejected", &detail, Some(&req));
+        anyhow::bail!("{detail}");
+    }
+
+    // (b) Freeze new-session creation for the millisecond snapshot window.
+    engine.freeze_handoff();
+
+    // (c) Snapshot sessions and auth, then build the manifest.
+    let snapshotter = Arc::clone(engine);
+    let snapshots = tokio::task::spawn_blocking(move || {
+        snapshotter.snapshot_handoff(std::time::Instant::now())
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("handoff snapshot task failed: {e}"))?;
+    let auth = authenticator
+        .read()
+        .await
+        .snapshot(std::time::Instant::now());
+
+    let manifest = handoff::HandoffManifest {
+        schema_version: handoff::HANDOFF_SCHEMA_VERSION,
+        handoff_id: handoff::new_handoff_id(),
+        from_version: env!("CARGO_PKG_VERSION").to_string(),
+        to_version: req.version.clone(),
+        to_sha256: req.sha256.clone(),
+        created_at_unix_ms: handoff::now_unix_ms(),
+        data_fd: data_socket.as_raw_fd(),
+        tcp_fd: None,
+        proxy_started_at_unix_ms,
+        sessions: snapshots,
+        auth,
+    };
+
+    // (d) Write the manifest, then stage every fd so the child inherits it.
+    let manifest_path = handoff::manifest_write_path();
+    if let Err(e) = handoff::write_json_atomic(&manifest_path, &manifest) {
+        record_failed(
+            "cannot write handoff manifest",
+            &format!("{e:#}"),
+            &manifest,
+        );
+        anyhow::bail!("cannot write handoff manifest: {e:#}");
+    }
+
+    let fds: Vec<std::os::fd::RawFd> = std::iter::once(manifest.data_fd)
+        .chain(manifest.sessions.iter().map(|s| s.outbound_fd))
+        .collect();
+    if let Err(e) = stage_fds_for_exec(&fds) {
+        record_failed("cannot stage fds for exec", &format!("{e:#}"), &manifest);
+        anyhow::bail!("cannot stage fds for exec: {e:#}");
+    }
+
+    // (e) Pre-validate the target in a child that inherits the staged fds.
+    let binary = req.binary_path.clone();
+    let validate_path = manifest_path.clone();
+    let validated = tokio::task::spawn_blocking(move || {
+        run_prevalidate(&binary, &validate_path, std::time::Duration::from_secs(3))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("handoff validator task failed: {e}"))?;
+    if let Err(e) = validated {
+        restore_cloexec(&fds);
+        record_failed(
+            "handoff pre-validation failed",
+            &format!("{e:#}"),
+            &manifest,
+        );
+        anyhow::bail!("handoff pre-validation failed: {e:#}");
+    }
+
+    // (f) Announce control-plane shutdown, free the ports, then exec in place.
+    #[cfg(feature = "quic")]
+    {
+        let _ = control_shutdown_tx.send(true);
+        if let Some(handle) = control_handle.as_mut() {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+        }
+        *control_handle = None;
+    }
+
+    let argv = handoff_argv();
+    let mut command = std::process::Command::new(&req.binary_path);
+    if argv.len() > 1 {
+        command.args(&argv[1..]);
+    }
+    command.arg0(&req.binary_path);
+    command.env(handoff::MANIFEST_ENV, &manifest_path);
+    let exec_error = command.exec();
+
+    restore_cloexec(&fds);
+    record_failed(
+        "exec of the handoff target failed",
+        &exec_error.to_string(),
+        &manifest,
+    );
+    Err(anyhow::anyhow!(
+        "exec {} failed: {exec_error}",
+        req.binary_path
+    ))
+}
+
+/// Clear `FD_CLOEXEC` on every fd and verify it took; restore all on failure.
+#[cfg(target_os = "linux")]
+fn stage_fds_for_exec(fds: &[std::os::fd::RawFd]) -> anyhow::Result<()> {
+    let mut cleared = Vec::with_capacity(fds.len());
+    for &fd in fds {
+        if let Err(e) = handoff::clear_cloexec(fd) {
+            restore_cloexec(&cleared);
+            return Err(anyhow::anyhow!("cannot clear FD_CLOEXEC on fd {fd}: {e}"));
+        }
+        cleared.push(fd);
+    }
+    for &fd in fds {
+        match handoff::is_cloexec(fd) {
+            Ok(false) => {}
+            Ok(true) => {
+                restore_cloexec(&cleared);
+                return Err(anyhow::anyhow!("fd {fd} is still FD_CLOEXEC after staging"));
+            }
+            Err(e) => {
+                restore_cloexec(&cleared);
+                return Err(anyhow::anyhow!("cannot verify FD_CLOEXEC on fd {fd}: {e}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn restore_cloexec(fds: &[std::os::fd::RawFd]) {
+    for &fd in fds {
+        let _ = handoff::set_cloexec(fd);
+    }
+}
+
+/// Run `binary --handoff-validate <manifest>` under a hard timeout.
+#[cfg(target_os = "linux")]
+fn run_prevalidate(
+    binary: &str,
+    manifest_path: &std::path::Path,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    let mut child = std::process::Command::new(binary)
+        .arg("--handoff-validate")
+        .arg(manifest_path)
+        .env_remove(handoff::MANIFEST_ENV)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("cannot spawn handoff validator: {e}"))?;
+
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => anyhow::bail!("handoff validator exited with {status}"),
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("handoff validator exceeded {timeout:?}");
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(e) => anyhow::bail!("cannot wait for handoff validator: {e}"),
+        }
+    }
+}
+
+/// The original argv with the handoff-only flags removed.
+#[cfg(target_os = "linux")]
+fn handoff_argv() -> Vec<std::ffi::OsString> {
+    let mut args = std::env::args_os();
+    let mut argv = Vec::new();
+    if let Some(program) = args.next() {
+        argv.push(program);
+    }
+    let mut skip_value = false;
+    for arg in args {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        let text = arg.to_string_lossy();
+        if text == "--handoff-schema" {
+            continue;
+        }
+        if text == "--handoff-validate" {
+            skip_value = true;
+            continue;
+        }
+        if text.starts_with("--handoff-validate=") {
+            continue;
+        }
+        argv.push(arg);
+    }
+    argv
 }

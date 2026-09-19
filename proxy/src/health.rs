@@ -9,6 +9,7 @@
 //!
 //! Both endpoints are used by the monitoring stack (Prometheus + Grafana).
 
+use crate::handoff::HandoffHealth;
 use crate::metrics::ProxyMetrics;
 use crate::relay::RelayEngine;
 use crate::update_state::UpdateState;
@@ -44,6 +45,8 @@ pub struct HealthResponse {
     pub sessions_created: u64,
     /// Last self-update snapshot; `null` when the state file is unavailable.
     pub update: Option<UpdateState>,
+    /// In-place handoff support and the last attempt, if any.
+    pub handoff: HandoffHealth,
 }
 
 /// Find the byte offset at which the HTTP body begins (after the blank line).
@@ -225,6 +228,7 @@ pub async fn run_health_server(
                         fec_recoveries: metrics.fec_recoveries.load(Ordering::Relaxed),
                         sessions_created: metrics.sessions_created.load(Ordering::Relaxed),
                         update: crate::update_state::current_update_state(),
+                        handoff: crate::handoff::handoff_health(),
                     };
                     (
                         "application/json",
@@ -306,6 +310,10 @@ mod tests {
             fec_recoveries: 0,
             sessions_created: 0,
             update: crate::update_state::current_update_state(),
+            handoff: HandoffHealth {
+                supported: crate::handoff::SUPPORTED,
+                last: None,
+            },
         }
     }
 
@@ -386,6 +394,10 @@ mod tests {
             fec_recoveries: 0,
             sessions_created: 0,
             update: None,
+            handoff: HandoffHealth {
+                supported: crate::handoff::SUPPORTED,
+                last: None,
+            },
         };
         let json = serde_json::to_string(&response).unwrap();
         for key in [
@@ -402,6 +414,50 @@ mod tests {
                 "missing {key}: {json}"
             );
         }
+    }
+
+    #[test]
+    fn health_exposes_handoff_support_and_last_status() {
+        let mut response = HealthResponse {
+            status: "healthy",
+            version: env!("CARGO_PKG_VERSION"),
+            active_connections: 0,
+            uptime_secs: 0,
+            region: "test".to_string(),
+            node_id: "test".to_string(),
+            packets_relayed: 0,
+            packets_dropped: 0,
+            drops_malformed: 0,
+            drops_auth_rejected: 0,
+            drops_abuse_blocked: 0,
+            drops_rate_limited: 0,
+            drops_fec_malformed: 0,
+            drops_session_setup: 0,
+            drops_relay_send_errors: 0,
+            bytes_relayed: 0,
+            fec_recoveries: 0,
+            sessions_created: 0,
+            update: None,
+            handoff: HandoffHealth {
+                supported: true,
+                last: None,
+            },
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"handoff\":{"), "{json}");
+        assert!(json.contains("\"supported\":true"), "{json}");
+        assert!(json.contains("\"last\":null"), "{json}");
+
+        response.handoff.last = Some(crate::handoff::HandoffStatus::ok(
+            "id",
+            "1.0.0",
+            "1.0.1",
+            2,
+            1_700_000_000_000,
+        ));
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"sessions_transferred\":2"), "{json}");
+        assert!(json.contains("\"result\":\"ok\""), "{json}");
     }
 
     #[test]

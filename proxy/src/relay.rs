@@ -55,6 +55,7 @@ const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
+#[cfg(target_os = "linux")]
 use super::handoff::SessionSnapshot;
 use super::metrics::{upstream_lag, DropReason, ProxyMetrics};
 use super::rate_limit::{RateLimitResult, RateLimiter};
@@ -248,6 +249,9 @@ pub struct RelayEngine {
     /// its listener task forever.  Manager-created handles stay in the manager's
     /// local `known_sessions`, which it already aborts.
     listener_handles: Arc<tokio::sync::Mutex<HashMap<SocketAddrV4, tokio::task::JoinHandle<()>>>>,
+    /// Set while an in-place handoff is staged: new sessions are refused but
+    /// existing sessions keep resolving.
+    handoff_frozen: AtomicBool,
 }
 
 impl RelayEngine {
@@ -267,7 +271,25 @@ impl RelayEngine {
             max_sessions,
             session_timeout,
             listener_handles: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            handoff_frozen: AtomicBool::new(false),
         }
+    }
+
+    /// Refuse new session creation while an in-place handoff is prepared.
+    ///
+    /// The window is milliseconds, and existing sessions keep resolving.
+    pub fn freeze_handoff(&self) {
+        self.handoff_frozen.store(true, Ordering::Release);
+    }
+
+    /// Resume accepting new sessions after a handoff attempt did not exec.
+    pub fn unfreeze_handoff(&self) {
+        self.handoff_frozen.store(false, Ordering::Release);
+    }
+
+    /// Whether new-session creation is currently frozen for a handoff.
+    pub fn is_handoff_frozen(&self) -> bool {
+        self.handoff_frozen.load(Ordering::Acquire)
     }
 
     /// Get the number of active sessions.
@@ -301,7 +323,11 @@ impl RelayEngine {
             }
         }
 
-        // Slow path: create new session
+        // Slow path: create new session. A staged handoff admits no new
+        // sessions, but the fast path above already served existing ones.
+        if self.is_handoff_frozen() {
+            anyhow::bail!("handoff in progress: refusing to create a new session");
+        }
         if !self.can_accept().await {
             anyhow::bail!("Max sessions ({}) reached", self.max_sessions);
         }
@@ -1635,6 +1661,48 @@ mod tests {
             .get_or_create_session(client2, server, false, 4, test_udp_sender().await)
             .await
             .is_err());
+    }
+
+    /// The freeze guard refuses new sessions while an existing session keeps
+    /// resolving, then admits new sessions again once unpacked.
+    #[tokio::test]
+    async fn freeze_handoff_refuses_new_sessions_but_serves_existing() {
+        let engine = RelayEngine::new(10);
+        let client = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), 40_010);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_017);
+        let other = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 8), 40_011);
+        let sender = test_udp_sender().await;
+
+        let (_, is_new) = engine
+            .get_or_create_session(client, server, false, 4, sender.clone())
+            .await
+            .unwrap();
+        assert!(is_new);
+
+        engine.freeze_handoff();
+        assert!(engine.is_handoff_frozen());
+
+        let (_, is_new) = engine
+            .get_or_create_session(client, server, false, 4, sender.clone())
+            .await
+            .unwrap();
+        assert!(!is_new, "existing session must keep resolving while frozen");
+
+        assert!(
+            engine
+                .get_or_create_session(other, server, false, 4, sender.clone())
+                .await
+                .is_err(),
+            "new session must be refused while frozen"
+        );
+
+        engine.unfreeze_handoff();
+        assert!(!engine.is_handoff_frozen());
+        let (_, is_new) = engine
+            .get_or_create_session(other, server, false, 4, sender)
+            .await
+            .unwrap();
+        assert!(is_new, "new sessions resume after unfreeze");
     }
 
     /// Activity must extend a session's lifetime: a session touched halfway

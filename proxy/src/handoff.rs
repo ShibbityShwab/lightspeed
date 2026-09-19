@@ -15,7 +15,8 @@
 //! binary before it is ever executed.
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +28,35 @@ pub const DEFAULT_MANIFEST_PATH: &str = "/run/lightspeed/handoff.json";
 
 /// Default handoff-request path polled by the outgoing process.
 pub const DEFAULT_REQUEST_PATH: &str = "/run/lightspeed/handoff-request.json";
+
+/// Default root containing the versioned release directories.
+pub const DEFAULT_RELEASES_DIR: &str = "/opt/lightspeed/releases";
+
+/// Default path of the last handoff result, surfaced through `/health`.
+pub const DEFAULT_RESULT_PATH: &str = "/run/lightspeed/handoff-result.json";
+
+/// Environment variable that carries the manifest path into the new process.
+///
+/// It is the adoption trigger: a process that finds it set adopts the manifest
+/// instead of binding the data socket. It also overrides the manifest write
+/// path so a test can drive the sequence without touching `/run`.
+pub const MANIFEST_ENV: &str = "LIGHTSPEED_HANDOFF_MANIFEST";
+
+/// Environment variable that overrides the release root.
+pub const RELEASES_DIR_ENV: &str = "LIGHTSPEED_RELEASES_DIR";
+
+/// Environment variable that overrides the result path (tests only).
+pub const RESULT_PATH_ENV: &str = "LIGHTSPEED_HANDOFF_RESULT";
+
+/// Whether in-place handoff is supported for this target.
+pub const SUPPORTED: bool = cfg!(target_os = "linux");
+
+/// [`HandoffStatus::result`] value for a completed handoff.
+pub const RESULT_OK: &str = "ok";
+/// [`HandoffStatus::result`] value for a request that was refused.
+pub const RESULT_REJECTED: &str = "rejected";
+/// [`HandoffStatus::result`] value for a handoff that failed after acceptance.
+pub const RESULT_FAILED: &str = "failed";
 
 /// Hard upper bound on bytes read from a manifest or request file (4 MiB).
 pub const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
@@ -87,6 +117,190 @@ pub struct HandoffRequest {
     pub binary_path: String,
     pub sha256: String,
     pub requested_at_unix_ms: u64,
+}
+
+/// The outcome of the most recent handoff attempt, surfaced through `/health`.
+///
+/// `result` is one of [`RESULT_OK`], [`RESULT_REJECTED`], or [`RESULT_FAILED`].
+/// `handoff_id`, `from_version`, and `to_version` are absent only when the
+/// request was refused before those fields were known. `error` is present for
+/// every non-`ok` result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffStatus {
+    pub schema_version: u32,
+    pub supported: bool,
+    pub handoff_id: Option<String>,
+    pub from_version: Option<String>,
+    pub to_version: Option<String>,
+    pub result: String,
+    pub sessions_transferred: u64,
+    pub at_unix_ms: u64,
+    pub error: Option<String>,
+}
+
+/// The `/health` view of handoff support: whether it is available, and the last
+/// recorded status (or `null` when this process has not attempted one).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffHealth {
+    pub supported: bool,
+    pub last: Option<HandoffStatus>,
+}
+
+impl HandoffStatus {
+    fn base(result: &str, at_unix_ms: u64) -> Self {
+        Self {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            supported: SUPPORTED,
+            handoff_id: None,
+            from_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            to_version: None,
+            result: result.to_string(),
+            sessions_transferred: 0,
+            at_unix_ms,
+            error: None,
+        }
+    }
+
+    /// A request refused before it was acted on.
+    pub fn rejected(error: impl Into<String>, at_unix_ms: u64) -> Self {
+        Self {
+            error: Some(error.into()),
+            ..Self::base(RESULT_REJECTED, at_unix_ms)
+        }
+    }
+
+    /// A handoff that failed after acceptance and left the process serving.
+    pub fn failed(error: impl Into<String>, at_unix_ms: u64) -> Self {
+        Self {
+            error: Some(error.into()),
+            ..Self::base(RESULT_FAILED, at_unix_ms)
+        }
+    }
+
+    /// A handoff that completed and installed `sessions_transferred` sessions.
+    pub fn ok(
+        handoff_id: &str,
+        from_version: &str,
+        to_version: &str,
+        sessions_transferred: u64,
+        at_unix_ms: u64,
+    ) -> Self {
+        Self {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            supported: SUPPORTED,
+            handoff_id: Some(handoff_id.to_string()),
+            from_version: Some(from_version.to_string()),
+            to_version: Some(to_version.to_string()),
+            result: RESULT_OK.to_string(),
+            sessions_transferred,
+            at_unix_ms,
+            error: None,
+        }
+    }
+
+    /// Attach the request's identity to a rejection, when one was parsed.
+    pub fn with_request(mut self, req: &HandoffRequest) -> Self {
+        self.handoff_id = Some(req.handoff_id.clone());
+        self.to_version = Some(req.version.clone());
+        self
+    }
+
+    /// Attach the manifest's identity to a post-acceptance failure.
+    pub fn with_manifest(mut self, manifest: &HandoffManifest) -> Self {
+        self.handoff_id = Some(manifest.handoff_id.clone());
+        self.to_version = Some(manifest.to_version.clone());
+        self
+    }
+}
+
+/// The last handoff status recorded in this process.
+static STATUS: Mutex<Option<HandoffStatus>> = Mutex::new(None);
+
+/// Record a handoff result in memory and, best effort, on disk.
+///
+/// The in-memory copy is always written so `/health` reflects the attempt even
+/// when the result directory is missing or read-only. A file write failure is
+/// swallowed: it must never fail `/health` or abort a handoff.
+pub fn record_handoff_status(status: HandoffStatus) {
+    *STATUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(status.clone());
+    let path = result_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = write_json_atomic(&path, &status);
+}
+
+/// The last recorded handoff status, or `None` when none was attempted.
+pub fn current_handoff_status() -> Option<HandoffStatus> {
+    STATUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// The `/health` handoff view for the current process.
+pub fn handoff_health() -> HandoffHealth {
+    HandoffHealth {
+        supported: SUPPORTED,
+        last: current_handoff_status(),
+    }
+}
+
+/// Drop the recorded status. Tests that repoint the result path call this.
+#[cfg(test)]
+pub(crate) fn reset_handoff_status_for_test() {
+    *STATUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+/// Resolve the manifest write path (`LIGHTSPEED_HANDOFF_MANIFEST` override).
+pub fn manifest_write_path() -> PathBuf {
+    match std::env::var_os(MANIFEST_ENV) {
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => PathBuf::from(DEFAULT_MANIFEST_PATH),
+    }
+}
+
+/// The manifest path named by the adoption trigger, if the env var is set.
+pub fn manifest_path_from_env() -> Option<PathBuf> {
+    match std::env::var_os(MANIFEST_ENV) {
+        Some(value) if !value.is_empty() => Some(PathBuf::from(value)),
+        _ => None,
+    }
+}
+
+/// Resolve the release root (`LIGHTSPEED_RELEASES_DIR` override).
+pub fn releases_root() -> PathBuf {
+    match std::env::var_os(RELEASES_DIR_ENV) {
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => PathBuf::from(DEFAULT_RELEASES_DIR),
+    }
+}
+
+/// Resolve the result path (`LIGHTSPEED_HANDOFF_RESULT` override).
+pub fn result_path() -> PathBuf {
+    match std::env::var_os(RESULT_PATH_ENV) {
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => PathBuf::from(DEFAULT_RESULT_PATH),
+    }
+}
+
+/// Current wall-clock time in milliseconds since the Unix epoch.
+pub fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A process-unique handoff id built from the current time and the pid.
+pub fn new_handoff_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!("{nanos:032x}{:08x}", std::process::id())
 }
 
 /// Write `value` as JSON to `path`, atomically.
@@ -403,6 +617,57 @@ pub fn validate_request(
     Ok(())
 }
 
+/// Decide whether this running binary is the target the manifest names.
+///
+/// Enforces the manifest schema, that `to_version` is the running package
+/// version, and that `to_sha256` matches `self_sha256`. The caller supplies the
+/// running version and the hash of its own executable so the decision stays
+/// pure and unit-testable without `/proc/self/exe`.
+pub fn check_adoption_identity(
+    manifest: &HandoffManifest,
+    running_version: &str,
+    self_sha256: &str,
+) -> Result<(), String> {
+    if manifest.schema_version != HANDOFF_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported manifest schema_version {} (expected {})",
+            manifest.schema_version, HANDOFF_SCHEMA_VERSION
+        ));
+    }
+    if manifest.to_version != running_version {
+        return Err(format!(
+            "manifest to_version {} does not match running version {running_version}",
+            manifest.to_version
+        ));
+    }
+    if !manifest.to_sha256.eq_ignore_ascii_case(self_sha256) {
+        return Err(format!(
+            "manifest to_sha256 {} does not match running executable sha256 {self_sha256}",
+            manifest.to_sha256
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the data fd and every carried session's outbound fd.
+///
+/// The adopting process runs this before taking ownership of any fd, so a
+/// manifest that names a regular file, a closed fd, or a non-UDP socket is
+/// refused without partial adoption.
+#[cfg(target_os = "linux")]
+pub fn validate_manifest_fds(manifest: &HandoffManifest) -> Result<(), String> {
+    validate_udp_fd(manifest.data_fd).map_err(|e| format!("data_fd {}: {e}", manifest.data_fd))?;
+    for snap in &manifest.sessions {
+        validate_udp_fd(snap.outbound_fd).map_err(|e| {
+            format!(
+                "outbound_fd {} for client {}: {e}",
+                snap.outbound_fd, snap.client_addr
+            )
+        })?;
+    }
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -616,6 +881,77 @@ mod tests {
             sha256_file(&path).unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    /// Serializes env-var mutation across parallel tests.
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn adoption_identity_rejects_wrong_schema_version_and_sha() {
+        let good = sample_manifest(HANDOFF_SCHEMA_VERSION);
+        assert!(check_adoption_identity(&good, "1.4.5", "ABC123").is_ok());
+
+        let mut wrong_schema = good.clone();
+        wrong_schema.schema_version = 999;
+        assert!(check_adoption_identity(&wrong_schema, "1.4.5", "ABC123").is_err());
+
+        let mut wrong_version = good.clone();
+        wrong_version.to_version = "9.9.9".to_string();
+        assert!(check_adoption_identity(&wrong_version, "1.4.5", "ABC123").is_err());
+
+        let mut wrong_sha = good;
+        wrong_sha.to_sha256 = "deadbeef".to_string();
+        assert!(check_adoption_identity(&wrong_sha, "1.4.5", "ABC123").is_err());
+    }
+
+    #[test]
+    fn handoff_status_records_to_memory_and_file() {
+        let _guard = env_guard();
+        reset_handoff_status_for_test();
+        let dir = temp_dir("status");
+        let path = dir.join("handoff-result.json");
+        std::env::set_var(RESULT_PATH_ENV, &path);
+
+        record_handoff_status(HandoffStatus::ok(
+            "id1",
+            "1.4.4",
+            "1.4.5",
+            3,
+            1_700_000_000_000,
+        ));
+        let current = current_handoff_status().expect("status recorded");
+        assert_eq!(current.result, RESULT_OK);
+        assert_eq!(current.sessions_transferred, 3);
+        assert!(current.supported);
+        assert_eq!(current.at_unix_ms, 1_700_000_000_000);
+
+        let bytes = std::fs::read(&path).expect("result file written");
+        let on_disk: HandoffStatus = serde_json::from_slice(&bytes).expect("valid result JSON");
+        assert_eq!(on_disk, current);
+
+        let health = handoff_health();
+        assert!(health.supported);
+        assert_eq!(health.last, Some(current));
+
+        std::env::remove_var(RESULT_PATH_ENV);
+        reset_handoff_status_for_test();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejected_status_carries_request_identity() {
+        let status = HandoffStatus::rejected("bad request", 42).with_request(&sample_request());
+        assert_eq!(status.result, RESULT_REJECTED);
+        assert_eq!(status.handoff_id.as_deref(), Some("0123456789abcdef"));
+        assert_eq!(status.to_version.as_deref(), Some("1.4.5"));
+        assert_eq!(status.error.as_deref(), Some("bad request"));
+        assert_eq!(status.sessions_transferred, 0);
     }
 
     #[cfg(target_os = "linux")]
