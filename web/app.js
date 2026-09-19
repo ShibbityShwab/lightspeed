@@ -269,6 +269,437 @@
       });
   }
 
+  // --- Network history trends (bounded snapshot history) ---
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var TREND_COLORS = ['#a29bfe', '#00cec9', '#00d68f', '#fdcb6e', '#ff6b6b', '#74b9ff', '#fd79a8', '#ffeaa7'];
+  var MAX_TREND_RELAYS = 8;
+  var trendUid = 0;
+
+  function finiteNumber(value) {
+    return typeof value === 'number' && isFinite(value);
+  }
+
+  function latestFinite(values) {
+    for (var i = values.length - 1; i >= 0; i--) {
+      if (finiteNumber(values[i])) return values[i];
+    }
+    return null;
+  }
+
+  function normalizeSnapshots(doc) {
+    if (!doc || typeof doc !== 'object' || !Array.isArray(doc.snapshots)) return [];
+    return doc.snapshots.filter(function (snap) {
+      return snap && typeof snap === 'object' && finiteNumber(snap.t);
+    }).sort(function (a, b) { return a.t - b.t; });
+  }
+
+  function cumulativeDelta(current, previous, reset) {
+    if (!finiteNumber(current)) return null;
+    if (reset || !finiteNumber(previous) || current < previous) return current;
+    return current - previous;
+  }
+
+  function perRelayDeltas(snap, prevSnap) {
+    var out = {};
+    var perRelay = snap && snap.per_relay;
+    if (!perRelay || typeof perRelay !== 'object') return out;
+    Object.keys(perRelay).forEach(function (id) {
+      var current = perRelay[id];
+      if (!current || typeof current !== 'object') return;
+      if (current.delta && typeof current.delta === 'object') {
+        out[id] = {
+          relayed: finiteNumber(current.delta.packets_relayed) ? current.delta.packets_relayed : null,
+          dropped: finiteNumber(current.delta.packets_dropped) ? current.delta.packets_dropped : null
+        };
+        return;
+      }
+      var prev = prevSnap && prevSnap.per_relay ? prevSnap.per_relay[id] : null;
+      out[id] = {
+        relayed: cumulativeDelta(current.packets_relayed, prev && prev.packets_relayed, current.reset === true),
+        dropped: cumulativeDelta(current.packets_dropped, prev && prev.packets_dropped, current.reset === true)
+      };
+    });
+    return out;
+  }
+
+  function buildTrendModel(snapshots) {
+    var totals = {};
+    var points = snapshots.map(function (snap, index) {
+      var deltas = perRelayDeltas(snap, snapshots[index - 1]);
+      Object.keys(deltas).forEach(function (id) {
+        var entry = deltas[id];
+        totals[id] = (totals[id] || 0) + (entry.relayed || 0) + (entry.dropped || 0);
+      });
+
+      var interval = snap.interval && typeof snap.interval === 'object' ? snap.interval : {};
+      var latencyMs = null;
+      if (finiteNumber(interval.relay_latency_us_sum) &&
+          finiteNumber(interval.relay_latency_us_count) &&
+          interval.relay_latency_us_count > 0) {
+        latencyMs = interval.relay_latency_us_sum / interval.relay_latency_us_count / 1000;
+      }
+
+      var fecRatio = null;
+      if (finiteNumber(interval.fec_recoveries) && finiteNumber(interval.fec_losses) &&
+          interval.fec_recoveries + interval.fec_losses > 0) {
+        fecRatio = (interval.fec_recoveries / (interval.fec_recoveries + interval.fec_losses)) * 100;
+      }
+
+      return { t: snap.t, relays: deltas, latencyMs: latencyMs, fecRatio: fecRatio };
+    });
+
+    var relayIds = Object.keys(totals).sort(function (a, b) {
+      return totals[b] - totals[a];
+    }).slice(0, MAX_TREND_RELAYS);
+
+    return {
+      points: points,
+      relayIds: relayIds,
+      hasLatency: points.some(function (point) { return finiteNumber(point.latencyMs); }),
+      hasFec: points.some(function (point) { return finiteNumber(point.fecRatio); })
+    };
+  }
+
+  function formatMs(value) {
+    if (!finiteNumber(value)) return '--';
+    return (value >= 10 ? value.toFixed(0) : value.toFixed(1)) + ' ms';
+  }
+
+  function formatPercent(value) {
+    if (!finiteNumber(value)) return '--';
+    return value.toFixed(1) + '%';
+  }
+
+  function formatMsAxis(value) {
+    if (!finiteNumber(value)) return '--';
+    return (value >= 10 ? value.toFixed(0) : value.toFixed(1)) + ' ms';
+  }
+
+  function formatPercentAxis(value) {
+    if (!finiteNumber(value)) return '--';
+    return Math.round(value) + '%';
+  }
+
+  function formatCountAxis(value) {
+    return formatCount(Math.round(value));
+  }
+
+  function formatShortTime(epochSecs) {
+    return new Date(epochSecs * 1000).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  function svgEl(name, attrs) {
+    var el = document.createElementNS(SVG_NS, name);
+    Object.keys(attrs || {}).forEach(function (key) { el.setAttribute(key, attrs[key]); });
+    return el;
+  }
+
+  function niceCeil(value) {
+    if (!(value > 0)) return 1;
+    if (value <= 10) return Math.ceil(value);
+    var exponent = Math.floor(Math.log10(value));
+    var base = Math.pow(10, exponent);
+    var scaled = value / base;
+    var step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+    return step * base;
+  }
+
+  function axisFractions(max) {
+    if (max <= 1) return [0, 1];
+    if (max <= 4) return [0, 0.5, 1];
+    return [0, 0.25, 0.5, 0.75, 1];
+  }
+
+  function buildLineChartSvg(spec) {
+    var W = 520;
+    var H = 220;
+    var padL = 70;
+    var padR = 16;
+    var padT = 16;
+    var padB = 34;
+    var uid = 'trend-' + (++trendUid);
+    var svg = svgEl('svg', {
+      viewBox: '0 0 ' + W + ' ' + H,
+      class: 'trend-svg',
+      role: 'img',
+      'aria-labelledby': uid + '-title ' + uid + '-desc'
+    });
+
+    var titleEl = svgEl('title', { id: uid + '-title' });
+    titleEl.textContent = spec.title + ' trend';
+    var descEl = svgEl('desc', { id: uid + '-desc' });
+    descEl.textContent = spec.description;
+    svg.appendChild(titleEl);
+    svg.appendChild(descEl);
+
+    var n = spec.points.length;
+    function xFor(index) {
+      if (n <= 1) return padL + (W - padL - padR) / 2;
+      return padL + (index / (n - 1)) * (W - padL - padR);
+    }
+
+    var values = [];
+    spec.series.forEach(function (series) {
+      series.values.forEach(function (value) { if (finiteNumber(value)) values.push(value); });
+    });
+    var max = niceCeil(Math.max.apply(null, values));
+    function yFor(value) {
+      return H - padB - (Math.max(0, value) / max) * (H - padT - padB);
+    }
+
+    axisFractions(max).forEach(function (fraction) {
+      var y = yFor(max * fraction);
+      svg.appendChild(svgEl('line', {
+        x1: padL, y1: y, x2: W - padR, y2: y, class: 'trend-grid-line'
+      }));
+      var label = svgEl('text', {
+        x: padL - 8, y: y, class: 'trend-axis-label', 'text-anchor': 'end', 'dominant-baseline': 'middle'
+      });
+      label.textContent = spec.axisFormat(max * fraction);
+      svg.appendChild(label);
+    });
+
+    spec.series.forEach(function (series) {
+      var path = '';
+      var penDown = false;
+      series.values.forEach(function (value, index) {
+        if (!finiteNumber(value)) { penDown = false; return; }
+        path += (penDown ? ' L ' : ' M ') + xFor(index).toFixed(1) + ' ' + yFor(value).toFixed(1);
+        penDown = true;
+      });
+      if (path) {
+        svg.appendChild(svgEl('path', { d: path, class: 'trend-series', stroke: series.color }));
+      }
+      if (n <= 60) {
+        series.values.forEach(function (value, index) {
+          if (!finiteNumber(value)) return;
+          svg.appendChild(svgEl('circle', {
+            cx: xFor(index), cy: yFor(value), r: 2.4, fill: series.color, class: 'trend-dot'
+          }));
+        });
+      }
+    });
+
+    var tickIndexes = n <= 1 ? [0] : [0, Math.floor((n - 1) / 2), n - 1];
+    if (n > 2 && window.innerWidth <= 480) tickIndexes = [0, n - 1];
+    var uniqueTicks = tickIndexes.filter(function (value, index, arr) { return arr.indexOf(value) === index; });
+    uniqueTicks.forEach(function (index, position) {
+      var anchor = uniqueTicks.length === 1 ? 'middle'
+        : position === 0 ? 'start'
+        : position === uniqueTicks.length - 1 ? 'end' : 'middle';
+      var label = svgEl('text', {
+        x: xFor(index), y: H - 10, class: 'trend-axis-label', 'text-anchor': anchor
+      });
+      label.textContent = formatShortTime(spec.points[index].t);
+      svg.appendChild(label);
+    });
+
+    return svg;
+  }
+
+  function renderTrendCard(spec) {
+    var card = document.createElement('figure');
+    card.className = 'trend-card';
+
+    var title = document.createElement('h4');
+    title.className = 'trend-card-title';
+    title.textContent = spec.title;
+    card.appendChild(title);
+
+    if (spec.subtitle) {
+      var subtitle = document.createElement('p');
+      subtitle.className = 'trend-card-subtitle';
+      subtitle.textContent = spec.subtitle;
+      card.appendChild(subtitle);
+    }
+
+    var hasData = spec.series.some(function (series) {
+      return series.values.some(finiteNumber);
+    });
+
+    if (!hasData) {
+      var noData = document.createElement('p');
+      noData.className = 'trend-no-data';
+      noData.textContent = spec.emptyMessage;
+      card.appendChild(noData);
+      return card;
+    }
+
+    card.appendChild(buildLineChartSvg(spec));
+
+    if (spec.series.length > 1) {
+      var legend = document.createElement('div');
+      legend.className = 'trend-legend';
+      spec.series.forEach(function (series) {
+        var item = document.createElement('span');
+        item.className = 'trend-legend-item';
+        var swatch = document.createElement('span');
+        swatch.className = 'trend-legend-swatch';
+        swatch.style.background = series.color;
+        var name = document.createElement('span');
+        name.textContent = series.label;
+        item.appendChild(swatch);
+        item.appendChild(name);
+        legend.appendChild(item);
+      });
+      card.appendChild(legend);
+    }
+
+    var summary = document.createElement('p');
+    summary.className = 'trend-card-summary';
+    summary.textContent = spec.summary;
+    card.appendChild(summary);
+
+    if (spec.caveat) {
+      var caveat = document.createElement('p');
+      caveat.className = 'trend-caveat';
+      caveat.textContent = spec.caveat;
+      card.appendChild(caveat);
+    }
+
+    return card;
+  }
+
+  function relaySeries(model, key) {
+    return model.relayIds.map(function (id, index) {
+      return {
+        label: id,
+        color: TREND_COLORS[index % TREND_COLORS.length],
+        values: model.points.map(function (point) {
+          var entry = point.relays[id];
+          return entry ? entry[key] : null;
+        })
+      };
+    });
+  }
+
+  function latestRelaySum(model, key) {
+    var last = model.points[model.points.length - 1];
+    if (!last) return null;
+    var total = 0;
+    var found = false;
+    model.relayIds.forEach(function (id) {
+      var entry = last.relays[id];
+      if (entry && finiteNumber(entry[key])) { total += entry[key]; found = true; }
+    });
+    return found ? total : null;
+  }
+
+  function windowSummary(model) {
+    var first = model.points[0];
+    var last = model.points[model.points.length - 1];
+    return model.points.length + ' snapshot' + (model.points.length === 1 ? '' : 's') +
+      ' · ' + formatShortTime(first.t) + ' to ' + formatShortTime(last.t);
+  }
+
+  function chartDescription(title, series, format) {
+    var parts = series.map(function (s) {
+      return s.label + ' latest ' + format(latestFinite(s.values));
+    });
+    return 'Line chart of ' + title.toLowerCase() + '. ' + parts.join('; ') + '.';
+  }
+
+  function showTrendsEmpty(message) {
+    var grid = document.getElementById('trends-grid');
+    var empty = document.getElementById('trends-empty');
+    if (grid) grid.textContent = '';
+    if (!empty) return;
+    var text = empty.querySelector('[data-trends-empty-message]');
+    if (text) text.textContent = message;
+    empty.hidden = false;
+  }
+
+  function renderTrends(doc) {
+    var grid = document.getElementById('trends-grid');
+    var empty = document.getElementById('trends-empty');
+    if (!grid || !empty) return;
+
+    var snapshots = normalizeSnapshots(doc);
+    if (!snapshots.length) {
+      showTrendsEmpty('No network history has been published yet. Trends appear after the first scheduled snapshot is recorded.');
+      return;
+    }
+
+    var model = buildTrendModel(snapshots);
+    if (!model.relayIds.length && !model.hasLatency && !model.hasFec) {
+      showTrendsEmpty('The published history has ' + snapshots.length + ' snapshot' +
+        (snapshots.length === 1 ? '' : 's') + ' but no plottable relay metrics yet.');
+      return;
+    }
+
+    grid.textContent = '';
+    empty.hidden = true;
+
+    var window = windowSummary(model);
+
+    if (model.relayIds.length) {
+      var relayedSeries = relaySeries(model, 'relayed');
+      grid.appendChild(renderTrendCard({
+        title: 'Packets relayed per interval',
+        subtitle: 'Packets each relay forwarded since the previous snapshot, per relay.',
+        series: relayedSeries,
+        points: model.points,
+        axisFormat: formatCountAxis,
+        description: chartDescription('Packets relayed per interval', relayedSeries, formatCount),
+        summary: 'Latest: ' + formatCount(latestRelaySum(model, 'relayed')) + ' relayed · ' + window,
+        emptyMessage: 'This history does not carry per-relay packet counters.'
+      }));
+
+      var droppedSeries = relaySeries(model, 'dropped');
+      grid.appendChild(renderTrendCard({
+        title: 'Packets filtered per interval',
+        subtitle: 'Packets each relay dropped or filtered since the previous snapshot (includes unauthenticated scans).',
+        series: droppedSeries,
+        points: model.points,
+        axisFormat: formatCountAxis,
+        description: chartDescription('Packets filtered per interval', droppedSeries, formatCount),
+        summary: 'Latest: ' + formatCount(latestRelaySum(model, 'dropped')) + ' filtered · ' + window,
+        emptyMessage: 'This history does not carry per-relay drop counters.'
+      }));
+    }
+
+    var latencyValues = model.points.map(function (point) { return point.latencyMs; });
+    grid.appendChild(renderTrendCard({
+      title: 'Mean upstream response lag',
+      subtitle: 'Relay-observed upstream response lag per snapshot (sum ÷ count of latency samples).',
+      series: [{ label: 'Network mean', color: TREND_COLORS[0], values: latencyValues }],
+      points: model.points,
+      axisFormat: formatMsAxis,
+      description: chartDescription('Mean upstream response lag', [{ label: 'network mean', values: latencyValues }], formatMs),
+      summary: 'Latest: ' + formatMs(latestFinite(latencyValues)) + ' · ' + window,
+      emptyMessage: 'This history does not carry latency sum/count counters, so there is no mean to plot.',
+      caveat: 'Mean of proxy-observed lag, not client RTT. It measures how long the relay waited for upstream responses, not the ping you would see in-game.'
+    }));
+
+    var fecValues = model.points.map(function (point) { return point.fecRatio; });
+    grid.appendChild(renderTrendCard({
+      title: 'FEC recovery ratio',
+      subtitle: 'Share of recorded FEC events that recovered data: recoveries ÷ (recoveries + losses).',
+      series: [{ label: 'Recovery ratio', color: TREND_COLORS[1], values: fecValues }],
+      points: model.points,
+      axisFormat: formatPercentAxis,
+      description: chartDescription('FEC recovery ratio', [{ label: 'recovery ratio', values: fecValues }], formatPercent),
+      summary: 'Latest: ' + formatPercent(latestFinite(fecValues)) + ' · ' + window,
+      emptyMessage: 'This history does not carry FEC recovery/loss counters, so there is no ratio to plot.'
+    }));
+  }
+
+  function loadNetworkHistory() {
+    if (!window.fetch) return;
+    fetch('network-history.json', { cache: 'no-cache' })
+      .then(function (response) {
+        if (!response.ok) throw new Error('network-history.json: HTTP ' + response.status);
+        return response.json();
+      })
+      .then(renderTrends)
+      .catch(function () {
+        showTrendsEmpty('Network history is unavailable or unreadable right now. Trends appear once the collector publishes a readable snapshot.');
+      });
+  }
+
   loadNetworkStats();
+  loadNetworkHistory();
 
 })();

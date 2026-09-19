@@ -248,6 +248,19 @@
         We publish live relay health (whether each node is up, not latency) from a periodically regenerated
         snapshot. Last checked <time data-last-checked datetime="">--</time>.
       </p>
+
+      <!-- Network Trends (bounded snapshot history) -->
+      <div class="trends" id="network-trends">
+        <h3 class="trends-title">Network Trends</h3>
+        <p class="trends-subtitle">
+          Trends are plotted from the collector's bounded snapshot history (up to 360 points) published
+          alongside the live snapshot. Metrics the history does not carry are left blank, never estimated.
+        </p>
+        <div class="trends-grid" id="trends-grid" data-trends-grid></div>
+        <div class="trends-empty" id="trends-empty" data-trends-empty hidden>
+          <p data-trends-empty-message>No network history has been published yet.</p>
+        </div>
+      </div>
     </div>
   </section>
 
