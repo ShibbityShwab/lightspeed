@@ -32,7 +32,15 @@
 #     client RTT. Percentiles are not exposed because the underlying
 #     histogram only stores sums and counts.
 #   * fec_recovery_ratio = fec_recoveries / (fec_recoveries + fec_losses)
-#     over the interval; null when the denominator is zero.
+#     over the interval; null when the denominator is zero. fec_losses is
+#     opt-in client telemetry, so without it the ratio reads 1.0.
+#   * fec_recovery_rate = fec_recoveries / fec_data_packets over the
+#     interval: relay-side recoveries per data packet. It needs no client
+#     telemetry and is null when fec_data_packets is zero.
+#   * fec_overhead_ratio = fec_parity_received / fec_data_packets over the
+#     interval: the redundancy the client spends on the uplink to recover
+#     losses. null when fec_data_packets is zero. A high ratio paired with
+#     a low recovery rate means the parity is not buying much.
 #
 # Anomaly flags use explicit thresholds (see THRESHOLDS below) and a
 # relay's OWN recent baseline, never fleet percentiles.
@@ -59,6 +67,8 @@ THRESHOLDS='{
   "drop_min_packets": 100,
   "fec_regression_delta": 0.15,
   "fec_min_packets": 10,
+  "fec_overhead_high_ratio": 0.15,
+  "fec_overhead_low_recovery": 0.05,
   "latency_jump_factor": 1.5,
   "latency_min_samples": 10,
   "baseline_window": 5,
@@ -156,6 +166,12 @@ def droprate($d): ratio(($d.packets_dropped); (($d.packets_relayed | n) + ($d.pa
 def fecratio($d):
     (($d.fec_recoveries | n) + ($d.fec_losses | n)) as $den
     | if $den > 0 then (($d.fec_recoveries | n) / $den) else null end;
+def fecoverhead($d):
+    (($d.fec_data_packets | n)) as $den
+    | if $den > 0 then (($d.fec_parity_received | n) / $den) else null end;
+def fecrecovery($d):
+    (($d.fec_data_packets | n)) as $den
+    | if $den > 0 then (($d.fec_recoveries | n) / $den) else null end;
 def prior_deltas($prior; $id): [ $prior[] | (.per_relay // {})[$id] // empty | (.delta // {}) ];
 def share($cats; $tot): ($cats | with_entries(.value = (if $tot > 0 then ((.value | n) / $tot) else 0 end)));
 def pct($x): (($x * 10000 | round) / 100 | tostring) + "%";
@@ -178,6 +194,8 @@ def pct($x): (($x * 10000 | round) / 100 | tostring) + "%";
     | (latmean($d)) as $lm
     | (mean_nn([ $pd[] | latmean(.) ])) as $lmBase
     | (fecratio($d)) as $fr
+    | (fecoverhead($d)) as $fo
+    | (fecrecovery($d)) as $frr
     | (mean_nn([ $pd[] | fecratio(.) ])) as $frBase
     | ({
         malformed: ($d.drops_malformed | n),
@@ -216,8 +234,12 @@ def pct($x): (($x * 10000 | round) / 100 | tostring) + "%";
         latency_baseline_us: $lmBase,
         latency_note: "mean of proxy-observed upstream lag, not client RTT",
         fec_recovery_ratio: $fr,
+        fec_recovery_rate: $frr,
         fec_baseline_ratio: $frBase,
         fec_recovery_ratio_cumulative: (fecratio($c)),
+        fec_overhead_ratio: $fo,
+        fec_parity_received: ($d.fec_parity_received | n),
+        fec_data_packets: ($d.fec_data_packets | n),
         fec_recoveries: ($d.fec_recoveries | n),
         fec_losses: ($d.fec_losses | n),
         fec_samples: (($d.fec_recoveries | n) + ($d.fec_losses | n)),
@@ -282,6 +304,30 @@ def pct($x): (($x * 10000 | round) / 100 | tostring) + "%";
                   + " below baseline " + pct(.fec_baseline_ratio))
       }
   ] as $fecFlags
+| [ $rows[] | select(
+      .reset == false
+      and .fec_overhead_ratio != null
+      and .fec_overhead_ratio >= ($T.fec_overhead_high_ratio)
+      and .fec_recovery_rate != null
+      and .fec_recovery_rate <= ($T.fec_overhead_low_recovery)
+      and .fec_data_packets >= ($T.fec_min_packets)
+    )
+    | {
+        type: "fec_overhead_high",
+        relay: .node_id,
+        severity: "warning",
+        metric: "fec_overhead_ratio",
+        value: .fec_overhead_ratio,
+        fec_recovery_rate: .fec_recovery_rate,
+        parity_packets: .fec_parity_received,
+        data_packets: .fec_data_packets,
+        threshold_ratio: $T.fec_overhead_high_ratio,
+        threshold_recovery: $T.fec_overhead_low_recovery,
+        message: (.node_id + ": FEC overhead " + pct(.fec_overhead_ratio)
+                  + " to recover " + pct(.fec_recovery_rate)
+                  + "; consider a larger client --fec-k")
+      }
+  ] as $fecOverheadFlags
 | [ $rows[] | select(
       .reset == false
       and .latency_mean_us != null
@@ -366,7 +412,7 @@ def pct($x): (($x * 10000 | round) / 100 | tostring) + "%";
         message: (.node_id + ": counter reset observed (relay restart or metrics reset)")
       }
   ] as $resetFlags
-| ($dropFlags + $fecFlags + $latFlags + $skewFlags + $rlFlags + $absentFlags + $unreachFlags + $resetFlags) as $flags
+| ($dropFlags + $fecFlags + $fecOverheadFlags + $latFlags + $skewFlags + $rlFlags + $absentFlags + $unreachFlags + $resetFlags) as $flags
 | {
     generated_at: ($last.t // $hist.generated_at // 0),
     history_path: $path,
@@ -379,6 +425,7 @@ def pct($x): (($x * 10000 | round) / 100 | tostring) + "%";
     notes: {
       latency: "latency_mean_us is the mean of proxy-observed upstream response lag (relay_latency_us_sum / relay_latency_us_count), NOT client RTT",
       fec: "fec_recovery_ratio = fec_recoveries / (fec_recoveries + fec_losses), interval deltas; null when the denominator is zero",
+      fec_overhead: "fec_overhead_ratio = fec_parity_received / fec_data_packets and fec_recovery_rate = fec_recoveries / fec_data_packets, interval deltas; fec_recovery_rate is relay-side and reliable without client telemetry; both null when fec_data_packets is zero",
       rates: "packets, drops, sessions and rate-limit numbers are per-snapshot interval deltas; cumulative_* are since relay boot",
       baseline: "spike/regression/jump comparisons use each relay own recent baseline (up to baseline_window prior snapshots), never fleet percentiles",
       reset_guard: "interval flags (drop spike, FEC regression, latency jump) are suppressed when a relay latest snapshot is a reset, because its delta is cumulative-since-boot, not an interval"
@@ -418,13 +465,13 @@ fi
 # ── Human-readable table ─────────────────────────────────────
 print_table() {
     local json="$1"
-    printf '%-14s %-7s %9s %8s %7s %10s %6s %6s %6s %5s %9s %-4s %s\n' \
-        RELAY VER RX DROP 'DROP%' 'LAT_us' 'FEC%' 'RL' 'RLIP' OVF 'A/C' RST FLAGS
-    printf -- '-----------------------------------------------------------------------------------------------\n'
-    while IFS=$'\t' read -r id ver rx drop dpct lat fec rl rlip ovf ac rst flags; do
+    printf '%-14s %-7s %9s %8s %7s %10s %6s %8s %6s %6s %6s %5s %9s %-4s %s\n' \
+        RELAY VER RX DROP 'DROP%' 'LAT_us' 'FEC%' 'FEC_OVH' RL RLIP OVF 'A/C' RST FLAGS
+    printf -- '----------------------------------------------------------------------------------------------------------\n'
+    while IFS=$'\t' read -r id ver rx drop dpct lat fec ovh rl rlip ovf ac rst flags; do
         [ -z "$id" ] && continue
-        printf '%-14s %-7s %9s %8s %7s %10s %6s %6s %6s %5s %9s %-4s %s\n' \
-            "$id" "$ver" "$rx" "$drop" "$dpct" "$lat" "$fec" "$rl" "$rlip" "$ovf" "$ac" "$rst" "$flags"
+        printf '%-14s %-7s %9s %8s %7s %10s %6s %8s %6s %6s %6s %5s %9s %-4s %s\n' \
+            "$id" "$ver" "$rx" "$drop" "$dpct" "$lat" "$fec" "$ovh" "$rl" "$rlip" "$ovf" "$ac" "$rst" "$flags"
     done < <(printf '%s' "$json" | jq -r '
         . as $root
         | $root.relays[]
@@ -435,7 +482,8 @@ print_table() {
             (.packets_dropped | tostring),
             (if .drop_rate == null then "-" else (((.drop_rate * 10000) | round) / 100 | tostring) end),
             (if .latency_mean_us == null then "-" else (((.latency_mean_us * 10) | round) / 10 | tostring) end),
-            (if .fec_recovery_ratio == null then "-" else (((.fec_recovery_ratio * 1000) | round) / 10 | tostring) end),
+            (if .fec_recovery_rate == null then "-" else (((.fec_recovery_rate * 1000) | round) / 10 | tostring) end),
+            (if .fec_overhead_ratio == null then "-" else (((.fec_overhead_ratio * 1000) | round) / 10 | tostring) end),
             (.rate_limit.hits | tostring),
             (.rate_limit.ip_hits | tostring),
             (.rate_limit.overflow | tostring),
@@ -466,6 +514,6 @@ fi
 
 printf '\nnotes:\n'
 printf '%s' "$analysis" | jq -r '.notes | to_entries[] | "  " + .key + ": " + .value'
-printf '  lat_us/fec%%: mean proxy-observed lag (not client RTT); recoveries/(recoveries+losses)\n'
+printf '  lat_us/fec%%/fec_ovh: mean proxy-observed lag (not client RTT); recoveries/data_packets (relay-side); parity/data uplink overhead\n'
 
 exit 0

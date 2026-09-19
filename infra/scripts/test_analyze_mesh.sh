@@ -13,6 +13,8 @@
 #   (d) an empty history does not crash
 #   (e) a missing history falls back to a live collection (file:// fixture)
 #   (f) --no-collect prints a clear instruction instead of collecting
+#   (g) high FEC overhead with low relay-side recovery fires fec_overhead_high
+#   (h) low overhead (or high relay-side recovery) does not fire it
 #   Plus: the analyzer passes `bash -n`.
 #
 # Usage: bash infra/scripts/test_analyze_mesh.sh
@@ -83,8 +85,8 @@ build_history() {
     jq -n --argjson spec "$2" --argjson gen "$3" '
       def counters: ["packets_relayed","bytes_relayed","packets_dropped","drops_malformed",
         "drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed",
-        "drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_recoveries",
-        "fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits",
+        "drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received",
+        "fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits",
         "rate_limit_ip_hits","rate_limit_overflow","sessions_created"];
       def zero: reduce counters[] as $k ({}; .[$k] = 0);
       [ $spec[] as $s
@@ -273,6 +275,76 @@ if [ -f "$MISSING" ]; then
 else
     PASS=$((PASS + 1))
 fi
+
+# ── (g) high FEC overhead + low relay-side recovery -> fec_overhead_high ─
+# fec_losses is 0, so the telemetry-only fec_recovery_ratio reads 1.0 and
+# cannot fire the flag; fec_recovery_rate (4/100) is the signal that does.
+SPEC_G="$(cat <<'JSON'
+[
+ {"t":1000,"relays":{
+   "relay-a":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":100,"fec_parity_received":25,"fec_recoveries":4,"fec_losses":0}},
+   "relay-b":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":100,"fec_parity_received":5,"fec_recoveries":4,"fec_losses":0}},
+   "relay-c":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":0,"fec_parity_received":0,"fec_recoveries":0,"fec_losses":0}}
+ }},
+ {"t":2000,"relays":{
+   "relay-a":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":100,"fec_parity_received":25,"fec_recoveries":4,"fec_losses":0}},
+   "relay-b":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":100,"fec_parity_received":5,"fec_recoveries":4,"fec_losses":0}},
+   "relay-c":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":0,"fec_parity_received":0,"fec_recoveries":0,"fec_losses":0}}
+ }}
+]
+JSON
+)"
+HG="$TMP/history-g.json"
+build_history "$HG" "$SPEC_G" 2000
+if LIGHTSPEED_NODES="$NODES_ABC" LIGHTSPEED_REGISTRY_PATH="$TMP/none.json" \
+        bash "$ANALYZE" --json --no-collect "$HG" >"$TMP/g.json" 2>"$TMP/g.err"; then
+    rc=0
+else
+    rc=$?
+fi
+assert_rc0 "$rc" "(g) analysis exits 0"
+assert_jq "$TMP/g.json" '.thresholds.fec_overhead_high_ratio == 0.15 and .thresholds.fec_overhead_low_recovery == 0.05' "(g) overhead thresholds exposed"
+assert_jq "$TMP/g.json" '[.flags[] | select(.type == "fec_overhead_high")] | length == 1' "(g) exactly one fec_overhead_high flag"
+assert_jq "$TMP/g.json" '[.flags[] | select(.type == "fec_overhead_high" and .relay == "relay-a")] | length == 1' "(g) the flag is on the high-overhead relay"
+assert_jq "$TMP/g.json" '[.flags[] | select(.type == "fec_overhead_high" and .relay == "relay-b")] | length == 0' "(g) the low-overhead relay is not flagged"
+assert_jq "$TMP/g.json" '.relays[] | select(.node_id == "relay-a") | .fec_overhead_ratio == 0.25' "(g) overhead ratio is parity/data"
+assert_jq "$TMP/g.json" '.relays[] | select(.node_id == "relay-a") | .fec_recovery_rate == 0.04' "(g) relay-side recovery rate is recoveries/data"
+assert_jq "$TMP/g.json" '.relays[] | select(.node_id == "relay-a") | .fec_recovery_ratio == 1.0' "(g) telemetry-only ratio still reads 1.0 without fec_losses"
+assert_jq "$TMP/g.json" '.relays[] | select(.node_id == "relay-c") | .fec_overhead_ratio == null' "(g) overhead is null when data packets are zero"
+assert_jq "$TMP/g.json" '.relays[] | select(.node_id == "relay-c") | .fec_recovery_rate == null' "(g) recovery rate is null when data packets are zero"
+assert_jq "$TMP/g.json" '[.flags[] | select(.type == "fec_overhead_high")][0].fec_recovery_rate == 0.04' "(g) the flag carries the relay-side recovery rate"
+assert_jq "$TMP/g.json" '[.flags[] | select(.type == "fec_overhead_high" and .relay == "relay-a" and .fec_recovery_rate <= 0.05)] | length == 1' "(g) the flag fires on relay-a's low relay-side recovery rate"
+assert_jq "$TMP/g.json" '[.flags[] | select(.type == "fec_overhead_high")][0].message | test("--fec-k")' "(g) the message suggests a larger --fec-k"
+assert_jq "$TMP/g.json" '[.flags[] | select(.type == "fec_overhead_high")][0].message | test("to recover 4%")' "(g) the message reports the relay-side recovery rate"
+assert_jq "$TMP/g.json" '.notes.fec_overhead | test("fec_parity_received / fec_data_packets")' "(g) the note explains the overhead metric"
+assert_jq "$TMP/g.json" '.notes.fec_overhead | test("fec_recoveries / fec_data_packets")' "(g) the note explains the relay-side recovery rate"
+
+# ── (h) high relay-side recovery (or low overhead) does not fire ──
+SPEC_H="$(cat <<'JSON'
+[
+ {"t":1000,"relays":{
+   "relay-a":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":100,"fec_parity_received":25,"fec_recoveries":300,"fec_losses":0}},
+   "relay-b":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":100,"fec_parity_received":5,"fec_recoveries":300,"fec_losses":0}}
+ }},
+ {"t":2000,"relays":{
+   "relay-a":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":100,"fec_parity_received":25,"fec_recoveries":300,"fec_losses":0}},
+   "relay-b":{"v":"1.3.2","reach":true,"d":{"fec_data_packets":100,"fec_parity_received":5,"fec_recoveries":300,"fec_losses":0}}
+ }}
+]
+JSON
+)"
+HH="$TMP/history-h.json"
+build_history "$HH" "$SPEC_H" 2000
+if LIGHTSPEED_NODES="$NODES_AB" LIGHTSPEED_REGISTRY_PATH="$TMP/none.json" \
+        bash "$ANALYZE" --json --no-collect "$HH" >"$TMP/h.json" 2>"$TMP/h.err"; then
+    rc=0
+else
+    rc=$?
+fi
+assert_rc0 "$rc" "(h) analysis exits 0"
+assert_jq "$TMP/h.json" '[.flags[] | select(.type == "fec_overhead_high")] | length == 0' "(h) no fec_overhead_high when relay-side recovery is high"
+assert_jq "$TMP/h.json" '.relays[] | select(.node_id == "relay-a") | .fec_overhead_ratio == 0.25' "(h) relay-a still reports a high raw overhead ratio"
+assert_jq "$TMP/h.json" '.relays[] | select(.node_id == "relay-a") | .fec_recovery_rate == 3.0' "(h) relay-side recovery rate exceeds the low-recovery threshold"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
