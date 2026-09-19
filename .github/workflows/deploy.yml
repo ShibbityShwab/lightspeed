@@ -7,6 +7,9 @@ on:
       - 'proxy/**'
       - 'protocol/**'
       - 'infra/scripts/deploy.sh'
+      - 'infra/scripts/relay-install.sh'
+      - 'infra/scripts/relay-updater.sh'
+      - 'infra/scripts/lib-nodes.sh'
   workflow_dispatch:
 
 concurrency:

@@ -33,6 +33,10 @@
 #   (q) a same-version install without --force is a clean no-op: exits 0,
 #       restarts nothing, writes no handoff request, and touches no bytes
 #   (r) --force reinstalls the same version through the normal activation path
+#   (s) --public-ip is inserted into a config that lacks it
+#   (t) --public-ip replaces an existing value
+#   (u) an invalid --public-ip aborts before any config change
+#   (v) --updater installs the self-updater to LIGHTSPEED_UPDATER_DEST
 #
 # Usage: bash infra/scripts/test_relay_install.sh
 # Exits 0 and prints "relay-install: all assertions passed" on success.
@@ -57,6 +61,7 @@ FIXTURE="$TMP/fixture"
 ROOT="$TMP/opt/lightspeed"
 BIN_DIR="$TMP/bin"
 HANDOFF_REQ="$TMP/run/handoff-request.json"
+UPDATER_DEST="$TMP/usr/local/lib/lightspeed/relay-updater.sh"
 SHA_BIN="${LIGHTSPEED_SHA256SUM:-sha256sum}"
 mkdir -p "$FIXTURE" "$ROOT/releases" "$BIN_DIR"
 
@@ -272,6 +277,7 @@ run_install() {
         LIGHTSPEED_HEALTH_INTERVAL="0" \
         LIGHTSPEED_SERVICE_NAME="lightspeed-proxy" \
         LIGHTSPEED_CONFIG_PATH="$FIXTURE/proxy.toml" \
+        LIGHTSPEED_UPDATER_DEST="$UPDATER_DEST" \
         LIGHTSPEED_KEEP_RELEASES="3" \
         LIGHTSPEED_SLEEP_BIN="true" \
         bash "$INSTALLER" --binary "$2" --version "$1" "${@:3}" >"$OUT" 2>"$ERR"
@@ -619,6 +625,49 @@ assert_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" \
 assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.5.0" \
     "(r) current still on the release"
 assert_no_staged "(r) no staged temp file remains"
+
+# ── (s) --public-ip is inserted into a config without it ─────
+reset_fixture
+printf '[server]\nnode_id = "x"\n\n[metrics]\nenabled = true\n' > "$FIXTURE/proxy.toml"
+STAGED_S="$TMP/staged-s"
+make_binary "$STAGED_S" 0
+if run_install "v1" "$STAGED_S" --public-ip "203.0.113.7"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(s) install with --public-ip exits 0"
+assert_grep "$FIXTURE/proxy.toml" 'public_ip = "203.0.113.7"' "(s) public_ip is inserted"
+assert_eq "$(grep -c 'public_ip' "$FIXTURE/proxy.toml")" "1" "(s) public_ip appears exactly once"
+
+# ── (t) --public-ip replaces an existing value ───────────────
+reset_fixture
+printf '[server]\npublic_ip = "198.51.100.1"\n' > "$FIXTURE/proxy.toml"
+STAGED_T="$TMP/staged-t"
+make_binary "$STAGED_T" 0
+if run_install "v1" "$STAGED_T" --public-ip "203.0.113.9"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(t) install with --public-ip replacing exits 0"
+assert_grep "$FIXTURE/proxy.toml" 'public_ip = "203.0.113.9"' "(t) public_ip is replaced"
+assert_not_grep "$FIXTURE/proxy.toml" '198.51.100.1' "(t) the old address is gone"
+assert_eq "$(grep -c 'public_ip' "$FIXTURE/proxy.toml")" "1" "(t) public_ip appears exactly once"
+
+# ── (u) an invalid --public-ip is rejected before any change ──
+reset_fixture
+printf '[server]\nnode_id = "x"\n' > "$FIXTURE/proxy.toml"
+STAGED_U="$TMP/staged-u"
+make_binary "$STAGED_U" 0
+if run_install "v1" "$STAGED_U" --public-ip "not-an-ip"; then rc=0; else rc=$?; fi
+assert_rc_nonzero "$rc" "(u) invalid --public-ip exits non-zero"
+assert_not_grep "$FIXTURE/proxy.toml" 'public_ip' "(u) config is untouched on an invalid address"
+
+# ── (v) --updater installs the self-updater script ───────────
+reset_fixture
+printf '[server]\n' > "$FIXTURE/proxy.toml"
+UPDATER_SRC="$TMP/updater-src.sh"
+printf '#!/usr/bin/env bash\necho updater\n' > "$UPDATER_SRC"
+STAGED_V="$TMP/staged-v"
+make_binary "$STAGED_V" 0
+rm -f "$UPDATER_DEST"
+if run_install "v1" "$STAGED_V" --updater "$UPDATER_SRC"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(v) install with --updater exits 0"
+assert_file_exists "$UPDATER_DEST" "(v) updater is installed at the destination"
+assert_same_bytes "$UPDATER_SRC" "$UPDATER_DEST" "(v) installed updater matches the source"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

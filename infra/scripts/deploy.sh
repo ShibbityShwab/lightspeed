@@ -31,6 +31,7 @@ SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-
 BINARY_NAME="lightspeed-proxy"
 REMOTE_STAGING="/tmp/${BINARY_NAME}.staged"
 REMOTE_INSTALLER="/tmp/lightspeed-relay-install.sh"
+REMOTE_UPDATER="/tmp/lightspeed-relay-updater.sh"
 
 # Colors
 GREEN='\033[0;32m'
@@ -42,6 +43,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 RELAY_INSTALLER="$SCRIPT_DIR/relay-install.sh"
+RELAY_UPDATER="$SCRIPT_DIR/relay-updater.sh"
 
 # ── Resolve node inventory (fail closed) ─────────────────────
 # shellcheck source=lib-nodes.sh
@@ -186,9 +188,27 @@ deploy_node() {
         return 1
     fi
 
-    # Versioned, health-gated activation with automatic rollback.
-    if ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${ip}" \
-            "bash ${REMOTE_INSTALLER} --binary ${REMOTE_STAGING} --version '${VERSION}'"; then
+    # Ship the self-updater too: the deploy pipeline is the only place it can
+    # be refreshed, since provisioning installs it once. Missing/failed upload
+    # is non-fatal.
+    local have_updater=0
+    if [ -f "$RELAY_UPDATER" ]; then
+        if scp $SSH_OPTS -i "$SSH_KEY" "$RELAY_UPDATER" \
+                "${SSH_USER}@${ip}:${REMOTE_UPDATER}" 2>/dev/null; then
+            have_updater=1
+        else
+            echo -e "${YELLOW}⚠️  SCP (updater) failed; deploying without it${NC}"
+        fi
+    fi
+
+    # Versioned, health-gated activation with automatic rollback. public_ip
+    # gives the proxy exact self-tunnel filtering; the updater is refreshed.
+    local installer_cmd="bash ${REMOTE_INSTALLER} --binary ${REMOTE_STAGING} --version '${VERSION}' --public-ip '${ip}'"
+    if [ "$have_updater" -eq 1 ]; then
+        installer_cmd="$installer_cmd --updater ${REMOTE_UPDATER}"
+    fi
+
+    if ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${ip}" "$installer_cmd"; then
         sleep 2
         local post_health
         post_health=$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'v{d.get(\"version\",\"?\")}, up {d.get(\"uptime_secs\",0)}s')" 2>/dev/null || echo "starting...")

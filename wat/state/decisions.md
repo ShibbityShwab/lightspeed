@@ -521,3 +521,17 @@ the client shipped on this branch reconnects within seconds.
 **Alternatives Considered:** offline operator SSH script (rejected: fragile journald parsing, not CI-runnable); client locale country only (rejected: opt-in, empty, self-declared); scoring by "relay path beats direct path" with great-circle distance (rejected: haversine obeys the triangle inequality, so a distance-only model can never show an improvement; real benefit is transit quality and last-mile).
 
 **Impact:** files under `proxy/src/`, `infra/geo/`, `infra/scripts/`, `.github/workflows/geoip-release.yml`, `docs/privacy.md`, `docs/faq.md`, `NOTICE`. No infrastructure spend; no client or protocol change.
+
+## 2026-09-19 - Deploy-path hardening after the 1.6.0 rollout
+
+**Context:** Shipping the geo placement work to the fleet exposed three latent deploy issues: the in-place handoff rejected every attempt because `/run/lightspeed/handoff-request.json` was root-owned `0600` while the proxy runs under `DynamicUser`; `deploy.sh` no-ops when the release version is unchanged, so proxy changes need a version bump to reach relays; and `relay-updater.sh` is never shipped by the deploy pipeline, so updater changes stayed at their provisioning revision.
+
+**Key decisions:**
+- `relay-install.sh` gained `--public-ip` (idempotent `[server] public_ip` edit, validated as IPv4) and `--updater` (install the self-updater to `LIGHTSPEED_UPDATER_DEST`), both applied before activation so the new process reads the corrected config on its first start.
+- `deploy.sh` passes each node's registry IP as `--public-ip` and ships `infra/scripts/relay-updater.sh` as `--updater`.
+- `deploy.yml` additionally triggers on `relay-install.sh`, `relay-updater.sh`, and `lib-nodes.sh` changes.
+- The handoff request is chowned to the runtime directory owner after publishing, so the proxy can read it.
+
+**Impact:** `infra/scripts/{relay-install,deploy,test_relay_install}.sh`, `.github/workflows/deploy.yml`, `CHANGELOG.md`, `Cargo.toml`/`Cargo.lock` (1.6.1).
+
+**Alternatives Considered:** a blunt `systemctl restart` fallback for the handoff failure was rejected in favour of fixing the permission mismatch, which also unblocks every future in-place update.
