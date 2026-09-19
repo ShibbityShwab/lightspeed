@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-19
+
+### Demand-driven relay placement analysis
+
+The proxy now derives the **country** of the client and game-server endpoints from a
+locally stored DB-IP Lite database, in memory at session creation, and aggregates only
+`(source_country, destination_country)` session counts. No raw IP is stored or exported,
+no client or protocol change is involved, and a k>=3 floor suppresses small cells before
+anything leaves the proxy. The counters are exposed as `lightspeed_geo_*` on `/metrics`.
+
+A new placement recommender (`infra/scripts/recommend-regions.sh`) turns the collected
+history into a player-region to game-server-region demand matrix and scores candidate
+hosting regions by demand-weighted coverage and redundancy, emitting an ADD, MOVE, or
+NONE recommendation with a stability gate. It reports `INSUFFICIENT_DATA` until enough
+sessions accumulate, and it is advisory only: it never provisions or moves a relay. The
+observed counts are coarsened to region pairs and persisted on the `stats` branch.
+
+### Relay operators
+
+The monthly DB-IP Lite MMDB is published as a `geoip-YYYY-MM` release asset and synced to
+`/opt/lightspeed/geoip/` by `relay-updater.sh --geoip-only`, with SHA-256 verification and
+a non-fatal failure path. Geo aggregation needs the database present when the proxy starts;
+if the file is missing, the proxy runs normally with aggregation disabled.
+
+### Community
+
+Built by the LightSpeed maintainer for the community relays and the players they serve.
+
 <!-- Authors: every release entry ends with a `### Community` section crediting
      the humans and reporters behind the changes (code contributors, issue
      reporters, dependency-bump bots). See the 1.5.0 entry for the format. -->
