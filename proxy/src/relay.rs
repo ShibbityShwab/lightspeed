@@ -567,6 +567,10 @@ impl RelayEngine {
                 }
             };
 
+            // Seal the adopted fd here, where ownership is established, so the
+            // caller never touches fds of snapshots that were skipped/closed.
+            let _ = crate::handoff::set_cloexec(snap.outbound_fd);
+
             let age = Duration::from_micros(snap.age_us);
             let started_at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
             let session = Arc::new(ClientSession {

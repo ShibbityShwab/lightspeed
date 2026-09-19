@@ -662,9 +662,9 @@ async fn adopt_handoff(
         .await;
 
     handoff::set_cloexec(manifest.data_fd)?;
-    for snap in &manifest.sessions {
-        handoff::set_cloexec(snap.outbound_fd)?;
-    }
+    // Per-session fds are sealed by install_handoff_sessions as each socket is
+    // adopted; snapshots that were skipped had their fd closed there, so they
+    // must not be touched here (a stale number could have been reused).
 
     info!(
         sessions = installed,
@@ -902,6 +902,12 @@ async fn run_handoff_sequence(
         );
         anyhow::bail!("handoff pre-validation failed: {e:#}");
     }
+
+    // Seal the verified binary fd before the final exec. execve of
+    // /proc/self/fd/<fd> resolves the fd while it is still open, and FD_CLOEXEC
+    // only closes it in the new image, so this works and stops the adopted
+    // process from inheriting (and leaking) a descriptor to its own binary.
+    let _ = handoff::set_cloexec(binary_fd);
 
     // (f) Announce control-plane shutdown, free the ports, then exec in place.
     #[cfg(feature = "quic")]
