@@ -55,9 +55,9 @@ if [ ! -f "$COLLECT" ]; then
 fi
 
 # ── Fixture writers ──────────────────────────────────────────
-# write_fixture <dir> <packets> <dropped> <bytes> <fec> <sessions> <active> <malformed> <lat_sum> <lat_count> <fec_losses>
+# write_fixture <dir> <packets> <dropped> <bytes> <fec> <sessions> <active> <malformed> <lat_sum> <lat_count> <fec_losses> <parity>
 write_fixture() {
-    local dir="$1" p="$2" d="$3" b="$4" f="$5" s="$6" a="$7" mal="$8" lsum="$9" lcnt="${10}" floss="${11}"
+    local dir="$1" p="$2" d="$3" b="$4" f="$5" s="$6" a="$7" mal="$8" lsum="$9" lcnt="${10}" floss="${11}" fpar="${12}"
     cat > "$dir/relay-a.health.json" <<JSON
 {"status":"healthy","version":"1.3.2","active_connections":$a,"packets_relayed":$p,"packets_dropped":$d,"bytes_relayed":$b,"fec_recoveries":$f,"sessions_created":$s,"drops_malformed":$mal}
 JSON
@@ -69,6 +69,7 @@ lightspeed_active_connections{node_id="relay-a"} $a
 lightspeed_relay_latency_us_sum{node_id="relay-a"} $lsum
 lightspeed_relay_latency_us_count{node_id="relay-a"} $lcnt
 lightspeed_fec_data_packets_total{node_id="relay-a"} 7
+lightspeed_fec_parity_received_total{node_id="relay-a"} $fpar
 lightspeed_fec_recoveries_total{node_id="relay-a"} $f
 lightspeed_telemetry_fec_losses_total{node_id="relay-a"} $floss
 lightspeed_rate_limit_hits_total{node_id="relay-a"} 4
@@ -112,7 +113,7 @@ run_collect() {
 
 # ── (a) absent history initializes cleanly ───────────────────
 H="$TMP/history.json"
-write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 run_collect "$H" "$REG_A"; assert_rc0 $? "(a) first run exits 0"
 assert_jq "$H" '.version == 1' "(a) document version is 1"
 assert_jq "$H" '.snapshots | length == 1' "(a) absent history starts with one snapshot"
@@ -124,26 +125,32 @@ assert_jq "$H" '.snapshots[0].per_relay["relay-a"].cumulative.drops_malformed ==
 assert_jq "$H" '.snapshots[0].per_relay["relay-a"].cumulative.relay_latency_us_sum == 500 and .snapshots[0].per_relay["relay-a"].cumulative.relay_latency_us_count == 10' "(a) latency histogram sum/count parsed"
 assert_jq "$H" '.snapshots[0].per_relay["relay-a"].reset == true' "(a) unseen relay treated as reset"
 assert_jq "$H" '.snapshots[0].interval.packets_relayed == 100 and .snapshots[0].totals.packets_relayed == 100' "(a) first snapshot interval == totals == raw"
+assert_jq "$H" '.snapshots[0].per_relay["relay-a"].cumulative.fec_parity_received == 25' "(a) cumulative fec_parity_received parsed from Prometheus"
+assert_jq "$H" '.snapshots[0].interval.fec_parity_received == 25 and .snapshots[0].totals.fec_parity_received == 25' "(a) first snapshot parity interval == totals == raw"
 
 # ── (b) monotonic counters -> exact deltas ───────────────────
-write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
 run_collect "$H" "$REG_A"; assert_rc0 $? "(b) second run exits 0"
 assert_jq "$H" '.snapshots | length == 2' "(b) history grows to two snapshots"
 assert_jq "$H" '.snapshots[1].interval.packets_relayed == 50' "(b) exact packets_relayed delta"
 assert_jq "$H" '.snapshots[1].interval.drops_malformed == 3' "(b) exact drops_malformed delta"
 assert_jq "$H" '.snapshots[1].interval.relay_latency_us_sum == 400' "(b) latency sum delta"
+assert_jq "$H" '.snapshots[1].interval.fec_parity_received == 15' "(b) exact fec parity delta"
+assert_jq "$H" '.snapshots[1].totals.fec_parity_received == 40' "(b) fec parity totals accumulate"
 assert_jq "$H" '.snapshots[1].totals.packets_relayed == 150' "(b) totals accumulate"
 assert_jq "$H" '.snapshots[1].per_relay["relay-a"].reset == false' "(b) monotonic relay is not a reset"
 assert_jq "$H" '.snapshots[1].per_relay["relay-a"].cumulative.packets_relayed == 150' "(b) cumulative stored post-scrape"
 
 # ── (c) counter decrease -> reset delta, totals never regress ──
-write_fixture "$TMP" 30 2 200 0 1 1 1 100 3 0
+write_fixture "$TMP" 30 2 200 0 1 1 1 100 3 0 10
 run_collect "$H" "$REG_A"; assert_rc0 $? "(c) third run exits 0"
 assert_jq "$H" '.snapshots | length == 3' "(c) reset append grows history"
 assert_jq "$H" '.snapshots[2].interval.packets_relayed == 30' "(c) reset delta equals current value"
 assert_jq "$H" '.snapshots[2].per_relay["relay-a"].reset == true' "(c) decreased counter marks reset=true"
 assert_jq "$H" '.snapshots[2].per_relay["relay-a"].reset_metrics | index("packets_relayed") != null' "(c) reset_metrics names the decreased counter"
 assert_jq "$H" '.snapshots[2].per_relay["relay-a"].reset_metrics | index("drops_malformed") != null' "(c) multiple decreased counters flagged"
+assert_jq "$H" '.snapshots[2].per_relay["relay-a"].reset_metrics | index("fec_parity_received") != null' "(c) decreased parity counter flagged"
+assert_jq "$H" '.snapshots[2].interval.fec_parity_received == 10' "(c) parity reset delta equals current value"
 assert_jq "$H" '.snapshots[2].totals.packets_relayed == 180' "(c) totals add reset deltas"
 assert_jq "$H" '(.snapshots[2].totals as $n | .snapshots[1].totals as $p | [ ($n | keys_unsorted[]) as $k | ($n[$k] >= $p[$k]) ] | all)' "(c) totals never regress across every counter"
 
@@ -151,7 +158,7 @@ assert_jq "$H" '(.snapshots[2].totals as $n | .snapshots[1].totals as $p | [ ($n
 CAP="$TMP/cap-history.json"
 jq -n '[range(1;361) | {t: ., relay_count:1, healthy_count:1, interval:{}, totals:{}, per_relay:{}}]
        | {version:1, generated_at:360, snapshots:.}' > "$CAP"
-write_fixture "$TMP" 500 10 5000 3 2 1 1 100 5 0
+write_fixture "$TMP" 500 10 5000 3 2 1 1 100 5 0 50
 run_collect "$CAP" "$REG_A"; assert_rc0 $? "(d) cap run exits 0"
 assert_jq "$CAP" '.snapshots | length == 360' "(d) history capped at 360 snapshots"
 assert_jq "$CAP" '.snapshots[0].t == 2' "(d) oldest retained snapshot is the second"
@@ -161,7 +168,7 @@ assert_jq "$CAP" '.snapshots[-1].per_relay["relay-a"].cumulative.packets_relayed
 REG_AB="$TMP/registry-ab.json"
 write_registry "$REG_AB" "[$node_a,$node_b]"
 MISS="$TMP/missing-history.json"
-write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 run_collect "$MISS" "$REG_AB"; assert_rc0 $? "(e) run with a missing relay exits 0"
 assert_jq "$MISS" '.version == 1 and (.snapshots | length) == 1' "(e) missing relay still writes a valid doc"
 assert_jq "$MISS" '.snapshots[0].relay_count == 2' "(e) both resolved relays appear"
@@ -173,7 +180,7 @@ assert_jq "$MISS" '.snapshots[0].interval.packets_relayed == 100' "(e) unreachab
 # ── (f) corrupt history starts fresh ─────────────────────────
 COR=$TMP/corrupt-history.json
 printf 'not json at all {{{' > "$COR"
-write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 run_collect "$COR" "$REG_A"; assert_rc0 $? "(f) corrupt history run exits 0"
 assert_jq "$COR" '.version == 1 and (.snapshots | length) == 1' "(f) corrupt history reinitializes cleanly"
 

@@ -45,7 +45,7 @@ DEFAULT_HISTORY='{"version":1,"generated_at":0,"snapshots":[]}'
 
 # Cumulative counters tracked for reset-safe deltas. Keep this list in
 # sync with RELAY_JQ's `cumulative` object.
-COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","sessions_created"]'
+COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","sessions_created"]'
 
 # ── Always write valid JSON; never fail the caller ───────────
 write_json() {
@@ -109,6 +109,7 @@ def mver($m):
       drops_session_setup: pick($H; $m; "drops_session_setup"; "lightspeed_drops_session_setup_total"),
       drops_relay_send_errors: pick($H; $m; "drops_relay_send_errors"; "lightspeed_drops_relay_send_errors_total"),
       fec_data_packets: mval($m; "lightspeed_fec_data_packets_total"),
+      fec_parity_received: mval($m; "lightspeed_fec_parity_received_total"),
       fec_recoveries: pick($H; $m; "fec_recoveries"; "lightspeed_fec_recoveries_total"),
       fec_losses: mval($m; "lightspeed_telemetry_fec_losses_total"),
       relay_latency_us_sum: mval($m; "lightspeed_relay_latency_us_sum"),
