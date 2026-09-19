@@ -94,6 +94,7 @@ pub fn ingest_telemetry(metrics: &ProxyMetrics, body: &[u8]) -> Result<(), &'sta
         p50 = report.p50_ms,
         p99 = report.p99_ms,
         samples = report.sample_count,
+        route_legs = report.route_legs.len(),
         "Telemetry report ingested"
     );
     metrics.record_telemetry_report(&report);

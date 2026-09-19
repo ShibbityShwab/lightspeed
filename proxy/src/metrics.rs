@@ -102,6 +102,65 @@ impl Default for TelemetryAggregator {
     }
 }
 
+/// Aggregated opt-in telemetry for one `(relay, game_id, country)` path.
+///
+/// Every field is a sum or count over the individual clients' per-leg
+/// observations; no raw or per-client sample is retained. As with
+/// [`TelemetryCell`], `rtt_*_sum_ms / reports` is the mean of the values the
+/// clients reported for that leg, not a population percentile.
+#[derive(Debug, Default, Clone)]
+pub struct RouteTelemetryCell {
+    /// Number of leg observations folded into this cell.
+    pub reports: u64,
+    /// Sum of the legs' `samples` counts.
+    pub samples: u64,
+    /// Sum of the legs' `rtt_p50_ms` values.
+    pub rtt_p50_sum_ms: f64,
+    /// Sum of the legs' `rtt_p95_ms` values.
+    pub rtt_p95_sum_ms: f64,
+    /// Sum of the legs' `rtt_p99_ms` values.
+    pub rtt_p99_sum_ms: f64,
+    /// Sum of the legs' `jitter_ms` values.
+    pub jitter_sum_ms: f64,
+    /// Sum of the legs' `lost` counts.
+    pub lost: u64,
+    /// Sum of the legs' `recovered` counts.
+    pub recovered: u64,
+    /// Sum of the legs' `dedup_saved` counts.
+    pub dedup_saved: u64,
+}
+
+/// Bounded per-`(relay, game, country)` telemetry aggregator.
+///
+/// Keyed by the normalized relay id, the raw numeric `game_id`, and the
+/// normalized two-letter country. Counters accumulate on ingest; the map is
+/// capped at [`RouteTelemetryAggregator::max_cells`], after which new keys are
+/// counted in `rejected` instead of inserted.
+#[derive(Debug)]
+pub struct RouteTelemetryAggregator {
+    /// Per-cell aggregates, keyed by `(normalized relay, game_id, country)`.
+    pub cells: HashMap<(String, u8, String), RouteTelemetryCell>,
+    /// Leg observations dropped because the cell cap was reached.
+    pub rejected: u64,
+    /// Maximum number of distinct cells retained.
+    pub max_cells: usize,
+}
+
+impl Default for RouteTelemetryAggregator {
+    fn default() -> Self {
+        Self {
+            cells: HashMap::new(),
+            rejected: 0,
+            max_cells: MAX_TELEMETRY_CELLS,
+        }
+    }
+}
+
+/// Longest relay identifier accepted from a client.
+///
+/// Mirrors the protocol's `PathObservation` validation bound.
+const MAX_RELAY_ID_LEN: usize = 64;
+
 /// Normalize a client-supplied country into a safe, bounded label value.
 ///
 /// Trims surrounding whitespace, keeps only ASCII alphabetic characters,
@@ -120,6 +179,26 @@ fn normalize_country(raw: &str) -> String {
     } else {
         "XX".to_string()
     }
+}
+
+/// Normalize a client-supplied relay id into a safe, bounded label value.
+///
+/// Returns `None` for anything that does not satisfy the protocol's relay-id
+/// charset (1..=64 bytes of ASCII alphanumerics or `.`, `_`, `-`). Accepted ids
+/// are lowercased so case variants cannot inflate the cell cardinality. This is
+/// a defense-in-depth re-check: the ingest boundary already runs
+/// [`lightspeed_protocol::TelemetryReport::validate`].
+fn normalize_relay(raw: &str) -> Option<String> {
+    if raw.is_empty() || raw.len() > MAX_RELAY_ID_LEN {
+        return None;
+    }
+    if !raw
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(raw.to_ascii_lowercase())
 }
 
 /// Compute a proxy-observed upstream response lag from two monotonic microsecond
@@ -233,6 +312,9 @@ pub struct ProxyMetrics {
     /// Bounded aggregation of opt-in client telemetry, keyed by
     /// `(game_id, normalized country)`.
     pub telemetry: std::sync::Mutex<TelemetryAggregator>,
+    /// Bounded aggregation of per-route-leg client telemetry, keyed by
+    /// `(normalized relay, game_id, country)`.
+    pub route_telemetry: std::sync::Mutex<RouteTelemetryAggregator>,
 
     // ── Latency histogram buckets ───────────────────────────────
     /// Per-bucket (non-cumulative) relay latency counts.
@@ -277,6 +359,7 @@ impl ProxyMetrics {
             inbound_batches_total: AtomicU64::new(0),
             inbound_packets_received: AtomicU64::new(0),
             telemetry: std::sync::Mutex::new(TelemetryAggregator::default()),
+            route_telemetry: std::sync::Mutex::new(RouteTelemetryAggregator::default()),
             latency_buckets: Default::default(),
             start_time: Instant::now(),
         }
@@ -393,25 +476,70 @@ impl ProxyMetrics {
     /// When the cell map is already at [`TelemetryAggregator::max_cells`] and
     /// this report would create a new key, it is counted in `rejected` instead.
     pub fn record_telemetry_report(&self, report: &lightspeed_protocol::TelemetryReport) {
-        let country = normalize_country(&report.client_country);
-        let key = (report.game_id, country);
-        let mut agg = self
-            .telemetry
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !agg.cells.contains_key(&key) && agg.cells.len() >= agg.max_cells {
-            agg.rejected += 1;
+        {
+            let country = normalize_country(&report.client_country);
+            let key = (report.game_id, country);
+            let mut agg = self
+                .telemetry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !agg.cells.contains_key(&key) && agg.cells.len() >= agg.max_cells {
+                agg.rejected += 1;
+            } else {
+                let cell = agg.cells.entry(key).or_default();
+                cell.reports += 1;
+                cell.samples += u64::from(report.sample_count);
+                cell.p50_sum_ms += f64::from(report.p50_ms);
+                cell.p95_sum_ms += f64::from(report.p95_ms);
+                cell.p99_sum_ms += f64::from(report.p99_ms);
+                cell.jitter_sum_ms += f64::from(report.jitter_ms);
+                cell.fec_recoveries += u64::from(report.fec_recoveries);
+                cell.fec_losses += u64::from(report.fec_losses);
+            }
+        }
+        self.record_route_legs(report.game_id, &report.client_country, &report.route_legs);
+    }
+
+    /// Fold a report's per-relay observations into the bounded per-path
+    /// aggregator, keyed by `(normalized relay, game_id, country)`.
+    ///
+    /// Legs whose relay id does not satisfy the protocol charset are skipped,
+    /// and a novel key past the cell cap is counted in `rejected` rather than
+    /// inserted.
+    pub fn record_route_legs(
+        &self,
+        game_id: u8,
+        raw_country: &str,
+        legs: &[lightspeed_protocol::telemetry::PathObservation],
+    ) {
+        if legs.is_empty() {
             return;
         }
-        let cell = agg.cells.entry(key).or_default();
-        cell.reports += 1;
-        cell.samples += u64::from(report.sample_count);
-        cell.p50_sum_ms += f64::from(report.p50_ms);
-        cell.p95_sum_ms += f64::from(report.p95_ms);
-        cell.p99_sum_ms += f64::from(report.p99_ms);
-        cell.jitter_sum_ms += f64::from(report.jitter_ms);
-        cell.fec_recoveries += u64::from(report.fec_recoveries);
-        cell.fec_losses += u64::from(report.fec_losses);
+        let country = normalize_country(raw_country);
+        let mut agg = self
+            .route_telemetry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for leg in legs {
+            let Some(relay) = normalize_relay(&leg.relay) else {
+                continue;
+            };
+            let key = (relay, game_id, country.clone());
+            if !agg.cells.contains_key(&key) && agg.cells.len() >= agg.max_cells {
+                agg.rejected += 1;
+                continue;
+            }
+            let cell = agg.cells.entry(key).or_default();
+            cell.reports += 1;
+            cell.samples += u64::from(leg.samples);
+            cell.rtt_p50_sum_ms += f64::from(leg.rtt_p50_ms);
+            cell.rtt_p95_sum_ms += f64::from(leg.rtt_p95_ms);
+            cell.rtt_p99_sum_ms += f64::from(leg.rtt_p99_ms);
+            cell.jitter_sum_ms += f64::from(leg.jitter_ms);
+            cell.lost += u64::from(leg.lost);
+            cell.recovered += u64::from(leg.recovered);
+            cell.dedup_saved += u64::from(leg.dedup_saved);
+        }
     }
 
     /// Build a collector whose telemetry map is capped at `max_cells`.
@@ -421,6 +549,16 @@ impl ProxyMetrics {
     pub fn with_max_telemetry_cells(max_cells: usize) -> Self {
         let metrics = Self::new();
         metrics.telemetry.lock().unwrap().max_cells = max_cells;
+        metrics
+    }
+
+    /// Build a collector whose per-path telemetry map is capped at `max_cells`.
+    ///
+    /// Test-only: production always uses [`MAX_TELEMETRY_CELLS`].
+    #[cfg(test)]
+    pub fn with_max_route_telemetry_cells(max_cells: usize) -> Self {
+        let metrics = Self::new();
+        metrics.route_telemetry.lock().unwrap().max_cells = max_cells;
         metrics
     }
 
@@ -817,6 +955,127 @@ impl ProxyMetrics {
             }
         }
 
+        // ── Per-route-leg client telemetry (aggregated, k-anonymized) ──
+        // HELP/TYPE headers are emitted unconditionally so the family is
+        // discoverable before the k-anonymity floor is reached.
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_reports_total Anonymous opt-in client per-route-leg observations, aggregated by relay, game, and country\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_reports_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_samples_total Sum of client-reported RTT sample counts per route-leg cell\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_samples_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_rtt_p50_ms_sum Sum of client-reported per-leg p50 RTT values (ms); _sum/_count is the mean of client-reported leg medians, not a population p50\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p50_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p50_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_rtt_p95_ms_sum Sum of client-reported per-leg p95 RTT values (ms); _sum/_count is the mean of client-reported leg p95s, not a population p95\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p95_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p95_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_rtt_p99_ms_sum Sum of client-reported per-leg p99 RTT values (ms); _sum/_count is the mean of client-reported leg p99s, not a population p99\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p99_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_route_rtt_p99_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_jitter_ms_sum Sum of client-reported per-leg jitter values (ms); _sum/_count is the mean of client-reported leg jitter values, not a population statistic\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_jitter_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_route_jitter_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_lost_total Sum of client-reported packets lost per route leg\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_lost_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_recovered_total Sum of client-reported packets recovered by FEC per route leg\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_recovered_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_dedup_saved_total Sum of client-reported duplicates suppressed per route leg\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_dedup_saved_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_route_rejected_total Route-leg observations dropped because the per-(relay,game,country) cell cap was reached\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_route_rejected_total counter\n");
+
+        {
+            let agg = self
+                .route_telemetry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            out.push_str(&format!(
+                "lightspeed_telemetry_route_rejected_total{{{}}} {}\n",
+                labels, agg.rejected
+            ));
+            for ((relay, game_id, country), cell) in &agg.cells {
+                if cell.reports < MIN_TELEMETRY_CELL_REPORTS {
+                    continue;
+                }
+                let game = lightspeed_protocol::game_id::key_for_id(*game_id).unwrap_or("unknown");
+                let cell_labels = format!(
+                    "{},game=\"{}\",country=\"{}\",relay=\"{}\"",
+                    labels, game, country, relay
+                );
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_reports_total{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_samples_total{{{}}} {}\n",
+                    cell_labels, cell.samples
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p50_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.rtt_p50_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p50_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p95_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.rtt_p95_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p95_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p99_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.rtt_p99_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_rtt_p99_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_jitter_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.jitter_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_jitter_ms_count{{{}}} {}\n",
+                    cell_labels, cell.reports
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_lost_total{{{}}} {}\n",
+                    cell_labels, cell.lost
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_recovered_total{{{}}} {}\n",
+                    cell_labels, cell.recovered
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_route_dedup_saved_total{{{}}} {}\n",
+                    cell_labels, cell.dedup_saved
+                ));
+            }
+        }
+
         // ── Build info ──────────────────────────────────────────
         out.push_str("# HELP lightspeed_build_info Build information\n");
         out.push_str("# TYPE lightspeed_build_info gauge\n");
@@ -1163,6 +1422,131 @@ mod tests {
         assert!(
             !output.contains("game=\"cs2\",country=\"US\""),
             "a cell below the k-anonymity floor must not be emitted"
+        );
+    }
+
+    fn fra_leg() -> lightspeed_protocol::telemetry::PathObservation {
+        lightspeed_protocol::telemetry::PathObservation {
+            relay: "relay-fra".to_string(),
+            rtt_p50_ms: 18.0,
+            rtt_p95_ms: 25.0,
+            rtt_p99_ms: 30.0,
+            jitter_ms: 1.2,
+            samples: 60,
+            lost: 3,
+            recovered: 2,
+            dedup_saved: 1,
+        }
+    }
+
+    fn ams_leg() -> lightspeed_protocol::telemetry::PathObservation {
+        lightspeed_protocol::telemetry::PathObservation {
+            relay: "relay-ams".to_string(),
+            rtt_p50_ms: 22.0,
+            rtt_p95_ms: 33.0,
+            rtt_p99_ms: 41.0,
+            jitter_ms: 2.0,
+            samples: 60,
+            lost: 5,
+            recovered: 4,
+            dedup_saved: 0,
+        }
+    }
+
+    /// Given: three reports, each carrying the same two route legs.
+    /// When: the reports are folded into the per-path aggregator.
+    /// Then: each relay becomes one cell whose sums are 3x the per-leg values,
+    /// and a novel relay past the cell cap is rejected instead of inserted.
+    #[test]
+    fn per_path_telemetry_aggregated_and_bounded() {
+        let m = ProxyMetrics::new();
+
+        for _ in 0..3 {
+            let mut r = report(2, "DE");
+            r.route_legs = vec![fra_leg(), ams_leg()];
+            m.record_telemetry_report(&r);
+        }
+
+        let output = m.to_prometheus("test", "test-node");
+
+        // relay-fra: 3 observations, sums are 3x per-leg values.
+        assert!(output.contains(
+            "lightspeed_telemetry_route_reports_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 3"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_samples_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 180"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p50_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 54.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p50_ms_count{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 3"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p95_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 75.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p99_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 90.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_jitter_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 3.6"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_lost_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 9"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_recovered_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 6"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_dedup_saved_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-fra\"} 3"
+        ));
+
+        // relay-ams is a distinct cell, not folded into relay-fra.
+        assert!(output.contains(
+            "lightspeed_telemetry_route_reports_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-ams\"} 3"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_rtt_p99_ms_sum{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-ams\"} 123.0"
+        ));
+        assert!(output.contains(
+            "lightspeed_telemetry_route_lost_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"DE\",relay=\"relay-ams\"} 15"
+        ));
+
+        // Six leg observations over two distinct relay ids collapse to two cells.
+        assert_eq!(m.route_telemetry.lock().unwrap().cells.len(), 2);
+
+        // Bounded: past the cell cap, a novel relay is rejected, not inserted.
+        let capped = ProxyMetrics::with_max_route_telemetry_cells(1);
+        let mut first = report(2, "DE");
+        first.route_legs = vec![fra_leg()];
+        capped.record_telemetry_report(&first);
+        let mut second = report(2, "DE");
+        second.route_legs = vec![ams_leg()];
+        capped.record_telemetry_report(&second);
+        assert_eq!(capped.route_telemetry.lock().unwrap().cells.len(), 1);
+        assert_eq!(capped.route_telemetry.lock().unwrap().rejected, 1);
+    }
+
+    /// Given: a single report carrying one route leg.
+    /// When: the report is folded in.
+    /// Then: the per-relay cell stays under the k-anonymity floor and is withheld,
+    /// even though the route metric family itself is declared.
+    #[test]
+    fn per_path_cell_below_k_suppressed() {
+        let m = ProxyMetrics::new();
+        let mut r = report(2, "DE");
+        r.route_legs = vec![fra_leg()];
+        m.record_telemetry_report(&r);
+
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(
+            output.contains("lightspeed_telemetry_route_reports_total"),
+            "the route metric family must be declared"
+        );
+        assert!(
+            !output.contains("relay=\"relay-fra\""),
+            "a per-relay cell below the k-anonymity floor must not be emitted"
         );
     }
 }
