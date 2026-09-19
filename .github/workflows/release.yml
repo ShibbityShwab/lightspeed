@@ -394,15 +394,28 @@ jobs:
     if: ${{ always() && needs.host.result == 'success' }}
     runs-on: "ubuntu-22.04"
     # The package has never been bootstrapped in microsoft/winget-pkgs, and
-    # winget-releaser cannot create the first version; until that manual
-    # bootstrap happens, do not fail the release on this optional publisher.
+    # winget-releaser cannot create the first version. A pre-check below skips
+    # the publish until the first manifest exists; continue-on-error stays as a
+    # belt-and-braces guard so this optional publisher never fails a release.
     continue-on-error: true
     env:
       # secrets.* cannot be read inside an `if:`, so gate on the env var instead.
       WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
     steps:
+      - name: Check whether the winget package exists
+        id: winget_pkg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api repos/microsoft/winget-pkgs/contents/manifests/s/ShibbityShwab/LightSpeed >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ShibbityShwab.LightSpeed is not bootstrapped in microsoft/winget-pkgs yet; skipping the winget publish until the first manifest is submitted."
+          fi
+
       - name: Publish LightSpeed to Windows Package Manager (winget)
-        if: ${{ env.WINGET_TOKEN != '' }}
+        if: ${{ env.WINGET_TOKEN != '' && steps.winget_pkg.outputs.exists == 'true' }}
         # vedantmgoyal9/winget-releaser: repo was renamed from
         # vedantmgoyal2009/winget-releaser (the old name still redirects).
         uses: vedantmgoyal9/winget-releaser@v2
