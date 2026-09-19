@@ -9,7 +9,7 @@ This directory is a **prepared + handoff** state. Publishing to
 
 ## What ships
 
-| File        | Arch          | Source asset (GitHub release v1.4.3) |
+| File        | Arch          | Source asset (GitHub release v1.5.0) |
 |-------------|---------------|--------------------------------------|
 | `/usr/bin/lightspeed`     | x86_64, aarch64 | `lightspeed-client-<triple>.tar.xz`   |
 | `/usr/bin/lightspeed-gui` | x86_64 only     | `lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz` |
@@ -44,19 +44,19 @@ cp /path/to/dist/aur/PKGBUILD /path/to/dist/aur/.SRCINFO .
 
 # 3. Commit and push. Pushing the initial commit publishes the package:
 git add PKGBUILD .SRCINFO
-git commit -m "lightspeed-bin 1.4.3-1"
+git commit -m "lightspeed-bin 1.5.0-1"
 git push
 ```
 
 ## Updating to a new upstream release
 
-When LightSpeed tags a new version (e.g. `v1.4.3`):
+When LightSpeed tags a new version (e.g. `v1.5.0`):
 
-1. `pkgver=1.4.3` in `PKGBUILD` (keep `pkgrel=1` on a version bump; bump
+1. `pkgver=1.5.0` in `PKGBUILD` (keep `pkgrel=1` on a version bump; bump
    `pkgrel` for packaging-only changes).
 2. Refresh the sha256 sums against the new release's assets:
    ```sh
-   gh release view v1.4.3 --repo ShibbityShwab/lightspeed --json assets \
+   gh release view v1.5.0 --repo ShibbityShwab/lightspeed --json assets \
      -q '.assets[] | select(.name | endswith(".tar.xz")) | "\(.name)  \(.digest | sub("sha256:"; ""))"'
    ```
    Asset names follow `lightspeed-{client,gui}-<target-triple>.tar.xz`;
@@ -66,17 +66,19 @@ When LightSpeed tags a new version (e.g. `v1.4.3`):
 4. Commit both files and `git push`.
 
 Do **not** update sha256sums of unchanged assets unnecessarily: real sums
-are already in place for 1.4.3 (verified by downloading each tarball,
-matching the release's published sha256, and by a full `makepkg` build that
-reported `Passed` on all checksums).
+are already in place for 1.5.0 (verified against the release's published
+sha256; see Local verification below).
 
-## Local verification (already performed for 1.4.3)
+## Local verification
 
-- `makepkg --printsrcinfo` -> exit 0, `.SRCINFO` consistent with `PKGBUILD`.
-- Full `makepkg -f` build on x86_64 -> success; checksum verification
-  `Passed`; package contains `/usr/bin/lightspeed`,
-  `/usr/bin/lightspeed-gui` and the LICENSE file.
-- `/usr/bin/lightspeed --version` -> `lightspeed 1.4.3`.
-- `ldd` on both binaries shows glibc/libgcc only, hence `depends=()`.
-  The GUI dlopens X11/Wayland/EGL at runtime (winit/glutin); install
-  `mesa`, `libxkbcommon`, and the wayland/X11 libs on a bare system.
+- 1.5.0: `makepkg --nobuild` validated the `sha256sums` against the published
+  assets (`Passed` for both x86_64 tarballs), and `makepkg --printsrcinfo` was
+  regenerated so `.SRCINFO` matches `PKGBUILD`. The packaging logic is
+  unchanged since 1.4.3.
+- 1.4.3 (full build): `makepkg -f` on x86_64 succeeded with checksums
+  `Passed`; the package contained `/usr/bin/lightspeed`,
+  `/usr/bin/lightspeed-gui`, and the LICENSE file, and `/usr/bin/lightspeed
+  --version` reported `lightspeed 1.4.3`.
+- `ldd` on both binaries shows glibc/libgcc only, hence `depends=()`. The GUI
+  dlopens X11/Wayland/EGL at runtime (winit/glutin); install `mesa`,
+  `libxkbcommon`, and the wayland/X11 libs on a bare system.
