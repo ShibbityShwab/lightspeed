@@ -20,6 +20,14 @@ use super::config::RateLimitConfig;
 /// (fail closed) instead of growing the map without bound.
 pub const MAX_TRACKED_IPS: usize = 65_536;
 
+/// Maximum number of distinct client flows tracked by the per-flow tier.
+///
+/// The per-flow entry is created before the per-IP tier can reject, so an
+/// attacker rotating source ports could otherwise grow the map without bound
+/// between cleanups. When the table is full, packets from a previously-unseen
+/// flow are rejected (fail closed).
+pub const MAX_TRACKED_FLOWS: usize = 65_536;
+
 /// Per-entry fixed-window rate limit state.
 struct ClientRateState {
     /// Packets in the current window.
@@ -61,6 +69,8 @@ pub struct RateLimiter {
     window_duration: Duration,
     /// Maximum number of distinct IPs tracked by the aggregate tier.
     max_tracked_ips: usize,
+    /// Maximum number of distinct flows tracked by the per-flow tier.
+    max_tracked_flows: usize,
 }
 
 impl RateLimiter {
@@ -72,6 +82,7 @@ impl RateLimiter {
             config,
             window_duration: Duration::from_secs(1),
             max_tracked_ips: MAX_TRACKED_IPS,
+            max_tracked_flows: MAX_TRACKED_FLOWS,
         }
     }
 
@@ -92,7 +103,11 @@ impl RateLimiter {
         packet_size: u64,
         now: Instant,
     ) -> RateLimitResult {
-        // Tier 1: per-flow (client IP + source port).
+        // Tier 1: per-flow (client IP + source port). Cap the map so a
+        // source-port-rotating attacker cannot grow it without bound.
+        if !self.clients.contains_key(&client) && self.clients.len() >= self.max_tracked_flows {
+            return RateLimitResult::FlowTableFull;
+        }
         let flow = self
             .clients
             .entry(client)
@@ -160,6 +175,8 @@ pub enum RateLimitResult {
     IpBandwidthExceeded,
     /// Per-IP tracking table is full and the source IP is new (fail closed).
     IpTableFull,
+    /// Per-flow tracking table is full and the source flow is new (fail closed).
+    FlowTableFull,
 }
 
 #[cfg(test)]
@@ -168,6 +185,14 @@ impl RateLimiter {
     fn with_max_tracked_ips(config: RateLimitConfig, max: usize) -> Self {
         Self {
             max_tracked_ips: max,
+            ..Self::new(config)
+        }
+    }
+
+    /// Test-only: create a limiter whose per-flow table holds `max` entries.
+    fn with_max_tracked_flows(config: RateLimitConfig, max: usize) -> Self {
+        Self {
+            max_tracked_flows: max,
             ..Self::new(config)
         }
     }
@@ -274,6 +299,30 @@ mod tests {
             limiter.ips.len(),
             2,
             "a rejected new IP must not be inserted"
+        );
+    }
+
+    #[test]
+    fn test_flow_table_fails_closed_when_full() {
+        let mut limiter = RateLimiter::with_max_tracked_flows(default_config(), 2);
+        let now = Instant::now();
+
+        assert_eq!(
+            limiter.check_at(client(1), 64, now),
+            RateLimitResult::Allowed
+        );
+        assert_eq!(
+            limiter.check_at(client(2), 64, now),
+            RateLimitResult::Allowed
+        );
+        assert_eq!(
+            limiter.check_at(client(3), 64, now),
+            RateLimitResult::FlowTableFull
+        );
+        assert_eq!(
+            limiter.clients.len(),
+            2,
+            "a rejected new flow must not be inserted"
         );
     }
 

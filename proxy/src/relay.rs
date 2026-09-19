@@ -585,6 +585,12 @@ async fn process_inbound_packet(
                 metrics.record_rate_limit_overflow();
                 return false;
             }
+            RateLimitResult::FlowTableFull => {
+                trace!(client = %client_addr, "Rate limit flow table full");
+                metrics.record_drop(DropReason::RateLimit);
+                metrics.record_rate_limit_overflow();
+                return false;
+            }
         }
     }
 
