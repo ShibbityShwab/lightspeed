@@ -1,0 +1,95 @@
+name: GeoIP Release
+
+# Publishes the monthly DB-IP Lite country MMDB as a pinned release asset.
+# The relay placement recommender downloads this asset at runtime, so the
+# release tag (geoip-YYYY-MM) is the stable pin.
+
+on:
+  schedule:
+    # Monthly on the 1st at 06:00 UTC.
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Month to publish in YYYY-MM (defaults to current UTC month)"
+        required: false
+        type: string
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve month
+        id: month
+        env:
+          INPUT_MONTH: ${{ github.event.inputs.month }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_MONTH:-}" ]; then
+            MONTH="$INPUT_MONTH"
+          else
+            MONTH="$(date -u +%Y-%m)"
+          fi
+          if ! printf '%s' "$MONTH" | grep -Eq '^[0-9]{4}-(0[1-9]|1[0-2])$'; then
+            echo "::error::Invalid month '$MONTH'; expected YYYY-MM."
+            exit 1
+          fi
+          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
+          echo "Resolved month: $MONTH"
+
+      - name: Download DB-IP Lite country MMDB
+        id: download
+        env:
+          MONTH: ${{ steps.month.outputs.month }}
+        run: |
+          set -euo pipefail
+          # DB-IP naming is release-month based, but the exact day the new
+          # archive appears varies. Try the requested month, then the month
+          # before it, so the 1st-of-month schedule is not an off-by-one.
+          PREV="$(date -u -d "${MONTH}-01 -1 month" +%Y-%m)"
+          for CAND in "$MONTH" "$PREV"; do
+            URL="https://download.db-ip.com/free/dbip-country-lite-${CAND}.mmdb.gz"
+            echo "Fetching $URL"
+            if curl -fsSL "$URL" -o db.mmdb.gz; then
+              gunzip -c db.mmdb.gz > "lightspeed-geoip-${CAND}.mmdb"
+              ls -l "lightspeed-geoip-${CAND}.mmdb"
+              echo "month=$CAND" >> "$GITHUB_OUTPUT"
+              echo "Resolved DB-IP month: $CAND"
+              exit 0
+            fi
+          done
+          echo "::error::DB-IP Lite is unavailable for ${MONTH} or ${PREV} (HTTP 404 or network error); re-run once it is live."
+          exit 1
+
+      - name: Generate checksum
+        env:
+          MONTH: ${{ steps.download.outputs.month }}
+        run: |
+          set -euo pipefail
+          sha256sum "lightspeed-geoip-${MONTH}.mmdb" > "lightspeed-geoip-${MONTH}.mmdb.sha256"
+          cat "lightspeed-geoip-${MONTH}.mmdb.sha256"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MONTH: ${{ steps.download.outputs.month }}
+        run: |
+          set -euo pipefail
+          TAG="geoip-${MONTH}"
+          ASSET="lightspeed-geoip-${MONTH}.mmdb"
+          CHECKSUM="${ASSET}.sha256"
+          BODY="IP geolocation data by DB-IP (https://db-ip.com), licensed under CC BY 4.0."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading assets with --clobber."
+            gh release upload "$TAG" "$ASSET" "$CHECKSUM" --clobber
+          else
+            gh release create "$TAG" "$ASSET" "$CHECKSUM" \
+              --title "GeoIP data ${MONTH}" \
+              --notes "$BODY"
+          fi
