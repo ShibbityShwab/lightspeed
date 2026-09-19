@@ -14,7 +14,9 @@
 //! cap and schema check, validate untrusted fds, and verify a handoff request's
 //! binary before it is ever executed.
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
