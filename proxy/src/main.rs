@@ -58,17 +58,58 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     check: bool,
 
+    /// Like --check, but also bind the data/control/health ports.
+    /// Only use while the proxy service is stopped.
+    #[arg(long, default_value_t = false)]
+    bind_check: bool,
+
     /// Developer mode: skip destination IP validation.
     #[arg(long, default_value_t = false)]
     dev: bool,
+}
+
+/// Maximum time to wait for the control plane to announce shutdown.
+#[cfg(feature = "quic")]
+const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wait for SIGINT (Ctrl+C) or, on Unix, SIGTERM.
+async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await?;
+    }
+    Ok(())
+}
+
+/// Perform the real data/control/health binds for `--bind-check`.
+fn bind_all(data: &str, control: &str, health: &str) -> anyhow::Result<()> {
+    print!("   UDP data port ({data})... ");
+    std::net::UdpSocket::bind(data)?;
+    println!("✅ bindable");
+    print!("   UDP control port ({control})... ");
+    std::net::UdpSocket::bind(control)?;
+    println!("✅ bindable");
+    print!("   TCP health port ({health})... ");
+    std::net::TcpListener::bind(health)?;
+    println!("✅ bindable");
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // ── --check mode ────────────────────────────────────────────
-    if cli.check {
+    // ── --check / --bind-check mode ─────────────────────────────
+    if cli.check || cli.bind_check {
         println!("🔍 LightSpeed Proxy health check");
         println!();
 
@@ -93,32 +134,55 @@ async fn main() -> anyhow::Result<()> {
             .data_bind
             .clone()
             .unwrap_or_else(|| format!("0.0.0.0:{}", cfg.network.data_port));
+        let control_bind = cli
+            .control_bind
+            .clone()
+            .unwrap_or_else(|| format!("0.0.0.0:{}", cfg.network.control_port));
         let health_bind = cli
             .health_bind
             .clone()
             .unwrap_or_else(|| format!("0.0.0.0:{}", cfg.network.health_port));
 
-        // 2. Bind check
-        print!("   UDP data port ({})... ", data_bind);
-        match std::net::UdpSocket::bind(&data_bind) {
-            Ok(_) => println!("✅ bindable"),
-            Err(e) => {
-                println!("❌ {}", e);
+        // 2. Validate bind addresses without touching the ports.
+        for (label, addr) in [
+            ("Data", &data_bind),
+            ("Control", &control_bind),
+            ("Health", &health_bind),
+        ] {
+            print!("   {label} bind address ({addr})... ");
+            if let Err(e) = addr.parse::<std::net::SocketAddr>() {
+                println!("❌ {e}");
                 std::process::exit(1);
             }
+            println!("✅ valid");
         }
 
-        print!("   HTTP health port ({})... ", health_bind);
-        match std::net::TcpListener::bind(&health_bind) {
-            Ok(_) => println!("✅ bindable"),
-            Err(e) => {
+        // 3. TLS assets (QUIC only): readability, or first-boot writability.
+        #[cfg(feature = "quic")]
+        {
+            print!("   TLS assets... ");
+            if let Err(e) = control::validate_tls_assets() {
+                println!("❌ {e}");
+                std::process::exit(1);
+            }
+            println!("✅ readable");
+        }
+
+        // 4. Real binds only for --bind-check. Plain --check never binds, so
+        //    it stays a valid gate while the service is already running.
+        if cli.bind_check {
+            if let Err(e) = bind_all(&data_bind, &control_bind, &health_bind) {
                 println!("❌ {}", e);
                 std::process::exit(1);
             }
         }
 
         println!();
-        println!("✅ All checks passed — proxy is ready to start");
+        if cli.bind_check {
+            println!("✅ All checks passed — proxy is ready to start");
+        } else {
+            println!("✅ All checks passed — config is valid (ports not bound)");
+        }
         return Ok(());
     }
 
@@ -283,15 +347,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn QUIC control plane server (if compiled with --features quic)
     #[cfg(feature = "quic")]
-    let control_handle = {
+    let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::watch::channel(false);
+    #[cfg(feature = "quic")]
+    let mut control_handle = {
         let control_addr: std::net::SocketAddr = control_bind.parse()?;
         let control_state = Arc::new(control::ControlState::new(
             config.clone(),
             Arc::clone(&authenticator),
         ));
         tokio::spawn(async move {
-            if let Err(e) = control::run_control_server(control_addr, control_state).await {
-                tracing::error!("QUIC control plane failed: {}", e);
+            match control::ControlServer::bind(control_addr, control_state) {
+                Ok(server) => server.run(control_shutdown_rx).await,
+                Err(e) => tracing::error!("QUIC control plane failed: {}", e),
             }
         })
     };
@@ -350,8 +417,13 @@ async fn main() -> anyhow::Result<()> {
     info!("⚡ LightSpeed Proxy running — press Ctrl+C to stop");
 
     // Wait for shutdown signal
-    tokio::signal::ctrl_c().await?;
+    wait_for_shutdown_signal().await?;
     info!("⚡ Shutdown signal received");
+
+    // Tell control-plane clients first: clients reconnect immediately instead
+    // of waiting out the QUIC idle timeout.
+    #[cfg(feature = "quic")]
+    let _ = control_shutdown_tx.send(true);
 
     // Abort background tasks
     relay_handle.abort();
@@ -361,8 +433,21 @@ async fn main() -> anyhow::Result<()> {
     }
     health_handle.abort();
     stats_handle.abort();
+
+    // Bounded wait for the control plane to announce shutdown and close its
+    // endpoint. A hung client must not be able to hang the whole shutdown.
     #[cfg(feature = "quic")]
-    control_handle.abort();
+    match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut control_handle).await {
+        Ok(Ok(())) => info!("Control plane announced shutdown and closed"),
+        Ok(Err(e)) => tracing::warn!("Control plane task failed during shutdown: {}", e),
+        Err(_) => {
+            tracing::warn!(
+                "Control plane shutdown exceeded {:?}; aborting",
+                SHUTDOWN_TIMEOUT
+            );
+            control_handle.abort();
+        }
+    }
 
     info!("⚡ LightSpeed Proxy shut down cleanly");
     Ok(())

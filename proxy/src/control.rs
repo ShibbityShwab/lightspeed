@@ -55,6 +55,10 @@ mod inner {
     pub struct ControlState {
         /// Active client sessions keyed by session ID.
         pub sessions: RwLock<HashMap<u32, ClientSession>>,
+        /// Live QUIC connections keyed by stable connection id. Kept so the
+        /// server can announce a graceful shutdown to every client before the
+        /// endpoint closes.
+        pub connections: RwLock<HashMap<usize, quinn::Connection>>,
         /// Server configuration.
         pub config: ProxyConfig,
         /// Shared authenticator for data-plane auth.
@@ -67,6 +71,7 @@ mod inner {
         pub fn new(config: ProxyConfig, authenticator: Arc<RwLock<Authenticator>>) -> Self {
             Self {
                 sessions: RwLock::new(HashMap::new()),
+                connections: RwLock::new(HashMap::new()),
                 config,
                 authenticator,
                 started_at: Instant::now(),
@@ -94,6 +99,14 @@ mod inner {
 
     // ── TLS ─────────────────────────────────────────────────────────
 
+    /// Directory holding the persistent TLS cert and key.
+    fn tls_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(
+            std::env::var("LIGHTSPEED_TLS_DIR")
+                .unwrap_or_else(|_| "/var/lib/lightspeed/tls".to_string()),
+        )
+    }
+
     /// Load a persistent self-signed certificate, or generate + store one on
     /// first boot. A stable certificate is required for client trust-on-first-
     /// use pinning: a fresh per-boot cert would change the fingerprint on every
@@ -102,10 +115,7 @@ mod inner {
         Vec<rustls::pki_types::CertificateDer<'static>>,
         rustls::pki_types::PrivateKeyDer<'static>,
     )> {
-        let dir = std::path::PathBuf::from(
-            std::env::var("LIGHTSPEED_TLS_DIR")
-                .unwrap_or_else(|_| "/var/lib/lightspeed/tls".to_string()),
-        );
+        let dir = tls_dir();
         let cert_path = dir.join("cert.der");
         let key_path = dir.join("key.der");
 
@@ -128,6 +138,57 @@ mod inner {
         std::fs::write(&key_path, key_der.secret_der())?;
 
         Ok((vec![cert_der], key_der))
+    }
+
+    /// Validate TLS assets without binding a port or generating anything.
+    ///
+    /// Fails when an existing cert/key pair is incomplete or unreadable, or
+    /// when first-boot generation would fail because no ancestor of the TLS
+    /// directory is writable. Used by `--check`.
+    pub fn validate_tls_assets() -> anyhow::Result<()> {
+        let dir = tls_dir();
+        let cert_path = dir.join("cert.der");
+        let key_path = dir.join("key.der");
+        let cert_exists = cert_path.exists();
+        let key_exists = key_path.exists();
+
+        if cert_exists || key_exists {
+            if !cert_exists || !key_exists {
+                anyhow::bail!("TLS cert/key are not a matching pair in {}", dir.display());
+            }
+            std::fs::read(&cert_path)
+                .map_err(|e| anyhow::anyhow!("cannot read {}: {}", cert_path.display(), e))?;
+            std::fs::read(&key_path)
+                .map_err(|e| anyhow::anyhow!("cannot read {}: {}", key_path.display(), e))?;
+            return Ok(());
+        }
+
+        // First boot generates the pair, so the nearest existing ancestor must
+        // be writable for `create_dir_all` + the cert writes to succeed.
+        let mut ancestor = dir.as_path();
+        while !ancestor.exists() {
+            ancestor = ancestor.parent().ok_or_else(|| {
+                anyhow::anyhow!("no existing ancestor for TLS dir {}", dir.display())
+            })?;
+        }
+        let probe_path = ancestor.join(".lightspeed-tls-write-probe");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe_path)
+        {
+            Ok(file) => {
+                drop(file);
+                let _ = std::fs::remove_file(&probe_path);
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(e) => anyhow::bail!(
+                "TLS dir ancestor {} is not writable: {}",
+                ancestor.display(),
+                e
+            ),
+        }
     }
 
     /// Build a quinn `ServerConfig` with a self-signed certificate.
@@ -165,54 +226,143 @@ mod inner {
 
     // ── Server ──────────────────────────────────────────────────────
 
-    /// Run the QUIC control plane server.
+    /// A bound QUIC control-plane endpoint.
     ///
-    /// Accepts connections and spawns a handler task for each client.
+    /// Binding is separate from serving so a caller can detect a bind failure
+    /// before committing to run, and so it can drive a graceful shutdown.
+    pub struct ControlServer {
+        endpoint: quinn::Endpoint,
+        state: Arc<ControlState>,
+    }
+
+    impl ControlServer {
+        /// Bind the QUIC control endpoint on `bind_addr`.
+        pub fn bind(bind_addr: SocketAddr, state: Arc<ControlState>) -> anyhow::Result<Self> {
+            let server_config = build_server_config()?;
+            let endpoint = quinn::Endpoint::server(server_config, bind_addr)?;
+            info!(
+                "QUIC control plane listening on {} (node={}, auth={})",
+                endpoint.local_addr()?,
+                state.config.server.node_id,
+                if state.config.security.require_auth {
+                    "enforced"
+                } else {
+                    "disabled"
+                }
+            );
+            Ok(Self { endpoint, state })
+        }
+
+        /// The actual bound address (resolves port 0 to the assigned port).
+        pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+            self.endpoint.local_addr()
+        }
+
+        /// Accept control connections until `shutdown` flips to `true`, then
+        /// announce a server shutdown to every live connection, close the
+        /// endpoint, and return.
+        pub async fn run(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+            // Cap concurrent control connections so idle pre-registration
+            // connections can't exhaust task/memory (only max_clients is enforced
+            // at Register).
+            let conn_limit = self.state.config.server.max_clients.max(1);
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(conn_limit));
+
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.changed() => break,
+                    incoming = self.endpoint.accept() => {
+                        let Some(incoming) = incoming else { break; };
+                        let state = Arc::clone(&self.state);
+                        let semaphore = Arc::clone(&semaphore);
+                        tokio::spawn(async move {
+                            let Ok(conn) = incoming.await else {
+                                return;
+                            };
+                            let Ok(permit) = semaphore.clone().try_acquire_owned() else {
+                                conn.close(0u32.into(), b"at capacity");
+                                return;
+                            };
+                            let remote = conn.remote_address();
+                            let conn_id = conn.stable_id();
+                            state.connections.write().await.insert(conn_id, conn.clone());
+                            info!("QUIC connection from {}", remote);
+                            if let Err(e) = handle_connection(conn, Arc::clone(&state)).await {
+                                warn!("Client {} connection error: {}", remote, e);
+                            }
+                            state.connections.write().await.remove(&conn_id);
+                            drop(permit);
+                        });
+                    }
+                }
+            }
+
+            self.announce_shutdown().await;
+            self.endpoint.close(0u32.into(), b"server shutdown");
+            info!("QUIC control plane shutting down");
+        }
+
+        /// Send `Disconnect { SERVER_SHUTDOWN }` to every live connection.
+        ///
+        /// Each write is individually time-bounded so one slow client cannot
+        /// stall the shutdown; the caller additionally bounds the whole `run`.
+        async fn announce_shutdown(&self) {
+            let connections: Vec<quinn::Connection> = self
+                .state
+                .connections
+                .read()
+                .await
+                .values()
+                .cloned()
+                .collect();
+            let count = connections.len();
+            let msg = ControlMessage::Disconnect {
+                reason: disconnect_reason::SERVER_SHUTDOWN,
+            };
+            for conn in &connections {
+                let opened = tokio::time::timeout(Duration::from_secs(1), conn.open_bi()).await;
+                if let Ok(Ok((mut send, _recv))) = opened {
+                    let _ =
+                        tokio::time::timeout(Duration::from_secs(1), msg.write_to(&mut send)).await;
+                    let _ = send.finish();
+                }
+            }
+
+            // QUIC may drop received-but-undelivered stream data when a
+            // CONNECTION_CLOSE arrives, so closing immediately races the
+            // client's read of the Disconnect. Wait (bounded) for peers to
+            // consume it and close first.
+            let drain = async {
+                let mut waiting = tokio::task::JoinSet::new();
+                for conn in connections {
+                    waiting.spawn(async move {
+                        conn.closed().await;
+                    });
+                }
+                while waiting.join_next().await.is_some() {}
+            };
+            let _ = tokio::time::timeout(Duration::from_secs(2), drain).await;
+            info!(
+                "Announced server shutdown to {} control connection(s)",
+                count
+            );
+        }
+    }
+
+    /// Convenience wrapper that runs without a shutdown channel.
+    ///
+    /// It never triggers the graceful announcement on its own; callers that
+    /// need one should hold a [`ControlServer`] and drive [`ControlServer::run`]
+    /// with a shutdown receiver.
     pub async fn run_control_server(
         bind_addr: SocketAddr,
         state: Arc<ControlState>,
     ) -> anyhow::Result<()> {
-        let server_config = build_server_config()?;
-        let endpoint = quinn::Endpoint::server(server_config, bind_addr)?;
-
-        info!(
-            "QUIC control plane listening on {} (node={}, auth={})",
-            bind_addr,
-            state.config.server.node_id,
-            if state.config.security.require_auth {
-                "enforced"
-            } else {
-                "disabled"
-            }
-        );
-
-        // Cap concurrent control connections so idle pre-registration
-        // connections can't exhaust task/memory (only max_clients is enforced
-        // at Register).
-        let conn_limit = state.config.server.max_clients.max(1);
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(conn_limit));
-
-        while let Some(incoming) = endpoint.accept().await {
-            let state = Arc::clone(&state);
-            let semaphore = Arc::clone(&semaphore);
-            tokio::spawn(async move {
-                let Ok(conn) = incoming.await else {
-                    return;
-                };
-                let Ok(permit) = semaphore.clone().try_acquire_owned() else {
-                    conn.close(0u32.into(), b"at capacity");
-                    return;
-                };
-                let remote = conn.remote_address();
-                info!("QUIC connection from {}", remote);
-                if let Err(e) = handle_connection(conn, state).await {
-                    warn!("Client {} connection error: {}", remote, e);
-                }
-                drop(permit);
-            });
-        }
-
-        info!("QUIC control plane shutting down");
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        ControlServer::bind(bind_addr, state)?
+            .run(shutdown_rx)
+            .await;
         Ok(())
     }
 
@@ -421,4 +571,6 @@ mod inner {
 // ── Re-exports ──────────────────────────────────────────────────────
 
 #[cfg(feature = "quic")]
-pub use inner::{run_control_server, ClientSession, ControlState};
+pub use inner::{
+    run_control_server, validate_tls_assets, ClientSession, ControlServer, ControlState,
+};
