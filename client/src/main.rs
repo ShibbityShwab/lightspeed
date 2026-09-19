@@ -64,6 +64,19 @@ struct ResolvedProxy {
     servers: Vec<String>,
 }
 
+/// Zeroes the process-global data-plane tokens when the client exits.
+///
+/// A supervised reconnect or mode switch must preserve the last relay-issued
+/// token, so tokens are cleared only here, at the single explicit process
+/// shutdown point, never on a transient disconnect.
+struct TokenResetOnShutdown;
+
+impl Drop for TokenResetOnShutdown {
+    fn drop(&mut self) {
+        crate::session::reset_all_tokens();
+    }
+}
+
 /// Resolve the proxy to use: explicit `--proxy`, else auto-select from
 /// configured servers, else discover from the signed registry, else a
 /// localhost dev default.
@@ -262,6 +275,8 @@ async fn main() -> anyhow::Result<()> {
         warn!("Config not found ({}), using defaults", e);
         config::Config::default()
     });
+
+    let _token_reset = TokenResetOnShutdown;
 
     // ── Transport selection (UDP default, TCP opt-in) ─────────────
     let use_tcp = cli.tcp || config.tunnel.transport.eq_ignore_ascii_case("tcp");

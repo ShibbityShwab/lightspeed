@@ -271,20 +271,22 @@ pub fn send_destinations(
     }
 }
 
+/// The test harness runs `#[test]`s in parallel and the token store is
+/// process-global, so tests that mutate it take this lock to stay
+/// deterministic.
+#[cfg(test)]
+static TOKEN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn token_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    TOKEN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The test harness runs `#[test]`s in parallel and the token store is
-    /// process-global, so tests that mutate it take this lock to stay
-    /// deterministic.
-    static TOKEN_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    fn token_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        TOKEN_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
 
     #[test]
     fn test_session_token_set_get() {

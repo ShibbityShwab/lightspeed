@@ -34,6 +34,6 @@ pub(crate) mod warp;
 #[cfg(feature = "quic")]
 #[doc(hidden)]
 pub mod test_support {
-    pub use crate::quic::register_session;
+    pub use crate::quic::{is_supervised, register_session, stop_supervisor};
     pub use crate::session::{path_token, session_token};
 }

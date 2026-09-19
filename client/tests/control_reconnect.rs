@@ -11,7 +11,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lightspeed_client::test_support::{path_token, register_session, session_token};
+use lightspeed_client::test_support::{
+    is_supervised, path_token, register_session, session_token, stop_supervisor,
+};
+use lightspeed_client::LightSpeedEngine;
 use lightspeed_protocol::control::ControlMessage;
 
 /// The first token the server issues (token B is 1001, and so on).
@@ -248,4 +251,54 @@ async fn registers_every_active_path() {
     );
     assert_eq!(path_token(path_a), token_a);
     assert_eq!(path_token(path_b), token_b);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn supervisor_stopped_on_disconnect() {
+    isolate_fingerprint_store();
+    let server = TestServer::start(false);
+    let data_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41201);
+    let _ = stop_supervisor(data_addr);
+
+    let mut engine = LightSpeedEngine::new(tokio::runtime::Handle::current());
+    engine.set_control_port(server.control_port);
+    engine.connect(data_addr);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while path_token(data_addr) == 0 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        server.registration_count(),
+        1,
+        "the engine must register on its configured control port"
+    );
+    let issued = path_token(data_addr);
+    assert!(
+        issued > 0,
+        "engine registration must publish the relay's per-path token"
+    );
+    assert!(
+        is_supervised(data_addr),
+        "connect must leave a live control-plane supervisor"
+    );
+
+    engine.disconnect();
+
+    assert!(
+        !is_supervised(data_addr),
+        "a normal disconnect must stop the relay's supervisor"
+    );
+    assert_eq!(
+        path_token(data_addr),
+        issued,
+        "a normal disconnect must not zero the per-path token"
+    );
+    assert_ne!(
+        session_token(),
+        0,
+        "a normal disconnect must not zero the session token"
+    );
+
+    let _ = stop_supervisor(data_addr);
 }
