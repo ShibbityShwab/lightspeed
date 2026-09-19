@@ -11,6 +11,7 @@
 
 use crate::metrics::ProxyMetrics;
 use crate::relay::RelayEngine;
+use crate::update_state::UpdateState;
 use lightspeed_protocol::TelemetryReport;
 use serde::Serialize;
 use std::sync::atomic::Ordering;
@@ -41,6 +42,8 @@ pub struct HealthResponse {
     pub bytes_relayed: u64,
     pub fec_recoveries: u64,
     pub sessions_created: u64,
+    /// Last self-update snapshot; `null` when the state file is unavailable.
+    pub update: Option<UpdateState>,
 }
 
 /// Find the byte offset at which the HTTP body begins (after the blank line).
@@ -214,6 +217,7 @@ pub async fn run_health_server(
                         bytes_relayed: metrics.bytes_relayed.load(Ordering::Relaxed),
                         fec_recoveries: metrics.fec_recoveries.load(Ordering::Relaxed),
                         sessions_created: metrics.sessions_created.load(Ordering::Relaxed),
+                        update: crate::update_state::current_update_state(),
                     };
                     (
                         "application/json",
@@ -245,6 +249,58 @@ pub async fn run_health_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes env-var mutation across parallel tests.
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn temp_state_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "ls-update-{}-{}-{}-{}",
+            tag,
+            std::process::id(),
+            nanos,
+            n
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sample_response() -> HealthResponse {
+        HealthResponse {
+            status: "healthy",
+            version: env!("CARGO_PKG_VERSION"),
+            active_connections: 0,
+            uptime_secs: 0,
+            region: "test-region".to_string(),
+            node_id: "test-node".to_string(),
+            packets_relayed: 0,
+            packets_dropped: 0,
+            drops_malformed: 0,
+            drops_auth_rejected: 0,
+            drops_abuse_blocked: 0,
+            drops_rate_limited: 0,
+            drops_fec_malformed: 0,
+            drops_session_setup: 0,
+            drops_relay_send_errors: 0,
+            bytes_relayed: 0,
+            fec_recoveries: 0,
+            sessions_created: 0,
+            update: crate::update_state::current_update_state(),
+        }
+    }
 
     #[test]
     fn test_parse_request_path() {
@@ -322,6 +378,7 @@ mod tests {
             bytes_relayed: 0,
             fec_recoveries: 0,
             sessions_created: 0,
+            update: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         for key in [
@@ -360,5 +417,94 @@ mod tests {
         assert!(ingest_telemetry(&m, b"not json at all").is_err());
         // Failed ingests must not create cells.
         assert_eq!(m.telemetry.lock().unwrap().cells.len(), 1);
+    }
+
+    #[test]
+    fn update_state_exposed_when_present() {
+        let _guard = env_guard();
+        crate::update_state::reset_cache_for_test();
+        let dir = temp_state_dir("present");
+        let path = dir.join("update-state.json");
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"current_version":"1.4.4","active_release":"/opt/lightspeed/releases/1.4.4","available_version":"1.4.5","rollback_version":null,"last_check_at":1700000000,"last_apply_at":1700000005,"last_result":"updated","last_error":null}"#,
+        )
+        .unwrap();
+        std::env::set_var("LIGHTSPEED_UPDATE_STATE", &path);
+
+        let response = sample_response();
+        let update = response.update.clone().expect("update should be present");
+        assert_eq!(update.current_version, "1.4.4");
+        assert_eq!(update.active_release, "/opt/lightspeed/releases/1.4.4");
+        assert_eq!(update.available_version.as_deref(), Some("1.4.5"));
+        assert_eq!(update.rollback_version, None);
+        assert_eq!(update.last_check_at, 1_700_000_000);
+        assert_eq!(update.last_apply_at, Some(1_700_000_005));
+        assert_eq!(update.last_result, "updated");
+        assert_eq!(update.last_error, None);
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"update\":{"), "update not nested: {json}");
+        assert!(json.contains("/opt/lightspeed/releases/1.4.4"), "{json}");
+        assert!(!json.contains("schema_version"), "{json}");
+
+        std::env::remove_var("LIGHTSPEED_UPDATE_STATE");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_null_when_absent() {
+        let _guard = env_guard();
+        crate::update_state::reset_cache_for_test();
+        let dir = temp_state_dir("absent");
+        let path = dir.join("does-not-exist.json");
+        std::env::set_var("LIGHTSPEED_UPDATE_STATE", &path);
+
+        let response = sample_response();
+        assert!(response.update.is_none());
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"update\":null"), "{json}");
+
+        std::env::remove_var("LIGHTSPEED_UPDATE_STATE");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_null_when_malformed() {
+        let _guard = env_guard();
+        crate::update_state::reset_cache_for_test();
+        let dir = temp_state_dir("malformed");
+        let path = dir.join("update-state.json");
+        std::fs::write(&path, b"{ this is not json").unwrap();
+        std::env::set_var("LIGHTSPEED_UPDATE_STATE", &path);
+
+        let response = sample_response();
+        assert!(response.update.is_none());
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"update\":null"), "{json}");
+
+        std::env::remove_var("LIGHTSPEED_UPDATE_STATE");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn oversized_state_is_ignored() {
+        let _guard = env_guard();
+        crate::update_state::reset_cache_for_test();
+        let dir = temp_state_dir("oversized");
+        let path = dir.join("update-state.json");
+        let mut contents = String::from(
+            r#"{"schema_version":1,"current_version":"1.4.4","active_release":"/opt/lightspeed/releases/1.4.4","available_version":null,"rollback_version":null,"last_check_at":1700000000,"last_apply_at":null,"last_result":"ok","last_error":null}"#,
+        );
+        contents.push_str(&" ".repeat(70 * 1024));
+        assert!(contents.len() > 64 * 1024);
+        std::fs::write(&path, contents).unwrap();
+        std::env::set_var("LIGHTSPEED_UPDATE_STATE", &path);
+
+        let response = sample_response();
+        assert!(response.update.is_none());
+
+        std::env::remove_var("LIGHTSPEED_UPDATE_STATE");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

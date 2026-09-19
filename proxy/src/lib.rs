@@ -12,3 +12,4 @@ pub mod metrics;
 pub mod notify;
 pub mod rate_limit;
 pub mod relay;
+pub mod update_state;
