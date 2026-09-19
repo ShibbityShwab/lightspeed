@@ -86,10 +86,14 @@ jobs:
           BODY="IP geolocation data by DB-IP (https://db-ip.com), licensed under CC BY 4.0."
 
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; uploading assets with --clobber."
+            echo "Release $TAG already exists; refreshing assets."
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --prerelease
             gh release upload "$TAG" "$ASSET" "$CHECKSUM" -R "$GITHUB_REPOSITORY" --clobber
           else
+            # The GeoIP drop is data, not a software release, so it is marked
+            # prerelease to keep /releases/latest pointing at the app binaries.
             gh release create "$TAG" "$ASSET" "$CHECKSUM" -R "$GITHUB_REPOSITORY" \
               --title "GeoIP data ${MONTH}" \
-              --notes "$BODY"
+              --notes "$BODY" \
+              --prerelease
           fi
