@@ -85,11 +85,11 @@ jobs:
           CHECKSUM="${ASSET}.sha256"
           BODY="IP geolocation data by DB-IP (https://db-ip.com), licensed under CC BY 4.0."
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists; uploading assets with --clobber."
-            gh release upload "$TAG" "$ASSET" "$CHECKSUM" --clobber
+            gh release upload "$TAG" "$ASSET" "$CHECKSUM" -R "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "$ASSET" "$CHECKSUM" \
+            gh release create "$TAG" "$ASSET" "$CHECKSUM" -R "$GITHUB_REPOSITORY" \
               --title "GeoIP data ${MONTH}" \
               --notes "$BODY"
           fi
