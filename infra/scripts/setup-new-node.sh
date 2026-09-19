@@ -13,6 +13,10 @@
 #   ./setup-new-node.sh 1.2.3.4 relay-ewr ewr
 #   ./setup-new-node.sh 5.6.7.8 relay-ams ams
 #
+# Environment:
+#   LIGHTSPEED_VERSION   Release version installed as the first release
+#                        (default: UTC timestamp + short git SHA).
+#
 # Prerequisites:
 #   - SSH access to the node (key at ~/.ssh/id_ed25519)
 #   - Linux proxy binary at target/release/lightspeed-proxy
@@ -47,6 +51,20 @@ SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BINARY="$PROJECT_ROOT/target/release/lightspeed-proxy"
+RELAY_INSTALLER="$SCRIPT_DIR/relay-install.sh"
+
+if [ -n "${LIGHTSPEED_VERSION:-}" ]; then
+    RELEASE_VERSION="$LIGHTSPEED_VERSION"
+else
+    RELEASE_VERSION="$(date -u +%Y%m%dT%H%M%SZ)-$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || printf 'nogit')"
+fi
+
+case "$RELEASE_VERSION" in
+    *[!A-Za-z0-9._-]*|.|..)
+        echo "Invalid LIGHTSPEED_VERSION: '$RELEASE_VERSION' (allowed: A-Za-z0-9._-)" >&2
+        exit 1
+        ;;
+esac
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -81,23 +99,26 @@ fi
 echo "  SSH OK"
 
 # ── Step 3: Upload binary ────────────────────────────────────
-echo -e "\n${CYAN}[3/6] Uploading binary...${NC}"
-scp $SSH_OPTS -i "$SSH_KEY" "$BINARY" "$SSH_USER@$NODE_IP:/tmp/lightspeed-proxy"
+echo -e "\n${CYAN}[3/6] Uploading binary and installer...${NC}"
+if [ ! -f "$RELAY_INSTALLER" ]; then
+    echo -e "${RED}Relay installer not found at $RELAY_INSTALLER${NC}"
+    exit 1
+fi
+scp $SSH_OPTS -i "$SSH_KEY" "$BINARY" "$SSH_USER@$NODE_IP:/tmp/lightspeed-proxy.staged"
+scp $SSH_OPTS -i "$SSH_KEY" "$RELAY_INSTALLER" "$SSH_USER@$NODE_IP:/tmp/lightspeed-relay-install.sh"
 echo "  Uploaded"
 
 # ── Step 4: Configure node ───────────────────────────────────
 echo -e "\n${CYAN}[4/6] Configuring node...${NC}"
-ssh $SSH_OPTS -i "$SSH_KEY" "$SSH_USER@$NODE_IP" bash -s "$NODE_ID" "$REGION" << 'REMOTE'
+ssh $SSH_OPTS -i "$SSH_KEY" "$SSH_USER@$NODE_IP" bash -s "$NODE_ID" "$REGION" "$RELEASE_VERSION" << 'REMOTE'
 set -euo pipefail
 NODE_ID="$1"
 REGION="$2"
+RELEASE_VERSION="$3"
 
-# Install binary
-chmod +x /tmp/lightspeed-proxy
-mv /tmp/lightspeed-proxy /usr/local/bin/lightspeed-proxy
-
-# Create config directory
+# Create config + release layout directories
 mkdir -p /etc/lightspeed
+install -d /opt/lightspeed/releases
 
 # Write proxy.toml
 cat > /etc/lightspeed/proxy.toml << EOF
@@ -130,15 +151,15 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
-Restart=always
-RestartSec=5
-ExecStart=/usr/local/bin/lightspeed-proxy \
-  --config /etc/lightspeed/proxy.toml \
-  --data-bind 0.0.0.0:4434 \
-  --control-bind 0.0.0.0:4433 \
-  --health-bind 0.0.0.0:8080
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
+ExecStart=/opt/lightspeed/current/lightspeed-proxy --config /etc/lightspeed/proxy.toml --data-bind 0.0.0.0:4434 --control-bind 0.0.0.0:4433 --health-bind 0.0.0.0:8080
 DynamicUser=true
+StateDirectory=lightspeed
+Environment=LIGHTSPEED_TLS_DIR=/var/lib/lightspeed/tls
+Restart=on-failure
+RestartSec=2
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -159,12 +180,15 @@ if command -v ufw &>/dev/null; then
     echo "y" | ufw enable 2>/dev/null || true
 fi
 
-# Enable and start
+# Register the unit and create the first versioned release. relay-install.sh
+# runs --check, repoints /opt/lightspeed/current, starts the service, and
+# health-gates it (rolling back if the new release never comes up).
 systemctl daemon-reload
 systemctl enable lightspeed-proxy
-systemctl start lightspeed-proxy
 
-echo "Service started"
+bash /tmp/lightspeed-relay-install.sh --binary /tmp/lightspeed-proxy.staged --version "$RELEASE_VERSION"
+
+echo "Service installed and activated"
 REMOTE
 echo "  Configured"
 
