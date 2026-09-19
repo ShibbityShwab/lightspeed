@@ -19,6 +19,15 @@
 #       byte-identical and exits non-zero
 #   (h) a same-version reinstall whose --check passes replaces the binary
 #   (i) no `.staged.*` temp files remain after either path
+#   (j) a supported handoff writes the request, sends SIGUSR2, soaks the new
+#       version, and only then repoints `current` and prunes
+#   (k) /health without a `handoff` field falls back to the restart path
+#   (l) a handoff that never happens leaves `current` on the old release and
+#       exits non-zero without a restart (zero downtime)
+#   (m) a handoff that comes up then fails the soak rolls back and restarts
+#   (n) a same-version install never hands off (the proxy refuses it)
+#   (o) --no-handoff forces the restart path even when handoff is available
+#   (p) --handoff refuses to signal a proxy that does not advertise support
 #
 # Usage: bash infra/scripts/test_relay_install.sh
 # Exits 0 and prints "relay-install: all assertions passed" on success.
@@ -42,6 +51,8 @@ trap 'rm -rf "$TMP"' EXIT
 FIXTURE="$TMP/fixture"
 ROOT="$TMP/opt/lightspeed"
 BIN_DIR="$TMP/bin"
+HANDOFF_REQ="$TMP/run/handoff-request.json"
+SHA_BIN="${LIGHTSPEED_SHA256SUM:-sha256sum}"
 mkdir -p "$FIXTURE" "$ROOT/releases" "$BIN_DIR"
 
 note_pass() { PASS=$((PASS + 1)); }
@@ -101,14 +112,56 @@ case "\$cmd" in
 esac
 STUB
 
-# ── Stub curl (honours the health mode written by the stubbed restart) ──
+# ── Stub curl ────────────────────────────────────────────────
+# Default mode honours `health_mode` (written by the stubbed restart) and
+# returns a legacy body with no `handoff` field. When `curl_script` exists it
+# is a one-directive-per-call sequence (last line repeats): FAIL, OLD,
+# OLD_NOSUP, or NEWOK. NEWOK reflects the handoff request back through
+# /health so the installer can match the id it generated.
 cat > "$BIN_DIR/curl" <<STUB
 #!/usr/bin/env bash
 F="$FIXTURE"
-mode="\$(cat "\$F/health_mode" 2>/dev/null || printf ok)"
-if [ "\$mode" != "ok" ]; then exit 1; fi
-printf '{"status":"healthy","version":"1.4.4","node_id":"fixture","uptime_secs":1}\n'
-exit 0
+ROOT="$ROOT"
+REQ="$HANDOFF_REQ"
+printf '%s\n' "\$(readlink "\$ROOT/current" 2>/dev/null || true)" >> "\$F/curl-current.log"
+
+if [ -f "\$F/curl_script" ]; then
+    n="\$(cat "\$F/curl_calls" 2>/dev/null || printf 0)"
+    n=\$((n + 1))
+    printf '%s\n' "\$n" > "\$F/curl_calls"
+    mode="\$(sed -n "\${n}p" "\$F/curl_script")"
+    [ -n "\$mode" ] || mode="\$(tail -1 "\$F/curl_script")"
+else
+    mode="LEGACY"
+fi
+
+oldver="\$(cat "\$F/old_version" 2>/dev/null || printf 1.4.3)"
+req_field() { [ -f "\$REQ" ] && grep -oE "\"\$1\":\"[^\"]*\"" "\$REQ" | head -1 | cut -d'"' -f4 || true; }
+
+emit_old() {
+    printf '{"status":"healthy","version":"%s","node_id":"fixture","uptime_secs":1,"handoff":{"supported":%s,"last":null}}\n' "\$oldver" "\$1"
+}
+emit_newok() {
+    local v i
+    v="\$(req_field version)"
+    i="\$(req_field handoff_id)"
+    printf '%s|%s\n' "\$i" "\$v" >> "\$F/handoff-echo.log"
+    printf '{"status":"healthy","version":"%s","node_id":"fixture","uptime_secs":1,"handoff":{"supported":true,"last":{"schema_version":1,"supported":true,"handoff_id":"%s","from_version":"%s","to_version":"%s","result":"ok","sessions_transferred":2,"at_unix_ms":1,"error":null}}}\n' "\$v" "\$i" "\$oldver" "\$v"
+}
+
+case "\$mode" in
+    FAIL) exit 1 ;;
+    OLD) emit_old true; exit 0 ;;
+    OLD_NOSUP) emit_old false; exit 0 ;;
+    NEWOK) emit_newok; exit 0 ;;
+    LEGACY)
+        m="\$(cat "\$F/health_mode" 2>/dev/null || printf ok)"
+        [ "\$m" = "ok" ] || exit 1
+        printf '{"status":"healthy","version":"%s","node_id":"fixture","uptime_secs":1}\n' "\$oldver"
+        exit 0
+        ;;
+    *) exit 1 ;;
+esac
 STUB
 
 # ── Stub file (`$FIXTURE/file_not_elf` forces a non-ELF description) ──
@@ -128,10 +181,12 @@ printf '# fixture config\n' > "$FIXTURE/proxy.toml"
 
 # ── Helpers ──────────────────────────────────────────────────
 reset_fixture() {
-    rm -rf "$ROOT"
+    rm -rf "$ROOT" "$TMP/run"
     mkdir -p "$ROOT/releases"
     : > "$FIXTURE/systemctl.log"
-    rm -f "$FIXTURE/fail_versions" "$FIXTURE/file_not_elf" "$FIXTURE/restart_fail"
+    rm -f "$FIXTURE/fail_versions" "$FIXTURE/file_not_elf" "$FIXTURE/restart_fail" \
+        "$FIXTURE/curl_script" "$FIXTURE/curl_calls" "$FIXTURE/curl-current.log" \
+        "$FIXTURE/handoff-echo.log" "$FIXTURE/old_version"
     printf 'ok\n' > "$FIXTURE/health_mode"
 }
 
@@ -140,6 +195,7 @@ make_binary() {
     cat > "$1" <<STUB
 #!/usr/bin/env bash
 if [ "\${1:-}" = "--check" ]; then exit $2; fi
+if [ "\${1:-}" = "--handoff-schema" ]; then echo 1; exit 0; fi
 echo "lightspeed-proxy 1.4.4"
 exit 0
 STUB
@@ -153,6 +209,7 @@ make_binary_marked() {
 #!/usr/bin/env bash
 # $3
 if [ "\${1:-}" = "--check" ]; then exit $2; fi
+if [ "\${1:-}" = "--handoff-schema" ]; then echo 1; exit 0; fi
 echo "lightspeed-proxy 1.4.4"
 exit 0
 STUB
@@ -175,6 +232,19 @@ assert_diff_bytes() {
     if cmp -s "$1" "$2"; then note_fail "$3 (bytes unexpectedly identical)"; else note_pass; fi
 }
 
+assert_not_grep() {
+    local file="$1" needle="$2" msg="$3"
+    if grep -q -- "$needle" "$file" 2>/dev/null; then
+        note_fail "$msg ('$needle' present in $file)"
+    else
+        note_pass
+    fi
+}
+
+assert_file_exists() {
+    if [ -f "$1" ]; then note_pass; else note_fail "$2 (missing $1)"; fi
+}
+
 # seed_release <version> <touch-date>
 seed_release() {
     mkdir -p "$ROOT/releases/$1"
@@ -182,13 +252,16 @@ seed_release() {
     touch -d "$2" "$ROOT/releases/$1" "$ROOT/releases/$1/lightspeed-proxy"
 }
 
-# run_install <version> <binary-path>; stdout/stderr into $OUT/$ERR
+# run_install <version> <binary-path> [extra installer flags...]
 run_install() {
     env \
         LIGHTSPEED_LAYOUT_ROOT="$ROOT" \
         LIGHTSPEED_SYSTEMCTL="$BIN_DIR/systemctl" \
         LIGHTSPEED_CURL="$BIN_DIR/curl" \
         LIGHTSPEED_FILE_BIN="$BIN_DIR/file" \
+        LIGHTSPEED_SHA256SUM="$SHA_BIN" \
+        LIGHTSPEED_HANDOFF_REQUEST="$HANDOFF_REQ" \
+        LIGHTSPEED_HANDOFF_SOAK_SECS="${SOAK_SECS:-1}" \
         LIGHTSPEED_HOST_ARCH="x86_64" \
         LIGHTSPEED_HEALTH_TIMEOUT="1" \
         LIGHTSPEED_HEALTH_INTERVAL="0" \
@@ -196,7 +269,7 @@ run_install() {
         LIGHTSPEED_CONFIG_PATH="$FIXTURE/proxy.toml" \
         LIGHTSPEED_KEEP_RELEASES="3" \
         LIGHTSPEED_SLEEP_BIN="true" \
-        bash "$INSTALLER" --binary "$2" --version "$1" >"$OUT" 2>"$ERR"
+        bash "$INSTALLER" --binary "$2" --version "$1" "${@:3}" >"$OUT" 2>"$ERR"
 }
 
 release_count() {
@@ -339,6 +412,158 @@ assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/v1" 
 assert_current_exists "(h) current is not dangling"
 assert_eq "$(cat "$FIXTURE/health_mode")" "ok" "(h) service healthy after same-version reinstall"
 assert_no_staged "(h) no staged temp file remains"
+
+# ── (j) handoff success: request, SIGUSR2, soak, then repoint + prune ──
+reset_fixture
+seed_release "1.4.1" "2020-01-01 00:00:00"
+seed_release "1.4.2" "2020-02-01 00:00:00"
+seed_release "1.4.3" "2020-03-01 00:00:00"
+ln -sfn "$ROOT/releases/1.4.3" "$ROOT/current"
+printf '1.4.3\n' > "$FIXTURE/old_version"
+printf 'OLD\nNEWOK\n' > "$FIXTURE/curl_script"
+STAGED_J="$TMP/staged-j"
+make_binary "$STAGED_J" 0
+SOAK_SECS=1
+if run_install "1.4.4" "$STAGED_J"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(j) handoff install exits 0"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.4" \
+    "(j) current repointed to the handoff release"
+assert_current_exists "(j) current is not dangling"
+assert_eq "$(release_count)" "3" "(j) prune kept 3 releases after handoff"
+assert_grep "$FIXTURE/systemctl.log" "kill -s SIGUSR2 lightspeed-proxy" "(j) SIGUSR2 was sent"
+assert_not_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" "(j) no restart on a successful handoff"
+
+assert_file_exists "$HANDOFF_REQ" "(j) handoff request was written"
+assert_eq "$(stat -c %a "$HANDOFF_REQ" 2>/dev/null || true)" "600" "(j) handoff request mode is 0600"
+assert_grep "$HANDOFF_REQ" '"schema_version":1' "(j) request schema_version is 1"
+assert_grep "$HANDOFF_REQ" '"version":"1.4.4"' "(j) request carries the new version"
+assert_grep "$HANDOFF_REQ" "\"binary_path\":\"$ROOT/releases/1.4.4/lightspeed-proxy\"" \
+    "(j) request carries the release binary path"
+REQ_SHA_J="$("$SHA_BIN" "$ROOT/releases/1.4.4/lightspeed-proxy" | awk '{print $1}')"
+assert_grep "$HANDOFF_REQ" "\"sha256\":\"$REQ_SHA_J\"" "(j) request carries the released binary sha256"
+REQ_ID_J="$(grep -oE '"handoff_id":"[^"]*"' "$HANDOFF_REQ" 2>/dev/null | head -1 | cut -d'"' -f4 || true)"
+if [ -n "$REQ_ID_J" ]; then
+    note_pass
+    assert_grep "$FIXTURE/handoff-echo.log" "$REQ_ID_J" "(j) /health echoed the request handoff_id"
+else
+    note_fail "(j) request has no handoff_id"
+fi
+assert_eq "$(tail -1 "$FIXTURE/curl-current.log" 2>/dev/null || true)" "$ROOT/releases/1.4.3" \
+    "(j) current still pointed at the old release throughout the ok + soak"
+if [ -f "$FIXTURE/handoff-echo.log" ] && [ "$(wc -l < "$FIXTURE/handoff-echo.log" | tr -d ' ')" -ge 2 ]; then
+    note_pass
+else
+    note_fail "(j) the soak polled /health more than once"
+fi
+
+# ── (k) no handoff field -> restart path, no request ─────────
+reset_fixture
+seed_release "1.4.3" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.4.3" "$ROOT/current"
+STAGED_K="$TMP/staged-k"
+make_binary "$STAGED_K" 0
+SOAK_SECS=0
+if run_install "1.4.4" "$STAGED_K"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(k) health without handoff falls back to restart and exits 0"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.4" \
+    "(k) restart path repointed current"
+assert_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" "(k) restart path was used"
+assert_not_grep "$FIXTURE/systemctl.log" "SIGUSR2" "(k) no handoff signal was sent"
+if [ -e "$HANDOFF_REQ" ]; then
+    note_fail "(k) handoff request was written on the restart path"
+else
+    note_pass
+fi
+
+# ── (l) handoff never happens -> no repoint, no restart, non-zero ──
+reset_fixture
+seed_release "1.4.3" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.4.3" "$ROOT/current"
+printf '1.4.3\n' > "$FIXTURE/old_version"
+printf 'OLD\n' > "$FIXTURE/curl_script"
+STAGED_L="$TMP/staged-l"
+make_binary "$STAGED_L" 0
+SOAK_SECS=0
+if run_install "1.4.4" "$STAGED_L"; then rc=0; else rc=$?; fi
+assert_rc_nonzero "$rc" "(l) a handoff that never completes exits non-zero"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.3" \
+    "(l) current unchanged when the handoff never happened"
+assert_current_exists "(l) current is not dangling"
+assert_grep "$FIXTURE/systemctl.log" "kill -s SIGUSR2 lightspeed-proxy" "(l) SIGUSR2 was attempted"
+assert_not_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" \
+    "(l) no restart on a zero-downtime handoff miss"
+
+# ── (m) handoff ok then soak fails -> rollback + restart ─────
+reset_fixture
+seed_release "1.4.3" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.4.3" "$ROOT/current"
+printf '1.4.3\n' > "$FIXTURE/old_version"
+printf 'OLD\nNEWOK\nFAIL\n' > "$FIXTURE/curl_script"
+STAGED_M="$TMP/staged-m"
+make_binary "$STAGED_M" 0
+SOAK_SECS=1
+if run_install "1.4.4" "$STAGED_M"; then rc=0; else rc=$?; fi
+assert_rc_nonzero "$rc" "(m) a failed soak exits non-zero"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.3" \
+    "(m) current rolled back to the previous release"
+assert_current_exists "(m) current is not dangling after rollback"
+assert_grep "$OUT" "rolling back" "(m) rollback is reported"
+assert_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" "(m) rollback restarted the service"
+
+# ── (n) same-version install never hands off ─────────────────
+reset_fixture
+seed_release "1.4.4" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.4.4" "$ROOT/current"
+printf '1.4.4\n' > "$FIXTURE/old_version"
+printf 'OLD\n' > "$FIXTURE/curl_script"
+STAGED_N="$TMP/staged-n"
+make_binary_marked "$STAGED_N" 0 "n marker: same version"
+SOAK_SECS=0
+if run_install "1.4.4" "$STAGED_N"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(n) same-version install exits 0"
+assert_not_grep "$FIXTURE/systemctl.log" "SIGUSR2" "(n) same version sends no SIGUSR2"
+if [ -e "$HANDOFF_REQ" ]; then
+    note_fail "(n) same version wrote a handoff request"
+else
+    note_pass
+fi
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.4" \
+    "(n) current still on the same release"
+
+# ── (o) --no-handoff forces the restart path ─────────────────
+reset_fixture
+seed_release "1.4.3" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.4.3" "$ROOT/current"
+printf '1.4.3\n' > "$FIXTURE/old_version"
+printf 'OLD\nNEWOK\n' > "$FIXTURE/curl_script"
+STAGED_O="$TMP/staged-o"
+make_binary "$STAGED_O" 0
+SOAK_SECS=0
+if run_install "1.4.4" "$STAGED_O" --no-handoff; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(o) --no-handoff install exits 0"
+assert_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" "(o) --no-handoff restarts"
+assert_not_grep "$FIXTURE/systemctl.log" "SIGUSR2" "(o) --no-handoff sends no SIGUSR2"
+if [ -e "$HANDOFF_REQ" ]; then
+    note_fail "(o) --no-handoff wrote a handoff request"
+else
+    note_pass
+fi
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.4" \
+    "(o) --no-handoff repointed current"
+
+# ── (p) --handoff refuses to signal an unsupported proxy ─────
+reset_fixture
+seed_release "1.4.3" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.4.3" "$ROOT/current"
+STAGED_P="$TMP/staged-p"
+make_binary "$STAGED_P" 0
+SOAK_SECS=0
+if run_install "1.4.4" "$STAGED_P" --handoff; then rc=0; else rc=$?; fi
+assert_eq "$rc" "2" "(p) --handoff without proxy support exits 2"
+assert_not_grep "$FIXTURE/systemctl.log" "SIGUSR2" \
+    "(p) --handoff sends no SIGUSR2 to an unsupported proxy"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.3" \
+    "(p) --handoff leaves current untouched when it cannot proceed"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
