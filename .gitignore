@@ -56,3 +56,4 @@ web/network-history.json
 # AI assistant generated artifacts
 .omo/
 .cortexkit/
+.playwright-mcp/
