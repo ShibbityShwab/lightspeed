@@ -75,7 +75,10 @@ jobs:
 
           mkdir -p web
           cp "$GITHUB_WORKSPACE/web/network-history.json" web/network-history.json
-          git add web/network-history.json
+          # The file is gitignored in the main tree (so local runs stay clean),
+          # so force-add it here or the commit step aborts and the history never
+          # accumulates on the stats branch.
+          git add -f web/network-history.json
 
           if git diff --cached --quiet; then
             echo "No history changes to commit"
