@@ -9,5 +9,6 @@ pub mod config;
 pub mod control;
 pub mod health;
 pub mod metrics;
+pub mod notify;
 pub mod rate_limit;
 pub mod relay;

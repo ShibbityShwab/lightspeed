@@ -17,6 +17,7 @@ use lightspeed_proxy::auth;
 use lightspeed_proxy::config;
 use lightspeed_proxy::health;
 use lightspeed_proxy::metrics;
+use lightspeed_proxy::notify;
 use lightspeed_proxy::rate_limit;
 use lightspeed_proxy::relay;
 
@@ -414,11 +415,45 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
+    // systemd readiness: every plane and the session manager are now spawned,
+    // so READY means the proxy is serving, not merely configured. This is
+    // additive and never alters an existing startup failure path.
+    notify::ready();
+    let data_local = data_socket
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| data_bind.clone());
+    notify::status(&format!(
+        "node={} region={} data={} control={} health={}",
+        config.server.node_id, config.server.region, data_local, control_bind, health_bind
+    ));
+
+    // Refresh the systemd watchdog at half of WatchdogSec. `tokio::time::interval`
+    // fires its first tick immediately, so consume it before the loop to keep the
+    // first ping one interval after startup.
+    let watchdog_handle = if notify::is_enabled() {
+        notify::watchdog_interval().map(|interval| {
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.tick().await;
+                loop {
+                    ticker.tick().await;
+                    notify::watchdog();
+                }
+            })
+        })
+    } else {
+        None
+    };
+
     info!("⚡ LightSpeed Proxy running — press Ctrl+C to stop");
 
     // Wait for shutdown signal
     wait_for_shutdown_signal().await?;
     info!("⚡ Shutdown signal received");
+
+    // Tell systemd we are shutting down before any task is aborted.
+    notify::stopping();
 
     // Tell control-plane clients first: clients reconnect immediately instead
     // of waiting out the QUIC idle timeout.
@@ -433,6 +468,9 @@ async fn main() -> anyhow::Result<()> {
     }
     health_handle.abort();
     stats_handle.abort();
+    if let Some(handle) = watchdog_handle {
+        handle.abort();
+    }
 
     // Bounded wait for the control plane to announce shutdown and close its
     // endpoint. A hung client must not be able to hang the whole shutdown.
