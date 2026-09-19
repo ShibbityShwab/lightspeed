@@ -53,6 +53,9 @@ web/network-stats.json
 # Bounded network-stats history (infra/scripts/append-history.sh; persisted on the stats branch)
 web/network-history.json
 
+# Relay placement recommendation (infra/scripts/recommend-regions.sh; persisted on the stats branch)
+web/placement.json
+
 # AI assistant generated artifacts
 .omo/
 .cortexkit/

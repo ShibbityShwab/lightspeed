@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "params": {
+    "alpha": 2,
+    "window_secs": 604800,
+    "min_window_sessions": 20,
+    "min_cell_sessions": 3,
+    "stability_runs": 3,
+    "add_margin": 0.10,
+    "move_margin": 0.20,
+    "redundancy_weight": 0.5,
+    "move_coverage_keep": 0.9,
+    "proximity_ms_floor": 15,
+    "near_duplicate_ms": 25
+  },
+  "candidates": [
+    {
+      "id": "oracle-us-ashburn-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "na",
+      "lat": 39.04,
+      "lon": -77.49,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only: a tenancy provisions Always Free compute in exactly one region and the home region is immutable. A1 allowance was cut to 2 OCPU/12 GB in June 2026; AMD micro unchanged."
+    },
+    {
+      "id": "gcp-us-central1",
+      "provider": "Google Cloud",
+      "region": "na",
+      "lat": 41.26,
+      "lon": -95.86,
+      "free_tier": true,
+      "viable": true,
+      "note": "GCP Always Free: one e2-micro in one of us-west1, us-central1, or us-east1 only. 1 GB/mo North America Premium egress; Standard tier carries a separate 200 GB/mo allowance."
+    },
+    {
+      "id": "vultr-free-miami",
+      "provider": "Vultr",
+      "region": "na",
+      "lat": 25.76,
+      "lon": -80.19,
+      "free_tier": true,
+      "viable": true,
+      "note": "Vultr Free Tier: free 1 vCPU/512 MB/10 GB in Miami, Seattle, or Frankfurt. Application-gated, randomized, and capacity-limited, so not guaranteed to be granted."
+    },
+    {
+      "id": "aws-us-east-1",
+      "provider": "Amazon Web Services",
+      "region": "na",
+      "lat": 38.95,
+      "lon": -77.45,
+      "free_tier": false,
+      "viable": true,
+      "note": "EC2 free access is 12-month for accounts created before 2025-07-15, or a 6-month credit plan for accounts created on/after that date. No ongoing $0 VM. Only path is the competitive AWS Cloud Credits for Open Source."
+    },
+    {
+      "id": "oracle-sa-saopaulo-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "latam",
+      "lat": -23.55,
+      "lon": -46.63,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only and the home region is immutable after tenancy provisioning."
+    },
+    {
+      "id": "gcp-southamerica-east1",
+      "provider": "Google Cloud",
+      "region": "latam",
+      "lat": -23.55,
+      "lon": -46.63,
+      "free_tier": false,
+      "viable": true,
+      "note": "No always-free tier outside the US: GCP always-free compute is US-only. Sponsor funding only."
+    },
+    {
+      "id": "oracle-eu-frankfurt-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "eu",
+      "lat": 50.11,
+      "lon": 8.68,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only and the home region is immutable after tenancy provisioning."
+    },
+    {
+      "id": "vultr-free-frankfurt",
+      "provider": "Vultr",
+      "region": "eu",
+      "lat": 50.11,
+      "lon": 8.68,
+      "free_tier": true,
+      "viable": true,
+      "note": "Vultr Free Tier: free 1 vCPU/512 MB/10 GB in Miami, Seattle, or Frankfurt. Application-gated and capacity-limited, so not guaranteed to be granted."
+    },
+    {
+      "id": "hetzner-fsn1",
+      "provider": "Hetzner",
+      "region": "eu",
+      "lat": 50.48,
+      "lon": 12.37,
+      "free_tier": false,
+      "viable": true,
+      "note": "No free tier. One-time 50 EUR open-source integration credit only. Low-cost, well-peered fallback if sponsor funding exists."
+    },
+    {
+      "id": "digitalocean-fra1",
+      "provider": "DigitalOcean",
+      "region": "eu",
+      "lat": 50.10,
+      "lon": 8.68,
+      "free_tier": false,
+      "viable": true,
+      "note": "No free tier. DigitalOcean Credits for Projects gives renewable open-source credits (about $60 to $20k per year by GitHub stars), renewed yearly."
+    },
+    {
+      "id": "oracle-me-dubai-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "mena",
+      "lat": 25.20,
+      "lon": 55.27,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only and the home region is immutable after tenancy provisioning."
+    },
+    {
+      "id": "aws-me-south-1",
+      "provider": "Amazon Web Services",
+      "region": "mena",
+      "lat": 26.07,
+      "lon": 50.55,
+      "free_tier": false,
+      "viable": true,
+      "note": "No ongoing $0 tier. Sponsor funding only."
+    },
+    {
+      "id": "oracle-af-johannesburg-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "africa",
+      "lat": -26.20,
+      "lon": 28.05,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only and the home region is immutable after tenancy provisioning."
+    },
+    {
+      "id": "aws-af-south-1",
+      "provider": "Amazon Web Services",
+      "region": "africa",
+      "lat": -33.92,
+      "lon": 18.42,
+      "free_tier": false,
+      "viable": true,
+      "note": "No ongoing $0 tier. Sponsor funding only."
+    },
+    {
+      "id": "oracle-ap-mumbai-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "sasia",
+      "lat": 19.08,
+      "lon": 72.88,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only and the home region is immutable after tenancy provisioning."
+    },
+    {
+      "id": "digitalocean-blr1",
+      "provider": "DigitalOcean",
+      "region": "sasia",
+      "lat": 12.97,
+      "lon": 77.59,
+      "free_tier": false,
+      "viable": true,
+      "note": "No free tier. DigitalOcean Credits for Projects gives renewable open-source credits (about $60 to $20k per year by GitHub stars), renewed yearly."
+    },
+    {
+      "id": "oracle-ap-singapore-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "apac",
+      "lat": 1.35,
+      "lon": 103.82,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only and the home region is immutable after tenancy provisioning."
+    },
+    {
+      "id": "oracle-ap-tokyo-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "apac",
+      "lat": 35.68,
+      "lon": 139.69,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only and the home region is immutable after tenancy provisioning."
+    },
+    {
+      "id": "gcp-asia-northeast1",
+      "provider": "Google Cloud",
+      "region": "apac",
+      "lat": 35.68,
+      "lon": 139.69,
+      "free_tier": false,
+      "viable": true,
+      "note": "No always-free compute in Asia: GCP always-free compute is US-only. Sponsor funding only."
+    },
+    {
+      "id": "oracle-ap-sydney-1",
+      "provider": "Oracle Cloud Infrastructure",
+      "region": "oceania",
+      "lat": -33.87,
+      "lon": 151.21,
+      "free_tier": true,
+      "viable": true,
+      "note": "OCI Always Free. Home-region-only and the home region is immutable after tenancy provisioning."
+    },
+    {
+      "id": "aws-ap-southeast-2",
+      "provider": "Amazon Web Services",
+      "region": "oceania",
+      "lat": -33.87,
+      "lon": 151.21,
+      "free_tier": false,
+      "viable": true,
+      "note": "No ongoing $0 tier. Sponsor funding only."
+    }
+  ]
+}

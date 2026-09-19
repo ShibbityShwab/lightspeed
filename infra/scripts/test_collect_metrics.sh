@@ -10,6 +10,9 @@
 #   (d) a 360-snapshot history trims the oldest on append
 #   (e) an unreachable relay still yields a valid document
 #   (f) a corrupt history file starts fresh
+#   (g) the labeled lightspeed_geo_sessions_total family is parsed,
+#       coarsened through the region catalog, and capped at 64 keys
+#       without touching the scalar delta math
 #
 # No network: the fake registry points health/metrics URLs at file://
 # fixtures, which curl reads locally.
@@ -86,6 +89,15 @@ lightspeed_build_info{node_id="relay-a",version="1.3.2"} 1
 METRICS
 }
 
+# append_geo <dir> <prometheus-line>...
+append_geo() {
+    local dir="$1"; shift
+    local line
+    for line in "$@"; do
+        printf '%s\n' "$line" >> "$dir/relay-a.metrics.txt"
+    done
+}
+
 # write_registry <out> <nodes-json-array>
 write_registry() {
     jq -n --argjson nodes "$2" \
@@ -104,9 +116,9 @@ node_b="$(jq -cn \
 REG_A="$TMP/registry-a.json"
 write_registry "$REG_A" "[$node_a]"
 
-# run_collect <history-path> <registry-path>
+# run_collect <history-path> <registry-path> [regions-path]
 run_collect() {
-    LIGHTSPEED_NODES= LIGHTSPEED_REGISTRY_PATH="$2" \
+    LIGHTSPEED_NODES= LIGHTSPEED_REGISTRY_PATH="$2" LIGHTSPEED_REGIONS_PATH="${3:-}" \
         bash "$COLLECT" "$1" >/dev/null 2>&1
     return $?
 }
@@ -183,6 +195,92 @@ printf 'not json at all {{{' > "$COR"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 run_collect "$COR" "$REG_A"; assert_rc0 $? "(f) corrupt history run exits 0"
 assert_jq "$COR" '.version == 1 and (.snapshots | length) == 1' "(f) corrupt history reinitializes cleanly"
+
+# ── (g) proxy geo: parse, coarsen, cap, degrade ──────────────
+# The proxy emits a labeled multi-line family
+#   lightspeed_geo_sessions_total{region=...,node_id=...,src="XX",dst="YY"} <n>
+# which the scalar mval() helper cannot parse. US/DE/JP resolve through
+# the shipped catalog to na/eu/apac; ZZ and QQ are deliberately unmapped.
+GEO_H="$TMP/history-geo.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+append_geo "$TMP" \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5' \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",dst="JP",src="US"} 4' \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="US"} 7' \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="DE",dst="DE"} 3' \
+    'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="src"} 11' \
+    'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="dst"} 12' \
+    'lightspeed_geo_sessions_skipped_total{region="us-west",node_id="relay-a",reason="self_tunnel"} 13' \
+    'lightspeed_geo_sessions_rejected_total{region="us-west",node_id="relay-a"} 14'
+run_collect "$GEO_H" "$REG_A"; assert_rc0 $? "(g) geo run exits 0"
+assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-eu"] == 5' "(g) US->DE coarsens to na-eu"
+assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-apac"] == 4' "(g) dst-before-src label order parses identically"
+assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-na"] == 7 and .snapshots[-1].per_relay["relay-a"].geo["eu-eu"] == 3' "(g) all mapped cells coarsen"
+assert_jq "$GEO_H" '(.snapshots[-1].per_relay["relay-a"].geo | length) == 4' "(g) exactly four session cells recorded"
+assert_jq "$GEO_H" '([.snapshots[-1].per_relay["relay-a"].geo[]] | add) == 19' "(g) misses/skipped/rejected are not sessions"
+assert_jq "$GEO_H" '(.snapshots[-1].per_relay["relay-a"].geo | has("apac-na")) | not' "(g) reversed region pair never fabricated"
+assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo_capped == false' "(g) no truncation below the cap"
+assert_jq "$GEO_H" '(.snapshots[-1].per_relay["relay-a"] | has("geo_unmapped_cells")) | not' "(g) no unmapped field when every cell maps"
+
+# ── (h) cap: >64 coarsened keys keep the first 64 lexicographically ──
+# The shipped catalog has 8 regions (64 ordered pairs max), so the cap
+# is exercised with a synthetic 10-region catalog and 70 distinct cells.
+jq -n '{regions: (reduce range(0;10) as $i ({}; .["r\($i)"] = {label: "r\($i)"})),
+        countries: (reduce range(0;10) as $i ({}; .["A\($i)"] = "r\($i)" | .["B\($i)"] = "r\($i)"))}' \
+    > "$TMP/regions-cap.json"
+GEO_CAP_H="$TMP/history-geo-cap.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+for i in $(seq 0 69); do
+    printf 'lightspeed_geo_sessions_total{region="r",node_id="relay-a",src="A%s",dst="B%s"} 3\n' \
+        "$((i % 10))" "$((i / 10))" >> "$TMP/relay-a.metrics.txt"
+done
+run_collect "$GEO_CAP_H" "$REG_A" "$TMP/regions-cap.json"; assert_rc0 $? "(h) cap run exits 0"
+assert_jq "$GEO_CAP_H" '(.snapshots[-1].per_relay["relay-a"].geo | length) == 64' "(h) 70 cells cap to exactly 64 keys"
+assert_jq "$GEO_CAP_H" '.snapshots[-1].per_relay["relay-a"].geo_capped == true' "(h) truncation sets geo_capped"
+assert_jq "$GEO_CAP_H" '.snapshots[-1].per_relay["relay-a"].geo | has("r0-r0") and has("r9-r0")' "(h) lexicographically first keys retained"
+assert_jq "$GEO_CAP_H" '(.snapshots[-1].per_relay["relay-a"].geo | has("r9-r6")) | not' "(h) lexicographically last keys dropped"
+assert_jq "$GEO_CAP_H" '([.snapshots[-1].per_relay["relay-a"].geo[]] | add) == 192' "(h) surviving cells keep their counts"
+
+# ── (i) unmapped countries are skipped and counted ───────────
+GEO_UNMAP_H="$TMP/history-geo-unmapped.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+append_geo "$TMP" \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5' \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="ZZ",dst="US"} 6' \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="QQ"} 5'
+run_collect "$GEO_UNMAP_H" "$REG_A"; assert_rc0 $? "(i) unmapped run exits 0"
+assert_jq "$GEO_UNMAP_H" '.snapshots[-1].per_relay["relay-a"].geo["na-eu"] == 5 and (.snapshots[-1].per_relay["relay-a"].geo | length) == 1' "(i) unmapped cells are skipped, never fabricated"
+assert_jq "$GEO_UNMAP_H" '.snapshots[-1].per_relay["relay-a"].geo_unmapped_cells == 2' "(i) each unmapped side-counted cell increments the counter"
+assert_jq "$GEO_UNMAP_H" '.snapshots[-1].per_relay["relay-a"].geo_capped == false' "(i) skipped cells are not cap truncation"
+
+# ── (j) missing region catalog degrades to empty geo ─────────
+GEO_MISSING_H="$TMP/history-geo-missing.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+append_geo "$TMP" \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5'
+run_collect "$GEO_MISSING_H" "$REG_A" /nonexistent
+assert_rc0 $? "(j) missing catalog still exits 0"
+assert_jq "$GEO_MISSING_H" '.snapshots[-1].per_relay["relay-a"].geo == {}' "(j) missing catalog degrades to empty geo"
+assert_jq "$GEO_MISSING_H" '.snapshots[-1].per_relay["relay-a"].geo_capped == false' "(j) missing catalog is not a truncation"
+assert_jq "$GEO_MISSING_H" '.version == 1 and (.snapshots | length) == 1' "(j) document stays valid and versioned"
+
+# ── (k) geo passes through the delta engine untouched ────────
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
+append_geo "$TMP" \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 9' \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",dst="JP",src="US"} 4' \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="US"} 7' \
+    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="DE",dst="DE"} 3' \
+    'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="src"} 11' \
+    'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="dst"} 12' \
+    'lightspeed_geo_sessions_skipped_total{region="us-west",node_id="relay-a",reason="self_tunnel"} 13' \
+    'lightspeed_geo_sessions_rejected_total{region="us-west",node_id="relay-a"} 14'
+run_collect "$GEO_H" "$REG_A"; assert_rc0 $? "(k) second geo run exits 0"
+assert_jq "$GEO_H" '.version == 1 and (.snapshots | length) == 2' "(k) geo does not change the snapshot version"
+assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-eu"] == 9' "(k) newest cumulative geo value passed through"
+assert_jq "$GEO_H" '.snapshots[-1].interval.packets_relayed == 50' "(k) scalar delta math is unaffected by geo"
+assert_jq "$GEO_H" '(.snapshots[-1].interval | has("na-eu")) | not' "(k) geo keys never enter interval"
+assert_jq "$GEO_H" '(.snapshots[-1].totals | has("na-eu")) | not' "(k) geo keys never enter totals"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

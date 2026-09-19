@@ -32,6 +32,9 @@ jobs:
           git fetch origin stats --depth=1 || true
           mkdir -p .stats
           (git show origin/stats:web/network-history.json > .stats/history.json 2>/dev/null || echo '{"version":1,"generated_at":0,"snapshots":[]}' > .stats/history.json)
+          # Prior placement recommendation carries stability.runs for the
+          # recommender's hysteresis gate. An empty object means "no history".
+          (git show origin/stats:web/placement.json > .stats/placement.json 2>/dev/null || echo '{}' > .stats/placement.json)
 
       - name: Generate live network stats
         run: bash infra/scripts/network-stats.sh
@@ -50,6 +53,21 @@ jobs:
           cp .stats/history.json web/network-history.json 2>/dev/null \
             || echo '{"version":1,"generated_at":0,"snapshots":[]}' > web/network-history.json
           bash infra/scripts/collect-metrics.sh web/network-history.json || true
+
+      - name: Recommend relay regions
+        # The recommender always exits 0 and always writes valid JSON. It is
+        # advisory only: it never provisions or moves infrastructure, and it
+        # writes to .stats/ so the recommendation stays off the public Pages
+        # artifact (it lives only on the stats branch).
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          bash infra/scripts/recommend-regions.sh \
+            --history web/network-history.json \
+            --previous .stats/placement.json \
+            --registry web/registry.json \
+            --geo-dir infra/geo \
+            --out .stats/placement.json
 
       - name: Commit history to stats branch
         continue-on-error: true
@@ -75,10 +93,15 @@ jobs:
 
           mkdir -p web
           cp "$GITHUB_WORKSPACE/web/network-history.json" web/network-history.json
-          # The file is gitignored in the main tree (so local runs stay clean),
-          # so force-add it here or the commit step aborts and the history never
-          # accumulates on the stats branch.
+          # These files are gitignored in the main tree (so local runs stay
+          # clean), so force-add them here or the commit step aborts and the
+          # history never accumulates on the stats branch.
           git add -f web/network-history.json
+
+          if [ -f "$GITHUB_WORKSPACE/.stats/placement.json" ]; then
+            cp "$GITHUB_WORKSPACE/.stats/placement.json" web/placement.json
+            git add -f web/placement.json
+          fi
 
           if git diff --cached --quiet; then
             echo "No history changes to commit"
@@ -87,7 +110,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: update network history snapshot"
+          git commit -m "chore: update network history and placement snapshot"
 
           pushed=0
           for attempt in 1 2 3; do
@@ -107,8 +130,11 @@ jobs:
               # Both runs appended a snapshot to the same JSON document, so a
               # conflict is expected. During a rebase "theirs" is our freshly
               # generated document; keep it and finish the replay.
-              git checkout --theirs -- web/network-history.json 2>/dev/null || true
+              git checkout --theirs -- web/network-history.json web/placement.json 2>/dev/null || true
               git add web/network-history.json
+              if [ -f web/placement.json ]; then
+                git add web/placement.json
+              fi
               GIT_EDITOR=true git rebase --continue || git rebase --abort || true
             fi
           done

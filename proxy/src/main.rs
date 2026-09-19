@@ -15,6 +15,7 @@
 use lightspeed_proxy::abuse;
 use lightspeed_proxy::auth;
 use lightspeed_proxy::config;
+use lightspeed_proxy::geo;
 use lightspeed_proxy::handoff;
 use lightspeed_proxy::health;
 use lightspeed_proxy::metrics;
@@ -25,6 +26,7 @@ use lightspeed_proxy::relay;
 #[cfg(feature = "quic")]
 use lightspeed_proxy::control;
 
+use std::net::Ipv4Addr;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
@@ -36,7 +38,7 @@ use std::sync::Arc;
 use clap::Parser;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 /// LightSpeed Proxy — UDP relay node
 #[derive(Parser, Debug)]
@@ -141,6 +143,49 @@ fn run_handoff_validate(manifest_path: &str) -> anyhow::Result<()> {
     }
 }
 
+/// Build the geo resolver from configuration.
+///
+/// Returns `None` (geo off) when disabled or when the database is missing or
+/// invalid; a bad database never prevents startup.
+fn build_geo_resolver(config: &config::ProxyConfig) -> Option<Arc<dyn geo::GeoResolver>> {
+    if !config.geo.enabled {
+        warn!("Geo aggregation disabled by configuration");
+        return None;
+    }
+    match geo::load_resolver(std::path::Path::new(&config.geo.mmdb_path)) {
+        Some(resolver) => {
+            info!("Geo aggregation enabled (mmdb: {})", config.geo.mmdb_path);
+            Some(resolver)
+        }
+        None => {
+            warn!(
+                "Geo aggregation enabled but MMDB at {} is unavailable; geo disabled",
+                config.geo.mmdb_path
+            );
+            None
+        }
+    }
+}
+
+/// Parse the port from a `host:port` bind string, falling back to `default`.
+fn bind_port(bind: &str, default: u16) -> u16 {
+    bind.rsplit_once(':')
+        .and_then(|(_, port)| port.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Parse `server.public_ip`, warning and ignoring an invalid value.
+fn parse_public_ip(raw: Option<&str>) -> Option<Ipv4Addr> {
+    let raw = raw?;
+    match raw.parse() {
+        Ok(ip) => Some(ip),
+        Err(error) => {
+            warn!("Invalid server.public_ip {raw:?}: {error}");
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -241,10 +286,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Load configuration
-    let config = config::ProxyConfig::load(&cli.config).unwrap_or_else(|e| {
+    let mut config = config::ProxyConfig::load(&cli.config).unwrap_or_else(|e| {
         tracing::warn!("Config not found ({}), using defaults", e);
         config::ProxyConfig::default()
     });
+    config.apply_env_overrides();
+    let geo_resolver = build_geo_resolver(&config);
 
     let data_bind = cli
         .data_bind
@@ -307,6 +354,21 @@ async fn main() -> anyhow::Result<()> {
         config.rate_limit.clone(),
     )));
     let metrics = Arc::new(metrics::ProxyMetrics::new());
+    let public_ip = parse_public_ip(config.server.public_ip.as_deref());
+    if geo_resolver.is_some() && public_ip.is_none() {
+        warn!(
+            "Geo aggregation is enabled but server.public_ip is unset; self-tunnel \
+             sessions are filtered only by the control port, so geo counts may include \
+             relay-to-self artifacts. Set [server] public_ip for exact filtering."
+        );
+    }
+    let geo_state = geo_resolver.map(|resolver| relay::GeoState {
+        resolver,
+        metrics: Arc::clone(&metrics),
+        public_ip,
+        control_port: bind_port(&control_bind, config.network.control_port),
+        data_port: bind_port(&data_bind, config.network.data_port),
+    });
     #[cfg(target_os = "linux")]
     let proxy_started_at_unix_ms = handoff::now_unix_ms();
 
@@ -316,15 +378,21 @@ async fn main() -> anyhow::Result<()> {
     let (authenticator, engine, data_socket) = match handoff::manifest_path_from_env() {
         Some(path) => {
             info!("Adopting in-place handoff from {}", path.display());
-            adopt_handoff(&path, &config, &metrics).await.map_err(|e| {
-                anyhow::anyhow!("handoff adoption from {} failed: {e:#}", path.display())
-            })?
+            adopt_handoff(&path, &config, &metrics, geo_state.clone())
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("handoff adoption from {} failed: {e:#}", path.display())
+                })?
         }
         None => {
             let authenticator = Arc::new(RwLock::new(auth::Authenticator::new(
                 config.security.require_auth,
             )));
-            let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
+            let mut relay_engine = relay::RelayEngine::new(config.server.max_clients);
+            if let Some(geo) = geo_state.clone() {
+                relay_engine = relay_engine.with_geo(geo);
+            }
+            let engine = Arc::new(relay_engine);
             // Bind every serving plane before spawning any task, so a bind
             // failure aborts startup instead of leaving a half-started service
             // that has already announced readiness to systemd.
@@ -628,6 +696,7 @@ async fn adopt_handoff(
     manifest_path: &std::path::Path,
     config: &config::ProxyConfig,
     metrics: &Arc<metrics::ProxyMetrics>,
+    geo: Option<relay::GeoState>,
 ) -> anyhow::Result<(
     Arc<RwLock<auth::Authenticator>>,
     Arc<relay::RelayEngine>,
@@ -652,7 +721,11 @@ async fn adopt_handoff(
         .await
         .restore(&manifest.auth, std::time::Instant::now());
 
-    let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
+    let mut relay_engine = relay::RelayEngine::new(config.server.max_clients);
+    if let Some(geo) = geo {
+        relay_engine = relay_engine.with_geo(geo);
+    }
+    let engine = Arc::new(relay_engine);
     let installed = engine
         .install_handoff_sessions(
             &manifest.sessions,
@@ -688,6 +761,7 @@ async fn adopt_handoff(
     manifest_path: &std::path::Path,
     _config: &config::ProxyConfig,
     _metrics: &Arc<metrics::ProxyMetrics>,
+    _geo: Option<relay::GeoState>,
 ) -> anyhow::Result<(
     Arc<RwLock<auth::Authenticator>>,
     Arc<relay::RelayEngine>,

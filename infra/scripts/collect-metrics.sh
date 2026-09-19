@@ -26,22 +26,30 @@
 #
 # Non-counter fields: `active_sessions` is a gauge and `version` is a
 # label. They are recorded per relay but excluded from delta/totals,
-# because differencing a gauge is meaningless.
+# because differencing a gauge is meaningless. The per-relay `geo`
+# region-pair map, `geo_capped`, and `geo_unmapped_cells` are cumulative
+# snapshot metadata and are likewise passed through untouched.
 #
 # Requires: bash, curl, jq
 # ──────────────────────────────────────────────────────────────
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # shellcheck source=lib-nodes.sh
 source "$SCRIPT_DIR/lib-nodes.sh"
 
 HISTORY_PATH="${1:-}"
 MAX_SNAPSHOTS=360
+# Bounded per-relay geo map. With the current 8-region catalog there are at
+# most 64 ordered region pairs, so this cap never truncates today; it bounds
+# the snapshot size once the catalog grows past that.
+MAX_GEO_CELLS=64
 TIMEOUT=4
 NOW="$(date +%s)"
 DEFAULT_HISTORY='{"version":1,"generated_at":0,"snapshots":[]}'
+REGIONS_PATH="${LIGHTSPEED_REGIONS_PATH:-$REPO_ROOT/infra/geo/regions.json}"
 
 # Cumulative counters tracked for reset-safe deltas. Keep this list in
 # sync with RELAY_JQ's `cumulative` object.
@@ -89,7 +97,38 @@ def mver($m):
      | map(select(startswith("lightspeed_build_info{")))
      | (.[0] // "")) as $line
   | (try ($line | capture("version=\"(?<v>[^\"]*)\"").v) catch "") // "";
+def geo_labels($labels):
+  ($labels | split(",")
+   | map(capture("^\\s*(?<k>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*\"(?<v>[^\"]*)\"\\s*$") // empty)
+   | map({(.k): .v})
+   | add) // {};
+def geo_cells($m; $countries; $max):
+  (($m // "") | split("\n")
+   | map(select(startswith("lightspeed_geo_sessions_total{")))
+   | map(try (
+        capture("^lightspeed_geo_sessions_total\\{(?<labels>[^}]*)\\}\\s+(?<value>[-+0-9.eE]+)")
+        | ((.value | tonumber?) // null) as $v
+        | (geo_labels(.labels)) as $l
+        | select($v != null and ($l.src // null) != null and ($l.dst // null) != null)
+        | { src: $l.src, dst: $l.dst, v: $v }
+      ) catch null)
+   | map(select(. != null))
+  ) as $cells
+  | (reduce $cells[] as $c
+       ({ cells: {}, unmapped: 0 };
+        ($countries[$c.src] // null) as $sr
+        | ($countries[$c.dst] // null) as $dr
+        | if $sr != null and $dr != null
+          then ("\($sr)-\($dr)") as $key
+               | .cells[$key] = ((.cells[$key] // 0) + $c.v)
+          else .unmapped += 1
+          end)) as $agg
+  | (($agg.cells | keys) | sort) as $keys
+  | { geo: (reduce $keys[0:$max][] as $k ({}; .[$k] = $agg.cells[$k])),
+      geo_capped: (($keys | length) > $max),
+      unmapped: $agg.unmapped };
 ($h | try fromjson catch null) as $H
+| (geo_cells($m; $countries; $maxgeo)) as $g
 | {
     node_id: $id,
     reachable: $reach,
@@ -97,6 +136,8 @@ def mver($m):
     active_sessions: ((($H.active_connections) // null) as $a
                       | if $a != null then ($a | tonumber? // 0)
                         else mval($m; "lightspeed_active_connections") end),
+    geo: $g.geo,
+    geo_capped: $g.geo_capped,
     cumulative: {
       packets_relayed: pick($H; $m; "packets_relayed"; "lightspeed_packets_relayed_total"),
       bytes_relayed: pick($H; $m; "bytes_relayed"; "lightspeed_bytes_relayed_total"),
@@ -120,6 +161,7 @@ def mver($m):
       sessions_created: pick($H; $m; "sessions_created"; "lightspeed_sessions_created_total")
     }
   }
+| if $g.unmapped > 0 then .geo_unmapped_cells = $g.unmapped else . end
 '
 
 # ── Delta engine: prev history + current scrape -> bounded document ──
@@ -153,6 +195,9 @@ def n: (tonumber? // 0);
         reachable: $reach,
         version: (.version // ""),
         active_sessions: (.active_sessions // 0 | n),
+        geo: (.geo // {}),
+        geo_capped: (.geo_capped // false),
+        geo_unmapped_cells: (.geo_unmapped_cells // null),
         cumulative: $r.cum,
         delta: $r.delta,
         reset_metrics: $r.reset_metrics,
@@ -169,15 +214,20 @@ def n: (tonumber? // 0);
    )) as $totals
 | (reduce $rows[] as $r (
      {};
-     .[$r.id] = {
+     .[$r.id] = ({
         reachable: $r.reachable,
         version: $r.version,
         active_sessions: $r.active_sessions,
+        geo: $r.geo,
+        geo_capped: $r.geo_capped,
         cumulative: $r.cumulative,
         delta: $r.delta,
         reset: $r.reset,
         reset_metrics: $r.reset_metrics
-     }
+     } + (if $r.geo_unmapped_cells == null
+          then {}
+          else {geo_unmapped_cells: $r.geo_unmapped_cells}
+          end))
    )) as $per_relay
 | ([ $snaps[],
      {
@@ -195,6 +245,16 @@ def n: (tonumber? // 0);
     snapshots: $newsnaps
   }
 '
+
+# ── Load the country -> region catalog; absence -> empty map ─
+COUNTRY_REGIONS="{}"
+if [ -f "$REGIONS_PATH" ] && [ -r "$REGIONS_PATH" ]; then
+    loaded_regions="$(jq -c 'if (.countries | type) == "object" then .countries else {} end' \
+        "$REGIONS_PATH" 2>/dev/null || true)"
+    if [ -n "$loaded_regions" ]; then
+        COUNTRY_REGIONS="$loaded_regions"
+    fi
+fi
 
 # ── Load prior history (normalize to a known-good shape) ─────
 prev="$DEFAULT_HISTORY"
@@ -250,6 +310,8 @@ while IFS= read -r node; do
         --arg h "$health" \
         --arg m "$metrics" \
         --argjson reach "$reach" \
+        --argjson countries "$COUNTRY_REGIONS" \
+        --argjson maxgeo "$MAX_GEO_CELLS" \
         "$RELAY_JQ" 2>/dev/null || true)"
     if [ -n "$row" ] && [ -n "${TMP_ROWS:-}" ]; then
         printf '%s\n' "$row" >> "$TMP_ROWS"

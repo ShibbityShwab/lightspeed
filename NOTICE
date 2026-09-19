@@ -1,0 +1,8 @@
+LightSpeed
+Copyright (c) 2026 ShibbityShwab. All rights reserved.
+
+This product includes third-party data and software:
+
+IP geolocation data by DB-IP (https://db-ip.com), licensed under CC BY 4.0.
+
+Uses the maxminddb crate (MIT licensed).

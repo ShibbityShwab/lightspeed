@@ -123,15 +123,17 @@ echo "  Uploaded"
 
 # ── Step 4: Configure node ───────────────────────────────────
 echo -e "\n${CYAN}[4/6] Configuring node...${NC}"
-ssh $SSH_OPTS -i "$SSH_KEY" "$SSH_USER@$NODE_IP" bash -s "$NODE_ID" "$REGION" "$RELEASE_VERSION" << 'REMOTE'
+ssh $SSH_OPTS -i "$SSH_KEY" "$SSH_USER@$NODE_IP" bash -s "$NODE_ID" "$REGION" "$RELEASE_VERSION" "$NODE_IP" << 'REMOTE'
 set -euo pipefail
 NODE_ID="$1"
 REGION="$2"
 RELEASE_VERSION="$3"
+NODE_IP="$4"
 
 # Create config + release layout directories
 mkdir -p /etc/lightspeed
 install -d /opt/lightspeed/releases
+install -d /opt/lightspeed/geoip
 
 # Write proxy.toml
 cat > /etc/lightspeed/proxy.toml << EOF
@@ -139,6 +141,7 @@ cat > /etc/lightspeed/proxy.toml << EOF
 node_id     = "$NODE_ID"
 region      = "$REGION"
 max_clients = 100
+public_ip   = "$NODE_IP"
 
 [security]
 require_auth                = true
@@ -154,6 +157,10 @@ max_connections    = 200
 [metrics]
 enabled       = true
 interval_secs = 10
+
+[geo]
+enabled   = true
+mmdb_path = "/opt/lightspeed/geoip/dbip-country-lite.mmdb"
 EOF
 
 # Write systemd service
@@ -214,6 +221,13 @@ install -m 0644 /tmp/lightspeed-update.timer /etc/systemd/system/lightspeed-upda
 systemctl daemon-reload
 systemctl enable --now lightspeed-update.timer
 echo "Self-update timer enabled"
+
+# Best-effort GeoIP sync. The pinned MMDB is not required for the proxy to
+# start, so a failure here must never fail provisioning; the update timer
+# retries it on its next run.
+LIGHTSPEED_GEOIP_DIR=/opt/lightspeed/geoip \
+    bash /usr/local/lib/lightspeed/relay-updater.sh --geoip-only \
+    || echo "GeoIP sync skipped; the update timer will retry"
 
 echo "Service installed and activated"
 REMOTE

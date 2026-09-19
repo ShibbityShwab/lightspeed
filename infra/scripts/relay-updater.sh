@@ -11,7 +11,10 @@
 # so operators can see the last check/apply outcome.
 #
 # Usage:
-#   relay-updater.sh [--dry-run] [--force] [--allow-prerelease]
+#   relay-updater.sh [--dry-run] [--force] [--allow-prerelease] [--geoip-only]
+#
+# --geoip-only syncs only the pinned GeoIP MMDB and exits; it never touches
+# the binary or the versioned release layout.
 #
 # Exit codes:
 #   0  up to date, dry-run, or another run holds the lock
@@ -25,6 +28,8 @@
 #   LIGHTSPEED_UPDATE_LOCK   (/var/lock/lightspeed-update.lock)
 #   LIGHTSPEED_RELEASE_REPO  (ShibbityShwab/lightspeed)
 #   LIGHTSPEED_RELEASE_API   (https://api.github.com/repos/<repo>/releases/latest)
+#   LIGHTSPEED_GEOIP_API     (https://api.github.com/repos/<repo>/releases?per_page=100)
+#   LIGHTSPEED_GEOIP_DIR     (/opt/lightspeed/geoip)
 #   GITHUB_TOKEN             (unset; sent as a bearer token when present)
 #   LIGHTSPEED_HOST_ARCH     (uname -m)
 #   LIGHTSPEED_CURL / _TAR / _JQ / _SHA256SUM / _FLOCK
@@ -51,16 +56,25 @@ TAR="${LIGHTSPEED_TAR:-tar}"
 JQ="${LIGHTSPEED_JQ:-jq}"
 SHA256SUM="${LIGHTSPEED_SHA256SUM:-sha256sum}"
 FLOCK="${LIGHTSPEED_FLOCK:-flock}"
+GEOIP_DIR="${LIGHTSPEED_GEOIP_DIR:-/opt/lightspeed/geoip}"
+GEOIP_ASSET_NAME="dbip-country-lite.mmdb"
+GEOIP_API="${LIGHTSPEED_GEOIP_API:-https://api.github.com/repos/$RELEASE_REPO/releases?per_page=100}"
+
+CURL_AUTH=()
+if [ -n "$GITHUB_TOKEN" ]; then
+    CURL_AUTH=(-H "Authorization: Bearer $GITHUB_TOKEN")
+fi
 
 DRY_RUN=0
 FORCE=0
 ALLOW_PRE=0
+GEOIP_ONLY=0
 
 log()  { printf 'relay-updater: %s\n' "$*"; }
 warn() { printf 'relay-updater: WARNING: %s\n' "$*" >&2; }
 
 usage() {
-    sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # --help is answered before any state or trap setup so it never writes
@@ -199,6 +213,7 @@ while [ $# -gt 0 ]; do
         --dry-run)          DRY_RUN=1; shift ;;
         --force)            FORCE=1; shift ;;
         --allow-prerelease) ALLOW_PRE=1; shift ;;
+        --geoip-only)       GEOIP_ONLY=1; shift ;;
         -h|--help)          STATE_WRITTEN=1; usage; exit 0 ;;
         *) usage_fail "unknown argument: $1" 1 ;;
     esac
@@ -239,6 +254,108 @@ semver_cmp() {
     return 1
 }
 
+# verify_sha256 FILE SHA_FILE -> prints the actual digest, returns 0 on match.
+# Returns 1 on mismatch or an empty/unreadable checksum file. Shared by the
+# tarball and GeoIP paths so neither can install unverified bytes.
+verify_sha256() {  # file sha_file
+    local file="$1" sha_file="$2" expected actual
+    [ -f "$file" ] || return 1
+    expected="$(awk '{print $1}' "$sha_file" 2>/dev/null | head -1 | tr 'A-F' 'a-f')"
+    actual="$("$SHA256SUM" "$file" 2>/dev/null | awk '{print $1}')"
+    if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+        return 1
+    fi
+    printf '%s' "$actual"
+    return 0
+}
+
+# sync_geoip resolves the newest release carrying a lightspeed-geoip-*.mmdb
+# asset, downloads the MMDB and its .sha256, verifies the digest, and installs
+# the DB atomically. Every failure warns and returns; it never aborts the
+# updater and never replaces an existing DB with an unverified download.
+sync_geoip() {
+    local json meta geo_tag asset_name asset_url sha_url
+    local gtmp db_file sha_file actual staged
+
+    json="$("$CURL" -sfL --max-time 30 \
+        -H "Accept: application/vnd.github+json" \
+        "${CURL_AUTH[@]}" "$GEOIP_API" 2>/dev/null || true)"
+    if [ -z "$json" ]; then
+        warn "geoip: releases API request failed: $GEOIP_API"
+        return 0
+    fi
+
+    meta="$(printf '%s' "$json" | "$JQ" -r '
+        [ .[] | select((.assets // []) | any(.name | (startswith("lightspeed-geoip-") and endswith(".mmdb")))) ][0] as $rel
+        | (($rel.assets // []) | map(select(.name | (startswith("lightspeed-geoip-") and endswith(".mmdb"))))[0] // {}) as $mmdb
+        | (($rel.assets // []) | map(select(.name == (($mmdb.name // "") + ".sha256")))[0] // {}) as $sum
+        | select(($mmdb.name // "") != "")
+        | "\($rel.tag_name)\t\($mmdb.name)\t\($mmdb.browser_download_url // "")\t\($sum.browser_download_url // "")"' 2>/dev/null || true)"
+    IFS=$'\t' read -r geo_tag asset_name asset_url sha_url <<< "$meta"
+    if [ -z "$asset_name" ]; then
+        warn "geoip: no release carries a lightspeed-geoip-*.mmdb asset"
+        return 0
+    fi
+    if [ -z "$asset_url" ]; then
+        warn "geoip: release $geo_tag has no download URL for $asset_name"
+        return 0
+    fi
+    if [ -z "$sha_url" ]; then
+        warn "geoip: release $geo_tag is missing $asset_name.sha256"
+        return 0
+    fi
+
+    gtmp="$(mktemp -d "${TMPDIR:-/tmp}/lightspeed-geoip.XXXXXX" 2>/dev/null)" || {
+        warn "geoip: cannot create a temp directory"
+        return 0
+    }
+    db_file="$gtmp/$asset_name"
+    sha_file="$gtmp/$asset_name.sha256"
+
+    if ! "$CURL" -sfL --max-time 300 -H "Accept: application/octet-stream" \
+            "${CURL_AUTH[@]}" -o "$db_file.part" "$asset_url" 2>/dev/null; then
+        warn "geoip: download failed: $asset_url"
+        rm -rf "$gtmp"
+        return 0
+    fi
+    mv -f "$db_file.part" "$db_file"
+
+    if ! "$CURL" -sfL --max-time 60 -H "Accept: application/octet-stream" \
+            "${CURL_AUTH[@]}" -o "$sha_file.part" "$sha_url" 2>/dev/null; then
+        warn "geoip: checksum download failed: $sha_url"
+        rm -rf "$gtmp"
+        return 0
+    fi
+    mv -f "$sha_file.part" "$sha_file"
+
+    if ! actual="$(verify_sha256 "$db_file" "$sha_file")"; then
+        warn "geoip: SHA-256 mismatch for $asset_name; existing DB left untouched"
+        rm -rf "$gtmp"
+        return 0
+    fi
+
+    if ! install -d -m 0755 "$GEOIP_DIR" 2>/dev/null; then
+        warn "geoip: cannot create $GEOIP_DIR"
+        rm -rf "$gtmp"
+        return 0
+    fi
+    staged="$GEOIP_DIR/.$GEOIP_ASSET_NAME.$$.tmp"
+    if ! install -m 0644 "$db_file" "$staged" 2>/dev/null; then
+        warn "geoip: cannot stage $GEOIP_DIR/$GEOIP_ASSET_NAME"
+        rm -f "$staged"
+        rm -rf "$gtmp"
+        return 0
+    fi
+    if mv -f "$staged" "$GEOIP_DIR/$GEOIP_ASSET_NAME" 2>/dev/null; then
+        log "geoip: installed $GEOIP_ASSET_NAME from $geo_tag (sha256 $actual)"
+    else
+        warn "geoip: failed to install $GEOIP_DIR/$GEOIP_ASSET_NAME"
+        rm -f "$staged"
+    fi
+    rm -rf "$gtmp"
+    return 0
+}
+
 # ── Exclusive lock ───────────────────────────────────────────
 LOCK_DIR="$(dirname "$LOCK_FILE")"
 if [ ! -d "$LOCK_DIR" ]; then
@@ -256,12 +373,22 @@ if ! "$FLOCK" -n 9; then
     exit 0
 fi
 
-# ── Query the release channel ────────────────────────────────
-CURL_AUTH=()
-if [ -n "$GITHUB_TOKEN" ]; then
-    CURL_AUTH=(-H "Authorization: Bearer $GITHUB_TOKEN")
+# ── GeoIP sync ───────────────────────────────────────────────
+# --geoip-only is a standalone path: sync the MMDB, record the run, exit.
+# A normal (non-dry-run) invocation syncs the MMDB too, best-effort; a geoip
+# failure warns and continues and never aborts the binary update path.
+if [ "$GEOIP_ONLY" -eq 1 ]; then
+    sync_geoip || true
+    LAST_RESULT="ok"
+    LAST_ERROR=""
+    write_state
+    exit 0
+fi
+if [ "$DRY_RUN" -eq 0 ]; then
+    sync_geoip || true
 fi
 
+# ── Query the release channel ────────────────────────────────
 json="$("$CURL" -sfL --max-time 30 \
     -H "Accept: application/vnd.github+json" \
     "${CURL_AUTH[@]}" "$RELEASE_API" 2>/dev/null || true)"
@@ -344,11 +471,7 @@ if ! "$CURL" -sfL --max-time 60 -H "Accept: application/octet-stream" \
 fi
 mv -f "$sha_file.part" "$sha_file"
 
-expected="$(awk '{print $1}' "$sha_file" | head -1 | tr 'A-F' 'a-f')"
-actual="$("$SHA256SUM" "$archive" | awk '{print $1}')"
-if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
-    fail_run "SHA-256 mismatch for $ASSET_NAME (expected '${expected:-none}', got '$actual')"
-fi
+actual="$(verify_sha256 "$archive" "$sha_file")" || fail_run "SHA-256 mismatch for $ASSET_NAME"
 log "sha256 verified ($actual)"
 
 mkdir -p "$TMP_DIR/extract"

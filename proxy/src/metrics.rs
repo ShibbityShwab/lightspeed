@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use crate::geo::GeoSide;
+
 /// Latency histogram bucket boundaries (microseconds).
 const LATENCY_BUCKETS_US: &[u64] = &[
     100,       // 0.1ms
@@ -153,6 +155,68 @@ impl Default for RouteTelemetryAggregator {
             rejected: 0,
             max_cells: MAX_TELEMETRY_CELLS,
         }
+    }
+}
+
+/// Bounded proxy-observed session aggregation keyed by
+/// `(src_country, dst_country)`.
+///
+/// Both labels are resolved by the proxy itself, so they are never
+/// client-controlled. Counters accumulate when a new session is created; the
+/// map is capped at [`GeoAggregator::max_cells`], after which a novel key is
+/// counted in `rejected` instead of inserted, mirroring the telemetry
+/// aggregators.
+#[derive(Debug)]
+pub struct GeoAggregator {
+    /// Per-cell session counts, keyed by `(src_country, dst_country)`.
+    pub cells: HashMap<(String, String), u64>,
+    /// Sessions dropped because the cell cap was reached.
+    pub rejected: u64,
+    /// Maximum number of distinct cells retained.
+    pub max_cells: usize,
+    /// Sessions whose source address could not be resolved to a country.
+    pub misses_src: u64,
+    /// Sessions whose destination address could not be resolved to a country.
+    pub misses_dst: u64,
+    /// New sessions skipped because the destination is the relay itself.
+    pub skipped_self_tunnel: u64,
+}
+
+impl Default for GeoAggregator {
+    fn default() -> Self {
+        Self {
+            cells: HashMap::new(),
+            rejected: 0,
+            max_cells: MAX_TELEMETRY_CELLS,
+            misses_src: 0,
+            misses_dst: 0,
+            skipped_self_tunnel: 0,
+        }
+    }
+}
+
+impl GeoAggregator {
+    /// Fold one new session's country pair into the bounded map.
+    pub fn record_session(&mut self, src: &str, dst: &str) {
+        let key = (src.to_string(), dst.to_string());
+        if !self.cells.contains_key(&key) && self.cells.len() >= self.max_cells {
+            self.rejected += 1;
+        } else {
+            *self.cells.entry(key).or_insert(0) += 1;
+        }
+    }
+
+    /// Count a country lookup miss on one side of the tunnel.
+    pub fn record_miss(&mut self, side: GeoSide) {
+        match side {
+            GeoSide::Src => self.misses_src += 1,
+            GeoSide::Dst => self.misses_dst += 1,
+        }
+    }
+
+    /// Count a new session whose destination is the relay itself.
+    pub fn record_self_tunnel_skip(&mut self) {
+        self.skipped_self_tunnel += 1;
     }
 }
 
@@ -316,6 +380,10 @@ pub struct ProxyMetrics {
     /// `(normalized relay, game_id, country)`.
     pub route_telemetry: std::sync::Mutex<RouteTelemetryAggregator>,
 
+    // ── Proxy-observed session geo ──────────────────────────────
+    /// Bounded aggregation of new-session country pairs observed by the proxy.
+    pub geo: std::sync::Mutex<GeoAggregator>,
+
     // ── Latency histogram buckets ───────────────────────────────
     /// Per-bucket (non-cumulative) relay latency counts.
     latency_buckets: [AtomicU64; N_BUCKETS],
@@ -360,6 +428,7 @@ impl ProxyMetrics {
             inbound_packets_received: AtomicU64::new(0),
             telemetry: std::sync::Mutex::new(TelemetryAggregator::default()),
             route_telemetry: std::sync::Mutex::new(RouteTelemetryAggregator::default()),
+            geo: std::sync::Mutex::new(GeoAggregator::default()),
             latency_buckets: Default::default(),
             start_time: Instant::now(),
         }
@@ -542,6 +611,30 @@ impl ProxyMetrics {
         }
     }
 
+    /// Record one new session's `(src_country, dst_country)` pair.
+    pub fn record_geo_session(&self, src: &str, dst: &str) {
+        self.geo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record_session(src, dst);
+    }
+
+    /// Record a country lookup miss on one side of a new session.
+    pub fn record_geo_miss(&self, side: GeoSide) {
+        self.geo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record_miss(side);
+    }
+
+    /// Record a new session skipped because its destination is the relay.
+    pub fn record_geo_self_tunnel_skip(&self) {
+        self.geo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record_self_tunnel_skip();
+    }
+
     /// Build a collector whose telemetry map is capped at `max_cells`.
     ///
     /// Test-only: production always uses [`MAX_TELEMETRY_CELLS`].
@@ -559,6 +652,16 @@ impl ProxyMetrics {
     pub fn with_max_route_telemetry_cells(max_cells: usize) -> Self {
         let metrics = Self::new();
         metrics.route_telemetry.lock().unwrap().max_cells = max_cells;
+        metrics
+    }
+
+    /// Build a collector whose geo session map is capped at `max_cells`.
+    ///
+    /// Test-only: production always uses [`MAX_TELEMETRY_CELLS`].
+    #[cfg(test)]
+    pub fn with_max_geo_cells(max_cells: usize) -> Self {
+        let metrics = Self::new();
+        metrics.geo.lock().unwrap().max_cells = max_cells;
         metrics
     }
 
@@ -1076,6 +1179,58 @@ impl ProxyMetrics {
             }
         }
 
+        // ── Proxy-observed session geo (aggregated, k-anonymized) ──
+        // HELP/TYPE headers are emitted unconditionally so the family is
+        // discoverable before the k-anonymity floor is reached.
+        out.push_str(
+            "# HELP lightspeed_geo_sessions_total New relay sessions aggregated by proxy-resolved source and destination country\n",
+        );
+        out.push_str("# TYPE lightspeed_geo_sessions_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_geo_lookup_misses_total New relay sessions whose source or destination country could not be resolved\n",
+        );
+        out.push_str("# TYPE lightspeed_geo_lookup_misses_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_geo_sessions_skipped_total New relay sessions excluded from geo aggregation by reason\n",
+        );
+        out.push_str("# TYPE lightspeed_geo_sessions_skipped_total counter\n");
+        out.push_str(
+            "# HELP lightspeed_geo_sessions_rejected_total Geo session pairs dropped because the per-(src,dst) cell cap was reached\n",
+        );
+        out.push_str("# TYPE lightspeed_geo_sessions_rejected_total counter\n");
+
+        {
+            let agg = self
+                .geo
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            out.push_str(&format!(
+                "lightspeed_geo_sessions_rejected_total{{{}}} {}\n",
+                labels, agg.rejected
+            ));
+            out.push_str(&format!(
+                "lightspeed_geo_lookup_misses_total{{{},side=\"src\"}} {}\n",
+                labels, agg.misses_src
+            ));
+            out.push_str(&format!(
+                "lightspeed_geo_lookup_misses_total{{{},side=\"dst\"}} {}\n",
+                labels, agg.misses_dst
+            ));
+            out.push_str(&format!(
+                "lightspeed_geo_sessions_skipped_total{{{},reason=\"self_tunnel\"}} {}\n",
+                labels, agg.skipped_self_tunnel
+            ));
+            for ((src, dst), count) in &agg.cells {
+                if *count < MIN_TELEMETRY_CELL_REPORTS {
+                    continue;
+                }
+                out.push_str(&format!(
+                    "lightspeed_geo_sessions_total{{{},src=\"{}\",dst=\"{}\"}} {}\n",
+                    labels, src, dst, count
+                ));
+            }
+        }
+
         // ── Build info ──────────────────────────────────────────
         out.push_str("# HELP lightspeed_build_info Build information\n");
         out.push_str("# TYPE lightspeed_build_info gauge\n");
@@ -1548,5 +1703,92 @@ mod tests {
             !output.contains("relay=\"relay-fra\""),
             "a per-relay cell below the k-anonymity floor must not be emitted"
         );
+    }
+
+    // ── Proxy-observed geo aggregation ──────────────────────────
+
+    #[test]
+    fn geo_cell_below_k_suppressed() {
+        let m = ProxyMetrics::new();
+        m.record_geo_session("US", "DE");
+
+        let output = m.to_prometheus("test", "test-node");
+
+        assert!(
+            output.contains("# HELP lightspeed_geo_sessions_total"),
+            "the geo metric family must be declared even before the floor"
+        );
+        assert!(
+            !output.contains("lightspeed_geo_sessions_total{"),
+            "a geo cell below the k-anonymity floor must not be emitted"
+        );
+    }
+
+    #[test]
+    fn geo_cell_cap_overflows_and_counts_rejected() {
+        let m = ProxyMetrics::with_max_geo_cells(2);
+
+        m.record_geo_session("US", "DE");
+        m.record_geo_session("FR", "DE");
+        // Third distinct pair is over the cap and must be rejected, not stored.
+        m.record_geo_session("JP", "DE");
+
+        assert_eq!(m.geo.lock().unwrap().cells.len(), 2);
+        assert_eq!(m.geo.lock().unwrap().rejected, 1);
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_geo_sessions_rejected_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+        assert!(!output.contains("src=\"JP\""));
+    }
+
+    #[test]
+    fn geo_lookup_misses_by_side() {
+        let m = ProxyMetrics::new();
+        m.record_geo_miss(crate::geo::GeoSide::Src);
+        m.record_geo_miss(crate::geo::GeoSide::Src);
+        m.record_geo_miss(crate::geo::GeoSide::Dst);
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_geo_lookup_misses_total{region=\"test\",node_id=\"test-node\",side=\"src\"} 2"
+        ));
+        assert!(output.contains(
+            "lightspeed_geo_lookup_misses_total{region=\"test\",node_id=\"test-node\",side=\"dst\"} 1"
+        ));
+    }
+
+    #[test]
+    fn geo_self_tunnel_skip_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_geo_self_tunnel_skip();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_geo_sessions_skipped_total{region=\"test\",node_id=\"test-node\",reason=\"self_tunnel\"} 1"
+        ));
+    }
+
+    #[test]
+    fn geo_help_type_always_emitted() {
+        let m = ProxyMetrics::new();
+        let output = m.to_prometheus("test", "test-node");
+
+        for family in [
+            "lightspeed_geo_sessions_total",
+            "lightspeed_geo_lookup_misses_total",
+            "lightspeed_geo_sessions_skipped_total",
+            "lightspeed_geo_sessions_rejected_total",
+        ] {
+            assert!(
+                output.contains(&format!("# HELP {family}")),
+                "missing HELP for {family}"
+            );
+            assert!(
+                output.contains(&format!("# TYPE {family} counter")),
+                "missing TYPE for {family}"
+            );
+        }
     }
 }

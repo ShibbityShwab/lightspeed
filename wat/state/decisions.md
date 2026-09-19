@@ -505,3 +505,19 @@ automatic rollback available. Future releases are applied by the hourly self-upd
 the in-place handoff, so no client reconnect is forced. **Note:** this first rollout was a
 blunt restart, so clients running a pre-reconnect client build may have needed a restart;
 the client shipped on this branch reconnects within seconds.
+
+## 2026-09-19 - Demand-driven relay placement recommender
+
+**Context:** The WF-025 observability overhaul added country tags, but player-country telemetry is opt-in via the CLI `--telemetry` flag only and the GUI has no toggle, so production relays expose zero game/country series. The owner asked to optimize relay placement by where players actually play, choosing a player-region to game-server-region demand matrix with no client telemetry change and no raw IP storage.
+
+**Delivered (planned, on branch `feat/relay-placement-recommender`):** proxy-side transient country derivation at session creation from a locally stored DB-IP Lite MMDB (maxminddb crate), aggregated to `(src_country, dst_country)` counters with a k>=3 export floor and 1024-cell cap, exposed as `lightspeed_geo_*` metrics; the collector coarsens to region pairs and persists them into the `stats` branch history; a new `recommend-regions.sh` scores candidate hosting regions by demand-weighted coverage and redundancy and emits an ADD/MOVE recommendation with an INSUFFICIENT_DATA floor.
+
+**Key decisions:**
+- Geolocate proxy-side (full coverage, no opt-in bias) rather than client-reported or SSH journal scraping; aggregate only, never store or export raw IPs.
+- Coarsen to region pairs in the public history while country pairs stay transient on `/metrics`.
+- Publish the MMDB as a pinned monthly `geoip-<YYYY-MM>` release asset.
+- Self-tunnel sessions (destination equals the relay's own control/data port) are filtered proxy-side because the aggregate discards destination IPs.
+
+**Alternatives Considered:** offline operator SSH script (rejected: fragile journald parsing, not CI-runnable); client locale country only (rejected: opt-in, empty, self-declared); scoring by "relay path beats direct path" with great-circle distance (rejected: haversine obeys the triangle inequality, so a distance-only model can never show an improvement; real benefit is transit quality and last-mile).
+
+**Impact:** files under `proxy/src/`, `infra/geo/`, `infra/scripts/`, `.github/workflows/geoip-release.yml`, `docs/privacy.md`, `docs/faq.md`, `NOTICE`. No infrastructure spend; no client or protocol change.

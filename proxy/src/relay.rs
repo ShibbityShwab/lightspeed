@@ -27,7 +27,7 @@
 //! 4. **Destination validation**: Blocks forwarding to private/internal IPs
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -43,10 +43,6 @@ use lightspeed_protocol::{
     FecDecoder, FecEncoder, FecHeader, TunnelHeader, FEC_HEADER_SIZE, HEADER_SIZE,
 };
 
-// Linux-only: Ipv4Addr needed to reconstruct address from sockaddr_in
-#[cfg(target_os = "linux")]
-use std::net::Ipv4Addr;
-
 /// Maximum size for a single outbound relay packet:
 /// TunnelHeader (20 B) + FecHeader (4 B) + receive buffer (2048 B).
 /// Declared as a module-level constant so the stack array in the response
@@ -55,6 +51,7 @@ const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
+use super::geo::{GeoResolver, GeoSide};
 #[cfg(target_os = "linux")]
 use super::handoff::SessionSnapshot;
 use super::metrics::{upstream_lag, DropReason, ProxyMetrics};
@@ -233,6 +230,26 @@ impl ClientSession {
     }
 }
 
+/// Proxy-side geo aggregation context bound to a relay engine.
+///
+/// When present, a newly created session resolves both endpoints to country
+/// codes and folds the pair into [`ProxyMetrics`]; lookup misses and
+/// self-tunnels are counted in their own families. No raw IP is retained.
+#[derive(Clone)]
+pub struct GeoState {
+    /// Resolves an IP to its two-letter country code.
+    pub resolver: Arc<dyn GeoResolver>,
+    /// Metrics collector the geo cells are recorded into.
+    pub metrics: Arc<ProxyMetrics>,
+    /// This relay's public IP, when known. Enables exact address-based
+    /// self-tunnel detection; the port heuristic is the fallback.
+    pub public_ip: Option<Ipv4Addr>,
+    /// Control-plane port used by the port-based self-tunnel fallback.
+    pub control_port: u16,
+    /// Data-plane port used by the port-based self-tunnel fallback.
+    pub data_port: u16,
+}
+
 /// The relay engine — manages all active tunnel sessions.
 pub struct RelayEngine {
     /// Active client sessions indexed by client address.
@@ -252,6 +269,8 @@ pub struct RelayEngine {
     /// Set while an in-place handoff is staged: new sessions are refused but
     /// existing sessions keep resolving.
     handoff_frozen: AtomicBool,
+    /// Proxy-side geo aggregation, or `None` when geo is disabled.
+    geo: Option<GeoState>,
 }
 
 impl RelayEngine {
@@ -272,7 +291,51 @@ impl RelayEngine {
             session_timeout,
             listener_handles: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             handoff_frozen: AtomicBool::new(false),
+            geo: None,
         }
+    }
+
+    /// Attach proxy-side geo aggregation to this engine.
+    pub fn with_geo(mut self, geo: GeoState) -> Self {
+        self.geo = Some(geo);
+        self
+    }
+
+    /// Record a newly created session's country pair, when geo is enabled.
+    ///
+    /// A self-tunnel is counted and skipped, and a resolver miss on either
+    /// side counts a miss instead of a pair. Called only from the single
+    /// new-session insert site, so a session is recorded at most once.
+    fn record_geo_session(&self, session: &ClientSession) {
+        let Some(geo) = &self.geo else {
+            return;
+        };
+        let dst = session.game_server.ip();
+        let self_tunnel = match geo.public_ip {
+            Some(public_ip) => *dst == public_ip,
+            None => {
+                // Fallback when [server] public_ip is unset: only the QUIC
+                // control port is a strong self-tunnel signal. The data port
+                // is deliberately excluded because game traffic can
+                // legitimately use 4434, and dropping it would hide real
+                // demand. Operators should set public_ip for an exact match.
+                session.game_server.port() == geo.control_port
+            }
+        };
+        if self_tunnel {
+            geo.metrics.record_geo_self_tunnel_skip();
+            return;
+        }
+        let src = session.client_addr.ip();
+        let Some(src_country) = geo.resolver.country(*src) else {
+            geo.metrics.record_geo_miss(GeoSide::Src);
+            return;
+        };
+        let Some(dst_country) = geo.resolver.country(*dst) else {
+            geo.metrics.record_geo_miss(GeoSide::Dst);
+            return;
+        };
+        geo.metrics.record_geo_session(&src_country, &dst_country);
     }
 
     /// Refuse new session creation while an in-place handoff is prepared.
@@ -383,6 +446,8 @@ impl RelayEngine {
             return Ok((Arc::clone(existing), false));
         }
         sessions.insert(client_addr, Arc::clone(&session));
+        drop(sessions);
+        self.record_geo_session(&session);
 
         Ok((session, true))
     }
@@ -2011,5 +2076,135 @@ mod tests {
         assert_eq!(write_errno.raw_os_error(), Some(libc::EPIPE));
         // SAFETY: `write_end` is still owned by this test.
         unsafe { libc::close(write_end) };
+    }
+
+    // ── Proxy-side geo session recording ────────────────────────
+
+    fn test_geo_resolver() -> Arc<dyn GeoResolver> {
+        Arc::new(|ip: Ipv4Addr| {
+            if ip == Ipv4Addr::new(198, 51, 100, 9) {
+                Some("DE".to_string())
+            } else {
+                Some("US".to_string())
+            }
+        })
+    }
+
+    fn test_geo_engine(metrics: &Arc<ProxyMetrics>, public_ip: Option<Ipv4Addr>) -> RelayEngine {
+        RelayEngine::new(10).with_geo(GeoState {
+            resolver: test_geo_resolver(),
+            metrics: Arc::clone(metrics),
+            public_ip,
+            control_port: 4433,
+            data_port: 4434,
+        })
+    }
+
+    #[tokio::test]
+    async fn new_session_records_country_pair() {
+        let metrics = Arc::new(ProxyMetrics::new());
+        let engine = test_geo_engine(&metrics, None);
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 50_000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_015);
+
+        let (_, is_new) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(is_new);
+
+        let agg = metrics.geo.lock().unwrap();
+        assert_eq!(
+            agg.cells.get(&("US".to_string(), "DE".to_string())),
+            Some(&1),
+            "a new session must contribute one (src,dst) country pair"
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_session_not_double_counted() {
+        let metrics = Arc::new(ProxyMetrics::new());
+        let engine = test_geo_engine(&metrics, None);
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 50_000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_015);
+
+        let (_, first) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        let (_, second) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(first && !second);
+
+        let agg = metrics.geo.lock().unwrap();
+        assert_eq!(
+            agg.cells.get(&("US".to_string(), "DE".to_string())),
+            Some(&1)
+        );
+    }
+
+    #[tokio::test]
+    async fn self_tunnel_skipped_by_public_ip() {
+        let metrics = Arc::new(ProxyMetrics::new());
+        let engine = test_geo_engine(&metrics, Some(Ipv4Addr::new(198, 51, 100, 9)));
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 50_000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_015);
+
+        engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+
+        let agg = metrics.geo.lock().unwrap();
+        assert!(agg.cells.is_empty(), "a self-tunnel must not record a pair");
+        assert_eq!(agg.skipped_self_tunnel, 1);
+    }
+
+    #[tokio::test]
+    async fn self_tunnel_skipped_by_port_heuristic() {
+        let metrics = Arc::new(ProxyMetrics::new());
+        let engine = test_geo_engine(&metrics, None);
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 50_000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 4433);
+
+        engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+
+        let agg = metrics.geo.lock().unwrap();
+        assert!(agg.cells.is_empty(), "a self-tunnel must not record a pair");
+        assert_eq!(agg.skipped_self_tunnel, 1);
+    }
+
+    #[tokio::test]
+    async fn data_port_destination_is_not_skipped() {
+        // Regression: the fallback heuristic must not treat a legitimate
+        // destination on the data port as a self-tunnel, or it would hide
+        // real demand on port 4434.
+        let metrics = Arc::new(ProxyMetrics::new());
+        let engine = test_geo_engine(&metrics, None);
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 50_000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 4434);
+
+        engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+
+        let agg = metrics.geo.lock().unwrap();
+        assert_eq!(
+            agg.cells.get(&("US".to_string(), "DE".to_string())),
+            Some(&1),
+            "a destination on the data port must still be recorded"
+        );
+        assert_eq!(agg.skipped_self_tunnel, 0);
     }
 }

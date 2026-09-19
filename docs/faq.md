@@ -65,6 +65,10 @@ What that means for you:
 
 Usually 1-3 seconds after you connect to a game server. The interceptor watches for 3 packets to the same destination within 1.5 seconds before locking on.
 
+### How does LightSpeed decide where to add relays?
+
+The proxy derives the **country** of an IP address from a locally stored DB-IP Lite database. This happens in memory, transiently, at session creation, for both the client source address and the game-server destination address. It then counts sessions per `(source_country, destination_country)` pair, so the network can see which region pairs are underserved. A k-anonymity floor of 3 suppresses any pair with fewer than 3 sessions before it is exported, and the public stats carry only coarsened region-pair counts (for example `mena-eu`). The counters contain no raw IP, and no raw IP is exported by the placement pipeline.
+
 ---
 
 ## FEC (Reliability Shield)
@@ -131,6 +135,14 @@ LightSpeed sees UDP packet headers (source/destination IP, port, size) to route 
 ### Is there telemetry?
 
 Telemetry is **opt-in only** (`--telemetry` flag). When enabled, it collects anonymized aggregate metrics (RTT percentiles, FEC stats). No IP addresses, user identities, or game account data are collected. See [Privacy Policy](privacy.md).
+
+### Does the proxy store my IP address?
+
+No. The proxy processes your source IP and the game-server destination IP transiently, in memory, to route packets and to derive a country for placement analysis. The address itself is not stored. What is kept is an aggregate session counter per `(source_country, destination_country)` pair, with a k>=3 floor so small cells are suppressed, and the public stats carry only coarsened region-pair counts. The placement counters contain no raw IP, and no raw IP is exported by the placement pipeline; the client telemetry contract is unchanged.
+
+### What does the proxy log?
+
+Operational logs written to stdout (configurable via `RUST_LOG`) include client IPs, session start/end times, and bytes relayed. Client IPs appear there only for rate limiting and abuse detection. Those logs live on the server you run, are not exported, and are not joined to the placement counters. Retention is controlled by your logging configuration. See [Privacy Policy](privacy.md).
 
 ---
 
