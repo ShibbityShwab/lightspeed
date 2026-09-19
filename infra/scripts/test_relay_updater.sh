@@ -17,6 +17,11 @@
 #   (g) the state file is written for no-update and mismatch outcomes
 #   (h) a held lock makes a run exit 0 with last_result=locked
 #   (i) a relay-install failure that rolled back is recorded as rolled_back
+#   (l) a matching lightspeed-geoip-*.mmdb asset installs dbip-country-lite.mmdb
+#   (m) a geoip checksum mismatch warns, keeps the existing DB, and exits 0
+#   (n) a release set with no geoip asset is a no-op that exits 0
+#   (o) --geoip-only installs the MMDB and never invokes relay-install
+#   (p) a normal (non-geoip-only) run also syncs the MMDB, best-effort
 #
 # Usage: bash infra/scripts/test_relay_updater.sh
 # Exits 0 and prints "relay-updater: all assertions passed" on success.
@@ -46,8 +51,11 @@ CALLS="$TMP/install-calls"
 OUT="$TMP/out.txt"
 ERR="$TMP/err.txt"
 ASSET_NAME="lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz"
+GEOIP_API_DIR="$TMP/geoip-api"
+GEOIP_DIR="$TMP/geoip"
+GEOIP_ASSET="lightspeed-geoip-2026-09.mmdb"
 
-mkdir -p "$API_DIR" "$ROOT/releases" "$BIN_DIR"
+mkdir -p "$API_DIR" "$ROOT/releases" "$BIN_DIR" "$GEOIP_API_DIR"
 
 note_pass() { PASS=$((PASS + 1)); }
 note_fail() { printf '  FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
@@ -77,6 +85,20 @@ assert_not_null() {
     if [ -n "$1" ] && [ "$1" != "null" ] && [ "$1" != "MISSING" ]; then note_pass; else
         note_fail "$2 (was '$1')"
     fi
+}
+
+assert_files_equal() {
+    if cmp -s "$1" "$2"; then note_pass; else note_fail "$3 (bytes differ)"; fi
+}
+
+assert_file_absent() {
+    if [ ! -e "$1" ]; then note_pass; else note_fail "$2 ($1 exists)"; fi
+}
+
+assert_file_mode() {
+    local actual
+    actual="$(stat -c %a "$1" 2>/dev/null || true)"
+    assert_eq "$actual" "$2" "$3"
 }
 
 # ── Fixture: stub relay-install ──────────────────────────────
@@ -114,6 +136,26 @@ write_release() {  # $1 = tag, $2 = prerelease (true|false)
           ]}' > "$API_DIR/release.json"
 }
 
+write_geoip_releases() {  # $1 = tag, $2 = mmdb asset basename
+    jq -n --arg tag "$1" --arg an "$2" \
+        --arg aurl "file://$GEOIP_API_DIR/$2" \
+        --arg surl "file://$GEOIP_API_DIR/$2.sha256" \
+        --arg sn "$2.sha256" \
+        '[{tag_name: $tag, prerelease: false,
+           assets: [
+             {name: $an, browser_download_url: $aurl},
+             {name: $sn, browser_download_url: $surl}
+           ]}]' > "$GEOIP_API_DIR/releases.json"
+}
+
+make_geoip_release() {  # $1 = tag, $2 = mmdb asset basename, $3 = blob bytes
+    rm -rf "$GEOIP_API_DIR"; mkdir -p "$GEOIP_API_DIR"
+    printf '%s' "$3" > "$GEOIP_API_DIR/$2"
+    "$SHA_BIN" "$GEOIP_API_DIR/$2" \
+        | awk '{print $1"  '"$2"'"}' > "$GEOIP_API_DIR/$2.sha256"
+    write_geoip_releases "$1" "$2"
+}
+
 set_current() {  # $1 = active version
     rm -rf "$ROOT"; mkdir -p "$ROOT/releases/$1"
     {
@@ -141,6 +183,8 @@ run_updater() {
         LIGHTSPEED_UPDATE_LOCK="$LOCK" \
         LIGHTSPEED_INSTALL_BIN="$BIN_DIR/relay-install" \
         LIGHTSPEED_HOST_ARCH="x86_64" \
+        LIGHTSPEED_GEOIP_API="${GEOIP_API_URL:-file://$GEOIP_API_DIR/no-geoip.json}" \
+        LIGHTSPEED_GEOIP_DIR="$GEOIP_DIR" \
         GITHUB_TOKEN= \
         INSTALL_CALLS="$CALLS" \
         bash "$UPDATER" "$@" >"$OUT" 2>"$ERR"
@@ -281,6 +325,73 @@ run_updater --bogus
 assert_eq "$RC" "2" "(k) unknown argument exits 2"
 assert_eq "$(state_field last_result)" "failed" "(k) state records failed"
 assert_grep "$ERR" "unknown argument" "(k) error names the argument"
+
+# ── (l) geoip: a matching asset installs the MMDB ────────────
+reset_state
+make_geoip_release "geoip-2026-09" "$GEOIP_ASSET" "MMDB-BYTES-2026-09"
+GEOIP_API_URL="file://$GEOIP_API_DIR/releases.json"
+rm -rf "$GEOIP_DIR"
+run_updater --geoip-only
+unset GEOIP_API_URL
+assert_rc_zero "$RC" "(l) geoip-only install exits 0"
+assert_files_equal "$GEOIP_API_DIR/$GEOIP_ASSET" "$GEOIP_DIR/dbip-country-lite.mmdb" \
+    "(l) installed MMDB bytes match the release asset"
+assert_file_mode "$GEOIP_DIR/dbip-country-lite.mmdb" "644" "(l) installed MMDB mode is 0644"
+assert_eq "$(install_call_count)" "0" "(l) geoip-only never calls relay-install"
+
+# ── (m) geoip: mismatch warns and keeps the existing DB ──────
+reset_state
+make_geoip_release "geoip-2026-09" "$GEOIP_ASSET" "MISMATCHED-DB-BYTES"
+printf '%064d  %s\n' 0 "$GEOIP_ASSET" > "$GEOIP_API_DIR/$GEOIP_ASSET.sha256"
+GEOIP_API_URL="file://$GEOIP_API_DIR/releases.json"
+mkdir -p "$GEOIP_DIR"
+printf 'GOOD-EXISTING-DB' > "$TMP/expected-good-db"
+cp "$TMP/expected-good-db" "$GEOIP_DIR/dbip-country-lite.mmdb"
+run_updater --geoip-only
+unset GEOIP_API_URL
+assert_rc_zero "$RC" "(m) checksum mismatch still exits 0"
+assert_files_equal "$TMP/expected-good-db" "$GEOIP_DIR/dbip-country-lite.mmdb" \
+    "(m) existing DB is not replaced on mismatch"
+assert_grep "$ERR" "mismatch" "(m) mismatch is warned"
+assert_eq "$(install_call_count)" "0" "(m) mismatch never calls relay-install"
+
+# ── (n) geoip: a release set with no geoip asset is a no-op ──
+reset_state
+rm -rf "$GEOIP_API_DIR"; mkdir -p "$GEOIP_API_DIR"
+printf '[]\n' > "$GEOIP_API_DIR/releases.json"
+GEOIP_API_URL="file://$GEOIP_API_DIR/releases.json"
+rm -rf "$GEOIP_DIR"
+run_updater --geoip-only
+unset GEOIP_API_URL
+assert_rc_zero "$RC" "(n) empty geoip release set exits 0"
+assert_file_absent "$GEOIP_DIR/dbip-country-lite.mmdb" \
+    "(n) no DB installed when no geoip asset exists"
+assert_eq "$(install_call_count)" "0" "(n) no-op never calls relay-install"
+
+# ── (o) geoip-only never invokes the binary installer ────────
+reset_state
+make_geoip_release "geoip-2026-09" "$GEOIP_ASSET" "MMDB-O-BYTES"
+GEOIP_API_URL="file://$GEOIP_API_DIR/releases.json"
+run_updater --geoip-only
+unset GEOIP_API_URL
+assert_rc_zero "$RC" "(o) geoip-only exits 0"
+assert_eq "$(install_call_count)" "0" "(o) geoip-only made no relay-install call"
+assert_eq "$(state_field last_result)" "ok" "(o) geoip-only records ok"
+
+# ── (p) a normal run also syncs the MMDB, best-effort ────────
+reset_state
+set_current "1.4.4"
+make_asset "1.4.4"
+write_release "v1.4.4" false
+make_geoip_release "geoip-2026-09" "$GEOIP_ASSET" "NORMAL-RUN-MMDB"
+GEOIP_API_URL="file://$GEOIP_API_DIR/releases.json"
+rm -rf "$GEOIP_DIR"
+run_updater
+unset GEOIP_API_URL
+assert_rc_zero "$RC" "(p) normal no-update run exits 0"
+assert_files_equal "$GEOIP_API_DIR/$GEOIP_ASSET" "$GEOIP_DIR/dbip-country-lite.mmdb" \
+    "(p) normal run syncs the MMDB"
+assert_eq "$(state_field last_result)" "no_update" "(p) binary path still records no_update"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
