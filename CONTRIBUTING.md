@@ -9,6 +9,7 @@ Thanks for your interest in making LightSpeed better! This is an open-source pro
 - [Development Setup](#development-setup)
 - [Proxy Hosting](#proxy-hosting)
 - [Submitting Changes](#submitting-changes)
+- [Release Notes](#release-notes)
 - [Community Guidelines](#community-guidelines)
 
 ---
@@ -165,6 +166,35 @@ bash setup-new-node.sh YOUR_VPS_IP your-node-id your-region
 - [ ] No clippy warnings (`cargo clippy --workspace`)
 - [ ] Docs updated if needed
 - [ ] No new infrastructure costs introduced
+
+---
+
+## Release Notes
+
+Every release entry in [`CHANGELOG.md`](CHANGELOG.md) becomes that release's
+GitHub body, verbatim. At release time `infra/scripts/release-notes.sh`
+extracts the matching `## [<version>]` section and replaces cargo-dist's
+generated boilerplate with it, so keep each entry self-contained and written
+for someone deciding whether to upgrade.
+
+Use these subsections, in this order, and omit any that are empty:
+
+- `### Added` - new features, flags, games, and telemetry.
+- `### Changed` - behavior changes and migrations users must know about.
+- `### Fixed` - bugs and regressions.
+- `### Security` - hardening and vulnerability fixes.
+- `### Dependencies` - notable dependency bumps.
+- `### Community` - credit the humans and reporters behind the release:
+  code contributors, issue reporters, and dependency-bump bots. One line
+  each, naming the handle, what they did, and the PR or issue number.
+  `infra/scripts/release-contributors.sh <from-ref> <to-ref>` lists the
+  non-bot authors in a range, which is the starting point for this section.
+
+Do **not** write release-engineering prose. No install instructions, no
+checksum tables, and no supply-chain verification steps such as "Verifying
+GitHub Artifact Attestations". GitHub already lists every artifact on the
+release page, and cargo-dist's generated block is discarded in favor of the
+changelog entry.
 
 ---
 
