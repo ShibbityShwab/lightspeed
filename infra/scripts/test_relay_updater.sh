@@ -269,6 +269,19 @@ assert_rc_nonzero "$RC" "(i) rolled-back run exits non-zero"
 assert_grep "$OUT" "rolling back" "(i) installer output is surfaced"
 assert_eq "$(state_field last_result)" "rolled_back" "(i) state records rolled_back"
 
+# ── (j) --help exits 0 and writes no state ───────────────────
+reset_state
+run_updater --help
+assert_rc_zero "$RC" "(j) --help exits 0"
+if [ ! -e "$STATE" ]; then note_pass; else note_fail "(j) --help wrote a state file"; fi
+
+# ── (k) an unknown argument records a failed state and exits 2 ──
+reset_state
+run_updater --bogus
+assert_eq "$RC" "2" "(k) unknown argument exits 2"
+assert_eq "$(state_field last_result)" "failed" "(k) state records failed"
+assert_grep "$ERR" "unknown argument" "(k) error names the argument"
+
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
     printf 'relay-updater: all assertions passed\n'

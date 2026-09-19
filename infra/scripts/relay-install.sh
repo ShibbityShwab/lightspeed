@@ -87,6 +87,17 @@ esac
 RELEASE_DIR="$RELEASES_DIR/$VERSION"
 RELEASE_BIN="$RELEASE_DIR/$BINARY_NAME"
 
+# The staged binary is written under a temp name and only renamed over the
+# release binary after --check passes, so a failed reinstall of the active
+# version can never truncate or corrupt the live binary.
+STAGED_BIN=""
+cleanup_staged() {
+    if [ -n "$STAGED_BIN" ]; then
+        rm -f "$STAGED_BIN"
+    fi
+}
+trap cleanup_staged EXIT
+
 # ── Verify the staged binary ─────────────────────────────────
 # Executable, and (when `file` is available) an ELF matching host arch.
 # Falls back to ELF magic-byte detection when `file` is missing.
@@ -97,8 +108,6 @@ verify_binary() {
     local desc=""
     if command -v "$FILE_BIN" >/dev/null 2>&1; then
         desc="$("$FILE_BIN" --brief "$BINARY_PATH" 2>/dev/null || true)"
-    else
-        desc="$("$FILE_BIN" "$BINARY_PATH" 2>/dev/null || true)"
     fi
 
     if [ -n "$desc" ]; then
@@ -138,9 +147,17 @@ active_release() {
     fi
 }
 
-# Atomically repoint `current`; returns non-zero if it would dangle.
+# Atomically repoint `current`; returns non-zero if the target is missing.
+# The new symlink is built beside the old one and renamed over it, so a
+# reader never sees `current` absent or dangling mid-swap.
 repoint() {
-    ln -sfn "$1" "$CURRENT_LINK" || return 1
+    [ -e "$1" ] || return 1
+    local tmp="$CURRENT_LINK.tmp.$$"
+    ln -sfn "$1" "$tmp" || { rm -f "$tmp"; return 1; }
+    if ! mv -Tf "$tmp" "$CURRENT_LINK"; then
+        rm -f "$tmp"
+        return 1
+    fi
     [ -e "$CURRENT_LINK" ] || return 1
     return 0
 }
@@ -223,14 +240,18 @@ printf 'relay-install: version=%s binary=%s\n' "$VERSION" "$BINARY_PATH"
 # 1. Verify the staged binary before touching the layout.
 verify_binary || exit 1
 
-# 2. Create the immutable release directory and copy the binary in.
+# 2. Create the immutable release directory and stage the binary under a
+#    temp name. The release binary is not touched until --check passes.
 install -d "$RELEASES_DIR"
 install -d "$RELEASE_DIR"
-install -m 0755 "$BINARY_PATH" "$RELEASE_BIN"
+STAGED_BIN="$RELEASE_DIR/.$BINARY_NAME.staged.$$"
+install -m 0755 "$BINARY_PATH" "$STAGED_BIN"
 
-# 3. Config gate: never activate a release whose --check fails.
-if ! "$RELEASE_BIN" --check --config "$CONFIG_PATH"; then
+# 3. Config gate: never activate a release whose --check fails. Checking the
+#    staged file leaves the active release byte-for-byte untouched on failure.
+if ! "$STAGED_BIN" --check --config "$CONFIG_PATH"; then
     fail "--check failed for $RELEASE_DIR; aborting before activation"
+    rm -f "$STAGED_BIN"
     # Leave the active release untouched. Remove the fresh release dir only
     # when it is not what `current` points at (so current can never dangle).
     if [ "$RELEASE_DIR" != "$PREV_RELEASE" ] && [ "$RELEASE_DIR" != "$(active_release)" ]; then
@@ -239,7 +260,12 @@ if ! "$RELEASE_BIN" --check --config "$CONFIG_PATH"; then
     exit 1
 fi
 
-# 4. Activate, health-gate, and roll back on failure.
+# 4. Atomic publish: rename the verified staged binary over the release
+#    binary. A running process keeps its old inode.
+mv -f "$STAGED_BIN" "$RELEASE_BIN"
+STAGED_BIN=""
+
+# 5. Activate, health-gate, and roll back on failure.
 if activate; then
     prune_releases
     log "activated $VERSION (current -> $RELEASE_DIR)"

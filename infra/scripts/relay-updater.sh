@@ -63,27 +63,13 @@ usage() {
     sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
-# ── Arg parsing ──────────────────────────────────────────────
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --dry-run)          DRY_RUN=1; shift ;;
-        --force)            FORCE=1; shift ;;
-        --allow-prerelease) ALLOW_PRE=1; shift ;;
-        -h|--help)          usage; exit 0 ;;
-        *) printf 'relay-updater: ERROR: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+# --help is answered before any state or trap setup so it never writes
+# update-state.json and always exits 0.
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) usage; exit 0 ;;
     esac
 done
-
-# ── Target triple ────────────────────────────────────────────
-case "$HOST_ARCH" in
-    x86_64|amd64)  TRIPLE="x86_64-unknown-linux-gnu" ;;
-    aarch64|arm64) TRIPLE="aarch64-unknown-linux-gnu" ;;
-    *)
-        printf 'relay-updater: ERROR: unsupported host arch: %s\n' "$HOST_ARCH" >&2
-        exit 2
-        ;;
-esac
-ASSET_NAME="$BINARY_NAME-$TRIPLE.tar.xz"
 
 # ── State accumulators (written by write_state) ──────────────
 STATE_WRITTEN=0
@@ -193,6 +179,38 @@ fail_run() {  # message
     write_state
     exit 1
 }
+
+# Usage / unsupported-arch failure: record it in the state file before
+# exiting 2 (the documented usage error code).
+usage_fail() {  # message [show_usage]
+    LAST_RESULT="failed"
+    LAST_ERROR="$1"
+    warn "$1"
+    if [ "${2:-0}" -eq 1 ]; then
+        usage >&2
+    fi
+    write_state
+    exit 2
+}
+
+# ── Arg parsing ──────────────────────────────────────────────
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run)          DRY_RUN=1; shift ;;
+        --force)            FORCE=1; shift ;;
+        --allow-prerelease) ALLOW_PRE=1; shift ;;
+        -h|--help)          STATE_WRITTEN=1; usage; exit 0 ;;
+        *) usage_fail "unknown argument: $1" 1 ;;
+    esac
+done
+
+# ── Target triple ────────────────────────────────────────────
+case "$HOST_ARCH" in
+    x86_64|amd64)  TRIPLE="x86_64-unknown-linux-gnu" ;;
+    aarch64|arm64) TRIPLE="aarch64-unknown-linux-gnu" ;;
+    *) usage_fail "unsupported host arch: $HOST_ARCH" 0 ;;
+esac
+ASSET_NAME="$BINARY_NAME-$TRIPLE.tar.xz"
 
 # semver_cmp A B -> exit 0 equal, 1 A<B, 2 A>B.
 # Compares major.minor.patch numerically; a release outranks its own

@@ -15,6 +15,10 @@
 #   (d) running the same install twice is idempotent
 #   (e) a release whose --check fails is never activated and never left behind
 #   (f) a non-ELF staged file is rejected before any layout change
+#   (g) a same-version reinstall whose --check fails leaves the active binary
+#       byte-identical and exits non-zero
+#   (h) a same-version reinstall whose --check passes replaces the binary
+#   (i) no `.staged.*` temp files remain after either path
 #
 # Usage: bash infra/scripts/test_relay_install.sh
 # Exits 0 and prints "relay-install: all assertions passed" on success.
@@ -140,6 +144,35 @@ echo "lightspeed-proxy 1.4.4"
 exit 0
 STUB
     chmod +x "$1"
+}
+
+# make_binary_marked <path> <check_rc> <marker>
+# Distinct bytes (the marker comment) so "left byte-identical" is meaningful.
+make_binary_marked() {
+    cat > "$1" <<STUB
+#!/usr/bin/env bash
+# $3
+if [ "\${1:-}" = "--check" ]; then exit $2; fi
+echo "lightspeed-proxy 1.4.4"
+exit 0
+STUB
+    chmod +x "$1"
+}
+
+assert_no_staged() {
+    local found
+    found="$(find "$ROOT/releases" -name '*.staged.*' -print 2>/dev/null || true)"
+    if [ -z "$found" ]; then note_pass; else
+        note_fail "$1 (staged temp files remain: $found)"
+    fi
+}
+
+assert_same_bytes() {
+    if cmp -s "$1" "$2"; then note_pass; else note_fail "$3 (bytes differ)"; fi
+}
+
+assert_diff_bytes() {
+    if cmp -s "$1" "$2"; then note_fail "$3 (bytes unexpectedly identical)"; else note_pass; fi
 }
 
 # seed_release <version> <touch-date>
@@ -268,6 +301,44 @@ assert_rc_nonzero "$rc" "(f) non-ELF file is rejected"
 assert_grep "$ERR" "not an ELF" "(f) rejection names the ELF problem"
 assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/v1" "(f) current untouched by rejected file"
 assert_current_exists "(f) current is not dangling after rejection"
+
+# ── (g) same-version reinstall with failing --check keeps the active binary ──
+reset_fixture
+seed_release "v1" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/v1" "$ROOT/current"
+ACTIVE_BIN_G="$ROOT/releases/v1/lightspeed-proxy"
+cp "$ACTIVE_BIN_G" "$TMP/active-before-g"
+STAGED_G="$TMP/staged-g"
+make_binary_marked "$STAGED_G" 1 "g marker: check fails"
+assert_diff_bytes "$TMP/active-before-g" "$STAGED_G" "(g) staged binary differs from active"
+if run_install "v1" "$STAGED_G"; then rc=0; else rc=$?; fi
+assert_rc_nonzero "$rc" "(g) same-version failed --check exits non-zero"
+assert_same_bytes "$TMP/active-before-g" "$ACTIVE_BIN_G" \
+    "(g) active binary is byte-identical after failed same-version reinstall"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/v1" \
+    "(g) current unchanged after failed same-version reinstall"
+assert_current_exists "(g) current is not dangling"
+assert_no_staged "(g) no staged temp file remains"
+
+# ── (h) same-version reinstall with passing --check replaces the binary ──
+reset_fixture
+seed_release "v1" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/v1" "$ROOT/current"
+ACTIVE_BIN_H="$ROOT/releases/v1/lightspeed-proxy"
+cp "$ACTIVE_BIN_H" "$TMP/active-before-h"
+STAGED_H="$TMP/staged-h"
+make_binary_marked "$STAGED_H" 0 "h marker: check passes"
+if run_install "v1" "$STAGED_H"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(h) same-version passing --check exits 0"
+assert_diff_bytes "$TMP/active-before-h" "$ACTIVE_BIN_H" \
+    "(h) active binary was replaced by the same-version reinstall"
+assert_same_bytes "$STAGED_H" "$ACTIVE_BIN_H" \
+    "(h) active binary matches the staged binary"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/v1" \
+    "(h) current still points at v1"
+assert_current_exists "(h) current is not dangling"
+assert_eq "$(cat "$FIXTURE/health_mode")" "ok" "(h) service healthy after same-version reinstall"
+assert_no_staged "(h) no staged temp file remains"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
