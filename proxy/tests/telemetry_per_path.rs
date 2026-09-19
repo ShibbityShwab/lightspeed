@@ -129,21 +129,16 @@ fn report_with_legs(route_legs: Vec<PathObservation>) -> TelemetryReport {
 
 // ── HTTP helpers ────────────────────────────────────────────────────
 
-/// Bind an ephemeral port, release it, and hand it to the real health server.
-///
-/// The server owns its bind, so the port is probed first to learn a free one.
+/// Bind an ephemeral listener and hand it to the real health server.
 async fn spawn_health_server() -> (String, tokio::task::JoinHandle<()>) {
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = probe.local_addr().unwrap().port();
-    drop(probe);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
 
-    let addr = format!("127.0.0.1:{port}");
     let metrics = std::sync::Arc::new(ProxyMetrics::new());
     let engine = std::sync::Arc::new(RelayEngine::new(16));
-    let server_addr = addr.clone();
     let handle = tokio::spawn(async move {
         if let Err(error) = run_health_server(
-            server_addr,
+            listener,
             metrics,
             engine,
             REGION.to_string(),

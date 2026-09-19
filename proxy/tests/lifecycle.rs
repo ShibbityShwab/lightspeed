@@ -234,3 +234,140 @@ mod shutdown {
         Ok(())
     }
 }
+
+#[cfg(unix)]
+mod readiness {
+    //! The proxy must announce systemd readiness (`READY=1`) only after every
+    //! serving plane is bound. A bind that fails must abort the process
+    //! non-zero *before* readiness, so systemd (Type=notify) never treats a
+    //! dead health listener as a healthy service.
+
+    use std::io;
+    use std::net::TcpListener;
+    use std::os::unix::net::UnixDatagram;
+    use std::path::PathBuf;
+    use std::process::{Child, Command, ExitStatus, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// A unique temp dir; removed when dropped.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> io::Result<Self> {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let dir = std::env::temp_dir().join(format!(
+                "lightspeed-readiness-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir)?;
+            Ok(Self(dir))
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Poll a child until it exits or `timeout` elapses.
+    fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
+        let start = Instant::now();
+        loop {
+            match child.try_wait().expect("try_wait failed") {
+                Some(status) => return Some(status),
+                None if start.elapsed() >= timeout => return None,
+                None => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    }
+
+    /// Bind a notify datagram receiver and return its path.
+    fn notify_receiver(dir: &TempDir) -> (PathBuf, UnixDatagram) {
+        let path = dir.0.join("notify.sock");
+        let sock = UnixDatagram::bind(&path).expect("bind notify receiver");
+        sock.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set read timeout");
+        (path, sock)
+    }
+
+    /// Spawn the proxy with CLI bind overrides, null stdio, and `NOTIFY_SOCKET`.
+    fn spawn_proxy(notify_path: &PathBuf, dir: &TempDir, health_bind: &str) -> Child {
+        let tls = dir.0.join("tls");
+        std::fs::create_dir_all(&tls).expect("create tls dir");
+        Command::new(env!("CARGO_BIN_EXE_lightspeed-proxy"))
+            .args([
+                "--config",
+                dir.0.join("missing.toml").to_str().unwrap(),
+                "--data-bind",
+                "127.0.0.1:0",
+                "--control-bind",
+                "127.0.0.1:0",
+                "--health-bind",
+                health_bind,
+            ])
+            .env("NOTIFY_SOCKET", notify_path)
+            .env("LIGHTSPEED_TLS_DIR", tls)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn lightspeed-proxy")
+    }
+
+    /// A healthy start binds every plane and then reports `READY=1`.
+    #[test]
+    fn normal_start_reports_ready() {
+        let dir = TempDir::new("normal").unwrap();
+        let (notify_path, receiver) = notify_receiver(&dir);
+        let mut child = spawn_proxy(&notify_path, &dir, "127.0.0.1:0");
+
+        let mut buf = [0u8; 128];
+        let n = receiver
+            .recv(&mut buf)
+            .expect("expected a READY notification from a healthy start");
+        assert_eq!(&buf[..n], b"READY=1", "first notification must be READY=1");
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// An occupied health port must fail the start non-zero, with no READY.
+    #[test]
+    fn occupied_health_port_exits_without_ready() {
+        let dir = TempDir::new("occupied").unwrap();
+        let (notify_path, receiver) = notify_receiver(&dir);
+
+        // Hold the health port for the whole test: the proxy must fail its
+        // bind instead of half-starting and claiming readiness.
+        let held = TcpListener::bind("127.0.0.1:0").expect("hold health port");
+        let health_bind = format!("127.0.0.1:{}", held.local_addr().unwrap().port());
+
+        let mut child = spawn_proxy(&notify_path, &dir, &health_bind);
+        let status = wait_with_timeout(&mut child, Duration::from_secs(10));
+        if status.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let status = status.expect("proxy kept running after a health bind failure");
+
+        assert!(
+            !status.success(),
+            "proxy must exit non-zero when the health bind fails, got {status}"
+        );
+
+        // No READY may have been sent before the failure.
+        let mut buf = [0u8; 128];
+        match receiver.recv(&mut buf) {
+            Ok(n) => panic!(
+                "proxy reported readiness before a failed bind: {:?}",
+                String::from_utf8_lossy(&buf[..n])
+            ),
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            }
+            Err(e) => panic!("unexpected error reading notify socket: {e}"),
+        }
+    }
+}

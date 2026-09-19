@@ -268,9 +268,35 @@ async fn main() -> anyhow::Result<()> {
     let metrics = Arc::new(metrics::ProxyMetrics::new());
     let engine = Arc::new(relay::RelayEngine::new(config.server.max_clients));
 
-    // Bind data plane UDP socket
-    let data_socket = Arc::new(UdpSocket::bind(&data_bind).await?);
+    // Bind every serving plane before spawning any task, so a bind failure
+    // aborts startup instead of leaving a half-started service that has
+    // already announced readiness to systemd.
+    let data_socket = Arc::new(
+        UdpSocket::bind(&data_bind)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to bind data plane on {data_bind}: {e}"))?,
+    );
     info!("Data plane socket bound to {}", data_socket.local_addr()?);
+
+    #[cfg(feature = "quic")]
+    let control_server = {
+        let control_addr: std::net::SocketAddr = control_bind.parse()?;
+        let control_state = Arc::new(control::ControlState::new(
+            config.clone(),
+            Arc::clone(&authenticator),
+        ));
+        control::ControlServer::bind(control_addr, control_state).map_err(|e| {
+            anyhow::anyhow!("failed to bind QUIC control plane on {control_addr}: {e}")
+        })?
+    };
+
+    let health_listener = tokio::net::TcpListener::bind(&health_bind)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to bind health listener on {health_bind}: {e}"))?;
+    info!(
+        "Health/metrics HTTP server bound to {}",
+        health_listener.local_addr()?
+    );
 
     // Spawn the relay inbound loop (client → game server)
     let relay_handle = {
@@ -346,39 +372,32 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Spawn QUIC control plane server (if compiled with --features quic)
+    // Serve the QUIC control plane on the endpoint bound above.
     #[cfg(feature = "quic")]
     let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::watch::channel(false);
     #[cfg(feature = "quic")]
-    let mut control_handle = {
-        let control_addr: std::net::SocketAddr = control_bind.parse()?;
-        let control_state = Arc::new(control::ControlState::new(
-            config.clone(),
-            Arc::clone(&authenticator),
-        ));
-        tokio::spawn(async move {
-            match control::ControlServer::bind(control_addr, control_state) {
-                Ok(server) => server.run(control_shutdown_rx).await,
-                Err(e) => tracing::error!("QUIC control plane failed: {}", e),
-            }
-        })
-    };
+    let mut control_handle = tokio::spawn(control_server.run(control_shutdown_rx));
 
     #[cfg(not(feature = "quic"))]
     info!("QUIC control plane disabled (compile with --features quic)");
 
-    // Spawn health check HTTP server
+    // Serve health/metrics on the listener bound above.
     let health_handle = {
         let metrics = Arc::clone(&metrics);
         let engine = Arc::clone(&engine);
         let region = config.server.region.clone();
         let node_id = config.server.node_id.clone();
-        let health_bind = health_bind.clone();
         let start_time = std::time::Instant::now();
         tokio::spawn(async move {
-            if let Err(e) =
-                health::run_health_server(health_bind, metrics, engine, region, node_id, start_time)
-                    .await
+            if let Err(e) = health::run_health_server(
+                health_listener,
+                metrics,
+                engine,
+                region,
+                node_id,
+                start_time,
+            )
+            .await
             {
                 tracing::error!("Health check server failed: {}", e);
             }

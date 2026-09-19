@@ -104,17 +104,24 @@ pub fn ingest_telemetry(metrics: &ProxyMetrics, body: &[u8]) -> Result<(), &'sta
     Ok(())
 }
 
-/// Run the HTTP health check + metrics server.
+/// Serve the HTTP health check + metrics endpoints on an already-bound
+/// listener. Binding is the caller's responsibility so a bind failure is
+/// observable before startup is reported ready.
 pub async fn run_health_server(
-    bind_addr: String,
+    listener: TcpListener,
     metrics: Arc<ProxyMetrics>,
     engine: Arc<RelayEngine>,
     region: String,
     node_id: String,
     start_time: Instant,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(&bind_addr).await?;
-    tracing::info!("Health/metrics HTTP server listening on {}", bind_addr);
+    tracing::info!(
+        "Health/metrics HTTP server listening on {}",
+        listener
+            .local_addr()
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|_| "<unknown>".to_string())
+    );
 
     loop {
         let (mut stream, _addr) = match listener.accept().await {
