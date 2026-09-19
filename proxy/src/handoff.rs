@@ -809,6 +809,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn sample_session(outbound_fd: i32, client_addr: &str) -> SessionSnapshot {
         SessionSnapshot {
             client_addr: client_addr.to_string(),
