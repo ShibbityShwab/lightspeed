@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-19
+
+### Relay operators: one-time restart, then seamless updates
+
+Relays that were running the previous in-place binary (`/usr/local/bin/lightspeed-proxy`
+under a `Type=simple` unit) were migrated to a versioned release layout
+(`/opt/lightspeed/releases/<version>` behind a `current` symlink) with a `Type=notify`
+unit and a 30s watchdog. That migration took **one health-gated restart per relay**, which
+briefly interrupted traffic on the relay being restarted and could require a client
+restart for clients running a build from before this release. Sorry for the blip; it was
+the one-time cost of adopting the new layout.
+
+From this release on, relay updates are applied **in place**. The running process validates
+the new binary, transfers its listening socket and every live session (each session's
+upstream socket included) plus the authentication table, and then re-executes the new
+binary in the same process. Existing connections keep flowing and the game server keeps
+seeing the same outbound source port, so updates no longer interrupt traffic or force
+clients to reconnect. If the new binary fails validation or its health gate, the relay
+stays on the previous release, and a bad install rolls back automatically.
+
+### Added
+- **Real relay latency.** `lightspeed_relay_latency_us` now measures the proxy-observed
+  upstream response lag (monotonic send stamp before the forward, cleared by the first
+  response) and is documented as *not* client RTT. Samples outside the `2s` bound are
+  discarded and counted. Previously the histogram had no caller, so latency panels and
+  alerts were dead.
+- **Drop categories.** `packets_dropped` stays the total, and a `DropReason` enum adds
+  malformed, FEC-malformed, session-setup, and relay-send-error counters alongside the
+  auth, abuse, and rate-limit counters. `/health`, the stats snapshot, and the website
+  (now "Packets Filtered" plus an "Upstream Loss" tile) all use them.
+- **Per-IP rate limiting.** A second tier keyed on the client IP (5000 pps / 5 MB/s,
+  fail-closed cap) complements the per-flow limiter. The old per-IP-and-port keying meant
+  rotating source ports never tripped it, so `rate_limit_hits_total` was always zero in
+  production.
+- **Per-path telemetry (opt-in).** The client measures RTT, jitter, loss, FEC, and
+  multipath dedup per relay and sends a bounded `route_legs` list; the proxy aggregates by
+  relay, game, and country behind a k>=3 floor. No IPs or identities are included.
+- **Mesh data tooling.** `collect-metrics.sh` builds a bounded, reset-safe snapshot
+  history (a counter decrease is treated as a relay restart) and `analyze-mesh.sh` flags
+  anomalies, feeding the network trend charts on the site.
+- **Relay self-update.** A versioned release layout with a reusable installer
+  (`--check` gate, health gate, automatic rollback, prune keeping the active and previous
+  release), a `Type=notify` unit with `WatchdogSec`, and a verified self-updater on a
+  jittered hourly timer that checks the release SHA-256 and records `update-state.json`.
+  `/health` reports the current and available versions and the last result.
+- **Seamless relay updates (in-place handoff).** A relay can `execve` a new binary in place,
+  preserving its listener and every live session's upstream socket plus the auth table;
+  sessions are rebuilt with fresh FEC decoders and re-anchored timers. Triggered by the
+  installer or updater over a root-owned request, validated by a child process that
+  inherits the exact file descriptors, and rolled back on any failure.
+- **Client: supervised control reconnect.** The per-relay control task now races the
+  connection against its 15s keepalive and reconnects with jittered backoff
+  (250ms to 5s), re-registering and refreshing its token without ever zeroing a valid one.
+  Previously a relay restart left a client deauthorized until the process was restarted.
+- **Uptime per relay on the site**, plus the network trend charts.
+
+### Changed
+- **Data-plane auth is token-keyed with an IP (and optional port) binding.** Tokens carry a
+  TTL refreshed on the control keepalive, a transport revive grace, and a short
+  previous-token window, so two clients behind one NAT no longer share one auth entry and a
+  reconnect is not deauthorized mid-flight.
+- Latency percentiles in telemetry are summed as mean-of-medians with that caveat in the
+  HELP text; `game` and `country` are aggregation labels, never PII.
+
+### Fixed
+- **Exactly one response listener per session.** Sessions created by the inbound path were
+  not registered with the session manager, which spawned a second listener; FEC parity was
+  split across two encoders.
+- **Sessions now expire on inactivity, not 300s after creation.** `last_activity` was never
+  refreshed, so every session was reaped five minutes in and re-created.
+- **The latency histogram no longer accumulates twice** and uses the documented bounds.
+- **`fec_data_packets_total` is incremented** instead of always reading zero.
+- **The installer no longer overwrites the active release before `--check`**, so a failed
+  reinstall cannot corrupt the running binary. The `current` symlink swap is atomic.
+- **Readiness is announced only after every plane binds**, so a failed control or health
+  bind aborts startup instead of leaving a healthy-looking dead service.
+- `protocol/src/framing.rs`'s `std::io` import is feature-gated so an isolated crate
+  clippy run is clean.
+
+### Security
+- Handoff validation is bound to the exact inode it executes: the target is opened once,
+  `fstat`-checked for regular/root-owned/non-writable, hashed from that descriptor, and both
+  the pre-validation child and the final `execve` use that descriptor, closing a
+  validate-then-exec race. Duplicate file descriptors are rejected.
+- The rate-limiter and auth tables are capped and fail closed.
+
 ## [1.4.4] - 2026-09-19
 
 ### Fixed
