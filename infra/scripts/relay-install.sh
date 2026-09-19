@@ -418,6 +418,10 @@ write_handoff_request() {  # id sha
         rm -f "$tmp"
         return 1
     fi
+    # The proxy unit runs under DynamicUser, so the running process cannot read
+    # a root-owned 0600 file. Give the request the runtime directory's owner
+    # (the proxy user) while keeping it owner-only.
+    chown --reference="$dir" "$HANDOFF_REQUEST" 2>/dev/null || true
     return 0
 }
 
