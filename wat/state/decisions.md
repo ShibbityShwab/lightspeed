@@ -481,3 +481,27 @@ response-source-port constraint. Serializing the FEC decoder was rejected as unn
 after analysis showed a safe reset. **Verification:** a committed root-only E2E
 (`test_handoff_e2e.sh`) proves the same PID switching versions with a live session and the
 game server observing the same outbound source port across the exec.
+
+## 2026-09-19 — Fleet rollout to 1.5.0 (one-time restart)
+
+**Context:** the user approved rolling every relay to the new build and accepting one blunt
+restart per relay, after which updates are seamless handoffs.
+
+**What was done:** bumped the workspace version to 1.5.0 (which also stops the self-updater
+from comparing an unreleased build against the published v1.4.4). Added
+`infra/scripts/migrate-to-versioned.sh`, a one-time, idempotent migration for relays still
+running an in-place `/usr/local/bin` binary under a `Type=simple` unit: it seeds the running
+binary as a `<version>-legacy` release, points `current` at it so rollback has a target, and
+installs the canonical `Type=notify` unit (which adds `RuntimeDirectory=lightspeed`, needed
+for the handoff manifest/result/request files). It deliberately does not restart;
+`relay-install.sh` then performs the single health-gated restart. Rolled ewr first (lowest
+traffic), verified, then lax, sgp, fra, and nrt.
+
+**Result:** all five relays run 1.5.0, healthy, `Type=notify` with a 30s watchdog,
+`handoff.supported=true`, `current -> /opt/lightspeed/releases/1.5.0`, and the previous
+binary retained (`1.3.2-legacy`, plus nrt's `1.4.4-canary`). The new drop categories are
+already counting (sgp recorded auth-rejected drops). Every install was health-gated with
+automatic rollback available. Future releases are applied by the hourly self-updater through
+the in-place handoff, so no client reconnect is forced. **Note:** this first rollout was a
+blunt restart, so clients running a pre-reconnect client build may have needed a restart;
+the client shipped on this branch reconnects within seconds.

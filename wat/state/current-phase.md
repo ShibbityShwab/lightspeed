@@ -185,7 +185,13 @@ binaries, `quic`/`full`/`ml`); installer self-test 86 checks, updater 46;
 preserved outbound source port; a real canary installed on relay-nrt (healthy,
 `current -> releases/1.4.4-canary-8bac681`, previous release retained).
 
-**Next:** re-run the final reviewer gate's findings if any; roll the handoff-capable
-build + `RuntimeDirectory` unit out to the fleet (the first rollout is a blunt restart);
-then use `collect-metrics.sh` + `analyze-mesh.sh` to inspect live per-path data and tune
+**Rolled out:** all five production relays now run 1.5.0 under the versioned layout with the
+`Type=notify` unit and `handoff.supported=true`; the previous binary is retained for
+rollback. Each relay took one health-gated restart (a one-time migration via
+`infra/scripts/migrate-to-versioned.sh`, then `relay-install.sh`); future releases apply via
+the in-place handoff with no forced reconnect. Relay uptime is already published on the site
+per relay.
+
+**Next:** push/merge the branch and cut a 1.5.0 release so the self-updater and the Pages
+stats reflect it; then use `collect-metrics.sh` + `analyze-mesh.sh` on live data to tune
 relay selection.
