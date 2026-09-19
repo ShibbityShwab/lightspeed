@@ -20,6 +20,7 @@
 # Usage:
 #   relay-install.sh --binary /tmp/lightspeed-proxy.staged --version <ver>
 #                    [--handoff | --no-handoff] [--force]
+#                    [--public-ip <ipv4>] [--updater <path>]
 #
 # A same-version install is a no-op: when `current` already points at a
 # release whose label equals <ver>, the installer logs and exits 0 without
@@ -31,11 +32,14 @@
 #                and the target version differs; otherwise repoint + restart
 #   --handoff    require the handoff path; error when it is not possible
 #   --no-handoff force the repoint + restart path
+#   --public-ip  ensure [server] public_ip matches this IPv4 in the config
+#   --updater    install the given relay-updater.sh to LIGHTSPEED_UPDATER_DEST
 #
 # Env seams (defaults in parentheses):
 #   LIGHTSPEED_LAYOUT_ROOT       (/opt/lightspeed)
 #   LIGHTSPEED_SERVICE_NAME      (lightspeed-proxy)
 #   LIGHTSPEED_CONFIG_PATH       (/etc/lightspeed/proxy.toml)
+#   LIGHTSPEED_UPDATER_DEST      (/usr/local/lib/lightspeed/relay-updater.sh)
 #   LIGHTSPEED_KEEP_RELEASES     (3)
 #   LIGHTSPEED_HEALTH_URL        (http://127.0.0.1:8080/health)
 #   LIGHTSPEED_HEALTH_TIMEOUT    (15 seconds)
@@ -90,11 +94,68 @@ usage() {
 log()  { printf '  relay-install: %s\n' "$*"; }
 fail() { printf 'relay-install: ERROR: %s\n' "$*" >&2; }
 
+# ── Node-local config: exact self-tunnel filtering ───────────
+# Without public_ip the proxy can only guess a relay-to-self session from the
+# control port. Setting it lets the proxy match the node's own address exactly.
+# Non-fatal when the config is absent; fatal only on a malformed address.
+ensure_public_ip() {
+    local ip="$1" cfg="$CONFIG_PATH"
+    [ -n "$ip" ] || return 0
+    [ -f "$cfg" ] || { log "no config at $cfg; skipping public_ip"; return 0; }
+
+    local o1 o2 o3 o4 o
+    IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+    for o in "$o1" "$o2" "$o3" "$o4"; do
+        case "$o" in ''|*[!0-9]*) fail "invalid --public-ip: $ip"; return 1 ;; esac
+        [ "$o" -le 255 ] || { fail "invalid --public-ip: $ip"; return 1; }
+    done
+
+    if grep -qE '^[[:space:]]*public_ip[[:space:]]*=' "$cfg"; then
+        if grep -qE "^[[:space:]]*public_ip[[:space:]]*=[[:space:]]*\"?${ip}\"?[[:space:]]*$" "$cfg"; then
+            return 0
+        fi
+        sed -i -E "s|^[[:space:]]*public_ip[[:space:]]*=.*|public_ip = \"${ip}\"|" "$cfg" \
+            || { fail "cannot update public_ip in $cfg"; return 1; }
+    elif grep -qE '^\[server\]' "$cfg"; then
+        sed -i -E "0,/^\[server\]/s//[server]\npublic_ip = \"${ip}\"/" "$cfg" \
+            || { fail "cannot add public_ip to $cfg"; return 1; }
+    else
+        printf '[server]\npublic_ip = "%s"\n\n' "$ip" | cat - "$cfg" > "$cfg.tmp.$$" \
+            && mv "$cfg.tmp.$$" "$cfg" \
+            || { fail "cannot add [server] to $cfg"; return 1; }
+    fi
+    log "config public_ip set to $ip"
+    return 0
+}
+
+# ── Self-updater refresh ─────────────────────────────────────
+# The updater is a standalone script that the deploy pipeline otherwise never
+# ships, so a new copy is installed here on every deploy. Best-effort.
+install_updater() {
+    local src="$1"
+    [ -n "$src" ] || return 0
+    [ -f "$src" ] || { log "warning: updater not found: $src"; return 0; }
+    if ! bash -n "$src" 2>/dev/null; then
+        log "warning: updater failed syntax check: $src"
+        return 0
+    fi
+    if install -d -m 0755 "$(dirname "$UPDATER_DEST")" \
+        && install -m 0755 "$src" "$UPDATER_DEST"; then
+        log "installed updater to $UPDATER_DEST"
+    else
+        log "warning: cannot install updater to $UPDATER_DEST"
+    fi
+    return 0
+}
+
 # ── Arg parsing ──────────────────────────────────────────────
 BINARY_PATH=""
 VERSION=""
 HANDOFF_MODE="auto"
 FORCE=0
+PUBLIC_IP=""
+UPDATER_PATH=""
+UPDATER_DEST="${LIGHTSPEED_UPDATER_DEST:-/usr/local/lib/lightspeed/relay-updater.sh}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --binary)     BINARY_PATH="${2:-}"; shift 2 ;;
@@ -102,6 +163,8 @@ while [ $# -gt 0 ]; do
         --handoff)    HANDOFF_MODE="handoff"; shift ;;
         --no-handoff) HANDOFF_MODE="restart"; shift ;;
         --force)      FORCE=1; shift ;;
+        --public-ip)  PUBLIC_IP="${2:-}"; shift 2 ;;
+        --updater)    UPDATER_PATH="${2:-}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown argument: $1"; usage >&2; exit 2 ;;
     esac
@@ -547,6 +610,15 @@ printf 'relay-install: version=%s binary=%s\n' "$VERSION" "$BINARY_PATH"
 
 # 1. Verify the staged binary before touching the layout.
 verify_binary || exit 1
+
+# 1b. Prepare node-local config and refresh the self-updater before activation
+#     so the new process reads the corrected config on its first start.
+if [ -n "$PUBLIC_IP" ]; then
+    ensure_public_ip "$PUBLIC_IP" || exit 2
+fi
+if [ -n "$UPDATER_PATH" ]; then
+    install_updater "$UPDATER_PATH"
+fi
 
 # 2. Create the immutable release directory and stage the binary under a
 #    temp name. The release binary is not touched until --check passes.
