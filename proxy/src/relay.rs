@@ -55,6 +55,7 @@ const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
+use super::handoff::SessionSnapshot;
 use super::metrics::{upstream_lag, DropReason, ProxyMetrics};
 use super::rate_limit::{RateLimitResult, RateLimiter};
 
@@ -404,6 +405,173 @@ impl RelayEngine {
                 false
             }
         });
+    }
+
+    /// Snapshot every UDP session for an in-place handoff.
+    ///
+    /// FEC decoder state and `pending_forward_us` are intentionally not carried:
+    /// the decoder is rebuilt by the adopting process and the latency marker is
+    /// zeroed so no post-handoff response is charged a bogus lag.  TCP sessions
+    /// cannot survive an `execve` (their write half lives in this process) and
+    /// are skipped.
+    #[cfg(target_os = "linux")]
+    pub fn snapshot_handoff(&self, now: Instant) -> Vec<SessionSnapshot> {
+        use std::os::fd::AsRawFd;
+
+        let sessions = self.sessions.blocking_read();
+        let mut snapshots = Vec::with_capacity(sessions.len());
+        let mut tcp_skipped = 0usize;
+        for session in sessions.values() {
+            if session.sender.is_tcp() {
+                tcp_skipped += 1;
+                continue;
+            }
+            let age_us = now
+                .saturating_duration_since(session.started_at)
+                .as_micros() as u64;
+            let last_activity_us = session.last_activity_us.load(Ordering::Relaxed);
+            snapshots.push(SessionSnapshot {
+                client_addr: session.client_addr.to_string(),
+                game_server: session.game_server.to_string(),
+                outbound_fd: session.outbound_socket.as_raw_fd(),
+                fec_enabled: session.fec_enabled,
+                fec_k: session.fec_k,
+                age_us,
+                idle_us: age_us.saturating_sub(last_activity_us),
+                response_seq: session.response_seq.load(Ordering::Relaxed),
+                last_client_seq: session.last_client_seq.load(Ordering::Relaxed),
+                packets_relayed: session.packets_relayed,
+                bytes_relayed: session.bytes_relayed,
+            });
+        }
+        drop(sessions);
+        if tcp_skipped > 0 {
+            info!(
+                tcp_sessions_skipped = tcp_skipped,
+                "Handoff snapshot skipped TCP sessions"
+            );
+        }
+        snapshots
+    }
+
+    /// Adopt snapshotted sessions into this engine.
+    ///
+    /// Each snapshot's outbound fd is validated and adopted into a fresh
+    /// non-blocking socket, a new [`ClientSession`] is built (new FEC decoder,
+    /// new cancellation token, re-anchored age, preserved activity and
+    /// counters), and its response listener is spawned immediately.  An address
+    /// that already has a session, or whose fd fails validation, is skipped.
+    /// Returns the number of sessions installed.
+    #[cfg(target_os = "linux")]
+    pub async fn install_handoff_sessions(
+        &self,
+        snaps: &[SessionSnapshot],
+        data_socket: Arc<UdpSocket>,
+        metrics: Arc<ProxyMetrics>,
+    ) -> usize {
+        let mut installed = 0usize;
+        for snap in snaps {
+            let client_addr: SocketAddrV4 = match snap.client_addr.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    warn!(
+                        client = %snap.client_addr,
+                        "Skipping handoff session with unparseable client_addr"
+                    );
+                    continue;
+                }
+            };
+            let game_server: SocketAddrV4 = match snap.game_server.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    warn!(
+                        client = %snap.client_addr,
+                        "Skipping handoff session with unparseable game_server"
+                    );
+                    continue;
+                }
+            };
+
+            {
+                let sessions = self.sessions.read().await;
+                if sessions.contains_key(&client_addr) {
+                    debug!(
+                        client = %client_addr,
+                        "Handoff session address already active, skipping"
+                    );
+                    continue;
+                }
+            }
+
+            let std_socket = match crate::handoff::adopt_std_udp(snap.outbound_fd) {
+                Ok(socket) => socket,
+                Err(e) => {
+                    warn!(
+                        client = %client_addr,
+                        fd = snap.outbound_fd,
+                        error = %e,
+                        "Skipping handoff session with invalid outbound fd"
+                    );
+                    continue;
+                }
+            };
+            let outbound_socket = match UdpSocket::from_std(std_socket) {
+                Ok(socket) => socket,
+                Err(e) => {
+                    warn!(
+                        client = %client_addr,
+                        error = %e,
+                        "Skipping handoff session: cannot register adopted socket"
+                    );
+                    continue;
+                }
+            };
+
+            let age = Duration::from_micros(snap.age_us);
+            let started_at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+            let session = Arc::new(ClientSession {
+                client_addr,
+                game_server,
+                outbound_socket: Arc::new(outbound_socket),
+                sender: ClientSender::Udp {
+                    socket: Arc::clone(&data_socket),
+                    addr: client_addr,
+                },
+                cancel: CancellationToken::new(),
+                packets_relayed: snap.packets_relayed,
+                bytes_relayed: snap.bytes_relayed,
+                started_at,
+                last_activity_us: AtomicU64::new(snap.age_us.saturating_sub(snap.idle_us)),
+                pending_forward_us: AtomicU64::new(0),
+                response_seq: AtomicU16::new(snap.response_seq),
+                last_client_seq: AtomicU16::new(snap.last_client_seq),
+                fec_enabled: snap.fec_enabled,
+                fec_k: snap.fec_k,
+                fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
+                listener_started: AtomicBool::new(false),
+                listeners_spawned: AtomicU64::new(0),
+            });
+
+            {
+                let mut sessions = self.sessions.write().await;
+                if sessions.contains_key(&client_addr) {
+                    continue;
+                }
+                sessions.insert(client_addr, Arc::clone(&session));
+            }
+
+            metrics.record_session_created();
+            if session.claim_response_listener() {
+                let session_clone = Arc::clone(&session);
+                let metrics_clone = Arc::clone(&metrics);
+                let handle = tokio::spawn(async move {
+                    run_session_response_listener(session_clone, metrics_clone).await;
+                });
+                self.register_listener_handle(client_addr, handle).await;
+            }
+            installed += 1;
+        }
+        installed
     }
 }
 
@@ -1607,5 +1775,97 @@ mod tests {
             "Expected {} packets via recvmmsg, got {}",
             N, received
         );
+    }
+
+    /// Snapshot a UDP session, then adopt it into a fresh engine and verify the
+    /// client, game server, FEC parameters, counters, and single response
+    /// listener are all reconstructed.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn handoff_snapshot_and_install_reconstruct_udp_sessions() {
+        let engine = Arc::new(RelayEngine::new(10));
+        let client = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 5), 40_000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_015);
+
+        let (session, is_new) = engine
+            .get_or_create_session(client, server, true, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(is_new);
+        session.touch();
+
+        let snapshotter = Arc::clone(&engine);
+        let snapshots =
+            tokio::task::spawn_blocking(move || snapshotter.snapshot_handoff(Instant::now()))
+                .await
+                .unwrap();
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].client_addr, client.to_string());
+        assert_eq!(snapshots[0].game_server, server.to_string());
+        assert!(snapshots[0].fec_enabled);
+        assert_eq!(snapshots[0].fec_k, 4);
+        assert!(snapshots[0].idle_us <= snapshots[0].age_us);
+
+        // Simulate an `execve`: the outgoing process image disappears, so its
+        // reactor registration is gone and the fd stays open for the adopter.
+        // `into_std` deregisters the socket; forgetting the std handle keeps the
+        // fd alive instead of closing it as the old session is torn down.
+        drop(session);
+        let original = engine.sessions().write().await.remove(&client).unwrap();
+        let original = Arc::try_unwrap(original).unwrap();
+        let outbound = Arc::try_unwrap(original.outbound_socket).unwrap();
+        std::mem::forget(outbound.into_std().unwrap());
+
+        let adopted = RelayEngine::new(10);
+        let data_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let metrics = Arc::new(ProxyMetrics::new());
+
+        let installed = adopted
+            .install_handoff_sessions(&snapshots, data_socket, metrics)
+            .await;
+        assert_eq!(installed, 1);
+
+        let sessions = adopted.sessions();
+        let guard = sessions.read().await;
+        let restored = guard.get(&client).expect("client session installed");
+        assert_eq!(restored.game_server, server);
+        assert!(restored.fec_enabled);
+        assert_eq!(restored.fec_k, 4);
+        assert_eq!(restored.response_listeners_spawned(), 1);
+        assert_eq!(restored.pending_forward_us.load(Ordering::Relaxed), 0);
+    }
+
+    /// TCP sessions cannot survive an `execve`; they must be skipped.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn handoff_snapshot_skips_tcp_sessions() {
+        let engine = Arc::new(RelayEngine::new(10));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener_addr = listener.local_addr().unwrap();
+        let connect = tokio::net::TcpStream::connect(listener_addr);
+        let (accepted, connected) = tokio::join!(listener.accept(), connect);
+        let (server_stream, _) = accepted.unwrap();
+        let _client_stream = connected.unwrap();
+        let (_read, write) = server_stream.into_split();
+
+        let sender = ClientSender::Tcp {
+            write: Arc::new(tokio::sync::Mutex::new(write)),
+            cancel: CancellationToken::new(),
+        };
+        let client = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 6), 40_001);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 27_016);
+        engine
+            .get_or_create_session(client, server, false, 4, sender)
+            .await
+            .unwrap();
+
+        let snapshotter = Arc::clone(&engine);
+        let snapshots =
+            tokio::task::spawn_blocking(move || snapshotter.snapshot_handoff(Instant::now()))
+                .await
+                .unwrap();
+
+        assert!(snapshots.is_empty(), "TCP sessions must be skipped");
     }
 }

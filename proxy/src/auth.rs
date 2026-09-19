@@ -32,6 +32,8 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
+use crate::handoff::AuthTokenSnapshot;
+
 /// Lifetime of a freshly issued token.
 pub const TOKEN_TTL: Duration = Duration::from_secs(300);
 
@@ -177,6 +179,58 @@ impl Authenticator {
         let before = self.tokens.len();
         self.tokens.retain(|_, entry| entry.expires_at > now);
         before - self.tokens.len()
+    }
+
+    /// Snapshot every live token for handoff.
+    ///
+    /// Entries whose deadline is at or before `now` are dropped; every surviving
+    /// entry reports its remaining lifetime in milliseconds.
+    pub fn snapshot(&self, now: Instant) -> Vec<AuthTokenSnapshot> {
+        self.tokens
+            .iter()
+            .filter_map(|(&token, entry)| {
+                let remaining = entry.expires_at.checked_duration_since(now)?;
+                Some(AuthTokenSnapshot {
+                    token,
+                    principal: entry.principal.to_string(),
+                    bound_port: entry.bound_port.unwrap_or(0),
+                    ttl_ms_remaining: remaining.as_millis() as u64,
+                })
+            })
+            .collect()
+    }
+
+    /// Restore tokens from a handoff snapshot.
+    ///
+    /// Each entry's deadline is re-anchored to `now + ttl_ms_remaining`, so a
+    /// token valid at handoff stays valid for exactly its remaining lifetime.
+    /// The table's fail-closed cap is preserved: new tokens beyond
+    /// [`Self::max_entries`] are refused rather than evicting a live entry.
+    pub fn restore(&mut self, snaps: &[AuthTokenSnapshot], now: Instant) {
+        for snap in snaps {
+            let principal = match snap.principal.parse::<Ipv4Addr>() {
+                Ok(principal) => principal,
+                Err(_) => {
+                    tracing::warn!(
+                        principal = %snap.principal,
+                        "Skipping handoff auth entry with unparseable principal"
+                    );
+                    continue;
+                }
+            };
+            if !self.tokens.contains_key(&snap.token) && self.tokens.len() >= self.max_entries {
+                tracing::warn!("Auth token table full, refusing to restore token");
+                continue;
+            }
+            self.tokens.insert(
+                snap.token,
+                AuthEntry {
+                    principal,
+                    bound_port: (snap.bound_port != 0).then_some(snap.bound_port),
+                    expires_at: now + Duration::from_millis(snap.ttl_ms_remaining),
+                },
+            );
+        }
     }
 
     /// Validate a packet's (principal, data_port, token) triple.
@@ -466,5 +520,91 @@ mod tests {
             111,
             now + PREVIOUS_TOKEN_GRACE + Duration::from_secs(1)
         ));
+    }
+
+    fn snap(
+        token: u32,
+        principal: &str,
+        bound_port: u16,
+        ttl_ms_remaining: u64,
+    ) -> AuthTokenSnapshot {
+        AuthTokenSnapshot {
+            token,
+            principal: principal.to_string(),
+            bound_port,
+            ttl_ms_remaining,
+        }
+    }
+
+    #[test]
+    fn snapshot_drops_expired_and_preserves_remaining_ttl() {
+        let mut auth = Authenticator::new(true);
+        let now = t0();
+        auth.authorize(ip(1), 40_001, 111, now);
+        auth.authorize(ip(2), 0, 222, now);
+        auth.revoke(222, now, Duration::from_secs(5));
+
+        let snapshots = auth.snapshot(now + Duration::from_secs(100));
+
+        assert_eq!(snapshots.len(), 1, "expired token must be dropped");
+        let entry = &snapshots[0];
+        assert_eq!(entry.token, 111);
+        assert_eq!(entry.principal, "10.0.0.1");
+        assert_eq!(entry.bound_port, 40_001);
+        assert_eq!(entry.ttl_ms_remaining, 200_000);
+    }
+
+    #[test]
+    fn snapshot_reports_zero_port_for_principal_only_tokens() {
+        let mut auth = Authenticator::new(true);
+        let now = t0();
+        auth.authorize(ip(3), 0, 333, now);
+
+        let snapshots = auth.snapshot(now);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].bound_port, 0);
+    }
+
+    #[test]
+    fn restore_reproduces_validation_at_the_original_deadline() {
+        let mut source = Authenticator::new(true);
+        let t0 = Instant::now();
+        source.authorize(ip(1), 40_001, 111, t0);
+        let snapshots = source.snapshot(t0 + Duration::from_secs(60));
+
+        let mut restored = Authenticator::new(true);
+        let restored_at = t0 + Duration::from_secs(120);
+        restored.restore(&snapshots, restored_at);
+
+        assert!(restored.validate(ip(1), 40_001, 111, restored_at + Duration::from_secs(239)));
+        assert!(!restored.validate(ip(1), 40_001, 111, restored_at + Duration::from_secs(241)));
+        assert!(!restored.validate(ip(2), 40_001, 111, restored_at));
+        assert!(!restored.validate(ip(1), 40_002, 111, restored_at));
+    }
+
+    #[test]
+    fn restore_preserves_the_fail_closed_cap() {
+        let mut restored = Authenticator::with_max_entries(true, 1);
+        let now = t0();
+        restored.restore(
+            &[
+                snap(111, "10.0.0.1", 0, 1_000),
+                snap(222, "10.0.0.2", 0, 1_000),
+            ],
+            now,
+        );
+
+        assert_eq!(restored.client_count(), 1);
+        assert!(restored.validate(ip(1), 0, 111, now));
+        assert!(!restored.validate(ip(2), 0, 222, now));
+    }
+
+    #[test]
+    fn restore_skips_unparseable_principals() {
+        let mut restored = Authenticator::new(true);
+        let now = t0();
+        restored.restore(&[snap(111, "not-an-ip", 0, 1_000)], now);
+
+        assert_eq!(restored.client_count(), 0);
     }
 }
