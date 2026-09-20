@@ -193,6 +193,10 @@ mod inner {
 
     /// Build a quinn `ServerConfig` with a self-signed certificate.
     fn build_server_config() -> anyhow::Result<quinn::ServerConfig> {
+        // quinn pulls rustls with its aws-lc-rs default while this crate selects
+        // ring, so two providers are compiled in and `ServerConfig::builder()`
+        // panics on auto-detection. Pin ring as the process-wide provider.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let (certs, key) = load_or_generate_cert()?;
 
         let rustls_config = rustls::ServerConfig::builder()
