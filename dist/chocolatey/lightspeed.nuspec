@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>lightspeed</id>
+    <version>1.6.3</version>
+    <title>LightSpeed</title>
+    <authors>ShibbityShwab</authors>
+    <owners>ShibbityShwab</owners>
+    <projectUrl>https://github.com/ShibbityShwab/lightspeed</projectUrl>
+    <packageSourceUrl>https://github.com/ShibbityShwab/lightspeed</packageSourceUrl>
+    <licenseUrl>https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <description>LightSpeed is a zero-cost global network optimizer for multiplayer games. This package installs the Windows CLI client (lightspeed.exe) and its bundled WinDivert driver files.</description>
+    <summary>Zero-cost global network optimizer for multiplayer games (Windows CLI client).</summary>
+    <tags>lightspeed game gaming network optimizer latency ping accelerator</tags>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
