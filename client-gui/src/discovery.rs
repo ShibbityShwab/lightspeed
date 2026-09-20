@@ -153,6 +153,12 @@ pub fn friendly_label(node_id: &str) -> String {
     }
 }
 
+/// The `/health` address for a relay: the registry advertises the UDP data
+/// port, so health probes always use [`HEALTH_PORT`] on the same host.
+pub fn health_endpoint(relay: SocketAddrV4) -> SocketAddrV4 {
+    SocketAddrV4::new(*relay.ip(), HEALTH_PORT)
+}
+
 /// Start a `/health` probe for `addr` on a background thread.
 pub fn spawn_health_probe(addr: SocketAddrV4) -> Receiver<Result<RelayHealth, String>> {
     let (tx, rx) = mpsc::channel();
@@ -166,6 +172,62 @@ pub fn spawn_health_probe(addr: SocketAddrV4) -> Receiver<Result<RelayHealth, St
 pub fn probe_blocking(addr: SocketAddrV4) -> Result<RelayHealth, String> {
     let body = http_get(addr, "/health")?;
     parse_health(&body)
+}
+
+/// Race every address in `addrs` for the lowest `/health` round trip on a
+/// background thread. The receiver yields the fastest relay that answered, or
+/// `None` when none did.
+pub fn spawn_relay_race(addrs: Vec<SocketAddrV4>) -> Receiver<Option<SocketAddrV4>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(race_blocking(&addrs));
+    });
+    rx
+}
+
+/// Probe every address concurrently and return the one with the lowest
+/// round-trip to `/health`. Addresses that fail to answer are ignored.
+pub fn race_blocking(addrs: &[SocketAddrV4]) -> Option<SocketAddrV4> {
+    if addrs.is_empty() {
+        return None;
+    }
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        for (index, addr) in addrs.iter().enumerate() {
+            let tx = tx.clone();
+            let addr = *addr;
+            scope.spawn(move || {
+                let _ = tx.send((index, addr, probe_latency(addr)));
+            });
+        }
+    });
+    drop(tx);
+
+    // Rebuild in input order so equal latencies keep the discovery order.
+    let mut samples: Vec<(usize, SocketAddrV4, Option<Duration>)> = rx.iter().collect();
+    samples.sort_by_key(|(index, _, _)| *index);
+    fastest_addr(
+        samples
+            .into_iter()
+            .map(|(_, addr, latency)| (addr, latency))
+            .collect(),
+    )
+}
+
+/// Time one `/health` round trip, or `None` when the relay does not answer.
+fn probe_latency(addr: SocketAddrV4) -> Option<Duration> {
+    let started = std::time::Instant::now();
+    probe_blocking(addr).ok().map(|_| started.elapsed())
+}
+
+/// The address with the smallest successful latency; ties keep input order.
+/// Addresses that timed out or failed contribute `None` and are ignored.
+pub fn fastest_addr(samples: Vec<(SocketAddrV4, Option<Duration>)>) -> Option<SocketAddrV4> {
+    samples
+        .into_iter()
+        .filter_map(|(addr, latency)| latency.map(|latency| (addr, latency)))
+        .reduce(|best, next| if next.1 < best.1 { next } else { best })
+        .map(|(addr, _)| addr)
 }
 
 /// Minimal HTTP/1.1 GET for the relays' plain-HTTP health endpoint. The GUI
@@ -225,9 +287,11 @@ fn parse_health(body: &str) -> Result<RelayHealth, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        friendly_label, parse_health, parse_nodes, probe_blocking, split_body, RelayHealth,
+        fastest_addr, friendly_label, health_endpoint, parse_health, parse_nodes, probe_blocking,
+        race_blocking, spawn_relay_race, split_body, RelayHealth,
     };
     use std::net::SocketAddrV4;
+    use std::time::Duration;
 
     #[test]
     fn friendly_labels_known_and_unknown_nodes() {
@@ -294,6 +358,113 @@ mod tests {
     #[test]
     fn parse_health_rejects_non_json() {
         assert!(parse_health("<html>nope</html>").is_err());
+    }
+
+    #[test]
+    #[ignore = "hits the live registry and production relay fleet"]
+    fn live_race_prefers_a_reachable_relay() {
+        let relays: Vec<SocketAddrV4> = match super::discover_blocking() {
+            super::DiscoveryOutcome::Found(nodes) => nodes
+                .into_iter()
+                .map(|node| health_endpoint(node.addr))
+                .collect(),
+            super::DiscoveryOutcome::Failed(reason) => panic!("discovery failed: {reason}"),
+        };
+        let winner = race_blocking(&relays);
+        println!("raced {} relays, winner = {winner:?}", relays.len());
+        assert!(winner.is_some(), "at least one relay should answer /health");
+    }
+
+    #[test]
+    fn health_endpoint_replaces_the_registry_port() {
+        // The registry advertises the UDP data port; health is always on 8080.
+        let relay = "203.0.113.5:4434".parse::<SocketAddrV4>().expect("addr");
+        assert_eq!(
+            health_endpoint(relay),
+            "203.0.113.5:8080".parse::<SocketAddrV4>().expect("addr")
+        );
+    }
+
+    #[test]
+    fn fastest_addr_picks_the_lowest_latency_and_skips_failures() {
+        let a = "10.0.0.1:8080".parse::<SocketAddrV4>().expect("addr");
+        let b = "10.0.0.2:8080".parse::<SocketAddrV4>().expect("addr");
+        let c = "10.0.0.3:8080".parse::<SocketAddrV4>().expect("addr");
+        let samples = vec![
+            (a, None),
+            (b, Some(Duration::from_millis(80))),
+            (c, Some(Duration::from_millis(20))),
+        ];
+        assert_eq!(fastest_addr(samples), Some(c));
+    }
+
+    #[test]
+    fn fastest_addr_ties_keep_input_order() {
+        let a = "10.0.0.1:8080".parse::<SocketAddrV4>().expect("addr");
+        let b = "10.0.0.2:8080".parse::<SocketAddrV4>().expect("addr");
+        let samples = vec![
+            (a, Some(Duration::from_millis(30))),
+            (b, Some(Duration::from_millis(30))),
+        ];
+        assert_eq!(fastest_addr(samples), Some(a));
+    }
+
+    #[test]
+    fn fastest_addr_without_successes_is_none() {
+        let a = "10.0.0.1:8080".parse::<SocketAddrV4>().expect("addr");
+        assert_eq!(fastest_addr(vec![(a, None)]), None);
+        assert_eq!(fastest_addr(Vec::new()), None);
+    }
+
+    #[test]
+    fn race_without_addresses_returns_none() {
+        assert_eq!(race_blocking(&[]), None);
+    }
+
+    #[test]
+    fn spawn_relay_race_delivers_a_result() {
+        let rx = spawn_relay_race(Vec::new());
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).ok(),
+            Some(None),
+            "an empty race resolves to no winner"
+        );
+    }
+
+    #[test]
+    fn race_prefers_the_responding_relay() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let responder = match listener.local_addr().expect("addr") {
+            std::net::SocketAddr::V4(v4) => v4,
+            std::net::SocketAddr::V6(_) => unreachable!("bound to IPv4"),
+        };
+        // Bind and immediately drop a second port so connects are refused.
+        let closed = match std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind")
+            .local_addr()
+            .expect("addr")
+        {
+            std::net::SocketAddr::V4(v4) => v4,
+            std::net::SocketAddr::V6(_) => unreachable!("bound to IPv4"),
+        };
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let body = r#"{"packets_relayed":1,"sessions_created":1}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        let winner = race_blocking(&[closed, responder]);
+        handle.join().expect("server thread");
+        assert_eq!(winner, Some(responder));
     }
 
     #[test]
