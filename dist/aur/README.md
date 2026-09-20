@@ -9,7 +9,7 @@ This directory is a **prepared + handoff** state. Publishing to
 
 ## What ships
 
-| File        | Arch          | Source asset (GitHub release v1.5.0) |
+| File        | Arch          | Source asset (GitHub release v1.6.3) |
 |-------------|---------------|--------------------------------------|
 | `/usr/bin/lightspeed`     | x86_64, aarch64 | `lightspeed-client-<triple>.tar.xz`   |
 | `/usr/bin/lightspeed-gui` | x86_64 only     | `lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz` |
@@ -44,7 +44,7 @@ cp /path/to/dist/aur/PKGBUILD /path/to/dist/aur/.SRCINFO .
 
 # 3. Commit and push. Pushing the initial commit publishes the package:
 git add PKGBUILD .SRCINFO
-git commit -m "lightspeed-bin 1.5.0-1"
+git commit -m "lightspeed-bin 1.6.3-1"
 git push
 ```
 
@@ -66,7 +66,7 @@ When LightSpeed tags a new version (e.g. `v1.5.0`):
 4. Commit both files and `git push`.
 
 Do **not** update sha256sums of unchanged assets unnecessarily: real sums
-are already in place for 1.5.0 (verified against the release's published
+are already in place for 1.6.3 (verified against the release's published
 sha256; see Local verification below).
 
 ## Local verification
