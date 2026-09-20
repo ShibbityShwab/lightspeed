@@ -1,0 +1,87 @@
+name: Health Monitor
+
+# Periodic end-to-end liveness check. The deploy health gate only proves a relay
+# serves /health; that is exactly how a fleet can look healthy while its QUIC
+# control plane is missing and every client is rejected. This job registers a
+# real client against every relay in the registry and fails (with an alert) if
+# any relay cannot accept a client or is otherwise down.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe live relays
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download the latest released client
+        run: |
+          set -euo pipefail
+          gh release download --pattern 'lightspeed-client-x86_64-unknown-linux-gnu.tar.xz'
+          tar -xJf lightspeed-client-x86_64-unknown-linux-gnu.tar.xz
+          bin="$(find . -type f -name lightspeed -perm -u+x | head -1)"
+          [ -n "$bin" ] || { echo "::error::client binary not found in the release archive"; exit 1; }
+          chmod +x "$bin"
+          echo "LIGHTSPEED_BIN=$bin" >> "$GITHUB_ENV"
+          "$bin" --version
+
+      - name: Probe every relay (health + control-plane registration)
+        run: |
+          set -uo pipefail
+          mapfile -t addrs < <(jq -r '.registry | fromjson | .nodes[] | .data_addr' web/registry.json)
+          mapfile -t health < <(jq -r '.registry | fromjson | .nodes[] | .health_url' web/registry.json)
+          [ "${#addrs[@]}" -gt 0 ] || { echo "::error::no relays in web/registry.json"; exit 1; }
+
+          fail=0
+          for i in "${!addrs[@]}"; do
+            addr="${addrs[$i]}"
+            hurl="${health[$i]}"
+            echo "── ${addr}"
+
+            if ! curl -fsS --max-time 8 "$hurl" >/dev/null; then
+              echo "::error::health check failed for ${addr} (${hurl})"
+              fail=1
+              continue
+            fi
+            echo "  /health OK"
+
+            ok=0
+            for attempt in 1 2; do
+              out="$("$LIGHTSPEED_BIN" --test-control --proxy "$addr" 2>&1 || true)"
+              if printf '%s' "$out" | grep -q "Control plane is working"; then
+                ok=1
+                break
+              fi
+              sleep 3
+            done
+
+            if [ "$ok" -eq 1 ]; then
+              echo "  control plane OK (client registered)"
+            else
+              echo "::error::control-plane registration failed for ${addr}"
+              printf '%s\n' "$out" | tail -6
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Notify Discord on failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK" ]; then
+            curl -fsS -X POST -H 'Content-Type: application/json' \
+              -d "{\"content\":\"🚨 LightSpeed health monitor FAILED: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
+              "$DISCORD_WEBHOOK" || true
+          fi

@@ -37,6 +37,23 @@ jobs:
       - name: Test
         run: cargo test --workspace --exclude lightspeed-gui
 
+  proxy-quic-smoke:
+    name: Proxy QUIC Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      # Exercises the release artifact, which unit tests do not: a missing
+      # `--features quic` or an ambiguous rustls provider passes `cargo test`
+      # and only fails when the shipped binary actually starts.
+      - name: Release QUIC control-plane smoke
+        run: bash infra/scripts/test_proxy_quic_smoke.sh
+
   macos-smoke:
     name: macOS Smoke Test
     runs-on: macos-latest
