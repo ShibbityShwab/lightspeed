@@ -548,3 +548,19 @@ the client shipped on this branch reconnects within seconds.
 **Impact:** `client-gui/src/{app,config,discovery}.rs`; released as 1.6.2.
 
 **Alternatives Considered:** connecting to index 0 immediately and switching later was rejected because it drops a live connection; racing first only delays the initial connect by the probe time.
+
+## 2026-09-20 - Postmortem: QUIC control plane outage (fleet)
+
+**Impact:** Every relay reported healthy but relayed nothing for roughly 12 hours: `packets_relayed=0`, `sessions_created=0`, `auth_rejections` climbing into the tens of thousands. Clients could not register.
+
+**Root causes:**
+1. `infra/scripts/deploy.sh` built the proxy without `--features quic` (proxy `default` features are empty), so the installed binary had no control plane. The deploy health gate only checks `/health`, which passes either way.
+2. The quic-enabled build then panicked at startup on rustls 0.23.45: quinn pulls rustls with `aws-lc-rs` while the proxy selects `ring`, so two providers are compiled in and `ServerConfig::builder()` panics on ambiguous auto-detection.
+
+**Fixes (v1.6.3):**
+- `proxy/src/control.rs` installs the ring `CryptoProvider` explicitly before building the server config.
+- `deploy.sh` builds with `--features quic`, refuses to deploy unless the binary contains the `QUIC control plane listening` string, and asserts UDP 4433 is listening after install.
+
+**Verification:** all five relays on 1.6.3 with 4433 and 4434 listening; a real QUIC client (`--live-test --features quic`) registered with relay-sgp-1 and relayed 5/5 with payload match (`sessions_created=1`, `packets_relayed=10`); the live site shows the traffic.
+
+**Lessons:** a health check that omits the control plane is not a health check; build pipelines must pin required features explicitly; the client CLI needs `--features quic` or it silently uses a stub.
