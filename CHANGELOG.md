@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Two community relays: **Mumbai (AP-South)** and **Madrid (EU-South)**, both
+  sponsor-funded and listed in the signed registry (7 nodes total).
+- `setup-new-node.sh` now generates the node identity key, syncs the GeoIP
+  database before the proxy starts, and refuses a binary built without
+  `--features quic`.
+
 ## [1.6.3] - 2026-09-20
 
 ### Fixed
