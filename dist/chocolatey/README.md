@@ -20,27 +20,34 @@ GUI is shipped as an MSI on the
 
 ## Build
 
-The `.nupkg` is a zip of the `.nuspec` at the root plus `tools/`. On Windows
-this is `choco pack lightspeed.nuspec`; a plain archive with the same layout
-works too:
+A `.nupkg` is an OPC zip, not a plain archive: it needs the `.nuspec` plus
+`[Content_Types].xml` and `_rels/.rels` at the root, or NuGet rejects the push
+with "Package does not contain a manifest". On Windows use `choco pack`; on any
+platform use the bundled script:
 
 ```sh
-cd dist/chocolatey && zip -r ../../lightspeed.1.6.3.nupkg lightspeed.nuspec tools/
+cd dist/chocolatey && ./build.sh
 ```
 
 ## Publish (maintainer)
 
 Chocolatey Community requires an account and is **moderated** (a human reviews
-new packages, usually within a few days).
+new packages, usually within a few days; the package shows as unlisted until it
+is approved). Web upload of `.nupkg` files is disabled, so push with an API key.
+
+With Chocolatey installed (Windows):
 
 ```sh
-# 1. Create an account at https://community.chocolatey.org/account/Register
-#    and copy the API key from https://community.chocolatey.org/account
-# 2. Push the built package
 choco push lightspeed.1.6.3.nupkg --source https://push.chocolatey.org/ --api-key <API_KEY>
 ```
 
-Or upload the `.nupkg` directly from the "Upload" page while signed in.
+Or from any platform with curl, against the NuGet v2 push endpoint:
+
+```sh
+curl -X PUT -H "X-NuGet-ApiKey: <API_KEY>" \
+  --data-binary @lightspeed.1.6.3.nupkg \
+  https://push.chocolatey.org/api/v2/package/
+```
 
 ## Updating
 
