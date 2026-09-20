@@ -564,3 +564,13 @@ the client shipped on this branch reconnects within seconds.
 **Verification:** all five relays on 1.6.3 with 4433 and 4434 listening; a real QUIC client (`--live-test --features quic`) registered with relay-sgp-1 and relayed 5/5 with payload match (`sessions_created=1`, `packets_relayed=10`); the live site shows the traffic.
 
 **Lessons:** a health check that omits the control plane is not a health check; build pipelines must pin required features explicitly; the client CLI needs `--features quic` or it silently uses a stub.
+
+## 2026-09-20 - Relay expansion: Mumbai and Madrid
+
+**Decision:** Add two sponsor-funded relays: `relay-bom-1` (Mumbai, ap-south, 65.20.92.201) and `relay-mad-1` (Madrid, eu-south, 65.20.99.61). The data did not yet justify expansion (the recommender reports INSUFFICIENT_DATA; about five distinct players in 24h), but the owner approved it as strategic coverage since the sponsor funds it.
+
+**Why these regions:** the observed but sparse demand showed Bangladesh reaching a Tokyo game server via nrt (Mumbai is far closer for South Asia) and Algeria reaching an Irish Riot server via fra/lax (Madrid is roughly 1000 km closer for the Maghreb). Vultr offers no Dubai region, so MENA coverage became Madrid.
+
+**Also fixed while provisioning:** `setup-new-node.sh` omitted the node identity key (needed for the registry pubkey), started the proxy before the GeoIP sync (leaving geo disabled until a restart), and instructed operators to build without `--features quic`. All three corrected, and the script now refuses a binary with no QUIC control plane.
+
+**Impact:** `web/registry.json` (signed, 7 nodes), `infra/geo/regions.json`, the GUI friendly labels, and the fleet docs. The fleet is now seven relays.

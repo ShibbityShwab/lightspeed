@@ -81,7 +81,7 @@ sudo lightspeed-client --start-interceptor --game rust
 lightspeed-client --probe-proxies
 ```
 
-This performs one discovery/probe pass and prints a visible report listing each discovered relay and its latency. You should see all five community relays (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo).
+This performs one discovery/probe pass and prints a visible report listing each discovered relay and its latency. You should see all seven community relays (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo, Mumbai, Madrid).
 
 **Check control-plane registration.** Run:
 

@@ -20,7 +20,7 @@
 # Prerequisites:
 #   - SSH access to the node (key at ~/.ssh/id_ed25519)
 #   - Linux proxy binary at target/release/lightspeed-proxy
-#     (build with: docker run --rm -v "$PWD:/src" -w /src rust:latest cargo build --release --bin lightspeed-proxy)
+#     (build with: cargo build --release --bin lightspeed-proxy --features quic)
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -86,7 +86,13 @@ if [ ! -f "$BINARY" ]; then
     echo -e "${RED}Binary not found at $BINARY${NC}"
     echo "Build it with:"
     echo "  cd $PROJECT_ROOT"
-    echo "  docker run --rm -v \"\$PWD:/src\" -w /src rust:latest cargo build --release --bin lightspeed-proxy"
+    echo "  cargo build --release --bin lightspeed-proxy --features quic"
+    exit 1
+fi
+# The binary must include the QUIC control plane: a build without
+# `--features quic` is a data-only proxy that auth-rejects every client.
+if ! grep -aqF "QUIC control plane listening" "$BINARY"; then
+    echo -e "${RED}Binary has no QUIC control plane. Rebuild with --features quic.${NC}" >&2
     exit 1
 fi
 echo "  Binary: $BINARY ($(du -h "$BINARY" | cut -f1))"
@@ -134,6 +140,12 @@ NODE_IP="$4"
 mkdir -p /etc/lightspeed
 install -d /opt/lightspeed/releases
 install -d /opt/lightspeed/geoip
+
+# Node identity (Ed25519). Its public half is listed in the registry so an
+# operator can revoke the node by pubkey; the proxy itself does not read it.
+if [ ! -f /etc/lightspeed/node.key ]; then
+    ssh-keygen -t ed25519 -N "" -f /etc/lightspeed/node.key -C "lightspeed-node" >/dev/null
+fi
 
 # Write proxy.toml
 cat > /etc/lightspeed/proxy.toml << EOF
@@ -202,25 +214,17 @@ if command -v ufw &>/dev/null; then
     echo "y" | ufw enable 2>/dev/null || true
 fi
 
-# Register the unit and create the first versioned release. relay-install.sh
-# runs --check, repoints /opt/lightspeed/current, starts the service, and
-# health-gates it (rolling back if the new release never comes up).
-systemctl daemon-reload
-systemctl enable lightspeed-proxy
-
-bash /tmp/lightspeed-relay-install.sh --binary /tmp/lightspeed-proxy.staged --version "$RELEASE_VERSION"
-
-# Install the self-updater and its systemd unit+timer. relay-updater.sh
-# resolves relay-install.sh from its own directory, and the unit's
-# ConditionPathExists guards mean the timer only fires once a release is live.
+# Install the self-updater and its systemd unit+timer before the proxy starts,
+# so the GeoIP sync can run first and the proxy loads the MMDB on its very
+# first start. relay-updater.sh resolves relay-install.sh from its own
+# directory, and the unit's ConditionPathExists guards mean the timer only
+# fires once a release is live.
 install -d /usr/local/lib/lightspeed
 install -m 0755 /tmp/lightspeed-relay-install.sh /usr/local/lib/lightspeed/relay-install.sh
 install -m 0755 /tmp/lightspeed-relay-updater.sh /usr/local/lib/lightspeed/relay-updater.sh
 install -m 0644 /tmp/lightspeed-update.service /etc/systemd/system/lightspeed-update.service
 install -m 0644 /tmp/lightspeed-update.timer /etc/systemd/system/lightspeed-update.timer
 systemctl daemon-reload
-systemctl enable --now lightspeed-update.timer
-echo "Self-update timer enabled"
 
 # Best-effort GeoIP sync. The pinned MMDB is not required for the proxy to
 # start, so a failure here must never fail provisioning; the update timer
@@ -229,6 +233,14 @@ LIGHTSPEED_GEOIP_DIR=/opt/lightspeed/geoip \
     bash /usr/local/lib/lightspeed/relay-updater.sh --geoip-only \
     || echo "GeoIP sync skipped; the update timer will retry"
 
+# Register the unit and create the first versioned release. relay-install.sh
+# runs --check, repoints /opt/lightspeed/current, starts the service (now with
+# the MMDB in place), and health-gates it (rolling back if it never comes up).
+systemctl enable lightspeed-proxy
+bash /tmp/lightspeed-relay-install.sh --binary /tmp/lightspeed-proxy.staged --version "$RELEASE_VERSION"
+
+systemctl enable --now lightspeed-update.timer
+echo "Self-update timer enabled"
 echo "Service installed and activated"
 REMOTE
 echo "  Configured"
