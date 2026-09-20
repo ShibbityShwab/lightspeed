@@ -146,6 +146,7 @@ install -d /opt/lightspeed/geoip
 if [ ! -f /etc/lightspeed/node.key ]; then
     ssh-keygen -t ed25519 -N "" -f /etc/lightspeed/node.key -C "lightspeed-node" >/dev/null
 fi
+echo "NODE_PUBKEY=$(cut -d' ' -f2 /etc/lightspeed/node.key.pub)" > /etc/lightspeed/identity
 
 # Write proxy.toml
 cat > /etc/lightspeed/proxy.toml << EOF
@@ -178,7 +179,7 @@ EOF
 # Write systemd service
 cat > /etc/systemd/system/lightspeed-proxy.service << 'UNIT'
 [Unit]
-Description=LightSpeed Proxy — UDP game latency optimizer
+Description=LightSpeed Proxy - UDP game latency optimizer
 After=network-online.target
 Wants=network-online.target
 
@@ -211,6 +212,7 @@ if command -v ufw &>/dev/null; then
     ufw allow 8080/tcp comment "LightSpeed health" 2>/dev/null || true
     ufw allow 4434/udp comment "LightSpeed data" 2>/dev/null || true
     ufw allow 4433/udp comment "LightSpeed control" 2>/dev/null || true
+    ufw allow 9999/udp comment "LightSpeed echo (test)" 2>/dev/null || true
     echo "y" | ufw enable 2>/dev/null || true
 fi
 
