@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-09-20
+
+### Fixed
+
+- **Data-plane outage.** The Deploy Proxy workflow built the proxy without
+  `--features quic`, so the binary it installed had no QUIC control plane:
+  clients could not register, every data packet was auth-rejected
+  (`auth_rejections` climbing, `sessions_created` 0), and nothing was relayed.
+  `deploy.sh` now builds with `--features quic`, refuses to deploy a binary whose
+  embedded release string proves the control plane was compiled out, and verifies
+  UDP 4433 is listening after install.
+
 ## [1.6.2] - 2026-09-20
 
 ### Added
