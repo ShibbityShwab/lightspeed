@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-09-20
+
+### Added
+
+- The GUI connects to the relay with the lowest latency on first run and on each
+  discovery, so it picks up newly added relays on its own. A "Auto (fastest)"
+  checkbox in the Boost Server row toggles it; choosing a relay manually pins it.
+  The latency race probes each relay's health endpoint concurrently and ignores
+  relays that do not answer.
+
 ## [1.6.1] - 2026-09-19
 
 ### Fixed
