@@ -40,16 +40,20 @@ region_display() {
     local hay="${region,,} ${node_id,,}"
 
     case "$hay" in
-        *ap-southeast*|*southeast*|*sgp*|*singapore*)
+        *ap-southeast*|*sgp*|*singapore*)
             echo "AP-Southeast|Singapore|SG|🇸🇬" ;;
-        *ap-northeast*|*northeast*|*nrt*|*tokyo*)
+        *ap-northeast*|*nrt*|*tokyo*)
             echo "AP-Northeast|Tokyo|JP|🇯🇵" ;;
-        *us-west*|*west*|*lax*|*"los angeles"*)
+        *ap-south*|*bom*|*mumbai*)
+            echo "AP-South|Mumbai|IN|🇮🇳" ;;
+        *us-west*|*lax*|*"los angeles"*)
             echo "North America|Los Angeles|US|🇺🇸" ;;
-        *us-east*|*east*|*ewr*|*"new jersey"*)
+        *us-east*|*ewr*|*"new jersey"*)
             echo "North America|New Jersey|US|🇺🇸" ;;
-        *eu-central*|*central*|*europe*|*fra*|*frankfurt*|*eu*)
+        *eu-central*|*fra*|*frankfurt*)
             echo "Europe|Frankfurt|DE|🇩🇪" ;;
+        *eu-south*|*mad*|*madrid*)
+            echo "Europe|Madrid|ES|🇪🇸" ;;
         *)
             echo "Other|${region}||🏳️" ;;
     esac
