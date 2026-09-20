@@ -92,19 +92,21 @@ echo -e "\n${CYAN}[1/4] Building release binary...${NC}"
 
 cd "$PROJECT_ROOT"
 
-# Try cross-compilation, fall back to native
+# The proxy's `default` feature set is empty, so the QUIC control plane (client
+# registration) only exists with `--features quic`. Building without it yields a
+# data-only proxy that auth-rejects every packet. Never drop these flags.
 if command -v cross &>/dev/null; then
     echo "  Using 'cross' for Linux x86_64 cross-compilation"
-    cross build --release --bin "$BINARY_NAME" --target x86_64-unknown-linux-gnu
+    cross build --release --bin "$BINARY_NAME" --features quic --target x86_64-unknown-linux-gnu
     BINARY_PATH="target/x86_64-unknown-linux-gnu/release/${BINARY_NAME}"
 elif rustup target list --installed | grep -q "x86_64-unknown-linux-gnu"; then
     echo "  Using cargo with x86_64-unknown-linux-gnu target"
-    cargo build --release --bin "$BINARY_NAME" --target x86_64-unknown-linux-gnu
+    cargo build --release --bin "$BINARY_NAME" --features quic --target x86_64-unknown-linux-gnu
     BINARY_PATH="target/x86_64-unknown-linux-gnu/release/${BINARY_NAME}"
 else
     echo "  ⚠️  No Linux cross-compilation target available."
     echo "  Building for current platform (deploy only works if building on Linux)."
-    cargo build --release --bin "$BINARY_NAME"
+    cargo build --release --bin "$BINARY_NAME" --features quic
     BINARY_PATH="target/release/${BINARY_NAME}"
 fi
 
@@ -115,6 +117,15 @@ fi
 
 BINARY_SIZE=$(du -h "$BINARY_PATH" | cut -f1)
 echo -e "  ${GREEN}✅ Built: $BINARY_PATH ($BINARY_SIZE)${NC}"
+
+# Hard gate: the release string only exists in a binary compiled with the quic
+# feature, so a miss means the control plane was compiled out. Search the file
+# directly (a `strings | grep -q` pipeline would false-fail under pipefail when
+# grep exits before strings finishes).
+if ! grep -aqF "QUIC control plane listening" "$BINARY_PATH"; then
+    echo -e "${RED}❌ The built proxy has no QUIC control plane (built without --features quic). Refusing to deploy.${NC}" >&2
+    exit 1
+fi
 
 if [ "$BUILD_ONLY" = true ]; then
     echo -e "\n${GREEN}Build complete. Skipping deployment (--build-only).${NC}"
@@ -213,6 +224,16 @@ deploy_node() {
         local post_health
         post_health=$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'v{d.get(\"version\",\"?\")}, up {d.get(\"uptime_secs\",0)}s')" 2>/dev/null || echo "starting...")
         echo -e "${GREEN}✅ OK${NC}  [${pre_health}] → [${post_health}]"
+
+        # The health gate cannot see the control plane, so assert it here: a
+        # binary without quic still serves /health while rejecting all clients.
+        local control_up
+        control_up=$(ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${ip}" \
+            "ss -lunp 2>/dev/null | grep -q ':4433' && echo yes || echo no" 2>/dev/null || echo no)
+        if [ "$control_up" != "yes" ]; then
+            echo -e "${RED}❌ control plane (UDP 4433) is not listening after install${NC}"
+            return 1
+        fi
     else
         echo -e "${RED}❌ Install/health gate failed (rolled back)${NC}"
         return 1
