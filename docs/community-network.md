@@ -37,7 +37,7 @@ transitive reputation or Sybil resistance yet.
 
 ### The live network
 
-Five relays are live, covering the major game-server regions:
+Seven relays are live, covering the major game-server regions:
 
 | Region | Location |
 |--------|----------|
@@ -46,6 +46,8 @@ Five relays are live, covering the major game-server regions:
 | AP-Southeast | Singapore |
 | EU-Central | Frankfurt |
 | AP-Northeast | Tokyo |
+| AP-South | Mumbai |
+| EU-South | Madrid |
 
 The default registry is a **static signed file** served from GitHub Pages:
 
@@ -192,8 +194,9 @@ The signing logic (`sign_registry` / `verify_registry`) lives in
 
 The community network is **LIVE** as of v1.4.0:
 
-- ✅ **Five relays online:** Los Angeles (US-West), New Jersey (US-East),
-  Singapore (AP-Southeast), Frankfurt (EU-Central), and Tokyo (AP-Northeast).
+- ✅ **Seven relays online:** Los Angeles (US-West), New Jersey (US-East),
+  Singapore (AP-Southeast), Frankfurt (EU-Central), Tokyo (AP-Northeast),
+  Mumbai (AP-South), and Madrid (EU-South).
   All are community-hosted and sponsor-funded.
 - ✅ **Registry hosted and signed:** the default registry is a static signed
   JSON file at

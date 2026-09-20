@@ -204,6 +204,8 @@
     "eu-west-2": "eu",
     "eu-north": "eu",
     "eu-north-1": "eu",
+    "eu-south": "eu",
+    "eu-south-1": "eu",
     "ap-southeast": "apac",
     "ap-southeast-1": "apac",
     "ap-southeast-2": "apac",
@@ -244,6 +246,14 @@
     "relay-nrt": {
       "lat": 35.68,
       "lon": 139.69
+    },
+    "relay-bom-1": {
+      "lat": 19.08,
+      "lon": 72.88
+    },
+    "relay-mad-1": {
+      "lat": 40.42,
+      "lon": -3.7
     }
   }
 }

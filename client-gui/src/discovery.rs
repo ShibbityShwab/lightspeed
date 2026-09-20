@@ -145,6 +145,8 @@ pub fn friendly_label(node_id: &str) -> String {
         "sgp" => Some("Singapore"),
         "fra" => Some("Frankfurt"),
         "nrt" => Some("Tokyo"),
+        "bom" => Some("Mumbai"),
+        "mad" => Some("Madrid"),
         _ => None,
     };
     match city {
@@ -300,6 +302,8 @@ mod tests {
         assert_eq!(friendly_label("relay-sgp-1"), "SGP — Singapore");
         assert_eq!(friendly_label("relay-fra"), "FRA — Frankfurt");
         assert_eq!(friendly_label("relay-nrt"), "NRT — Tokyo");
+        assert_eq!(friendly_label("relay-bom-1"), "BOM — Mumbai");
+        assert_eq!(friendly_label("relay-mad-1"), "MAD — Madrid");
         assert_eq!(friendly_label("relay-xyz-9"), "relay-xyz-9");
     }
 

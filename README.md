@@ -74,7 +74,7 @@ LightSpeed now runs a **community relay network**: five sponsor-funded relays in
 
 ### Smart Routing
 - **Automatic proxy selection** - probes all configured proxies and picks the fastest
-- **Community relay auto-discovery** - finds the five community relays via the signed registry with zero config, or point at your own with `--registry <url>`
+- **Community relay auto-discovery** - finds the seven community relays via the signed registry with zero config, or point at your own with `--registry <url>`
 - **ML-based route prediction** - 11-feature Random Forest model learns from your connection patterns
 - **Multipath FEC** - XOR-based Forward Error Correction with ~25% bandwidth overhead (vs. ExitLag's 200%)
 - **TCP tunnel fallback** - client↔proxy leg over TCP (`--tcp`) for networks that block UDP
