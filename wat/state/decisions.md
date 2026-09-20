@@ -535,3 +535,16 @@ the client shipped on this branch reconnects within seconds.
 **Impact:** `infra/scripts/{relay-install,deploy,test_relay_install}.sh`, `.github/workflows/deploy.yml`, `CHANGELOG.md`, `Cargo.toml`/`Cargo.lock` (1.6.1).
 
 **Alternatives Considered:** a blunt `systemctl restart` fallback for the handoff failure was rejected in favour of fixing the permission mismatch, which also unblocks every future in-place update.
+
+## 2026-09-20 - GUI relay auto-select
+
+**Context:** GUI users landed on the first discovered relay (index 0) on first run, so they did not benefit from later-added relays and could be pinned to a far one.
+
+**Key decisions:**
+- The GUI races every discovered relay's `/health` endpoint concurrently, choosing the lowest round trip, and re-races on each discovery while disconnected. `discovery::health_endpoint()` derives port 8080 from the registry advert (which is the 4434 UDP data port) so probes hit the right port.
+- Auto-select is on by default and persisted as `auto_select`; picking a relay manually clears it, and a race result is ignored once the user is connected or has pinned a relay (`should_apply_race`).
+- Exposed as an "Auto (fastest)" checkbox in the Boost Server row.
+
+**Impact:** `client-gui/src/{app,config,discovery}.rs`; released as 1.6.2.
+
+**Alternatives Considered:** connecting to index 0 immediately and switching later was rejected because it drops a live connection; racing first only delays the initial connect by the probe time.

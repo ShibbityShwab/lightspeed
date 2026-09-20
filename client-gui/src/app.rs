@@ -129,6 +129,8 @@ pub struct LightSpeedApp<P: Platform> {
 
     // ── Proxy connection ─────────────────────────────────────────────────
     selected_proxy_idx: usize,
+    auto_select: bool,
+    relay_race: Option<Receiver<Option<SocketAddrV4>>>,
     show_proxy_manager: bool,
     manager_label_input: String,
     manager_addr_input: String,
@@ -197,6 +199,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     .position(|entry| entry.addr.to_string() == selected)
             })
             .unwrap_or(0);
+        let auto_select = saved.auto_select;
 
         let mut app = Self {
             engine,
@@ -204,6 +207,8 @@ impl<P: Platform> LightSpeedApp<P> {
             tray,
             quit,
             selected_proxy_idx,
+            auto_select,
+            relay_race: None,
             show_proxy_manager: false,
             manager_label_input: String::new(),
             manager_addr_input: String::new(),
@@ -284,9 +289,54 @@ impl<P: Platform> LightSpeedApp<P> {
         let config = GuiConfig {
             selected: self.selected_entry().map(|entry| entry.addr.to_string()),
             proxies: self.proxies.clone(),
+            auto_select: self.auto_select,
         };
         if let Err(e) = config::save(&paths::config_file(), &config) {
             tracing::warn!("Could not persist GUI config: {e}");
+        }
+    }
+
+    /// Race the discovered relays and connect to the fastest one.
+    fn start_relay_race(&mut self) {
+        let addrs: Vec<SocketAddrV4> = self
+            .proxies
+            .iter()
+            .map(|entry| discovery::health_endpoint(entry.addr))
+            .collect();
+        if addrs.is_empty() {
+            return;
+        }
+        tracing::info!("Racing {} relays for the lowest latency", addrs.len());
+        self.relay_race = Some(discovery::spawn_relay_race(addrs));
+    }
+
+    /// Apply a finished latency race: connect to the winner when auto-select is
+    /// still on and the user has not connected or pinned a relay meanwhile.
+    fn poll_relay_race(&mut self) {
+        let winner = match &self.relay_race {
+            Some(rx) => match rx.try_recv() {
+                Ok(winner) => winner,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+            },
+            None => return,
+        };
+        self.relay_race = None;
+
+        if !should_apply_race(self.auto_select, self.status.connected) {
+            return;
+        }
+        let Some(addr) = winner else {
+            tracing::warn!("Relay latency race found no reachable relay");
+            return;
+        };
+        if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
+            if idx != self.selected_proxy_idx {
+                tracing::info!("Auto-selected the fastest relay {addr}");
+                self.selected_proxy_idx = idx;
+            }
+            self.connect_selected();
+            self.persist_config();
         }
     }
 
@@ -324,7 +374,9 @@ impl<P: Platform> LightSpeedApp<P> {
             DiscoveryOutcome::Found(relays) => {
                 tracing::info!("Relay discovery found {} relays", relays.len());
                 self.persist_config();
-                if !self.status.connected && !self.proxies.is_empty() {
+                if should_race(self.auto_select, self.status.connected, self.proxies.len()) {
+                    self.start_relay_race();
+                } else if !self.status.connected && !self.proxies.is_empty() {
                     self.connect_selected();
                 }
             }
@@ -355,7 +407,7 @@ impl<P: Platform> LightSpeedApp<P> {
             self.health = None;
             return;
         }
-        let addr = SocketAddrV4::new(*entry.addr.ip(), discovery::HEALTH_PORT);
+        let addr = discovery::health_endpoint(entry.addr);
         let needs_probe = match &self.health {
             Some(probe) => probe.addr != addr,
             None => true,
@@ -445,6 +497,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // Refresh engine snapshot and background relay state.
         self.status = self.engine.lock().unwrap().snapshot();
         self.poll_discovery();
+        self.poll_relay_race();
         self.poll_health();
 
         // Collect a finished update check from the background thread.
@@ -549,8 +602,23 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         btn.on_hover_text(format!("{}", entry.addr));
                     }
                     if self.selected_proxy_idx != prev {
+                        self.auto_select = false;
                         self.connect_selected();
                         self.persist_config();
+                    }
+                }
+                if !self.proxies.is_empty() {
+                    let auto = ui
+                        .checkbox(&mut self.auto_select, "Auto (fastest)")
+                        .on_hover_text(
+                            "Connect to the relay with the lowest latency. \
+                             Newly discovered relays are considered too.",
+                        );
+                    if auto.changed() {
+                        self.persist_config();
+                        if self.auto_select && !self.status.connected {
+                            self.start_relay_race();
+                        }
                     }
                 }
                 if ui.button("⚙ Manage").clicked() {
@@ -1639,8 +1707,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             || self.status.interceptor_active
         {
             Duration::from_millis(500) // 2 Hz for live counters
-        } else if matches!(self.discovery, DiscoveryState::InFlight(_)) {
-            Duration::from_millis(200) // keep the discovery spinner moving
+        } else if matches!(self.discovery, DiscoveryState::InFlight(_)) || self.relay_race.is_some()
+        {
+            Duration::from_millis(200) // keep the spinner and latency race moving
         } else {
             Duration::from_secs(1)
         };
@@ -1727,6 +1796,18 @@ pub enum CloseDecision {
     Exit,
 }
 
+/// Whether discovery should start a latency race instead of connecting to the
+/// first relay: only when auto-select is on, disconnected, and relays exist.
+pub fn should_race(auto_select: bool, connected: bool, proxy_count: usize) -> bool {
+    auto_select && !connected && proxy_count > 0
+}
+
+/// Whether a finished latency race may still steer the selection. A relay the
+/// user pinned or a connection they started meanwhile wins.
+pub fn should_apply_race(auto_select: bool, connected: bool) -> bool {
+    auto_select && !connected
+}
+
 pub fn close_decision(
     has_system_tray: bool,
     quit_requested: bool,
@@ -1804,7 +1885,10 @@ fn parse_custom_port_range(s: &str) -> Option<(u16, u16)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_discovery_result, close_decision, games, CloseDecision};
+    use super::{
+        apply_discovery_result, close_decision, games, should_apply_race, should_race,
+        CloseDecision,
+    };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
     use std::net::SocketAddrV4;
@@ -1852,6 +1936,21 @@ mod tests {
                 entry.key
             );
         }
+    }
+
+    #[test]
+    fn auto_select_races_only_when_disconnected_with_relays() {
+        assert!(should_race(true, false, 2));
+        assert!(!should_race(true, true, 2), "already connected");
+        assert!(!should_race(true, false, 0), "no relays to race");
+        assert!(!should_race(false, false, 2), "user pinned a relay");
+    }
+
+    #[test]
+    fn a_pinned_relay_or_live_connection_beats_a_late_race_result() {
+        assert!(should_apply_race(true, false));
+        assert!(!should_apply_race(false, false), "user pinned a relay");
+        assert!(!should_apply_race(true, true), "connected meanwhile");
     }
 
     #[test]

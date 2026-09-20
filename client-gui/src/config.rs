@@ -50,11 +50,24 @@ impl ProxyEntry {
 }
 
 /// Persisted GUI state.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuiConfig {
     /// Selected relay address (`"ip:port"`), if any.
     pub selected: Option<String>,
     pub proxies: Vec<ProxyEntry>,
+    /// When true, the GUI connects to the lowest-latency relay it can reach and
+    /// reconsiders on each discovery, so newly added relays are picked up.
+    pub auto_select: bool,
+}
+
+impl Default for GuiConfig {
+    fn default() -> Self {
+        Self {
+            selected: None,
+            proxies: Vec::new(),
+            auto_select: true,
+        }
+    }
 }
 
 /// Load the config at `path`, falling back to defaults on any error.
@@ -83,6 +96,10 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         .get("selected")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let auto_select = table
+        .get("auto_select")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
 
     let mut proxies = Vec::new();
     if let Some(items) = table.get("proxies").and_then(Value::as_array) {
@@ -113,7 +130,11 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
             });
         }
     }
-    Ok(GuiConfig { selected, proxies })
+    Ok(GuiConfig {
+        selected,
+        proxies,
+        auto_select,
+    })
 }
 
 /// Serialize a config to TOML.
@@ -122,6 +143,7 @@ pub fn render(config: &GuiConfig) -> String {
     if let Some(selected) = &config.selected {
         table.insert("selected".into(), Value::String(selected.clone()));
     }
+    table.insert("auto_select".into(), Value::Boolean(config.auto_select));
     let entries: Vec<Value> = config
         .proxies
         .iter()
@@ -189,6 +211,7 @@ mod tests {
                 ),
                 ProxyEntry::custom(addr("127.0.0.1:4434"), "Local proxy"),
             ],
+            auto_select: true,
         }
     }
 
@@ -255,6 +278,17 @@ mod tests {
         reset(&path).expect("reset");
         assert!(!path.exists());
         reset(&path).expect("reset again");
+    }
+
+    #[test]
+    fn config_auto_select_defaults_to_true_and_parses_false() {
+        assert!(
+            parse("selected = \"1.2.3.4:4434\"\n")
+                .expect("parse")
+                .auto_select
+        );
+        assert!(!parse("auto_select = false\n").expect("parse").auto_select);
+        assert!(parse("auto_select = true\n").expect("parse").auto_select);
     }
 
     #[test]
