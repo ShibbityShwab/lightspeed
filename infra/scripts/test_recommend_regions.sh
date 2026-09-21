@@ -19,6 +19,8 @@
 #  (10) catalog integrity: every referenced region key exists and every
 #       coordinate is in range in infra/geo/regions.json and
 #       infra/geo/candidates.json
+#  (11) a lone candidate has a null margin and cannot fire the ADD gate
+#  (12) a large accumulated history still yields a real window (ARG_MAX)
 #
 # Tests (3)-(7) use a synthetic three-region catalog under $TMP with
 # fully controlled geometry; tests (1), (2), (8), (9), (10) exercise
@@ -351,6 +353,18 @@ assert_rc0 $? "(11) single-candidate run exits 0"
 assert_jq "$OUT11" '.ranking | length == 1' "(11) exactly one candidate is ranked"
 assert_jq "$OUT11" '.ranking[0].margin == null' "(11) a lone candidate has no margin, not a fabricated one"
 assert_jq "$OUT11" '.recommendation.action == "NONE"' "(11) a lone candidate cannot fire the margin gate"
+
+# ── (12) a large accumulated history does not fall back ──────
+# Regression: the recommender passed the whole history through --argjson, so a
+# real accumulated history blew past ARG_MAX and silently emitted the
+# INSUFFICIENT_DATA document (window snapshots 0) while small fixtures passed.
+LARGE="$TMP/large-history.json"
+jq -cn '{version:1,generated_at:0,snapshots:[range(0;60) | {t:(1700000000 + .*3600),relay_count:2,healthy_count:2,interval:{sessions_created:5},totals:{sessions_created:5},per_relay:{"relay-a":{reachable:true,reset:false,geo:{"na-eu":5}},"relay-b":{reachable:true,reset:false,geo:{"eu-eu":4}}}}]}' > "$LARGE"
+OUT12="$TMP/out12.json"
+run_rec "$LARGE" missing "$REGISTRY_REAL" "$GEO_REAL" "$OUT12"
+assert_rc0 $? "(12) large history exits 0"
+assert_jq "$OUT12" '.notes | test("fatal parse failure") | not' "(12) large history does not fall back to the minimal document"
+assert_jq "$OUT12" '.window.snapshots > 0' "(12) large history yields a non-empty window"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
