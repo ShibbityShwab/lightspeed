@@ -333,6 +333,37 @@ jobs:
           git commit -m "chore(homebrew): bump to v${VERSION}"
           git push origin HEAD:master
 
+  # The Chocolatey package pins a release URL and sha256 inside the install
+  # script, so each tag must move dist/chocolatey to the new version and sums.
+  # Committing it here keeps the next `choco push` current without a manual step.
+  bump-chocolatey:
+    needs:
+      - plan
+      - host
+    if: ${{ always() && github.event_name == 'push' && needs.host.result == 'success' }}
+    permissions:
+      contents: write
+    runs-on: "ubuntu-22.04"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+      - name: Bump the Chocolatey package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash infra/scripts/bump-chocolatey.sh "$VERSION"
+          if git diff --quiet -- dist/chocolatey; then
+            echo "package already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist/chocolatey
+          git commit -m "chore(chocolatey): bump to v${VERSION}"
+          git push origin HEAD:master
+
   announce:
     needs:
       - plan
