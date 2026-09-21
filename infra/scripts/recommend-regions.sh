@@ -510,17 +510,30 @@ def streak_of($runs; $top_id):
   }
 '
 
+# Inputs go through files, not --argjson: the accumulated history eventually
+# exceeds ARG_MAX ("Argument list too long"), which silently produced the
+# INSUFFICIENT_DATA fallback on real data while the small test fixtures passed.
+tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t lightspeed-rec)"
+printf '%s' "$hist_json" > "$tmpdir/hist.json"
+printf '%s' "$geo_json" > "$tmpdir/geo.json"
+printf '%s' "$candidates_json" > "$tmpdir/cands.json"
+printf '%s' "$nodes_json" > "$tmpdir/nodes.json"
+printf '%s' "$prev_json" > "$tmpdir/prev.json"
+
+PROLOGUE='($histf[0]) as $hist | ($geof[0]) as $geo | ($candsf[0]) as $cands | ($nodesf[0]) as $nodes | ($prevf[0]) as $prev | '
+
 result="$(jq -cn \
-    --argjson hist "$hist_json" \
-    --argjson geo "$geo_json" \
-    --argjson cands "$candidates_json" \
-    --argjson nodes "$nodes_json" \
+    --slurpfile histf "$tmpdir/hist.json" \
+    --slurpfile geof "$tmpdir/geo.json" \
+    --slurpfile candsf "$tmpdir/cands.json" \
+    --slurpfile nodesf "$tmpdir/nodes.json" \
+    --slurpfile prevf "$tmpdir/prev.json" \
     --argjson params "$params_json" \
-    --argjson prev "$prev_json" \
     --argjson now "$NOW" \
     --arg geo_dir "$GEO_DIR" \
     --arg history_path "${HISTORY_PATH:-<none>}" \
-    "$MAIN_JQ" 2>/dev/null || true)"
+    "${PROLOGUE}${MAIN_JQ}" 2>/dev/null || true)"
+rm -rf "$tmpdir"
 
 [ -n "$result" ] || result="$minimal_json"
 write_json "$result" "$minimal_json"
