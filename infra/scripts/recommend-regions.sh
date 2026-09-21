@@ -46,7 +46,9 @@
 #      by exactly one relay when the candidate is "within 10 percent".
 #   8. Distances are haversine km * 0.01 = approximate RTT ms.
 #   9. Ranking is score desc, candidate id asc. margin is the relative
-#      lead of the top candidate over the second.
+#      lead of the top candidate over the best candidate in a *different*
+#      region (candidates sharing the leader's region are alternatives,
+#      not rivals, so they must not zero out the margin).
 #  10. stability.runs keeps the last 10 runs; streak counts trailing
 #      runs with the same top candidate.
 #  11. ADD needs an unserved leader region plus either stability or a
@@ -410,7 +412,9 @@ def streak_of($runs; $top_id):
    ]) as $ranking0
 | ($ranking0 | sort_by([(-.score), .candidate_id])) as $ranking
 | (if ($ranking | length) > 0 then $ranking[0] else null end) as $top
-| (if ($ranking | length) > 1 then $ranking[1] else null end) as $second
+| (if $top == null then null
+   else (([ $ranking[] | select(.region != $top.region) ] | .[0]) // null)
+   end) as $second
 | (if $top == null or $second == null then null
    else (($top.score - $second.score)
          / (if $second.score < 0.001 then 0.001 else $second.score end))

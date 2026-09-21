@@ -164,7 +164,7 @@ SYNTH_NODES='[{"node_id":"relay-hub-a","region":"hub","data_addr":"10.0.0.1:4434
               {"node_id":"relay-far","region":"far","data_addr":"10.0.0.3:4434"}]'
 CAND_EAST='{"id":"cand-east","provider":"test","region":"east","lat":0,"lon":60,"free_tier":true,"viable":true,"note":""}'
 CAND_WEST='{"id":"cand-west","provider":"test","region":"west","lat":0,"lon":-60,"free_tier":true,"viable":true,"note":""}'
-CAND_EAST2='{"id":"cand-east2","provider":"test","region":"east","lat":0,"lon":63.063861606035466,"free_tier":true,"viable":true,"note":""}'
+CAND_RIVAL='{"id":"cand-rival","provider":"test","region":"west","lat":0,"lon":63.063861606035466,"free_tier":true,"viable":true,"note":""}'
 CAND_HUB='{"id":"cand-hub","provider":"test","region":"hub","lat":0,"lon":20,"free_tier":true,"viable":true,"note":""}'
 CAND_NEAR='{"id":"cand-near","provider":"test","region":"hub","lat":30,"lon":0.2,"free_tier":true,"viable":true,"note":""}'
 
@@ -179,7 +179,7 @@ write_synth_candidates "$GEO_ADD" "[$CAND_EAST,$CAND_WEST]"
 # geo-leader5: cand-east leads cand-east2 by ~5% on cell east->east
 GEO_LEAD="$TMP/geo-leader5"
 write_synth_regions "$GEO_LEAD"
-write_synth_candidates "$GEO_LEAD" "[$CAND_EAST,$CAND_EAST2]"
+write_synth_candidates "$GEO_LEAD" "[$CAND_EAST,$CAND_RIVAL]"
 
 # geo-move: cand-hub improves the served hub->hub cell; cand-near is a
 # near-duplicate of relay-hub-a and must be rejected

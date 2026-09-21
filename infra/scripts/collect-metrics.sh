@@ -328,13 +328,22 @@ if ! printf '%s' "$current_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
 fi
 
 # ── Compute deltas, totals, and the bounded snapshot list ────
+# prev and current are large (accumulated history plus live metrics), so they
+# travel as files rather than --argjson: past ARG_MAX the jq run produced
+# nothing and the collector silently rewrote the previous history, freezing the
+# snapshot list on real data while the small test fixtures passed.
+ctmp="$(mktemp -d 2>/dev/null || mktemp -d -t lightspeed-collect)"
+printf '%s' "$prev" > "$ctmp/prev.json"
+printf '%s' "$current_json" > "$ctmp/current.json"
+DPROLOGUE='($prevf[0]) as $prev | ($curf[0]) as $current | '
 result="$(jq -c \
-    --argjson prev "$prev" \
-    --argjson current "$current_json" \
+    --slurpfile prevf "$ctmp/prev.json" \
+    --slurpfile curf "$ctmp/current.json" \
     --argjson counters "$COUNTERS" \
     --argjson max "$MAX_SNAPSHOTS" \
     --argjson now "$NOW" \
-    "$DELTA_JQ" <<<'null' 2>/dev/null || true)"
+    "${DPROLOGUE}${DELTA_JQ}" <<<'null' 2>/dev/null || true)"
+rm -rf "$ctmp"
 
 if [ -z "$result" ]; then
     result="$prev"
