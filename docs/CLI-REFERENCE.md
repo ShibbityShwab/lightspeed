@@ -1,6 +1,6 @@
 # CLI Reference
 
-> `lightspeed` — Reduce your ping. Free. Forever.
+> `lightspeed` - Reduce your ping. Free. Forever.
 
 ## Quick Start
 
@@ -15,7 +15,7 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | Flag | Description |
 |------|-------------|
 | `-c, --config <PATH>` | Path to config file (default: `lightspeed.toml`) |
-| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot` |
+| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot`, `deadbydaylight`, `bodycam`, `csgo`, `roblox`, `zomboid` (run `--list-games` for the full list) |
 | `-p, --proxy <ADDR>` | Proxy server address (`host:port`). Auto-selects from config if omitted |
 | `-v, --verbose` | Enable verbose logging |
 
@@ -88,6 +88,16 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | `--benchmark` | Run latency benchmark (direct vs LightSpeed routing) |
 | `--target <ADDR>` | Target server for `--benchmark` (`ip:port`) |
 | `--scan-processes` | Scan for running game processes |
+| `--registry <URL>` | Community registry URL (signed node list) for relay discovery; with `--probe-proxies` its nodes are probed too |
+
+### Telemetry
+
+| Flag | Description |
+|------|-------------|
+| `--telemetry` | Force telemetry on even if the config disables it (it is on by default) |
+| `--no-telemetry` | Disable telemetry (hard override, always wins) |
+
+Telemetry is **on by default** since v1.6.5. It sends anonymous aggregate metrics (p50/p95/p99 RTT, jitter, FEC counters, and the direct/relayed/saved latency numbers) to your own relay every 15 minutes. No IP address, identifier, or packet content is sent, and cells with fewer than 3 reports are suppressed. Disable it with `--no-telemetry` or `telemetry = false` under `[general]` in `lightspeed.toml`. See [Privacy](privacy.md).
 
 ## Examples
 
@@ -144,6 +154,6 @@ See [Deploy Proxy](deploy-proxy.md) for the full reference.
 
 ## See Also
 
-- [User Guide](user-guide.md) — step-by-step setup
-- [Troubleshooting](troubleshooting.md) — common issues
-- [Deploy Proxy](deploy-proxy.md) — run your own proxy
+- [User Guide](user-guide.md) - step-by-step setup
+- [Troubleshooting](troubleshooting.md) - common issues
+- [Deploy Proxy](deploy-proxy.md) - run your own proxy

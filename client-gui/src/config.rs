@@ -3,7 +3,7 @@
 //! Stores the proxy/relay list and the selected relay. Loading is tolerant: a
 //! missing or malformed file yields defaults instead of an error, and the file
 //! is only ever written by an explicit user action or a successful discovery
-//! refresh — never on startup with placeholder data.
+//! refresh - never on startup with placeholder data.
 
 use std::net::SocketAddrV4;
 use std::path::Path;
@@ -220,7 +220,7 @@ mod tests {
                 ProxyEntry::discovered(
                     "relay-lax-1",
                     addr("207.246.106.36:4434"),
-                    "LAX — Los Angeles",
+                    "LAX - Los Angeles",
                 ),
                 ProxyEntry::custom(addr("127.0.0.1:4434"), "Local proxy"),
             ],
@@ -333,7 +333,7 @@ mod tests {
         let discovered = vec![ProxyEntry::discovered(
             "relay-lax-1",
             addr("207.246.106.36:4434"),
-            "LAX — Los Angeles",
+            "LAX - Los Angeles",
         )];
         let merged = merge_discovered(&existing, discovered);
         assert_eq!(merged.len(), 2);

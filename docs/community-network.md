@@ -2,7 +2,7 @@
 
 > How to run a relay, publish it, and let clients discover it, end to end.
 
-LightSpeed runs a **community relay network**: five sponsor-funded relays,
+LightSpeed runs a **community relay network**: eight sponsor-funded relays,
 hosted by the community, that any client can use with zero configuration. You
 can also self-host your own relay. This document ties the whole flow together
 (**deploy → register → discover**) so a new relay operator can onboard in one
@@ -193,7 +193,7 @@ The signing logic (`sign_registry` / `verify_registry`) lives in
 
 ## Current status & known gaps
 
-The community network is **LIVE** as of v1.4.0:
+The community network is **LIVE** (since v1.4.0; eight relays as of v1.6.5):
 
 - ✅ **Eight relays online:** Los Angeles (US-West), New Jersey (US-East),
   Singapore (AP-Southeast), Frankfurt (EU-Central), Tokyo (AP-Northeast),

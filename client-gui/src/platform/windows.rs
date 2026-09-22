@@ -1,4 +1,4 @@
-//! # LightSpeed GUI — Windows Platform
+//! # LightSpeed GUI - Windows Platform
 //!
 //! Real tray-icon backend using `tray_icon`, admin check via `net session`,
 //! capture check via `sc query npcap`, and Rust port detection via
@@ -27,7 +27,7 @@ static TRAY_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
 /// SAFETY: `TrayIcon` uses `Rc<RefCell<…>>` internally on Windows, which is
 /// SAFETY: `WindowsTray` is only ever created and accessed on the main
-/// (egui) thread — the same thread that runs the Windows message loop.
+/// (egui) thread - the same thread that runs the Windows message loop.
 /// It is never sent across threads, so `Rc<RefCell<…>>` internals from
 /// the `tray_icon` crate cannot cause data races in practice.
 // SAFETY: WindowsTray contains winapi HANDLEs which are Send-safe (HANDLEs
@@ -68,7 +68,7 @@ impl WindowsTray {
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&item_quit);
 
-        // Start gray (disconnected) — will update on first frame via tray state machine.
+        // Start gray (disconnected) - will update on first frame via tray state machine.
         let Some(icon) = lightning_icon(160, 160, 160) else {
             tracing::warn!("Tray icon image unavailable; continuing without a system tray");
             return None;

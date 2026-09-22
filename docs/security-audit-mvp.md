@@ -3,9 +3,9 @@
 > **Date:** 2026-02-21  
 > **Auditor:** SecOps Agent  
 > **Scope:** All code from WF-001 Steps 1-4 (tunnel engine, proxy, QUIC control plane)  
-> **Status:** ✅ PASS — All Critical/High findings mitigated
+> **Status:** ✅ PASS - All Critical/High findings mitigated
 
-> **Update (2026-08-18):** This audit is from the MVP (2026-02-21). In shipped releases, S-02 and S-04 are now fully closed — `require_auth` defaults to **`true`** (v1.1.0) and the client registers over QUIC then stamps its session token into every data-plane packet (v1.1.0). v1.2.0 added a TCP tunnel leg and configurable ports (see §1 and §4).
+> **Update (2026-08-18):** This audit is from the MVP (2026-02-21). In shipped releases, S-02 and S-04 are now fully closed - `require_auth` defaults to **`true`** (v1.1.0) and the client registers over QUIC then stamps its session token into every data-plane packet (v1.1.0). v1.2.0 added a TCP tunnel leg and configurable ports (see §1 and §4).
 
 ---
 
@@ -14,10 +14,10 @@
 ### Assets
 | Asset | Description | Sensitivity |
 |-------|-------------|-------------|
-| Proxy relay capacity | UDP relay bandwidth & compute | High — can be weaponized |
-| Client game traffic | Player's game packets in transit | Medium — cleartext UDP |
-| Control plane session | QUIC connection state | Medium — session hijacking |
-| Proxy infrastructure | Vultr cloud instances (vc2-1c-1gb) | High — abuse = bandwidth bill |
+| Proxy relay capacity | UDP relay bandwidth & compute | High - can be weaponized |
+| Client game traffic | Player's game packets in transit | Medium - cleartext UDP |
+| Control plane session | QUIC connection state | Medium - session hijacking |
+| Proxy infrastructure | Vultr cloud instances (vc2-1c-1gb) | High - abuse = bandwidth bill |
 
 ### Threat Actors
 | Actor | Capability | Motivation |
@@ -43,7 +43,7 @@ Internet → [QUIC Control :4433] → Proxy
 
 **After:**
 - ✅ `is_public_ipv4()` blocks RFC1918, loopback, link-local, multicast, broadcast, documentation, and shared address ranges
-- ✅ Integrated into `AbuseDetector::record_inbound()` — checked per-packet before forwarding
+- ✅ Integrated into `AbuseDetector::record_inbound()` - checked per-packet before forwarding
 - ✅ 14 test assertions cover all blocked ranges + edge cases
 
 **Residual Risk:** None for private IPs. Public IP abuse mitigated by rate limiting + abuse detection.

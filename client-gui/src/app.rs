@@ -1,4 +1,4 @@
-//! # LightSpeed GUI — App
+//! # LightSpeed GUI - App
 //!
 //! Main egui application state, UI layout, and pure helper functions.
 //! Wraps [`LightSpeedEngine`] in a platform-generic `<P: Platform>` struct
@@ -118,7 +118,7 @@ struct HealthProbe {
 /// Platform-generic egui application for the LightSpeed status window.
 ///
 /// Type parameter `P` selects the platform backend (Windows tray or Linux
-/// stub).  Most of the UI logic is platform-independent — only the tray
+/// stub).  Most of the UI logic is platform-independent - only the tray
 /// interaction, font loading, port detection, and admin checks delegate to
 /// `P`.
 pub struct LightSpeedApp<P: Platform> {
@@ -476,7 +476,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             close_requested,
         ) {
             CloseDecision::Exit => {
-                tracing::info!("Quit requested — stopping engine");
+                tracing::info!("Quit requested - stopping engine");
                 self.shutdown_engine();
                 std::process::exit(0);
             }
@@ -639,7 +639,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     ui.horizontal(|ui| {
                         ui.colored_label(
                             egui::Color32::from_rgb(255, 190, 60),
-                            "⚠ Relay refresh failed — using the saved list",
+                            "⚠ Relay refresh failed - using the saved list",
                         )
                         .on_hover_text(err);
                         if ui.small_button("Retry").clicked() {
@@ -772,7 +772,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         self.status.interceptor_platform
                     ));
                     if !self.status.interceptor_server.is_empty() {
-                        ui.label(format!(" — {}", self.status.interceptor_server))
+                        ui.label(format!(" - {}", self.status.interceptor_server))
                             .on_hover_text("The game server your packets are being routed through the Boost Server to reach.");
                     }
                 });
@@ -791,7 +791,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     ui.monospace(format!("{:>8}", self.status.interceptor_from_proxy));
                     ui.separator();
                     ui.label("Delivered:")
-                        .on_hover_text("Responses injected back into your game — your game sees these as coming directly from the game server.");
+                        .on_hover_text("Responses injected back into your game - your game sees these as coming directly from the game server.");
                     ui.monospace(format!("{:>8}", self.status.interceptor_injected));
                 });
                 if self.status.interceptor_errors > 0 {
@@ -801,7 +801,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     )
                     .on_hover_ui(|ui| {
                         ui.label("Packets that couldn't be delivered back to your game.\n\
-                                  Usually a firewall issue — see Troubleshooting.");
+                                  Usually a firewall issue - see Troubleshooting.");
                         ui.hyperlink_to("📖 Fix Drops",
                             "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#packets-sent-climbing-packets-delivered-0");
                     });
@@ -809,7 +809,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
                 ui.add_space(4.0);
                 if self.status.interceptor_intercepted == 0 {
-                    // No packets yet — waiting for game traffic.
+                    // No packets yet - waiting for game traffic.
                     let elapsed = self.boost_start
                         .map(|t| t.elapsed().as_secs())
                         .unwrap_or(0);
@@ -831,7 +831,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                 );
                             });
                     } else {
-                        // 15 s+ with no packets → likely port mismatch — amber warning.
+                        // 15 s+ with no packets → likely port mismatch - amber warning.
                         let (lo, hi) = self.selected_game_ports();
                         egui::Frame::new()
                             .fill(egui::Color32::from_rgb(55, 40, 8))
@@ -840,10 +840,10 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             .show(ui, |ui: &mut egui::Ui| {
                                 ui.colored_label(
                                     egui::Color32::from_rgb(255, 190, 60),
-                                    "⚠ No game traffic seen — possible port mismatch",
+                                    "⚠ No game traffic seen - possible port mismatch",
                                 );
                                 ui.weak(format!(
-                                    "Watching ports {lo}–{hi}. Your server may be on a \
+                                    "Watching ports {lo}-{hi}. Your server may be on a \
                                      different port.\n\
                                      Stop Boost, open ▶ Advanced, set a Custom Port Range, \
                                      then click BOOST MY GAME again.",
@@ -862,7 +862,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         .show(ui, |ui: &mut egui::Ui| {
                             ui.colored_label(
                                 egui::Color32::from_rgb(150, 255, 150),
-                                "✅ Boost active — play normally, your game is fully optimised.",
+                                "✅ Boost active - play normally, your game is fully optimised.",
                             );
                             ui.weak(
                                 "Your in-game ping now reflects the Boost Server route. \
@@ -900,7 +900,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         "⚡ BOOST ENGAGED",
                     );
                     if !self.status.windivert_server.is_empty() {
-                        ui.label(format!(" — {}", self.status.windivert_server))
+                        ui.label(format!(" - {}", self.status.windivert_server))
                             .on_hover_text("The game server your packets are being routed through the Boost Server to reach.");
                     }
                 });
@@ -919,7 +919,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     ui.monospace(format!("{:>8}", self.status.windivert_from_proxy));
                     ui.separator();
                     ui.label("Delivered:")
-                        .on_hover_text("Responses injected back into your game — your game sees these as coming directly from the game server.");
+                        .on_hover_text("Responses injected back into your game - your game sees these as coming directly from the game server.");
                     ui.monospace(format!("{:>8}", self.status.windivert_injected));
                 });
                 if self.status.windivert_errors > 0 {
@@ -929,7 +929,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     )
                     .on_hover_ui(|ui| {
                         ui.label("Packet that couldn't be delivered back to your game.\n\
-                                  Usually a firewall issue — see Troubleshooting.");
+                                  Usually a firewall issue - see Troubleshooting.");
                         ui.hyperlink_to("📖 Fix Drops",
                             "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#packets-sent-climbing-packets-delivered-0");
                     });
@@ -937,7 +937,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
                 ui.add_space(4.0);
                 if self.status.windivert_intercepted == 0 {
-                    // No packets yet — waiting for game traffic.
+                    // No packets yet - waiting for game traffic.
                     let elapsed = self.boost_start
                         .map(|t| t.elapsed().as_secs())
                         .unwrap_or(0);
@@ -959,7 +959,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                 );
                             });
                     } else {
-                        // 15 s+ with no packets → likely port mismatch — amber warning.
+                        // 15 s+ with no packets → likely port mismatch - amber warning.
                         let (lo, hi) = self.selected_game_ports();
                         egui::Frame::new()
                             .fill(egui::Color32::from_rgb(55, 40, 8))
@@ -968,10 +968,10 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             .show(ui, |ui: &mut egui::Ui| {
                                 ui.colored_label(
                                     egui::Color32::from_rgb(255, 190, 60),
-                                    "⚠ No game traffic seen — possible port mismatch",
+                                    "⚠ No game traffic seen - possible port mismatch",
                                 );
                                 ui.weak(format!(
-                                    "Watching ports {lo}–{hi}. Your server may be on a \
+                                    "Watching ports {lo}-{hi}. Your server may be on a \
                                      different port.\n\
                                      Stop Boost, open ▶ Advanced, set a Custom Port Range, \
                                      then click BOOST MY GAME again.",
@@ -990,7 +990,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         .show(ui, |ui: &mut egui::Ui| {
                             ui.colored_label(
                                 egui::Color32::from_rgb(150, 255, 150),
-                                "✅ Boost active — play normally, your game is fully optimised.",
+                                "✅ Boost active - play normally, your game is fully optimised.",
                             );
                             ui.weak(
                                 "Your in-game ping now reflects the Boost Server route. \
@@ -1028,7 +1028,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         "⚡ BOOST ENGAGED",
                     );
                     ui.label(format!(
-                        " — {} ({})",
+                        " - {} ({})",
                         self.status.capture_game, self.status.capture_interface,
                     ));
                 });
@@ -1056,7 +1056,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         egui::Color32::from_rgb(220, 80, 80),
                         format!("⚠ Drops: {}", self.status.capture_errors),
                     )
-                    .on_hover_text("Packets that couldn't be delivered — check your firewall settings.");
+                    .on_hover_text("Packets that couldn't be delivered - check your firewall settings.");
                 }
                 if self.status.capture_fec && self.status.capture_fec_recovered > 0 {
                     ui.label(format!(
@@ -1079,7 +1079,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                 "⚠ No game traffic detected yet.",
                             );
                             ui.weak("• Make sure your game is connected to a server (not just the menu).");
-                            ui.weak("• If using a non-standard port, use Advanced — set server manually.");
+                            ui.weak("• If using a non-standard port, use Advanced - set server manually.");
                         });
                 }
 
@@ -1091,7 +1091,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     .show(ui, |ui: &mut egui::Ui| {
                         ui.colored_label(
                             egui::Color32::from_rgb(150, 255, 150),
-                            "✅ Boost active — just play normally.",
+                            "✅ Boost active - just play normally.",
                         );
                         ui.weak("LightSpeed is silently rerouting your game traffic.");
                     });
@@ -1121,7 +1121,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 ui.horizontal(|ui| {
                     ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "⚡ BOOST ENGAGED (manual)");
                     ui.label(format!(
-                        " — {} -> port {}",
+                        " - {} -> port {}",
                         self.status.redirect_game, self.status.redirect_local_port,
                     ));
                 });
@@ -1148,7 +1148,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
                 if self.status.redirect_fec {
                     ui.label(format!(
-                        "🛡 Reliability Shield — parity: {}  recovered: {}",
+                        "🛡 Reliability Shield - parity: {}  recovered: {}",
                         self.status.redirect_fec_parity, self.status.redirect_fec_recovered,
                     ))
                     .on_hover_ui(|ui| {
@@ -1202,7 +1202,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     });
                 } else {
                     ui.horizontal(|ui| {
-                        ui.weak("No game running — select your game and click Boost")
+                        ui.weak("No game running - select your game and click Boost")
                             .on_hover_text(
                                 "Start your game and connect to a server, then click \
                                  BOOST MY GAME. Or select your game manually below.",
@@ -1242,12 +1242,12 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 ui.horizontal(|ui| {
                     ui.checkbox(
                         &mut self.fec_enabled,
-                        "🛡 Reliability Shield — recover lost packets (+25% data)",
+                        "🛡 Reliability Shield - recover lost packets (+25% data)",
                     )
                     .on_hover_ui(|ui| {
                         ui.label(
                             "Reliability Shield sends extra repair data so the Boost Server \
-                             can reconstruct any packets your connection drops — no more \
+                             can reconstruct any packets your connection drops - no more \
                              rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
                         );
                         ui.hyperlink_to(
@@ -1299,7 +1299,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                     ui.label(
                                         "Deep Boost intercepts game traffic at the OS level, \
                                          giving the lowest possible ping improvement. Your game \
-                                         will show the Boost Server ping as its connection ping — \
+                                         will show the Boost Server ping as its connection ping - \
                                          this is normal.",
                                     );
                                     ui.hyperlink_to(
@@ -1314,7 +1314,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             );
                         });
                 } else {
-                    // Not admin — show restart nudge inline
+                    // Not admin - show restart nudge inline
                     egui::Frame::new()
                         .fill(egui::Color32::from_rgb(55, 40, 10))
                         .corner_radius(4.0)
@@ -1420,9 +1420,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
                 // ── Advanced expander (manual server IP fallback) ─────────
                 let adv_label = if self.show_advanced {
-                    "v Advanced — set server manually"
+                    "v Advanced - set server manually"
                 } else {
-                    "▶ Advanced — set server manually"
+                    "▶ Advanced - set server manually"
                 };
                 if ui
                     .small_button(adv_label)
@@ -1468,7 +1468,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                              Format: lo-hi  (e.g. 28015-28999)  or a single port."
                                         );
                                         ui.hyperlink_to(
-                                            "📖 Port not detected — fix guide",
+                                            "📖 Port not detected - fix guide",
                                             "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
                                         );
                                     });
@@ -1882,7 +1882,7 @@ pub fn apply_discovery_result(
 }
 
 /// Known Steam-service UDP ports that RustClient.exe keeps open for
-/// Steam NAT punch / relay etc. — we skip these so the WinDivert filter
+/// Steam NAT punch / relay etc. - we skip these so the WinDivert filter
 /// doesn't intercept Steam traffic instead of game traffic.
 pub const STEAM_SERVICE_PORTS: &[u16] = &[
     3478, 4379, 4380,  // Steam NAT punch / relay
@@ -2015,7 +2015,7 @@ mod tests {
         assert_eq!(error, None);
         assert_eq!(proxies.len(), 2);
         assert_eq!(proxies[0].node_id.as_deref(), Some("relay-lax-1"));
-        assert_eq!(proxies[0].label, "LAX — Los Angeles");
+        assert_eq!(proxies[0].label, "LAX - Los Angeles");
         assert_eq!(proxies[1].label, "Local proxy");
         assert!(!proxies[1].is_discovered());
     }

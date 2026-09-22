@@ -4,16 +4,16 @@
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.5.x   | ✅ Active support  |
-| 0.4.x   | ❌ End of life     |
-| < 0.4   | ❌ End of life     |
+| 1.6.x   | ✅ Active support  |
+| 1.5.x   | ❌ End of life     |
+| < 1.5   | ❌ End of life     |
 
 ## Reporting a Vulnerability
 
 **Do not open a public issue.** Instead, report vulnerabilities privately:
 
-1. **GitHub Security Advisory** — Go to the [Security tab](https://github.com/ShibbityShwab/lightspeed/security/advisories) and click "Report a vulnerability"
-2. **Email** — If you prefer, contact the maintainer directly
+1. **GitHub Security Advisory** - Go to the [Security tab](https://github.com/ShibbityShwab/lightspeed/security/advisories) and click "Report a vulnerability"
+2. **Email** - If you prefer, contact the maintainer directly
 
 You should receive a response within **48 hours**. We take all security reports seriously.
 
@@ -36,11 +36,11 @@ You should receive a response within **48 hours**. We take all security reports 
 
 LightSpeed is built with security in mind:
 
-- **No encryption on data plane** — game traffic remains inspectable by anti-cheat systems
-- **Token-based authentication** — session tokens validated per-packet
-- **Rate limiting** — per-client PPS and BPS limits prevent abuse
-- **Destination validation** — blocks forwarding to private/internal IPs
-- **Anti-amplification** — inbound/outbound byte ratio tracking
-- **No secrets in source** — all credentials via environment variables
+- **No encryption on data plane** - game traffic remains inspectable by anti-cheat systems
+- **Token-based authentication** - session tokens validated per-packet
+- **Rate limiting** - per-client PPS and BPS limits prevent abuse
+- **Destination validation** - blocks forwarding to private/internal IPs
+- **Anti-amplification** - inbound/outbound byte ratio tracking
+- **No secrets in source** - all credentials via environment variables
 
 See the [Security Audit](docs/security-audit-mvp.md) for the full MVP review.

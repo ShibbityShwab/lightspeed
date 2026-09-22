@@ -4,12 +4,16 @@ Prebuilt (`-bin`) AUR packaging for **LightSpeed**, the zero-cost global
 network optimizer for multiplayer games:
 <https://github.com/ShibbityShwab/lightspeed>.
 
-This directory is a **prepared + handoff** state. Publishing to
+This directory is a **prepared but unpublished** state. Publishing to
 `aur.archlinux.org` is external and intentionally **not** performed here.
+Arch Linux account registration is currently **closed**, so this package
+cannot be submitted at this time; the files are kept ready for whenever
+registration reopens. There is currently **no** `lightspeed-bin` package on
+the AUR.
 
 ## What ships
 
-| File        | Arch          | Source asset (GitHub release v1.6.3) |
+| File        | Arch          | Source asset (GitHub release v1.6.5) |
 |-------------|---------------|--------------------------------------|
 | `/usr/bin/lightspeed`     | x86_64, aarch64 | `lightspeed-client-<triple>.tar.xz`   |
 | `/usr/bin/lightspeed-gui` | x86_64 only     | `lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz` |
@@ -44,7 +48,7 @@ cp /path/to/dist/aur/PKGBUILD /path/to/dist/aur/.SRCINFO .
 
 # 3. Commit and push. Pushing the initial commit publishes the package:
 git add PKGBUILD .SRCINFO
-git commit -m "lightspeed-bin 1.6.3-1"
+git commit -m "lightspeed-bin 1.6.5-1"
 git push
 ```
 
@@ -66,11 +70,14 @@ When LightSpeed tags a new version (e.g. `v1.5.0`):
 4. Commit both files and `git push`.
 
 Do **not** update sha256sums of unchanged assets unnecessarily: real sums
-are already in place for 1.6.3 (verified against the release's published
+are already in place for 1.6.5 (verified against the release's published
 sha256; see Local verification below).
 
 ## Local verification
 
+- 1.6.5: `sha256sums` were refreshed from the v1.6.5 release assets via
+  `gh release view v1.6.5 --json assets` and match the published digests for
+  the x86_64 client, x86_64 GUI, and aarch64 client tarballs.
 - 1.5.0: `makepkg --nobuild` validated the `sha256sums` against the published
   assets (`Passed` for both x86_64 tarballs), and `makepkg --printsrcinfo` was
   regenerated so `.SRCINFO` matches `PKGBUILD`. The packaging logic is

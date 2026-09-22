@@ -87,7 +87,7 @@ Enable if you have packet loss (micro-stutters, rubber-banding). Disable if your
 
 ### How do I get a proxy node?
 
-You don't have to do anything. LightSpeed ships with the community relay network as the default: five sponsor-funded relays (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo) that the client discovers automatically through a signed registry. The registry URL and the operator's public key are compiled into the client, so there is no setup and no config file needed.
+You don't have to do anything. LightSpeed ships with the community relay network as the default: eight sponsor-funded relays (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo, Mumbai, Madrid, Sydney) that the client discovers automatically through a signed registry. The registry URL and the operator's public key are compiled into the client, so there is no setup and no config file needed.
 
 If you want to use a different registry, override it with `--registry <url>` or a `[registry]` block in `lightspeed.toml`. See the [Community Relay Network guide](community-network.md).
 
@@ -134,7 +134,7 @@ LightSpeed sees UDP packet headers (source/destination IP, port, size) to route 
 
 ### Is there telemetry?
 
-Telemetry is **opt-in only** (`--telemetry` flag). When enabled, it collects anonymized aggregate metrics (RTT percentiles, FEC stats). No IP addresses, user identities, or game account data are collected. See [Privacy Policy](privacy.md).
+Telemetry is **on by default** since v1.6.5. It sends anonymized aggregate metrics (RTT percentiles, jitter, FEC stats, and the direct/relayed/saved latency numbers) to **your own relay**. No IP addresses, tokens, identifiers, or game account data are collected, and the relay suppresses any cell with fewer than 3 reports (k=3). Turn it off any time with `--no-telemetry`, `telemetry = false` under `[general]` in `lightspeed.toml`, or the GUI's **"Share anonymous latency stats"** checkbox. See [Privacy Policy](privacy.md).
 
 ### Does the proxy store my IP address?
 

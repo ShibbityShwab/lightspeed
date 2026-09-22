@@ -1,12 +1,12 @@
 # Deploy a LightSpeed Proxy
 
-> Deploy your own proxy relay on any Linux VPS. You own the node, you run the node. There is no shared "LightSpeed network". This is self-hosting, full stop.
+> Deploy your own proxy relay on any Linux VPS. You own the node, you run the node. LightSpeed also ships a community relay network that works out of the box, but this guide is for running your own dedicated node. This is self-hosting, full stop.
 
 ## Overview
 
 A **proxy node** is a small relay server that sits between your game client and the game server. Your client tunnels game packets to the node over UDP, and the node forwards them toward the game server over its own high-speed backbone connection. The result is a shorter, less congested path than your ISP's default route, which usually means lower and more stable ping.
 
-The model is **self-hosted**: you provision a VPS, install the proxy binary, and point your client at it. Nobody else uses your node, and you don't rely on anyone else's. Run one node for yourself, or spin up a few in different regions and let the client pick the fastest automatically (see [Multi-Node Mesh](#multi-node-mesh)).
+The model is **self-hosted**: you provision a VPS, install the proxy binary, and point your client at it. Nobody else uses your node, and you don't rely on anyone else's. Run one node for yourself, or spin up a few in different regions and let the client pick the fastest automatically (see [Multi-Node Mesh](#multi-node-mesh)). If you would rather not run your own, the client uses the community relay network by default (see [Community Relay Network](community-network.md)).
 
 A single node is tiny, roughly **~500KB of actual RAM**, so it fits comfortably on even the smallest VPS.
 
@@ -20,7 +20,7 @@ The full deployment options (native binary, Docker, automated script) are docume
 | `4433` | QUIC | Control plane: client registration and auth |
 | `8080` | HTTP | Health check and Prometheus metrics |
 
-All three ports are configurable via the `[network]` section — see [Configurable ports](#configurable-ports).
+All three ports are configurable via the `[network]` section - see [Configurable ports](#configurable-ports).
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ Before you start, you need:
 
 - **A Linux VPS.** Any provider works. A single small instance is plenty.
 - **SSH access** to the VPS.
-- **Open firewall ports.** Allow inbound UDP `4434` (data) and TCP `4434` (TCP tunnel), UDP `4433` (QUIC control), and TCP `8080` (health/metrics). Ports are configurable via the `[network]` section — see [Configurable ports](#configurable-ports). The exact commands depend on your provider's firewall and `ufw`/`firewalld` on the box.
+- **Open firewall ports.** Allow inbound UDP `4434` (data) and TCP `4434` (TCP tunnel), UDP `4433` (QUIC control), and TCP `8080` (health/metrics). Ports are configurable via the `[network]` section - see [Configurable ports](#configurable-ports). The exact commands depend on your provider's firewall and `ufw`/`firewalld` on the box.
 - **A way to run the proxy.** Either the Rust toolchain to build from source, or Docker. See the options below.
 
 ## Quick Deployment
@@ -49,8 +49,8 @@ The systemd unit runs `/opt/lightspeed/current/lightspeed-proxy`, so switching v
 For a fresh node, use the one-shot setup script (it uploads the binary, writes the config and unit, installs the first release, and verifies health):
 
 ```bash
-# Build locally
-cargo build --release -p lightspeed-proxy
+# Build locally (the quic feature is required for the control plane)
+cargo build --release -p lightspeed-proxy --features quic
 
 # Provision the node (ip, node-id, region)
 bash infra/scripts/setup-new-node.sh YOUR_VPS_IP relay-1 us-east
@@ -94,6 +94,12 @@ export LIGHTSPEED_NODES='{"relay-1":{"ip":"1.2.3.4"},"relay-2":{"ip":"5.6.7.8"}}
 ./infra/scripts/deploy.sh
 ```
 
+The project's own relays are deployed through the **Deploy Proxy** GitHub
+Actions workflow (`.github/workflows/deploy.yml`), which builds the proxy and
+runs `deploy.sh` on every push to `master` that touches `proxy/**`,
+`protocol/**`, or the deploy scripts. The proxy must be built with
+`--features quic` for the control plane to work.
+
 ## Security & Authentication
 
 The proxy has a QUIC control plane (port `4433`) that gates the data plane. As of
@@ -120,7 +126,7 @@ IP binding); the enforcement path is covered by `proxy/tests/integration_securit
   binaries already are).
 - The **client** must be built with the `quic` feature so it can register (the release
   binaries already are). A client built without `quic` sends token `0` and will be
-  rejected by an authenticated proxy — build with `cargo build --features quic`.
+  rejected by an authenticated proxy - build with `cargo build --features quic`.
 
 ### Setting the config
 
@@ -161,7 +167,7 @@ The `--data-bind`, `--control-bind`, and `--health-bind` CLI flags override the 
 For networks that block or throttle UDP, the client↔proxy leg can run over TCP instead.
 On the client, pass `--tcp` (or set `tunnel.transport = "tcp"` in the client config); the
 proxy accepts both UDP and TCP on its data port by default. The same auth, rate-limit,
-abuse, and FEC pipeline applies to TCP traffic — it is not a weaker path. The TCP tunnel
+abuse, and FEC pipeline applies to TCP traffic - it is not a weaker path. The TCP tunnel
 uses length-prefixed framing with a hard frame-size cap and connection limits.
 
 ## Multi-Node Mesh

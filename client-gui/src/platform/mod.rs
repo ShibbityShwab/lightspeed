@@ -1,4 +1,4 @@
-//! # LightSpeed GUI — Platform Abstraction
+//! # LightSpeed GUI - Platform Abstraction
 //!
 //! Traits and helpers that isolate platform-specific concerns (system tray,
 //! font paths, admin detection, game port discovery) behind a generic

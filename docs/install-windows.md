@@ -61,7 +61,7 @@ The GUI shows relay status, registration state, and packet counters so you can s
 
 ## Verify it works
 
-**Check relay discovery and registration.** Open the GUI status view. You should see the community relays listed (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo) with a healthy status, and a registration line showing the QUIC/auth handshake succeeded. If you are using the CLI build, run:
+**Check relay discovery and registration.** Open the GUI status view. You should see the community relays listed (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo, Mumbai, Madrid, Sydney) with a healthy status, and a registration line showing the QUIC/auth handshake succeeded. If you are using the CLI build, run:
 
 ```powershell
 lightspeed-client.exe --probe-proxies

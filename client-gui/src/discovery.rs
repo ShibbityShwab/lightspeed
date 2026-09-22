@@ -132,7 +132,7 @@ fn parse_nodes(nodes: Vec<(String, String)>) -> Vec<RelayInfo> {
         .collect()
 }
 
-/// Friendly label for a node id: `relay-lax-1` → `LAX — Los Angeles`.
+/// Friendly label for a node id: `relay-lax-1` -> `LAX - Los Angeles`.
 /// Unknown node ids are shown verbatim.
 pub fn friendly_label(node_id: &str) -> String {
     let code = node_id
@@ -151,7 +151,7 @@ pub fn friendly_label(node_id: &str) -> String {
         _ => None,
     };
     match city {
-        Some(city) => format!("{} — {}", code.to_ascii_uppercase(), city),
+        Some(city) => format!("{} - {}", code.to_ascii_uppercase(), city),
         None => node_id.to_string(),
     }
 }
@@ -298,14 +298,14 @@ mod tests {
 
     #[test]
     fn friendly_labels_known_and_unknown_nodes() {
-        assert_eq!(friendly_label("relay-lax-1"), "LAX — Los Angeles");
-        assert_eq!(friendly_label("relay-ewr-1"), "EWR — New Jersey");
-        assert_eq!(friendly_label("relay-sgp-1"), "SGP — Singapore");
-        assert_eq!(friendly_label("relay-fra"), "FRA — Frankfurt");
-        assert_eq!(friendly_label("relay-nrt"), "NRT — Tokyo");
-        assert_eq!(friendly_label("relay-bom-1"), "BOM — Mumbai");
-        assert_eq!(friendly_label("relay-mad-1"), "MAD — Madrid");
-        assert_eq!(friendly_label("relay-syd-1"), "SYD — Sydney");
+        assert_eq!(friendly_label("relay-lax-1"), "LAX - Los Angeles");
+        assert_eq!(friendly_label("relay-ewr-1"), "EWR - New Jersey");
+        assert_eq!(friendly_label("relay-sgp-1"), "SGP - Singapore");
+        assert_eq!(friendly_label("relay-fra"), "FRA - Frankfurt");
+        assert_eq!(friendly_label("relay-nrt"), "NRT - Tokyo");
+        assert_eq!(friendly_label("relay-bom-1"), "BOM - Mumbai");
+        assert_eq!(friendly_label("relay-mad-1"), "MAD - Madrid");
+        assert_eq!(friendly_label("relay-syd-1"), "SYD - Sydney");
         assert_eq!(friendly_label("relay-xyz-9"), "relay-xyz-9");
     }
 

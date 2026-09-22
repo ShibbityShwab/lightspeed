@@ -10,7 +10,7 @@
 [![Release](https://img.shields.io/github/v/release/ShibbityShwab/lightspeed?style=flat-square&color=blue)](https://github.com/ShibbityShwab/lightspeed/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/ShibbityShwab/lightspeed/ci.yml?branch=master&style=flat-square)](https://github.com/ShibbityShwab/lightspeed/actions)
 [![License](https://img.shields.io/badge/license-NonCommercial-blue.svg?style=flat-square)](LICENSE)
-[![Rust](https://img.shields.io/badge/built%20with-Rust%201.85+-orange.svg?style=flat-square)](https://rust-lang.org)
+[![Rust](https://img.shields.io/badge/built%20with-Rust%201.88+-orange.svg?style=flat-square)](https://rust-lang.org)
 [![Tests](https://img.shields.io/badge/tests-200%2B%20passing-brightgreen.svg?style=flat-square)](https://github.com/ShibbityShwab/lightspeed/actions)
 
 LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It routes your game traffic through an optimized proxy tunnel, bypassing slow ISP paths to reduce and stabilize your ping - no subscriptions, no usage fees, no infrastructure bills.
@@ -19,7 +19,7 @@ LightSpeed is a **zero-cost global network optimizer** for multiplayer games. It
 
 ### 🌐 Community Relay Network
 
-LightSpeed now runs a **community relay network**: five sponsor-funded relays in Los Angeles, New Jersey, Singapore, Frankfurt, and Tokyo. Clients discover them automatically through a signed registry (`https://shibbityshwab.github.io/lightspeed/registry.json`) with the operator's key compiled in, so there is nothing to configure. Self-hosting your own proxy is still fully supported. See the [Community Relay Network guide](docs/community-network.md) for details.
+LightSpeed now runs a **community relay network**: eight sponsor-funded relays in Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo, Mumbai, Madrid, and Sydney. Clients discover them automatically through a signed registry (`https://shibbityshwab.github.io/lightspeed/registry.json`) with the operator's key compiled in, so there is nothing to configure. The GUI picks the fastest relay for you on first run, and self-hosting your own proxy is still fully supported. See the [Community Relay Network guide](docs/community-network.md) for details.
 
 ---
 
@@ -32,11 +32,14 @@ LightSpeed now runs a **community relay network**: five sponsor-funded relays in
 # Option 1: Interactive demo (no proxy needed)
 ./lightspeed --demo
 
-# Option 2: Jump straight in
-./lightspeed --start-interceptor --game rust --proxy YOUR_PROXY_IP:4434
+# Option 2: Jump straight in (auto-selects the fastest community relay)
+./lightspeed --start-interceptor --game rust
 
-# Option 3: Probe your proxy first
+# Option 3: Probe the community relays first
 ./lightspeed --probe-proxies
+
+# Or point at your own proxy
+./lightspeed --start-interceptor --game rust --proxy YOUR_PROXY_IP:4434
 ```
 
 📖 **[Full User Guide →](docs/user-guide.md)** | **[CLI Reference →](docs/CLI-REFERENCE.md)**
@@ -73,8 +76,9 @@ LightSpeed now runs a **community relay network**: five sponsor-funded relays in
 ## ✨ Features
 
 ### Smart Routing
-- **Automatic proxy selection** - probes all configured proxies and picks the fastest
+- **Automatic proxy selection** - probes all configured proxies and picks the fastest; the GUI auto-selects the fastest relay on first run with an "Auto (fastest)" checkbox
 - **Community relay auto-discovery** - finds the eight community relays via the signed registry with zero config, or point at your own with `--registry <url>`
+- **Ping saved** - measures direct (ICMP) game-server RTT against the tunnelled round trip so you can see how much LightSpeed actually saves
 - **ML-based route prediction** - 11-feature Random Forest model learns from your connection patterns
 - **Multipath FEC** - XOR-based Forward Error Correction with ~25% bandwidth overhead (vs. ExitLag's 200%)
 - **TCP tunnel fallback** - client↔proxy leg over TCP (`--tcp`) for networks that block UDP
@@ -110,9 +114,11 @@ LightSpeed ships three packages. **You only need one**:
 
 | Platform | Command |
 |----------|---------|
-| **Windows** | `winget install ShibbityShwab.LightSpeed` (package submitted, pending review) |
+| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` |
+| **Windows (Chocolatey)** | `choco install lightspeed` (submitted, pending moderation) |
+| **Windows (winget)** | `winget install ShibbityShwab.LightSpeed` (submitted, awaiting Microsoft review) |
 | **macOS and Linux** | `brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed && brew install ShibbityShwab/lightspeed/lightspeed` |
-| **Arch Linux** | `yay -S lightspeed-bin` (AUR, pending first publish) |
+| **Arch Linux** | `yay -S lightspeed-bin` (AUR, prepared but not yet published) |
 
 ### One-line Install (Linux and macOS)
 
@@ -218,7 +224,7 @@ lightspeed/
 
 ## 🔏 Privacy
 
-LightSpeed shares **anonymous aggregate latency statistics on by default** so the community can see real ping improvements. Only percentiles (p50/p95/p99), jitter, and FEC counters are sent to **your own relay**. No IP addresses, tokens, identifiers, or packet contents are ever collected, and the relay suppresses any cell with fewer than 3 reports (k=3).
+Since 1.6.5, LightSpeed shares **anonymous aggregate latency statistics on by default** so the community can see real ping improvements. Only percentiles (p50/p95/p99), jitter, FEC counters, and the direct-vs-tunnelled RTT difference (the "ping saved" metric) are sent to **your own relay**. No IP addresses, tokens, identifiers, or packet contents are ever collected, and the relay suppresses any cell with fewer than 3 reports (k=3).
 
 Turn it off any time with `--no-telemetry`, `telemetry = false` in `lightspeed.toml`, or the **"Share anonymous latency stats"** checkbox in the GUI.
 
@@ -234,6 +240,7 @@ Turn it off any time with `--no-telemetry`, `telemetry = false` in `lightspeed.t
 - [x] **v0.4.0** - 9-game support, session telemetry, Windows GUI, recvmmsg batched I/O
 - [x] **v0.5.0** - Linux interceptor CLI, cross-platform GUI, Docker, MockInterceptor
 - [x] **v1.0.0** - Public stable release: installer wizard + self-hosted proxy model
+- [x] **v1.6.5** - Eight-relay community network, on-by-default anonymous telemetry with opt-out, and the "ping saved" metric
 
 ---
 
