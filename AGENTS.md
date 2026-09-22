@@ -1,6 +1,6 @@
 # LightSpeed WAT Autonomy Engine Integration
 
-> Industry-standard `AGENTS.md` — canonical AI agent instructions for this repository.
+> Industry-standard `AGENTS.md` - canonical AI agent instructions for this repository.
 > You are operating within the LightSpeed WAT (Workflows, Agents, and Tools) system. LightSpeed is a zero-cost global network optimizer for multiplayer games.
 
 ## Core Directives
@@ -14,19 +14,19 @@
 4. **Adopt the Assigned Persona:** When executing a workflow step, check `wat/state/current-phase.md` for the assigned agent's role. Reference `wat/archive/agents.md` for persona definitions.
 
 5. **Maintain the State:**
-   - Log significant technical decisions to `wat/state/decisions.md`
-   - Update `wat/state/current-phase.md` when steps are completed
+  - Log significant technical decisions to `wat/state/decisions.md`
+  - Update `wat/state/current-phase.md` when steps are completed
 
 ## Agent System
 
 The project uses a specialized agent system defined in `wat/archive/agents.md`. Key agents include:
-- **Architect** — System design and technical decisions
-- **RustDev** — Rust systems programming (Tokio, pcap, quinn, linfa)
-- **InfraDev** — Cloud infrastructure (any Always Free tier provider)
-- **NetEng** — Network engineering, BGP, UDP tunnels
-- **QAEngineer** — Testing, benchmarks, game compatibility
-- **SecOps** — Security, anti-abuse
-- **DevOps** — CI/CD, deployment
+- **Architect** - System design and technical decisions
+- **RustDev** - Rust systems programming (Tokio, pcap, quinn, linfa)
+- **InfraDev** - Cloud infrastructure (any Always Free tier provider)
+- **NetEng** - Network engineering, BGP, UDP tunnels
+- **QAEngineer** - Testing, benchmarks, game compatibility
+- **SecOps** - Security, anti-abuse
+- **DevOps** - CI/CD, deployment
 
 ## Quick Reference
 

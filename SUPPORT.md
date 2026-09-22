@@ -4,10 +4,10 @@
 
 Start with the [documentation](docs/README.md):
 
-- [User Guide](docs/user-guide.md) — setup and usage
-- [FAQ](docs/faq.md) — common questions
-- [Troubleshooting](docs/troubleshooting.md) — fix issues
-- [CLI Reference](docs/CLI-REFERENCE.md) — all commands
+- [User Guide](docs/user-guide.md) - setup and usage
+- [FAQ](docs/faq.md) - common questions
+- [Troubleshooting](docs/troubleshooting.md) - fix issues
+- [CLI Reference](docs/CLI-REFERENCE.md) - all commands
 
 ## 🐛 Bug Reports
 
@@ -20,8 +20,8 @@ Include:
 
 ## 💬 Community
 
-- [GitHub Discussions](https://github.com/ShibbityShwab/lightspeed/discussions) — questions, ideas, benchmarks
-- [GitHub Issues](https://github.com/ShibbityShwab/lightspeed/issues) — bugs and feature requests
+- [GitHub Discussions](https://github.com/ShibbityShwab/lightspeed/discussions) - questions, ideas, benchmarks
+- [GitHub Issues](https://github.com/ShibbityShwab/lightspeed/issues) - bugs and feature requests
 
 ## 💰 Commercial Licensing
 

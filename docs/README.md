@@ -1,6 +1,6 @@
 # <picture><source media="(prefers-color-scheme: dark)" srcset="../web/assets/brand/lightspeed-mark-inverse.svg"><img src="../web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> LightSpeed Documentation
 
-Welcome to the LightSpeed documentation wiki — synced from the [source repo](https://github.com/ShibbityShwab/lightspeed/tree/master/docs).
+Welcome to the LightSpeed documentation wiki - synced from the [source repo](https://github.com/ShibbityShwab/lightspeed/tree/master/docs).
 
 ---
 

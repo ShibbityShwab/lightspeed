@@ -4,7 +4,7 @@ use std::net::SocketAddrV4;
 
 use clap::Parser;
 
-/// LightSpeed — Reduce your ping. Free. Forever.
+/// LightSpeed - Reduce your ping. Free. Forever.
 #[derive(Parser, Debug)]
 #[command(name = "lightspeed", version, about, long_about = None)]
 pub struct Cli {
@@ -24,19 +24,19 @@ pub struct Cli {
     #[arg(short, long, default_value_t = false)]
     pub verbose: bool,
 
-    /// Dry run — show what would happen without capturing packets
+    /// Dry run - show what would happen without capturing packets
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
 
-    /// Run tunnel test mode — send test packets to verify proxy connectivity
+    /// Run tunnel test mode - send test packets to verify proxy connectivity
     #[arg(long, default_value_t = false)]
     pub test_tunnel: bool,
 
-    /// Test QUIC control plane — connect, register, ping, disconnect
+    /// Test QUIC control plane - connect, register, ping, disconnect
     #[arg(long, default_value_t = false)]
     pub test_control: bool,
 
-    /// Game server address (ip:port) — enables redirect mode.
+    /// Game server address (ip:port) - enables redirect mode.
     /// Traffic to this server is tunneled through the proxy.
     #[arg(short = 's', long)]
     pub game_server: Option<String>,

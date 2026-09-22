@@ -1,4 +1,4 @@
-//! # LightSpeed GUI — macOS Platform
+//! # LightSpeed GUI - macOS Platform
 //!
 //! **UNTESTED.** This backend compiles but has not been run on real macOS
 //! hardware. It is modeled on the Linux backend: stub tray (no menu-bar

@@ -270,7 +270,7 @@
       <div class="container">
         <p class="section-eyebrow">Infrastructure</p>
         <h2 class="section-title">Global Network</h2>
-        <p class="section-subtitle">Community-hosted relays across North America, Europe, AP-Southeast, and AP-Northeast. Your client verifies the signed registry and auto-discovers the fastest path.</p>
+        <p class="section-subtitle">Community-hosted relays across North America, Europe, AP-Southeast, AP-Northeast, AP-South, and Oceania. Your client verifies the signed registry and auto-discovers the fastest path.</p>
         <div class="relay-grid">
           <article class="relay-card" data-node-id="relay-lax-1">
             <div class="relay-head">
@@ -361,7 +361,7 @@
               <span class="node-chip" aria-hidden="true">SYD</span>
               <div>
                 <h3>Sydney</h3>
-                <div class="relay-region">AP-Southeast-2</div>
+                <div class="relay-region">Oceania</div>
               </div>
             </div>
             <div class="relay-status relay-status-pending"><span class="status-dot" aria-hidden="true"></span><span data-relay-status>Checking</span></div>
@@ -766,7 +766,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>Privacy First</h3>
-            <p>No account and no telemetry by default. The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay.</p>
+            <p>No account required. Anonymous aggregate telemetry is on by default and can be turned off any time with <code>--no-telemetry</code> or the GUI checkbox. It sends only aggregate latency metrics to your own relay: no IP addresses, no identifiers, no packet contents, and any cell with fewer than 3 reports is suppressed (k&gt;=3). The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -963,9 +963,9 @@
             <div class="method-card">
               <div class="method-head">
                 <h4>Windows Package Manager</h4>
-                <span class="method-badge">Coming soon</span>
+                <span class="method-badge">Not published</span>
               </div>
-              <p>The winget package is not published yet. The MSI above is the same build; use it until the package is available.</p>
+              <p>The winget package is not published. The MSI above is the same build; use it for now.</p>
               <div class="code-copy">
                 <code class="code-block">winget install ShibbityShwab.LightSpeed</code>
                 <button class="copy-btn" type="button" aria-label="Copy winget command">Copy</button>
@@ -989,10 +989,37 @@
 
             <div class="method-card">
               <div class="method-head">
-                <h4>Arch Linux (AUR)</h4>
-                <span class="method-badge">Coming soon</span>
+                <h4>Scoop (Windows)</h4>
               </div>
-              <p>Packaging is prepared. The package is not yet published to the AUR; this command will work once it is.</p>
+              <p>Add the bucket once, then install and upgrade with scoop.</p>
+              <div class="code-copy">
+                <code class="code-block">scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket</code>
+                <button class="copy-btn" type="button" aria-label="Copy scoop bucket command">Copy</button>
+              </div>
+              <div class="code-copy">
+                <code class="code-block">scoop install lightspeed</code>
+                <button class="copy-btn" type="button" aria-label="Copy scoop install command">Copy</button>
+              </div>
+            </div>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Chocolatey (Windows)</h4>
+                <span class="method-badge">Pending moderation</span>
+              </div>
+              <p>The package is submitted to the Chocolatey Community feed and is pending moderation. The MSI above is the same build; use it until the package is approved.</p>
+              <div class="code-copy">
+                <code class="code-block">choco install lightspeed</code>
+                <button class="copy-btn" type="button" aria-label="Copy Chocolatey command">Copy</button>
+              </div>
+            </div>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Arch Linux (AUR)</h4>
+                <span class="method-badge">Not published</span>
+              </div>
+              <p>The AUR package is not published. Use the Linux tarballs above or the shell installer below.</p>
               <div class="code-copy">
                 <code class="code-block">yay -S lightspeed-bin</code>
                 <button class="copy-btn" type="button" aria-label="Copy AUR command">Copy</button>
@@ -1043,7 +1070,7 @@
           </details>
           <details class="faq-item">
             <summary>How much will this actually reduce my ping?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
-            <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut 10-40ms off your ping. If your ISP already has optimal routing, the improvement may be minimal. The model picks the best route, or direct if that's fastest.</p>
+            <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut a meaningful amount off your ping. If your ISP already has optimal routing, the improvement may be minimal. The model picks the best route, or direct if that's fastest. The hero stat above reports the median ping saved from real client measurements once enough reports have arrived.</p>
           </details>
           <details class="faq-item">
             <summary>Does LightSpeed make my internet faster?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
@@ -1059,7 +1086,7 @@
           </details>
           <details class="faq-item">
             <summary>Is my data safe?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
-            <p>We don't collect any data by default. No accounts, no registration, no telemetry. If you opt-in to anonymous latency reporting, we collect only aggregate network metrics (ping times, not your identity or game data). All traffic passes through unencrypted to avoid adding overhead. We document this transparently.</p>
+            <p>Anonymous aggregate telemetry is on by default. No accounts, no registration, and no personal data. It sends only aggregate network metrics (latency percentiles, jitter, FEC counters) to your own relay: no IP addresses, no identifiers, and no packet contents. Any cell with fewer than 3 reports is suppressed (k&gt;=3). Turn it off any time with <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the GUI checkbox. All traffic passes through unencrypted to avoid adding overhead. We document this transparently.</p>
           </details>
           <details class="faq-item">
             <summary>How do I get a proxy node?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>

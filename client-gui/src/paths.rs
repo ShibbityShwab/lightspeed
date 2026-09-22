@@ -15,7 +15,7 @@ pub fn data_dir() -> PathBuf {
         .join("Lightspeed")
 }
 
-/// `gui-trace.log` — the tracing sink wired up in `main`.
+/// `gui-trace.log` - the tracing sink wired up in `main`.
 pub fn log_file() -> PathBuf {
     data_dir().join("gui-trace.log")
 }
@@ -31,7 +31,7 @@ pub fn config_dir() -> PathBuf {
     dirs::config_dir().unwrap_or_default().join("light-speed")
 }
 
-/// `config.toml` — persisted proxy list + selected relay.
+/// `config.toml` - persisted proxy list + selected relay.
 pub fn config_file() -> PathBuf {
     config_dir().join("config.toml")
 }

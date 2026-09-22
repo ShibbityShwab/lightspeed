@@ -1,6 +1,6 @@
 # <picture><source media="(prefers-color-scheme: dark)" srcset="../web/assets/brand/lightspeed-mark-inverse.svg"><img src="../web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> LightSpeed Architecture
 
-> Last updated: 2026-08-18 — Reflects v1.0.0–v1.2.0: installer pipeline (cargo-dist), self-hosted proxy model, token authentication, TCP tunnel, configurable ports, 13-game support
+> Last updated: 2026-09-22 - Reflects v1.6.5: community relay network (eight sponsor-funded relays), on-by-default telemetry with the ping-saved metric, GUI auto-select of the fastest relay, installer pipeline (cargo-dist), self-hosted proxy model, token authentication, TCP tunnel, configurable ports, 18-game support
 
 ---
 
@@ -23,18 +23,22 @@
 **Key Principles**:
 - Data plane (game packets) uses raw UDP for minimum latency
 - Control plane uses QUIC for reliability
-- No encryption on the data plane — transparency is a feature, not a bug
+- No encryption on the data plane - transparency is a feature, not a bug
 - FEC adds loss recovery without retransmission (protocol v2)
 - WARP integration provides free local route optimization
+- Clients discover relays through a signed registry and auto-select the fastest on first run
 
 ---
 
 ## Example Infrastructure (2-Node Self-Hosted Mesh)
 
-Each user runs their own proxy nodes. This is an example of a 2-node setup:
+By default the client uses the **community relay network** (eight sponsor-funded
+relays discovered through the signed registry, see
+[Community Relay Network](community-network.md)). Each user can also run their
+own proxy nodes. This is an example of a 2-node self-hosted setup:
 
 > **All nodes are identical.** Both boxes run the same `lightspeed-proxy` binary. The words
-> "primary" and "relay" below are *topology role labels* — not separate node types or
+> "primary" and "relay" below are *topology role labels* - not separate node types or
 > products. Any node can serve both roles simultaneously.
 
 ```
@@ -109,7 +113,8 @@ main.rs ────────────────────────
   │   └── trainer.rs                 ← Model training pipeline (Linear Ensemble)
   │
 │
-  ├── telemetry.rs                   ← Session telemetry: collector, TelemetryEvent, report
+  ├── telemetry.rs                   ← Session telemetry: collector, TelemetryEvent, report (on by default)
+  ├── latency.rs                     ← direct (ICMP) vs relayed RTT tracking, saved_ms (ping saved)
   ├── cli.rs                         ← CLI flag definitions (clap derive)
   ├── modes/                         ← Run-mode handlers
   │   ├── capture_mode.rs            ← pcap capture + tunnel pipeline
@@ -168,20 +173,20 @@ lib.rs ────────────────────────�
 
 ## Data Flow
 
-### Outbound (Client → Game Server) — Redirect Mode
+### Outbound (Client → Game Server) - Redirect Mode
 
 ```
 1. Game client configured to connect to localhost:LOCAL_PORT
 2. [redirect]  UdpRedirect receives game packet on local socket
 3. [tunnel]    TunnelHeader created (20 bytes: version, seq, timestamp, orig addrs)
 4. [fec]       If FEC enabled: FecEncoder groups K packets, generates parity
-5. [relay]     Header + payload sent to proxy via UDP (port 4434) — or TCP (port 4434) when `--tcp` is set
+5. [relay]     Header + payload sent to proxy via UDP (port 4434) - or TCP (port 4434) when `--tcp` is set
 6. [proxy]     Proxy receives, strips header, validates session
 7. [proxy]     Original UDP packet forwarded to game server
 8. [game]      Game server sees user's ORIGINAL IP (preserved!)
 ```
 
-### Outbound (Client → Game Server) — Capture Mode
+### Outbound (Client → Game Server) - Capture Mode
 
 ```
 1. Game sends UDP to game server IP:port normally
@@ -190,7 +195,7 @@ lib.rs ────────────────────────�
 4. [route]     RouteSelector picks optimal proxy (Nearest or ML)
 5. [tunnel]    TunnelHeader created (20 bytes)
 6. [fec]       If FEC enabled: FecEncoder adds parity packets
-7. [relay]     Header + payload sent to proxy via UDP (port 4434) — or TCP when `--tcp` is set
+7. [relay]     Header + payload sent to proxy via UDP (port 4434) - or TCP when `--tcp` is set
 8-9. Same as redirect mode
 ```
 
@@ -251,7 +256,7 @@ With WARP:
 
 ## Interface Definitions (Rust Traits)
 
-### `PacketCapture` — Platform Packet Capture
+### `PacketCapture` - Platform Packet Capture
 ```rust
 pub trait PacketCapture: Send + Sync {
     fn start(&mut self, filter: &CaptureFilter) -> Result<(), CaptureError>;
@@ -261,7 +266,7 @@ pub trait PacketCapture: Send + Sync {
 }
 ```
 
-### `RouteSelector` — Proxy Selection
+### `RouteSelector` - Proxy Selection
 ```rust
 pub trait RouteSelector: Send + Sync {
     fn select(&self, game_server: SocketAddrV4, proxies: &[ProxyNode])
@@ -271,7 +276,7 @@ pub trait RouteSelector: Send + Sync {
 }
 ```
 
-### `GameConfig` — Per-Game Settings
+### `GameConfig` - Per-Game Settings
 ```rust
 pub trait GameConfig: Send + Sync {
     fn name(&self) -> &str;
@@ -293,7 +298,7 @@ pub trait GameConfig: Send + Sync {
 | **bytes** | Zero-copy buffers | Efficient packet handling without allocation |
 | **pcap** | Packet capture | Cross-platform libpcap binding, well-maintained |
 | **quinn** | QUIC client/server | Pure Rust, built on rustls, active development |
-| **linfa** | ML toolkit | Native Rust ML — no Python dependency, fast inference |
+| **linfa** | ML toolkit | Native Rust ML - no Python dependency, fast inference |
 | **clap** | CLI parsing | Derive-based, excellent UX, industry standard |
 | **tracing** | Structured logging | Async-aware, spans for latency tracking, filterable |
 | **serde/toml** | Config parsing | Standard serialization, human-readable config format |
@@ -306,10 +311,10 @@ pub trait GameConfig: Send + Sync {
 ### Feature Gating
 
 Heavy dependencies requiring a C compiler are behind cargo features:
-- `pcap-capture` — requires Npcap (Windows) or libpcap (Linux)
-- `quic` — requires ring (via rustls) → needs C compiler
-- `ml` — requires linfa ecosystem → may need BLAS
-- `full` — enables all of the above
+- `pcap-capture` - requires Npcap (Windows) or libpcap (Linux)
+- `quic` - requires ring (via rustls) → needs C compiler
+- `ml` - requires linfa ecosystem → may need BLAS
+- `full` - enables all of the above
 
 Default build (no features) compiles with just the Rust toolchain.
 
@@ -319,7 +324,7 @@ Default build (no features) compiles with just the Rust toolchain.
 
 ### Windows (Primary Target)
 - **Capture**: Npcap via pcap crate (MVP), WFP native (planned)
-- **Redirect**: Local UDP proxy — no admin privileges needed
+- **Redirect**: Local UDP proxy - no admin privileges needed
 - **Anti-cheat**: Must not trigger EAC/VAC. pcap is passive capture, not modification
 - **Admin**: Packet capture requires Administrator privileges; redirect mode does not
 - **Binary**: Single `.exe`, no runtime dependencies (except Npcap for capture)

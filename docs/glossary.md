@@ -4,7 +4,7 @@
 
 ## Core Concepts
 
-**Proxy Node (Boost Server):** A lightweight UDP relay server (~500KB RAM) that forwards game traffic between your PC and game servers through a faster backbone path. You run your own proxy on any Linux VPS.
+**Proxy Node (Boost Server):** A lightweight UDP relay server (~500KB RAM) that forwards game traffic between your PC and game servers through a faster backbone path. The client uses the community relay network by default; you can also run your own proxy on any Linux VPS.
 
 **Interceptor:** The OS-level component that captures outbound game UDP packets before they leave your network interface and redirects them through the proxy. Uses nftables/iptables (Linux), pfctl (macOS), or WinDivert (Windows).
 
@@ -20,7 +20,9 @@
 
 **K (Block Size):** Number of data packets per FEC parity packet. Default is 4 (25% overhead). Higher K = less overhead but less protection against burst loss.
 
-**RTT (Round-Trip Time):** The time in milliseconds for a packet to travel from your PC to the proxy and back. Measured continuously during keepalive probing.
+**RTT (Round-Trip Time):** The time in milliseconds for a packet to travel from your PC to the relay and back. Measured continuously during keepalive probing.
+
+**Ping Saved:** The difference between the direct (ICMP) RTT to the game server and the tunnelled round trip through the relay. It is the core value metric LightSpeed reports, and the relay aggregates it (k>=3) for the "Ping saved by LightSpeed" figure on the website.
 
 **Keepalive:** Periodic empty packets sent between client and proxy to measure RTT and maintain the session. Sent every 5 seconds.
 
@@ -30,7 +32,7 @@
 
 ## Modes
 
-**Interceptor Mode (`--start-interceptor`):** Kernel-level MITM that transparently redirects game traffic through the proxy. No game configuration needed — the game connects normally.
+**Interceptor Mode (`--start-interceptor`):** Kernel-level MITM that transparently redirects game traffic through the proxy. No game configuration needed - the game connects normally.
 
 **Redirect Mode (`--game-server`):** The game connects to localhost on a specific port, and LightSpeed forwards traffic to the real server through the proxy. No root required.
 
@@ -53,6 +55,8 @@
 ---
 
 ## Infrastructure
+
+**Community Relay Network:** The default set of eight sponsor-funded relays (Los Angeles, New Jersey, Singapore, Frankfurt, Tokyo, Mumbai, Madrid, Sydney) that the client discovers through a signed registry. Free to use, no setup required.
 
 **VPS (Virtual Private Server):** A cloud-hosted virtual machine running Linux. LightSpeed proxies run on VPS instances with as little as 512MB RAM.
 

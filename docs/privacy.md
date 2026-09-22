@@ -1,6 +1,6 @@
 # Privacy Policy
 
-> Last updated: 2026-09-19
+> Last updated: 2026-09-22
 
 ---
 
@@ -47,19 +47,26 @@ IP geolocation data by DB-IP (https://db-ip.com), licensed under CC BY 4.0.
 ## Anonymous Telemetry (on by default)
 
 Telemetry is **on by default**. It sends anonymous aggregate metrics to **your
-own proxy's** `/telemetry` endpoint. There is no central LightSpeed telemetry
+own relay's** `/telemetry` endpoint. There is no central LightSpeed telemetry
 server. The relay suppresses any cell with fewer than **3 reports** (k-anonymity
 floor of 3), so no individual client's data is ever exported.
+
+The client measures both the direct (ICMP) RTT to the game server and the
+tunnelled round trip, and the relay aggregates the difference. That difference
+is the **"Ping saved by LightSpeed"** figure shown on the website. It is a
+per-cell aggregate, never a per-client value.
 
 | Metric | Example | PII? |
 |--------|---------|------|
 | RTT percentiles | p50: 31ms, p95: 45ms, p99: 52ms | No |
 | Jitter | 2.3ms stddev | No |
 | FEC recovery rate | 12 packets recovered / 1000 | No |
+| Direct vs relayed RTT | direct p50: 61ms, relayed p50: 31ms | No |
+| Ping saved | 30ms (direct p50 minus relayed p50) | No |
 | Session duration | 45 minutes | No |
 | Proxy region | "us-west" | No |
 | Game name | "rust" | No |
-| LightSpeed version | "1.4.2" | No |
+| LightSpeed version | "1.6.5" | No |
 
 **Explicitly NOT collected:** IP addresses, user identities, game account data, packet payloads.
 
@@ -82,7 +89,7 @@ checkbox.
 
 ## Proxy Logs
 
-If you run your own proxy, the proxy server writes access logs to stdout (configurable via `RUST_LOG`). These are operational logs, not analytics. They contain:
+If you run your own relay, the proxy server writes access logs to stdout (configurable via `RUST_LOG`). These are operational logs, not analytics. They contain:
 - Client IP addresses (for rate limiting and abuse detection)
 - Session start/end times
 - Packets/bytes relayed per session
@@ -94,16 +101,17 @@ Client IPs appear in these logs only because the proxy needs them for rate limit
 ## Data Retention
 
 - **Client:** No data is persisted beyond the current session (in-memory only).
-- **Proxy:** Logs are written to stdout. Retention is controlled by your server's logging configuration. Placement counters are aggregate only, with a k>=3 floor, and carry no raw IPs.
-- **Telemetry:** Data is sent to your proxy's endpoint. You control retention.
+- **Relay:** Logs are written to stdout. Retention is controlled by your server's logging configuration. Placement counters are aggregate only, with a k>=3 floor, and carry no raw IPs.
+- **Telemetry:** Data is sent to your relay's endpoint. You control retention.
 
 ---
 
 ## Third-Party Services
 
 LightSpeed does not integrate with any third-party analytics, advertising, or tracking services. The only network connections are:
-1. Your PC → your proxy (UDP tunnel + optional QUIC control plane)
-2. Your proxy → game servers (forwarded UDP packets)
+1. Your PC → your relay (UDP tunnel + optional QUIC control plane)
+2. Your relay → game servers (forwarded UDP packets)
+3. Your PC → the signed relay registry over HTTPS (discovery only, no identifiers sent)
 
 ---
 

@@ -1,6 +1,6 @@
 # <picture><source media="(prefers-color-scheme: dark)" srcset="../web/assets/brand/lightspeed-mark-inverse.svg"><img src="../web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> LightSpeed Tunnel Protocol v1/v2
 
-> Last updated: 2026-08-18 — v1.2.0: adds TCP framing (client→proxy leg), session_token stamping
+> Last updated: 2026-09-22 - v1.6.5: TCP framing (client→proxy leg), session_token stamping, QUIC control plane on UDP 4433, data on UDP 4434
 
 ---
 
@@ -8,12 +8,12 @@
 
 The LightSpeed Tunnel Protocol is a lightweight UDP encapsulation protocol designed to route game traffic through proxy nodes with minimal overhead. It is:
 
-- **Unencrypted** — game traffic remains inspectable (anti-cheat friendly)
-- **IP-preserving** — original source/destination IPs carried in header
-- **Low overhead** — 20 bytes added per packet (v1), 24 bytes with FEC (v2)
-- **Sequence-numbered** — supports dedup for multipath routing
-- **FEC-capable** — optional Forward Error Correction for packet loss recovery (v2)
-- **TCP-transportable** — the same packet can travel the client→proxy leg over TCP (length-prefixed framing) for UDP-restricted networks
+- **Unencrypted** - game traffic remains inspectable (anti-cheat friendly)
+- **IP-preserving** - original source/destination IPs carried in header
+- **Low overhead** - 20 bytes added per packet (v1), 24 bytes with FEC (v2)
+- **Sequence-numbered** - supports dedup for multipath routing
+- **FEC-capable** - optional Forward Error Correction for packet loss recovery (v2)
+- **TCP-transportable** - the same packet can travel the client→proxy leg over TCP (length-prefixed framing) for UDP-restricted networks
 
 ---
 
@@ -28,7 +28,7 @@ The version field (4 bits) in byte 0 determines which header format is used.
 
 ---
 
-## Header Format — v1 (20 bytes)
+## Header Format - v1 (20 bytes)
 
 ```
  0                   1                   2                   3
@@ -75,7 +75,7 @@ Multiple flags can be set simultaneously.
 
 ---
 
-## Header Format — v2 FEC Extension (4 additional bytes)
+## Header Format - v2 FEC Extension (4 additional bytes)
 
 When `Version = 2`, the v1 header is followed by a 4-byte FEC extension:
 
@@ -101,7 +101,7 @@ When `Version = 2`, the v1 header is followed by a 4-byte FEC extension:
 
 **Total v2 header: 24 bytes.** Payload follows immediately after.
 
-### FEC Algorithm — XOR Parity
+### FEC Algorithm - XOR Parity
 
 The FEC scheme uses simple XOR parity across a group of K data packets:
 
@@ -134,8 +134,8 @@ Recovery (if P2 lost):
 - Overhead: 1 extra packet per K data packets (e.g., K=8 → 12.5% overhead)
 - Parity computation: ~3μs (negligible latency impact)
 - Recovery: ~3ms (vs 400ms+ for TCP-style retransmission)
-- Parity packet is `max_payload_len_in_block + 2` bytes — much smaller than old fixed 1400 B
-  for typical game traffic (64–512 B), saving ~10× parity bandwidth
+- Parity packet is `max_payload_len_in_block + 2` bytes - much smaller than old fixed 1400 B
+  for typical game traffic (64-512 B), saving ~10× parity bandwidth
 
 ### ⚠️ FEC Parity Wire-Format Compatibility
 
@@ -151,9 +151,9 @@ but no recovery). Perform a coordinated rolling upgrade of all proxy nodes and c
 ### FEC Statistics (`FecStats`)
 
 Both `FecEncoder` and `FecDecoder` track:
-- `packets_encoded` / `packets_decoded` — total packets processed
-- `parity_generated` / `packets_recovered` — FEC operations performed
-- `packets_lost` — packets that could not be recovered (>1 loss per group)
+- `packets_encoded` / `packets_decoded` - total packets processed
+- `parity_generated` / `packets_recovered` - FEC operations performed
+- `packets_lost` - packets that could not be recovered (>1 loss per group)
 
 ---
 
@@ -311,14 +311,14 @@ tunnel packet is wrapped in a length-prefixed frame:
 
 ## Security Considerations
 
-1. **No encryption by design** — game traffic is inspectable (anti-cheat compatible)
-2. **IP preservation** — game servers see real user IP (not proxy IP)
-3. **Session tokens** — per-client `session_token` byte in header, stamped after QUIC registration (v1.1.0+)
-4. **Rate limiting** — per-client PPS and BPS limits enforced by proxy
-5. **Anti-amplification** — proxy tracks inbound/outbound byte ratio
-6. **Anti-reflection** — proxy limits unique destinations per client per time window
-7. **Destination validation** — proxy blocks private IPs, localhost, multicast, link-local
-8. **No open relay** — only authenticated sessions can relay traffic (`require_auth` on by default)
+1. **No encryption by design** - game traffic is inspectable (anti-cheat compatible)
+2. **IP preservation** - game servers see real user IP (not proxy IP)
+3. **Session tokens** - per-client `session_token` byte in header, stamped after QUIC registration (v1.1.0+)
+4. **Rate limiting** - per-client PPS and BPS limits enforced by proxy
+5. **Anti-amplification** - proxy tracks inbound/outbound byte ratio
+6. **Anti-reflection** - proxy limits unique destinations per client per time window
+7. **Destination validation** - proxy blocks private IPs, localhost, multicast, link-local
+8. **No open relay** - only authenticated sessions can relay traffic (`require_auth` on by default)
 
 ---
 
@@ -401,36 +401,36 @@ Decoded:
 ## Implementation Reference
 
 ### Header (`protocol/src/header.rs`)
-- `TunnelHeader::new()` — create data packet header
-- `TunnelHeader::keepalive()` — create keepalive header
-- `TunnelHeader::with_session_token()` — builder for auth token
-- `TunnelHeader::make_response()` — swap src/dst for proxy reply
-- `TunnelHeader::encode_to_array()` → `[u8; 20]` — **zero-alloc** stack encode _(v0.4.0-dev+, hot path)_
-- `TunnelHeader::encode()` → `Bytes` — serialize to wire format (delegates to `encode_to_array`)
-- `TunnelHeader::encode_with_payload(&[u8])` → `Bytes` — header + payload in one allocation
-- `TunnelHeader::decode(&[u8])` → `Result<TunnelHeader>` — parse from wire format
-- `TunnelHeader::decode_with_payload(&[u8])` → `Result<(TunnelHeader, &[u8])>` — parse header + slice payload
+- `TunnelHeader::new()` - create data packet header
+- `TunnelHeader::keepalive()` - create keepalive header
+- `TunnelHeader::with_session_token()` - builder for auth token
+- `TunnelHeader::make_response()` - swap src/dst for proxy reply
+- `TunnelHeader::encode_to_array()` → `[u8; 20]` - **zero-alloc** stack encode _(v0.4.0-dev+, hot path)_
+- `TunnelHeader::encode()` → `Bytes` - serialize to wire format (delegates to `encode_to_array`)
+- `TunnelHeader::encode_with_payload(&[u8])` → `Bytes` - header + payload in one allocation
+- `TunnelHeader::decode(&[u8])` → `Result<TunnelHeader>` - parse from wire format
+- `TunnelHeader::decode_with_payload(&[u8])` → `Result<(TunnelHeader, &[u8])>` - parse header + slice payload
 
 ### FEC (`protocol/src/fec.rs`)
-- `FecEncoder::new(k_size: u8)` — create encoder with K data packets per block
-- `FecEncoder::add_packet(&[u8])` → `Option<Bytes>` — XOR into parity; returns compact parity when block full
-- `FecEncoder::flush()` → `Option<(block_id, actual_k, Bytes)>` — force-emit partial block parity
-- `FecEncoder::block_id()` → `u16` — current block ID
-- `FecEncoder::current_index()` → `u8` — packets accumulated in current block
-- `FecHeader::data(block_id, index, k_size)` — create FEC extension header for data packet
-- `FecHeader::parity(block_id, k_size)` — create FEC extension header for parity packet
-- `FecHeader::encode(&mut BytesMut)` — append 4-byte FEC header to buffer
-- `FecHeader::decode(&mut &[u8])` → `Option<FecHeader>` — parse 4-byte FEC header
-- `FecDecoder::new()` — create decoder (64-slot ring buffer, 500ms block expiry)
-- `FecDecoder::receive_data(&FecHeader, Bytes)` → `Bytes` — track data packet; return payload
-- `FecDecoder::receive_parity(&FecHeader, Bytes)` → `Option<(u8, Bytes)>` — store parity; attempt recovery
-- `FecDecoder::try_recover_block(block_id)` → `Option<(u8, Bytes)>` — explicit recovery attempt
-- `FecDecoder::gc()` — discard blocks older than `max_age_ms`
-- `FecDecoder::stats()` → `FecStats` — `active_blocks`, `recovered_count`, `recovery_failures`
+- `FecEncoder::new(k_size: u8)` - create encoder with K data packets per block
+- `FecEncoder::add_packet(&[u8])` → `Option<Bytes>` - XOR into parity; returns compact parity when block full
+- `FecEncoder::flush()` → `Option<(block_id, actual_k, Bytes)>` - force-emit partial block parity
+- `FecEncoder::block_id()` → `u16` - current block ID
+- `FecEncoder::current_index()` → `u8` - packets accumulated in current block
+- `FecHeader::data(block_id, index, k_size)` - create FEC extension header for data packet
+- `FecHeader::parity(block_id, k_size)` - create FEC extension header for parity packet
+- `FecHeader::encode(&mut BytesMut)` - append 4-byte FEC header to buffer
+- `FecHeader::decode(&mut &[u8])` → `Option<FecHeader>` - parse 4-byte FEC header
+- `FecDecoder::new()` - create decoder (64-slot ring buffer, 500ms block expiry)
+- `FecDecoder::receive_data(&FecHeader, Bytes)` → `Bytes` - track data packet; return payload
+- `FecDecoder::receive_parity(&FecHeader, Bytes)` → `Option<(u8, Bytes)>` - store parity; attempt recovery
+- `FecDecoder::try_recover_block(block_id)` → `Option<(u8, Bytes)>` - explicit recovery attempt
+- `FecDecoder::gc()` - discard blocks older than `max_age_ms`
+- `FecDecoder::stats()` → `FecStats` - `active_blocks`, `recovered_count`, `recovery_failures`
 
 ### Control (`protocol/src/control.rs`)
-- `ControlMessage::read_from(stream)` — async QUIC message read
-- `ControlMessage::write_to(stream)` — async QUIC message write
-- `ControlMessage::encode()` / `decode()` — binary serialization
+- `ControlMessage::read_from(stream)` - async QUIC message read
+- `ControlMessage::write_to(stream)` - async QUIC message write
+- `ControlMessage::encode()` / `decode()` - binary serialization
 
 All encode/decode covered by unit tests (header: 8 tests, FEC: 10 tests + 6 proptests, control: 6 tests).

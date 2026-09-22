@@ -5,15 +5,13 @@ Homebrew. It covers the four cargo-dist client targets: macOS `x86_64` and
 `aarch64`, and Linux `x86_64` and `aarch64`. The GUI is not covered: upstream
 publishes no macOS GUI build.
 
-## Install (no separate tap repository required)
+## Install
 
-Homebrew's one-argument `brew tap user/name` assumes a repository named
-`homebrew-name`. Rather than maintain a second repository, this formula lives
-in the main `lightspeed` repository and is tapped with the explicit URL form,
-which works with any Git repository:
+The tap `ShibbityShwab/lightspeed` is **live**. Tap it and install the
+formula:
 
 ```sh
-brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed
+brew tap ShibbityShwab/lightspeed
 brew install ShibbityShwab/lightspeed/lightspeed
 ```
 
@@ -24,9 +22,8 @@ model). Afterwards the fully qualified name works anywhere:
 brew upgrade ShibbityShwab/lightspeed/lightspeed
 ```
 
-If you would rather have the shorter `brew install ShibbityShwab/tap/lightspeed`,
-create a repository named `homebrew-tap` and move `Formula/lightspeed.rb` into
-it; nothing else changes.
+The formula source of truth lives in this repository at
+`Formula/lightspeed.rb`; the tap repository mirrors it.
 
 ## Updating for a new release
 

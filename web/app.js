@@ -785,14 +785,14 @@
     var savedValues = model.points.map(function (point) { return point.savedMs; });
     grid.appendChild(renderTrendCard({
       title: 'Ping saved by LightSpeed',
-      subtitle: 'Direct ping minus tunnelled ping, averaged over opt-in client reports. Positive means LightSpeed was faster.',
+      subtitle: 'Direct ping minus tunnelled ping, averaged over client reports (telemetry is on by default, opt-out). Positive means LightSpeed was faster.',
       series: [{ label: 'Saved', color: TREND_COLORS[2], values: savedValues }],
       points: model.points,
       axisFormat: formatMsAxis,
       description: chartDescription('Ping saved by LightSpeed', [{ label: 'saved', values: savedValues }], formatMs),
       summary: 'Latest: ' + formatMs(latestFinite(savedValues)) + ' · ' + window,
-      emptyMessage: 'No opt-in client latency reports yet, so there is no direct-versus-tunnelled comparison to plot.',
-      caveat: 'Direct ping is measured by the client with ICMP to the game server; tunnelled ping is the game traffic round trip through the relay. Both are client-measured and opt-in.'
+      emptyMessage: 'No client latency reports yet, so there is no direct-versus-tunnelled comparison to plot.',
+      caveat: 'Direct ping is measured by the client with ICMP to the game server; tunnelled ping is the game traffic round trip through the relay. Both are client-measured and reported by default telemetry, which can be turned off.'
     }));
 
     var fecValues = model.points.map(function (point) { return point.fecRatio; });

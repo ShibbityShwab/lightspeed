@@ -4,7 +4,7 @@
 
 ## Quick Diagnostic
 
-Run the built-in environment check first — it catches most issues:
+Run the built-in environment check first - it catches most issues:
 
 ```bash
 lightspeed --check
@@ -56,7 +56,7 @@ lightspeed --check
 The detector hasn't seen 3 packets to the same destination within 1.5 seconds.
 
 1. Make sure you're connected to a game server (move your character to generate traffic)
-2. If packets still aren't detected after 15 seconds, your server is on a non-standard port — use manual server mode
+2. If packets still aren't detected after 15 seconds, your server is on a non-standard port - use manual server mode
 3. Stop and restart the interceptor after connecting to the server
 
 ### Packets Sent climbing, Packets Delivered = 0
@@ -199,6 +199,6 @@ Attach the log file to your [GitHub issue](https://github.com/ShibbityShwab/ligh
 
 ## Still Stuck?
 
-- [FAQ](faq.md) — common questions
-- [GitHub Issues](https://github.com/ShibbityShwab/lightspeed/issues) — search existing reports
+- [FAQ](faq.md) - common questions
+- [GitHub Issues](https://github.com/ShibbityShwab/lightspeed/issues) - search existing reports
 - Open a new issue with your OS, game, and log output

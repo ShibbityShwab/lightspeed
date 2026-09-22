@@ -1,4 +1,4 @@
-//! # LightSpeed GUI — Linux Platform
+//! # LightSpeed GUI - Linux Platform
 //!
 //! Stub tray (Linux has no system-tray standard), admin check via `id -u`,
 //! capture check via `tcpdump`/`dumpcap`, and Rust port detection via
@@ -135,7 +135,7 @@ fn detect_rust_ports_ss() -> Option<(u16, u16)> {
             continue;
         }
 
-        // Local port (col 4) — RustClient's listening socket.
+        // Local port (col 4) - RustClient's listening socket.
         if let Some(port_str) = parts[3].rsplit(':').next() {
             if let Ok(port) = port_str.parse::<u16>() {
                 if port >= 1024 && !STEAM_SERVICE_PORTS.contains(&port) && !ports.contains(&port) {
@@ -144,7 +144,7 @@ fn detect_rust_ports_ss() -> Option<(u16, u16)> {
             }
         }
 
-        // Remote port (col 5) — the game server it's connected to.
+        // Remote port (col 5) - the game server it's connected to.
         let remote_field = parts[4].trim_end_matches('*');
         if let Some(port_str) = remote_field.rsplit(':').next() {
             if let Ok(port) = port_str.parse::<u16>() {

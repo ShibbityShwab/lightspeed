@@ -1,6 +1,6 @@
 # <picture><source media="(prefers-color-scheme: dark)" srcset="web/assets/brand/lightspeed-mark-inverse.svg"><img src="web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> Contributing to LightSpeed
 
-Thanks for your interest in making LightSpeed better! This is an open-source project and contributions of all kinds are welcome — code, bug reports, game requests, proxy hosting, and documentation.
+Thanks for your interest in making LightSpeed better! This is an open-source project and contributions of all kinds are welcome - code, bug reports, game requests, proxy hosting, and documentation.
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ cargo test --workspace
 cargo run --bin lightspeed-proxy -- --config proxy/proxy.toml.default
 ```
 
-**Prerequisites:** Rust stable (1.75+), libpcap-dev (Linux), Npcap (Windows)
+**Prerequisites:** Rust 1.88+ (1.95+ for the GUI), libpcap-dev (Linux), Npcap (Windows)
 
 ---
 
@@ -59,14 +59,14 @@ Use [GitHub Discussions](https://github.com/ShibbityShwab/lightspeed/discussions
 - "Introduce yourself" posts
 
 ### 🌐 Run Your Own Proxy Node
-LightSpeed is **self-hosted** — there is no shared network. You run your own proxy on a VPS near the game servers you play on. This is the core model.
+LightSpeed ships a **community relay network** of eight sponsor-funded relays that clients discover automatically, and self-hosting your own proxy is still fully supported. You can run your own proxy on a VPS near the game servers you play on, or publish it to the signed registry for others.
 
-1. Get a Linux VPS (any provider with a free tier — see infra/README.md)
+1. Get a Linux VPS (any provider with a free tier - see infra/README.md)
 2. Follow the setup guide in [`infra/README.md`](infra/README.md)
 3. Use `infra/scripts/setup-new-node.sh` for automated setup
 4. Requires: Linux VPS, UDP ports 4433/4434 open, 512MB RAM minimum
 
-> **Managed cloud nodes** (where we host for you) are planned for a future release. For now, hosting your own is the way to go.
+> **Managed cloud nodes** (where we host for you) are not offered. The community relays are sponsor-funded, and hosting your own remains the way to run a private node.
 
 ### 💻 Code Contributions
 See [Development Setup](#development-setup) below.
@@ -82,7 +82,7 @@ lightspeed/
 ├── client/         # Rust client (packet capture + routing)
 │   └── src/
 │       ├── capture/    # pcap backends (Linux/macOS/Windows)
-│       ├── games/      # Game-specific profiles (Fortnite, CS2, Dota 2, Rust)
+│       ├── games/      # Game-specific profiles (18 games: Rust, CS2, Fortnite, ...)
 │       ├── ml/         # ML route selection (linfa)
 │       ├── route/      # Route selector + failover
 │       └── tunnel/     # UDP tunnel engine
@@ -100,7 +100,7 @@ lightspeed/
 
 ### Adding Game Support
 
-1. Create `client/src/games/yourgame.rs` — see `cs2.rs` as a reference
+1. Create `client/src/games/yourgame.rs` - see `cs2.rs` as a reference
 2. Add the game to `client/src/games/mod.rs`
 3. Test with a local proxy: `cargo run --bin lightspeed-proxy`
 4. Submit a PR with benchmark results
@@ -130,7 +130,7 @@ cargo build --release --bin lightspeed-proxy --target x86_64-unknown-linux-gnu
 
 ## Proxy Hosting
 
-Self-hosting a proxy is how LightSpeed works. See [`infra/README.md`](infra/README.md) for the full guide.
+LightSpeed clients use the community relay network by default, and self-hosting a proxy is fully supported. See [`infra/README.md`](infra/README.md) for the full guide.
 
 ### Requirements
 - Linux VPS (Ubuntu 22.04+ recommended)
@@ -148,8 +148,7 @@ bash setup-new-node.sh YOUR_VPS_IP your-node-id your-region
 ```
 
 ### Supported Cloud Providers (Free Tier Available)
-| Provider | Instance | Free Period | Notes |
-|----------|----------|------------|-------|
+Any provider with an Always Free tier works. The community relays run on sponsor-funded Vultr instances, and the setup script targets Ubuntu 22.04+.
 
 ---
 
@@ -157,8 +156,8 @@ bash setup-new-node.sh YOUR_VPS_IP your-node-id your-region
 
 1. Fork the repo and create a branch: `git checkout -b fix/my-feature`
 2. Make your changes with tests
-3. Run `cargo test --workspace` — all tests must pass
-4. Run `cargo clippy --workspace` — no warnings
+3. Run `cargo test --workspace` - all tests must pass
+4. Run `cargo clippy --workspace` - no warnings
 5. Submit a PR with a clear description
 
 ### PR Checklist
@@ -201,7 +200,7 @@ changelog entry.
 ## Community Guidelines
 
 - **Be respectful.** We're all here to improve gaming for everyone.
-- **No discrimination.** Region, rank, or skill level — everyone's welcome.
+- **No discrimination.** Region, rank, or skill level - everyone's welcome.
 - **No commercial spam.** Don't promote paid alternatives in our community.
 - **Keep it constructive.** Bug reports and criticism are welcome; complaining without context isn't.
 

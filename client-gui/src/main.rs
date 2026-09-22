@@ -1,4 +1,4 @@
-//! LightSpeed GUI — system-tray icon + egui status window.
+//! LightSpeed GUI - system-tray icon + egui status window.
 //!
 //! Cross-platform via the `platform` module (Windows tray-icon with
 //! `tray_icon`, Linux stub).

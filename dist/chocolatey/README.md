@@ -35,17 +35,20 @@ Chocolatey Community requires an account and is **moderated** (a human reviews
 new packages, usually within a few days; the package shows as unlisted until it
 is approved). Web upload of `.nupkg` files is disabled, so push with an API key.
 
+**Status: version 1.6.5 is SUBMITTED and PENDING MODERATION** (unlisted until a
+moderator approves it).
+
 With Chocolatey installed (Windows):
 
 ```sh
-choco push lightspeed.1.6.3.nupkg --source https://push.chocolatey.org/ --api-key <API_KEY>
+choco push lightspeed.1.6.5.nupkg --source https://push.chocolatey.org/ --api-key <API_KEY>
 ```
 
 Or from any platform with curl, against the NuGet v2 push endpoint:
 
 ```sh
 curl -X PUT -H "X-NuGet-ApiKey: <API_KEY>" \
-  --data-binary @lightspeed.1.6.3.nupkg \
+  --data-binary @lightspeed.1.6.5.nupkg \
   https://push.chocolatey.org/api/v2/package/
 ```
 
