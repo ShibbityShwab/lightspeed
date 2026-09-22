@@ -96,7 +96,7 @@ windivert = { version = "0.6", optional = true, features = ["vendored"] }
 # `vendored` reaches windivert-sys through the `windivert` dependency above, so
 # it is intentionally not repeated here.
 windivert-sys = { version = "0.10", optional = true }
-windows = { version = "0.48", optional = true, default-features = false, features = ["Win32_Foundation"] }
+windows = { version = "0.62", optional = true, default-features = false, features = ["Win32_Foundation"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

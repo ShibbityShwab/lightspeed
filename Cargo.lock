@@ -2937,7 +2937,7 @@ dependencies = [
  "ureq",
  "windivert",
  "windivert-sys",
- "windows 0.48.0",
+ "windows 0.62.2",
 ]
 
 [[package]]
