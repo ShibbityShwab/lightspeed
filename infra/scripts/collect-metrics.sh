@@ -230,9 +230,13 @@ def n: (tonumber? // 0);
         reachable: $r.reachable,
         version: $r.version,
         active_sessions: $r.active_sessions,
-        geo: $r.geo,
-        geo_capped: $r.geo_capped,
-        cumulative: $r.cumulative,
+         geo: $r.geo,
+         geo_capped: $r.geo_capped,
+         lifetime: (reduce $counters[] as $k (
+            {};
+            .[$k] = (((($prevrelay[$r.id].lifetime[$k]) // 0) | n) + ($r.delta[$k] // 0))
+         )),
+         cumulative: $r.cumulative,
         delta: $r.delta,
         reset: $r.reset,
         reset_metrics: $r.reset_metrics
