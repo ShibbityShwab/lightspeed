@@ -207,6 +207,7 @@
     "eu-south": "eu",
     "eu-south-1": "eu",
     "ap-southeast": "apac",
+    "ap-southeast-2": "oceania",
     "ap-southeast-1": "apac",
     "ap-southeast-2": "apac",
     "ap-northeast": "apac",
@@ -254,6 +255,10 @@
     "relay-mad-1": {
       "lat": 40.42,
       "lon": -3.7
+    },
+    "relay-syd-1": {
+      "lat": -33.87,
+      "lon": 151.21
     }
   }
 }

@@ -599,7 +599,7 @@ mod tests {
         let signed: SignedRegistry = serde_json::from_str(&signed_json).unwrap();
         let registry = verify_registry(&signed, DEFAULT_OPERATOR_PUBKEY_B64).unwrap();
         assert_eq!(registry.schema_version, 1);
-        assert_eq!(registry.nodes.len(), 7);
+        assert_eq!(registry.nodes.len(), 8);
         for expected in [
             "relay-lax-1",
             "relay-ewr-1",

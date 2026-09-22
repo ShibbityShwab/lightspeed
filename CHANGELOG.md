@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Eighth community relay: **Sydney (AP-Southeast-2)**, sponsor-funded and listed
+  in the signed registry. It was the recommender's first confident `ADD`
+  (unserved leader, stable for 3 runs), fixing Australian players detouring via
+  Los Angeles.
+
+### Added
+
 - Two community relays: **Mumbai (AP-South)** and **Madrid (EU-South)**, both
   sponsor-funded and listed in the signed registry (7 nodes total).
 - `setup-new-node.sh` now generates the node identity key, syncs the GeoIP
