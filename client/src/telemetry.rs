@@ -95,7 +95,7 @@ impl TelemetryCollector {
     }
 
     /// Compute percentiles from a sorted slice.
-    fn percentile(sorted: &[f32], pct: f32) -> f32 {
+    pub(crate) fn percentile(sorted: &[f32], pct: f32) -> f32 {
         if sorted.is_empty() {
             return 0.0;
         }
@@ -106,8 +106,10 @@ impl TelemetryCollector {
     /// Build a [`TelemetryReport`] from the current samples.
     /// Drains all accumulated samples and FEC counters.
     async fn build_report(&self, game_id: u8, country: &str) -> Option<TelemetryReport> {
+        let (direct_p50_ms, relayed_p50_ms) = crate::latency::report_values();
+
         let mut inner = self.inner.lock().await;
-        if inner.samples.is_empty() {
+        if inner.samples.is_empty() && direct_p50_ms.is_none() && relayed_p50_ms.is_none() {
             return None;
         }
 
@@ -149,6 +151,8 @@ impl TelemetryCollector {
             sample_count: count,
             fec_recoveries: recoveries,
             fec_losses: losses,
+            direct_p50_ms,
+            relayed_p50_ms,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             route_legs,
         })

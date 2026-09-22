@@ -16,6 +16,7 @@ mod config;
 mod error;
 mod games;
 mod interceptor;
+mod latency;
 mod ml;
 mod modes;
 mod quic;
@@ -265,6 +266,9 @@ async fn main() -> anyhow::Result<()> {
         telemetry::print_disclosure();
         let collector = Arc::new(TelemetryCollector::new());
         telemetry::paths::install_global_collector(collector.as_ref());
+        // Direct/relayed latency measurement shares the opt-in gate: no ICMP
+        // probe or tunnel RTT tracking happens unless telemetry is enabled.
+        latency::install_global(Arc::new(latency::LatencyTracker::default()));
         Some(collector)
     } else {
         None
@@ -1005,6 +1009,25 @@ async fn main() -> anyhow::Result<()> {
     crate::session::set_current_proxy(proxy_addr);
     start_continuous_rerouting(&resolved.servers, &config, &cli);
 
+    // ── Telemetry context + periodic flush (all session modes) ────
+    //
+    // Spawned before mode dispatch so redirect, capture, and interceptor
+    // sessions report too, not just keepalive mode. The context is kept for
+    // keepalive mode's final shutdown flush.
+    let game_id = cli
+        .game
+        .as_deref()
+        .map(lightspeed_protocol::game_id::id_for_key)
+        .unwrap_or(lightspeed_protocol::game_id::UNKNOWN);
+    let telemetry_ctx = telemetry::context::TelemetryContext {
+        game_id,
+        country: telemetry::context::detect_country(),
+    };
+    if let Some(ref tc) = telemetry_collector {
+        let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
+        telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, telemetry_ctx.clone());
+    }
+
     // ── --live-test ───────────────────────────────────────────────
     if cli.live_test {
         let echo_server = cli
@@ -1206,24 +1229,6 @@ async fn main() -> anyhow::Result<()> {
             proxy_addr,
         );
         info!("");
-    }
-
-    // ── Spawn periodic telemetry flush (every 15 min) ─────────────
-    let game_id = cli
-        .game
-        .as_deref()
-        .map(lightspeed_protocol::game_id::id_for_key)
-        .unwrap_or(lightspeed_protocol::game_id::UNKNOWN);
-    let telemetry_ctx = telemetry::context::TelemetryContext {
-        game_id,
-        country: telemetry::context::detect_country(),
-    };
-
-    if let Some(ref tc) = telemetry_collector {
-        let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
-        // TelemetryCollector is Arc-backed; .clone() shares the same ring buffer.
-        // The context is cloned so the shutdown flush below can reuse it.
-        telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, telemetry_ctx.clone());
     }
 
     // ── Keepalive mode ────────────────────────────────────────────

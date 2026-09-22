@@ -17,6 +17,7 @@ pub(crate) mod capture;
 pub(crate) mod cli;
 pub(crate) mod config;
 pub(crate) mod error;
+pub(crate) mod latency;
 pub(crate) mod ml;
 pub(crate) mod modes;
 pub(crate) mod quic;

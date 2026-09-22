@@ -669,6 +669,7 @@ mod inner {
                         let fec_hdr = FecHeader::data(block_id, index, cfg.fec_k);
                         let pkt_buf = build_fec_data_packet(&hdr, &fec_hdr, &payload);
                         let parity = encoder.add_packet(&payload);
+                        crate::latency::record_outbound(*game_dst.ip());
                         let _ = tunnel_socket.send_to(&pkt_buf, proxy_addr).await;
                         if let Some(parity_bytes) = parity {
                             let ps = seq.wrapping_add(1);
@@ -687,6 +688,7 @@ mod inner {
                         )
                         .with_session_token(crate::session::session_token());
                         let pkt_bytes = hdr.encode_with_payload(&payload);
+                        crate::latency::record_outbound(*game_dst.ip());
                         let _ = tunnel_socket.send_to(&pkt_bytes, proxy_addr).await;
                     }
 
@@ -719,6 +721,10 @@ mod inner {
                             continue;
                         }
                     };
+
+                    if !header.is_keepalive() {
+                        crate::latency::record_inbound(*header.orig_src_addr().ip());
+                    }
 
                     // Handle keepalive echo
                     if header.is_keepalive() {
