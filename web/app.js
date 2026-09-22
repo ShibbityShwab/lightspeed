@@ -407,7 +407,13 @@
         fecRatio = (interval.fec_recoveries / (interval.fec_recoveries + interval.fec_losses)) * 100;
       }
 
-      return { t: snap.t, relays: deltas, latencyMs: latencyMs, fecRatio: fecRatio };
+      var savedMs = null;
+      if (finiteNumber(interval.saved_ms_sum) && finiteNumber(interval.saved_ms_count) &&
+          interval.saved_ms_count > 0) {
+        savedMs = interval.saved_ms_sum / interval.saved_ms_count;
+      }
+
+      return { t: snap.t, relays: deltas, latencyMs: latencyMs, fecRatio: fecRatio, savedMs: savedMs };
     });
 
     var relayIds = Object.keys(totals).sort(function (a, b) {
@@ -418,7 +424,8 @@
       points: points,
       relayIds: relayIds,
       hasLatency: points.some(function (point) { return finiteNumber(point.latencyMs); }),
-      hasFec: points.some(function (point) { return finiteNumber(point.fecRatio); })
+      hasFec: points.some(function (point) { return finiteNumber(point.fecRatio); }),
+      hasSaved: points.some(function (point) { return finiteNumber(point.savedMs); })
     };
   }
 
@@ -685,7 +692,7 @@
     }
 
     var model = buildTrendModel(snapshots);
-    if (!model.relayIds.length && !model.hasLatency && !model.hasFec) {
+    if (!model.relayIds.length && !model.hasLatency && !model.hasFec && !model.hasSaved) {
       showTrendsEmpty('The published history has ' + snapshots.length + ' snapshot' +
         (snapshots.length === 1 ? '' : 's') + ' but no plottable relay metrics yet.');
       return;
@@ -695,6 +702,12 @@
     empty.hidden = true;
 
     var window = windowSummary(model);
+
+    var heroSaved = document.getElementById('hero-ping-saved');
+    if (heroSaved) {
+      var savedSeries = model.points.map(function (point) { return point.savedMs; }).filter(finiteNumber);
+      heroSaved.textContent = savedSeries.length ? formatMs(savedSeries[savedSeries.length - 1]) : 'collecting';
+    }
 
     if (model.relayIds.length) {
       var relayedSeries = relaySeries(model, 'relayed');
@@ -733,6 +746,19 @@
       summary: 'Latest: ' + formatMs(latestFinite(latencyValues)) + ' · ' + window,
       emptyMessage: 'This history does not carry latency sum/count counters, so there is no mean to plot.',
       caveat: 'Mean of proxy-observed lag, not client RTT. It measures how long the relay waited for upstream responses, not the ping you would see in-game.'
+    }));
+
+    var savedValues = model.points.map(function (point) { return point.savedMs; });
+    grid.appendChild(renderTrendCard({
+      title: 'Ping saved by LightSpeed',
+      subtitle: 'Direct ping minus tunnelled ping, averaged over opt-in client reports. Positive means LightSpeed was faster.',
+      series: [{ label: 'Saved', color: TREND_COLORS[2], values: savedValues }],
+      points: model.points,
+      axisFormat: formatMsAxis,
+      description: chartDescription('Ping saved by LightSpeed', [{ label: 'saved', values: savedValues }], formatMs),
+      summary: 'Latest: ' + formatMs(latestFinite(savedValues)) + ' · ' + window,
+      emptyMessage: 'No opt-in client latency reports yet, so there is no direct-versus-tunnelled comparison to plot.',
+      caveat: 'Direct ping is measured by the client with ICMP to the game server; tunnelled ping is the game traffic round trip through the relay. Both are client-measured and opt-in.'
     }));
 
     var fecValues = model.points.map(function (point) { return point.fecRatio; });
