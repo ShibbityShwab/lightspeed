@@ -48,7 +48,8 @@
 #   9. Ranking is score desc, candidate id asc. margin is the relative
 #      lead of the top candidate over the best candidate in a *different*
 #      region (candidates sharing the leader's region are alternatives,
-#      not rivals, so they must not zero out the margin).
+#      not rivals, so they must not zero out the margin). It is capped
+#      at 1.0, which also covers a runner-up region scoring ~0.
 #  10. stability.runs keeps the last 10 runs; streak counts trailing
 #      runs with the same top candidate.
 #  11. ADD needs an unserved leader region plus either stability or a
@@ -416,8 +417,9 @@ def streak_of($runs; $top_id):
    else (([ $ranking[] | select(.region != $top.region) ] | .[0]) // null)
    end) as $second
 | (if $top == null or $second == null then null
-   else (($top.score - $second.score)
-         / (if $second.score < 0.001 then 0.001 else $second.score end))
+   elif $second.score < 0.001 then 1
+   else (($top.score - $second.score) / $second.score
+         | if . > 1 then 1 else . end)
    end) as $margin_raw
 | (if $margin_raw == null then null else ($margin_raw | r6) end) as $margin
 | (if $margin == null then false else true end) as $has_margin
