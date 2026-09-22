@@ -367,6 +367,12 @@ assert_rc0 $? "(12) large history exits 0"
 assert_jq "$OUT12" '.notes | test("fatal parse failure") | not' "(12) large history does not fall back to the minimal document"
 assert_jq "$OUT12" '.window.snapshots > 0' "(12) large history yields a non-empty window"
 
+# ── (13) relay necessity is reported for every existing relay ─
+assert_jq "$OUT3" '.relay_necessity | length > 0' "(13) necessity lists existing relays"
+assert_jq "$OUT3" '(.relay_necessity | length) == (.existing | length)' "(13) one necessity row per existing relay"
+assert_jq "$OUT3" '.relay_necessity | all(has("sessions") and has("worst_retention"))' "(13) necessity rows carry sessions and retention"
+assert_jq "$OUT3" '.prune_candidates | type == "array"' "(13) prune_candidates is an array"
+
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
     printf 'recommend-regions: all assertions passed\n'
