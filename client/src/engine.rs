@@ -172,6 +172,13 @@ pub struct LightSpeedEngine {
     windivert_stat_slot: Option<WinDivertStatSlot>,
     /// Live handle for the OOP TrafficInterceptor (multiplatform MITM).
     interceptor_handle: Option<crate::interceptor::InterceptorHandle>,
+    /// Periodic telemetry flush task, running while a relay is connected and
+    /// telemetry is enabled.
+    telemetry_flush: Option<tokio::task::JoinHandle<()>>,
+    /// Relay the telemetry flusher reports to, refreshed on each connect/start.
+    telemetry_proxy: Option<SocketAddrV4>,
+    /// Wire game id attached to telemetry reports (`UNKNOWN` until a game runs).
+    telemetry_game_id: u8,
 }
 
 impl LightSpeedEngine {
@@ -191,6 +198,9 @@ impl LightSpeedEngine {
             windivert_done_rx: None,
             windivert_stat_slot: None,
             interceptor_handle: None,
+            telemetry_flush: None,
+            telemetry_proxy: None,
+            telemetry_game_id: lightspeed_protocol::game_id::UNKNOWN,
         }
     }
 
@@ -231,12 +241,72 @@ impl LightSpeedEngine {
         self.rt
             .spawn(run_keepalive(proxy_addr, status, rx, generation));
         self.spawn_registration(proxy_addr);
+        self.note_telemetry_proxy(proxy_addr);
     }
 
     /// Record the registry node id of the relay currently selected by the GUI.
     pub fn set_node_id(&mut self, node_id: Option<String>) {
         if let Ok(mut s) = self.status.write() {
             s.node_id = node_id;
+        }
+    }
+
+    /// Enable or disable anonymous telemetry for this engine.
+    ///
+    /// Enabling installs the process-wide collector and latency tracker
+    /// (idempotent) and starts periodic flushing for the current relay.
+    /// Disabling stops flushing and gates off further recording. The
+    /// process-wide installation is never removed; it is only muted.
+    pub fn set_telemetry_enabled(&mut self, enabled: bool) {
+        if enabled {
+            let _ = crate::telemetry::install();
+            crate::telemetry::set_enabled(true);
+            self.refresh_telemetry_flush();
+        } else {
+            crate::telemetry::set_enabled(false);
+            self.stop_telemetry_flush();
+        }
+    }
+
+    /// Set the wire game id attached to telemetry reports (`0` = unknown).
+    pub fn set_telemetry_game(&mut self, game_key: &str) {
+        self.telemetry_game_id = lightspeed_protocol::game_id::id_for_key(game_key);
+    }
+
+    /// Remember the relay for telemetry and (re)start flushing when enabled.
+    fn note_telemetry_proxy(&mut self, proxy_addr: SocketAddrV4) {
+        self.telemetry_proxy = Some(proxy_addr);
+        self.refresh_telemetry_flush();
+    }
+
+    /// (Re)start the periodic flush toward the remembered relay.
+    fn refresh_telemetry_flush(&mut self) {
+        self.stop_telemetry_flush();
+        if !crate::telemetry::is_enabled() {
+            return;
+        }
+        let Some(proxy) = self.telemetry_proxy else {
+            return;
+        };
+        let Some(collector) = crate::telemetry::paths::global_collector().cloned() else {
+            return;
+        };
+        let ctx = crate::telemetry::context::TelemetryContext {
+            game_id: self.telemetry_game_id,
+            country: crate::telemetry::context::detect_country(),
+        };
+        let host = proxy.ip().to_string();
+        // `spawn_periodic_flush` calls `tokio::spawn`, which needs a runtime
+        // context; the GUI calls engine methods from the egui thread.
+        let _guard = self.rt.enter();
+        self.telemetry_flush = Some(crate::telemetry::spawn_periodic_flush(collector, host, ctx));
+        tracing::info!("Telemetry flush started toward {}", proxy.ip());
+    }
+
+    /// Stop the periodic flush (if running).
+    fn stop_telemetry_flush(&mut self) {
+        if let Some(handle) = self.telemetry_flush.take() {
+            handle.abort();
         }
     }
 
@@ -272,6 +342,7 @@ impl LightSpeedEngine {
             let _ = tx.send(());
         }
         self.stop_supervised();
+        self.stop_telemetry_flush();
         if let Ok(mut s) = self.status.write() {
             s.connected = false;
         }
@@ -323,6 +394,7 @@ impl LightSpeedEngine {
 
         let status = Arc::clone(&self.status);
         self.spawn_registration(proxy_addr);
+        self.note_telemetry_proxy(proxy_addr);
         self.rt.spawn(async move {
             // run_with_shutdown takes &self and is Send, but UdpRedirect isn't
             // Arc'd — we move it into the task.
@@ -432,6 +504,7 @@ impl LightSpeedEngine {
         let proxy_id = proxy_addr.to_string();
 
         self.spawn_registration(proxy_addr);
+        self.note_telemetry_proxy(proxy_addr);
         self.rt.spawn(async move {
             // game_box owned here; reference valid for the duration of the .await
             let game: Box<dyn crate::games::GameConfig> = game_box;
@@ -552,6 +625,7 @@ impl LightSpeedEngine {
 
         let status = Arc::clone(&self.status);
         self.spawn_registration(proxy_addr);
+        self.note_telemetry_proxy(proxy_addr);
         self.rt.spawn(async move {
             match run_windivert_mode_with_shutdown(cfg, rx, Some(stat_slot)).await {
                 Ok(()) => tracing::info!("WinDivert redirect stopped cleanly"),
@@ -641,6 +715,7 @@ impl LightSpeedEngine {
 
         let status = Arc::clone(&self.status);
         self.spawn_registration(proxy_addr);
+        self.note_telemetry_proxy(proxy_addr);
         self.rt.spawn(async move {
             match run_windivert_mode_with_shutdown(cfg, rx, Some(stat_slot)).await {
                 Ok(()) => tracing::info!("WinDivert auto-redirect stopped cleanly"),
@@ -747,6 +822,7 @@ impl LightSpeedEngine {
         let platform = interceptor.platform_name();
 
         self.spawn_registration(proxy_addr);
+        self.note_telemetry_proxy(proxy_addr);
         // `start()` must run inside a Tokio runtime context: the WinDivert
         // backend calls `tokio::spawn`/`spawn_blocking`/`Handle::current()`,
         // which panic with "there is no reactor running" from a non-Tokio
@@ -980,6 +1056,17 @@ async fn run_keepalive(
                                     s.rtt_history.push(rtt_ms);
                                     if s.rtt_history.len() > 120 {
                                         s.rtt_history.remove(0);
+                                    }
+                                }
+                                if crate::telemetry::is_enabled() {
+                                    if let Some(collector) =
+                                        crate::telemetry::paths::global_collector()
+                                    {
+                                        collector.record_rtt(rtt_ms).await;
+                                        collector.record_path_rtt(
+                                            &crate::telemetry::paths::relay_label(proxy),
+                                            rtt_ms,
+                                        );
                                     }
                                 }
                             }

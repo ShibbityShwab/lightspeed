@@ -140,6 +140,7 @@ pub struct LightSpeedApp<P: Platform> {
     selected_game_idx: usize,
     server_input: String,
     fec_enabled: bool,
+    share_latency_stats: bool,
     auto_detected_game: Option<String>,
 
     // ── System state ──────────────────────────────────────────────────────
@@ -200,6 +201,7 @@ impl<P: Platform> LightSpeedApp<P> {
             })
             .unwrap_or(0);
         let auto_select = saved.auto_select;
+        let share_latency_stats = saved.share_latency_stats;
 
         let mut app = Self {
             engine,
@@ -216,6 +218,7 @@ impl<P: Platform> LightSpeedApp<P> {
             selected_game_idx,
             server_input: String::new(),
             fec_enabled: false,
+            share_latency_stats,
             auto_detected_game,
             is_admin,
             fonts_setup: false,
@@ -234,6 +237,10 @@ impl<P: Platform> LightSpeedApp<P> {
 
         // Reconnect to the persisted relay immediately; discovery may replace
         // the list a moment later without dropping the connection.
+        app.engine
+            .lock()
+            .unwrap()
+            .set_telemetry_enabled(share_latency_stats);
         app.connect_selected();
         app
     }
@@ -290,6 +297,7 @@ impl<P: Platform> LightSpeedApp<P> {
             selected: self.selected_entry().map(|entry| entry.addr.to_string()),
             proxies: self.proxies.clone(),
             auto_select: self.auto_select,
+            share_latency_stats: self.share_latency_stats,
         };
         if let Err(e) = config::save(&paths::config_file(), &config) {
             tracing::warn!("Could not persist GUI config: {e}");
@@ -1249,6 +1257,30 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     });
                 });
 
+                ui.add_space(4.0);
+
+                // ── Anonymous telemetry toggle ────────────────────────────
+                ui.horizontal(|ui| {
+                    let changed = ui
+                        .checkbox(
+                            &mut self.share_latency_stats,
+                            "📊 Share anonymous latency stats",
+                        )
+                        .on_hover_text(
+                            "Send anonymous aggregate RTT, jitter, and FEC stats to your \
+                             relay so the community can see real latency improvements. No \
+                             IP address, identifier, or packet content is ever sent.",
+                        )
+                        .changed();
+                    if changed {
+                        self.persist_config();
+                        self.engine
+                            .lock()
+                            .unwrap()
+                            .set_telemetry_enabled(self.share_latency_stats);
+                    }
+                });
+
                 ui.add_space(8.0);
 
                 // ── Method info strip ─────────────────────────────────────
@@ -1368,7 +1400,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
                     if let Some(proxy) = self.selected_proxy_addr() {
                         let game_key = self.selected_game().key;
-                        let result = self.engine.lock().unwrap().start_interceptor(
+                        let mut engine = self.engine.lock().unwrap();
+                        engine.set_telemetry_game(game_key);
+                        let result = engine.start_interceptor(
                             game_key,
                             proxy,
                             self.fec_enabled,

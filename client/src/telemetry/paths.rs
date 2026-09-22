@@ -124,12 +124,13 @@ fn jitter_ms(samples: &[f32]) -> f32 {
     deltas / (samples.len() - 1) as f32
 }
 
-/// Process-wide opt-in collector, installed only when telemetry is enabled.
+/// Process-wide collector, installed by [`super::install`].
 static GLOBAL_COLLECTOR: OnceLock<TelemetryCollector> = OnceLock::new();
 
 /// Install the active collector so transport call sites can feed per-leg
-/// telemetry without threading the handle through every call. Never installed
-/// when telemetry is disabled, which is what keeps the opt-in gate intact.
+/// telemetry without threading the handle through every call. Idempotent: the
+/// first call wins and later calls are ignored. Recording is additionally
+/// gated by [`super::is_enabled`], so a disabled collector accumulates nothing.
 pub fn install_global_collector(collector: &TelemetryCollector) {
     let _ = GLOBAL_COLLECTOR.set(collector.clone());
 }
@@ -175,6 +176,9 @@ pub fn relay_label(addr: impl Into<SocketAddr>) -> String {
 /// Feed a per-leg response into telemetry when it is enabled. `latency_us == 0`
 /// means no RTT was measured, so only the duplicate signal is recorded.
 pub fn record_relay_response(addr: impl Into<SocketAddr>, latency_us: u64, duplicate: bool) {
+    if !super::is_enabled() {
+        return;
+    }
     let Some(collector) = global_collector() else {
         return;
     };
@@ -189,6 +193,9 @@ pub fn record_relay_response(addr: impl Into<SocketAddr>, latency_us: u64, dupli
 
 /// Feed a per-leg FEC recovery into telemetry when it is enabled.
 pub fn record_relay_recovery(addr: impl Into<SocketAddr>) {
+    if !super::is_enabled() {
+        return;
+    }
     if let Some(collector) = global_collector() {
         collector.record_path_recovered(&relay_label(addr));
     }

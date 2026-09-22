@@ -44,8 +44,12 @@ pub struct GeneralConfig {
     #[serde(default = "default_log_level")]
     pub log_level: String,
 
-    /// Enable telemetry (latency metrics only, opt-in).
-    #[serde(default)]
+    /// Share anonymous aggregate latency statistics with the relay.
+    ///
+    /// **On by default (opt-out).** Only aggregate RTT percentiles, jitter,
+    /// and FEC counters are sent; never an IP address, identifier, token, or
+    /// packet content. Set to `false` (or pass `--no-telemetry`) to disable.
+    #[serde(default = "default_telemetry")]
     pub telemetry: bool,
 
     /// Network interface to capture on (auto-detect if empty).
@@ -155,6 +159,10 @@ fn default_log_level() -> String {
     "info".into()
 }
 
+fn default_telemetry() -> bool {
+    true
+}
+
 fn default_keepalive_ms() -> u64 {
     5000
 }
@@ -207,7 +215,7 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             log_level: default_log_level(),
-            telemetry: false,
+            telemetry: default_telemetry(),
             interface: None,
         }
     }
@@ -294,7 +302,7 @@ mod tests {
     fn test_config_default() {
         let config = Config::default();
         assert_eq!(config.general.log_level, "info");
-        assert!(!config.general.telemetry);
+        assert!(config.general.telemetry);
         assert!(config.general.interface.is_none());
         assert_eq!(config.tunnel.keepalive_ms, 5000);
         assert_eq!(config.tunnel.timeout_ms, 10000);
@@ -316,7 +324,7 @@ mod tests {
     fn test_sub_config_defaults() {
         let general = GeneralConfig::default();
         assert_eq!(general.log_level, "info");
-        assert!(!general.telemetry);
+        assert!(general.telemetry);
         assert!(general.interface.is_none());
 
         let tunnel = TunnelConfig::default();
@@ -347,6 +355,21 @@ mod tests {
     // ── TOML round-trip tests ──────────────────────────────────────────
 
     #[test]
+    fn test_telemetry_defaults_on_and_can_be_disabled() {
+        // Absent key => on by default (opt-out).
+        let defaulted: Config = toml::from_str("[general]\nlog_level = \"info\"\n").unwrap();
+        assert!(defaulted.general.telemetry);
+
+        // Explicit opt-out is honoured.
+        let opted_out: Config = toml::from_str("[general]\ntelemetry = false\n").unwrap();
+        assert!(!opted_out.general.telemetry);
+
+        // Explicit opt-in stays true.
+        let opted_in: Config = toml::from_str("[general]\ntelemetry = true\n").unwrap();
+        assert!(opted_in.general.telemetry);
+    }
+
+    #[test]
     fn test_empty_config_toml_roundtrip() {
         let toml_str = "";
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -371,7 +394,7 @@ keepalive_ms = 10000
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.general.log_level, "debug");
         assert_eq!(config.general.interface.as_deref(), Some("eth0"));
-        assert!(!config.general.telemetry); // default preserved
+        assert!(config.general.telemetry); // default preserved (on by default)
         assert_eq!(config.tunnel.keepalive_ms, 10000);
         assert_eq!(config.tunnel.timeout_ms, 10000); // default preserved
         assert_eq!(config.route.strategy, "nearest"); // default preserved
@@ -586,7 +609,7 @@ servers = [
         let config: Config = toml::from_str(example).expect("example config must parse");
 
         assert_eq!(config.general.log_level, "info");
-        assert!(!config.general.telemetry);
+        assert!(config.general.telemetry);
         assert!(config.general.interface.is_none());
 
         assert_eq!(config.tunnel.keepalive_ms, 5000);

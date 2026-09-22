@@ -180,13 +180,14 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub scan_processes: bool,
 
-    /// Enable opt-in anonymous telemetry.
-    /// Sends aggregated latency stats (p50/p95/p99, jitter, FEC) to the proxy
-    /// every 15 min. No IP address or PII is ever sent. See docs/privacy.md.
+    /// Share anonymous aggregate latency stats (on by default).
+    /// Sends p50/p95/p99 RTT, jitter, and FEC counters to the relay every
+    /// 15 minutes. No IP address, identifier, or packet content is ever sent,
+    /// and cells with fewer than 3 reports are suppressed. See docs/privacy.md.
     #[arg(long, default_value_t = false)]
     pub telemetry: bool,
 
-    /// Disable telemetry even if enabled in the config file.
+    /// Disable telemetry even though it is on by default (overrides config).
     #[arg(long, default_value_t = false)]
     pub no_telemetry: bool,
 }
