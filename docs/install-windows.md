@@ -67,7 +67,7 @@ The GUI shows relay status, registration state, and packet counters so you can s
 lightspeed-client.exe --probe-proxies
 ```
 
-This performs one discovery/probe pass and prints a visible report listing each discovered relay and its latency. You should see all seven community relays.
+This performs one discovery/probe pass and prints a visible report listing each discovered relay and its latency. You should see all eight community relays.
 
 **Check control-plane registration.** With the CLI build:
 
