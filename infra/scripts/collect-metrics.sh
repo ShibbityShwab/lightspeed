@@ -53,7 +53,7 @@ REGIONS_PATH="${LIGHTSPEED_REGIONS_PATH:-$REPO_ROOT/infra/geo/regions.json}"
 
 # Cumulative counters tracked for reset-safe deltas. Keep this list in
 # sync with RELAY_JQ's `cumulative` object.
-COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","sessions_created"]'
+COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","sessions_created","direct_ms_sum","direct_ms_count","relayed_ms_sum","relayed_ms_count","saved_ms_sum","saved_ms_count"]'
 
 # ── Always write valid JSON; never fail the caller ───────────
 write_json() {
@@ -88,6 +88,12 @@ def mval($m; $name):
      | map(select((startswith($name + "{")) or (startswith($name + " "))))
      | (.[0] // "")) as $line
   | (try ($line | capture("^[^ ]+ +(?<v>[-+0-9.eE]+)").v | tonumber) catch 0) // 0;
+def sum_family($m; $name):
+  (($m // "") | split("\n")
+   | map(select((startswith($name + "{")) or (startswith($name + " "))))
+   | map(try (capture("^[^ ]+ +(?<v>[-+0-9.eE]+)").v | tonumber) catch null)
+   | map(select(. != null))
+   | add) // 0;
 def pick($H; $m; $hk; $mn):
   ($H[$hk]) as $v
   | if $v != null then ($v | tonumber? // 0) else mval($m; $mn) end;
@@ -155,6 +161,12 @@ def geo_cells($m; $countries; $max):
       fec_losses: mval($m; "lightspeed_telemetry_fec_losses_total"),
       relay_latency_us_sum: mval($m; "lightspeed_relay_latency_us_sum"),
       relay_latency_us_count: mval($m; "lightspeed_relay_latency_us_count"),
+      direct_ms_sum: sum_family($m; "lightspeed_telemetry_direct_ms_sum"),
+      direct_ms_count: sum_family($m; "lightspeed_telemetry_direct_ms_count"),
+      relayed_ms_sum: sum_family($m; "lightspeed_telemetry_relayed_ms_sum"),
+      relayed_ms_count: sum_family($m; "lightspeed_telemetry_relayed_ms_count"),
+      saved_ms_sum: sum_family($m; "lightspeed_telemetry_saved_ms_sum"),
+      saved_ms_count: sum_family($m; "lightspeed_telemetry_saved_ms_count"),
       rate_limit_hits: mval($m; "lightspeed_rate_limit_hits_total"),
       rate_limit_ip_hits: mval($m; "lightspeed_rate_limit_ip_hits_total"),
       rate_limit_overflow: mval($m; "lightspeed_rate_limit_overflow_total"),
