@@ -149,12 +149,13 @@ fn parse_echo_reply(buf: &[u8]) -> Option<(u16, u16)> {
 
 fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
-    let mut chunks = data.chunks_exact(2);
-    for chunk in &mut chunks {
-        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    let mut i = 0;
+    while i + 2 <= data.len() {
+        sum += u32::from(u16::from_be_bytes([data[i], data[i + 1]]));
+        i += 2;
     }
-    if let [last] = chunks.remainder() {
-        sum += u32::from(u16::from_be_bytes([*last, 0]));
+    if i < data.len() {
+        sum += u32::from(u16::from_be_bytes([data[i], 0]));
     }
     while sum >> 16 != 0 {
         sum = (sum & 0xffff) + (sum >> 16);
