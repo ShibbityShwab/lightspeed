@@ -267,6 +267,54 @@
     });
   }
 
+  // /health counters are process-lifetime and reset when the relay rolls over
+  // in place, so the cards and headline read the accumulator the collector
+  // carries across restarts instead. Falls back to /health until history loads.
+  var lifetimeByRelay = null;
+  var lastRelays = null;
+
+  function applyRelayStats(relays) {
+    var merged = relays.map(function (relay) {
+      var lt = lifetimeByRelay && lifetimeByRelay[relay.node_id];
+      if (!lt) return relay;
+      var out = {};
+      Object.keys(relay).forEach(function (k) { out[k] = relay[k]; });
+      if (typeof lt.packets_relayed === 'number') out.packets_relayed = lt.packets_relayed;
+      if (typeof lt.sessions_created === 'number') out.sessions_created = lt.sessions_created;
+      return out;
+    });
+    renderRelayCards(merged);
+    renderRelayHealthList(relays);
+
+    var totalRelayed = 0;
+    var totalDropped = 0;
+    var totalUpstreamLoss = 0;
+    var totalSessions = 0;
+    merged.forEach(function (relay) {
+      if (typeof relay.packets_relayed === 'number') totalRelayed += relay.packets_relayed;
+      if (typeof relay.packets_dropped === 'number') totalDropped += relay.packets_dropped;
+      if (typeof relay.drops_relay_send_errors === 'number') totalUpstreamLoss += relay.drops_relay_send_errors;
+      if (typeof relay.sessions_created === 'number') totalSessions += relay.sessions_created;
+    });
+    setStat('packets_relayed', formatCount(totalRelayed));
+    setStat('packets_dropped', formatCount(totalDropped));
+    setStat('drops_relay_send_errors', formatCount(totalUpstreamLoss));
+    setStat('sessions_created', formatCount(totalSessions));
+  }
+
+  function applyLifetime(snapshots) {
+    if (!snapshots.length) return;
+    var per = snapshots[snapshots.length - 1].per_relay || {};
+    var byRelay = {};
+    Object.keys(per).forEach(function (id) {
+      var lt = per[id] && per[id].lifetime;
+      if (lt && typeof lt === 'object') byRelay[id] = lt;
+    });
+    if (!Object.keys(byRelay).length) return;
+    lifetimeByRelay = byRelay;
+    if (lastRelays) applyRelayStats(lastRelays);
+  }
+
   function renderNetworkStats(stats) {
     if (!stats || typeof stats !== 'object') return;
 
@@ -291,23 +339,8 @@
 
     var relays = Array.isArray(stats.relays) ? stats.relays : [];
     if (relays.length) {
-      renderRelayCards(relays);
-      renderRelayHealthList(relays);
-
-      var totalRelayed = 0;
-      var totalDropped = 0;
-      var totalUpstreamLoss = 0;
-      var totalSessions = 0;
-      relays.forEach(function (relay) {
-        if (typeof relay.packets_relayed === 'number') totalRelayed += relay.packets_relayed;
-        if (typeof relay.packets_dropped === 'number') totalDropped += relay.packets_dropped;
-        if (typeof relay.drops_relay_send_errors === 'number') totalUpstreamLoss += relay.drops_relay_send_errors;
-        if (typeof relay.sessions_created === 'number') totalSessions += relay.sessions_created;
-      });
-      setStat('packets_relayed', formatCount(totalRelayed));
-      setStat('packets_dropped', formatCount(totalDropped));
-      setStat('drops_relay_send_errors', formatCount(totalUpstreamLoss));
-      setStat('sessions_created', formatCount(totalSessions));
+      lastRelays = relays;
+      applyRelayStats(relays);
     }
 
     var healthBar = document.getElementById('network-health-bar');
@@ -686,6 +719,7 @@
     if (!grid || !empty) return;
 
     var snapshots = normalizeSnapshots(doc);
+    applyLifetime(snapshots);
     if (!snapshots.length) {
       showTrendsEmpty('No network history has been published yet. Trends appear after the first scheduled snapshot is recorded.');
       return;

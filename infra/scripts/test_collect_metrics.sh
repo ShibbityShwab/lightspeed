@@ -133,6 +133,7 @@ assert_jq "$H" '.snapshots[0].relay_count == 1 and .snapshots[0].healthy_count =
 assert_jq "$H" '.snapshots[0].per_relay["relay-a"].version == "1.3.2"' "(a) version parsed from health"
 assert_jq "$H" '.snapshots[0].per_relay["relay-a"].active_sessions == 1' "(a) active_sessions gauge recorded"
 assert_jq "$H" '.snapshots[0].per_relay["relay-a"].cumulative.packets_relayed == 100' "(a) cumulative packets_relayed"
+assert_jq "$H" '.snapshots[0].per_relay["relay-a"].lifetime.packets_relayed == 100' "(a) lifetime accumulator seeded on the first snapshot"
 assert_jq "$H" '.snapshots[0].per_relay["relay-a"].cumulative.drops_malformed == 1' "(a) flat health drop field parsed"
 assert_jq "$H" '.snapshots[0].per_relay["relay-a"].cumulative.relay_latency_us_sum == 500 and .snapshots[0].per_relay["relay-a"].cumulative.relay_latency_us_count == 10' "(a) latency histogram sum/count parsed"
 assert_jq "$H" '.snapshots[0].per_relay["relay-a"].reset == true' "(a) unseen relay treated as reset"
