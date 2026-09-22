@@ -13,7 +13,7 @@
 #   (d) a missing / empty registry with no override is non-zero
 #   (e) deploy.sh fails closed on an empty inventory without
 #       starting a build
-# Plus: the signed registry still lists exactly 5 nodes.
+# Plus: the signed registry still lists exactly 8 nodes.
 #
 # Usage: bash infra/scripts/test_inventory.sh
 # Exits 0 and prints "inventory: all assertions passed" on success.
@@ -119,7 +119,7 @@ assert_eq "$(printf '%s' "$OUTPREC" | jq -r '.[0].node_id')" "solo" "(b) overrid
 # ── (c) default registry resolves from any CWD ───────────────
 OUT_CWD="$(cd "$TMP" && env -u LIGHTSPEED_NODES -u LIGHTSPEED_REGISTRY_PATH \
     bash -c 'source "$1"; lightspeed_resolve_nodes' _ "$LIB")"
-assert_eq "$(printf '%s' "$OUT_CWD" | jq -r 'length')" "5" "(c) default registry resolves from another CWD"
+assert_eq "$(printf '%s' "$OUT_CWD" | jq -r 'length')" "8" "(c) default registry resolves from another CWD"
 
 # ── (d) missing / empty registry with no override ────────────
 ERR_MISSING="$TMP/err-missing.txt"
@@ -148,8 +148,8 @@ else
 fi
 
 # ── signed registry integrity ────────────────────────────────
-assert_eq "$(jq -r '.registry | fromjson | .nodes | length' "$REGISTRY")" "5" \
-    "signed registry still lists exactly 5 nodes"
+assert_eq "$(jq -r '.registry | fromjson | .nodes | length' "$REGISTRY")" "8" \
+    "signed registry still lists exactly 8 nodes"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

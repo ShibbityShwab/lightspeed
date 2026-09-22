@@ -40,6 +40,8 @@ region_display() {
     local hay="${region,,} ${node_id,,}"
 
     case "$hay" in
+        *ap-southeast-2*|*syd*|*sydney*)
+            echo "AP-Southeast-2|Sydney|AU|🇦🇺" ;;
         *ap-southeast*|*sgp*|*singapore*)
             echo "AP-Southeast|Singapore|SG|🇸🇬" ;;
         *ap-northeast*|*nrt*|*tokyo*)
