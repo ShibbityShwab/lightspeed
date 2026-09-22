@@ -58,6 +58,9 @@
 #      move_coverage_keep of every kept cell's current cost.
 #  12. Candidates within near_duplicate_ms of an existing relay are
 #      rejected as near_duplicate.
+#  13. Every existing relay is reported in relay_necessity with its window
+#      session count and the coverage retention if it were dropped;
+#      prune_candidates lists relays that are both idle and redundant.
 #
 # Requires: bash, jq (>= 1.6 for sin/cos/asin/sqrt).
 # ──────────────────────────────────────────────────────────────
@@ -114,7 +117,7 @@ done
 
 # ── Minimal documents (valid JSON, no jq required) ───────────
 STATIC_MINIMAL='{"schema_version":1,"generated_at":0,"status":"INSUFFICIENT_DATA","window":{"from_t":0,"to_t":0,"snapshots":0,"sessions":0,"cells":0,"min_window_sessions":20,"min_cell_sessions":3},"matrix":[],"existing":[],"ranking":[],"rejected":[],"recommendation":{"action":"NONE","candidate_id":null,"remove_node_id":null,"reason":"insufficient data"},"stability":{"top_id":null,"streak":0,"required":3,"runs":[]},"notes":"no data"}'
-DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"near_duplicate_ms":25}'
+DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"near_duplicate_ms":25,"idle_sessions_max":0}'
 
 write_json() {
     local json="$1" minimal="$2"
@@ -285,6 +288,7 @@ def streak_of($runs; $top_id):
 | ($params.move_margin // 0.20 | n) as $move_margin
 | ($params.redundancy_weight // 0.5 | n) as $redundancy_weight
 | ($params.move_coverage_keep // 0.9 | n) as $coverage_keep
+| ($params.idle_sessions_max // 0 | n) as $idle_sessions_max
 | ($params.near_duplicate_ms // 25 | n) as $near_dup
 
 # ── Snapshot window ──────────────────────────────────────────
@@ -451,6 +455,22 @@ def streak_of($runs; $top_id):
 | ([ $removals[] | select(.worst_retention >= $coverage_keep and .worst_retention > 0) ]
    | sort_by([(-.worst_retention), .node_id]) | .[0] // null) as $move_target
 
+# ── Relay necessity ──────────────────────────────────────────
+# Pairs each relay window session count with the coverage it uniquely
+# provides (retention if that relay were dropped). A relay that is both
+# idle and redundant by those two measures is a prune candidate.
+| (reduce ($snaps[]?.per_relay // {} | to_entries[]) as $e
+    ({}; .[$e.key] = ((.[$e.key] // 0) + ($e.value.delta.sessions_created // 0)))) as $relay_sessions
+| ([ $existing[] as $r
+     | {node_id: $r.node_id,
+        region: $r.region,
+        sessions: (($relay_sessions[$r.node_id] // 0) | n),
+        worst_retention: (([ $removals[] | select(.node_id == $r.node_id) | .worst_retention ] | .[0]) // 1)}
+   ] | sort_by(.node_id)) as $relay_necessity
+| ([ $relay_necessity[]
+     | select((.sessions // 0) <= $idle_sessions_max and .worst_retention >= $coverage_keep)
+     | .node_id ]) as $prune_candidates
+
 # ── Stability ────────────────────────────────────────────────
 | (($prev.stability.runs // []) | .[-10:]) as $prev_runs
 | ({t: $to_t,
@@ -503,6 +523,8 @@ def streak_of($runs; $top_id):
     },
     matrix: ($cells | map({src, dst, sessions})),
     existing: $existing,
+    relay_necessity: $relay_necessity,
+    prune_candidates: $prune_candidates,
     ranking: $ranking_out,
     rejected: $rejected,
     recommendation: $recommendation,
