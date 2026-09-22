@@ -6,7 +6,7 @@
 
 ## Summary
 
-LightSpeed is **privacy-first by design**. The tunnel is unencrypted to remain compatible with anti-cheat systems: game servers always see your real IP address. Telemetry is opt-in only and limited to anonymized aggregate metrics. No personally identifiable information (PII) is ever collected or stored.
+LightSpeed is **privacy-first by design**. The tunnel is unencrypted to remain compatible with anti-cheat systems: game servers always see your real IP address. Telemetry is **on by default** and can be turned off at any time; it is limited to anonymized aggregate metrics. No personally identifiable information (PII) is ever collected or stored.
 
 ---
 
@@ -44,9 +44,12 @@ IP geolocation data by DB-IP (https://db-ip.com), licensed under CC BY 4.0.
 
 ---
 
-## Opt-In Telemetry (`--telemetry`)
+## Anonymous Telemetry (on by default)
 
-When you explicitly enable telemetry with the `--telemetry` flag, LightSpeed collects:
+Telemetry is **on by default**. It sends anonymous aggregate metrics to **your
+own proxy's** `/telemetry` endpoint. There is no central LightSpeed telemetry
+server. The relay suppresses any cell with fewer than **3 reports** (k-anonymity
+floor of 3), so no individual client's data is ever exported.
 
 | Metric | Example | PII? |
 |--------|---------|------|
@@ -60,19 +63,20 @@ When you explicitly enable telemetry with the `--telemetry` flag, LightSpeed col
 
 **Explicitly NOT collected:** IP addresses, user identities, game account data, packet payloads.
 
-Telemetry is sent to your own proxy's `/telemetry` endpoint. You control where it goes. There is no central LightSpeed telemetry server.
-
-### How to Enable/Disable
+### How to Turn It Off
 
 ```bash
-# Enable for this session
-lightspeed --telemetry --start-interceptor --game rust --proxy YOUR_PROXY:4434
-
-# Disable for this session (overrides config)
+# Disable for this session (overrides the config and the default)
 lightspeed --no-telemetry --start-interceptor --game rust --proxy YOUR_PROXY:4434
+
+# Disable permanently in lightspeed.toml
+# [general]
+# telemetry = false
 ```
 
-Telemetry is **off by default**. There is no auto-enrollment.
+`--telemetry` forces telemetry on for one session; `--no-telemetry` always wins.
+The GUI exposes the same switch as the **"Share anonymous latency stats"**
+checkbox.
 
 ---
 

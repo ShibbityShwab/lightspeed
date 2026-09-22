@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-09-22
+
+### Changed
+
+- Anonymous performance telemetry is now **on by default** (opt out with
+  `--no-telemetry`, `telemetry = false` in the config, or the new GUI checkbox).
+  Only aggregate percentiles, jitter and FEC counters are sent to your own
+  relay; no IPs, tokens, or identifiers, and cells below 3 reports are
+  suppressed.
+- The GUI gained a "Share anonymous latency stats" checkbox, and GUI sessions
+  now contribute to the ping-saved metric instead of only the CLI.
+
+### Fixed
+
+- The telemetry flush built an invalid address (`ip:8080:8080`), so client
+  reports never reached the relay. This is why the ping-saved metric could only
+  ever read "collecting".
+
 ## [1.6.4] - 2026-09-22
 
 ### Added

@@ -37,9 +37,10 @@ data_port = 4434
 # Log verbosity: trace, debug, info, warn, error. Default: info.
 log_level = "info"
 
-# Opt-in anonymous telemetry (latency percentiles + FEC stats only, no PII).
-# See docs/privacy.md. Default: false.
-telemetry = false
+# Anonymous aggregate telemetry (latency percentiles + FEC stats only, no
+# IPs, identifiers, or packet content). On by default. See docs/privacy.md.
+# Set to false (or run with --no-telemetry) to opt out.
+telemetry = true
 
 # Capture interface; auto-detected when unset.
 # interface = "eth0"

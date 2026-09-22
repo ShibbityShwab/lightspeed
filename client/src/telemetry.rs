@@ -5,15 +5,16 @@
 //!
 //! ## Privacy guarantees
 //!
-//! - **Disabled by default** — only enabled via `general.telemetry = true` in
-//!   `lightspeed.toml` or the `--telemetry` CLI flag.
-//! - **No PII** — the report never includes IP address, user ID, session token,
+//! - **On by default (opt-out)**: disable with `--no-telemetry` or
+//!   `general.telemetry = false` in `lightspeed.toml`.
+//! - **No PII**: the report never includes IP address, user ID, session token,
 //!   hostname, or any individual packet timing.
-//! - **Aggregated only** — raw RTT samples are reduced to percentiles
+//! - **Aggregated only**: raw RTT samples are reduced to percentiles
 //!   (p50/p95/p99) and jitter before being sent; the raw ring buffer is
-//!   discarded after each flush.
-//! - **First-run disclosure** — a clear banner is printed on every startup when
-//!   telemetry is enabled so users always know.
+//!   discarded after each flush. The relay suppresses any cell with fewer than
+//!   three reports (k-anonymity floor).
+//! - **Startup notice**: a one-line notice is printed once on startup when
+//!   telemetry runs, so users always know how to opt out.
 //!
 //! ## Endpoint
 //!
@@ -21,7 +22,7 @@
 //! [`TelemetryReport`].  Uses a hand-rolled HTTP/1.0 request so the client
 //! does not need an HTTP library dependency.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::Duration;
 
@@ -32,7 +33,7 @@ use tracing::{debug, warn};
 
 use lightspeed_protocol::TelemetryReport;
 
-pub(crate) mod context;
+pub mod context;
 pub(crate) mod paths;
 
 use context::TelemetryContext;
@@ -42,6 +43,48 @@ const RING_CAPACITY: usize = 1024;
 
 /// How often to flush telemetry while the tunnel is running.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(60 * 15); // 15 minutes
+
+/// Process-wide enable gate for telemetry recording and flushing.
+///
+/// Defaults to `false`. [`install`] sets it to `true`; [`set_enabled`] lets a
+/// caller (for example the GUI toggle) pause and resume without tearing the
+/// installed collector down. Read by the global recording hooks and by
+/// [`spawn_periodic_flush`].
+static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether telemetry recording and flushing are currently active.
+pub fn is_enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
+/// Enable or disable telemetry for the rest of the process.
+///
+/// This never uninstalls the collector: while disabled, the global recording
+/// hooks stop accumulating samples and the periodic flush stops sending, but
+/// the collector's `OnceLock` stays set. Call [`install`] first so a handle
+/// exists.
+pub fn set_enabled(enabled: bool) {
+    ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Install the process-wide telemetry collector and latency tracker.
+///
+/// **Idempotent.** The first call installs the collector and the direct/relayed
+/// latency tracker and returns a handle that shares state with the installed
+/// collector. Later calls are no-ops that return a handle to the
+/// already-installed collector, so installing twice neither panics nor
+/// double-installs. Enables telemetry.
+///
+/// Spawn [`spawn_periodic_flush`] once a relay address is known to actually
+/// send reports.
+#[must_use]
+pub fn install() -> TelemetryCollector {
+    let collector = TelemetryCollector::new();
+    paths::install_global_collector(&collector);
+    crate::latency::install_global(Arc::new(crate::latency::LatencyTracker::default()));
+    set_enabled(true);
+    paths::global_collector().cloned().unwrap_or(collector)
+}
 
 /// Shared RTT sample ring buffer + FEC counters.
 ///
@@ -237,6 +280,9 @@ pub fn spawn_periodic_flush(
         interval.tick().await; // skip the first immediate tick
         loop {
             interval.tick().await;
+            if !is_enabled() {
+                continue;
+            }
             collector
                 .flush(&proxy_host, ctx.game_id, &ctx.country)
                 .await;
@@ -244,23 +290,15 @@ pub fn spawn_periodic_flush(
     })
 }
 
-/// Print the one-time telemetry disclosure banner to the console.
+/// Print the one-line startup notice that telemetry is active.
 ///
-/// Should be called **once** per startup when `telemetry == true`.
-pub fn print_disclosure() {
-    println!();
-    println!("┌─────────────────────────────────────────────────────────────────┐");
-    println!("│  📊  Anonymous telemetry ENABLED                               │");
-    println!("│                                                                 │");
-    println!("│  LightSpeed will send anonymised latency stats (p50/p95/p99,   │");
-    println!("│  jitter, FEC recoveries) to the proxy every 15 minutes.        │");
-    println!("│                                                                 │");
-    println!("│  NO IP address, user ID, or packet content is ever sent.       │");
-    println!("│  See docs/privacy.md for the full field list.                  │");
-    println!("│                                                                 │");
-    println!("│  Disable:  --no-telemetry  or  telemetry = false in config     │");
-    println!("└─────────────────────────────────────────────────────────────────┘");
-    println!();
+/// Printed once per startup when telemetry runs, so users always see what is
+/// sent and how to opt out.
+pub fn print_notice() {
+    println!(
+        "📊 Anonymous telemetry on: aggregate latency stats only, no IPs. \
+         Disable with --no-telemetry or telemetry = false in lightspeed.toml."
+    );
 }
 
 #[cfg(test)]

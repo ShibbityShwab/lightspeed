@@ -17,7 +17,7 @@ pub(crate) mod capture;
 pub(crate) mod cli;
 pub(crate) mod config;
 pub(crate) mod error;
-pub(crate) mod latency;
+pub mod latency;
 pub(crate) mod ml;
 pub(crate) mod modes;
 pub(crate) mod quic;
@@ -25,7 +25,7 @@ pub(crate) mod redirect;
 pub mod registry;
 pub(crate) mod route;
 pub(crate) mod session;
-pub(crate) mod telemetry;
+pub mod telemetry;
 pub(crate) mod tunnel;
 pub(crate) mod warp;
 

@@ -244,6 +244,15 @@ fn start_continuous_rerouting(servers: &[String], config: &config::Config, cli: 
     ));
 }
 
+/// Whether telemetry runs for this invocation.
+///
+/// On by default: the config default is `true`, so telemetry runs unless the
+/// user opts out. `--telemetry` forces it on even if the config disables it,
+/// while `--no-telemetry` is a hard override that always wins.
+fn telemetry_enabled(cli: &Cli, config: &config::Config) -> bool {
+    !cli.no_telemetry && (cli.telemetry || config.general.telemetry)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -257,28 +266,23 @@ async fn main() -> anyhow::Result<()> {
 
     info!("⚡ LightSpeed v{} starting", env!("CARGO_PKG_VERSION"));
 
-    // ── Telemetry (opt-in) ────────────────────────────────────────
-    //
-    // --telemetry enables anonymous aggregated RTT/FEC stats reporting.
-    // No PII is ever collected. See docs/privacy.md for full details.
-    let telemetry_collector: Option<Arc<TelemetryCollector>> = if cli.telemetry && !cli.no_telemetry
-    {
-        telemetry::print_disclosure();
-        let collector = Arc::new(TelemetryCollector::new());
-        telemetry::paths::install_global_collector(collector.as_ref());
-        // Direct/relayed latency measurement shares the opt-in gate: no ICMP
-        // probe or tunnel RTT tracking happens unless telemetry is enabled.
-        latency::install_global(Arc::new(latency::LatencyTracker::default()));
-        Some(collector)
-    } else {
-        None
-    };
-
     // ── Configuration ─────────────────────────────────────────────
     let config = config::Config::load(&cli.config).unwrap_or_else(|e| {
         warn!("Config not found ({}), using defaults", e);
         config::Config::default()
     });
+
+    // ── Telemetry (on by default, opt-out) ────────────────────────
+    //
+    // Anonymous aggregate latency stats only: no IP address, token, or user
+    // identifier is ever sent. Disable with --no-telemetry or
+    // `telemetry = false` in lightspeed.toml. See docs/privacy.md.
+    let telemetry_collector: Option<Arc<TelemetryCollector>> = if telemetry_enabled(&cli, &config) {
+        telemetry::print_notice();
+        Some(Arc::new(telemetry::install()))
+    } else {
+        None
+    };
 
     let _token_reset = TokenResetOnShutdown;
 
@@ -1024,7 +1028,8 @@ async fn main() -> anyhow::Result<()> {
         country: telemetry::context::detect_country(),
     };
     if let Some(ref tc) = telemetry_collector {
-        let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
+        // `flush` appends `:8080` itself, so pass the bare relay IP only.
+        let proxy_host = proxy_addr.ip().to_string();
         telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, telemetry_ctx.clone());
     }
 
@@ -1243,4 +1248,52 @@ async fn main() -> anyhow::Result<()> {
         telemetry_ctx,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::telemetry_enabled;
+    use crate::cli::Cli;
+    use crate::config::Config;
+    use clap::Parser;
+
+    fn cli_with(telemetry: bool, no_telemetry: bool) -> Cli {
+        let mut cli = Cli::try_parse_from(["lightspeed"]).unwrap();
+        cli.telemetry = telemetry;
+        cli.no_telemetry = no_telemetry;
+        cli
+    }
+
+    #[test]
+    fn telemetry_runs_by_default() {
+        assert!(telemetry_enabled(
+            &cli_with(false, false),
+            &Config::default()
+        ));
+    }
+
+    #[test]
+    fn config_opt_out_disables_telemetry() {
+        let mut config = Config::default();
+        config.general.telemetry = false;
+        assert!(!telemetry_enabled(&cli_with(false, false), &config));
+    }
+
+    #[test]
+    fn cli_flag_forces_telemetry_on_over_config() {
+        let mut config = Config::default();
+        config.general.telemetry = false;
+        assert!(telemetry_enabled(&cli_with(true, false), &config));
+    }
+
+    #[test]
+    fn no_telemetry_is_a_hard_override() {
+        assert!(!telemetry_enabled(
+            &cli_with(true, true),
+            &Config::default()
+        ));
+        let mut config = Config::default();
+        config.general.telemetry = true;
+        assert!(!telemetry_enabled(&cli_with(false, true), &config));
+    }
 }

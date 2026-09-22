@@ -216,6 +216,16 @@ lightspeed/
 
 ---
 
+## 🔏 Privacy
+
+LightSpeed shares **anonymous aggregate latency statistics on by default** so the community can see real ping improvements. Only percentiles (p50/p95/p99), jitter, and FEC counters are sent to **your own relay**. No IP addresses, tokens, identifiers, or packet contents are ever collected, and the relay suppresses any cell with fewer than 3 reports (k=3).
+
+Turn it off any time with `--no-telemetry`, `telemetry = false` in `lightspeed.toml`, or the **"Share anonymous latency stats"** checkbox in the GUI.
+
+📖 **[Privacy Policy →](docs/privacy.md)**
+
+---
+
 ## 🗺️ Roadmap
 
 - [x] **v0.1.0** - MVP: UDP tunnel, proxy server, QUIC control, security hardening

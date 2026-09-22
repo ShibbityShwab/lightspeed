@@ -58,6 +58,9 @@ pub struct GuiConfig {
     /// When true, the GUI connects to the lowest-latency relay it can reach and
     /// reconsiders on each discovery, so newly added relays are picked up.
     pub auto_select: bool,
+    /// When true, share anonymous aggregate latency statistics with the relay.
+    /// On by default; no IP address, identifier, or packet content is sent.
+    pub share_latency_stats: bool,
 }
 
 impl Default for GuiConfig {
@@ -66,6 +69,7 @@ impl Default for GuiConfig {
             selected: None,
             proxies: Vec::new(),
             auto_select: true,
+            share_latency_stats: true,
         }
     }
 }
@@ -98,6 +102,10 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         .map(str::to_string);
     let auto_select = table
         .get("auto_select")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let share_latency_stats = table
+        .get("share_latency_stats")
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
@@ -134,6 +142,7 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         selected,
         proxies,
         auto_select,
+        share_latency_stats,
     })
 }
 
@@ -144,6 +153,10 @@ pub fn render(config: &GuiConfig) -> String {
         table.insert("selected".into(), Value::String(selected.clone()));
     }
     table.insert("auto_select".into(), Value::Boolean(config.auto_select));
+    table.insert(
+        "share_latency_stats".into(),
+        Value::Boolean(config.share_latency_stats),
+    );
     let entries: Vec<Value> = config
         .proxies
         .iter()
@@ -212,6 +225,7 @@ mod tests {
                 ProxyEntry::custom(addr("127.0.0.1:4434"), "Local proxy"),
             ],
             auto_select: true,
+            share_latency_stats: true,
         }
     }
 
@@ -289,6 +303,25 @@ mod tests {
         );
         assert!(!parse("auto_select = false\n").expect("parse").auto_select);
         assert!(parse("auto_select = true\n").expect("parse").auto_select);
+    }
+
+    #[test]
+    fn config_share_latency_stats_defaults_on_and_parses_false() {
+        assert!(
+            parse("selected = \"1.2.3.4:4434\"\n")
+                .expect("parse")
+                .share_latency_stats
+        );
+        assert!(
+            !parse("share_latency_stats = false\n")
+                .expect("parse")
+                .share_latency_stats
+        );
+        assert!(
+            parse("share_latency_stats = true\n")
+                .expect("parse")
+                .share_latency_stats
+        );
     }
 
     #[test]

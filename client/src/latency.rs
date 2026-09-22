@@ -5,9 +5,9 @@
 //! actual tunnelled game traffic (client → relay → game server → relay →
 //! client). Their difference is LightSpeed's core value metric, `saved_ms`.
 //!
-//! The direct prober is strictly opt-in: the process-wide tracker is installed
-//! only when telemetry is enabled, and a given server is probed at most once
-//! per [`DIRECT_BURST_INTERVAL`].
+//! The direct prober is strictly gated on telemetry: the process-wide tracker
+//! is installed by `telemetry::install`, and probing only runs while telemetry
+//! is enabled, so opting out (`--no-telemetry`) sends no ICMP probes.
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -307,20 +307,23 @@ impl Default for LatencyTracker {
 
 static GLOBAL: OnceLock<Arc<LatencyTracker>> = OnceLock::new();
 
-/// Install the process-wide tracker. Never called unless telemetry is enabled,
-/// which is what keeps ICMP probing opt-in.
+/// Install the process-wide tracker. Idempotent: the first call wins.
 pub fn install_global(tracker: Arc<LatencyTracker>) {
     let _ = GLOBAL.set(tracker);
 }
 
-/// The installed tracker, or `None` when telemetry is disabled.
+/// The installed tracker, or `None` when telemetry was never installed.
 pub fn global() -> Option<&'static Arc<LatencyTracker>> {
     GLOBAL.get()
 }
 
 /// T0 hook: call when an outbound game packet is tunnelled to the relay. Kicks
-/// a rate-limited direct burst onto a blocking thread.
+/// a rate-limited direct burst onto a blocking thread. No-op when telemetry is
+/// disabled, so no ICMP probes leave the machine while opted out.
 pub fn record_outbound(server: Ipv4Addr) {
+    if !crate::telemetry::is_enabled() {
+        return;
+    }
     let Some(tracker) = global() else {
         return;
     };
