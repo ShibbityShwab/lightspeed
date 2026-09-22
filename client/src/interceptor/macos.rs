@@ -236,6 +236,7 @@ impl TrafficInterceptor for PfInterceptor {
                             fh.encode(&mut buf);
                             buf.extend_from_slice(payload);
                             let parity = enc.add_packet(payload);
+                            crate::latency::record_outbound(*server_addr.ip());
                             let _ = tunnel_socket.send_to(&buf, crate::session::current_proxy().unwrap_or(config_proxy)).await;
                             if let Some(pb) = parity {
                                 let ps = seq.wrapping_add(1);
@@ -253,6 +254,7 @@ impl TrafficInterceptor for PfInterceptor {
                             let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts_us, src, server_addr)
                                 .with_session_token(crate::session::session_token());
                             let pkt = hdr.encode_with_payload(payload);
+                            crate::latency::record_outbound(*server_addr.ip());
                             let (dests, n) = crate::session::send_destinations(config_proxy);
                             for d in dests.iter().take(n) {
                                 let _ = tunnel_socket.send_to(&pkt, *d).await;
@@ -283,6 +285,8 @@ impl TrafficInterceptor for PfInterceptor {
                         };
 
                         if header.is_keepalive() { continue; }
+
+                        crate::latency::record_inbound(*header.orig_src_addr().ip());
 
                         let dest = match game_src {
                             Some(gs) => gs,

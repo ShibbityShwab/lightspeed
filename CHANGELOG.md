@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-09-22
+
+### Added
+
+- **Ping saved metric.** While telemetry is enabled the client now measures the
+  direct (ICMP) RTT to the detected game server and the round trip of the
+  tunnelled game traffic, and reports both. The relay aggregates them and the
+  website shows the difference as "Ping saved by LightSpeed", the metric that
+  says whether the software is actually helping. Probing is opt-in and at most
+  one burst per server per 60 seconds.
+
 ### Added
 
 - Eighth community relay: **Sydney (AP-Southeast-2)**, sponsor-funded and listed

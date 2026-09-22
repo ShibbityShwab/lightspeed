@@ -76,6 +76,19 @@ pub struct TelemetryCell {
     pub fec_recoveries: u64,
     /// Sum of the reports' `fec_losses` values.
     pub fec_losses: u64,
+    /// Sum of the reports' `direct_p50_ms` values, over reports where present.
+    pub direct_sum_ms: f64,
+    /// Number of reports that carried `direct_p50_ms`.
+    pub direct_count: u64,
+    /// Sum of the reports' `relayed_p50_ms` values, over reports where present.
+    pub relayed_sum_ms: f64,
+    /// Number of reports that carried `relayed_p50_ms`.
+    pub relayed_count: u64,
+    /// Sum of `direct_p50_ms - relayed_p50_ms` over reports where both are
+    /// present.
+    pub saved_sum_ms: f64,
+    /// Number of reports where both latency values were present.
+    pub saved_count: u64,
 }
 
 /// Bounded per-`(game, country)` telemetry aggregator.
@@ -564,6 +577,19 @@ impl ProxyMetrics {
                 cell.jitter_sum_ms += f64::from(report.jitter_ms);
                 cell.fec_recoveries += u64::from(report.fec_recoveries);
                 cell.fec_losses += u64::from(report.fec_losses);
+                if let Some(direct) = report.direct_p50_ms {
+                    cell.direct_sum_ms += f64::from(direct);
+                    cell.direct_count += 1;
+                }
+                if let Some(relayed) = report.relayed_p50_ms {
+                    cell.relayed_sum_ms += f64::from(relayed);
+                    cell.relayed_count += 1;
+                }
+                if let (Some(direct), Some(relayed)) = (report.direct_p50_ms, report.relayed_p50_ms)
+                {
+                    cell.saved_sum_ms += f64::from(direct) - f64::from(relayed);
+                    cell.saved_count += 1;
+                }
             }
         }
         self.record_route_legs(report.game_id, &report.client_country, &report.route_legs);
@@ -986,6 +1012,21 @@ impl ProxyMetrics {
         );
         out.push_str("# TYPE lightspeed_telemetry_fec_losses_total counter\n");
         out.push_str(
+            "# HELP lightspeed_telemetry_direct_ms_sum Sum of client-reported direct (un-relayed) game-server ICMP RTT medians (ms); _sum/_count is the mean of client direct medians, not a population p50\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_direct_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_direct_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_relayed_ms_sum Sum of client-reported relayed tunnelled round-trip medians (ms); _sum/_count is the mean of client relayed medians, not a population p50\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_relayed_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_relayed_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_saved_ms_sum Sum of client-reported (direct - relayed) latency savings (ms); positive means the relay was faster\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_saved_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_saved_ms_count counter\n");
+        out.push_str(
             "# HELP lightspeed_telemetry_rejected_total Telemetry reports dropped because the per-(game,country) cell cap was reached\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_rejected_total counter\n");
@@ -1054,6 +1095,30 @@ impl ProxyMetrics {
                 out.push_str(&format!(
                     "lightspeed_telemetry_fec_losses_total{{{}}} {}\n",
                     cell_labels, cell.fec_losses
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_direct_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.direct_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_direct_ms_count{{{}}} {}\n",
+                    cell_labels, cell.direct_count
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_relayed_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.relayed_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_relayed_ms_count{{{}}} {}\n",
+                    cell_labels, cell.relayed_count
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_saved_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.saved_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_saved_ms_count{{{}}} {}\n",
+                    cell_labels, cell.saved_count
                 ));
             }
         }
@@ -1463,6 +1528,8 @@ mod tests {
             sample_count: 100,
             fec_recoveries: 1,
             fec_losses: 0,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
             client_version: "1.4.4".to_string(),
             route_legs: vec![],
         }
@@ -1518,6 +1585,88 @@ mod tests {
         assert!(output.contains(
             "lightspeed_telemetry_fec_losses_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
         ));
+    }
+
+    /// Given: three reports, one with both latencies, one direct-only, one
+    /// relayed-only. When: they are folded into the telemetry cell. Then: the
+    /// direct and relayed sums/counts each cover only the reports that carried
+    /// that value, and saved sums only the reports where both were present.
+    #[test]
+    fn telemetry_direct_relayed_and_saved_aggregated() {
+        let m = ProxyMetrics::new();
+
+        let mut both = report(2, "US");
+        both.direct_p50_ms = Some(50.0);
+        both.relayed_p50_ms = Some(30.0);
+        let mut direct_only = report(2, "US");
+        direct_only.direct_p50_ms = Some(60.0);
+        let mut relayed_only = report(2, "US");
+        relayed_only.relayed_p50_ms = Some(50.0);
+
+        m.record_telemetry_report(&both);
+        m.record_telemetry_report(&direct_only);
+        m.record_telemetry_report(&relayed_only);
+
+        let output = m.to_prometheus("test", "test-node");
+        let labels = "region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"";
+
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_direct_ms_sum{{{labels}}} 110.0"
+        )));
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_direct_ms_count{{{labels}}} 2"
+        )));
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_relayed_ms_sum{{{labels}}} 80.0"
+        )));
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_relayed_ms_count{{{labels}}} 2"
+        )));
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_saved_ms_sum{{{labels}}} 20.0"
+        )));
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_saved_ms_count{{{labels}}} 1"
+        )));
+    }
+
+    /// Given: no cell has reached the k-anonymity floor. When: metrics are
+    /// rendered. Then: all five new families are still declared, but no
+    /// per-cell series leak.
+    #[test]
+    fn telemetry_latency_families_declared_below_k() {
+        let m = ProxyMetrics::new();
+        m.record_telemetry_report(&report(2, "US"));
+
+        let output = m.to_prometheus("test", "test-node");
+        for family in [
+            "lightspeed_telemetry_direct_ms_sum",
+            "lightspeed_telemetry_relayed_ms_sum",
+            "lightspeed_telemetry_saved_ms_sum",
+        ] {
+            assert!(
+                output.contains(&format!("# HELP {family}")),
+                "missing HELP for {family}"
+            );
+            assert!(
+                output.contains(&format!("# TYPE {family} counter")),
+                "missing TYPE for {family}"
+            );
+        }
+        for family in [
+            "lightspeed_telemetry_direct_ms_count",
+            "lightspeed_telemetry_relayed_ms_count",
+            "lightspeed_telemetry_saved_ms_count",
+        ] {
+            assert!(
+                output.contains(&format!("# TYPE {family} counter")),
+                "missing TYPE for {family}"
+            );
+        }
+        assert!(
+            !output.contains("lightspeed_telemetry_direct_ms_sum{"),
+            "a cell below the k-anonymity floor must not emit per-cell latency series"
+        );
     }
 
     #[test]

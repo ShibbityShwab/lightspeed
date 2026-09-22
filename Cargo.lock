@@ -2904,7 +2904,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-client"
-version = "1.6.3"
+version = "1.6.4"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2925,6 +2925,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "socket2",
  "sys-locale",
  "thiserror 2.0.20",
  "tokio",
@@ -2941,7 +2942,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-gui"
-version = "1.6.3"
+version = "1.6.4"
 dependencies = [
  "anyhow",
  "axoupdater",
@@ -2965,7 +2966,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-protocol"
-version = "1.6.3"
+version = "1.6.4"
 dependencies = [
  "bytes",
  "criterion",
@@ -2979,7 +2980,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-proxy"
-version = "1.6.3"
+version = "1.6.4"
 dependencies = [
  "anyhow",
  "bytes",

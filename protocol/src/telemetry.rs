@@ -93,6 +93,18 @@ pub struct TelemetryReport {
     #[serde(default)]
     pub fec_losses: u32,
 
+    // ── Direct vs relayed latency (LightSpeed's core value metric) ───────────
+    /// Median ICMP echo RTT to the detected game server over the direct,
+    /// un-relayed path (ms). `None` when the direct probe has not produced a
+    /// usable reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_p50_ms: Option<f32>,
+    /// Median round-trip of tunnelled game traffic through the relay
+    /// (client → relay → game server → relay → client) (ms). `None` when no
+    /// tunnelled round trip has been measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relayed_p50_ms: Option<f32>,
+
     // ── Client version (for compatibility tracking only) ─────────────────────
     /// SemVer string of the `lightspeed` client binary.
     pub client_version: String,
@@ -119,6 +131,16 @@ impl TelemetryReport {
         }
         if self.jitter_ms < 0.0 || self.jitter_ms > 10_000.0 {
             return Err("jitter_ms out of range");
+        }
+        if let Some(v) = self.direct_p50_ms {
+            if !v.is_finite() || !(0.0..=10_000.0).contains(&v) {
+                return Err("direct_p50_ms out of range");
+            }
+        }
+        if let Some(v) = self.relayed_p50_ms {
+            if !v.is_finite() || !(0.0..=10_000.0).contains(&v) {
+                return Err("relayed_p50_ms out of range");
+            }
         }
         if self.sample_count > 100_000 {
             return Err("sample_count unreasonably large");
@@ -185,6 +207,8 @@ mod tests {
             sample_count: 180,
             fec_recoveries: 3,
             fec_losses: 0,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
             client_version: "0.4.0-dev".to_string(),
             route_legs: vec![],
         };
@@ -211,6 +235,8 @@ mod tests {
             sample_count: 60,
             fec_recoveries: 0,
             fec_losses: 0,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
         };
@@ -229,6 +255,8 @@ mod tests {
             sample_count: 10,
             fec_recoveries: 0,
             fec_losses: 0,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
         };
@@ -247,6 +275,8 @@ mod tests {
             sample_count: 10,
             fec_recoveries: 0,
             fec_losses: 0,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
         };
@@ -266,6 +296,8 @@ mod tests {
             sample_count: 100,
             fec_recoveries: 1,
             fec_losses: 0,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![PathObservation {
                 relay: "relay-fra".to_string(),
@@ -310,6 +342,8 @@ mod tests {
             sample_count: 120,
             fec_recoveries: 2,
             fec_losses: 1,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
             client_version: "0.5.0".to_string(),
             route_legs: vec![
                 PathObservation {
@@ -367,6 +401,8 @@ mod tests {
             sample_count: 120,
             fec_recoveries: 0,
             fec_losses: 0,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
             client_version: "0.5.0".to_string(),
             route_legs: legs,
         };
@@ -390,5 +426,73 @@ mod tests {
             base(vec![bad_order]).validate().is_err(),
             "rtt_p95 below rtt_p50 must be rejected"
         );
+    }
+
+    fn minimal_report() -> TelemetryReport {
+        TelemetryReport {
+            game_id: 1,
+            client_country: "US".to_string(),
+            p50_ms: 30.0,
+            p95_ms: 50.0,
+            p99_ms: 80.0,
+            jitter_ms: 2.0,
+            sample_count: 100,
+            fec_recoveries: 0,
+            fec_losses: 0,
+            direct_p50_ms: None,
+            relayed_p50_ms: None,
+            client_version: "0.4.0".to_string(),
+            route_legs: vec![],
+        }
+    }
+
+    #[test]
+    fn direct_and_relayed_latency_roundtrip() {
+        let mut report = minimal_report();
+        report.direct_p50_ms = Some(48.5);
+        report.relayed_p50_ms = Some(31.25);
+
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: TelemetryReport = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.direct_p50_ms, Some(48.5));
+        assert_eq!(decoded.relayed_p50_ms, Some(31.25));
+        assert!(decoded.validate().is_ok());
+    }
+
+    #[test]
+    fn absent_latency_fields_are_omitted_from_json() {
+        let json = serde_json::to_string(&minimal_report()).unwrap();
+        assert!(
+            !json.contains("direct_p50_ms"),
+            "None direct_p50_ms must not appear in JSON: {json}"
+        );
+        assert!(
+            !json.contains("relayed_p50_ms"),
+            "None relayed_p50_ms must not appear in JSON: {json}"
+        );
+    }
+
+    #[test]
+    fn latency_fields_accept_legacy_reports_without_them() {
+        let json = r#"{"game_id":2,"client_country":"TH","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":10,"client_version":"0.4.0"}"#;
+        let decoded: TelemetryReport = serde_json::from_str(json).unwrap();
+        assert_eq!(decoded.direct_p50_ms, None);
+        assert_eq!(decoded.relayed_p50_ms, None);
+    }
+
+    #[test]
+    fn latency_validation_rejects_out_of_range() {
+        let mut too_high = minimal_report();
+        too_high.direct_p50_ms = Some(10_001.0);
+        assert!(too_high.validate().is_err());
+
+        let mut negative = minimal_report();
+        negative.relayed_p50_ms = Some(-1.0);
+        assert!(negative.validate().is_err());
+
+        let mut not_finite = minimal_report();
+        not_finite.direct_p50_ms = Some(f32::NAN);
+        assert!(not_finite.validate().is_err());
     }
 }

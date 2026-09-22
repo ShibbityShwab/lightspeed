@@ -261,6 +261,7 @@ impl UdpRedirect {
                         let pkt_buf = build_fec_data_packet(&header, &fec_hdr, payload);
                         let parity = encoder.add_packet(payload);
 
+                        crate::latency::record_outbound(*game_server.ip());
                         match tunnel_sender.send(&pkt_buf).await {
                             Ok(sent) => {
                                 stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
@@ -310,6 +311,7 @@ impl UdpRedirect {
                             .with_session_token(crate::session::session_token());
                         let packet = header.encode_with_payload(payload);
 
+                        crate::latency::record_outbound(*game_server.ip());
                         match tunnel_sender.send(&packet).await {
                             Ok(sent) => {
                                 stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
@@ -379,6 +381,10 @@ impl UdpRedirect {
                             continue;
                         }
                     };
+
+                    if !header.is_keepalive() {
+                        crate::latency::record_inbound(*header.orig_src_addr().ip());
+                    }
 
                     // Get the game client address
                     let game_addr = {

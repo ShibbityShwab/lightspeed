@@ -462,6 +462,8 @@ async fn run_capture_mode_inner(
                     continue;
                 }
 
+                crate::latency::record_inbound(*header.orig_src_addr().ip());
+
                 // Get the game client's metadata (learned from outbound capture)
                 let meta = {
                     let meta = capture_meta.read().await;
@@ -630,6 +632,7 @@ async fn run_capture_mode_inner(
                     let fec_hdr = FecHeader::data(block_id, index, fec_k);
                     let pkt_buf = build_fec_data_packet(&header, &fec_hdr, &pkt.payload);
                     let parity = encoder.add_packet(&pkt.payload);
+                    crate::latency::record_outbound(*pkt.dst.ip());
                     let _ = tunnel_socket.send_to(&pkt_buf, proxy_addr).await;
 
                     if let Some(parity_bytes) = parity {
@@ -649,6 +652,7 @@ async fn run_capture_mode_inner(
                     let header = lightspeed_protocol::TunnelHeader::new(seq, ts, pkt.src, pkt.dst)
                         .with_session_token(crate::session::session_token());
                     let packet = header.encode_with_payload(&pkt.payload);
+                    crate::latency::record_outbound(*pkt.dst.ip());
                     let _ = tunnel_socket.send_to(&packet, proxy_addr).await;
                 }
 
