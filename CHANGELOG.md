@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-09-23
+
+### Fixed
+
+- **Ping saved could show impossible values.** The direct probe accepted a reply
+  from any host and never checked the target was a public unicast address, so a
+  local answer was recorded as roughly 0.08ms. It now rejects non-routable
+  targets, verifies the reply source, discards sub-millisecond readings, keys the
+  direct median per server with a TTL, and only reports a saving when direct and
+  relayed are fresh and from the same server.
+- **Published traffic totals did not reconcile.** The site totals were
+  accumulated independently of the per-relay lifetimes and read about 5.8x too
+  high; totals are now the sum of the per-relay accumulators.
+- **Relays could get stuck on an old version.** A handoff request the DynamicUser
+  proxy could not read made the installer exit without a fallback, pinning five
+  relays to 1.6.4. The installer now opens read access and falls back to a
+  health-gated restart, so every relay self-updates.
+
 ## [1.6.5] - 2026-09-22
 
 ### Changed
