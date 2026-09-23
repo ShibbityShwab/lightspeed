@@ -361,6 +361,7 @@ mod tests {
             fec_recoveries: 1,
             fec_losses: 0,
             direct_p50_ms: Some(42.0),
+            direct_app_p50_ms: None,
             relayed_p50_ms: Some(28.0),
             client_version: "0.4.0-dev".to_string(),
             route_legs: vec![],

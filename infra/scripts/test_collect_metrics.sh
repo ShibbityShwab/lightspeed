@@ -75,6 +75,8 @@ lightspeed_fec_data_packets_total{node_id="relay-a"} 7
 lightspeed_fec_parity_received_total{node_id="relay-a"} $fpar
 lightspeed_fec_recoveries_total{node_id="relay-a"} $f
 lightspeed_telemetry_fec_losses_total{node_id="relay-a"} $floss
+lightspeed_telemetry_direct_app_ms_sum{node_id="relay-a"} $lsum
+lightspeed_telemetry_direct_app_ms_count{node_id="relay-a"} $lcnt
 lightspeed_rate_limit_hits_total{node_id="relay-a"} 4
 lightspeed_rate_limit_ip_hits_total{node_id="relay-a"} 0
 lightspeed_rate_limit_overflow_total{node_id="relay-a"} 0
@@ -333,6 +335,23 @@ assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].lifetime.packets_relayed
 assert_jq "$RECON" '.snapshots[-1].totals.packets_relayed == ([.snapshots[-1].per_relay[].lifetime.packets_relayed] | add)' "(l) packets_relayed totals reconcile"
 assert_jq "$RECON" '.snapshots[-1].totals.sessions_created == ([.snapshots[-1].per_relay[].lifetime.sessions_created] | add)' "(l) sessions_created totals reconcile"
 assert_jq "$RECON" '.snapshots[-1].totals.drops_malformed == ([.snapshots[-1].per_relay[].lifetime.drops_malformed] | add)' "(l) drops_malformed totals reconcile"
+
+# ── (m) direct-app telemetry families parse and delta ────────
+# The two lightspeed_telemetry_direct_app_ms_* families are labeled multi-line
+# counters that must round-trip through sum_family into cumulative, interval
+# and totals alongside the direct/relayed/saved families.
+APP_H="$TMP/history-direct-app.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+run_collect "$APP_H" "$REG_A"; assert_rc0 $? "(m) direct-app first run exits 0"
+assert_jq "$APP_H" '.snapshots[-1].per_relay["relay-a"].cumulative.direct_app_ms_sum == 500' "(m) direct-app sum parsed via sum_family"
+assert_jq "$APP_H" '.snapshots[-1].per_relay["relay-a"].cumulative.direct_app_ms_count == 10' "(m) direct-app count parsed via sum_family"
+assert_jq "$APP_H" '.snapshots[-1].interval.direct_app_ms_sum == 500 and .snapshots[-1].totals.direct_app_ms_sum == 500' "(m) first snapshot interval == totals == raw"
+
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
+run_collect "$APP_H" "$REG_A"; assert_rc0 $? "(m) direct-app second run exits 0"
+assert_jq "$APP_H" '.snapshots[-1].interval.direct_app_ms_sum == 400' "(m) direct-app sum delta"
+assert_jq "$APP_H" '.snapshots[-1].interval.direct_app_ms_count == 10' "(m) direct-app count delta"
+assert_jq "$APP_H" '.snapshots[-1].totals.direct_app_ms_sum == 900' "(m) direct-app sum totals accumulate"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

@@ -32,6 +32,15 @@ pub enum Decision {
     PassThrough,
     /// Entering a fresh detection window: re-inject and keep accumulating.
     StartDetection,
+    /// Sample this packet as a like-for-like direct application RTT probe.
+    ///
+    /// The caller re-injects the game's OWN packet UNCHANGED onto the direct
+    /// path: no synthetic packet is generated and no payload is rewritten,
+    /// which is the anti-cheat safety property. The sampler times the reply
+    /// on a sniff handle, so from the game's point of view nothing changed.
+    /// Distinct from [`PassThrough`](Decision::PassThrough) so the detection
+    /// state machine's semantics stay untouched.
+    ShadowDirect,
     /// The previous lock expired (server went stale); the caller must tear down
     /// per-session cached state (e.g. the inject interface cache) before this
     /// packet, which is re-injected and begins a new detection window.

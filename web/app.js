@@ -440,13 +440,24 @@
         fecRatio = (interval.fec_recoveries / (interval.fec_recoveries + interval.fec_losses)) * 100;
       }
 
-      var savedMs = null;
-      if (finiteNumber(interval.saved_ms_sum) && finiteNumber(interval.saved_ms_count) &&
-          interval.saved_ms_count > 0) {
-        savedMs = interval.saved_ms_sum / interval.saved_ms_count;
+      var directAppMs = null;
+      if (finiteNumber(interval.direct_app_ms_sum) && finiteNumber(interval.direct_app_ms_count) &&
+          interval.direct_app_ms_count > 0) {
+        directAppMs = interval.direct_app_ms_sum / interval.direct_app_ms_count;
       }
 
-      return { t: snap.t, relays: deltas, latencyMs: latencyMs, fecRatio: fecRatio, savedMs: savedMs };
+      var icmpSavedMs = null;
+      if (finiteNumber(interval.saved_ms_sum) && finiteNumber(interval.saved_ms_count) &&
+          interval.saved_ms_count > 0) {
+        icmpSavedMs = interval.saved_ms_sum / interval.saved_ms_count;
+      }
+
+      var savedMs = finiteNumber(directAppMs) ? directAppMs : icmpSavedMs;
+
+      return {
+        t: snap.t, relays: deltas, latencyMs: latencyMs, fecRatio: fecRatio,
+        savedMs: savedMs, savedIsDirectApp: finiteNumber(directAppMs)
+      };
     });
 
     var relayIds = Object.keys(totals).sort(function (a, b) {
@@ -458,7 +469,11 @@
       relayIds: relayIds,
       hasLatency: points.some(function (point) { return finiteNumber(point.latencyMs); }),
       hasFec: points.some(function (point) { return finiteNumber(point.fecRatio); }),
-      hasSaved: points.some(function (point) { return finiteNumber(point.savedMs); })
+      hasSaved: points.some(function (point) { return finiteNumber(point.savedMs); }),
+      hasDirectApp: points.some(function (point) { return point.savedIsDirectApp; }),
+      hasIcmpSavedFallback: points.some(function (point) {
+        return finiteNumber(point.savedMs) && !point.savedIsDirectApp;
+      })
     };
   }
 
@@ -783,16 +798,28 @@
     }));
 
     var savedValues = model.points.map(function (point) { return point.savedMs; });
+    var likeForLike = model.hasDirectApp && !model.hasIcmpSavedFallback;
+    var savedSubtitle = likeForLike
+      ? 'Direct application RTT, from a small sample of the game\'s own packets on the un-relayed path, minus the same traffic through the relay, averaged over client reports (telemetry is on by default, opt-out). Positive means the tunnelled path was faster.'
+      : 'ICMP round trip to the game server minus the tunnelled game-traffic round trip, averaged over client reports (telemetry is on by default, opt-out). Positive means the tunnelled path was faster.';
+    var savedCaveat;
+    if (likeForLike) {
+      savedCaveat = 'Both numbers are game-packet round trips: direct samples the game\'s own packets on the un-relayed path, tunnelled is the same traffic through the relay. Like-for-like, so this is a direct comparison of the two paths.';
+    } else if (model.hasDirectApp) {
+      savedCaveat = 'Some reports compare the game\'s own packets directly (like-for-like); older reports use an ICMP echo for the direct side. They are mixed here, so treat this as an estimate.';
+    } else {
+      savedCaveat = 'Direct is the client\'s ICMP echo to the game server. Tunnelled is the round trip of the game traffic itself through the relay, which includes the server\'s own processing time. They are different instruments, so treat this as an estimate, not a measurement of in-game ping.';
+    }
     grid.appendChild(renderTrendCard({
       title: 'RTT saved by LightSpeed',
-      subtitle: 'ICMP round trip to the game server minus the tunnelled game-traffic round trip, averaged over client reports (telemetry is on by default, opt-out). Positive means the tunnelled path was faster.',
+      subtitle: savedSubtitle,
       series: [{ label: 'Saved', color: TREND_COLORS[2], values: savedValues }],
       points: model.points,
       axisFormat: formatMsAxis,
       description: chartDescription('RTT saved by LightSpeed', [{ label: 'saved', values: savedValues }], formatMs),
       summary: 'Latest: ' + formatMs(latestFinite(savedValues)) + ' · ' + window,
       emptyMessage: 'No client latency reports yet, so there is no direct-versus-tunnelled comparison to plot.',
-      caveat: 'Direct is the client\'s ICMP echo to the game server. Tunnelled is the round trip of the game traffic itself through the relay, which includes the server\'s own processing time. They are different instruments, so treat this as an estimate, not a measurement of in-game ping.'
+      caveat: savedCaveat
     }));
 
     var fecValues = model.points.map(function (point) { return point.fecRatio; });
