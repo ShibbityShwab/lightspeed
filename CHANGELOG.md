@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.8] - 2026-09-23
+
+### Added
+
+- **Linux shadow direct latency.** For a sampled moment (once per server per 30
+  seconds) a dedicated probe socket sends an extra copy of the game's own bytes
+  straight to the server and times the reply, so the RTT-saved figure is a
+  like-for-like application comparison on Linux too. The game's original packet
+  still tunnels unchanged. The probe is exempted from the interceptor's redirect
+  with a socket mark; without CAP_NET_ADMIN it disables itself and interception
+  is unaffected.
+
+- Like-for-like direct measurement on Windows (shipped in 1.6.7) plus the honest
+  "RTT saved" relabel now apply across CLI, GUI, site and docs.
+
 ## [1.6.7] - 2026-09-23
 
 ### Added
