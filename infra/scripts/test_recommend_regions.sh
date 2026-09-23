@@ -21,6 +21,8 @@
 #       infra/geo/candidates.json
 #  (11) a lone candidate has a null margin and cannot fire the ADD gate
 #  (12) a large accumulated history still yields a real window (ARG_MAX)
+#  (13) relay necessity and prune candidates are reported per relay
+#  (14) ADD requires stability_runs and add_min_window_sessions, not a margin alone
 #
 # Tests (3)-(7) use a synthetic three-region catalog under $TMP with
 # fully controlled geometry; tests (1), (2), (8), (9), (10) exercise
@@ -196,6 +198,10 @@ write_synth_candidates "$GEO_SINGLE" "[$CAND_EAST]"
 H_SYNTH="$TMP/hist-synth.json"
 write_history "$H_SYNTH" \
     "[$(snap 1000 relay-hub-a false '{"east-east":25}'),$(snap 1060 relay-hub-a false '{"east-east":50}')]"
+# 60 reconstructed sessions, enough to clear add_min_window_sessions
+H_SYNTH_BIG="$TMP/hist-synth-big.json"
+write_history "$H_SYNTH_BIG" \
+    "[$(snap 1000 relay-hub-a false '{"east-east":100}'),$(snap 1060 relay-hub-a false '{"east-east":160}')]"
 # same, but for the hub->hub demand used by the MOVE fixtures
 H_MOVE="$TMP/hist-move.json"
 write_history "$H_MOVE" \
@@ -235,16 +241,16 @@ run_rec "$H_REAL" missing "$REGISTRY_REAL" "$GEO_REAL" "$TMP/out2b.json" --windo
 assert_rc0 $? "(2) --window-secs run exits 0"
 assert_jq "$TMP/out2b.json" '.status == "INSUFFICIENT_DATA" and .window.snapshots == 1' "(2) --window-secs narrows the window"
 
-# ── (3) a 40% leader -> ADD ──────────────────────────────────
+# ── (3) a 40% leader without stability -> NONE ───────────────
 OUT3="$TMP/out3.json"
-run_rec "$H_SYNTH" missing "$REG_SYNTH" "$GEO_ADD" "$OUT3"
+run_rec "$H_SYNTH_BIG" missing "$REG_SYNTH" "$GEO_ADD" "$OUT3"
 assert_rc0 $? "(3) add40 run exits 0"
 assert_jq "$OUT3" '.status == "OK"' "(3) add40 is OK"
 assert_jq "$OUT3" '.ranking[0].candidate_id == "cand-east"' "(3) cand-east leads"
 assert_jq "$OUT3" '.ranking[0].margin >= 0.40' "(3) leader margin is at least 40%"
 assert_jq "$OUT3" '.ranking[0].margin <= 1' "(3) margin is capped at 1 even when rivals score zero"
-assert_jq "$OUT3" '.recommendation.action == "ADD" and .recommendation.candidate_id == "cand-east"' "(3) dominant leader recommends ADD"
-assert_jq "$OUT3" '.recommendation.remove_node_id == null' "(3) ADD removes nothing"
+assert_jq "$OUT3" '.recommendation.action == "NONE"' "(3) a single-run margin lead never ADDs"
+assert_jq "$OUT3" '.recommendation.remove_node_id == null' "(3) NONE removes nothing"
 assert_jq "$OUT3" '.stability.streak == 1' "(3) first run has a one-run streak"
 
 # ── (4) a 5% leader with no history -> NONE ──────────────────
@@ -261,7 +267,7 @@ assert_jq "$OUT4" '.stability.streak == 1' "(4) no prior runs means a one-run st
 PREV5="$TMP/prev5.json"
 write_previous "$PREV5" cand-east 3
 OUT5="$TMP/out5.json"
-run_rec "$H_SYNTH" "$PREV5" "$REG_SYNTH" "$GEO_LEAD" "$OUT5"
+run_rec "$H_SYNTH_BIG" "$PREV5" "$REG_SYNTH" "$GEO_LEAD" "$OUT5"
 assert_rc0 $? "(5) stable-leader run exits 0"
 assert_jq "$OUT5" '.recommendation.action == "ADD" and .recommendation.candidate_id == "cand-east"' "(5) a 5% leader with 3 stable runs recommends ADD"
 assert_jq "$OUT5" '.stability.streak >= 3' "(5) streak reaches stability_runs"
@@ -372,6 +378,17 @@ assert_jq "$OUT3" '.relay_necessity | length > 0' "(13) necessity lists existing
 assert_jq "$OUT3" '(.relay_necessity | length) == (.existing | length)' "(13) one necessity row per existing relay"
 assert_jq "$OUT3" '.relay_necessity | all(has("sessions") and has("worst_retention"))' "(13) necessity rows carry sessions and retention"
 assert_jq "$OUT3" '.prune_candidates | type == "array"' "(13) prune_candidates is an array"
+
+# ── (14) a stable leader below the session floor is NONE ─────
+PREV14="$TMP/prev14.json"
+write_previous "$PREV14" cand-east 3
+OUT14="$TMP/out14.json"
+run_rec "$H_SYNTH" "$PREV14" "$REG_SYNTH" "$GEO_LEAD" "$OUT14"
+assert_rc0 $? "(14) small-window stable run exits 0"
+assert_jq "$OUT14" '.status == "OK"' "(14) small window is still OK"
+assert_jq "$OUT14" '.window.sessions == 25' "(14) window is below the ADD floor"
+assert_jq "$OUT14" '.stability.streak >= 3' "(14) the leader is stable"
+assert_jq "$OUT14" '.recommendation.action == "NONE"' "(14) stability alone does not ADD below add_min_window_sessions"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

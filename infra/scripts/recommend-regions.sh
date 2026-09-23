@@ -52,8 +52,9 @@
 #      at 1.0, which also covers a runner-up region scoring ~0.
 #  10. stability.runs keeps the last 10 runs; streak counts trailing
 #      runs with the same top candidate.
-#  11. ADD needs an unserved leader region plus either stability or a
-#      margin >= add_margin. MOVE needs margin >= move_margin, stability,
+#  11. ADD needs an unserved leader region, a streak of stability_runs, and
+#      at least add_min_window_sessions window sessions; a single margin lead
+#      is never enough. MOVE needs margin >= move_margin, stability,
 #      and some existing relay whose removal retains at least
 #      move_coverage_keep of every kept cell's current cost.
 #  12. Candidates within near_duplicate_ms of an existing relay are
@@ -117,7 +118,7 @@ done
 
 # ── Minimal documents (valid JSON, no jq required) ───────────
 STATIC_MINIMAL='{"schema_version":1,"generated_at":0,"status":"INSUFFICIENT_DATA","window":{"from_t":0,"to_t":0,"snapshots":0,"sessions":0,"cells":0,"min_window_sessions":20,"min_cell_sessions":3},"matrix":[],"existing":[],"ranking":[],"rejected":[],"recommendation":{"action":"NONE","candidate_id":null,"remove_node_id":null,"reason":"insufficient data"},"stability":{"top_id":null,"streak":0,"required":3,"runs":[]},"notes":"no data"}'
-DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"near_duplicate_ms":25,"idle_sessions_max":0}'
+DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"add_min_window_sessions":50,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"near_duplicate_ms":25,"idle_sessions_max":0}'
 
 write_json() {
     local json="$1" minimal="$2"
@@ -285,6 +286,7 @@ def streak_of($runs; $top_id):
 | ($params.min_cell_sessions // 3 | n) as $min_cell
 | ($params.stability_runs // 3 | n) as $stability_runs
 | ($params.add_margin // 0.10 | n) as $add_margin
+| ($params.add_min_window_sessions // 50 | n) as $add_min_window_sessions
 | ($params.move_margin // 0.20 | n) as $move_margin
 | ($params.redundancy_weight // 0.5 | n) as $redundancy_weight
 | ($params.move_coverage_keep // 0.9 | n) as $coverage_keep
@@ -491,11 +493,10 @@ def streak_of($runs; $top_id):
                then "fewer than 2 snapshots in the window"
                else "window sessions \($window_sessions) below minimum \($min_sessions)" end)}
    elif ($top != null and (($served | index($top_region)) == null)
-         and ($streak >= $stability_runs or ($has_margin and $margin >= $add_margin))) then
+         and $streak >= $stability_runs
+         and $window_sessions >= $add_min_window_sessions) then
      {action: "ADD", candidate_id: $top.candidate_id, remove_node_id: null,
-      reason: (if $streak >= $stability_runs
-               then "unserved leader \($top.candidate_id) stable for \($streak) run(s)"
-               else "unserved leader \($top.candidate_id) with margin \($margin_display) >= add_margin \($add_margin)" end)}
+      reason: "unserved leader \($top.candidate_id) stable for \($streak) run(s) with \($window_sessions) window sessions >= \($add_min_window_sessions)"}
    elif ($top != null and $has_margin and $margin >= $move_margin and $streak >= $stability_runs
          and $move_target != null) then
      {action: "MOVE", candidate_id: $top.candidate_id, remove_node_id: $move_target.node_id,
