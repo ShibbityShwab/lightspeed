@@ -98,6 +98,22 @@ append_geo() {
     done
 }
 
+# write_relay_fixture <dir> <name> <packets> <malformed> <sessions>
+# Minimal per-relay health+metrics for an arbitrary relay id, used to
+# drive the gap/reset/join reconciliation scenario.
+write_relay_fixture() {
+    local dir="$1" name="$2" p="$3" mal="$4" s="$5"
+    cat > "$dir/relay-$name.health.json" <<JSON
+{"status":"healthy","version":"1.3.2","active_connections":0,"packets_relayed":$p,"sessions_created":$s,"drops_malformed":$mal}
+JSON
+    cat > "$dir/relay-$name.metrics.txt" <<METRICS
+lightspeed_packets_relayed_total{node_id="relay-$name"} $p
+lightspeed_sessions_created_total{node_id="relay-$name"} $s
+lightspeed_drops_malformed_total{node_id="relay-$name"} $mal
+lightspeed_build_info{node_id="relay-$name",version="1.3.2"} 1
+METRICS
+}
+
 # write_registry <out> <nodes-json-array>
 write_registry() {
     jq -n --argjson nodes "$2" \
@@ -282,6 +298,41 @@ assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-eu"] == 9' "(k) 
 assert_jq "$GEO_H" '.snapshots[-1].interval.packets_relayed == 50' "(k) scalar delta math is unaffected by geo"
 assert_jq "$GEO_H" '(.snapshots[-1].interval | has("na-eu")) | not' "(k) geo keys never enter interval"
 assert_jq "$GEO_H" '(.snapshots[-1].totals | has("na-eu")) | not' "(k) geo keys never enter totals"
+
+# ── (l) gap + reset + join: totals reconcile with sum(lifetime) ──
+# A relay disappears from the inventory for one snapshot, then returns
+# with a lower cumulative (a restart), while a second relay joins
+# mid-history. The published totals must equal the sum of the persisted
+# per-relay lifetimes, the absent relay must be carried forward, and the
+# returning relay's lifetime must absorb the reset delta without
+# regressing.
+RECON="$TMP/history-reconcile.json"
+REG_B="$TMP/registry-b.json"
+write_registry "$REG_B" "[$node_b]"
+write_registry "$REG_AB" "[$node_a,$node_b]"
+
+write_relay_fixture "$TMP" a 100 1 3
+run_collect "$RECON" "$REG_A"; assert_rc0 $? "(l) baseline run exits 0"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].lifetime.packets_relayed == 100' "(l) first-seen relay seeds lifetime from cumulative"
+
+write_relay_fixture "$TMP" b 50 0 2
+run_collect "$RECON" "$REG_B"; assert_rc0 $? "(l) gap run exits 0"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].reachable == false' "(l) absent relay carried forward as unreachable"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].lifetime.packets_relayed == 100' "(l) carried-forward relay keeps its lifetime"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].delta.packets_relayed == 0' "(l) carried-forward relay contributes zero delta"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-b"].lifetime.packets_relayed == 50' "(l) joining relay seeds lifetime from cumulative"
+assert_jq "$RECON" '.snapshots[-1].totals.packets_relayed == ([.snapshots[-1].per_relay[].lifetime.packets_relayed] | add)' "(l) totals equal sum(lifetime) across the gap"
+
+write_relay_fixture "$TMP" a 30 1 4
+write_relay_fixture "$TMP" b 80 0 2
+run_collect "$RECON" "$REG_AB"; assert_rc0 $? "(l) return-after-reset run exits 0"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].reachable == true' "(l) returning relay is reachable again"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].reset == true' "(l) backward cumulative marks a reset"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].delta.packets_relayed == 30' "(l) reset delta equals the new cumulative"
+assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].lifetime.packets_relayed == 130' "(l) lifetime accumulates reset-safe (100 + 30)"
+assert_jq "$RECON" '.snapshots[-1].totals.packets_relayed == ([.snapshots[-1].per_relay[].lifetime.packets_relayed] | add)' "(l) packets_relayed totals reconcile"
+assert_jq "$RECON" '.snapshots[-1].totals.sessions_created == ([.snapshots[-1].per_relay[].lifetime.sessions_created] | add)' "(l) sessions_created totals reconcile"
+assert_jq "$RECON" '.snapshots[-1].totals.drops_malformed == ([.snapshots[-1].per_relay[].lifetime.drops_malformed] | add)' "(l) drops_malformed totals reconcile"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
