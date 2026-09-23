@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>lightspeed</id>
-    <version>1.6.6</version>
+    <version>1.6.7</version>
     <title>LightSpeed</title>
     <authors>ShibbityShwab</authors>
     <owners>ShibbityShwab</owners>
