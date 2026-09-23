@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.9] - 2026-09-23
+
+### Fixed
+
+- **Live modes never reported telemetry.** `--watch` and `--start-interceptor`
+  return before the shared telemetry flush is spawned, so a real session
+  recorded samples locally and never sent them; the packet counters kept
+  moving, so it looked healthy from the outside. Both modes now spawn the
+  periodic flush. This is what kept the RTT-saved figure at "collecting" for
+  interceptor users even with telemetry on.
+
 ## [1.6.8] - 2026-09-23
 
 ### Added
