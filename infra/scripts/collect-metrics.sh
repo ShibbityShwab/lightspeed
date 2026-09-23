@@ -20,9 +20,11 @@
 # Reset rule: for each relay + cumulative metric, if current >= previous
 # then delta = current - previous (reset=false); otherwise delta =
 # current with a reset flag for that metric (the relay restarted). A
-# relay absent from the prior snapshot is treated as newly seen
-# (reset=true). Per-snapshot interval.* is the sum of per-relay deltas
-# and totals.* only ever grows.
+# relay absent from the current scrape is carried forward from the prior
+# snapshot (same lifetime, zero delta, reachable=false). Per-relay
+# lifetime.* is the reset-safe accumulator and totals.* is the sum of
+# those accumulators, so the published fleet total always reconciles with
+# the per-relay lifetimes.
 #
 # Non-counter fields: `active_sessions` is a gauge and `version` is a
 # label. They are recorded per relay but excluded from delta/totals,
@@ -179,27 +181,38 @@ def geo_cells($m; $countries; $max):
 # ── Delta engine: prev history + current scrape -> bounded document ──
 DELTA_JQ='
 def n: (tonumber? // 0);
+# Reset-safe delta for one counter: monotonic growth -> difference;
+# a backward counter (relay restarted) -> the new cumulative, because
+# the lifetime up to the reset already lives in prev_lifetime.
+def delta_of($cv; $pv; $reach):
+  if $reach then (if $cv >= $pv then $cv - $pv else $cv end) else 0 end;
+# First time a relay is seen, its lifetime is its current cumulative
+# (the lifetime up to that point). If an older snapshot predates the
+# lifetime field, seed from its cumulative instead of dropping history.
+def prev_life($pr; $k):
+  (($pr.lifetime[$k]) // ($pr.cumulative[$k]) // 0) | n;
 ($current // []) as $cur
 | (($prev.snapshots) // []) as $snaps
 | ($snaps | last) as $lastsnap
 | (($lastsnap.per_relay) // {}) as $prevrelay
-| (($lastsnap.totals) // {}) as $prevtotals
+| ([ $cur[].node_id ] | unique) as $curids
+| ([ $prevrelay | keys[] | select(. as $k | ($curids | index($k)) == null) ]) as $staleids
 | [ $cur[]
     | (.node_id) as $id
     | ((.reachable // false)) as $reach
     | (.cumulative // {}) as $cc
-    | (($prevrelay[$id].cumulative) // null) as $pc
+    | (($prevrelay[$id]) // null) as $pr
+    | (($pr.cumulative) // {}) as $pc
     | (reduce $counters[] as $k (
-         {cum:{}, delta:{}, reset_metrics:[]};
+         {cum:{}, delta:{}, lifetime:{}, reset_metrics:[]};
          ($cc[$k] // 0 | n) as $cv
-         | (if $pc == null then 0 else ($pc[$k] // 0 | n) end) as $pv
+         | (if ($pc | type) == "object" then ($pc[$k] // 0 | n) else 0 end) as $pv
          | (if $reach then $cv else $pv end) as $effc
-         | (if $reach
-            then (if $cv >= $pv then $cv - $pv else $cv end)
-            else 0 end) as $d
-         | (if $reach and ($pc == null or $cv < $pv) then true else false end) as $rst
+         | delta_of($cv; $pv; $reach) as $d
+         | (if $reach and ($pr == null or $cv < $pv) then true else false end) as $rst
          | .cum[$k] = $effc
          | .delta[$k] = $d
+         | .lifetime[$k] = (prev_life($pr; $k) + $d)
          | (if $rst then .reset_metrics += [$k] else . end)
        )) as $r
     | {
@@ -212,19 +225,31 @@ def n: (tonumber? // 0);
         geo_unmapped_cells: (.geo_unmapped_cells // null),
         cumulative: $r.cum,
         delta: $r.delta,
+        lifetime: $r.lifetime,
         reset_metrics: $r.reset_metrics,
         reset: (($r.reset_metrics | length) > 0)
       }
   ] as $rows
-| (reduce $counters[] as $k (
-     {};
-     .[$k] = ([ $rows[].delta[$k] ] | add // 0)
-   )) as $interval
-| (reduce $counters[] as $k (
-     {};
-     .[$k] = (($prevtotals[$k] // 0 | n) + ($interval[$k] // 0))
-   )) as $totals
-| (reduce $rows[] as $r (
+| [ $staleids[]
+    | . as $id
+    | $prevrelay[$id] as $pr
+    | {
+        id: $id,
+        reachable: false,
+        version: ($pr.version // ""),
+        active_sessions: ($pr.active_sessions // 0 | n),
+        geo: ($pr.geo // {}),
+        geo_capped: ($pr.geo_capped // false),
+        geo_unmapped_cells: ($pr.geo_unmapped_cells // null),
+        cumulative: ($pr.cumulative // {}),
+        delta: (reduce $counters[] as $k ({}; .[$k] = 0)),
+        lifetime: (reduce $counters[] as $k ({}; .[$k] = prev_life($pr; $k))),
+        reset_metrics: [],
+        reset: false
+      }
+  ] as $stalerows
+| ($rows + $stalerows) as $allrows
+| (reduce $allrows[] as $r (
      {};
      .[$r.id] = ({
         reachable: $r.reachable,
@@ -232,10 +257,7 @@ def n: (tonumber? // 0);
         active_sessions: $r.active_sessions,
          geo: $r.geo,
          geo_capped: $r.geo_capped,
-         lifetime: (reduce $counters[] as $k (
-            {};
-            .[$k] = (((($prevrelay[$r.id].lifetime[$k]) // 0) | n) + ($r.delta[$k] // 0))
-         )),
+         lifetime: $r.lifetime,
          cumulative: $r.cumulative,
         delta: $r.delta,
         reset: $r.reset,
@@ -245,11 +267,19 @@ def n: (tonumber? // 0);
           else {geo_unmapped_cells: $r.geo_unmapped_cells}
           end))
    )) as $per_relay
+| (reduce $counters[] as $k (
+     {};
+     .[$k] = ([ $allrows[].delta[$k] ] | add // 0)
+   )) as $interval
+| (reduce $counters[] as $k (
+     {};
+     .[$k] = ([ $per_relay[].lifetime[$k] ] | add // 0)
+   )) as $totals
 | ([ $snaps[],
      {
        t: ($now | n),
        relay_count: ($cur | length),
-       healthy_count: ([ $rows[] | select(.reachable) ] | length),
+       healthy_count: ([ $allrows[] | select(.reachable) ] | length),
        interval: $interval,
        totals: $totals,
        per_relay: $per_relay

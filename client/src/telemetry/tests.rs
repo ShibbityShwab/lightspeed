@@ -30,18 +30,42 @@ async fn test_telemetry_percentiles() {
 }
 
 #[tokio::test]
-async fn test_telemetry_drains_after_flush() {
+async fn test_telemetry_peek_repeats_until_commit() {
     let collector = TelemetryCollector::new();
     collector.record_rtt(30.0).await;
     collector.record_rtt(40.0).await;
 
-    let r1 = collector.build_report(0, "").await;
-    assert!(r1.is_some());
-    assert_eq!(r1.unwrap().sample_count, 2);
+    let first = collector.build_report(0, "").await;
+    assert_eq!(first.map(|r| r.sample_count), Some(2));
 
-    // Second build should return None — samples were drained.
-    let r2 = collector.build_report(0, "").await;
-    assert!(r2.is_none());
+    // Peeking again before commit still sees the same samples.
+    let second = collector.build_report(0, "").await;
+    assert_eq!(second.as_ref().map(|r| r.sample_count), Some(2));
+
+    collector
+        .commit_report(&second.expect("report to commit"))
+        .await;
+
+    // Only the commit drains.
+    let third = collector.build_report(0, "").await;
+    assert!(third.is_none());
+}
+
+#[tokio::test]
+async fn failed_post_retains_samples() {
+    let collector = TelemetryCollector::new();
+    collector.record_rtt(42.0).await;
+
+    // Nothing listens on 127.0.0.1:8080 in the test environment, so the POST
+    // fails; the samples it carried must survive for the next flush.
+    collector.flush("127.0.0.1", 0, "").await;
+
+    let report = collector.build_report(0, "").await;
+    assert_eq!(
+        report.map(|r| r.sample_count),
+        Some(1),
+        "a failed POST must not drop the samples it drained"
+    );
 }
 
 #[tokio::test]
@@ -55,8 +79,11 @@ async fn test_fec_counters_reset_after_build() {
     let report = collector.build_report(1, "US").await.unwrap();
     assert_eq!(report.fec_recoveries, 2);
     assert_eq!(report.fec_losses, 1);
+    // A peek does not consume the counters.
+    assert_eq!(collector.fec_recoveries.load(Ordering::Relaxed), 2);
+    assert_eq!(collector.fec_losses.load(Ordering::Relaxed), 1);
 
-    // Counters reset after build.
+    collector.commit_report(&report).await;
     assert_eq!(collector.fec_recoveries.load(Ordering::Relaxed), 0);
     assert_eq!(collector.fec_losses.load(Ordering::Relaxed), 0);
 }
@@ -158,5 +185,14 @@ async fn path_count_bounded() {
     assert!(report.validate().is_ok());
 
     let second = collector.build_report(1, "US").await;
-    assert!(second.is_none(), "legs drain with the global samples");
+    assert!(
+        second.is_some(),
+        "a peek repeats the legs until the report is committed"
+    );
+
+    collector
+        .commit_report(&second.expect("report to commit"))
+        .await;
+    let third = collector.build_report(1, "US").await;
+    assert!(third.is_none(), "committing drains the legs and samples");
 }

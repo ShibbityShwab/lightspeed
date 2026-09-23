@@ -50,6 +50,7 @@
 #   LIGHTSPEED_CURL              (curl)
 #   LIGHTSPEED_FILE_BIN          (file)
 #   LIGHTSPEED_SHA256SUM         (sha256sum)
+#   LIGHTSPEED_STAT              (stat)
 #   LIGHTSPEED_HOST_ARCH         (uname -m)
 #   LIGHTSPEED_SLEEP_BIN         (sleep)
 #
@@ -79,6 +80,7 @@ SYSTEMCTL="${LIGHTSPEED_SYSTEMCTL:-systemctl}"
 CURL="${LIGHTSPEED_CURL:-curl}"
 FILE_BIN="${LIGHTSPEED_FILE_BIN:-file}"
 SHA256SUM="${LIGHTSPEED_SHA256SUM:-sha256sum}"
+STAT="${LIGHTSPEED_STAT:-stat}"
 HOST_ARCH="${LIGHTSPEED_HOST_ARCH:-$(uname -m)}"
 SLEEP_BIN="${LIGHTSPEED_SLEEP_BIN:-sleep}"
 
@@ -456,6 +458,28 @@ use_handoff() {
     return 0
 }
 
+# The service's runtime user is only resolvable when the unit sets User=; a
+# DynamicUser unit leaves it empty, so the caller falls back to the runtime
+# directory's own owner. Empty means unknown, never an error.
+service_runtime_user() {
+    "$SYSTEMCTL" show -p User --value "$SERVICE_NAME" 2>/dev/null | head -1 || true
+}
+
+# Can the running service read the published request? A root-owned request
+# under a root-owned runtime directory cannot, which is the live failure on
+# units without RuntimeDirectory=lightspeed.
+handoff_request_readable() {  # dir
+    local dir="$1" svc_user
+    svc_user="$(service_runtime_user)"
+    if [ -n "$svc_user" ]; then
+        if [ "$("$STAT" -c '%U' "$HANDOFF_REQUEST" 2>/dev/null || true)" = "$svc_user" ]; then
+            return 0
+        fi
+        return 1
+    fi
+    [ "$("$STAT" -c '%u' "$dir" 2>/dev/null || printf 0)" != "0" ]
+}
+
 # Write the root-owned handoff request atomically (mode 0600). The release
 # binary is already published, so its sha256 names exactly what will exec.
 write_handoff_request() {  # id sha
@@ -483,8 +507,17 @@ write_handoff_request() {  # id sha
     fi
     # The proxy unit runs under DynamicUser, so the running process cannot read
     # a root-owned 0600 file. Give the request the runtime directory's owner
-    # (the proxy user) while keeping it owner-only.
+    # (the proxy user) while keeping it owner-only. When systemd did not create
+    # the directory as the service user (an older unit without
+    # RuntimeDirectory=), that owner is root and the service still cannot read
+    # it, so open the directory and the request for reading; the main flow
+    # still falls back to a restart if the proxy never picks it up.
     chown --reference="$dir" "$HANDOFF_REQUEST" 2>/dev/null || true
+    if ! handoff_request_readable "$dir"; then
+        log "handoff request is not readable by $SERVICE_NAME; opening read access"
+        chmod 0711 "$dir" 2>/dev/null || true
+        chmod 0644 "$HANDOFF_REQUEST" 2>/dev/null || true
+    fi
     return 0
 }
 
@@ -568,6 +601,16 @@ handoff_rollback() {
         fail "could not repoint current to $RELEASE_DIR"
     fi
     exit 1
+}
+
+# A handoff that could not complete (the request was unreadable by the
+# DynamicUser service, so the proxy never picked it up and the poll timed out)
+# must not leave the node stuck on the old version. Fall back to the ordinary
+# health-gated restart so the new version still takes effect; the caller rolls
+# back only when that new binary fails its health gate.
+handoff_fallback() {
+    log "fallback: activating $VERSION by health-gated restart"
+    activate
 }
 
 # Keep the newest N releases; prune older ones only after a healthy
@@ -678,8 +721,13 @@ if [ "$use_handoff_rc" -eq 0 ]; then
             handoff_rollback
             ;;
         *)
-            fail "handoff to $VERSION did not run; $SERVICE_NAME left on ${PREV_RELEASE:-its release}"
-            exit 1
+            fail "handoff to $VERSION did not complete; falling back to restart"
+            if handoff_fallback; then
+                prune_releases
+                log "activated $VERSION via fallback restart (current -> $RELEASE_DIR)"
+                exit 0
+            fi
+            rollback
             ;;
     esac
 fi

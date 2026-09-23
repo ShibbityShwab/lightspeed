@@ -41,32 +41,43 @@ impl PathInner {
         self.legs.last_mut().map(|(_, leg)| leg)
     }
 
+    /// Build the current observations without consuming them.
+    pub(super) fn snapshot_observations(&self) -> Vec<PathObservation> {
+        self.legs
+            .iter()
+            .filter_map(|(relay, leg)| observation(relay, leg))
+            .collect()
+    }
+
     pub(super) fn drain_observations(&mut self) -> Vec<PathObservation> {
         std::mem::take(&mut self.legs)
             .into_iter()
-            .filter_map(|(relay, leg)| {
-                if leg.rtt_ms.is_empty() {
-                    return None;
-                }
-                let mut sorted = leg.rtt_ms.clone();
-                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                let p50 = TelemetryCollector::percentile(&sorted, 50.0);
-                let p95 = TelemetryCollector::percentile(&sorted, 95.0);
-                let p99 = TelemetryCollector::percentile(&sorted, 99.0);
-                Some(PathObservation {
-                    relay,
-                    rtt_p50_ms: round_one(p50),
-                    rtt_p95_ms: round_one(p95),
-                    rtt_p99_ms: round_one(p99),
-                    jitter_ms: round_one(jitter_ms(&leg.rtt_ms)),
-                    samples: sorted.len() as u32,
-                    lost: leg.lost,
-                    recovered: leg.recovered,
-                    dedup_saved: leg.dedup_saved,
-                })
-            })
+            .filter_map(|(relay, leg)| observation(&relay, &leg))
             .collect()
     }
+}
+
+/// Reduce one leg's accumulated samples to a [`PathObservation`].
+fn observation(relay: &str, leg: &PathLeg) -> Option<PathObservation> {
+    if leg.rtt_ms.is_empty() {
+        return None;
+    }
+    let mut sorted = leg.rtt_ms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50 = TelemetryCollector::percentile(&sorted, 50.0);
+    let p95 = TelemetryCollector::percentile(&sorted, 95.0);
+    let p99 = TelemetryCollector::percentile(&sorted, 99.0);
+    Some(PathObservation {
+        relay: relay.to_string(),
+        rtt_p50_ms: round_one(p50),
+        rtt_p95_ms: round_one(p95),
+        rtt_p99_ms: round_one(p99),
+        jitter_ms: round_one(jitter_ms(&leg.rtt_ms)),
+        samples: sorted.len() as u32,
+        lost: leg.lost,
+        recovered: leg.recovered,
+        dedup_saved: leg.dedup_saved,
+    })
 }
 
 impl TelemetryCollector {
