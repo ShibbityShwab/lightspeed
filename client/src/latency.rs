@@ -5,6 +5,12 @@
 //! actual tunnelled game traffic (client → relay → game server → relay →
 //! client). Their difference is LightSpeed's core value metric, `saved_ms`.
 //!
+//! `direct_app_p50_ms` is the median round trip of a small sample of the game's
+//! own packets on the direct, un-relayed path, timed against the server's
+//! reply. It is game-packet-to-game-packet with `relayed_p50_ms`, so the two are
+//! directly comparable, unlike the ICMP-based `direct_p50_ms`, which stays as
+//! the estimate.
+//!
 //! The direct prober is strictly gated on telemetry: the process-wide tracker
 //! is installed by `telemetry::install`, and probing only runs while telemetry
 //! is enabled, so opting out (`--no-telemetry`) sends no ICMP probes.
@@ -33,6 +39,16 @@ pub const DIRECT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub const DIRECT_BURST_INTERVAL: Duration = Duration::from_secs(60);
 /// Rolling window capacity for relayed RTT samples.
 pub const RELAYED_RING_CAPACITY: usize = 256;
+/// How long a shadow-direct sample waits for the server's reply before it is
+/// discarded, so a stale timestamp cannot pair with a much later packet.
+pub const SHADOW_DIRECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Minimum interval between shadow-direct samples for the same server. At most
+/// one of the game's own packets per server per interval is timed directly.
+pub const SHADOW_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
+/// How long a stored shadow-direct median remains reportable.
+pub const SHADOW_DIRECT_TTL: Duration = Duration::from_secs(300);
+/// Rolling window capacity for shadow-direct application RTT samples.
+pub const SHADOW_RING_CAPACITY: usize = 256;
 
 const ECHO_PAYLOAD: &[u8] = b"lightspeed-ping";
 
@@ -226,6 +242,11 @@ struct Inner {
     last_burst: HashMap<Ipv4Addr, Instant>,
     relayed: Vec<f32>,
     relayed_server: Option<Ipv4Addr>,
+    shadow_pending: HashMap<Ipv4Addr, Instant>,
+    shadow_last: HashMap<Ipv4Addr, Instant>,
+    shadow: Vec<f32>,
+    shadow_server: Option<Ipv4Addr>,
+    shadow_measured_at: Option<Instant>,
 }
 
 impl Inner {
@@ -252,6 +273,16 @@ impl Inner {
             return None;
         }
         let mut sorted = self.relayed.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(TelemetryCollector::percentile(&sorted, 50.0))
+    }
+
+    /// Median of the current single-server shadow-direct window, if any.
+    fn shadow_median(&self) -> Option<f32> {
+        if self.shadow.is_empty() {
+            return None;
+        }
+        let mut sorted = self.shadow.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         Some(TelemetryCollector::percentile(&sorted, 50.0))
     }
@@ -358,6 +389,68 @@ impl LatencyTracker {
         self.lock().latest_direct()
     }
 
+    /// Claim the shadow-direct sampling slot for `server`. Returns `true` when
+    /// a sample is due: the caller must re-inject the game's own packet
+    /// unchanged onto the direct path. At most one sample per server per
+    /// [`SHADOW_SAMPLE_INTERVAL`]. Uses its own map, so it never touches the
+    /// relayed `pending` entry.
+    pub fn record_shadow_outbound(&self, server: Ipv4Addr) -> bool {
+        let now = self.clock.now();
+        let mut inner = self.lock();
+        if let Some(sent_at) = inner.shadow_pending.get(&server).copied() {
+            if now.saturating_duration_since(sent_at) >= SHADOW_DIRECT_TIMEOUT {
+                inner.shadow_pending.remove(&server);
+            }
+        }
+        match inner.shadow_last.get(&server) {
+            Some(last) if now.saturating_duration_since(*last) < SHADOW_SAMPLE_INTERVAL => false,
+            _ => {
+                inner.shadow_last.insert(server, now);
+                inner.shadow_pending.insert(server, now);
+                true
+            }
+        }
+    }
+
+    /// Record the server's reply to a shadow-direct sample. Pairs only with a
+    /// pending sample inside [`SHADOW_DIRECT_TIMEOUT`]; anything older is
+    /// discarded rather than measured.
+    pub fn record_shadow_inbound(&self, server: Ipv4Addr) {
+        let now = self.clock.now();
+        let mut inner = self.lock();
+        let Some(sent_at) = inner.shadow_pending.remove(&server) else {
+            return;
+        };
+        if now.saturating_duration_since(sent_at) >= SHADOW_DIRECT_TIMEOUT {
+            return;
+        }
+        let rtt_ms = now.saturating_duration_since(sent_at).as_secs_f64() * 1000.0;
+        if !rtt_ms.is_finite() || rtt_ms <= 0.0 {
+            return;
+        }
+        if inner.shadow_server != Some(server) {
+            inner.shadow.clear();
+            inner.shadow_server = Some(server);
+        }
+        if inner.shadow.len() >= SHADOW_RING_CAPACITY {
+            inner.shadow.remove(0);
+        }
+        inner.shadow.push(rtt_ms as f32);
+        inner.shadow_measured_at = Some(now);
+    }
+
+    /// Median direct application RTT, only while the shadow window was
+    /// measured within [`SHADOW_DIRECT_TTL`].
+    pub fn shadow_direct_p50_ms(&self) -> Option<f32> {
+        let now = self.clock.now();
+        let inner = self.lock();
+        let measured_at = inner.shadow_measured_at?;
+        if now.saturating_duration_since(measured_at) >= SHADOW_DIRECT_TTL {
+            return None;
+        }
+        inner.shadow_median()
+    }
+
     /// Median of the current relayed window, if any.
     pub fn relayed_p50_ms(&self) -> Option<f32> {
         self.lock().relayed_median()
@@ -449,6 +542,37 @@ pub fn record_inbound(server: Ipv4Addr) {
     if let Some(tracker) = global() {
         tracker.record_inbound(server);
     }
+}
+
+/// Shadow-direct hook: ask whether a sample is due for `server`. The caller
+/// re-injects the game's own packet unchanged on the direct path (never a
+/// synthetic packet). Returns `false` when telemetry is disabled, so opting
+/// out sends nothing.
+pub fn record_shadow_outbound(server: Ipv4Addr) -> bool {
+    if !crate::telemetry::is_enabled() {
+        return false;
+    }
+    match global() {
+        Some(tracker) => tracker.record_shadow_outbound(server),
+        None => false,
+    }
+}
+
+/// Shadow-direct hook: record the server's reply to a sampled packet. No-op
+/// when telemetry is disabled.
+pub fn record_shadow_inbound(server: Ipv4Addr) {
+    if !crate::telemetry::is_enabled() {
+        return;
+    }
+    if let Some(tracker) = global() {
+        tracker.record_shadow_inbound(server);
+    }
+}
+
+/// Median direct application RTT for the next telemetry report; `None` when no
+/// fresh shadow sample exists or telemetry is off.
+pub fn shadow_direct_p50_ms() -> Option<f32> {
+    global().and_then(|tracker| tracker.shadow_direct_p50_ms())
 }
 
 /// Values for the next telemetry report; `(None, None)` when telemetry is off.
@@ -817,6 +941,133 @@ mod tests {
             probe_with(&socket, target, ident, seq).is_some(),
             "a reply from the probe target must be accepted"
         );
+    }
+
+    // ── Shadow-direct application RTT sampler ───────────────────────────────
+
+    #[test]
+    fn shadow_sample_is_rate_limited_to_one_per_server_per_interval() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        assert!(t.record_shadow_outbound(SERVER), "the first sample is due");
+        assert!(
+            !t.record_shadow_outbound(SERVER),
+            "a second sample inside the interval must be refused"
+        );
+
+        clock.advance(Duration::from_secs(29));
+        assert!(
+            !t.record_shadow_outbound(SERVER),
+            "still inside the interval"
+        );
+
+        clock.advance(Duration::from_secs(1));
+        assert!(t.record_shadow_outbound(SERVER), "due again at 30s");
+
+        assert!(
+            t.record_shadow_outbound(OTHER_SERVER),
+            "each server has its own sampling slot"
+        );
+    }
+
+    #[test]
+    fn shadow_sample_does_not_clobber_relayed_pending() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        t.note_outbound(SERVER);
+        assert!(t.record_shadow_outbound(SERVER));
+
+        clock.advance(Duration::from_millis(25));
+        t.record_inbound(SERVER);
+        assert_eq!(t.relayed_p50_ms(), Some(25.0));
+
+        clock.advance(Duration::from_millis(5));
+        t.record_shadow_inbound(SERVER);
+        assert_eq!(t.shadow_direct_p50_ms(), Some(30.0));
+        assert_eq!(
+            t.relayed_p50_ms(),
+            Some(25.0),
+            "the shadow sample must not disturb the relayed window"
+        );
+    }
+
+    #[test]
+    fn shadow_median_selects_the_middle_sample() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        for rtt_ms in [10u64, 30, 20] {
+            assert!(t.record_shadow_outbound(SERVER));
+            clock.advance(Duration::from_millis(rtt_ms));
+            t.record_shadow_inbound(SERVER);
+            clock.advance(Duration::from_secs(30));
+        }
+
+        assert_eq!(t.shadow_direct_p50_ms(), Some(20.0));
+    }
+
+    #[test]
+    fn shadow_reply_after_timeout_is_not_paired() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        assert!(t.record_shadow_outbound(SERVER));
+        clock.advance(SHADOW_DIRECT_TIMEOUT + Duration::from_millis(1));
+        t.record_shadow_inbound(SERVER);
+
+        assert_eq!(
+            t.shadow_direct_p50_ms(),
+            None,
+            "a reply past the timeout must not pair with the sample"
+        );
+    }
+
+    #[test]
+    fn shadow_stale_pending_is_cleared_for_the_next_sample() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        assert!(t.record_shadow_outbound(SERVER));
+        clock.advance(SHADOW_SAMPLE_INTERVAL + SHADOW_DIRECT_TIMEOUT + Duration::from_millis(1));
+
+        assert!(
+            t.record_shadow_outbound(SERVER),
+            "the stale pending must not block the next sample"
+        );
+        clock.advance(Duration::from_millis(40));
+        t.record_shadow_inbound(SERVER);
+
+        assert_eq!(t.shadow_direct_p50_ms(), Some(40.0));
+    }
+
+    #[test]
+    fn shadow_median_expires_after_ttl() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        assert!(t.record_shadow_outbound(SERVER));
+        clock.advance(Duration::from_millis(15));
+        t.record_shadow_inbound(SERVER);
+        assert_eq!(t.shadow_direct_p50_ms(), Some(15.0));
+
+        clock.advance(SHADOW_DIRECT_TTL);
+        assert_eq!(
+            t.shadow_direct_p50_ms(),
+            None,
+            "a shadow median older than the TTL must not be reported"
+        );
+    }
+
+    #[test]
+    fn shadow_inbound_without_pending_is_ignored() {
+        let t = tracker(
+            Arc::new(ScriptedProber::new(vec![])),
+            Arc::new(TestClock::new()),
+        );
+        t.record_shadow_inbound(SERVER);
+        assert_eq!(t.shadow_direct_p50_ms(), None);
     }
 
     #[test]

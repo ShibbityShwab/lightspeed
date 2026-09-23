@@ -104,6 +104,13 @@ pub struct TelemetryReport {
     /// tunnelled round trip has been measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relayed_p50_ms: Option<f32>,
+    /// Median direct application RTT to the detected game server over the
+    /// un-relayed path (ms), measured by timing a small sample of the game's
+    /// OWN packets. This is game-packet-to-game-packet with `relayed_p50_ms`,
+    /// so the two are directly comparable, unlike the ICMP-based
+    /// `direct_p50_ms`. `None` when no direct sample has been observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_app_p50_ms: Option<f32>,
 
     // ── Client version (for compatibility tracking only) ─────────────────────
     /// SemVer string of the `lightspeed` client binary.
@@ -135,6 +142,11 @@ impl TelemetryReport {
         if let Some(v) = self.direct_p50_ms {
             if !v.is_finite() || !(0.0..=10_000.0).contains(&v) {
                 return Err("direct_p50_ms out of range");
+            }
+        }
+        if let Some(v) = self.direct_app_p50_ms {
+            if !v.is_finite() || !(0.0..=10_000.0).contains(&v) {
+                return Err("direct_app_p50_ms out of range");
             }
         }
         if let Some(v) = self.relayed_p50_ms {
@@ -208,6 +220,7 @@ mod tests {
             fec_recoveries: 3,
             fec_losses: 0,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "0.4.0-dev".to_string(),
             route_legs: vec![],
@@ -236,6 +249,7 @@ mod tests {
             fec_recoveries: 0,
             fec_losses: 0,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
@@ -256,6 +270,7 @@ mod tests {
             fec_recoveries: 0,
             fec_losses: 0,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
@@ -276,6 +291,7 @@ mod tests {
             fec_recoveries: 0,
             fec_losses: 0,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
@@ -297,6 +313,7 @@ mod tests {
             fec_recoveries: 1,
             fec_losses: 0,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![PathObservation {
@@ -343,6 +360,7 @@ mod tests {
             fec_recoveries: 2,
             fec_losses: 1,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "0.5.0".to_string(),
             route_legs: vec![
@@ -402,6 +420,7 @@ mod tests {
             fec_recoveries: 0,
             fec_losses: 0,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "0.5.0".to_string(),
             route_legs: legs,
@@ -440,6 +459,7 @@ mod tests {
             fec_recoveries: 0,
             fec_losses: 0,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
@@ -494,5 +514,48 @@ mod tests {
         let mut not_finite = minimal_report();
         not_finite.direct_p50_ms = Some(f32::NAN);
         assert!(not_finite.validate().is_err());
+    }
+
+    /// Given: a report carrying a direct application RTT. When: it round-trips
+    /// through JSON and validation. Then: the value survives, and out-of-range
+    /// or non-finite values are rejected with the same bounds as `direct_p50_ms`.
+    #[test]
+    fn direct_app_latency_roundtrip_and_validation() {
+        let mut report = minimal_report();
+        report.direct_app_p50_ms = Some(47.5);
+
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: TelemetryReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.direct_app_p50_ms, Some(47.5));
+        assert!(decoded.validate().is_ok());
+
+        for bad in [10_001.0, -1.0, f32::NAN, f32::INFINITY] {
+            let mut r = minimal_report();
+            r.direct_app_p50_ms = Some(bad);
+            assert!(
+                r.validate().is_err(),
+                "direct_app_p50_ms {bad} must be rejected"
+            );
+        }
+    }
+
+    /// Given: a report with no direct application RTT. When: it is serialised.
+    /// Then: the absent field is omitted from JSON entirely.
+    #[test]
+    fn absent_direct_app_field_is_omitted_from_json() {
+        let json = serde_json::to_string(&minimal_report()).unwrap();
+        assert!(
+            !json.contains("direct_app"),
+            "None direct_app_p50_ms must not appear in JSON: {json}"
+        );
+    }
+
+    /// Given: a legacy report body predating the field. When: it is decoded.
+    /// Then: the field defaults to `None`.
+    #[test]
+    fn direct_app_field_accepts_legacy_reports_without_it() {
+        let json = r#"{"game_id":2,"client_country":"TH","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":10,"client_version":"0.4.0"}"#;
+        let decoded: TelemetryReport = serde_json::from_str(json).unwrap();
+        assert_eq!(decoded.direct_app_p50_ms, None);
     }
 }

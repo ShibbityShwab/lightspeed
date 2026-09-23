@@ -235,3 +235,44 @@ guard that cannot trigger with the real 8-region catalog; MOVE target selection 
 **Next:** let demand accumulate. The Pages recommender runs every 6h and currently reports
 INSUFFICIENT_DATA (no geo cells reach the k>=3 floor yet). Once volume grows it will name the
 best next region to deploy and test; any actual relay add or move remains a human decision.
+
+---
+
+## WF-027: Shadow direct path - step 1 (like-for-like direct application RTT)
+
+**Workflow:** WF-027
+**Agent:** RustDev + QAEngineer
+**Status:** Implemented in the working tree (not committed)
+
+The published "RTT saved" compared an ICMP echo (direct) against the tunnelled
+game-traffic round trip (relayed): different instruments, so only an estimate.
+Step 1 adds a like-for-like direct application RTT: one of the game's OWN
+packets per server per 30s goes out on the direct path unmodified, the server's
+reply is timed on a WinDivert inbound sniff handle, and `direct_app_p50_ms`
+flows through telemetry, proxy metrics, the collector, and the web trend. The
+ICMP estimate stays as the fallback.
+
+Delivered:
+- `client/src/latency.rs`: separate shadow-direct tracker (own pending map, 30s
+  per-server gate, 5s reply timeout, 300s TTL, 256-sample ring,
+  `shadow_direct_p50_ms`); never touches `pending` or the relayed ring.
+- `client/src/interceptor/order.rs` + `windows.rs`: `Decision::ShadowDirect`,
+  unchanged re-injection of the game's own packet, inbound sniff handle, teardown
+  ack extended to four owners.
+- `protocol/src/telemetry.rs`: `direct_app_p50_ms` (finite, 0..=10000).
+- `client/src/telemetry.rs`: `build_report` populates it.
+- `proxy/src/metrics.rs`: `lightspeed_telemetry_direct_app_ms_{sum,count}`.
+- `infra/scripts/collect-metrics.sh` + test: `direct_app_ms_{sum,count}`.
+- `web/app.js`: prefers the like-for-like value, ICMP estimate as fallback.
+
+**Verification:** `cargo fmt --all --check` clean; clippy `-Dwarnings` default and
+`full` clean; `cargo test --workspace --exclude lightspeed-gui` 714 passed, 0
+failed; collector suite 100 checks. Windows-only code cannot be compiled on this
+host and is compile-checked by CI: the `windows-gui` job builds the client with
+`windivert-redirect`, the `windows-test` job builds the feature-off stub.
+
+**Known gap:** real Windows runtime behaviour (sniff handle pairing, direct
+re-injection) rests on the CI Windows build plus the Linux-runnable shadow
+tracker unit tests.
+
+**Next (step 2):** not defined in this task.

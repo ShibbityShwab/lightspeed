@@ -151,9 +151,33 @@ impl TelemetryCollector {
     /// been sent, so a failed flush can retry with the same data.
     async fn build_report(&self, game_id: u8, country: &str) -> Option<TelemetryReport> {
         let (direct_p50_ms, relayed_p50_ms) = crate::latency::peek_report_values();
+        let direct_app_p50_ms = crate::latency::shadow_direct_p50_ms();
+        self.build_report_with_latency(
+            game_id,
+            country,
+            direct_p50_ms,
+            relayed_p50_ms,
+            direct_app_p50_ms,
+        )
+        .await
+    }
 
+    /// Build a report from explicit latency values. Split out so field
+    /// propagation is testable without installing the process-wide tracker.
+    async fn build_report_with_latency(
+        &self,
+        game_id: u8,
+        country: &str,
+        direct_p50_ms: Option<f32>,
+        relayed_p50_ms: Option<f32>,
+        direct_app_p50_ms: Option<f32>,
+    ) -> Option<TelemetryReport> {
         let inner = self.inner.lock().await;
-        if inner.samples.is_empty() && direct_p50_ms.is_none() && relayed_p50_ms.is_none() {
+        if inner.samples.is_empty()
+            && direct_p50_ms.is_none()
+            && relayed_p50_ms.is_none()
+            && direct_app_p50_ms.is_none()
+        {
             return None;
         }
 
@@ -196,6 +220,7 @@ impl TelemetryCollector {
             fec_losses: losses,
             direct_p50_ms,
             relayed_p50_ms,
+            direct_app_p50_ms,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             route_legs,
         })

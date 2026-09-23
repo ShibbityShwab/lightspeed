@@ -213,9 +213,52 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 }
             };
 
-        // Both handles are open: any later setup error must release them.
-        let mut setup_guard =
-            HandleShutdownGuard::new(Arc::clone(&wd_intercept), Arc::clone(&wd_inject));
+        // Open a shadow-direct inbound handle. It is a sniff handle (copy, never
+        // divert), so it observes replies from a tracked game server to a
+        // sampled game packet without disrupting either direction. The outbound
+        // filter is port-range based, so this mirrors it on SrcPort and the read
+        // loop additionally matches the source against the tracked server.
+        // Non-fatal: shadow sampling refines telemetry, it is never a reason to
+        // fail interception.
+        let shadow_filter = if port_lo == port_hi {
+            format!(
+                "udp and inbound and udp.SrcPort == {port_lo} and ip.SrcAddr != {}",
+                config_proxy.ip()
+            )
+        } else {
+            format!(
+                "udp and inbound and udp.SrcPort >= {port_lo} and udp.SrcPort <= {port_hi} and ip.SrcAddr != {}",
+                config_proxy.ip()
+            )
+        };
+        tracing::info!(
+            "🔀 WinDivert shadow-direct inbound filter: {}",
+            shadow_filter
+        );
+        let wd_shadow: Option<Arc<OwnedHandle>> = match OwnedHandle::open(
+            &shadow_filter,
+            WinDivertLayer::Network,
+            0,
+            WinDivertFlags::new().set_sniff(),
+        ) {
+            Ok(h) => {
+                tracing::info!("✅ WinDivert shadow-direct inbound handle opened");
+                Some(Arc::new(h))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "WinDivert shadow-direct inbound handle failed (shadow sampling disabled): {e}"
+                );
+                None
+            }
+        };
+
+        // All handles are open: any later setup error must release them.
+        let mut setup_guard = HandleShutdownGuard::new(
+            Arc::clone(&wd_intercept),
+            Arc::clone(&wd_inject),
+            wd_shadow.clone(),
+        );
 
         // Shared state
         let counters = Arc::new(InterceptorCounters::default());
@@ -241,9 +284,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
         // Each owner thread sends one ack when it can no longer touch its
         // WinDivert handle, so `stop_and_wait` can close deterministically.
-        // The third ack is the tunnel task, which also removes the firewall
-        // rule, so teardown does not finish before the rule is gone.
-        let (ack_tx, teardown_ack) = TeardownAck::new(3);
+        // The tunnel task also removes the firewall rule, so teardown does not
+        // finish before the rule is gone. The shadow inbound thread acks only
+        // when its sniff handle is open.
+        let ack_count = if wd_shadow.is_some() { 4 } else { 3 };
+        let (ack_tx, teardown_ack) = TeardownAck::new(ack_count);
 
         // ── Shutdown signal ──────────────────────────────────────────────
         // Keep tokio::sync::oneshot for InterceptorHandle compatibility, but
@@ -336,17 +381,38 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                             match parsed {
                                 Some((game_src, game_dst, payload)) => {
-                                    match tracker.observe(game_dst, Instant::now(), payload.len()) {
-                                        Decision::Tunnel(server) => {
-                                            if reported_server != Some(server) {
-                                                reported_server = Some(server);
-                                                if let Ok(mut g) =
-                                                    counters_ic.detected_server.lock()
-                                                {
-                                                    *g = Some(server);
-                                                }
-                                                tracing::info!("🔍 Locked game server: {}", server);
+                                    let decision =
+                                        tracker.observe(game_dst, Instant::now(), payload.len());
+
+                                    // Publish the locked server before the decision
+                                    // can become a ShadowDirect sample: the shadow
+                                    // inbound thread pairs replies against it.
+                                    if let Decision::Tunnel(server) = decision {
+                                        if reported_server != Some(server) {
+                                            reported_server = Some(server);
+                                            if let Ok(mut g) = counters_ic.detected_server.lock() {
+                                                *g = Some(server);
                                             }
+                                            tracing::info!("🔍 Locked game server: {}", server);
+                                        }
+                                    }
+
+                                    // When the shadow sampler is due for this locked
+                                    // server, this packet becomes a like-for-like
+                                    // direct application RTT sample.
+                                    let decision = match decision {
+                                        Decision::Tunnel(server)
+                                            if crate::latency::record_shadow_outbound(
+                                                *server.ip(),
+                                            ) =>
+                                        {
+                                            Decision::ShadowDirect
+                                        }
+                                        other => other,
+                                    };
+
+                                    match decision {
+                                        Decision::Tunnel(server) => {
                                             counters_ic
                                                 .packets_intercepted
                                                 .fetch_add(1, Ordering::Relaxed);
@@ -359,6 +425,15 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                             {
                                                 break;
                                             }
+                                        }
+                                        Decision::ShadowDirect => {
+                                            // Re-inject the game's OWN packet
+                                            // UNCHANGED on the direct path. No
+                                            // synthetic packet and no payload
+                                            // rewrite: the anti-cheat safety
+                                            // property. The reply is timed on the
+                                            // sniff inbound handle.
+                                            let _ = wd_ic.send(data, &addr);
                                         }
                                         Decision::PassThrough | Decision::StartDetection => {
                                             let _ = wd_ic.send(data, &addr);
@@ -471,6 +546,59 @@ impl TrafficInterceptor for WinDivertInterceptor {
             });
         }
         tracing::info!("✅ Inject thread spawned");
+
+        // ── Shadow-direct inbound thread (blocking) ───────────────────────
+        //
+        // Reads the sniff handle and records a direct application RTT when a
+        // reply comes from the tracked game server. The sniff handle never
+        // diverts, so the game still receives every reply.
+        if let Some(wd_sh) = wd_shadow.as_ref() {
+            let wd_sh = Arc::clone(wd_sh);
+            let counters_sh = Arc::clone(&counters);
+            let running_sh = Arc::clone(&running);
+            let ack_sh = ack_tx.clone();
+
+            tracing::info!("🚀 Spawning shadow-direct inbound thread...");
+            tokio::task::spawn_blocking(move || {
+                let mut recv_buf = vec![0u8; 65535];
+                loop {
+                    if !running_sh.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    match wd_sh.recv(&mut recv_buf) {
+                        Ok((len, addr)) => {
+                            // Skip packets our own inject handle spoofed for the
+                            // tunnelled path: only a genuine wire reply proves
+                            // the direct path's RTT.
+                            if addr.impostor() {
+                                continue;
+                            }
+                            let Some((src, _dst, _payload)) = parse_ipv4_udp(&recv_buf[..len])
+                            else {
+                                continue;
+                            };
+                            let tracked = *counters_sh
+                                .detected_server
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if tracked.filter(|server| server.ip() == src.ip()).is_some() {
+                                crate::latency::record_shadow_inbound(*src.ip());
+                            }
+                        }
+                        Err(e) => {
+                            let raw = e.raw_os_error().unwrap_or(0);
+                            if recv_should_break(running_sh.load(Ordering::Relaxed), raw) {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                    }
+                }
+                let _ = ack_sh.send(());
+                tracing::info!("WinDivert shadow-direct thread exiting");
+            });
+        }
+        tracing::info!("✅ Shadow-direct inbound thread spawned");
 
         // ── Async tunnel task ─────────────────────────────────────────────
         {
@@ -729,6 +857,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             {
                 let wd_ic = Arc::clone(&wd_intercept);
                 let wd_inj = Arc::clone(&wd_inject);
+                let wd_sh = wd_shadow.clone();
                 move || {
                     // The intercept handle is used for both recv and send
                     // (pass-through re-injection), so shut down both directions
@@ -738,6 +867,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     }
                     if let Err(e) = wd_inj.shutdown(WinDivertShutdownMode::Both) {
                         tracing::warn!("WinDivert inject shutdown failed: {e}");
+                    }
+                    if let Some(sh) = &wd_sh {
+                        if let Err(e) = sh.shutdown(WinDivertShutdownMode::Both) {
+                            tracing::warn!("WinDivert shadow shutdown failed: {e}");
+                        }
                     }
                 }
             },
@@ -758,9 +892,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
 //  Handle lifecycle helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Shuts both WinDivert handles down unless disarmed.
+/// Shuts the WinDivert handles down unless disarmed.
 ///
-/// `start` opens both handles before it binds the tunnel socket and spawns the
+/// `start` opens the handles before it binds the tunnel socket and spawns the
 /// async tunnel task. If any of that setup fails, `Drop` shuts the handles
 /// down; the owner threads then exit and the last `Arc<OwnedHandle>` drop
 /// closes the handle, so a failed start cannot leak WFP state. On success
@@ -769,15 +903,21 @@ impl TrafficInterceptor for WinDivertInterceptor {
 struct HandleShutdownGuard {
     intercept: Arc<OwnedHandle>,
     inject: Arc<OwnedHandle>,
+    shadow: Option<Arc<OwnedHandle>>,
     armed: bool,
 }
 
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 impl HandleShutdownGuard {
-    fn new(intercept: Arc<OwnedHandle>, inject: Arc<OwnedHandle>) -> Self {
+    fn new(
+        intercept: Arc<OwnedHandle>,
+        inject: Arc<OwnedHandle>,
+        shadow: Option<Arc<OwnedHandle>>,
+    ) -> Self {
         Self {
             intercept,
             inject,
+            shadow,
             armed: true,
         }
     }
@@ -795,6 +935,9 @@ impl Drop for HandleShutdownGuard {
         }
         let _ = self.intercept.shutdown(WinDivertShutdownMode::Both);
         let _ = self.inject.shutdown(WinDivertShutdownMode::Both);
+        if let Some(shadow) = &self.shadow {
+            let _ = shadow.shutdown(WinDivertShutdownMode::Both);
+        }
     }
 }
 

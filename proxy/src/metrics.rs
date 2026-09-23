@@ -84,6 +84,11 @@ pub struct TelemetryCell {
     pub relayed_sum_ms: f64,
     /// Number of reports that carried `relayed_p50_ms`.
     pub relayed_count: u64,
+    /// Sum of the reports' `direct_app_p50_ms` values, over reports where
+    /// present.
+    pub direct_app_sum_ms: f64,
+    /// Number of reports that carried `direct_app_p50_ms`.
+    pub direct_app_count: u64,
     /// Sum of `direct_p50_ms - relayed_p50_ms` over reports where both are
     /// present.
     pub saved_sum_ms: f64,
@@ -585,6 +590,10 @@ impl ProxyMetrics {
                     cell.relayed_sum_ms += f64::from(relayed);
                     cell.relayed_count += 1;
                 }
+                if let Some(direct_app) = report.direct_app_p50_ms {
+                    cell.direct_app_sum_ms += f64::from(direct_app);
+                    cell.direct_app_count += 1;
+                }
                 if let (Some(direct), Some(relayed)) = (report.direct_p50_ms, report.relayed_p50_ms)
                 {
                     cell.saved_sum_ms += f64::from(direct) - f64::from(relayed);
@@ -1027,6 +1036,11 @@ impl ProxyMetrics {
         out.push_str("# TYPE lightspeed_telemetry_saved_ms_sum counter\n");
         out.push_str("# TYPE lightspeed_telemetry_saved_ms_count counter\n");
         out.push_str(
+            "# HELP lightspeed_telemetry_direct_app_ms_sum Sum of client-reported direct application RTT medians (ms), measured by timing a sample of the game's own packets on the un-relayed path; _sum/_count is the mean of client direct-app medians, not a population p50\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_direct_app_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_direct_app_ms_count counter\n");
+        out.push_str(
             "# HELP lightspeed_telemetry_rejected_total Telemetry reports dropped because the per-(game,country) cell cap was reached\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_rejected_total counter\n");
@@ -1119,6 +1133,14 @@ impl ProxyMetrics {
                 out.push_str(&format!(
                     "lightspeed_telemetry_saved_ms_count{{{}}} {}\n",
                     cell_labels, cell.saved_count
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_direct_app_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.direct_app_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_direct_app_ms_count{{{}}} {}\n",
+                    cell_labels, cell.direct_app_count
                 ));
             }
         }
@@ -1529,6 +1551,7 @@ mod tests {
             fec_recoveries: 1,
             fec_losses: 0,
             direct_p50_ms: None,
+            direct_app_p50_ms: None,
             relayed_p50_ms: None,
             client_version: "1.4.4".to_string(),
             route_legs: vec![],
@@ -1628,6 +1651,64 @@ mod tests {
         assert!(output.contains(&format!(
             "lightspeed_telemetry_saved_ms_count{{{labels}}} 1"
         )));
+    }
+
+    /// Given: three reports, two carrying a direct application RTT. When: they
+    /// are folded into the telemetry cell. Then: the direct-app sum/count cover
+    /// only the reports that carried it, and the family is emitted.
+    #[test]
+    fn telemetry_direct_app_aggregated_and_emitted() {
+        let m = ProxyMetrics::new();
+
+        let mut with_app = report(2, "US");
+        with_app.direct_app_p50_ms = Some(48.0);
+        let mut second = report(2, "US");
+        second.direct_app_p50_ms = Some(52.0);
+        let without = report(2, "US");
+
+        m.record_telemetry_report(&with_app);
+        m.record_telemetry_report(&second);
+        m.record_telemetry_report(&without);
+
+        {
+            let agg = m.telemetry.lock().unwrap();
+            let cell = agg.cells.values().next().unwrap();
+            assert_eq!(cell.direct_app_sum_ms, 100.0);
+            assert_eq!(cell.direct_app_count, 2);
+        }
+
+        let output = m.to_prometheus("test", "test-node");
+        let labels = "region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"";
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_direct_app_ms_sum{{{labels}}} 100.0"
+        )));
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_direct_app_ms_count{{{labels}}} 2"
+        )));
+    }
+
+    /// Given: a cell below the k-anonymity floor. When: metrics are rendered.
+    /// Then: the direct-app family is still declared, but no per-cell series
+    /// leaks.
+    #[test]
+    fn telemetry_direct_app_family_declared_below_k() {
+        let m = ProxyMetrics::new();
+        m.record_telemetry_report(&report(2, "US"));
+
+        let output = m.to_prometheus("test", "test-node");
+        for family in [
+            "lightspeed_telemetry_direct_app_ms_sum",
+            "lightspeed_telemetry_direct_app_ms_count",
+        ] {
+            assert!(
+                output.contains(&format!("# TYPE {family} counter")),
+                "missing TYPE for {family}"
+            );
+        }
+        assert!(
+            !output.contains("lightspeed_telemetry_direct_app_ms_sum{"),
+            "a cell below the k-anonymity floor must not emit direct-app series"
+        );
     }
 
     /// Given: no cell has reached the k-anonymity floor. When: metrics are

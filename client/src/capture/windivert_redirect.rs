@@ -447,7 +447,9 @@ mod inner {
                                             break;
                                         }
                                     }
-                                    Decision::PassThrough | Decision::StartDetection => {
+                                    Decision::PassThrough
+                                    | Decision::StartDetection
+                                    | Decision::ShadowDirect => {
                                         let _ = wd_ic.send(data, &addr);
                                     }
                                     Decision::ResetToDetection => {
