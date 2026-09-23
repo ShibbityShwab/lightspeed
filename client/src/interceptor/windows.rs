@@ -412,7 +412,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     };
 
                                     match decision {
-                                        Decision::Tunnel(server) => {
+                                        Decision::Tunnel(_) => {
                                             counters_ic
                                                 .packets_intercepted
                                                 .fetch_add(1, Ordering::Relaxed);
