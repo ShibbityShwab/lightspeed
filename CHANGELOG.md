@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.7] - 2026-09-23
+
+### Added
+
+- **Like-for-like direct latency measurement (Windows).** A sampled game packet
+  is let out on the direct path (re-injected unchanged, at most one per server
+  per 30 seconds) and its reply is timed on a second sniff-only WinDivert handle,
+  giving a direct application RTT to compare against the tunnelled round trip.
+  The game's own packet is used unmodified; no synthetic packets enter the game
+  flow. Linux and macOS follow in a later release.
+
+### Changed
+
+- The published figure is relabelled **"RTT saved"** and the copy states plainly
+  that it compares an ICMP echo to the game traffic round trip, so it is an
+  estimate rather than a measurement of in-game ping. Where the new direct
+  application RTT is available it is used instead, making the comparison
+  like-for-like.
+
 ## [1.6.6] - 2026-09-23
 
 ### Fixed
