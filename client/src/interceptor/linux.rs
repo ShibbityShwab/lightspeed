@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 
 use super::recovery::RecvBackoff;
 use super::rotation::{Action, RotationTracker, ROTATE_SCAN_INTERVAL};
+use super::shadow_probe::{tunnel_then_probe, ShadowProbe, PROBE_MARK};
 use super::teardown::TeardownAck;
 use super::traits::{
     InterceptorConfig, InterceptorCounters, InterceptorHandle, PlatformTeardown, TrafficInterceptor,
@@ -235,6 +236,13 @@ impl TrafficInterceptor for NftablesInterceptor {
             let mut in_buf = vec![0u8; 65535];
             let mut game_src: Option<SocketAddrV4> = None;
 
+            // Shadow-direct probe socket, created lazily on the first claimed
+            // sample and reused for the session. `shadow_disabled` latches a
+            // bind failure so a probe is not retried on every packet.
+            let mut shadow_probe: Option<Arc<ShadowProbe>> = None;
+            let mut shadow_probe_port: Option<u16> = None;
+            let mut shadow_disabled = false;
+
             let mut rotation = RotationTracker::new();
             let mut scan_timer = tokio::time::interval_at(
                 tokio::time::Instant::now() + ROTATE_SCAN_INTERVAL,
@@ -271,6 +279,17 @@ impl TrafficInterceptor for NftablesInterceptor {
                             Some(r) => r,
                             None => break,
                         };
+
+                        // The nat OUTPUT rule matches destination only, so the
+                        // extra direct probe can be redirected back here. Drop
+                        // it before it can touch the game's flow.
+                        if is_self_redirected_probe(shadow_probe_port, src) {
+                            tracing::debug!(
+                                "Linux interceptor: ignored redirected shadow-direct probe from {src}"
+                            );
+                            continue;
+                        }
+
                         let len = data.len();
                         out_buf[..len].copy_from_slice(&data);
 
@@ -294,41 +313,87 @@ impl TrafficInterceptor for NftablesInterceptor {
                             .unwrap_or_default()
                             .as_micros() as u32;
 
-                        if let Some(ref mut enc) = fec_encoder {
-                            let block_id = enc.block_id();
-                            let index = enc.current_index();
-                            let hdr = lightspeed_protocol::TunnelHeader::new_fec(seq, ts, src, actual_dst)
-                                .with_session_token(crate::session::session_token());
-                            let fh = FecHeader::data(block_id, index, fec_k);
-                            let mut buf = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + len);
-                            buf.extend_from_slice(&hdr.encode_to_array());
-                            fh.encode(&mut buf);
-                            buf.extend_from_slice(payload);
-                            let parity = enc.add_packet(payload);
-                            crate::latency::record_outbound(*actual_dst.ip());
-                            let _ = tunnel_socket.send_to(&buf, crate::session::current_proxy().unwrap_or(config_proxy)).await;
-                            if let Some(pb) = parity {
-                                let ps = seq.wrapping_add(1);
-                                let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, src, actual_dst)
-                                    .with_session_token(crate::session::session_token());
-                                let pf = FecHeader::parity(block_id, fec_k);
-                                let mut pb2 = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + pb.len());
-                                pb2.extend_from_slice(&ph.encode_to_array());
-                                pf.encode(&mut pb2);
-                                pb2.extend_from_slice(&pb);
-                                let _ = tunnel_socket.send_to(&pb2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
-                                seq = seq.wrapping_add(1);
-                            }
-                        } else {
-                            let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts, src, actual_dst)
-                                .with_session_token(crate::session::session_token());
-                            let pkt = hdr.encode_with_payload(payload);
-                            crate::latency::record_outbound(*actual_dst.ip());
-                            let (dests, n) = crate::session::send_destinations(config_proxy);
-                            for d in dests.iter().take(n) {
-                                let _ = tunnel_socket.send_to(&pkt, *d).await;
+                        // Shadow-direct sampling is gated on telemetry by the
+                        // tracker. The socket opens lazily on the first due
+                        // sample and is reused for the whole session.
+                        let shadow_due = crate::latency::record_shadow_outbound(*actual_dst.ip());
+                        if shadow_due && shadow_probe.is_none() && !shadow_disabled {
+                            match ShadowProbe::bind() {
+                                Ok(probe) if probe.is_usable() => {
+                                    let probe = Arc::new(probe);
+                                    let port = probe.local_port();
+                                    probe.spawn_reader(
+                                        Arc::clone(&running_loop),
+                                        crate::latency::record_shadow_inbound,
+                                    );
+                                    tracing::debug!("Linux shadow-direct probe on port {port:?}");
+                                    shadow_probe_port = port;
+                                    shadow_probe = Some(probe);
+                                }
+                                Ok(_) => {
+                                    // SO_MARK was refused, so the nat rule would
+                                    // capture the probe; send no direct copies.
+                                    tracing::debug!(
+                                        "Linux shadow-direct probe disabled: SO_MARK unavailable"
+                                    );
+                                    shadow_disabled = true;
+                                }
+                                Err(e) => {
+                                    tracing::debug!("Linux shadow-direct probe disabled: {e}");
+                                    shadow_disabled = true;
+                                }
                             }
                         }
+
+                        crate::latency::record_outbound(*actual_dst.ip());
+
+                        // The game's packet is tunnelled first and unchanged.
+                        // Only afterwards, when the sampler claimed a sample, is
+                        // an EXTRA copy of its own bytes sent direct.
+                        let tunnel_send = async {
+                            if let Some(ref mut enc) = fec_encoder {
+                                let block_id = enc.block_id();
+                                let index = enc.current_index();
+                                let hdr = lightspeed_protocol::TunnelHeader::new_fec(seq, ts, src, actual_dst)
+                                    .with_session_token(crate::session::session_token());
+                                let fh = FecHeader::data(block_id, index, fec_k);
+                                let mut buf = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + len);
+                                buf.extend_from_slice(&hdr.encode_to_array());
+                                fh.encode(&mut buf);
+                                buf.extend_from_slice(payload);
+                                let parity = enc.add_packet(payload);
+                                let _ = tunnel_socket.send_to(&buf, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                                if let Some(pb) = parity {
+                                    let ps = seq.wrapping_add(1);
+                                    let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, src, actual_dst)
+                                        .with_session_token(crate::session::session_token());
+                                    let pf = FecHeader::parity(block_id, fec_k);
+                                    let mut pb2 = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + pb.len());
+                                    pb2.extend_from_slice(&ph.encode_to_array());
+                                    pf.encode(&mut pb2);
+                                    pb2.extend_from_slice(&pb);
+                                    let _ = tunnel_socket.send_to(&pb2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                                    seq = seq.wrapping_add(1);
+                                }
+                            } else {
+                                let hdr = lightspeed_protocol::TunnelHeader::new(seq, ts, src, actual_dst)
+                                    .with_session_token(crate::session::session_token());
+                                let pkt = hdr.encode_with_payload(payload);
+                                let (dests, n) = crate::session::send_destinations(config_proxy);
+                                for d in dests.iter().take(n) {
+                                    let _ = tunnel_socket.send_to(&pkt, *d).await;
+                                }
+                            }
+                        };
+
+                        tunnel_then_probe(
+                            tunnel_send,
+                            shadow_due,
+                            shadow_probe.as_deref(),
+                            payload,
+                            actual_dst,
+                        )
+                        .await;
                         seq = seq.wrapping_add(1);
                     }
 
@@ -458,6 +523,14 @@ fn scan_candidates(process_names: &[&str], proxy: SocketAddrV4) -> Vec<SocketAdd
     out
 }
 
+/// True when a datagram received on the redirect listener came from the
+/// shadow-direct probe socket itself, i.e. the destination-only redirect
+/// captured the probe's own copy. Such a packet must be dropped before it can
+/// touch the game's flow.
+fn is_self_redirected_probe(shadow_probe_port: Option<u16>, src: SocketAddrV4) -> bool {
+    shadow_probe_port == Some(src.port())
+}
+
 /// Apply a [`RotationTracker`] decision, re-synchronising the tracker when a
 /// rule transaction fails so `tracker.current()` never diverges from the rule.
 fn apply_action(
@@ -549,7 +622,13 @@ impl Installer {
             Backend::Nft(nft) => {
                 nft_run(nft, &nft_install_script(server, self.local_port, &self.tag))?
             }
-            Backend::Iptables(ipt) => ipt_add(ipt, server, self.local_port, &self.tag)?,
+            Backend::Iptables(ipt) => {
+                apply_ipt_plan(
+                    ipt,
+                    &self.tag,
+                    &ipt_install_plan(server, self.local_port, &self.tag),
+                )?;
+            }
         }
         self.current = Some(server);
         Ok(())
@@ -564,7 +643,12 @@ impl Installer {
                 if let Some(previous) = self.current {
                     ipt_del(ipt, previous, self.local_port, &self.tag);
                 }
-                ipt_add(ipt, server, self.local_port, &self.tag)?;
+                ipt_del_mark(ipt, &self.tag);
+                apply_ipt_plan(
+                    ipt,
+                    &self.tag,
+                    &ipt_install_plan(server, self.local_port, &self.tag),
+                )?;
             }
         }
         self.current = Some(server);
@@ -577,14 +661,18 @@ impl Installer {
         };
         match &self.backend {
             Backend::Nft(nft) => nft_delete_table(nft, &self.tag),
-            Backend::Iptables(ipt) => ipt_del(ipt, previous, self.local_port, &self.tag),
+            Backend::Iptables(ipt) => {
+                ipt_del(ipt, previous, self.local_port, &self.tag);
+                ipt_del_mark(ipt, &self.tag);
+            }
         }
     }
 }
 
 fn nft_install_script(server: SocketAddrV4, local_port: u16, tag: &str) -> String {
     format!(
-        "table ip {tag} {{\n chain output {{\n  type nat hook output priority -100; policy accept;\n  ip daddr {ip} udp dport {port} redirect to :{local_port}\n }}\n}}\n",
+        "table ip {tag} {{\n chain output {{\n  type nat hook output priority -100; policy accept;\n  meta mark {mark:#x} return\n  ip daddr {ip} udp dport {port} redirect to :{local_port}\n }}\n}}\n",
+        mark = PROBE_MARK,
         ip = server.ip(),
         port = server.port(),
     )
@@ -593,7 +681,9 @@ fn nft_install_script(server: SocketAddrV4, local_port: u16, tag: &str) -> Strin
 fn nft_swap_script(server: SocketAddrV4, local_port: u16, tag: &str) -> String {
     format!(
         "flush chain ip {tag} output\n\
+         add rule ip {tag} output meta mark {mark:#x} return\n\
          add rule ip {tag} output ip daddr {ip} udp dport {port} redirect to :{local_port}\n",
+        mark = PROBE_MARK,
         ip = server.ip(),
         port = server.port(),
     )
@@ -656,18 +746,61 @@ fn ipt_rule_args(server: SocketAddrV4, local_port: u16, tag: &str, op: &str) -> 
     ]
 }
 
-fn ipt_add(ipt: &Path, server: SocketAddrV4, local_port: u16, tag: &str) -> anyhow::Result<()> {
+fn ipt_mark_return_args(tag: &str, op: &str) -> Vec<String> {
+    vec![
+        "-t".into(),
+        "nat".into(),
+        op.into(),
+        "OUTPUT".into(),
+        "-m".into(),
+        "mark".into(),
+        "--mark".into(),
+        format!("{PROBE_MARK:#x}"),
+        "-m".into(),
+        "comment".into(),
+        "--comment".into(),
+        format!("{tag}_probe"),
+        "-j".into(),
+        "RETURN".into(),
+    ]
+}
+
+/// The nat OUTPUT rules for one session in evaluation order: the probe-mark
+/// exemption first, then the game-traffic REDIRECT. The exemption carries no
+/// destination match, so it can only ever exempt the marked probe.
+fn ipt_install_plan(server: SocketAddrV4, local_port: u16, tag: &str) -> Vec<Vec<String>> {
+    vec![
+        ipt_mark_return_args(tag, "-A"),
+        ipt_rule_args(server, local_port, tag, "-A"),
+    ]
+}
+
+fn ipt_apply(ipt: &Path, args: &[String]) -> anyhow::Result<()> {
     let out = std::process::Command::new(ipt)
-        .args(ipt_rule_args(server, local_port, tag, "-A"))
+        .args(args)
         .output()
         .map_err(|e| anyhow::anyhow!("iptables failed to start: {e}"))?;
     if !out.status.success() {
         anyhow::bail!(
-            "iptables rule add failed: {}",
+            "iptables rule failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    tracing::info!("iptables: added REDIRECT rule (tag={tag})");
+    Ok(())
+}
+
+/// Apply the ordered rules, rolling the exemption back when a later rule fails
+/// so no mark rule is left orphaned without its redirect.
+fn apply_ipt_plan(ipt: &Path, tag: &str, plan: &[Vec<String>]) -> anyhow::Result<()> {
+    for (index, args) in plan.iter().enumerate() {
+        if let Err(e) = ipt_apply(ipt, args) {
+            if index > 0 {
+                ipt_del_mark(ipt, tag);
+            }
+            return Err(e);
+        }
+    }
+    tracing::info!("iptables: added probe exemption + REDIRECT rules (tag={tag})");
     Ok(())
 }
 
@@ -676,6 +809,13 @@ fn ipt_del(ipt: &Path, server: SocketAddrV4, local_port: u16, tag: &str) {
         .args(ipt_rule_args(server, local_port, tag, "-D"))
         .output();
     tracing::info!("iptables: removed REDIRECT rule (tag={tag})");
+}
+
+fn ipt_del_mark(ipt: &Path, tag: &str) {
+    let _ = std::process::Command::new(ipt)
+        .args(ipt_mark_return_args(tag, "-D"))
+        .output();
+    tracing::info!("iptables: removed probe mark exemption (tag={tag})");
 }
 
 /// Return the full path to `cmd` if it exists in PATH.
@@ -820,6 +960,47 @@ mod tests {
     }
 
     #[test]
+    fn nft_install_script_exempts_the_probe_mark_before_the_redirect() {
+        let script = nft_install_script(server(), 40000, "lightspeed_40000");
+        let mark_at = script
+            .find("meta mark 0x4c53 return")
+            .expect("the probe-mark exemption must be present");
+        let redirect_at = script
+            .find("redirect to :40000")
+            .expect("the redirect must still be present");
+        assert!(
+            mark_at < redirect_at,
+            "the mark exemption must be evaluated before the redirect"
+        );
+        assert!(
+            script.contains("ip daddr 203.0.113.9 udp dport 34568 redirect to :40000"),
+            "the redirect must keep matching the exact server"
+        );
+    }
+
+    #[test]
+    fn nft_swap_script_exempts_the_probe_mark_before_the_redirect() {
+        let script = nft_swap_script(server(), 40000, "lightspeed_40000");
+        let flush_at = script
+            .find("flush chain ip lightspeed_40000 output")
+            .unwrap();
+        let mark_at = script
+            .find("meta mark 0x4c53 return")
+            .expect("the probe-mark exemption must be present after a swap");
+        let redirect_at = script
+            .find("redirect to :40000")
+            .expect("the redirect must still be present after a swap");
+        assert!(
+            flush_at < mark_at,
+            "the chain must be flushed before reload"
+        );
+        assert!(
+            mark_at < redirect_at,
+            "the mark exemption must be re-added before the redirect"
+        );
+    }
+
+    #[test]
     fn nft_swap_script_flushes_then_adds_in_one_transaction() {
         let script = nft_swap_script(server(), 40000, "lightspeed_40000");
         let flush_at = script
@@ -840,5 +1021,119 @@ mod tests {
         assert!(add.contains(&"203.0.113.9".to_string()));
         assert!(!add.contains(&"0.0.0.0".to_string()));
         assert_eq!(add.len(), del.len());
+    }
+
+    #[test]
+    fn ipt_plan_exempts_the_probe_mark_before_the_redirect() {
+        let plan = ipt_install_plan(server(), 40000, "lightspeed_40000");
+        assert_eq!(plan.len(), 2, "exactly the exemption and the redirect");
+        let mark = &plan[0];
+        let redirect = &plan[1];
+        assert!(mark.contains(&"--mark".to_string()));
+        assert!(mark.contains(&format!("{PROBE_MARK:#x}")));
+        assert!(mark.contains(&"RETURN".to_string()));
+        assert!(!mark.contains(&"REDIRECT".to_string()));
+        assert!(
+            !mark.contains(&"203.0.113.9".to_string()),
+            "the exemption must match no destination, or it would affect game traffic"
+        );
+        assert!(redirect.contains(&"REDIRECT".to_string()));
+        assert!(redirect.contains(&"203.0.113.9".to_string()));
+    }
+
+    #[test]
+    fn self_redirected_probe_is_dropped_but_game_traffic_is_not() {
+        let ip = Ipv4Addr::new(192, 168, 1, 5);
+        let game = SocketAddrV4::new(ip, 54321);
+        let probe = SocketAddrV4::new(ip, 40000);
+        assert!(!is_self_redirected_probe(None, game));
+        assert!(!is_self_redirected_probe(Some(40000), game));
+        assert!(is_self_redirected_probe(Some(40000), probe));
+    }
+
+    /// End-to-end proof that the probe mark bypasses the redirect while an
+    /// unmarked socket is still captured. It creates a private network
+    /// namespace (not a real game and not the host's rules), installs the same
+    /// nat OUTPUT rule the interceptor uses, and checks the listener sees the
+    /// unmarked packet but never the marked one.
+    ///
+    /// Ignored because it needs root (`unshare(CLONE_NEWNET)`, `nft`) and the
+    /// `nft`/`ip` binaries, none of which CI has. Run with:
+    /// `sudo -E cargo test -p lightspeed-client --lib \
+    ///    interceptor::linux::tests::marked_probe_bypasses_the_redirect \
+    ///    -- --ignored --test-threads=1`
+    #[test]
+    #[ignore = "requires root + nft + ip; run with --ignored under sudo"]
+    fn marked_probe_bypasses_the_redirect_while_an_unmarked_socket_is_captured() {
+        use std::net::UdpSocket;
+
+        if unsafe { libc::geteuid() } != 0 {
+            eprintln!("skipping: requires root");
+            return;
+        }
+        let Some(nft) = which("nft") else {
+            eprintln!("skipping: nft not in PATH");
+            return;
+        };
+        if unsafe { libc::unshare(libc::CLONE_NEWNET) } != 0 {
+            eprintln!(
+                "skipping: unshare(CLONE_NEWNET) failed: {}",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+
+        let lo_up = std::process::Command::new("ip")
+            .args(["link", "set", "lo", "up"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !lo_up {
+            eprintln!("skipping: cannot bring up loopback");
+            return;
+        }
+
+        // Given a redirecting listener and a routable game-server address (the
+        // route is what makes the marked packet otherwise sendable),
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let listener_port = listener.local_addr().unwrap().port();
+        let target = SocketAddrV4::new(Ipv4Addr::new(10, 9, 9, 9), 9);
+        let _ = std::process::Command::new("ip")
+            .args(["route", "add", "10.9.9.9/32", "dev", "lo"])
+            .output();
+        let tag = format!("lightspeed_probe_test_{listener_port}");
+        nft_run(&nft, &nft_install_script(target, listener_port, &tag)).unwrap();
+
+        // When an unmarked socket sends to that destination,
+        let unmarked = UdpSocket::bind("0.0.0.0:0").unwrap();
+        unmarked.send_to(b"unmarked", target).unwrap();
+        let mut buf = [0u8; 64];
+
+        // Then it is still redirected to the listener,
+        assert!(
+            listener.recv_from(&mut buf).is_ok(),
+            "an unmarked packet must still be captured by the redirect"
+        );
+
+        // And when the marked probe sends to the same destination,
+        let probe = ShadowProbe::bind().expect("probe bind");
+        if !probe.is_usable() {
+            eprintln!("skipping: SO_MARK unavailable even as root");
+            nft_delete_table(&nft, &tag);
+            return;
+        }
+        let _ = probe.send_copy(b"marked", target);
+
+        // Then the listener never sees it: the mark exemption routed it out
+        // directly instead of into the tunnel.
+        assert!(
+            listener.recv_from(&mut buf).is_err(),
+            "a marked probe packet must bypass the redirect"
+        );
+
+        nft_delete_table(&nft, &tag);
     }
 }
