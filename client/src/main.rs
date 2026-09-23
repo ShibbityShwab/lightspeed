@@ -253,6 +253,23 @@ fn telemetry_enabled(cli: &Cli, config: &config::Config) -> bool {
     !cli.no_telemetry && (cli.telemetry || config.general.telemetry)
 }
 
+// Modes that return before the shared dispatch (--watch, --start-interceptor)
+// still tunnel real gameplay, so they must spawn the periodic flush themselves.
+// Without this they record samples locally and never send them, which is
+// invisible because the packet counters keep moving.
+fn spawn_session_telemetry_flush(
+    collector: &Option<Arc<TelemetryCollector>>,
+    proxy_addr: std::net::SocketAddrV4,
+    game_key: &str,
+) {
+    let Some(tc) = collector else { return };
+    let ctx = telemetry::context::TelemetryContext {
+        game_id: lightspeed_protocol::game_id::id_for_key(game_key),
+        country: telemetry::context::detect_country(),
+    };
+    telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_addr.ip().to_string(), ctx);
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -461,6 +478,7 @@ async fn main() -> anyhow::Result<()> {
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         crate::session::set_current_proxy(proxy_addr);
         start_continuous_rerouting(&resolved.servers, &config, &cli);
+        spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
         return run_watch_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
@@ -859,6 +877,7 @@ async fn main() -> anyhow::Result<()> {
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         crate::session::set_current_proxy(proxy_addr);
         start_continuous_rerouting(&resolved.servers, &config, &cli);
+        spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
         return run_intercept_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
     }
 
