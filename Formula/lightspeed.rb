@@ -8,22 +8,22 @@ class Lightspeed < Formula
   on_macos do
     on_intel do
       url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.7/lightspeed-client-x86_64-apple-darwin.tar.xz"
-      sha256 "d4434c8ee2204375b621f68068cdcb7318b5d4c70d3321cf9c3f6765d61954d5"
+      sha256 "2225c31ffca0911bff1d63cc1dbad15508e4ce736dfd76f8c06bcb479a2c1112"
     end
     on_arm do
       url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.7/lightspeed-client-aarch64-apple-darwin.tar.xz"
-      sha256 "bd39e9dc2175a4ab6466e280f1562e5d122a5f5b68e796694fc4de0962cfe9d0"
+      sha256 "fe50805b246c7ad89ecb6b2407ab5daa03382966317ba4e0b88f052c186e5d79"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.7/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz"
-      sha256 "68fbadc064fa663d0c54ef3a066538456651c9e6bd9a5c85bbec71bc85a63dc5"
+      sha256 "b2a1b31b4782c48f23e2ba7344cd708d9a88ad32106f871deb7ef169fe3d129a"
     end
     on_arm do
       url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.7/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz"
-      sha256 "ac74fba7b04cf12128c5fdcf8f5ffec9a1842f659e519d44999114e6eff8cefd"
+      sha256 "72dc0f8ac1d615f8b8fb41ae261ee2ce3065fecae6f9f0d3e223726700583884"
     end
   end
 
