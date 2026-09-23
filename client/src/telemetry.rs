@@ -146,12 +146,13 @@ impl TelemetryCollector {
         sorted[idx.min(sorted.len() - 1)]
     }
 
-    /// Build a [`TelemetryReport`] from the current samples.
-    /// Drains all accumulated samples and FEC counters.
+    /// Build a [`TelemetryReport`] from the current samples without consuming
+    /// them. A report is only committed by [`Self::commit_report`] once it has
+    /// been sent, so a failed flush can retry with the same data.
     async fn build_report(&self, game_id: u8, country: &str) -> Option<TelemetryReport> {
-        let (direct_p50_ms, relayed_p50_ms) = crate::latency::report_values();
+        let (direct_p50_ms, relayed_p50_ms) = crate::latency::peek_report_values();
 
-        let mut inner = self.inner.lock().await;
+        let inner = self.inner.lock().await;
         if inner.samples.is_empty() && direct_p50_ms.is_none() && relayed_p50_ms.is_none() {
             return None;
         }
@@ -172,17 +173,16 @@ impl TelemetryCollector {
         };
 
         let count = inner.samples.len() as u32;
-        let recoveries = self.fec_recoveries.swap(0, Ordering::Relaxed);
-        let losses = self.fec_losses.swap(0, Ordering::Relaxed);
+        drop(inner);
 
-        // Drain samples after reading.
-        inner.samples.clear();
+        let recoveries = self.fec_recoveries.load(Ordering::Relaxed);
+        let losses = self.fec_losses.load(Ordering::Relaxed);
 
         let route_legs = self
             .paths
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .drain_observations();
+            .snapshot_observations();
 
         Some(TelemetryReport {
             game_id,
@@ -199,6 +199,31 @@ impl TelemetryCollector {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             route_legs,
         })
+    }
+
+    /// Drop the samples, FEC counters, and path legs covered by a report that
+    /// was sent successfully. Called only after the POST succeeds.
+    async fn commit_report(&self, report: &TelemetryReport) {
+        {
+            let mut inner = self.inner.lock().await;
+            let reported = (report.sample_count as usize).min(inner.samples.len());
+            inner.samples.drain(0..reported);
+        }
+        self.fec_recoveries
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(report.fec_recoveries))
+            })
+            .ok();
+        self.fec_losses
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(report.fec_losses))
+            })
+            .ok();
+        crate::latency::commit_report_values();
+        self.paths
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain_observations();
     }
 
     /// Send the report to `http://<proxy_host>:8080/telemetry`.
@@ -243,6 +268,7 @@ impl TelemetryCollector {
                     return;
                 }
                 let _ = stream.shutdown().await;
+                self.commit_report(&report).await;
                 debug!(
                     samples = report.sample_count,
                     p50 = report.p50_ms,

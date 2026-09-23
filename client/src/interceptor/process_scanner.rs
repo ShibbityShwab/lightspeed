@@ -79,15 +79,31 @@ pub fn find_game_process(process_names: &[&str]) -> Option<ProcessInfo> {
 
 /// Returns `true` when `ip` is a routable public IPv4 address.
 ///
-/// Rejects: unspecified (0.0.0.0), loopback (127.x), link-local (169.254.x),
-/// and the three RFC 1918 private ranges.
+/// Rejects unspecified/0.0.0.0/8, loopback, link-local, multicast, broadcast,
+/// the RFC 1918 private ranges, CGNAT, and the remaining special-use ranges
+/// (IETF assignments, benchmarking, and TEST-NET documentation blocks). A
+/// destination that is not routable to the public internet is answered
+/// locally, which would fabricate an impossibly fast direct-latency reading.
 pub fn is_public_ipv4(ip: Ipv4Addr) -> bool {
-    if ip.is_unspecified() || ip.is_loopback() || ip.is_link_local() {
+    if ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+    {
         return false;
     }
-    let [a, b, ..] = ip.octets();
+    let [a, b, c, _] = ip.octets();
+    // 0.0.0.0/8
+    if a == 0 {
+        return false;
+    }
     // 10.0.0.0/8
     if a == 10 {
+        return false;
+    }
+    // 100.64.0.0/10 (CGNAT)
+    if a == 100 && (64..=127).contains(&b) {
         return false;
     }
     // 172.16.0.0/12
@@ -96,6 +112,22 @@ pub fn is_public_ipv4(ip: Ipv4Addr) -> bool {
     }
     // 192.168.0.0/16
     if a == 192 && b == 168 {
+        return false;
+    }
+    // 192.0.0.0/24 (IETF protocol assignments) and 192.0.2.0/24 (TEST-NET-1)
+    if a == 192 && b == 0 && (c == 0 || c == 2) {
+        return false;
+    }
+    // 198.18.0.0/15 (benchmarking)
+    if a == 198 && (b == 18 || b == 19) {
+        return false;
+    }
+    // 198.51.100.0/24 (TEST-NET-2)
+    if a == 198 && b == 51 && c == 100 {
+        return false;
+    }
+    // 203.0.113.0/24 (TEST-NET-3)
+    if a == 203 && b == 0 && c == 113 {
         return false;
     }
     true
@@ -592,6 +624,57 @@ mod tests {
         assert!(!is_public_ipv4("127.0.0.1".parse().unwrap()));
         assert!(!is_public_ipv4("0.0.0.0".parse().unwrap()));
         assert!(!is_public_ipv4("169.254.0.1".parse().unwrap()));
+    }
+
+    /// Every non-routable special-use range must be rejected: a local or
+    /// loopback destination gets answered by the host itself in microseconds,
+    /// producing physically impossible direct-latency readings.
+    #[test]
+    fn is_public_ipv4_rejects_non_routable_ranges() {
+        let public = [
+            "8.8.8.8",
+            "1.1.1.1",
+            "172.15.0.1",     // just below the 172.16/12 private block
+            "172.32.0.1",     // just above the 172.16/12 private block
+            "100.63.255.255", // just below CGNAT
+            "100.128.0.1",    // just above CGNAT
+            "198.17.255.255", // just below 198.18/15
+            "198.20.0.1",     // just above 198.18/15
+            "192.0.1.1",      // just above 192.0.0/24
+            "192.0.3.1",      // just above 192.0.2/24
+            "203.0.114.1",    // just above 203.0.113/24
+        ];
+        for ip in public {
+            assert!(
+                is_public_ipv4(ip.parse().unwrap()),
+                "{ip} must be considered public"
+            );
+        }
+
+        let non_routable = [
+            "0.0.0.0",         // unspecified
+            "0.1.2.3",         // 0.0.0.0/8
+            "127.0.0.1",       // loopback
+            "127.255.255.255", // loopback
+            "169.254.1.1",     // link-local
+            "224.0.0.1",       // multicast
+            "239.255.255.255", // multicast
+            "255.255.255.255", // broadcast
+            "100.64.0.1",      // CGNAT
+            "100.127.255.255", // CGNAT
+            "192.0.0.1",       // IETF protocol assignments
+            "198.18.0.1",      // benchmarking
+            "198.19.255.255",  // benchmarking
+            "192.0.2.1",       // TEST-NET-1
+            "198.51.100.1",    // TEST-NET-2
+            "203.0.113.1",     // TEST-NET-3
+        ];
+        for ip in non_routable {
+            assert!(
+                !is_public_ipv4(ip.parse().unwrap()),
+                "{ip} must be rejected as non-routable"
+            );
+        }
     }
 
     #[test]

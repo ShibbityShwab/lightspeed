@@ -19,7 +19,14 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use crate::telemetry::TelemetryCollector;
 
 /// Number of ICMP probes in one direct burst.
-pub const DIRECT_PROBE_COUNT: usize = 3;
+pub const DIRECT_PROBE_COUNT: usize = 5;
+/// Minimum plausible direct RTT in milliseconds. A faster reply was answered
+/// locally rather than over the public internet and must never be stored.
+pub const MIN_PLAUSIBLE_DIRECT_MS: f32 = 1.0;
+/// Minimum plausible replies in a burst before a median is meaningful.
+pub const MIN_DIRECT_SAMPLES: usize = 3;
+/// How long a stored direct median remains pairable with a relayed window.
+pub const DIRECT_MEDIAN_TTL: Duration = Duration::from_secs(300);
 /// Timeout for each ICMP probe reply.
 pub const DIRECT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// Minimum interval between direct bursts for the same server.
@@ -87,6 +94,33 @@ fn icmp_ident(socket: &Socket) -> u16 {
         .unwrap_or(0)
 }
 
+/// The socket operations an echo prober needs, abstracted so tests can script
+/// replies (including their source addresses) without a network.
+trait ProbeSocket {
+    /// Send one echo request to `target`.
+    fn send(&self, request: &[u8], target: Ipv4Addr) -> std::io::Result<()>;
+    /// Receive one datagram, returning its length and source address.
+    fn recv(&self, buf: &mut [std::mem::MaybeUninit<u8>]) -> std::io::Result<(usize, SocketAddr)>;
+}
+
+/// Real datagram socket backing [`SystemIcmpProber`].
+struct UdpProbeSocket(Socket);
+
+impl ProbeSocket for UdpProbeSocket {
+    fn send(&self, request: &[u8], target: Ipv4Addr) -> std::io::Result<()> {
+        let dest: SockAddr = SocketAddr::V4(SocketAddrV4::new(target, 0)).into();
+        self.0.send_to(request, &dest).map(|_| ())
+    }
+
+    fn recv(&self, buf: &mut [std::mem::MaybeUninit<u8>]) -> std::io::Result<(usize, SocketAddr)> {
+        let (len, source) = self.0.recv_from(buf)?;
+        let source = source
+            .as_socket()
+            .ok_or_else(|| std::io::Error::other("ICMP source was not an IP address"))?;
+        Ok((len, source))
+    }
+}
+
 fn probe_once(target: Ipv4Addr, seq: u16) -> Option<f32> {
     let socket = icmp_socket().ok()?;
     socket.set_read_timeout(Some(DIRECT_PROBE_TIMEOUT)).ok()?;
@@ -94,18 +128,28 @@ fn probe_once(target: Ipv4Addr, seq: u16) -> Option<f32> {
     socket.bind(&bind).ok()?;
 
     let ident = icmp_ident(&socket);
-    let request = build_echo_request(ident, seq);
-    let dest: SockAddr = SocketAddr::V4(SocketAddrV4::new(target, 0)).into();
+    probe_with(&UdpProbeSocket(socket), target, ident, seq)
+}
 
+/// Run one echo exchange over an abstract socket. Returns the round trip in ms
+/// when a matching reply arrives before the timeout.
+fn probe_with<S: ProbeSocket>(socket: &S, target: Ipv4Addr, ident: u16, seq: u16) -> Option<f32> {
+    let request = build_echo_request(ident, seq);
     let sent_at = Instant::now();
-    socket.send_to(&request, &dest).ok()?;
+    socket.send(&request, target).ok()?;
 
     let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 1500];
     for _ in 0..4 {
-        let Ok((len, _)) = socket.recv_from(&mut buf) else {
+        let Ok((len, source)) = socket.recv(&mut buf) else {
             return None;
         };
-        // SAFETY: `recv_from` initialized exactly the first `len` bytes of `buf`.
+        if !reply_source_matches(source, target) {
+            if sent_at.elapsed() >= DIRECT_PROBE_TIMEOUT {
+                return None;
+            }
+            continue;
+        }
+        // SAFETY: `recv` initialized exactly the first `len` bytes of `buf`.
         let filled = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), len) };
         if parse_echo_reply(filled) == Some((ident, seq)) {
             return Some(sent_at.elapsed().as_secs_f32() * 1000.0);
@@ -115,6 +159,12 @@ fn probe_once(target: Ipv4Addr, seq: u16) -> Option<f32> {
         }
     }
     None
+}
+
+/// A reply is only ours when it came from the host we probed. Accepting a reply
+/// from any host lets a locally-answered flow masquerade as a WAN round trip.
+fn reply_source_matches(source: SocketAddr, target: Ipv4Addr) -> bool {
+    matches!(source, SocketAddr::V4(v4) if *v4.ip() == target)
 }
 
 fn build_echo_request(ident: u16, seq: u16) -> [u8; 8 + ECHO_PAYLOAD.len()] {
@@ -163,12 +213,48 @@ fn checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+/// A direct-burst median together with the moment it was measured.
+struct DirectSample {
+    median_ms: f32,
+    measured_at: Instant,
+}
+
 #[derive(Default)]
 struct Inner {
-    direct_p50_ms: Option<f32>,
+    direct: HashMap<Ipv4Addr, DirectSample>,
     pending: HashMap<Ipv4Addr, Instant>,
     last_burst: HashMap<Ipv4Addr, Instant>,
     relayed: Vec<f32>,
+    relayed_server: Option<Ipv4Addr>,
+}
+
+impl Inner {
+    /// The direct median for `server`, only while it is within
+    /// [`DIRECT_MEDIAN_TTL`] of measurement.
+    fn fresh_direct(&self, server: Ipv4Addr, now: Instant) -> Option<f32> {
+        self.direct
+            .get(&server)
+            .filter(|sample| now.saturating_duration_since(sample.measured_at) < DIRECT_MEDIAN_TTL)
+            .map(|sample| sample.median_ms)
+    }
+
+    /// The most recently measured direct median across all servers.
+    fn latest_direct(&self) -> Option<f32> {
+        self.direct
+            .values()
+            .max_by_key(|sample| sample.measured_at)
+            .map(|sample| sample.median_ms)
+    }
+
+    /// Median of the current single-server relayed window, if any.
+    fn relayed_median(&self) -> Option<f32> {
+        if self.relayed.is_empty() {
+            return None;
+        }
+        let mut sorted = self.relayed.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(TelemetryCollector::percentile(&sorted, 50.0))
+    }
 }
 
 /// Opt-in direct + relayed latency tracker.
@@ -220,6 +306,10 @@ impl LatencyTracker {
         if !rtt_ms.is_finite() || rtt_ms <= 0.0 {
             return;
         }
+        if inner.relayed_server != Some(server) {
+            inner.relayed.clear();
+            inner.relayed_server = Some(server);
+        }
         if inner.relayed.len() >= RELAYED_RING_CAPACITY {
             inner.relayed.remove(0);
         }
@@ -234,68 +324,80 @@ impl LatencyTracker {
         self.run_direct_burst(server)
     }
 
-    /// Run one direct burst, store the median, and return it. `None` when no
-    /// probe produced a reply.
+    /// Run one direct burst, store the median, and return it. Replies faster
+    /// than [`MIN_PLAUSIBLE_DIRECT_MS`] are discarded, and fewer than
+    /// [`MIN_DIRECT_SAMPLES`] plausible replies yield `None` rather than a
+    /// fabricated p50.
     pub fn run_direct_burst(&self, server: Ipv4Addr) -> Option<f32> {
         let mut replies = Vec::with_capacity(DIRECT_PROBE_COUNT);
         for seq in 0..DIRECT_PROBE_COUNT {
             if let Some(rtt) = self.prober.probe(server, seq as u16) {
-                if rtt.is_finite() && rtt >= 0.0 {
+                if rtt.is_finite() && rtt >= MIN_PLAUSIBLE_DIRECT_MS {
                     replies.push(rtt);
                 }
             }
         }
-        if replies.is_empty() {
+        if replies.len() < MIN_DIRECT_SAMPLES {
             return None;
         }
         replies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let median = TelemetryCollector::percentile(&replies, 50.0);
-        self.lock().direct_p50_ms = Some(median);
+        let measured_at = self.clock.now();
+        self.lock().direct.insert(
+            server,
+            DirectSample {
+                median_ms: median,
+                measured_at,
+            },
+        );
         Some(median)
     }
 
-    /// Latest direct median, if a burst has produced one.
+    /// Latest direct median across servers, if a burst has produced one.
     pub fn direct_p50_ms(&self) -> Option<f32> {
-        self.lock().direct_p50_ms
+        self.lock().latest_direct()
     }
 
     /// Median of the current relayed window, if any.
     pub fn relayed_p50_ms(&self) -> Option<f32> {
-        let mut inner = self.lock();
-        if inner.relayed.is_empty() {
-            return None;
-        }
-        let mut sorted = std::mem::take(&mut inner.relayed);
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median = TelemetryCollector::percentile(&sorted, 50.0);
-        inner.relayed = sorted;
-        Some(median)
+        self.lock().relayed_median()
     }
 
-    /// `direct - relayed`, only when both medians exist.
+    /// `direct - relayed`, only when a fresh direct median and the relayed
+    /// window are from the same server. Mixing a direct median from one server
+    /// or moment with a relayed window from another is not a saving.
     pub fn saved_ms(&self) -> Option<f32> {
-        match (self.direct_p50_ms(), self.relayed_p50_ms()) {
-            (Some(direct), Some(relayed)) => Some(direct - relayed),
-            _ => None,
-        }
+        let now = self.clock.now();
+        let inner = self.lock();
+        let server = inner.relayed_server?;
+        let direct = inner.fresh_direct(server, now)?;
+        let relayed = inner.relayed_median()?;
+        Some(direct - relayed)
     }
 
-    /// Take the values for one telemetry report. The direct median persists
-    /// (it refreshes at most once per [`DIRECT_BURST_INTERVAL`]); the relayed
-    /// window drains so each report covers a fresh interval.
-    pub fn take_report_values(&self) -> (Option<f32>, Option<f32>) {
-        let direct = self.direct_p50_ms();
-        let relayed = {
-            let mut inner = self.lock();
-            if inner.relayed.is_empty() {
-                None
-            } else {
-                let mut sorted = std::mem::take(&mut inner.relayed);
-                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                Some(TelemetryCollector::percentile(&sorted, 50.0))
-            }
+    /// Current report values without draining the relayed window.
+    pub fn peek_report_values(&self) -> (Option<f32>, Option<f32>) {
+        let now = self.clock.now();
+        let inner = self.lock();
+        let direct = match inner.relayed_server {
+            Some(server) => inner.fresh_direct(server, now),
+            None => None,
         };
-        (direct, relayed)
+        (direct, inner.relayed_median())
+    }
+
+    /// Drain the relayed window after a report carrying it was accepted.
+    pub fn commit_report_values(&self) {
+        self.lock().relayed.clear();
+    }
+
+    /// Take the values for one telemetry report. The direct median is reported
+    /// only when it is fresh and belongs to the same server as the relayed
+    /// window; the relayed window drains so each report covers a fresh interval.
+    pub fn take_report_values(&self) -> (Option<f32>, Option<f32>) {
+        let values = self.peek_report_values();
+        self.commit_report_values();
+        values
     }
 }
 
@@ -339,7 +441,11 @@ pub fn record_outbound(server: Ipv4Addr) {
 }
 
 /// T1 hook: call when the first relayed response for `server` is decoded.
+/// No-op when telemetry is disabled, so a muted client records nothing.
 pub fn record_inbound(server: Ipv4Addr) {
+    if !crate::telemetry::is_enabled() {
+        return;
+    }
     if let Some(tracker) = global() {
         tracker.record_inbound(server);
     }
@@ -350,6 +456,22 @@ pub fn report_values() -> (Option<f32>, Option<f32>) {
     match global() {
         Some(tracker) => tracker.take_report_values(),
         None => (None, None),
+    }
+}
+
+/// Values for the next telemetry report without draining the relayed window;
+/// `(None, None)` when telemetry is off.
+pub fn peek_report_values() -> (Option<f32>, Option<f32>) {
+    match global() {
+        Some(tracker) => tracker.peek_report_values(),
+        None => (None, None),
+    }
+}
+
+/// Commit values returned by [`peek_report_values`] after a successful send.
+pub fn commit_report_values() {
+    if let Some(tracker) = global() {
+        tracker.commit_report_values();
     }
 }
 
@@ -409,11 +531,50 @@ mod tests {
         }
     }
 
+    /// Scripted [`ProbeSocket`] that returns canned datagrams (with their
+    /// source addresses) instead of touching the network.
+    struct ScriptedSocket {
+        replies: StdMutex<Vec<(SocketAddr, Vec<u8>)>>,
+        sends: AtomicUsize,
+    }
+
+    impl ProbeSocket for ScriptedSocket {
+        fn send(&self, _request: &[u8], _target: Ipv4Addr) -> std::io::Result<()> {
+            self.sends.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn recv(
+            &self,
+            buf: &mut [std::mem::MaybeUninit<u8>],
+        ) -> std::io::Result<(usize, SocketAddr)> {
+            let mut replies = self.replies.lock().unwrap();
+            if replies.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "no scripted reply",
+                ));
+            }
+            let (source, bytes) = replies.remove(0);
+            for (slot, byte) in buf.iter_mut().zip(bytes.iter()) {
+                slot.write(*byte);
+            }
+            Ok((bytes.len(), source))
+        }
+    }
+
+    fn echo_reply_bytes(ident: u16, seq: u16) -> Vec<u8> {
+        let mut reply = build_echo_request(ident, seq);
+        reply[0] = 0;
+        reply.to_vec()
+    }
+
     fn tracker(prober: Arc<dyn IcmpProber>, clock: Arc<dyn Clock>) -> LatencyTracker {
         LatencyTracker::new(prober, clock)
     }
 
     const SERVER: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 7);
+    const OTHER_SERVER: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 9);
 
     #[test]
     fn median_selects_the_middle_reply() {
@@ -428,14 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn partial_replies_use_median_of_what_arrived() {
-        let prober = Arc::new(ScriptedProber::new(vec![Some(10.0), None, Some(30.0)]));
-        let t = tracker(prober, Arc::new(TestClock::new()));
-        // percentile(50) of [10, 30] takes the upper-middle sample.
-        assert_eq!(t.run_direct_burst(SERVER), Some(30.0));
-    }
-
-    #[test]
     fn no_replies_leave_direct_unset() {
         let prober = Arc::new(ScriptedProber::new(vec![None, None, None]));
         let t = tracker(prober, Arc::new(TestClock::new()));
@@ -444,14 +597,46 @@ mod tests {
     }
 
     #[test]
+    fn below_minimum_replies_leave_direct_unset() {
+        let prober = Arc::new(ScriptedProber::new(vec![Some(10.0), None, Some(30.0)]));
+        let t = tracker(prober, Arc::new(TestClock::new()));
+        assert_eq!(
+            t.run_direct_burst(SERVER),
+            None,
+            "a median of fewer than three replies is not a p50"
+        );
+    }
+
+    #[test]
+    fn all_implausible_burst_returns_none() {
+        let prober = Arc::new(ScriptedProber::new(vec![Some(0.1), Some(0.5), Some(0.9)]));
+        let t = tracker(prober, Arc::new(TestClock::new()));
+        assert_eq!(t.run_direct_burst(SERVER), None);
+        assert_eq!(t.direct_p50_ms(), None);
+    }
+
+    #[test]
+    fn filtered_burst_uses_remaining_median() {
+        let prober = Arc::new(ScriptedProber::new(vec![
+            Some(0.5),
+            Some(10.0),
+            Some(0.2),
+            Some(50.0),
+            Some(30.0),
+        ]));
+        let t = tracker(prober, Arc::new(TestClock::new()));
+        assert_eq!(
+            t.run_direct_burst(SERVER),
+            Some(30.0),
+            "sub-millisecond replies are discarded, the rest form the median"
+        );
+    }
+
+    #[test]
     fn burst_is_rate_limited_per_server() {
         let prober = Arc::new(ScriptedProber::new(vec![
-            Some(20.0),
-            Some(20.0),
-            Some(20.0),
-            Some(20.0),
-            Some(20.0),
-            Some(20.0),
+            Some(20.0);
+            DIRECT_PROBE_COUNT * 2
         ]));
         let clock = Arc::new(TestClock::new());
         let t = tracker(prober.clone(), clock.clone());
@@ -514,6 +699,75 @@ mod tests {
     }
 
     #[test]
+    fn stale_direct_is_not_reported() {
+        let prober = Arc::new(ScriptedProber::new(vec![Some(50.0); MIN_DIRECT_SAMPLES]));
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(prober, clock.clone());
+        t.run_direct_burst(SERVER);
+        t.note_outbound(SERVER);
+        clock.advance(Duration::from_millis(20));
+        t.record_inbound(SERVER);
+
+        clock.advance(Duration::from_secs(301));
+        let (direct, relayed) = t.take_report_values();
+        assert_eq!(direct, None, "a stale direct median must not be reported");
+        assert_eq!(relayed, Some(20.0));
+    }
+
+    #[test]
+    fn direct_from_other_server_is_not_reported() {
+        let prober = Arc::new(ScriptedProber::new(vec![Some(50.0); MIN_DIRECT_SAMPLES]));
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(prober, clock.clone());
+        t.run_direct_burst(SERVER);
+        t.note_outbound(OTHER_SERVER);
+        clock.advance(Duration::from_millis(20));
+        t.record_inbound(OTHER_SERVER);
+
+        let (direct, relayed) = t.take_report_values();
+        assert_eq!(
+            direct, None,
+            "direct from a different server must not be reported"
+        );
+        assert_eq!(relayed, Some(20.0));
+    }
+
+    #[test]
+    fn saved_ms_rejects_other_server_direct() {
+        let prober = Arc::new(ScriptedProber::new(vec![Some(50.0); MIN_DIRECT_SAMPLES]));
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(prober, clock.clone());
+        t.run_direct_burst(SERVER);
+        t.note_outbound(OTHER_SERVER);
+        clock.advance(Duration::from_millis(20));
+        t.record_inbound(OTHER_SERVER);
+
+        assert_eq!(
+            t.saved_ms(),
+            None,
+            "direct from a different server must not yield saved"
+        );
+    }
+
+    #[test]
+    fn saved_ms_rejects_stale_direct() {
+        let prober = Arc::new(ScriptedProber::new(vec![Some(50.0); MIN_DIRECT_SAMPLES]));
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(prober, clock.clone());
+        t.run_direct_burst(SERVER);
+        t.note_outbound(SERVER);
+        clock.advance(Duration::from_millis(20));
+        t.record_inbound(SERVER);
+
+        clock.advance(Duration::from_secs(301));
+        assert_eq!(
+            t.saved_ms(),
+            None,
+            "a stale direct median must not yield saved"
+        );
+    }
+
+    #[test]
     fn report_values_drain_relayed_but_keep_direct() {
         let prober = Arc::new(ScriptedProber::new(vec![
             Some(50.0),
@@ -529,6 +783,40 @@ mod tests {
 
         assert_eq!(t.take_report_values(), (Some(50.0), Some(35.0)));
         assert_eq!(t.take_report_values(), (Some(50.0), None));
+    }
+
+    #[test]
+    fn reply_from_other_host_is_ignored() {
+        let target = Ipv4Addr::new(198, 51, 100, 10);
+        let (ident, seq) = (0x1234, 7);
+        let other = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 11), 0));
+        let socket = ScriptedSocket {
+            replies: StdMutex::new(vec![(other, echo_reply_bytes(ident, seq)); 4]),
+            sends: AtomicUsize::new(0),
+        };
+
+        assert_eq!(
+            probe_with(&socket, target, ident, seq),
+            None,
+            "a reply from a different host must be ignored"
+        );
+        assert_eq!(socket.sends.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn reply_from_target_host_is_accepted() {
+        let target = Ipv4Addr::new(198, 51, 100, 10);
+        let (ident, seq) = (0x1234, 7);
+        let source = SocketAddr::V4(SocketAddrV4::new(target, 0));
+        let socket = ScriptedSocket {
+            replies: StdMutex::new(vec![(source, echo_reply_bytes(ident, seq))]),
+            sends: AtomicUsize::new(0),
+        };
+
+        assert!(
+            probe_with(&socket, target, ident, seq).is_some(),
+            "a reply from the probe target must be accepted"
+        );
     }
 
     #[test]
