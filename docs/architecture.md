@@ -114,7 +114,7 @@ main.rs ────────────────────────
   │
 │
   ├── telemetry.rs                   ← Session telemetry: collector, TelemetryEvent, report (on by default)
-  ├── latency.rs                     ← direct (ICMP) vs relayed RTT tracking, saved_ms (ping saved)
+  ├── latency.rs                     ← direct (ICMP) vs relayed RTT tracking, saved_ms (RTT saved)
   ├── cli.rs                         ← CLI flag definitions (clap derive)
   ├── modes/                         ← Run-mode handlers
   │   ├── capture_mode.rs            ← pcap capture + tunnel pipeline

@@ -53,7 +53,9 @@ floor of 3), so no individual client's data is ever exported.
 
 The client measures both the direct (ICMP) RTT to the game server and the
 tunnelled round trip, and the relay aggregates the difference. That difference
-is the **"Ping saved by LightSpeed"** figure shown on the website. It is a
+is the **"RTT saved by LightSpeed"** figure shown on the website. It compares two
+different instruments (an ICMP echo against the game traffic's own round trip),
+so it is an estimate, not a measurement of in-game ping. It is a
 per-cell aggregate, never a per-client value.
 
 | Metric | Example | PII? |
@@ -62,7 +64,7 @@ per-cell aggregate, never a per-client value.
 | Jitter | 2.3ms stddev | No |
 | FEC recovery rate | 12 packets recovered / 1000 | No |
 | Direct vs relayed RTT | direct p50: 61ms, relayed p50: 31ms | No |
-| Ping saved | 30ms (direct p50 minus relayed p50) | No |
+| RTT saved | 30ms (direct ICMP p50 minus relayed p50) | No |
 | Session duration | 45 minutes | No |
 | Proxy region | "us-west" | No |
 | Game name | "rust" | No |

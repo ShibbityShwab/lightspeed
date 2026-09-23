@@ -158,7 +158,7 @@
               <dd class="stat-value">18</dd>
             </div>
             <div class="stat">
-              <dt class="stat-label">Median ping saved</dt>
+              <dt class="stat-label">Median RTT saved</dt>
               <dd class="stat-value"><span id="hero-ping-saved">collecting</span></dd>
             </div>
           </dl>
@@ -1070,7 +1070,7 @@
           </details>
           <details class="faq-item">
             <summary>How much will this actually reduce my ping?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
-            <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut a meaningful amount off your ping. If your ISP already has optimal routing, the improvement may be minimal. The model picks the best route, or direct if that's fastest. The hero stat above reports the median ping saved from real client measurements once enough reports have arrived.</p>
+            <p>It depends on your location and ISP. If your ISP routes your traffic through suboptimal paths (very common), LightSpeed can cut a meaningful amount off your ping. If your ISP already has optimal routing, the improvement may be minimal. The model picks the best route, or direct if that's fastest. The hero stat above is an estimate from real client measurements: it is the difference between the client's ICMP round trip to the game server and its tunnelled game-traffic round trip. ICMP and game traffic are different instruments, so read it as a signal, not a promise of in-game latency.</p>
           </details>
           <details class="faq-item">
             <summary>Does LightSpeed make my internet faster?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>

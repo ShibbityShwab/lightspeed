@@ -78,7 +78,7 @@ LightSpeed now runs a **community relay network**: eight sponsor-funded relays i
 ### Smart Routing
 - **Automatic proxy selection** - probes all configured proxies and picks the fastest; the GUI auto-selects the fastest relay on first run with an "Auto (fastest)" checkbox
 - **Community relay auto-discovery** - finds the eight community relays via the signed registry with zero config, or point at your own with `--registry <url>`
-- **Ping saved** - measures direct (ICMP) game-server RTT against the tunnelled round trip so you can see how much LightSpeed actually saves
+- **RTT saved** - measures the client's direct (ICMP) game-server round trip against the tunnelled round trip so you can see the estimated saving, with the caveat that the two are different instruments
 - **ML-based route prediction** - 11-feature Random Forest model learns from your connection patterns
 - **Multipath FEC** - XOR-based Forward Error Correction with ~25% bandwidth overhead (vs. ExitLag's 200%)
 - **TCP tunnel fallback** - client↔proxy leg over TCP (`--tcp`) for networks that block UDP
@@ -224,7 +224,7 @@ lightspeed/
 
 ## 🔏 Privacy
 
-Since 1.6.5, LightSpeed shares **anonymous aggregate latency statistics on by default** so the community can see real ping improvements. Only percentiles (p50/p95/p99), jitter, FEC counters, and the direct-vs-tunnelled RTT difference (the "ping saved" metric) are sent to **your own relay**. No IP addresses, tokens, identifiers, or packet contents are ever collected, and the relay suppresses any cell with fewer than 3 reports (k=3).
+Since 1.6.5, LightSpeed shares **anonymous aggregate latency statistics on by default** so the community can see real ping improvements. Only percentiles (p50/p95/p99), jitter, FEC counters, and the direct-vs-tunnelled round-trip difference (the "RTT saved" metric) are sent to **your own relay**. No IP addresses, tokens, identifiers, or packet contents are ever collected, and the relay suppresses any cell with fewer than 3 reports (k=3).
 
 Turn it off any time with `--no-telemetry`, `telemetry = false` in `lightspeed.toml`, or the **"Share anonymous latency stats"** checkbox in the GUI.
 
@@ -240,7 +240,7 @@ Turn it off any time with `--no-telemetry`, `telemetry = false` in `lightspeed.t
 - [x] **v0.4.0** - 9-game support, session telemetry, Windows GUI, recvmmsg batched I/O
 - [x] **v0.5.0** - Linux interceptor CLI, cross-platform GUI, Docker, MockInterceptor
 - [x] **v1.0.0** - Public stable release: installer wizard + self-hosted proxy model
-- [x] **v1.6.5** - Eight-relay community network, on-by-default anonymous telemetry with opt-out, and the "ping saved" metric
+- [x] **v1.6.5** - Eight-relay community network, on-by-default anonymous telemetry with opt-out, and the "RTT saved" metric
 
 ---
 

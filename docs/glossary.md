@@ -22,7 +22,7 @@
 
 **RTT (Round-Trip Time):** The time in milliseconds for a packet to travel from your PC to the relay and back. Measured continuously during keepalive probing.
 
-**Ping Saved:** The difference between the direct (ICMP) RTT to the game server and the tunnelled round trip through the relay. It is the core value metric LightSpeed reports, and the relay aggregates it (k>=3) for the "Ping saved by LightSpeed" figure on the website.
+**RTT Saved:** The difference between the direct (ICMP) round trip to the game server and the tunnelled round trip of the game traffic through the relay. Because ICMP and game traffic are different instruments, the figure is an estimate rather than a like-for-like measurement of in-game latency. It is the core value metric LightSpeed reports, and the relay aggregates it (k>=3) for the "RTT saved by LightSpeed" figure on the website.
 
 **Keepalive:** Periodic empty packets sent between client and proxy to measure RTT and maintain the session. Sent every 5 seconds.
 
