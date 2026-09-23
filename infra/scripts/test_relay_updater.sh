@@ -22,6 +22,8 @@
 #   (n) a release set with no geoip asset is a no-op that exits 0
 #   (o) --geoip-only installs the MMDB and never invokes relay-install
 #   (p) a normal (non-geoip-only) run also syncs the MMDB, best-effort
+#   (q) a failed in-place handoff is retried once with --no-handoff and, when
+#       that restart path succeeds, the run is recorded as updated
 #
 # Usage: bash infra/scripts/test_relay_updater.sh
 # Exits 0 and prints "relay-updater: all assertions passed" on success.
@@ -102,10 +104,18 @@ assert_file_mode() {
 }
 
 # ── Fixture: stub relay-install ──────────────────────────────
+# INSTALL_RC_SEQ is a comma-separated per-call exit code list (the last value
+# repeats); unset means every call exits INSTALL_RC (default 0).
 cat > "$BIN_DIR/relay-install" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$INSTALL_CALLS"
 if [ -n "${INSTALL_MSG:-}" ]; then printf '%s\n' "$INSTALL_MSG"; fi
+if [ -n "${INSTALL_RC_SEQ:-}" ]; then
+    n="$(wc -l < "$INSTALL_CALLS" | tr -d ' ')"
+    rc="$(printf '%s' "$INSTALL_RC_SEQ" | cut -d, -f"$n")"
+    [ -n "$rc" ] || rc="${INSTALL_RC:-0}"
+    exit "$rc"
+fi
 exit "${INSTALL_RC:-0}"
 STUB
 chmod +x "$BIN_DIR/relay-install"
@@ -392,6 +402,24 @@ assert_rc_zero "$RC" "(p) normal no-update run exits 0"
 assert_files_equal "$GEOIP_API_DIR/$GEOIP_ASSET" "$GEOIP_DIR/dbip-country-lite.mmdb" \
     "(p) normal run syncs the MMDB"
 assert_eq "$(state_field last_result)" "no_update" "(p) binary path still records no_update"
+
+# ── (q) a failed handoff is retried with --no-handoff ────────
+# The relays stuck on 1.6.4 fail the in-place handoff (a root-written request
+# the DynamicUser service cannot read). A newer relay-install.sh falls back
+# internally, but an older installed one does not, so the updater must retry
+# the apply on the restart-only path instead of staying stuck.
+reset_state
+set_current "1.4.3"
+make_asset "1.4.4"
+write_release "v1.4.4" false
+export INSTALL_RC_SEQ="1,0"
+export INSTALL_MSG="relay-install: ERROR: handoff to 1.4.4 did not run; lightspeed-proxy left on $ROOT/releases/1.4.3"
+run_updater
+unset INSTALL_RC_SEQ INSTALL_MSG
+assert_rc_zero "$RC" "(q) a handoff failure with a successful retry exits 0"
+assert_eq "$(install_call_count)" "2" "(q) the installer was retried exactly once"
+assert_grep "$CALLS" "--no-handoff" "(q) the retry used --no-handoff"
+assert_eq "$(state_field last_result)" "updated" "(q) state records updated after the fallback"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

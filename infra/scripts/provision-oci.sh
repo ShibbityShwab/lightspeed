@@ -128,6 +128,10 @@ Restart=always
 RestartSec=5
 ExecStart=/usr/local/bin/lightspeed-proxy --config /etc/lightspeed/proxy.toml --data-bind 0.0.0.0:4434 --control-bind 0.0.0.0:4433 --health-bind 0.0.0.0:8080
 DynamicUser=true
+StateDirectory=lightspeed
+RuntimeDirectory=lightspeed
+RuntimeDirectoryMode=0750
+Environment=LIGHTSPEED_TLS_DIR=/var/lib/lightspeed/tls
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

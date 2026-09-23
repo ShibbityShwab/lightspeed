@@ -484,12 +484,31 @@ if [ -z "$staged" ]; then
 fi
 chmod +x "$staged"
 
+# Does an installer failure look like an in-place handoff that never ran (for
+# example a root-written request the DynamicUser service cannot read)? A newer
+# relay-install.sh falls back internally and exits 0, but the updater may be
+# running against an older installed copy, so a match is retried once on the
+# restart-only path. A handoff that came up then failed health is excluded: its
+# message says "did not stay healthy" and a restart cannot rescue it.
+handoff_failure_output() {  # output
+    printf '%s' "$1" | grep -Eiq 'did not run|did not complete|not readable|unreadable|permission denied'
+}
+
 # ── Apply through relay-install.sh ───────────────────────────
 LAST_APPLY_AT="$(date +%s)"
 install_out=""
 install_rc=0
 install_out="$("$BASH" "$INSTALL_BIN" --binary "$staged" --version "$VERSION" 2>&1)" || install_rc=$?
 printf '%s\n' "$install_out"
+
+# Handoff-failure fallback: retry once with --no-handoff so the hourly updater
+# recovers instead of staying stuck on the old version.
+if [ "$install_rc" -ne 0 ] && handoff_failure_output "$install_out"; then
+    warn "handoff path failed; retrying with --no-handoff"
+    install_rc=0
+    install_out="$("$BASH" "$INSTALL_BIN" --binary "$staged" --version "$VERSION" --no-handoff 2>&1)" || install_rc=$?
+    printf '%s\n' "$install_out"
+fi
 
 if [ "$install_rc" -eq 0 ]; then
     CURRENT_VERSION="$VERSION"

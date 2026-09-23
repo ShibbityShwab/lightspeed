@@ -23,8 +23,8 @@
 #   (j) a supported handoff writes the request, sends SIGUSR2, soaks the new
 #       version, and only then repoints `current` and prunes
 #   (k) /health without a `handoff` field falls back to the restart path
-#   (l) a handoff that never happens leaves `current` on the old release and
-#       exits non-zero without a restart (zero downtime)
+#   (l) a handoff that never completes (the request is unreadable by the
+#       DynamicUser service) falls back to a health-gated restart and exits 0
 #   (m) a handoff that comes up then fails the soak rolls back and restarts
 #   (n) a same-version install (with --force) never hands off (the proxy
 #       refuses it)
@@ -37,6 +37,8 @@
 #   (t) --public-ip replaces an existing value
 #   (u) an invalid --public-ip aborts before any config change
 #   (v) --updater installs the self-updater to LIGHTSPEED_UPDATER_DEST
+#   (w) a request the service user does not own is opened for reading (0644
+#       under an 0711 runtime dir) and the install still falls back to a restart
 #
 # Usage: bash infra/scripts/test_relay_install.sh
 # Exits 0 and prints "relay-install: all assertions passed" on success.
@@ -118,6 +120,10 @@ case "\$cmd" in
         if [ -f "\$F/restart_fail" ]; then exit 1; fi
         exit 0
         ;;
+    show)
+        cat "\$F/service_user" 2>/dev/null || true
+        exit 0
+        ;;
     *) exit 0 ;;
 esac
 STUB
@@ -196,7 +202,7 @@ reset_fixture() {
     : > "$FIXTURE/systemctl.log"
     rm -f "$FIXTURE/fail_versions" "$FIXTURE/file_not_elf" "$FIXTURE/restart_fail" \
         "$FIXTURE/curl_script" "$FIXTURE/curl_calls" "$FIXTURE/curl-current.log" \
-        "$FIXTURE/handoff-echo.log" "$FIXTURE/old_version"
+        "$FIXTURE/handoff-echo.log" "$FIXTURE/old_version" "$FIXTURE/service_user"
     printf 'ok\n' > "$FIXTURE/health_mode"
 }
 
@@ -486,7 +492,11 @@ else
     note_pass
 fi
 
-# ── (l) handoff never happens -> no repoint, no restart, non-zero ──
+# ── (l) handoff never completes -> fall back to a restart ────
+# The real trigger is a request the DynamicUser service cannot read, so the
+# proxy never picks it up and the installer's poll times out. The installer
+# must not stay stuck on the old version: it falls back to a health-gated
+# restart so the new version still takes effect.
 reset_fixture
 seed_release "1.4.3" "2020-01-01 00:00:00"
 ln -sfn "$ROOT/releases/1.4.3" "$ROOT/current"
@@ -496,13 +506,13 @@ STAGED_L="$TMP/staged-l"
 make_binary "$STAGED_L" 0
 SOAK_SECS=0
 if run_install "1.4.4" "$STAGED_L"; then rc=0; else rc=$?; fi
-assert_rc_nonzero "$rc" "(l) a handoff that never completes exits non-zero"
-assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.3" \
-    "(l) current unchanged when the handoff never happened"
-assert_current_exists "(l) current is not dangling"
+assert_rc_zero "$rc" "(l) an uncompleted handoff falls back to a restart and exits 0"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.4" \
+    "(l) fallback repointed current to the new release"
+assert_current_exists "(l) current is not dangling after fallback"
 assert_grep "$FIXTURE/systemctl.log" "kill -s SIGUSR2 lightspeed-proxy" "(l) SIGUSR2 was attempted"
-assert_not_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" \
-    "(l) no restart on a zero-downtime handoff miss"
+assert_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" "(l) fallback restarted the service"
+assert_grep "$OUT" "fallback" "(l) the fallback path is reported"
 
 # ── (m) handoff ok then soak fails -> rollback + restart ─────
 reset_fixture
@@ -668,6 +678,32 @@ if run_install "v1" "$STAGED_V" --updater "$UPDATER_SRC"; then rc=0; else rc=$?;
 assert_rc_zero "$rc" "(v) install with --updater exits 0"
 assert_file_exists "$UPDATER_DEST" "(v) updater is installed at the destination"
 assert_same_bytes "$UPDATER_SRC" "$UPDATER_DEST" "(v) installed updater matches the source"
+
+# ── (w) permission-denied request -> readable + fallback ─────
+# On an older unit without RuntimeDirectory= the installer creates a
+# root-owned /run/lightspeed, so a 0600 request is unreadable by the
+# DynamicUser service and the handoff stalls. The installer must open read
+# access when the service user does not own the request, and still fall back
+# to a restart so the update lands.
+reset_fixture
+seed_release "1.4.3" "2020-01-01 00:00:00"
+ln -sfn "$ROOT/releases/1.4.3" "$ROOT/current"
+printf '1.4.3\n' > "$FIXTURE/old_version"
+printf 'OLD\n' > "$FIXTURE/curl_script"
+printf 'lightspeed-svc\n' > "$FIXTURE/service_user"
+STAGED_W="$TMP/staged-w"
+make_binary "$STAGED_W" 0
+SOAK_SECS=0
+if run_install "1.4.4" "$STAGED_W"; then rc=0; else rc=$?; fi
+assert_rc_zero "$rc" "(w) an unreadable handoff request still exits 0"
+assert_eq "$(readlink "$ROOT/current" 2>/dev/null || true)" "$ROOT/releases/1.4.4" \
+    "(w) fallback repointed current to the new release"
+assert_grep "$FIXTURE/systemctl.log" "restart lightspeed-proxy" "(w) fallback restarted the service"
+assert_grep "$OUT" "fallback" "(w) the fallback path is reported"
+assert_eq "$(stat -c %a "$HANDOFF_REQ" 2>/dev/null || true)" "644" \
+    "(w) the handoff request was opened for the service user"
+assert_eq "$(stat -c %a "$(dirname "$HANDOFF_REQ")" 2>/dev/null || true)" "711" \
+    "(w) the runtime dir was opened for the service user"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
