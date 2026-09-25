@@ -214,6 +214,8 @@ pub struct RouteTelemetryCell {
     pub recovered: u64,
     /// Sum of the legs' `dedup_saved` counts.
     pub dedup_saved: u64,
+    /// Distinct sources, used only to enforce the k floor at render time.
+    source_ips: SourceIpSet,
 }
 
 /// Bounded per-`(relay, game, country)` telemetry aggregator.
@@ -687,7 +689,12 @@ impl ProxyMetrics {
                 }
             }
         }
-        self.record_route_legs(report.game_id, &report.client_country, &report.route_legs);
+        self.record_route_legs(
+            report.game_id,
+            &report.client_country,
+            &report.route_legs,
+            peer_ip,
+        );
     }
 
     /// Fold a report's per-relay observations into the bounded per-path
@@ -701,6 +708,7 @@ impl ProxyMetrics {
         game_id: u8,
         raw_country: &str,
         legs: &[lightspeed_protocol::telemetry::PathObservation],
+        peer_ip: IpAddr,
     ) {
         if legs.is_empty() {
             return;
@@ -720,6 +728,7 @@ impl ProxyMetrics {
                 continue;
             }
             let cell = agg.cells.entry(key).or_default();
+            cell.source_ips.insert(peer_ip);
             cell.reports += 1;
             cell.samples += u64::from(leg.samples);
             cell.rtt_p50_sum_ms += f64::from(leg.rtt_p50_ms);
@@ -1310,7 +1319,7 @@ impl ProxyMetrics {
                 labels, agg.rejected
             ));
             for ((relay, game_id, country), cell) in &agg.cells {
-                if cell.reports < MIN_TELEMETRY_CELL_REPORTS {
+                if cell.source_ips.len() < MIN_TELEMETRY_CELL_SOURCE_IPS {
                     continue;
                 }
                 let game = lightspeed_protocol::game_id::key_for_id(*game_id).unwrap_or("unknown");
@@ -1959,6 +1968,32 @@ mod tests {
         assert!(output.contains(
             "lightspeed_telemetry_reports_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
         ));
+    }
+
+    #[test]
+    fn route_cell_floors_on_distinct_sources() {
+        let one = ProxyMetrics::new();
+        for _ in 0..3 {
+            one.record_route_legs(2, "US", &[fra_leg()], ip(1));
+        }
+        let output = one.to_prometheus("test", "test-node");
+        assert!(
+            !output.contains("lightspeed_telemetry_route_reports_total{region=\"test\""),
+            "a route cell backed by one source must stay suppressed:\n{output}"
+        );
+
+        let three = ProxyMetrics::new();
+        for i in 0..3u8 {
+            three.record_route_legs(2, "US", &[fra_leg()], ip(i + 1));
+        }
+        let output = three.to_prometheus("test", "test-node");
+        let relay = fra_leg().relay;
+        assert!(
+            output.contains(&format!(
+                "lightspeed_telemetry_route_reports_total{{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\",relay=\"{relay}\"}} 3"
+            )),
+            "a route cell with three distinct sources must be exported:\n{output}"
+        );
     }
 
     /// Given: reports where the paired direct-app RTT is better than, worse

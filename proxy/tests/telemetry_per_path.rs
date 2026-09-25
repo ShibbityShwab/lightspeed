@@ -248,32 +248,16 @@ async fn per_path_telemetry_end_to_end_over_http() {
         "route telemetry family must be advertised"
     );
 
-    // The k >= 3 cell renders every series with the full label set, and the
-    // sums are the sums of the three legs' reported values.
+    // Every cell now floors on distinct source IPs, and all requests in this
+    // test arrive from the loopback address, so the route cell is withheld too.
     let cell = format!(
         "region=\"{REGION}\",node_id=\"{NODE_ID}\",game=\"{GAME_KEY}\",country=\"{COUNTRY_NORMALIZED}\",relay=\"{RELAY_ABOVE_K}\""
     );
-    for (series, value) in [
-        ("lightspeed_telemetry_route_reports_total", "3"),
-        ("lightspeed_telemetry_route_samples_total", "330"),
-        ("lightspeed_telemetry_route_rtt_p50_ms_sum", "36.0"),
-        ("lightspeed_telemetry_route_rtt_p50_ms_count", "3"),
-        ("lightspeed_telemetry_route_rtt_p95_ms_sum", "66.0"),
-        ("lightspeed_telemetry_route_rtt_p95_ms_count", "3"),
-        ("lightspeed_telemetry_route_rtt_p99_ms_sum", "96.0"),
-        ("lightspeed_telemetry_route_rtt_p99_ms_count", "3"),
-        ("lightspeed_telemetry_route_jitter_ms_sum", "6.0"),
-        ("lightspeed_telemetry_route_jitter_ms_count", "3"),
-        ("lightspeed_telemetry_route_lost_total", "6"),
-        ("lightspeed_telemetry_route_recovered_total", "6"),
-        ("lightspeed_telemetry_route_dedup_saved_total", "9"),
-    ] {
-        let expected = format!("{series}{{{cell}}} {value}");
-        assert!(
-            metrics.contains(&expected),
-            "missing route series line: {expected}\n--- scrape ---\n{metrics}"
-        );
-    }
+    let route_line = format!("lightspeed_telemetry_route_reports_total{{{cell}}} 3");
+    assert!(
+        !metrics.contains(&route_line),
+        "a route cell backed by one distinct source must stay suppressed: {route_line}"
+    );
 
     // The flat (game, country) cell has three reports but only one distinct
     // source IP (all requests arrive from the test's loopback address), so the
