@@ -9,8 +9,8 @@ use std::time::Duration;
 use tracing::warn;
 
 use crate::cli::parse_proxy_addr;
-use crate::route::selector::NearestSelector;
-use crate::route::{ProxyHealth, ProxyNode, RouteSelector, SelectedRoute};
+use crate::route::selector::{DestinationAwareSelector, NearestSelector};
+use crate::route::{destination, ProxyHealth, ProxyNode, RouteSelector, SelectedRoute};
 
 /// Probe a single proxy by sending keepalive packets and measuring RTT.
 ///
@@ -117,6 +117,7 @@ pub async fn probe_labeled(
         }));
     }
 
+    destination::ensure_global();
     let mut nodes = Vec::new();
     for handle in handles {
         if let Ok((id, addr, latency)) = handle.await {
@@ -135,6 +136,12 @@ pub async fn probe_labeled(
                 latency_us: latency,
                 load: 0.0,
             });
+        }
+    }
+
+    for node in &nodes {
+        if let Some(client_leg_us) = node.latency_us {
+            destination::observe_client_leg(node.data_addr, client_leg_us);
         }
     }
 
@@ -178,7 +185,7 @@ pub async fn select_best_proxy(
                 Box::new(NearestSelector::new())
             }
         },
-        _ => Box::new(NearestSelector::new()),
+        _ => Box::new(DestinationAwareSelector::new()),
     };
 
     selector

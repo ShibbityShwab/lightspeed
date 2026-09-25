@@ -301,12 +301,28 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Local latency measurement is independent of telemetry reporting: the
+    // interceptor/tunnel needs it for routing, so install it whether or not
+    // reporting is enabled. Nothing measured reaches the relay unless reporting
+    // is on (enforced in telemetry::TelemetryCollector::flush).
+    latency::install_measurement();
+
     let _token_reset = TokenResetOnShutdown;
 
     // ── Transport selection (UDP default, TCP opt-in) ─────────────
     let use_tcp = cli.tcp || config.tunnel.transport.eq_ignore_ascii_case("tcp");
     if use_tcp {
         info!("🌐 TCP tunnel transport enabled");
+    }
+
+    // ── DSCP marking (opt-in, off by default) ─────────────────────
+    //
+    // Only the player's local hop may honour DSCP; later hops and the proxy
+    // side are unmarked. Windows ignores IP_TOS without QWAVE/QoS2.
+    let use_dscp = cli.dscp || config.tunnel.dscp;
+    tunnel::qos::set_enabled(use_dscp);
+    if use_dscp {
+        info!("🏷️  DSCP EF (46) marking enabled for tunnel packets");
     }
 
     // ── Cloudflare WARP manager (used by several early-exit paths) ─

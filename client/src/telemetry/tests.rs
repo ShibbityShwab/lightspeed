@@ -56,9 +56,13 @@ async fn failed_post_retains_samples() {
     let collector = TelemetryCollector::new();
     collector.record_rtt(42.0).await;
 
-    // Nothing listens on 127.0.0.1:8080 in the test environment, so the POST
-    // fails; the samples it carried must survive for the next flush.
-    collector.flush("127.0.0.1", 0, "").await;
+    // Reporting is opt-in, so enable it for this send attempt. Nothing listens
+    // on 127.0.0.1:8080 in the test environment, so the POST fails; the samples
+    // it carried must survive for the next flush.
+    set_enabled(true);
+    let outcome = collector.flush("127.0.0.1", 0, "").await;
+    set_enabled(false);
+    assert_eq!(outcome, FlushOutcome::SendFailed);
 
     let report = collector.build_report(0, "").await;
     assert_eq!(

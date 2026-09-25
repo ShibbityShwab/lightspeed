@@ -21,6 +21,7 @@ use tokio::net::UdpSocket;
 
 use crate::error::TunnelError;
 use crate::tunnel::budget::{self, PayloadFit};
+use crate::tunnel::pacer::{Pacer, DEFAULT_CEILING_BPS};
 use crate::tunnel::transport::TunnelTransport;
 
 /// Get current timestamp in microseconds since epoch.
@@ -42,7 +43,8 @@ pub struct RelayStats {
     pub recv_errors: AtomicU64,
     pub fec_parity_sent: AtomicU64,
     pub fec_recovered: AtomicU64,
-    /// Game payloads dropped for exceeding the conservative tunnel budget.
+    /// Game payloads forwarded with fragmentation allowed for exceeding the
+    /// conservative tunnel budget.
     pub payloads_over_budget: AtomicU64,
 }
 
@@ -82,6 +84,9 @@ pub struct UdpRelay {
     fec_encoder: Option<FecEncoder>,
     /// FEC decoder (inbound), if FEC is enabled.
     fec_decoder: Option<FecDecoder>,
+    /// Conservative outbound pacer. Bounds the burst rate and backs off on
+    /// measured loss; see [`crate::tunnel::pacer`].
+    pacer: Pacer,
 }
 
 impl UdpRelay {
@@ -95,7 +100,18 @@ impl UdpRelay {
             stats: Arc::new(RelayStats::new()),
             fec_encoder: None,
             fec_decoder: None,
+            pacer: Pacer::with_ceiling(DEFAULT_CEILING_BPS, DEFAULT_CEILING_BPS),
         }
+    }
+
+    /// The outbound pacer for observability and loss feedback.
+    pub fn pacer(&self) -> &Pacer {
+        &self.pacer
+    }
+
+    /// The outbound pacer, mutably, for loss feedback.
+    pub fn pacer_mut(&mut self) -> &mut Pacer {
+        &mut self.pacer
     }
 
     /// Enable FEC with the given block size (K data packets per parity).
@@ -170,9 +186,8 @@ impl UdpRelay {
             tracing::warn!(
                 payload_len = payload_len,
                 budget = budget,
-                "Dropped game payload over the conservative tunnel MTU budget"
+                "Forwarding oversized game payload; the kernel may fragment it on the client-to-relay hop"
             );
-            return Ok(0);
         }
 
         let path_token = crate::session::path_token(proxy_addr);
@@ -192,7 +207,12 @@ impl UdpRelay {
 
             let parity = encoder.add_packet(payload);
 
-            let sent = transport.send(&pkt_buf).await?;
+            self.pacer.acquire(pkt_buf.len()).await;
+            let sent = if budget::datagram_fits(pkt_buf.len()) {
+                transport.send(&pkt_buf).await?
+            } else {
+                transport.send_may_fragment(&pkt_buf).await?
+            };
             self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
             self.stats
                 .bytes_sent
@@ -214,7 +234,12 @@ impl UdpRelay {
                 let parity_buf =
                     build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
 
-                let parity_sent = transport.send(&parity_buf).await?;
+                self.pacer.acquire(parity_buf.len()).await;
+                let parity_sent = if budget::datagram_fits(parity_buf.len()) {
+                    transport.send(&parity_buf).await?
+                } else {
+                    transport.send_may_fragment(&parity_buf).await?
+                };
                 self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
                 self.stats
                     .bytes_sent
@@ -235,7 +260,12 @@ impl UdpRelay {
                 TunnelHeader::new(seq, now_us(), orig_src, orig_dst).with_session_token(path_token);
             let packet = header.encode_with_payload(payload);
 
-            let sent = transport.send(&packet).await?;
+            self.pacer.acquire(packet.len()).await;
+            let sent = if budget::datagram_fits(packet.len()) {
+                transport.send(&packet).await?
+            } else {
+                transport.send_may_fragment(&packet).await?
+            };
 
             self.stats.packets_sent.fetch_add(1, Ordering::Relaxed);
             self.stats
@@ -299,6 +329,9 @@ impl UdpRelay {
             .bytes_received
             .fetch_add(len as u64, Ordering::Relaxed);
 
+        // A healthy response nudges the paced rate back up, slowly.
+        self.pacer.maybe_recover();
+
         // Measure RTT from timestamp
         let now = now_us();
         let rtt_us = now.wrapping_sub(header.timestamp_us);
@@ -314,6 +347,7 @@ impl UdpRelay {
             if header.has_fec() {
                 if let Some(data) = decode_fec_payload(payload_slice, decoder) {
                     self.stats.fec_recovered.fetch_add(1, Ordering::Relaxed);
+                    self.pacer.on_loss();
                     tracing::info!(
                         block = header.sequence,
                         recovered_len = data.len(),
@@ -421,6 +455,60 @@ mod tests {
             assert_eq!(
                 header.session_token, 0x1234_5678,
                 "the data plane must stamp the destination's per-path token, not the default"
+            );
+
+            crate::session::reset_all_tokens();
+        });
+    }
+
+    #[test]
+    fn oversized_payload_is_forwarded_and_counted() {
+        let _guard = crate::session::token_test_guard();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        rt.block_on(async {
+            let receiver = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind receiver");
+            let proxy_addr = match receiver.local_addr().expect("receiver addr") {
+                std::net::SocketAddr::V4(v4) => v4,
+                std::net::SocketAddr::V6(_) => panic!("expected IPv4"),
+            };
+            crate::session::set_session_token(0xDEAD_BEEF);
+            crate::session::set_path_token(proxy_addr, 0x1234_5678);
+
+            let mut relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+            relay.bind().await.expect("bind relay");
+
+            // 200 bytes over the plain budget: the clamp used to drop this.
+            let budget = lightspeed_protocol::max_game_payload(false);
+            let payload = vec![0xA5u8; budget + 200];
+            let src = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000);
+            let dst = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 40001);
+
+            let sent = relay
+                .send_to_proxy(&payload, src, dst, proxy_addr)
+                .await
+                .expect("send oversized payload");
+            assert!(
+                sent > 0,
+                "an oversized payload must not be silently dropped (sent={sent})"
+            );
+
+            let mut buf = vec![0u8; 4096];
+            let (n, _) = tokio::time::timeout(Duration::from_secs(2), receiver.recv_from(&mut buf))
+                .await
+                .expect("oversized tunnel packet within 2s")
+                .expect("receive oversized tunnel packet");
+            let (_, body) = TunnelHeader::decode_with_payload(&buf[..n]).expect("decode header");
+            assert_eq!(body, payload.as_slice(), "payload must arrive unchanged");
+            assert_eq!(
+                relay.stats.payloads_over_budget.load(Ordering::Relaxed),
+                1,
+                "an oversized payload must be counted"
             );
 
             crate::session::reset_all_tokens();

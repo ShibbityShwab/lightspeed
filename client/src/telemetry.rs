@@ -52,9 +52,28 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(60 * 15); // 15 minutes
 /// [`spawn_periodic_flush`].
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Whether telemetry recording and flushing are currently active.
+/// Whether telemetry reporting is currently active.
+///
+/// This gates **reporting only**. Local latency measurement is independent and
+/// runs whenever the interceptor/tunnel is active; see `crate::latency`.
 pub fn is_enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
+}
+
+/// Outcome of one telemetry flush attempt.
+///
+/// Reporting is strictly opt-in, so [`FlushOutcome::Disabled`] is returned
+/// before any report is built or any connection is opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlushOutcome {
+    /// Reporting is disabled; nothing was built or sent.
+    Disabled,
+    /// Reporting is enabled but the collector had nothing to report.
+    NothingToSend,
+    /// A report was built and sent, and its samples were committed.
+    Sent,
+    /// A report was built but the send failed; samples were retained.
+    SendFailed,
 }
 
 /// Enable or disable telemetry for the rest of the process.
@@ -67,13 +86,16 @@ pub fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-/// Install the process-wide telemetry collector and latency tracker.
+/// Install the process-wide telemetry collector and enable reporting.
 ///
-/// **Idempotent.** The first call installs the collector and the direct/relayed
-/// latency tracker and returns a handle that shares state with the installed
-/// collector. Later calls are no-ops that return a handle to the
-/// already-installed collector, so installing twice neither panics nor
-/// double-installs. Enables telemetry.
+/// **Idempotent.** The first call installs the collector and returns a handle
+/// that shares state with the installed collector. Later calls are no-ops that
+/// return a handle to the already-installed collector, so installing twice
+/// neither panics nor double-installs.
+///
+/// This also ensures local measurement is installed (`latency::install_measurement`),
+/// because a report needs measured values, but measurement is not otherwise
+/// tied to telemetry: tunnel/interceptor paths install it independently.
 ///
 /// Spawn [`spawn_periodic_flush`] once a relay address is known to actually
 /// send reports.
@@ -81,7 +103,7 @@ pub fn set_enabled(enabled: bool) {
 pub fn install() -> TelemetryCollector {
     let collector = TelemetryCollector::new();
     paths::install_global_collector(&collector);
-    crate::latency::install_global(Arc::new(crate::latency::LatencyTracker::default()));
+    crate::latency::install_measurement();
     set_enabled(true);
     paths::global_collector().cloned().unwrap_or(collector)
 }
@@ -253,28 +275,37 @@ impl TelemetryCollector {
 
     /// Send the report to `http://<proxy_host>:8080/telemetry`.
     ///
+    /// Reporting is strictly opt-in: when [`is_enabled`] is false this returns
+    /// [`FlushOutcome::Disabled`] without building a report or opening a
+    /// connection. Local measurement is unaffected; see `crate::latency`.
+    ///
     /// Uses a raw Tokio TCP connection + hand-rolled HTTP/1.0 POST so the
-    /// client does not need an HTTP client library.  Any network error is
-    /// silently swallowed — telemetry is best-effort.
-    pub async fn flush(&self, proxy_host: &str, game_id: u8, country: &str) {
+    /// client does not need an HTTP client library. Any network error is
+    /// swallowed, because telemetry is best-effort.
+    pub async fn flush(&self, proxy_host: &str, game_id: u8, country: &str) -> FlushOutcome {
+        if !is_enabled() {
+            debug!("Telemetry flush skipped: reporting disabled");
+            return FlushOutcome::Disabled;
+        }
+
         let report = match self.build_report(game_id, country).await {
             Some(r) => r,
             None => {
                 debug!("Telemetry flush: no samples to send");
-                return;
+                return FlushOutcome::NothingToSend;
             }
         };
 
         if let Err(e) = report.validate() {
             warn!("Telemetry report validation failed (bug): {}", e);
-            return;
+            return FlushOutcome::SendFailed;
         }
 
         let body = match serde_json::to_string(&report) {
             Ok(b) => b,
             Err(e) => {
                 warn!("Telemetry serialisation failed: {}", e);
-                return;
+                return FlushOutcome::SendFailed;
             }
         };
 
@@ -290,7 +321,7 @@ impl TelemetryCollector {
             Ok(Ok(mut stream)) => {
                 if let Err(e) = stream.write_all(request.as_bytes()).await {
                     debug!("Telemetry send error: {}", e);
-                    return;
+                    return FlushOutcome::SendFailed;
                 }
                 let _ = stream.shutdown().await;
                 self.commit_report(&report).await;
@@ -300,12 +331,15 @@ impl TelemetryCollector {
                     p99 = report.p99_ms,
                     "📊 Telemetry flushed"
                 );
+                FlushOutcome::Sent
             }
             Ok(Err(e)) => {
                 debug!("Telemetry connect failed ({}): {}", addr, e);
+                FlushOutcome::SendFailed
             }
             Err(_) => {
                 debug!("Telemetry connect timed out ({})", addr);
+                FlushOutcome::SendFailed
             }
         }
     }
@@ -334,7 +368,7 @@ pub fn spawn_periodic_flush(
             if !is_enabled() {
                 continue;
             }
-            collector
+            let _ = collector
                 .flush(&proxy_host, ctx.game_id, &ctx.country)
                 .await;
         }

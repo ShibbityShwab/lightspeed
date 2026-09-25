@@ -141,6 +141,9 @@ impl TrafficInterceptor for PfInterceptor {
                 "macOS pf interceptor: could not set don't-fragment on tunnel socket: {e}"
             );
         }
+        if let Err(e) = crate::tunnel::qos::apply(&tunnel_socket) {
+            tracing::warn!("macOS pf interceptor: could not set DSCP on tunnel socket: {e}");
+        }
 
         listener_std.set_nonblocking(true)?;
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
@@ -239,9 +242,8 @@ impl TrafficInterceptor for PfInterceptor {
                             tracing::warn!(
                                 payload_len = payload_len,
                                 budget = budget,
-                                "macOS pf interceptor: dropped game payload over the conservative tunnel MTU budget"
+                                "macOS pf interceptor: forwarding oversized game payload; the kernel may fragment it"
                             );
-                            continue;
                         }
 
                         if let Some(ref mut enc) = fec_encoder {
@@ -256,7 +258,12 @@ impl TrafficInterceptor for PfInterceptor {
                             buf.extend_from_slice(payload);
                             let parity = enc.add_packet(payload);
                             crate::latency::record_outbound(*server_addr.ip());
-                            let _ = tunnel_socket.send_to(&buf, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                            let _ = crate::tunnel::transport::send_datagram(
+                                &tunnel_socket,
+                                &buf,
+                                crate::session::current_proxy().unwrap_or(config_proxy),
+                            )
+                            .await;
                             if let Some(pb) = parity {
                                 let ps = seq.wrapping_add(1);
                                 let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts_us, src, server_addr)
@@ -266,7 +273,12 @@ impl TrafficInterceptor for PfInterceptor {
                                 pb2.extend_from_slice(&ph.encode_to_array());
                                 pf2.encode(&mut pb2);
                                 pb2.extend_from_slice(&pb);
-                                let _ = tunnel_socket.send_to(&pb2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                                let _ = crate::tunnel::transport::send_datagram(
+                                    &tunnel_socket,
+                                    &pb2,
+                                    crate::session::current_proxy().unwrap_or(config_proxy),
+                                )
+                                .await;
                                 seq = seq.wrapping_add(1);
                             }
                         } else {
@@ -276,7 +288,12 @@ impl TrafficInterceptor for PfInterceptor {
                             crate::latency::record_outbound(*server_addr.ip());
                             let (dests, n) = crate::session::send_destinations(config_proxy);
                             for d in dests.iter().take(n) {
-                                let _ = tunnel_socket.send_to(&pkt, *d).await;
+                                let _ = crate::tunnel::transport::send_datagram(
+                                    &tunnel_socket,
+                                    &pkt,
+                                    *d,
+                                )
+                                .await;
                             }
                         }
                         seq = seq.wrapping_add(1);

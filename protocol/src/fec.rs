@@ -1,7 +1,7 @@
 //! # Forward Error Correction (FEC)
 //!
-//! XOR-based FEC for LightSpeed tunnel packets. This is our core
-//! competitive advantage over ExitLag's brute-force packet duplication.
+//! XOR-based FEC for LightSpeed tunnel packets. This is a recovery
+//! mechanism for the tunnel, not a bandwidth-doubling duplication scheme.
 //!
 //! ## How It Works
 //!
@@ -13,7 +13,7 @@
 //! ## Bandwidth Comparison
 //!
 //! ```text
-//! ExitLag (duplication):  Send every packet on 2-3 paths → 2-3x bandwidth
+//! Duplication (2 paths):  Send every packet on 2-3 paths → 2-3x bandwidth
 //! LightSpeed (FEC):       Send K data + P parity           → (K+P)/K bandwidth
 //!                         Default K=4, P=1                 → 1.25x bandwidth
 //! ```
@@ -24,7 +24,7 @@
 //! parity packets go on the secondary path. This means:
 //! - If primary path drops a packet → recover from parity on secondary
 //! - If secondary path drops → no impact (data is complete on primary)
-//! - Total bandwidth: ~1.25x (vs ExitLag's 3x)
+//! - Total bandwidth: ~1.25x
 //!
 //! ## FEC Header Extension (4 bytes, appended after TunnelHeader when FLAG_FEC is set)
 //!

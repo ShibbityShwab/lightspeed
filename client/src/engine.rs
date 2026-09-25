@@ -130,7 +130,8 @@ pub struct EngineStatus {
     pub interceptor_injected: u64,
     /// Errors.
     pub interceptor_errors: u64,
-    /// Payloads dropped for exceeding the conservative tunnel payload budget.
+    /// Payloads forwarded with fragmentation allowed for exceeding the
+    /// conservative tunnel payload budget.
     pub interceptor_payloads_over_budget: u64,
     /// Error description if the interceptor failed to start.
     pub interceptor_error: Option<String>,
@@ -186,6 +187,10 @@ pub struct LightSpeedEngine {
 impl LightSpeedEngine {
     /// Create a new (disconnected) engine backed by `rt`.
     pub fn new(rt: Handle) -> Self {
+        // The engine can start an interceptor, redirect, or capture, all of
+        // which need local measurement. Install it independently of telemetry
+        // reporting; nothing is reported unless telemetry is enabled.
+        crate::latency::install_measurement();
         Self {
             rt,
             status: Arc::new(RwLock::new(EngineStatus::default())),
@@ -669,7 +674,7 @@ impl LightSpeedEngine {
     /// Non-game traffic that accidentally passes the broad filter is re-injected
     /// untouched.
     ///
-    /// This is the ExitLag-style "just click Start, then launch your game"
+    /// This is the "just click Start, then launch your game"
     /// experience.
     #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
     pub fn start_windivert_for_game(

@@ -62,7 +62,7 @@ pub async fn run_tunnel_test(mut relay: UdpRelay, proxy_addr: SocketAddrV4) -> a
     info!("🧪 Tunnel test complete:");
     info!("   Packets sent:     {}", sent);
     info!("   Bytes sent:       {}", bytes_sent);
-    info!("   Over-budget drop: {}", over_budget);
+    info!("   Over-budget forwarded: {}", over_budget);
     info!("   Responses:        {}", received);
 
     if received > 0 {

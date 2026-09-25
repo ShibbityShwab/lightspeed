@@ -155,6 +155,9 @@ impl TrafficInterceptor for NftablesInterceptor {
         if let Err(e) = crate::tunnel::transport::set_dont_fragment(&tunnel_socket) {
             tracing::warn!("Linux interceptor: could not set don't-fragment on tunnel socket: {e}");
         }
+        if let Err(e) = crate::tunnel::qos::apply(&tunnel_socket) {
+            tracing::warn!("Linux interceptor: could not set DSCP on tunnel socket: {e}");
+        }
 
         listener_std.set_nonblocking(true)?;
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
@@ -210,7 +213,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                     interval.tick().await;
                     let snap = counters_s.snapshot("nftables");
                     tracing::info!(
-                        "📊 Interceptor: {} pkts out / {} pkts in / {} injected / {} errors / {} over-budget dropped",
+                        "📊 Interceptor: {} pkts out / {} pkts in / {} injected / {} errors / {} over-budget forwarded",
                         snap.packets_intercepted,
                         snap.packets_from_proxy,
                         snap.packets_injected,
@@ -326,9 +329,8 @@ impl TrafficInterceptor for NftablesInterceptor {
                             tracing::warn!(
                                 payload_len = payload_len,
                                 budget = budget,
-                                "Linux interceptor: dropped game payload over the conservative tunnel MTU budget"
+                                "Linux interceptor: forwarding oversized game payload; the kernel may fragment it"
                             );
-                            continue;
                         }
 
                         // Shadow-direct sampling is gated on telemetry by the
@@ -380,7 +382,12 @@ impl TrafficInterceptor for NftablesInterceptor {
                                 fh.encode(&mut buf);
                                 buf.extend_from_slice(payload);
                                 let parity = enc.add_packet(payload);
-                                let _ = tunnel_socket.send_to(&buf, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                                let _ = crate::tunnel::transport::send_datagram(
+                                    &tunnel_socket,
+                                    &buf,
+                                    crate::session::current_proxy().unwrap_or(config_proxy),
+                                )
+                                .await;
                                 if let Some(pb) = parity {
                                     let ps = seq.wrapping_add(1);
                                     let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, src, actual_dst)
@@ -390,7 +397,12 @@ impl TrafficInterceptor for NftablesInterceptor {
                                     pb2.extend_from_slice(&ph.encode_to_array());
                                     pf.encode(&mut pb2);
                                     pb2.extend_from_slice(&pb);
-                                    let _ = tunnel_socket.send_to(&pb2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                                    let _ = crate::tunnel::transport::send_datagram(
+                                        &tunnel_socket,
+                                        &pb2,
+                                        crate::session::current_proxy().unwrap_or(config_proxy),
+                                    )
+                                    .await;
                                     seq = seq.wrapping_add(1);
                                 }
                             } else {
@@ -399,7 +411,12 @@ impl TrafficInterceptor for NftablesInterceptor {
                                 let pkt = hdr.encode_with_payload(payload);
                                 let (dests, n) = crate::session::send_destinations(config_proxy);
                                 for d in dests.iter().take(n) {
-                                    let _ = tunnel_socket.send_to(&pkt, *d).await;
+                                    let _ = crate::tunnel::transport::send_datagram(
+                                        &tunnel_socket,
+                                        &pkt,
+                                        *d,
+                                    )
+                                    .await;
                                 }
                             }
                         };

@@ -58,6 +58,12 @@ mtu = 1400
 # Client-to-relay transport: "udp" (default) or "tcp".
 transport = "udp"
 
+# Mark tunnel packets with DSCP Expedited Forwarding (EF, 46) so the player's
+# own router or ISP can prioritise them. Off by default: only the local hop may
+# honour it, later hops may ignore or reclassify it, and stamping EF without the
+# network's consent can be policed. Ignored on Windows. Default: false.
+dscp = false
+
 [route]
 # Route selection strategy: "nearest" (default), "ml", or "multipath".
 strategy = "nearest"

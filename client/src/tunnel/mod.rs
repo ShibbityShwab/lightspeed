@@ -7,6 +7,8 @@
 pub mod budget;
 pub mod capture;
 pub mod header;
+pub mod pacer;
+pub mod qos;
 pub mod relay;
 pub mod transport;
 

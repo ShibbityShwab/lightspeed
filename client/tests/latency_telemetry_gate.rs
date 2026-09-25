@@ -1,19 +1,44 @@
-//! Regression: the inbound relayed-RTT hook must respect the telemetry enable
-//! flag, exactly like the outbound hook. Kept as an integration test so the
-//! process-wide tracker it installs cannot leak into the library unit tests.
+//! Regression: local latency measurement is independent of telemetry reporting.
+//!
+//! Measurement (direct ICMP, relayed RTT, shadow direct) feeds local routing
+//! and any future do-no-harm bypass decision, so it must run whenever the
+//! interceptor/tunnel runs, even with `--no-telemetry`. Reporting to the relay
+//! stays strictly opt-in: with telemetry disabled no report is built or sent.
+//!
+//! Kept as integration tests so the process-wide tracker and the telemetry gate
+//! they install cannot leak into the library unit tests.
 
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use lightspeed_client::latency::{self, Clock, IcmpProber, LatencyTracker};
+use lightspeed_client::latency::{self, Clock, IcmpProber, LatencyTracker, DIRECT_PROBE_COUNT};
+use lightspeed_client::telemetry::{self, FlushOutcome, TelemetryCollector};
 
-struct NoopProber;
+struct ScriptedProber {
+    replies: StdMutex<Vec<Option<f32>>>,
+    calls: AtomicUsize,
+}
 
-impl IcmpProber for NoopProber {
+impl ScriptedProber {
+    fn new(replies: Vec<Option<f32>>) -> Self {
+        Self {
+            replies: StdMutex::new(replies),
+            calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl IcmpProber for ScriptedProber {
     fn probe(&self, _target: Ipv4Addr, _seq: u16) -> Option<f32> {
-        None
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let mut replies = self.replies.lock().unwrap();
+        if replies.is_empty() {
+            None
+        } else {
+            replies.remove(0)
+        }
     }
 }
 
@@ -42,31 +67,83 @@ impl Clock for ManualClock {
     }
 }
 
-#[test]
-fn record_inbound_is_gated_on_telemetry_enabled() {
-    let server = Ipv4Addr::new(203, 0, 113, 7);
-    let clock = Arc::new(ManualClock::new());
-    let tracker = Arc::new(LatencyTracker::new(Arc::new(NoopProber), clock.clone()));
-    latency::install_global(Arc::clone(&tracker));
-    let installed = latency::global().expect("tracker installed");
+const SERVER: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 7);
+/// Direct bursts are rate-limited per server, so the ICMP assertion uses its
+/// own server to avoid the interval consumed by the relayed leg.
+const DIRECT_SERVER: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 8);
 
-    lightspeed_client::telemetry::set_enabled(false);
-    installed.note_outbound(server);
-    clock.advance(Duration::from_millis(20));
-    latency::record_inbound(server);
+/// Given: telemetry reporting is disabled. When: the interceptor/tunnel hooks
+/// fire. Then: local measurement is still recorded, because it feeds local
+/// decisions and is not sent anywhere without telemetry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn measurement_runs_with_telemetry_disabled() {
+    let clock = Arc::new(ManualClock::new());
+    let prober = Arc::new(ScriptedProber::new(vec![Some(50.0); DIRECT_PROBE_COUNT]));
+    let tracker = Arc::new(LatencyTracker::new(prober, clock.clone()));
+    latency::install_global(Arc::clone(&tracker));
+    telemetry::set_enabled(false);
+    assert!(!telemetry::is_enabled(), "reporting must be off");
+
+    // Direct ICMP burst: the outbound hook must still kick it off. The burst
+    // runs on a blocking thread, so poll rather than assume a fixed delay.
+    latency::record_outbound(DIRECT_SERVER);
+    let mut direct = None;
+    for _ in 0..200 {
+        if let Some(median) = tracker.direct_p50_ms() {
+            direct = Some(median);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert_eq!(
-        installed.relayed_p50_ms(),
-        None,
-        "disabled telemetry must not record a relayed RTT"
+        direct,
+        Some(50.0),
+        "direct ICMP measurement must run without telemetry"
     );
 
-    lightspeed_client::telemetry::set_enabled(true);
-    installed.note_outbound(server);
+    // Relayed RTT: the inbound hook must still record.
+    tracker.note_outbound(SERVER);
     clock.advance(Duration::from_millis(20));
-    latency::record_inbound(server);
+    latency::record_inbound(SERVER);
     assert_eq!(
-        installed.relayed_p50_ms(),
+        tracker.relayed_p50_ms(),
         Some(20.0),
-        "enabled telemetry records the relayed RTT"
+        "relayed measurement must run without telemetry"
+    );
+
+    // Shadow direct: the sampler must still claim a slot and record.
+    assert!(
+        latency::record_shadow_outbound(SERVER),
+        "shadow sampling must be due without telemetry"
+    );
+    clock.advance(Duration::from_millis(15));
+    latency::record_shadow_inbound(SERVER);
+    assert_eq!(
+        tracker.shadow_direct_p50_ms(),
+        Some(15.0),
+        "shadow direct measurement must run without telemetry"
+    );
+
+    assert!(
+        !telemetry::is_enabled(),
+        "local measurement must never turn reporting on"
+    );
+}
+
+/// Given: telemetry reporting is disabled. When: a flush is attempted with a
+/// sample buffered. Then: flush refuses before building a report or opening a
+/// connection, so nothing is sent.
+#[tokio::test]
+async fn no_report_is_sent_with_telemetry_disabled() {
+    let collector = TelemetryCollector::new();
+    collector.record_rtt(42.0).await;
+
+    telemetry::set_enabled(false);
+    let outcome = collector.flush("127.0.0.1", 0, "").await;
+
+    assert_eq!(
+        outcome,
+        FlushOutcome::Disabled,
+        "a disabled client must not build or send a telemetry report"
     );
 }

@@ -317,6 +317,12 @@ async fn run_capture_mode_inner(
 
     // Shared tunnel socket for outbound capture and inbound injection
     let tunnel_socket = Arc::new(tokio::net::UdpSocket::bind("0.0.0.0:0").await?);
+    if let Err(e) = crate::tunnel::transport::set_dont_fragment(&tunnel_socket) {
+        tracing::warn!("Capture mode: could not set don't-fragment on tunnel socket: {e}");
+    }
+    if let Err(e) = crate::tunnel::qos::apply(&tunnel_socket) {
+        tracing::warn!("Capture mode: could not set DSCP on tunnel socket: {e}");
+    }
 
     // Create packet injector for bidirectional response delivery
     #[cfg(feature = "pcap-capture")]
@@ -367,7 +373,7 @@ async fn run_capture_mode_inner(
     // Shared outbound counters
     let outbound_packets = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let outbound_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let over_budget_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let over_budget_forwarded = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let start_time = std::time::Instant::now();
 
     // Fill the engine's stat slot so it can poll live counters via snapshot().
@@ -557,7 +563,7 @@ async fn run_capture_mode_inner(
     let stats_handle = {
         let out_pkts = Arc::clone(&outbound_packets);
         let out_bytes = Arc::clone(&outbound_bytes);
-        let over_budget = Arc::clone(&over_budget_dropped);
+        let over_budget = Arc::clone(&over_budget_forwarded);
         let inj_stats = Arc::clone(&injector_stats);
         let running = Arc::clone(&running);
         tokio::spawn(async move {
@@ -571,18 +577,18 @@ async fn run_capture_mode_inner(
                 let from_proxy = inj_stats.packets_from_proxy.load(Ordering::Relaxed);
                 let recovered = inj_stats.fec_recovered.load(Ordering::Relaxed);
                 let errors = inj_stats.inject_errors.load(Ordering::Relaxed);
-                let dropped = over_budget.load(Ordering::Relaxed);
+                let forwarded = over_budget.load(Ordering::Relaxed);
 
                 if cap > 0 || from_proxy > 0 {
                     if fec_enabled {
                         info!(
-                            "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | FEC recovered: {} | Errors: {} | Over-budget dropped: {}",
-                            cap, cap_b, from_proxy, inj, inj_b, recovered, errors, dropped
+                            "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | FEC recovered: {} | Errors: {} | Over-budget forwarded: {}",
+                            cap, cap_b, from_proxy, inj, inj_b, recovered, errors, forwarded
                         );
                     } else {
                         info!(
-                            "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | Errors: {} | Over-budget dropped: {}",
-                            cap, cap_b, from_proxy, inj, inj_b, errors, dropped
+                            "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | Errors: {} | Over-budget forwarded: {}",
+                            cap, cap_b, from_proxy, inj, inj_b, errors, forwarded
                         );
                     }
                 }
@@ -631,13 +637,12 @@ async fn run_capture_mode_inner(
                     budget,
                 } = crate::tunnel::budget::classify(pkt.payload.len(), fec_encoder.is_some())
                 {
-                    over_budget_dropped.fetch_add(1, Ordering::Relaxed);
+                    over_budget_forwarded.fetch_add(1, Ordering::Relaxed);
                     tracing::warn!(
                         payload_len = payload_len,
                         budget = budget,
-                        "Capture mode: dropped game payload over the conservative tunnel MTU budget"
+                        "Capture mode: forwarding oversized game payload; the kernel may fragment it"
                     );
-                    continue;
                 }
 
                 if let Some(ref mut encoder) = fec_encoder {
@@ -650,7 +655,12 @@ async fn run_capture_mode_inner(
                     let pkt_buf = build_fec_data_packet(&header, &fec_hdr, &pkt.payload);
                     let parity = encoder.add_packet(&pkt.payload);
                     crate::latency::record_outbound(*pkt.dst.ip());
-                    let _ = tunnel_socket.send_to(&pkt_buf, proxy_addr).await;
+                    let _ = crate::tunnel::transport::send_datagram(
+                        &tunnel_socket,
+                        &pkt_buf,
+                        proxy_addr,
+                    )
+                    .await;
 
                     if let Some(parity_bytes) = parity {
                         let parity_seq = seq.wrapping_add(1);
@@ -661,7 +671,12 @@ async fn run_capture_mode_inner(
                         let parity_fec = FecHeader::parity(block_id, fec_k);
                         let parity_buf =
                             build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
-                        let _ = tunnel_socket.send_to(&parity_buf, proxy_addr).await;
+                        let _ = crate::tunnel::transport::send_datagram(
+                            &tunnel_socket,
+                            &parity_buf,
+                            proxy_addr,
+                        )
+                        .await;
                         seq = seq.wrapping_add(1);
                     }
                 } else {
@@ -670,7 +685,12 @@ async fn run_capture_mode_inner(
                         .with_session_token(crate::session::session_token());
                     let packet = header.encode_with_payload(&pkt.payload);
                     crate::latency::record_outbound(*pkt.dst.ip());
-                    let _ = tunnel_socket.send_to(&packet, proxy_addr).await;
+                    let _ = crate::tunnel::transport::send_datagram(
+                        &tunnel_socket,
+                        &packet,
+                        proxy_addr,
+                    )
+                    .await;
                 }
 
                 tracing::trace!(
@@ -703,7 +723,7 @@ async fn run_capture_mode_inner(
     let elapsed = start_time.elapsed();
     let out_total = outbound_packets.load(Ordering::Relaxed);
     let out_bytes_total = outbound_bytes.load(Ordering::Relaxed);
-    let over_budget_total = over_budget_dropped.load(Ordering::Relaxed);
+    let over_budget_total = over_budget_forwarded.load(Ordering::Relaxed);
     let inj_total = injector_stats.packets_injected.load(Ordering::Relaxed);
     let inj_bytes_total = injector_stats.bytes_injected.load(Ordering::Relaxed);
     let from_proxy_total = injector_stats.packets_from_proxy.load(Ordering::Relaxed);
@@ -718,7 +738,10 @@ async fn run_capture_mode_inner(
         "   Captured:        {} packets, {} bytes",
         out_total, out_bytes_total
     );
-    info!("   Over-budget dropped: {} packets", over_budget_total);
+    info!(
+        "   Over-budget forwarded (may fragment): {} packets",
+        over_budget_total
+    );
     if elapsed.as_secs() > 0 && out_total > 0 {
         info!(
             "   Avg PPS:         {:.0}",

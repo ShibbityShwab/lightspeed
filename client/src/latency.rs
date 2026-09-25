@@ -11,12 +11,34 @@
 //! directly comparable, unlike the ICMP-based `direct_p50_ms`, which stays as
 //! the estimate.
 //!
-//! The direct prober is strictly gated on telemetry: the process-wide tracker
-//! is installed by `telemetry::install`, and probing only runs while telemetry
-//! is enabled, so opting out (`--no-telemetry`) sends no ICMP probes.
+//! ## Measurement vs. reporting
+//!
+//! Local measurement is **independent of telemetry reporting**. Installing the
+//! process-wide tracker ([`install_measurement`], or `telemetry::install` on
+//! the reporting path) declares that a feature needing measurement (the
+//! interceptor or tunnel) is running; from then on the hooks below record. The
+//! telemetry enable flag only governs the **reporting** side: while it is off,
+//! measurements stay entirely local and no report is built or sent (enforced in
+//! `telemetry::TelemetryCollector::flush`).
+//!
+//! This split is deliberate. The direct, relayed, and shadow-direct samples
+//! feed local routing and a do-no-harm bypass gate, so they must not be
+//! silently disabled by opting out of reporting. Nothing measured here reaches
+//! the relay until telemetry is enabled.
+//!
+//! ### Shadow-direct is an explicit, documented exception
+//!
+//! The shadow-direct sampler re-injects a copy of the game's own packet onto
+//! the direct path. That is extra traffic on the game-server connection even
+//! when telemetry is off, so it is an explicit decision rather than a side
+//! effect: it runs whenever the interceptor is running, is rate-limited to one
+//! packet per server per [`SHADOW_SAMPLE_INTERVAL`], and, because the hook is
+//! only invoked from the interceptor, never fires when the interceptor is
+//! stopped. Its samples are not reported unless telemetry is on.
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -288,7 +310,10 @@ impl Inner {
     }
 }
 
-/// Opt-in direct + relayed latency tracker.
+/// Direct, relayed, and shadow-direct latency tracker.
+///
+/// Local measurement is independent of telemetry reporting; see the module
+/// docs. The tracker stores samples only; nothing here sends them anywhere.
 pub struct LatencyTracker {
     prober: Arc<dyn IcmpProber>,
     clock: Arc<dyn Clock>,
@@ -502,21 +527,56 @@ impl Default for LatencyTracker {
 
 static GLOBAL: OnceLock<Arc<LatencyTracker>> = OnceLock::new();
 
-/// Install the process-wide tracker. Idempotent: the first call wins.
-pub fn install_global(tracker: Arc<LatencyTracker>) {
-    let _ = GLOBAL.set(tracker);
+/// Process-wide gate for whether local latency measurement is running.
+///
+/// This is separate from [`crate::telemetry::is_enabled`], which governs
+/// **reporting**. Measurement feeds local routing and a do-no-harm bypass gate,
+/// so it runs whenever a feature that needs it (the interceptor/tunnel) is
+/// active, regardless of whether telemetry is opted in.
+static MEASURING: AtomicBool = AtomicBool::new(false);
+
+/// Whether local latency measurement is currently active.
+pub fn is_measuring() -> bool {
+    MEASURING.load(Ordering::Relaxed)
 }
 
-/// The installed tracker, or `None` when telemetry was never installed.
+/// Enable or disable local latency measurement. Never touches telemetry.
+pub fn set_measuring(measuring: bool) {
+    MEASURING.store(measuring, Ordering::Relaxed);
+}
+
+/// Install the process-wide tracker. Idempotent: the first call wins.
+///
+/// Installing a tracker means a measurement feature is active, so this also
+/// enables measurement. It does **not** enable telemetry reporting.
+pub fn install_global(tracker: Arc<LatencyTracker>) {
+    let _ = GLOBAL.set(tracker);
+    set_measuring(true);
+}
+
+/// Declare that a feature needs local measurement and install the process-wide
+/// tracker if it is not already present. Idempotent, and independent of
+/// telemetry: call this from every tunnel/interceptor start path.
+pub fn install_measurement() {
+    if global().is_none() {
+        install_global(Arc::new(LatencyTracker::default()));
+    }
+    set_measuring(true);
+}
+
+/// The installed tracker, or `None` when measurement was never installed.
 pub fn global() -> Option<&'static Arc<LatencyTracker>> {
     GLOBAL.get()
 }
 
 /// T0 hook: call when an outbound game packet is tunnelled to the relay. Kicks
-/// a rate-limited direct burst onto a blocking thread. No-op when telemetry is
-/// disabled, so no ICMP probes leave the machine while opted out.
+/// a rate-limited direct burst onto a blocking thread.
+///
+/// Gated on local measurement ([`is_measuring`]), not on telemetry: a muted
+/// client still measures locally. The burst's result is not reported anywhere.
 pub fn record_outbound(server: Ipv4Addr) {
-    if !crate::telemetry::is_enabled() {
+    crate::route::destination::note_outbound(server);
+    if !is_measuring() {
         return;
     }
     let Some(tracker) = global() else {
@@ -534,9 +594,11 @@ pub fn record_outbound(server: Ipv4Addr) {
 }
 
 /// T1 hook: call when the first relayed response for `server` is decoded.
-/// No-op when telemetry is disabled, so a muted client records nothing.
+/// Gated on local measurement, not on telemetry, so a muted client still
+/// records the relayed RTT it needs for local decisions.
 pub fn record_inbound(server: Ipv4Addr) {
-    if !crate::telemetry::is_enabled() {
+    crate::route::destination::note_inbound(server);
+    if !is_measuring() {
         return;
     }
     if let Some(tracker) = global() {
@@ -546,10 +608,17 @@ pub fn record_inbound(server: Ipv4Addr) {
 
 /// Shadow-direct hook: ask whether a sample is due for `server`. The caller
 /// re-injects the game's own packet unchanged on the direct path (never a
-/// synthetic packet). Returns `false` when telemetry is disabled, so opting
-/// out sends nothing.
+/// synthetic packet).
+///
+/// **Explicit decision:** this is local measurement, so it runs whenever the
+/// interceptor is running, even with `--no-telemetry`. The re-injected packet
+/// goes only to the game server, unchanged, at most once per server per
+/// [`SHADOW_SAMPLE_INTERVAL`], and never to the relay; the sample is not
+/// reported unless telemetry is on. Because the hook is only called from the
+/// interceptor, it does not fire while the interceptor is stopped. Returns
+/// `false` when measurement is not active.
 pub fn record_shadow_outbound(server: Ipv4Addr) -> bool {
-    if !crate::telemetry::is_enabled() {
+    if !is_measuring() {
         return false;
     }
     match global() {
@@ -558,10 +627,10 @@ pub fn record_shadow_outbound(server: Ipv4Addr) -> bool {
     }
 }
 
-/// Shadow-direct hook: record the server's reply to a sampled packet. No-op
-/// when telemetry is disabled.
+/// Shadow-direct hook: record the server's reply to a sampled packet. Gated on
+/// local measurement, not on telemetry.
 pub fn record_shadow_inbound(server: Ipv4Addr) {
-    if !crate::telemetry::is_enabled() {
+    if !is_measuring() {
         return;
     }
     if let Some(tracker) = global() {
@@ -570,12 +639,16 @@ pub fn record_shadow_inbound(server: Ipv4Addr) {
 }
 
 /// Median direct application RTT for the next telemetry report; `None` when no
-/// fresh shadow sample exists or telemetry is off.
+/// fresh shadow sample exists.
+///
+/// Reads local measurement only. Whether a report is allowed to use it is
+/// decided by the reporting gate in `telemetry::TelemetryCollector::flush`.
 pub fn shadow_direct_p50_ms() -> Option<f32> {
     global().and_then(|tracker| tracker.shadow_direct_p50_ms())
 }
 
-/// Values for the next telemetry report; `(None, None)` when telemetry is off.
+/// Values for the next telemetry report; `(None, None)` when no tracker is
+/// installed. Reads local measurement; this is not the reporting gate.
 pub fn report_values() -> (Option<f32>, Option<f32>) {
     match global() {
         Some(tracker) => tracker.take_report_values(),
@@ -584,7 +657,7 @@ pub fn report_values() -> (Option<f32>, Option<f32>) {
 }
 
 /// Values for the next telemetry report without draining the relayed window;
-/// `(None, None)` when telemetry is off.
+/// `(None, None)` when no tracker is installed.
 pub fn peek_report_values() -> (Option<f32>, Option<f32>) {
     match global() {
         Some(tracker) => tracker.peek_report_values(),

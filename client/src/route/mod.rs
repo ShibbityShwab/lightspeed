@@ -6,6 +6,7 @@
 //! - **ML**: AI-powered route prediction using linfa
 //! - **Multipath**: Send on multiple paths, use fastest arrival (planned — engine not yet implemented)
 
+pub mod destination;
 pub mod failover;
 pub mod multipath;
 pub mod selector;
@@ -64,6 +65,9 @@ pub struct SelectedRoute {
 pub enum RouteStrategy {
     /// Nearest healthy proxy by latency.
     Nearest,
+    /// Lowest estimated client-to-relay plus relay-to-destination path, using
+    /// the destination estimator (falls back to nearest without a signal).
+    DestinationAware,
     /// ML-predicted optimal route.
     MlPredicted,
     /// Multipath — use multiple proxies simultaneously (not yet implemented).

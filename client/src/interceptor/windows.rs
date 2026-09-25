@@ -3,7 +3,7 @@
 //! This is the gold-standard implementation on Windows.  WinDivert is a signed
 //! NDIS lightweight filter driver that holds each matching packet in the
 //! kernel until userspace either re-injects or drops it — identical in
-//! principle to how ExitLag / WTFast / NoPing operate.
+//! principle to how other packet-capture tools operate.
 //!
 //! ## Improvements over legacy `windivert_redirect.rs`
 //!
@@ -721,9 +721,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 tracing::warn!(
                                     payload_len = payload_len,
                                     budget = budget,
-                                    "WinDivert interceptor: dropped game payload over the conservative tunnel MTU budget"
+                                    "WinDivert interceptor: forwarding oversized game payload; the kernel may fragment it"
                                 );
-                                continue;
                             }
 
                             if let Some(ref mut enc) = fec_encoder {
@@ -738,7 +737,12 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 buf2.extend_from_slice(&payload);
                                 let parity = enc.add_packet(&payload);
                                 crate::latency::record_outbound(*game_dst.ip());
-                                let _ = tunnel_socket.send_to(&buf2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                                let _ = crate::tunnel::transport::send_datagram(
+                                    &tunnel_socket,
+                                    &buf2,
+                                    crate::session::current_proxy().unwrap_or(config_proxy),
+                                )
+                                .await;
                                 if let Some(pb) = parity {
                                     let ps = seq.wrapping_add(1);
                                     let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, game_src, game_dst)
@@ -748,7 +752,12 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     pb2.extend_from_slice(&ph.encode_to_array());
                                     pf.encode(&mut pb2);
                                     pb2.extend_from_slice(&pb);
-                                    let _ = tunnel_socket.send_to(&pb2, crate::session::current_proxy().unwrap_or(config_proxy)).await;
+                                    let _ = crate::tunnel::transport::send_datagram(
+                                        &tunnel_socket,
+                                        &pb2,
+                                        crate::session::current_proxy().unwrap_or(config_proxy),
+                                    )
+                                    .await;
                                     seq = seq.wrapping_add(1);
                                 }
                             } else {
@@ -758,7 +767,12 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 crate::latency::record_outbound(*game_dst.ip());
                                 let (dests, n) = crate::session::send_destinations(config_proxy);
                                 for d in dests.iter().take(n) {
-                                    let _ = tunnel_socket.send_to(&pkt, *d).await;
+                                    let _ = crate::tunnel::transport::send_datagram(
+                                        &tunnel_socket,
+                                        &pkt,
+                                        *d,
+                                    )
+                                    .await;
                                 }
                             }
                             seq = seq.wrapping_add(1);

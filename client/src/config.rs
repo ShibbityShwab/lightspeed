@@ -75,6 +75,15 @@ pub struct TunnelConfig {
     /// Transport for the client→proxy leg: "udp" (default) or "tcp".
     #[serde(default = "default_transport")]
     pub transport: String,
+
+    /// Mark tunnel packets with DSCP Expedited Forwarding (EF, 46).
+    ///
+    /// **Off by default.** Only a player's own router or ISP can act on this,
+    /// every later hop may ignore or reclassify it, and stamping EF on traffic
+    /// without the network's consent can be policed. Enable with `--dscp`.
+    /// Ignored on Windows, where marking requires the QWAVE/QoS2 API.
+    #[serde(default)]
+    pub dscp: bool,
 }
 
 /// Proxy connection settings.
@@ -228,6 +237,7 @@ impl Default for TunnelConfig {
             timeout_ms: default_timeout_ms(),
             mtu: default_mtu(),
             transport: default_transport(),
+            dscp: false,
         }
     }
 }
@@ -307,6 +317,7 @@ mod tests {
         assert_eq!(config.tunnel.keepalive_ms, 5000);
         assert_eq!(config.tunnel.timeout_ms, 10000);
         assert_eq!(config.tunnel.mtu, 1400);
+        assert!(!config.tunnel.dscp);
         assert!(config.proxy.servers.is_empty());
         assert_eq!(config.proxy.quic_port, 4433);
         assert_eq!(config.proxy.data_port, 4434);
@@ -331,6 +342,7 @@ mod tests {
         assert_eq!(tunnel.keepalive_ms, 5000);
         assert_eq!(tunnel.timeout_ms, 10000);
         assert_eq!(tunnel.mtu, 1400);
+        assert!(!tunnel.dscp);
 
         let proxy = ProxyConfig::default();
         assert!(proxy.servers.is_empty());
@@ -353,6 +365,15 @@ mod tests {
     }
 
     // ── TOML round-trip tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_dscp_defaults_off_and_can_be_enabled() {
+        let defaulted: Config = toml::from_str("[tunnel]\nkeepalive_ms = 5000\n").unwrap();
+        assert!(!defaulted.tunnel.dscp, "DSCP marking must be opt-in");
+
+        let opted_in: Config = toml::from_str("[tunnel]\ndscp = true\n").unwrap();
+        assert!(opted_in.tunnel.dscp);
+    }
 
     #[test]
     fn test_telemetry_defaults_on_and_can_be_disabled() {

@@ -31,7 +31,7 @@
 //!
 //! # Anti-cheat compatibility
 //! Rust/EAC, CS2/VAC, and Valorant/Vanguard all permit WinDivert-style
-//! network drivers in the same way that ExitLag, WTFast, and NoPing work.
+//! network drivers in the same way other packet-capture tools do.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::AtomicU64;
@@ -146,7 +146,7 @@ pub struct WinDivertConfig {
     ///
     /// `Some(addr)` — specific server mode (filter targets exactly this IP:port).
     /// `None`       — auto-detect mode (broad port-range filter; server IP is learned
-    ///                from the first intercepted outbound packet, ExitLag-style).
+    ///                from the first intercepted outbound packet).
     pub server_addr: Option<SocketAddrV4>,
     /// UDP port range used in the WinDivert filter.
     ///

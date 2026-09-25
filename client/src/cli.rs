@@ -47,7 +47,7 @@ pub struct Cli {
 
     /// Enable Forward Error Correction (FEC) for packet loss recovery.
     /// Adds ~25% bandwidth overhead but can recover any single lost packet
-    /// per block of K. Much more efficient than ExitLag's packet duplication.
+    /// per block of K. Recovery does not need a retransmission round trip.
     #[arg(long, default_value_t = false)]
     pub fec: bool,
 
@@ -59,6 +59,11 @@ pub struct Cli {
     /// Use TCP for the client→proxy leg of the tunnel (UDP-restricted networks).
     #[arg(long, default_value_t = false)]
     pub tcp: bool,
+
+    /// Mark tunnel packets with DSCP EF (46) so the local router/ISP may
+    /// prioritise them. Opt-in; ignored on Windows.
+    #[arg(long, default_value_t = false)]
+    pub dscp: bool,
 
     /// Enable Cloudflare WARP for improved routing (5-10ms savings).
     /// Automatically connects WARP on startup and restores on shutdown.
@@ -226,6 +231,8 @@ mod tests {
         assert!(!cli.test_control);
         assert!(!cli.fec);
         assert_eq!(cli.fec_k, 4);
+        assert!(!cli.tcp);
+        assert!(!cli.dscp);
         assert!(!cli.warp);
         assert!(!cli.no_warp);
         assert!(!cli.warp_status);
@@ -254,6 +261,12 @@ mod tests {
         assert!(cli.interception_mode.is_none());
         assert!(cli.echo_server.is_none());
         assert!(cli.interface.is_none());
+    }
+
+    #[test]
+    fn test_dscp_flag_is_opt_in() {
+        let cli = Cli::try_parse_from(["lightspeed", "--dscp"]).unwrap();
+        assert!(cli.dscp);
     }
 
     #[test]

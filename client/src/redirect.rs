@@ -18,7 +18,7 @@
 //! When FEC is enabled, packets are grouped into blocks of K. For each block,
 //! an XOR parity packet is generated and sent alongside data. If any single
 //! packet in a block is lost in transit, it can be recovered from the parity.
-//! This adds ~25% bandwidth overhead (K=4) vs ExitLag's 200-300%.
+//! This adds ~25% bandwidth overhead at the default K=4.
 //!
 //! ## Usage
 //!
@@ -63,7 +63,8 @@ pub struct RedirectStats {
     pub errors: AtomicU64,
     pub fec_parity_sent: AtomicU64,
     pub fec_recovered: AtomicU64,
-    /// Game payloads dropped for exceeding the conservative tunnel budget.
+    /// Game payloads forwarded with fragmentation allowed for exceeding the
+    /// conservative tunnel budget.
     pub payloads_over_budget: AtomicU64,
 }
 
@@ -246,9 +247,8 @@ impl UdpRedirect {
                         warn!(
                             payload_len = payload_len,
                             budget = budget,
-                            "Dropped game payload over the conservative tunnel MTU budget"
+                            "Forwarding oversized game payload; the kernel may fragment it"
                         );
-                        continue;
                     }
 
                     // Remember the game client's address
@@ -280,7 +280,12 @@ impl UdpRedirect {
                         let parity = encoder.add_packet(payload);
 
                         crate::latency::record_outbound(*game_server.ip());
-                        match tunnel_sender.send(&pkt_buf).await {
+                        let send_result = if budget::datagram_fits(pkt_buf.len()) {
+                            tunnel_sender.send(&pkt_buf).await
+                        } else {
+                            tunnel_sender.send_may_fragment(&pkt_buf).await
+                        };
+                        match send_result {
                             Ok(sent) => {
                                 stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
                                 stats
@@ -308,7 +313,12 @@ impl UdpRedirect {
                             let parity_buf =
                                 build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
 
-                            match tunnel_sender.send(&parity_buf).await {
+                            let parity_result = if budget::datagram_fits(parity_buf.len()) {
+                                tunnel_sender.send(&parity_buf).await
+                            } else {
+                                tunnel_sender.send_may_fragment(&parity_buf).await
+                            };
+                            match parity_result {
                                 Ok(sent) => {
                                     stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
                                     stats
@@ -330,7 +340,12 @@ impl UdpRedirect {
                         let packet = header.encode_with_payload(payload);
 
                         crate::latency::record_outbound(*game_server.ip());
-                        match tunnel_sender.send(&packet).await {
+                        let send_result = if budget::datagram_fits(packet.len()) {
+                            tunnel_sender.send(&packet).await
+                        } else {
+                            tunnel_sender.send_may_fragment(&packet).await
+                        };
+                        match send_result {
                             Ok(sent) => {
                                 stats.packets_to_proxy.fetch_add(1, Ordering::Relaxed);
                                 stats
@@ -500,12 +515,12 @@ impl UdpRedirect {
                             let parity = stats.fec_parity_sent.load(Ordering::Relaxed);
                             let recovered = stats.fec_recovered.load(Ordering::Relaxed);
                             info!(
-                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | FEC: {} parity sent, {} recovered | Errors: {} | Over-budget dropped: {}",
+                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | FEC: {} parity sent, {} recovered | Errors: {} | Over-budget forwarded: {}",
                                 to_proxy, bytes_out, to_game, bytes_in, parity, recovered, errors, over_budget
                             );
                         } else {
                             info!(
-                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | Errors: {} | Over-budget dropped: {}",
+                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | Errors: {} | Over-budget forwarded: {}",
                                 to_proxy, bytes_out, to_game, bytes_in, errors, over_budget
                             );
                         }

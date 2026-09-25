@@ -187,7 +187,8 @@ pub async fn run_keepalive_mode(
     // ── Final telemetry flush ─────────────────────────────────────
     if let Some(ref tc) = telemetry {
         let proxy_host = format!("{}:{}", proxy_addr.ip(), 8080);
-        tc.flush(&proxy_host, telemetry_ctx.game_id, &telemetry_ctx.country)
+        let _ = tc
+            .flush(&proxy_host, telemetry_ctx.game_id, &telemetry_ctx.country)
             .await;
         info!("📡 Telemetry flushed");
     }

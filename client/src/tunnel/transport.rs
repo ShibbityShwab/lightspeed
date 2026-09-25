@@ -20,9 +20,14 @@ use lightspeed_protocol::framing::{read_frame, write_frame};
 /// With DF set, a datagram larger than the path MTU is rejected with
 /// `EMSGSIZE` (surfaced as a send error) instead of being fragmented on the
 /// wire. Linux uses `IP_MTU_DISCOVER = IP_PMTUDISC_DO`; macOS uses
-/// `IP_DONTFRAG`; Windows UDP sockets already default to DF=1 since Vista, so
-/// no call is made there. A failure to set the flag is non-fatal: the payload
-/// budget is the primary guarantee and DF is defence in depth.
+/// `IP_DONTFRAG`; Windows sets `IP_DONTFRAGMENT` to TRUE. A failure to set the
+/// flag is non-fatal: the payload budget is the primary guarantee and DF is
+/// defence in depth.
+///
+/// This is the default policy for every tunnel socket. The one exception is a
+/// payload over the conservative budget, which is sent with DF temporarily
+/// cleared (see [`set_fragment_allowed`] and [`FragmentAllowed`]) so the kernel
+/// may fragment it rather than lose it.
 pub fn set_dont_fragment(socket: &UdpSocket) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -32,10 +37,85 @@ pub fn set_dont_fragment(socket: &UdpSocket) -> io::Result<()> {
     {
         macos_set_dont_fragment(socket)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        windows_set_dontfragment(socket, true)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = socket;
         Ok(())
+    }
+}
+
+/// Allow the kernel to fragment datagrams sent on a tunnel UDP socket.
+///
+/// Linux uses `IP_MTU_DISCOVER = IP_PMTUDISC_DONT`; macOS clears `IP_DONTFRAG`;
+/// Windows clears `IP_DONTFRAGMENT`. This is used only around the rare
+/// oversized payload so the conservative no-fragment guarantee stays intact
+/// for payloads that fit.
+pub fn set_fragment_allowed(socket: &UdpSocket) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        linux_set_fragment_allowed(socket)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_set_fragment_allowed(socket)
+    }
+    #[cfg(windows)]
+    {
+        windows_set_dontfragment(socket, false)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = socket;
+        Ok(())
+    }
+}
+
+/// Allow kernel fragmentation on a tunnel UDP socket until the guard drops,
+/// then restore don't-fragment.
+///
+/// Only used for a payload over the conservative budget. Game-payload sends on
+/// one data plane are sequential, so clearing the bit cannot race another
+/// game-payload send; the keepalive task shares the socket but only emits
+/// small control packets that never approach the MTU.
+pub struct FragmentAllowed<'a> {
+    socket: &'a UdpSocket,
+}
+
+impl<'a> FragmentAllowed<'a> {
+    /// Clear don't-fragment on `socket` until the guard is dropped.
+    pub fn new(socket: &'a UdpSocket) -> io::Result<Self> {
+        set_fragment_allowed(socket)?;
+        Ok(Self { socket })
+    }
+}
+
+impl Drop for FragmentAllowed<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = set_dont_fragment(self.socket) {
+            tracing::warn!("Could not restore don't-fragment on tunnel socket: {e}");
+        }
+    }
+}
+
+/// Send one already-encoded tunnel datagram, allowing the local kernel to
+/// fragment it when it exceeds the conservative clamp.
+///
+/// Datagrams that fit keep the socket's don't-fragment guarantee. Used by the
+/// interceptor backends and capture mode, which send on a raw socket.
+pub async fn send_datagram(
+    socket: &UdpSocket,
+    packet: &[u8],
+    addr: SocketAddrV4,
+) -> io::Result<usize> {
+    if crate::tunnel::budget::datagram_fits(packet.len()) {
+        socket.send_to(packet, addr).await
+    } else {
+        let _allow = FragmentAllowed::new(socket)?;
+        socket.send_to(packet, addr).await
     }
 }
 
@@ -44,6 +124,28 @@ fn linux_set_dont_fragment(socket: &UdpSocket) -> io::Result<()> {
     use std::os::fd::AsRawFd;
 
     let value: libc::c_int = libc::IP_PMTUDISC_DO;
+    // SAFETY: `socket` owns a live fd for the duration of the call, and the
+    // value plus its size match IP_MTU_DISCOVER's documented `c_int` payload.
+    let rc = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::IPPROTO_IP,
+            libc::IP_MTU_DISCOVER,
+            std::ptr::addr_of!(value).cast::<libc::c_void>(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_set_fragment_allowed(socket: &UdpSocket) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let value: libc::c_int = libc::IP_PMTUDISC_DONT;
     // SAFETY: `socket` owns a live fd for the duration of the call, and the
     // value plus its size match IP_MTU_DISCOVER's documented `c_int` payload.
     let rc = unsafe {
@@ -96,6 +198,78 @@ fn macos_set_dont_fragment(socket: &UdpSocket) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn macos_set_fragment_allowed(socket: &UdpSocket) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::raw::{c_int, c_uint, c_void};
+
+    extern "C" {
+        fn setsockopt(
+            fd: c_int,
+            level: c_int,
+            optname: c_int,
+            optval: *const c_void,
+            optlen: c_uint,
+        ) -> c_int;
+    }
+
+    const IPPROTO_IP: c_int = 0;
+    const IP_DONTFRAG: c_int = 28;
+    let value: c_int = 0;
+    // SAFETY: `socket` owns a live fd for the duration of the call, and the
+    // value plus its size match IP_DONTFRAG's documented `c_int` payload.
+    let rc = unsafe {
+        setsockopt(
+            socket.as_raw_fd(),
+            IPPROTO_IP,
+            IP_DONTFRAG,
+            std::ptr::addr_of!(value).cast::<c_void>(),
+            std::mem::size_of::<c_int>() as c_uint,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Windows has defaulted UDP sockets to don't-fragment (DF) since Vista, and
+/// exposes `IP_DONTFRAGMENT` as a `DWORD`-valued socket option. Clearing it
+/// lets the stack fragment an oversized datagram; setting it restores the
+/// conservative default.
+///
+/// NOTE: this branch is not built or exercised on the Linux/macOS build hosts,
+/// so it is the one platform edit that remains unverified.
+#[cfg(windows)]
+fn windows_set_dontfragment(socket: &UdpSocket, enabled: bool) -> io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+
+    const IPPROTO_IP: i32 = 0;
+    const IP_DONTFRAGMENT: i32 = 14;
+
+    #[link(name = "ws2_32")]
+    extern "system" {
+        fn setsockopt(s: usize, level: i32, optname: i32, optval: *const u8, optlen: i32) -> i32;
+    }
+
+    let value: u32 = u32::from(enabled);
+    // SAFETY: `socket` owns a live SOCKET for the duration of the call, and
+    // IP_DONTFRAGMENT takes a DWORD payload whose size we pass explicitly.
+    let rc = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as usize,
+            IPPROTO_IP,
+            IP_DONTFRAGMENT,
+            std::ptr::addr_of!(value).cast::<u8>(),
+            std::mem::size_of::<u32>() as i32,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Transport for the client↔proxy leg of the tunnel.
 pub enum TunnelTransport {
     Udp {
@@ -115,6 +289,9 @@ impl TunnelTransport {
         let socket = UdpSocket::bind(local).await?;
         if let Err(e) = set_dont_fragment(&socket) {
             tracing::warn!("Could not set don't-fragment on tunnel UDP socket: {e}");
+        }
+        if let Err(e) = crate::tunnel::qos::apply(&socket) {
+            tracing::warn!("Could not set DSCP on tunnel UDP socket: {e}");
         }
         Ok(Self::Udp {
             socket: Arc::new(socket),
@@ -174,6 +351,22 @@ impl TunnelTransport {
                 write_frame(&mut *guard, bytes).await?;
                 Ok(bytes.len())
             }
+        }
+    }
+
+    /// Send `bytes` to the proxy, allowing the local kernel to fragment this
+    /// datagram.
+    ///
+    /// Only used for a payload over the conservative budget: the socket's
+    /// don't-fragment bit is cleared for the send and restored afterwards, so
+    /// payloads that fit keep the no-fragment guarantee.
+    pub async fn send_may_fragment(&self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Udp { socket, proxy } => {
+                let _allow = FragmentAllowed::new(socket)?;
+                socket.send_to(bytes, *proxy).await
+            }
+            Self::Tcp { .. } => self.send(bytes).await,
         }
     }
 
@@ -238,6 +431,20 @@ impl TunnelSender {
                 write_frame(&mut *guard, bytes).await?;
                 Ok(bytes.len())
             }
+        }
+    }
+
+    /// Send `bytes` to the proxy, allowing the local kernel to fragment this
+    /// datagram. Counterpart to [`TunnelTransport::send_may_fragment`], used
+    /// only for a payload over the conservative budget.
+    pub async fn send_may_fragment(&self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Udp(socket, proxy) => {
+                let _allow = FragmentAllowed::new(socket)?;
+                let proxy = *proxy.read().unwrap();
+                socket.send_to(bytes, proxy).await
+            }
+            Self::Tcp(_) => self.send(bytes).await,
         }
     }
 
