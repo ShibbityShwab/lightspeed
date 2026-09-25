@@ -6,7 +6,8 @@
 //!
 //! All metrics are designed for free-tier monitoring (no external services needed).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -46,12 +47,65 @@ const MAX_UPSTREAM_LAG_US: u64 = 2_000_000;
 /// Reports that would create a cell past this cap are counted as rejected.
 pub const MAX_TELEMETRY_CELLS: usize = 1024;
 
-/// Minimum number of reports a cell must hold before it is emitted.
+/// Minimum number of report observations a per-path or geo cell must hold
+/// before it is emitted.
 ///
-/// This is a k-anonymity floor: emitting a cell backed by one or two reports
-/// could correlate a small population back to an individual client, so such
-/// cells are withheld until the population is large enough.
+/// This is a k-anonymity floor for the aggregators that have no source address
+/// to key on (`RouteTelemetryAggregator`, `GeoAggregator`): emitting a cell
+/// backed by one or two observations could correlate a small population back
+/// to an individual client, so such cells are withheld until the population is
+/// large enough. The flat client telemetry cell instead floors on distinct
+/// source IPs, see [`MIN_TELEMETRY_CELL_SOURCE_IPS`].
 pub const MIN_TELEMETRY_CELL_REPORTS: u64 = 3;
+
+/// Minimum number of distinct source IPs a client telemetry cell must have
+/// seen before it is emitted.
+///
+/// Distinct sources are the real k-anonymity floor for client-submitted
+/// reports: a single client can inflate [`MIN_TELEMETRY_CELL_REPORTS`] by
+/// flushing repeatedly, but it cannot manufacture distinct source addresses.
+/// Matches the report floor value so the published k = 3 promise is unchanged.
+pub const MIN_TELEMETRY_CELL_SOURCE_IPS: usize = 3;
+
+/// Hard cap on the distinct source IPs retained per client telemetry cell.
+///
+/// The export decision is final once the cell has seen
+/// [`MIN_TELEMETRY_CELL_SOURCE_IPS`] distinct sources, so the set stops
+/// growing exactly there. This is the per-cell analogue of
+/// [`MAX_TELEMETRY_CELLS`]: it bounds memory even when a client rotates source
+/// addresses, and the addresses are never exported.
+const MAX_TELEMETRY_CELL_SOURCE_IPS: usize = MIN_TELEMETRY_CELL_SOURCE_IPS;
+
+/// Bounded set of distinct source IP addresses observed in one telemetry cell.
+///
+/// Addresses are retained only to enforce [`MIN_TELEMETRY_CELL_SOURCE_IPS`] and
+/// are never exported. The manual `Debug` impl reports only the count, so an
+/// address cannot reach a log line through a derived debug dump.
+#[derive(Clone, Default)]
+struct SourceIpSet {
+    ips: HashSet<IpAddr>,
+}
+
+impl SourceIpSet {
+    /// Record `ip`, ignored once the set is full or already contains it.
+    fn insert(&mut self, ip: IpAddr) -> bool {
+        self.ips.len() < MAX_TELEMETRY_CELL_SOURCE_IPS && self.ips.insert(ip)
+    }
+
+    /// Number of distinct source IPs observed, capped at
+    /// [`MAX_TELEMETRY_CELL_SOURCE_IPS`].
+    fn len(&self) -> usize {
+        self.ips.len()
+    }
+}
+
+impl std::fmt::Debug for SourceIpSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceIpSet")
+            .field("distinct", &self.ips.len())
+            .finish()
+    }
+}
 
 /// Aggregated opt-in telemetry for one `(game_id, normalized country)` pair.
 ///
@@ -94,6 +148,18 @@ pub struct TelemetryCell {
     pub saved_sum_ms: f64,
     /// Number of reports where both latency values were present.
     pub saved_count: u64,
+    /// Sum of `direct_app_p50_ms - relayed_p50_ms` over reports where both are
+    /// present, the client's paired app-to-app comparison. Signed: negative
+    /// means the relayed path was slower than direct.
+    pub saved_app_sum_ms: f64,
+    /// Number of reports where both `direct_app_p50_ms` and `relayed_p50_ms`
+    /// were present.
+    pub saved_app_count: u64,
+    /// Number of those paired reports whose saving was negative.
+    pub saved_app_negative_count: u64,
+    /// Distinct source IPs observed, used only to enforce the k-anonymity
+    /// floor. Never exported; bounded by [`MAX_TELEMETRY_CELL_SOURCE_IPS`].
+    source_ips: SourceIpSet,
 }
 
 /// Bounded per-`(game, country)` telemetry aggregator.
@@ -560,9 +626,16 @@ impl ProxyMetrics {
     /// Record an anonymous opt-in telemetry report received from a client.
     ///
     /// The report is normalized and folded into its `(game_id, country)` cell.
-    /// When the cell map is already at [`TelemetryAggregator::max_cells`] and
-    /// this report would create a new key, it is counted in `rejected` instead.
-    pub fn record_telemetry_report(&self, report: &lightspeed_protocol::TelemetryReport) {
+    /// `peer_ip` is used only to count distinct source addresses for the
+    /// k-anonymity floor; it is never stored beyond that set and never
+    /// exported. When the cell map is already at
+    /// [`TelemetryAggregator::max_cells`] and this report would create a new
+    /// key, it is counted in `rejected` instead.
+    pub fn record_telemetry_report(
+        &self,
+        report: &lightspeed_protocol::TelemetryReport,
+        peer_ip: IpAddr,
+    ) {
         {
             let country = normalize_country(&report.client_country);
             let key = (report.game_id, country);
@@ -574,6 +647,7 @@ impl ProxyMetrics {
                 agg.rejected += 1;
             } else {
                 let cell = agg.cells.entry(key).or_default();
+                cell.source_ips.insert(peer_ip);
                 cell.reports += 1;
                 cell.samples += u64::from(report.sample_count);
                 cell.p50_sum_ms += f64::from(report.p50_ms);
@@ -598,6 +672,18 @@ impl ProxyMetrics {
                 {
                     cell.saved_sum_ms += f64::from(direct) - f64::from(relayed);
                     cell.saved_count += 1;
+                }
+                // `direct_app_p50_ms` is measured to pair with this relayed leg,
+                // so their joint presence is the client's paired comparison.
+                if let (Some(direct_app), Some(relayed)) =
+                    (report.direct_app_p50_ms, report.relayed_p50_ms)
+                {
+                    let saved_app = f64::from(direct_app) - f64::from(relayed);
+                    cell.saved_app_sum_ms += saved_app;
+                    cell.saved_app_count += 1;
+                    if saved_app < 0.0 {
+                        cell.saved_app_negative_count += 1;
+                    }
                 }
             }
         }
@@ -1041,6 +1127,15 @@ impl ProxyMetrics {
         out.push_str("# TYPE lightspeed_telemetry_direct_app_ms_sum counter\n");
         out.push_str("# TYPE lightspeed_telemetry_direct_app_ms_count counter\n");
         out.push_str(
+            "# HELP lightspeed_telemetry_saved_app_ms_sum Sum of client-reported (direct app - relayed) app-to-app latency savings (ms) over reports that carried both values; positive means the relay was faster\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_saved_app_ms_sum counter\n");
+        out.push_str("# TYPE lightspeed_telemetry_saved_app_ms_count counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_saved_app_negative_count Number of paired client reports where the relayed app RTT was worse than the direct app RTT (negative saving)\n",
+        );
+        out.push_str("# TYPE lightspeed_telemetry_saved_app_negative_count counter\n");
+        out.push_str(
             "# HELP lightspeed_telemetry_rejected_total Telemetry reports dropped because the per-(game,country) cell cap was reached\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_rejected_total counter\n");
@@ -1057,7 +1152,7 @@ impl ProxyMetrics {
                 labels, agg.rejected
             ));
             for ((game_id, country), cell) in &agg.cells {
-                if cell.reports < MIN_TELEMETRY_CELL_REPORTS {
+                if cell.source_ips.len() < MIN_TELEMETRY_CELL_SOURCE_IPS {
                     continue;
                 }
                 let game = lightspeed_protocol::game_id::key_for_id(*game_id).unwrap_or("unknown");
@@ -1141,6 +1236,18 @@ impl ProxyMetrics {
                 out.push_str(&format!(
                     "lightspeed_telemetry_direct_app_ms_count{{{}}} {}\n",
                     cell_labels, cell.direct_app_count
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_saved_app_ms_sum{{{}}} {:.1}\n",
+                    cell_labels, cell.saved_app_sum_ms
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_saved_app_ms_count{{{}}} {}\n",
+                    cell_labels, cell.saved_app_count
+                ));
+                out.push_str(&format!(
+                    "lightspeed_telemetry_saved_app_negative_count{{{}}} {}\n",
+                    cell_labels, cell.saved_app_negative_count
                 ));
             }
         }
@@ -1334,6 +1441,13 @@ impl ProxyMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
+
+    /// A distinct source IP per `n`, so multi-report fixtures clear the
+    /// distinct-source k-anonymity floor.
+    fn ip(n: u8) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::new(10, 0, 0, n))
+    }
 
     #[test]
     fn test_prometheus_output_format() {
@@ -1580,9 +1694,9 @@ mod tests {
         third.fec_recoveries = 3;
         third.fec_losses = 2;
 
-        m.record_telemetry_report(&report(2, "us "));
-        m.record_telemetry_report(&second);
-        m.record_telemetry_report(&third);
+        m.record_telemetry_report(&report(2, "us "), ip(1));
+        m.record_telemetry_report(&second, ip(2));
+        m.record_telemetry_report(&third, ip(3));
 
         let output = m.to_prometheus("test", "test-node");
 
@@ -1626,9 +1740,9 @@ mod tests {
         let mut relayed_only = report(2, "US");
         relayed_only.relayed_p50_ms = Some(50.0);
 
-        m.record_telemetry_report(&both);
-        m.record_telemetry_report(&direct_only);
-        m.record_telemetry_report(&relayed_only);
+        m.record_telemetry_report(&both, ip(1));
+        m.record_telemetry_report(&direct_only, ip(2));
+        m.record_telemetry_report(&relayed_only, ip(3));
 
         let output = m.to_prometheus("test", "test-node");
         let labels = "region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"";
@@ -1666,9 +1780,9 @@ mod tests {
         second.direct_app_p50_ms = Some(52.0);
         let without = report(2, "US");
 
-        m.record_telemetry_report(&with_app);
-        m.record_telemetry_report(&second);
-        m.record_telemetry_report(&without);
+        m.record_telemetry_report(&with_app, ip(1));
+        m.record_telemetry_report(&second, ip(2));
+        m.record_telemetry_report(&without, ip(3));
 
         {
             let agg = m.telemetry.lock().unwrap();
@@ -1693,7 +1807,7 @@ mod tests {
     #[test]
     fn telemetry_direct_app_family_declared_below_k() {
         let m = ProxyMetrics::new();
-        m.record_telemetry_report(&report(2, "US"));
+        m.record_telemetry_report(&report(2, "US"), ip(1));
 
         let output = m.to_prometheus("test", "test-node");
         for family in [
@@ -1717,7 +1831,7 @@ mod tests {
     #[test]
     fn telemetry_latency_families_declared_below_k() {
         let m = ProxyMetrics::new();
-        m.record_telemetry_report(&report(2, "US"));
+        m.record_telemetry_report(&report(2, "US"), ip(1));
 
         let output = m.to_prometheus("test", "test-node");
         for family in [
@@ -1754,17 +1868,17 @@ mod tests {
     fn test_telemetry_normalization() {
         let m = ProxyMetrics::new();
 
-        for _ in 0..3 {
-            m.record_telemetry_report(&report(2, " usa "));
+        for i in 0..3u8 {
+            m.record_telemetry_report(&report(2, " usa "), ip(i + 1));
         }
-        for _ in 0..3 {
-            m.record_telemetry_report(&report(2, "th"));
+        for i in 0..3u8 {
+            m.record_telemetry_report(&report(2, "th"), ip(i + 1));
         }
-        for _ in 0..3 {
-            m.record_telemetry_report(&report(2, ""));
+        for i in 0..3u8 {
+            m.record_telemetry_report(&report(2, ""), ip(i + 1));
         }
-        for _ in 0..3 {
-            m.record_telemetry_report(&report(250, "th"));
+        for i in 0..3u8 {
+            m.record_telemetry_report(&report(250, "th"), ip(i + 1));
         }
 
         let output = m.to_prometheus("test", "test-node");
@@ -1782,10 +1896,10 @@ mod tests {
     fn test_telemetry_cell_cap_overflows() {
         let m = ProxyMetrics::with_max_telemetry_cells(2);
 
-        m.record_telemetry_report(&report(1, "US"));
-        m.record_telemetry_report(&report(2, "US"));
+        m.record_telemetry_report(&report(1, "US"), ip(1));
+        m.record_telemetry_report(&report(2, "US"), ip(2));
         // Third distinct cell is over the cap and must be rejected, not stored.
-        m.record_telemetry_report(&report(3, "US"));
+        m.record_telemetry_report(&report(3, "US"), ip(3));
 
         assert_eq!(m.telemetry.lock().unwrap().cells.len(), 2);
         assert_eq!(m.telemetry.lock().unwrap().rejected, 1);
@@ -1800,7 +1914,7 @@ mod tests {
     #[test]
     fn test_telemetry_cells_below_k_are_suppressed() {
         let m = ProxyMetrics::new();
-        m.record_telemetry_report(&report(2, "US"));
+        m.record_telemetry_report(&report(2, "US"), ip(1));
 
         let output = m.to_prometheus("test", "test-node");
 
@@ -1808,6 +1922,134 @@ mod tests {
             !output.contains("game=\"cs2\",country=\"US\""),
             "a cell below the k-anonymity floor must not be emitted"
         );
+    }
+
+    /// Given: three reports for one (game, country) cell, all from the same
+    /// source IP. When: metrics are rendered. Then: the cell stays suppressed
+    /// even though it holds three reports, because it has one distinct source.
+    #[test]
+    fn telemetry_same_source_three_reports_stays_suppressed() {
+        let m = ProxyMetrics::new();
+        for _ in 0..3 {
+            m.record_telemetry_report(&report(2, "US"), ip(1));
+        }
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(
+            !output.contains("game=\"cs2\",country=\"US\""),
+            "a cell backed by one distinct IP must stay suppressed"
+        );
+
+        let agg = m.telemetry.lock().unwrap();
+        let cell = agg.cells.values().next().unwrap();
+        assert_eq!(cell.reports, 3, "the reports must still be aggregated");
+    }
+
+    /// Given: three reports for one (game, country) cell from three distinct
+    /// source IPs. When: metrics are rendered. Then: the cell clears the floor
+    /// and is emitted with its report count.
+    #[test]
+    fn telemetry_three_distinct_sources_export() {
+        let m = ProxyMetrics::new();
+        for i in 0..3u8 {
+            m.record_telemetry_report(&report(2, "US"), ip(i + 1));
+        }
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains(
+            "lightspeed_telemetry_reports_total{region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"} 3"
+        ));
+    }
+
+    /// Given: reports where the paired direct-app RTT is better than, worse
+    /// than, and equal to the relayed RTT, plus one unpaired report. When: the
+    /// cell is folded and rendered. Then: the signed sum and pair count cover
+    /// only the paired reports, and the negative count counts only the report
+    /// where the relay was worse.
+    #[test]
+    fn telemetry_saved_app_signed_and_negative_count() {
+        let m = ProxyMetrics::new();
+
+        let mut better = report(2, "US");
+        better.direct_app_p50_ms = Some(50.0);
+        better.relayed_p50_ms = Some(30.0);
+
+        let mut worse = report(2, "US");
+        worse.direct_app_p50_ms = Some(20.0);
+        worse.relayed_p50_ms = Some(55.0);
+
+        let mut same = report(2, "US");
+        same.direct_app_p50_ms = Some(40.0);
+        same.relayed_p50_ms = Some(40.0);
+
+        let mut direct_only = report(2, "US");
+        direct_only.direct_app_p50_ms = Some(40.0);
+
+        m.record_telemetry_report(&better, ip(1));
+        m.record_telemetry_report(&worse, ip(2));
+        m.record_telemetry_report(&same, ip(3));
+        m.record_telemetry_report(&direct_only, ip(4));
+
+        {
+            let agg = m.telemetry.lock().unwrap();
+            let cell = agg.cells.values().next().unwrap();
+            assert_eq!(cell.saved_app_count, 3);
+            assert_eq!(cell.saved_app_negative_count, 1);
+            assert_eq!(cell.saved_app_sum_ms, -15.0);
+        }
+
+        let output = m.to_prometheus("test", "test-node");
+        let labels = "region=\"test\",node_id=\"test-node\",game=\"cs2\",country=\"US\"";
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_saved_app_ms_sum{{{labels}}} -15.0"
+        )));
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_saved_app_ms_count{{{labels}}} 3"
+        )));
+        assert!(output.contains(&format!(
+            "lightspeed_telemetry_saved_app_negative_count{{{labels}}} 1"
+        )));
+    }
+
+    /// Given: a cell below the k-anonymity floor. When: metrics are rendered.
+    /// Then: the saved-app families are still declared, but no per-cell series
+    /// leaks.
+    #[test]
+    fn telemetry_saved_app_families_declared_below_k() {
+        let m = ProxyMetrics::new();
+        m.record_telemetry_report(&report(2, "US"), ip(1));
+
+        let output = m.to_prometheus("test", "test-node");
+        for family in [
+            "lightspeed_telemetry_saved_app_ms_sum",
+            "lightspeed_telemetry_saved_app_ms_count",
+            "lightspeed_telemetry_saved_app_negative_count",
+        ] {
+            assert!(
+                output.contains(&format!("# TYPE {family} counter")),
+                "missing TYPE for {family}"
+            );
+        }
+        assert!(
+            !output.contains("lightspeed_telemetry_saved_app_ms_sum{"),
+            "a cell below the k-anonymity floor must not emit saved-app series"
+        );
+    }
+
+    /// Given: one cell that sees far more distinct source IPs than the floor.
+    /// When: they are folded in. Then: the retained distinct-IP set stays
+    /// capped, so client-controlled addresses cannot grow proxy memory.
+    #[test]
+    fn telemetry_source_ip_set_is_bounded() {
+        let m = ProxyMetrics::new();
+        for last in 0..=255u8 {
+            m.record_telemetry_report(&report(2, "US"), IpAddr::V4(Ipv4Addr::new(10, 0, 1, last)));
+        }
+
+        let agg = m.telemetry.lock().unwrap();
+        let cell = agg.cells.values().next().unwrap();
+        assert_eq!(cell.reports, 256);
+        assert_eq!(cell.source_ips.len(), MAX_TELEMETRY_CELL_SOURCE_IPS);
     }
 
     fn fra_leg() -> lightspeed_protocol::telemetry::PathObservation {
@@ -1846,10 +2088,10 @@ mod tests {
     fn per_path_telemetry_aggregated_and_bounded() {
         let m = ProxyMetrics::new();
 
-        for _ in 0..3 {
+        for i in 0..3u8 {
             let mut r = report(2, "DE");
             r.route_legs = vec![fra_leg(), ams_leg()];
-            m.record_telemetry_report(&r);
+            m.record_telemetry_report(&r, ip(i + 1));
         }
 
         let output = m.to_prometheus("test", "test-node");
@@ -1904,10 +2146,10 @@ mod tests {
         let capped = ProxyMetrics::with_max_route_telemetry_cells(1);
         let mut first = report(2, "DE");
         first.route_legs = vec![fra_leg()];
-        capped.record_telemetry_report(&first);
+        capped.record_telemetry_report(&first, ip(1));
         let mut second = report(2, "DE");
         second.route_legs = vec![ams_leg()];
-        capped.record_telemetry_report(&second);
+        capped.record_telemetry_report(&second, ip(2));
         assert_eq!(capped.route_telemetry.lock().unwrap().cells.len(), 1);
         assert_eq!(capped.route_telemetry.lock().unwrap().rejected, 1);
     }
@@ -1921,7 +2163,7 @@ mod tests {
         let m = ProxyMetrics::new();
         let mut r = report(2, "DE");
         r.route_legs = vec![fra_leg()];
-        m.record_telemetry_report(&r);
+        m.record_telemetry_report(&r, ip(1));
 
         let output = m.to_prometheus("test", "test-node");
 

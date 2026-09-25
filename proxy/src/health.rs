@@ -15,6 +15,7 @@ use crate::relay::RelayEngine;
 use crate::update_state::UpdateState;
 use lightspeed_protocol::TelemetryReport;
 use serde::Serialize;
+use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -81,8 +82,14 @@ fn parse_request_path(raw: &[u8]) -> &str {
 /// The body must be a JSON [`TelemetryReport`]. Parse and validation failures
 /// are logged at `warn` with their specific cause and returned as a static
 /// message the caller maps to HTTP 400. On success the report is folded into
-/// the bounded aggregator and `Ok(())` is returned.
-pub fn ingest_telemetry(metrics: &ProxyMetrics, body: &[u8]) -> Result<(), &'static str> {
+/// the bounded aggregator and `Ok(())` is returned. `peer_ip` is the TCP peer
+/// address, used only to count distinct sources for the k-anonymity floor; it
+/// is never logged or exported.
+pub fn ingest_telemetry(
+    metrics: &ProxyMetrics,
+    body: &[u8],
+    peer_ip: IpAddr,
+) -> Result<(), &'static str> {
     let report: TelemetryReport = match serde_json::from_slice(body) {
         Ok(report) => report,
         Err(e) => {
@@ -103,7 +110,7 @@ pub fn ingest_telemetry(metrics: &ProxyMetrics, body: &[u8]) -> Result<(), &'sta
         route_legs = report.route_legs.len(),
         "Telemetry report ingested"
     );
-    metrics.record_telemetry_report(&report);
+    metrics.record_telemetry_report(&report, peer_ip);
     Ok(())
 }
 
@@ -127,7 +134,7 @@ pub async fn run_health_server(
     );
 
     loop {
-        let (mut stream, _addr) = match listener.accept().await {
+        let (mut stream, addr) = match listener.accept().await {
             Ok(conn) => conn,
             Err(e) => {
                 tracing::warn!("Health accept error: {}", e);
@@ -180,7 +187,7 @@ pub async fn run_health_server(
                     return;
                 }
 
-                let resp = match ingest_telemetry(&metrics, body_slice) {
+                let resp = match ingest_telemetry(&metrics, body_slice, addr.ip()) {
                     Ok(()) => "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                     Err(_) => {
                         "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -468,7 +475,9 @@ mod tests {
         let m = ProxyMetrics::new();
         let valid = br#"{"game_id":2,"client_country":"us","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":100,"fec_recoveries":1,"fec_losses":0,"client_version":"1.4.4"}"#;
 
-        assert!(ingest_telemetry(&m, valid).is_ok());
+        let peer = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
+        assert!(ingest_telemetry(&m, valid, peer).is_ok());
         {
             let agg = m.telemetry.lock().unwrap();
             assert_eq!(agg.cells.len(), 1);
@@ -478,9 +487,9 @@ mod tests {
 
         // p95 < p50 is rejected by TelemetryReport::validate.
         let bad_percentile = br#"{"game_id":2,"client_country":"us","p50_ms":100.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":100,"fec_recoveries":1,"fec_losses":0,"client_version":"1.4.4"}"#;
-        assert!(ingest_telemetry(&m, bad_percentile).is_err());
+        assert!(ingest_telemetry(&m, bad_percentile, peer).is_err());
 
-        assert!(ingest_telemetry(&m, b"not json at all").is_err());
+        assert!(ingest_telemetry(&m, b"not json at all", peer).is_err());
         // Failed ingests must not create cells.
         assert_eq!(m.telemetry.lock().unwrap().cells.len(), 1);
     }

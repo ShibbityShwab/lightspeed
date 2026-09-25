@@ -275,14 +275,16 @@ async fn per_path_telemetry_end_to_end_over_http() {
         );
     }
 
-    // The flat (game, country) cell still aggregates the whole reports.
+    // The flat (game, country) cell has three reports but only one distinct
+    // source IP (all requests arrive from the test's loopback address), so the
+    // distinct-source k-anonymity floor withholds it from the scrape.
     let flat_cell = format!(
         "region=\"{REGION}\",node_id=\"{NODE_ID}\",game=\"{GAME_KEY}\",country=\"{COUNTRY_NORMALIZED}\""
     );
     let flat_line = format!("lightspeed_telemetry_reports_total{{{flat_cell}}} 3");
     assert!(
-        metrics.contains(&flat_line),
-        "missing aggregated telemetry cell: {flat_line}"
+        !metrics.contains(&flat_line),
+        "a flat cell backed by one distinct source must stay suppressed: {flat_line}"
     );
 
     // No cell was dropped by the cap or the relay-charset filter.
