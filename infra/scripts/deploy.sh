@@ -88,6 +88,7 @@ PROBE_BIN="${LIGHTSPEED_PROBE_BIN:-}"
 # Evidence accumulated for a stopped rollout and the most recent gate.
 ROLLOUT_EVIDENCE=""
 VERIFY_EVIDENCE=""
+PROBE_LAST_OUTPUT=""
 
 # Inventory globals. Declared here so a sourced shell (and `set -u`) can read
 # them before `lightspeed_load_inventory` populates them.
@@ -252,14 +253,22 @@ udp_port_listening() {
 # workflow runs against live relays. The client exits 0 even when it only
 # partially connects, so the marker string is the assertion.
 probe_control_plane() {
-	local ip="$1" dport="${2:-$DATA_PORT}" out
+	local ip="$1" dport="${2:-$DATA_PORT}" out attempt
 	if [ -z "$PROBE_BIN" ] || [ ! -x "$PROBE_BIN" ]; then
 		return 1
 	fi
-	out="$("$PROBE_BIN" --test-control --proxy "${ip}:${dport}" 2>&1 || true)"
-	if printf '%s' "$out" | grep -q "Control plane is working"; then
-		return 0
-	fi
+	# A single failed probe is not proof of a broken relay: a relay can be
+	# briefly busy or mid-restart, and a false negative here blocks a good
+	# deploy. Retry before declaring failure, and keep the last output so the
+	# evidence block can show why.
+	for attempt in 1 2 3; do
+		out="$("$PROBE_BIN" --test-control --proxy "${ip}:${dport}" 2>&1 || true)"
+		if printf '%s' "$out" | grep -q "Control plane is working"; then
+			return 0
+		fi
+		PROBE_LAST_OUTPUT="$out"
+		[ "$attempt" -lt 3 ] && sleep 5
+	done
 	return 1
 }
 
@@ -298,7 +307,7 @@ verify_node() {
 	VERIFY_EVIDENCE="${VERIFY_EVIDENCE} ports=ok"
 
 	if ! probe_control_plane "$ip" "$dport"; then
-		VERIFY_EVIDENCE="${VERIFY_EVIDENCE} control_probe=failed"
+		VERIFY_EVIDENCE="${VERIFY_EVIDENCE} control_probe=failed probe_output=$(printf '%s' "$PROBE_LAST_OUTPUT" | tr '\n' '|' | tail -c 300)"
 		log_err "  ❌ ${name}: control-plane registration failed"
 		return 1
 	fi
