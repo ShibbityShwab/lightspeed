@@ -110,6 +110,7 @@ async fn run_smoke_test_linux(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
         proxy_addr,
         fec_enabled: false,
         fec_k: 4,
+        adaptive_fec: Default::default(),
         bypass: Default::default(),
     };
     let mut handle = interceptor.start(config)?;

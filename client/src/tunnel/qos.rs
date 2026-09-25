@@ -15,6 +15,31 @@
 //! Windows is intentionally a no-op: modern Windows ignores `IP_TOS` set
 //! through Winsock and requires the much heavier QWAVE/QoS2 API to mark
 //! egress traffic, so we do not pretend to support it.
+//!
+//! ## ECN is deliberately deferred
+//!
+//! [`set_dscp`] writes the DSCP value into the top six bits of the IPv4 TOS
+//! byte and leaves the two ECN bits at zero. ECN would let the client-to-relay
+//! path signal congestion instead of dropping, but the relay path cannot
+//! observe or echo ECN/CE marks without a wire-protocol change:
+//!
+//! * The original game packet's IP header is stripped before wrapping, and the
+//!   tunnel header carries only the original addresses and ports, never the
+//!   TOS/ECN bits. A CE mark from the game server or any hop is not preserved
+//!   end to end.
+//! * The client reads UDP with `recv_from`, which discards IP ancillary data.
+//!   Reading the received ECN bits needs `IP_RECVTOS` plus `recvmsg` on
+//!   Linux/macOS and a different mechanism on Windows, none of which
+//!   `TunnelTransport` uses today.
+//! * The relay would have to observe the outer ECN bits and echo a CE signal
+//!   back to the client. The 24-byte tunnel header has a reserved byte and four
+//!   reserved flag bits, so a signal field is possible, but adding one is a
+//!   wire change and a rolling proxy deployment, not a free side effect.
+//!
+//! Setting the ECN bits without that echo path would let the kernel report
+//! congestion the client never learns about, which is a fake signal. ECN stays
+//! off until the tunnel header grows a negotiated congestion signal and the
+//! relay implements its echo.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

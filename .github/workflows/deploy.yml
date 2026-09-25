@@ -6,6 +6,14 @@ on:
     paths:
       - 'proxy/**'
       - 'protocol/**'
+      # The deploy builds the CLI client as its control-plane probe
+      # (`lightspeed --features quic`, see lightspeed_resolve_probe in
+      # infra/scripts/deploy.sh) and the canary gate refuses to deploy if that
+      # probe cannot register. A client-only fix (for example the rustls
+      # provider change) therefore changes the deploy's own verification path
+      # and must retrigger a deploy, or the fix never reaches production.
+      # Scoped to client/** only: client-gui is not part of the probe.
+      - 'client/**'
       - 'infra/scripts/deploy.sh'
       - 'infra/scripts/relay-install.sh'
       - 'infra/scripts/relay-updater.sh'

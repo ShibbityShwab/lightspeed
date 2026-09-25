@@ -202,8 +202,10 @@ lightspeed/
 | [CLI Reference](docs/CLI-REFERENCE.md) | All commands and flags |
 | [FAQ](docs/faq.md) | Common questions |
 | [Troubleshooting](docs/troubleshooting.md) | Fix common issues |
+| [Bufferbloat Guide](docs/bufferbloat.md) | Fix latency on your own router (SQM/CAKE) |
 | [Deploy Proxy](docs/deploy-proxy.md) | Self-hosting guide |
 | [Community Relay Network](docs/community-network.md) | Run + publish a relay for others |
+| [Operator Key Succession](docs/operator-key-succession.md) | Registry trust model, key rotation and recovery |
 | [Architecture](docs/architecture.md) | System design |
 | [Protocol](docs/protocol.md) | Wire protocol spec |
 | [Supported Games](docs/supported-games.md) | Game profiles |

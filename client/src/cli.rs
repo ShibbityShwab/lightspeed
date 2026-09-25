@@ -76,6 +76,12 @@ pub struct Cli {
     #[arg(long, default_value_t = 25)]
     pub fec_max_overhead: u32,
 
+    /// Discover the real client→relay path MTU (DPLPMTUD) and raise the tunnel
+    /// payload budget when the path supports it. Off by default; any failure
+    /// falls back to the conservative clamp.
+    #[arg(long, default_value_t = false)]
+    pub path_mtu_discovery: bool,
+
     /// Enable Cloudflare WARP for improved routing (5-10ms savings).
     /// Automatically connects WARP on startup and restores on shutdown.
     #[arg(short = 'w', long, default_value_t = false)]

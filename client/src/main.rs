@@ -343,6 +343,22 @@ async fn main() -> anyhow::Result<()> {
         config::Config::default()
     });
 
+    // ── Adaptive FEC policy (opt-in, shared by every path) ────────
+    //
+    // One policy feeds the relay and the inline paths, so a single opt-in
+    // gates every data plane. The default is disabled, which keeps the fixed
+    // K=4/P=1 behaviour byte-for-byte.
+    let adaptive_cfg = AdaptiveConfig {
+        enabled: cli.adaptive_fec || config.tunnel.adaptive_fec,
+        k_size: cli.fec_k,
+        max_overhead_pct: if cli.fec_max_overhead != 25 {
+            cli.fec_max_overhead
+        } else {
+            config.tunnel.fec_max_overhead_pct
+        },
+        ..AdaptiveConfig::default()
+    };
+
     // ── Telemetry (on by default, opt-out) ────────────────────────
     //
     // Anonymous aggregate latency stats only: no IP address, token, or user
@@ -580,7 +596,15 @@ async fn main() -> anyhow::Result<()> {
         crate::session::set_current_proxy(proxy_addr);
         start_continuous_rerouting(&resolved.servers, &config, &cli);
         spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
-        return run_watch_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
+        return run_watch_mode(
+            game_key,
+            proxy_addr,
+            cli.fec,
+            cli.fec_k,
+            adaptive_cfg,
+            server_override,
+        )
+        .await;
     }
 
     // ── --smoke-test ───────────────────────────────────────────
@@ -930,6 +954,7 @@ async fn main() -> anyhow::Result<()> {
                         proxy_addr,
                         cli.fec,
                         cli.fec_k,
+                        adaptive_cfg,
                     );
 
                     match config_opt {
@@ -979,7 +1004,15 @@ async fn main() -> anyhow::Result<()> {
         crate::session::set_current_proxy(proxy_addr);
         start_continuous_rerouting(&resolved.servers, &config, &cli);
         spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
-        return run_intercept_mode(game_key, proxy_addr, cli.fec, cli.fec_k, server_override).await;
+        return run_intercept_mode(
+            game_key,
+            proxy_addr,
+            cli.fec,
+            cli.fec_k,
+            adaptive_cfg,
+            server_override,
+        )
+        .await;
     }
 
     // ── Game detection ────────────────────────────────────────────
@@ -1171,16 +1204,6 @@ async fn main() -> anyhow::Result<()> {
     // ── Relay socket (shared by tunnel/control tests + keepalive) ─
     let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
     let mut relay = UdpRelay::new(bind_addr);
-    let adaptive_cfg = AdaptiveConfig {
-        enabled: cli.adaptive_fec || config.tunnel.adaptive_fec,
-        k_size: cli.fec_k,
-        max_overhead_pct: if cli.fec_max_overhead != 25 {
-            cli.fec_max_overhead
-        } else {
-            config.tunnel.fec_max_overhead_pct
-        },
-        ..AdaptiveConfig::default()
-    };
     if adaptive_cfg.enabled {
         info!(
             "Adaptive FEC: on (K={}, overhead ceiling {}%)",
@@ -1189,6 +1212,14 @@ async fn main() -> anyhow::Result<()> {
         );
         relay = relay.with_adaptive_fec(adaptive_cfg);
     }
+    let pmtud_enabled = cli.path_mtu_discovery || config.tunnel.path_mtu_discovery;
+    if pmtud_enabled {
+        info!(
+            "Client-to-relay path-MTU discovery: on (hard cap {} bytes)",
+            crate::tunnel::pmtud::HARD_CAP_PATH_MTU
+        );
+    }
+    relay = relay.with_pmtud(pmtud_enabled);
     if use_tcp {
         relay.connect_tcp(proxy_addr).await?;
     } else {
@@ -1270,7 +1301,14 @@ async fn main() -> anyhow::Result<()> {
 
         let mut redirect_proxy =
             redirect::UdpRedirect::new(local_port, game_server_addr, proxy_addr);
-        if cli.fec {
+        if adaptive_cfg.enabled {
+            info!(
+                "   FEC:         adaptive (K={}, ceiling {}%)",
+                adaptive_cfg.effective_k(),
+                adaptive_cfg.overhead_pct()
+            );
+            redirect_proxy = redirect_proxy.with_adaptive_fec(adaptive_cfg);
+        } else if cli.fec {
             info!(
                 "   FEC:         enabled (K={}, ~{}% overhead)",
                 cli.fec_k,
@@ -1339,6 +1377,7 @@ async fn main() -> anyhow::Result<()> {
                         proxy_addr,
                         cli.fec,
                         cli.fec_k,
+                        adaptive_cfg,
                         None,
                     )
                     .await;

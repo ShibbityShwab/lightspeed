@@ -10,20 +10,29 @@
 use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use lightspeed_protocol::{
     build_fec_data_packet, build_fec_parity_packet, decode_fec_payload, FecDecoder, FecEncoder,
-    FecHeader, TunnelHeader,
+    FecHeader, TunnelHeader, CONSERVATIVE_PATH_MTU,
 };
 use tokio::net::UdpSocket;
 
 use crate::error::TunnelError;
 use crate::tunnel::adaptive::{AdaptiveConfig, AdaptiveFec, AdaptiveStats};
+use crate::tunnel::breaker::{Breaker, BreakerConfig, BreakerState, BreakerStats};
 use crate::tunnel::budget::{self, PayloadFit};
 use crate::tunnel::pacer::{Pacer, DEFAULT_CEILING_BPS};
+use crate::tunnel::pmtud::{PathMtuDiscovery, PmtudConfig, HARD_CAP_PATH_MTU};
 use crate::tunnel::transport::TunnelTransport;
+
+/// How often the data plane samples the control plane's discovered path MTU.
+///
+/// Sampling is lazy (driven by sends) and rate-limited, so it never runs
+/// per-packet and never blocks a send. If no control connection is live the
+/// sample falls back to the conservative clamp.
+const MTU_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Get current timestamp in microseconds since epoch.
 fn now_us() -> u32 {
@@ -47,6 +56,16 @@ pub struct RelayStats {
     /// Game payloads forwarded with fragmentation allowed for exceeding the
     /// conservative tunnel budget.
     pub payloads_over_budget: AtomicU64,
+    /// Path MTU currently in force on the client-to-relay hop, in bytes. Starts
+    /// at the conservative clamp and only rises when discovery is enabled and a
+    /// larger path is confirmed.
+    pub effective_path_mtu: AtomicU64,
+    /// Circuit-breaker state transitions on this relay path. Incremented once
+    /// per crossing, alongside the `tracing` event the breaker emits.
+    pub breaker_transitions: AtomicU64,
+    /// Current circuit-breaker state as a metric gauge (see
+    /// [`BreakerState::metric_code`]).
+    pub breaker_state: AtomicU64,
 }
 
 impl RelayStats {
@@ -61,6 +80,9 @@ impl RelayStats {
             fec_parity_sent: AtomicU64::new(0),
             fec_recovered: AtomicU64::new(0),
             payloads_over_budget: AtomicU64::new(0),
+            effective_path_mtu: AtomicU64::new(CONSERVATIVE_PATH_MTU as u64),
+            breaker_transitions: AtomicU64::new(0),
+            breaker_state: AtomicU64::new(0),
         }
     }
 }
@@ -92,6 +114,14 @@ pub struct UdpRelay {
     /// Conservative outbound pacer. Bounds the burst rate and backs off on
     /// measured loss; see [`crate::tunnel::pacer`].
     pacer: Pacer,
+    /// Client-to-relay path-MTU discovery policy. Disabled by default, in
+    /// which case the conservative clamp is used unchanged.
+    pmtud: PathMtuDiscovery,
+    /// Last time the discovered path MTU was sampled, to bound sampling.
+    last_mtu_refresh: Option<Instant>,
+    breaker: Breaker,
+    /// Proxy the breaker's windows describe, so switching relays resets it.
+    last_proxy: Option<SocketAddrV4>,
 }
 
 impl UdpRelay {
@@ -108,7 +138,81 @@ impl UdpRelay {
             adaptive: None,
             last_rtt_us: None,
             pacer: Pacer::with_ceiling(DEFAULT_CEILING_BPS, DEFAULT_CEILING_BPS),
+            pmtud: PathMtuDiscovery::new(PmtudConfig::default()),
+            last_mtu_refresh: None,
+            breaker: Breaker::new(BreakerConfig::default()),
+            last_proxy: None,
         }
+    }
+
+    /// Enable or disable client-to-relay path-MTU discovery.
+    ///
+    /// Disabled (the default) reproduces the fixed conservative clamp exactly.
+    pub fn with_pmtud(mut self, enabled: bool) -> Self {
+        self.pmtud = PathMtuDiscovery::new(PmtudConfig { enabled });
+        self
+    }
+
+    /// The client-to-relay path MTU currently in force, in bytes.
+    pub fn effective_path_mtu(&self) -> usize {
+        self.pmtud.effective_path_mtu()
+    }
+
+    /// Sample the control plane's DPLPMTUD result, at most once per
+    /// [`MTU_REFRESH_INTERVAL`], and apply it to the budget policy.
+    ///
+    /// Never blocks and never awaits network I/O: it reads the already-
+    /// discovered `quinn` path MTU. A missing control connection is treated as a
+    /// failed probe so the budget falls back to the conservative clamp.
+    pub fn refresh_path_mtu(&mut self, proxy_addr: SocketAddrV4) {
+        if !self.pmtud.enabled() {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(last) = self.last_mtu_refresh {
+            if now.duration_since(last) < MTU_REFRESH_INTERVAL {
+                return;
+            }
+        }
+        self.last_mtu_refresh = Some(now);
+        match crate::quic::supervised_path_mtu(proxy_addr) {
+            Some(udp_payload) => {
+                let path_mtu = usize::from(udp_payload)
+                    + lightspeed_protocol::OUTER_IPV4_HEADER_SIZE
+                    + lightspeed_protocol::OUTER_UDP_HEADER_SIZE;
+                self.observe_path_mtu(path_mtu);
+            }
+            None => self.observe_path_mtu_failure(),
+        }
+    }
+
+    /// Record an observed client-to-relay path MTU and publish the result.
+    pub fn observe_path_mtu(&mut self, path_mtu: usize) {
+        self.last_mtu_refresh = Some(Instant::now());
+        if self.pmtud.record_discovered(path_mtu) {
+            self.publish_path_mtu();
+        }
+    }
+
+    /// Record a failed or ambiguous discovery and fall back to the clamp.
+    pub fn observe_path_mtu_failure(&mut self) {
+        self.last_mtu_refresh = Some(Instant::now());
+        if self.pmtud.record_failure() {
+            self.publish_path_mtu();
+        }
+    }
+
+    /// Publish the effective path MTU as an observable stat and a log line.
+    fn publish_path_mtu(&self) {
+        let path_mtu = self.pmtud.effective_path_mtu();
+        self.stats
+            .effective_path_mtu
+            .store(path_mtu as u64, Ordering::Relaxed);
+        tracing::info!(
+            path_mtu = path_mtu,
+            hard_cap = HARD_CAP_PATH_MTU,
+            "client-to-relay path MTU updated"
+        );
     }
 
     /// The outbound pacer for observability and loss feedback.
@@ -119,6 +223,51 @@ impl UdpRelay {
     /// The outbound pacer, mutably, for loss feedback.
     pub fn pacer_mut(&mut self) -> &mut Pacer {
         &mut self.pacer
+    }
+
+    /// The relay-path circuit breaker.
+    pub fn breaker(&self) -> &Breaker {
+        &self.breaker
+    }
+
+    /// Snapshot of the circuit breaker for metrics.
+    pub fn breaker_stats(&self) -> BreakerStats {
+        self.breaker.stats()
+    }
+
+    /// Whether the caller must stop using this relay for new sessions.
+    pub fn should_fall_back(&self) -> bool {
+        self.breaker.should_fall_back()
+    }
+
+    /// Whether this relay may accept new sessions.
+    pub fn accepts_new_sessions(&self) -> bool {
+        self.breaker.accepts_new_sessions()
+    }
+
+    /// Feed one loss observation at `now`; on a transition, publish the metric
+    /// and, when backing off, add one extra pacer decrease.
+    pub fn observe_breaker_loss_at(&mut self, now: tokio::time::Instant, loss_pct: f64) {
+        let before = self.breaker.state();
+        self.breaker.on_sample_at(now, loss_pct);
+        let after = self.breaker.state();
+        if after == before {
+            return;
+        }
+        self.stats
+            .breaker_transitions
+            .fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .breaker_state
+            .store(after.metric_code(), Ordering::Relaxed);
+        if after == BreakerState::BackingOff {
+            self.pacer.on_loss();
+        }
+    }
+
+    /// Feed one loss observation using the monotonic clock.
+    pub fn observe_breaker_loss(&mut self, loss_pct: f64) {
+        self.observe_breaker_loss_at(tokio::time::Instant::now(), loss_pct);
     }
 
     /// Enable FEC with the given block size (K data packets per parity).
@@ -223,13 +372,20 @@ impl UdpRelay {
         orig_dst: SocketAddrV4,
         proxy_addr: SocketAddrV4,
     ) -> Result<usize, TunnelError> {
+        self.refresh_path_mtu(proxy_addr);
+        if self.last_proxy != Some(proxy_addr) {
+            self.breaker.reset();
+            self.stats.breaker_state.store(0, Ordering::Relaxed);
+            self.last_proxy = Some(proxy_addr);
+        }
         // Point the UDP transport at the target proxy (TCP's peer is fixed).
         if let Some(transport) = self.transport.as_mut() {
             transport.set_proxy(proxy_addr);
         }
         let transport = self.transport.as_ref().ok_or(TunnelError::NotConnected)?;
 
-        let fit = budget::classify(payload.len(), self.fec_encoder.is_some());
+        let path_mtu = self.pmtud.effective_path_mtu();
+        let fit = budget::classify_at(payload.len(), self.fec_encoder.is_some(), path_mtu);
         if let PayloadFit::OverBudget {
             payload_len,
             budget,
@@ -274,7 +430,7 @@ impl UdpRelay {
             }
 
             self.pacer.acquire(pkt_buf.len()).await;
-            let sent = if budget::datagram_fits(pkt_buf.len()) {
+            let sent = if budget::datagram_fits_at(pkt_buf.len(), path_mtu) {
                 transport.send(&pkt_buf).await?
             } else {
                 transport.send_may_fragment(&pkt_buf).await?
@@ -301,7 +457,7 @@ impl UdpRelay {
                     build_fec_parity_packet(&parity_header, &parity_fec, &parity_bytes);
 
                 self.pacer.acquire(parity_buf.len()).await;
-                let parity_sent = if budget::datagram_fits(parity_buf.len()) {
+                let parity_sent = if budget::datagram_fits_at(parity_buf.len(), path_mtu) {
                     transport.send(&parity_buf).await?
                 } else {
                     transport.send_may_fragment(&parity_buf).await?
@@ -327,7 +483,7 @@ impl UdpRelay {
             let packet = header.encode_with_payload(payload);
 
             self.pacer.acquire(packet.len()).await;
-            let sent = if budget::datagram_fits(packet.len()) {
+            let sent = if budget::datagram_fits_at(packet.len(), path_mtu) {
                 transport.send(&packet).await?
             } else {
                 transport.send_may_fragment(&packet).await?
@@ -428,7 +584,9 @@ impl UdpRelay {
         if recovered {
             self.stats.fec_recovered.fetch_add(1, Ordering::Relaxed);
             self.pacer.on_loss();
-            self.observe_link(self.recovery_loss_pct(), jitter_ms);
+            let recovery_loss = self.recovery_loss_pct();
+            self.observe_link(recovery_loss, jitter_ms);
+            self.observe_breaker_loss(recovery_loss);
             tracing::info!(
                 block = header.sequence,
                 recovered_len = payload.len(),
@@ -436,6 +594,7 @@ impl UdpRelay {
             );
         } else {
             self.observe_link(0.0, jitter_ms);
+            self.observe_breaker_loss(0.0);
         }
 
         Ok((header, payload, proxy_addr))
@@ -701,5 +860,178 @@ mod tests {
 
             crate::session::reset_all_tokens();
         });
+    }
+
+    /// A payload that fits the discovery-raised budget but not the conservative
+    /// clamp must be sent without being counted as oversized.
+    #[test]
+    fn discovered_mtu_raises_the_send_budget() {
+        let _guard = crate::session::token_test_guard();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        rt.block_on(async {
+            let receiver = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind receiver");
+            let proxy_addr = match receiver.local_addr().expect("receiver addr") {
+                std::net::SocketAddr::V4(v4) => v4,
+                std::net::SocketAddr::V6(_) => panic!("expected IPv4"),
+            };
+            crate::session::set_session_token(0xDEAD_BEEF);
+            crate::session::set_path_token(proxy_addr, 0x1234_5678);
+
+            let mut relay =
+                UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).with_pmtud(true);
+            relay.bind().await.expect("bind relay");
+            assert_eq!(
+                relay.effective_path_mtu(),
+                CONSERVATIVE_PATH_MTU,
+                "discovery starts at the clamp, never below it"
+            );
+            relay.observe_path_mtu(HARD_CAP_PATH_MTU);
+            assert_eq!(relay.effective_path_mtu(), HARD_CAP_PATH_MTU);
+
+            // Between the conservative budget (1440) and the raised one (1448).
+            let payload = vec![0x5Au8; lightspeed_protocol::max_game_payload(false) + 4];
+            let src = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000);
+            let dst = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 40001);
+
+            let sent = relay
+                .send_to_proxy(&payload, src, dst, proxy_addr)
+                .await
+                .expect("send within the discovered budget");
+            assert!(sent > 0);
+
+            let mut buf = vec![0u8; 4096];
+            let (n, _) = tokio::time::timeout(Duration::from_secs(2), receiver.recv_from(&mut buf))
+                .await
+                .expect("packet within 2s")
+                .expect("receive packet");
+            let (_, body) = TunnelHeader::decode_with_payload(&buf[..n]).expect("decode header");
+            assert_eq!(body, payload.as_slice());
+            assert_eq!(
+                relay.stats.payloads_over_budget.load(Ordering::Relaxed),
+                0,
+                "a payload within the discovered budget must not count as oversized"
+            );
+            assert_eq!(
+                relay.stats.effective_path_mtu.load(Ordering::Relaxed),
+                HARD_CAP_PATH_MTU as u64,
+                "the effective MTU must be observable"
+            );
+
+            crate::session::reset_all_tokens();
+        });
+    }
+
+    /// With discovery off (the default) the same payload keeps today's clamp
+    /// behaviour: forwarded with fragmentation allowed and counted.
+    #[test]
+    fn discovery_disabled_keeps_the_conservative_budget() {
+        let _guard = crate::session::token_test_guard();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        rt.block_on(async {
+            let receiver = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind receiver");
+            let proxy_addr = match receiver.local_addr().expect("receiver addr") {
+                std::net::SocketAddr::V4(v4) => v4,
+                std::net::SocketAddr::V6(_) => panic!("expected IPv4"),
+            };
+            crate::session::set_session_token(0xDEAD_BEEF);
+            crate::session::set_path_token(proxy_addr, 0x1234_5678);
+
+            let mut relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+            relay.bind().await.expect("bind relay");
+            assert_eq!(relay.effective_path_mtu(), CONSERVATIVE_PATH_MTU);
+
+            let payload = vec![0x5Au8; lightspeed_protocol::max_game_payload(false) + 4];
+            let src = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000);
+            let dst = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 40001);
+
+            relay
+                .send_to_proxy(&payload, src, dst, proxy_addr)
+                .await
+                .expect("oversized payload is still forwarded, never dropped");
+            assert_eq!(
+                relay.stats.payloads_over_budget.load(Ordering::Relaxed),
+                1,
+                "without discovery the conservative clamp still counts it"
+            );
+
+            crate::session::reset_all_tokens();
+        });
+    }
+
+    #[test]
+    fn breaker_backs_off_then_signals_fallback_on_sustained_loss() {
+        let mut relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+        let ceiling = relay.pacer().rate_bps();
+        let t0 = tokio::time::Instant::now();
+        let mut t = t0;
+        let mut backed_off = false;
+        let mut opened = false;
+        for _ in 0..80 {
+            relay.observe_breaker_loss_at(t, 25.0);
+            match relay.breaker().state() {
+                BreakerState::BackingOff => backed_off = true,
+                BreakerState::Open => {
+                    opened = true;
+                    break;
+                }
+                _ => {}
+            }
+            t += Duration::from_millis(500);
+        }
+        assert!(backed_off, "sustained loss must back off");
+        assert!(opened, "sustained loss must open the breaker");
+        assert!(
+            relay.should_fall_back(),
+            "an open breaker must signal fallback"
+        );
+        assert!(!relay.accepts_new_sessions());
+        assert_eq!(
+            relay.stats.breaker_state.load(Ordering::Relaxed),
+            BreakerState::Open.metric_code()
+        );
+        assert!(
+            relay.stats.breaker_transitions.load(Ordering::Relaxed) >= 2,
+            "backing off and opening must both be counted"
+        );
+        assert!(
+            relay.pacer().rate_bps() < ceiling,
+            "backing off must reduce the pacer rate"
+        );
+    }
+
+    #[test]
+    fn single_burst_does_not_trip_the_relay_breaker() {
+        let mut relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+        let t0 = tokio::time::Instant::now();
+        for i in 0..8 {
+            relay.observe_breaker_loss_at(t0 + Duration::from_millis(20 * i), 25.0);
+        }
+        let mut t = t0 + Duration::from_millis(200);
+        while t.saturating_duration_since(t0) < Duration::from_secs(3) {
+            relay.observe_breaker_loss_at(t, 0.0);
+            t += Duration::from_millis(20);
+        }
+        assert!(
+            relay.breaker().is_healthy(),
+            "a single burst must not trip it"
+        );
+        assert_eq!(
+            relay.stats.breaker_transitions.load(Ordering::Relaxed),
+            0,
+            "a single burst must not transition"
+        );
+        assert!(relay.accepts_new_sessions());
     }
 }

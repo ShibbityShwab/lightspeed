@@ -39,6 +39,8 @@ use super::windivert_handle::{is_fwp_in_use, OwnedHandle};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_udp};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+use crate::tunnel::adaptive::InlineFecGate;
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use std::net::SocketAddrV4;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -667,12 +669,15 @@ impl TrafficInterceptor for WinDivertInterceptor {
             // Main async loop: forward intercepted packets to proxy, inject responses.
             let fec_enabled = config.fec_enabled;
             let fec_k = config.fec_k;
+            let adaptive_cfg = config.adaptive_fec;
+            let fec_active = fec_enabled || adaptive_cfg.enabled;
             let running_loop = Arc::clone(&running);
             let ack_loop = ack_tx.clone();
 
             tokio::spawn(async move {
-                let mut fec_encoder = if fec_enabled {
-                    Some(lightspeed_protocol::FecEncoder::new(fec_k))
+                let mut fec_gate = InlineFecGate::new(adaptive_cfg, fec_k);
+                let mut fec_encoder = if fec_active {
+                    Some(lightspeed_protocol::FecEncoder::new(fec_gate.block_k()))
                 } else {
                     None
                 };
@@ -728,14 +733,24 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             if let Some(ref mut enc) = fec_encoder {
                                 let block_id = enc.block_id();
                                 let index = enc.current_index();
+                                let k_size = enc.k_size();
                                 let hdr = lightspeed_protocol::TunnelHeader::new_fec(seq, ts, game_src, game_dst)
                                     .with_session_token(crate::session::session_token());
-                                let fh = FecHeader::data(block_id, index, fec_k);
+                                let fh = FecHeader::data(block_id, index, k_size);
                                 let mut buf2 = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + payload.len());
                                 buf2.extend_from_slice(&hdr.encode_to_array());
                                 fh.encode(&mut buf2);
                                 buf2.extend_from_slice(&payload);
                                 let parity = enc.add_packet(&payload);
+                                // Same gate as the relay: drop this block's parity
+                                // while the link is clean.
+                                let emit_parity = fec_gate.emit_parity();
+                                if parity.is_some() {
+                                    fec_gate.record_block(emit_parity);
+                                }
+                                counters_t
+                                    .adaptive_parity_ratio_bp
+                                    .store(fec_gate.parity_ratio_bp(), Ordering::Relaxed);
                                 crate::latency::record_outbound(*game_dst.ip());
                                 let _ = crate::tunnel::transport::send_datagram(
                                     &tunnel_socket,
@@ -743,11 +758,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     crate::session::current_proxy().unwrap_or(config_proxy),
                                 )
                                 .await;
-                                if let Some(pb) = parity {
+                                if let Some(pb) = parity.filter(|_| emit_parity) {
                                     let ps = seq.wrapping_add(1);
                                     let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, game_src, game_dst)
                                         .with_session_token(crate::session::session_token());
-                                    let pf = FecHeader::parity(block_id, fec_k);
+                                    let pf = FecHeader::parity(block_id, k_size);
                                     let mut pb2 = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + pb.len());
                                     pb2.extend_from_slice(&ph.encode_to_array());
                                     pf.encode(&mut pb2);
@@ -809,6 +824,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 None => continue,
                             };
 
+                            let mut recovered = false;
                             let game_data: Option<bytes::Bytes> = if header.has_fec() {
                                 if payload.len() < FEC_HEADER_SIZE { continue; }
                                 let mut sl: &[u8] = &payload[..FEC_HEADER_SIZE];
@@ -819,13 +835,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 let data = &payload[FEC_HEADER_SIZE..];
                                 let dec = fec_decoders.entry(src_addr).or_default();
                                 if fh.is_parity() {
-                                    let recovered = dec
+                                    let recovered_pkt = dec
                                         .receive_parity(&fh, bytes::Bytes::copy_from_slice(data))
                                         .map(|(_, r)| r);
-                                    if recovered.is_some() {
+                                    recovered = recovered_pkt.is_some();
+                                    if recovered {
                                         crate::telemetry::paths::record_relay_recovery(src_addr);
                                     }
-                                    recovered
+                                    recovered_pkt
                                 } else {
                                     let b = bytes::Bytes::copy_from_slice(data);
                                     dec.receive_data(&fh, b.clone());
@@ -848,6 +865,17 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             } else {
                                 Some(bytes::Bytes::copy_from_slice(payload))
                             };
+
+                            {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_micros() as u32;
+                                fec_gate.observe_response(recovered, header.timestamp_us, now);
+                                counters_t
+                                    .adaptive_parity_ratio_bp
+                                    .store(fec_gate.parity_ratio_bp(), Ordering::Relaxed);
+                            }
 
                             if let Some(data) = game_data {
                                 if !data.is_empty() {

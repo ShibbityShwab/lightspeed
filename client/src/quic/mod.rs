@@ -61,6 +61,11 @@ mod inner {
                 .try_into()
                 .map_err(|e: quinn::VarIntBoundsExceeded| QuicError::Tls(e.to_string()))?,
         ));
+        // Bound quinn's built-in RFC 8899 DPLPMTUD so the client-to-relay path
+        // is probed only up to the cap the data plane is willing to trust.
+        let mut mtu_discovery = quinn::MtuDiscoveryConfig::default();
+        mtu_discovery.upper_bound(crate::tunnel::pmtud::HARD_CAP_UDP_PAYLOAD as u16);
+        transport.mtu_discovery_config(Some(mtu_discovery));
         client_config.transport_config(Arc::new(transport));
 
         Ok(client_config)
@@ -599,6 +604,12 @@ mod supervisor {
         (token != 0).then_some(token)
     }
 
+    /// The control connection's current DPLPMTUD result for `data_addr`, as the
+    /// largest UDP payload the client-to-relay path supports.
+    pub fn supervised_path_mtu(data_addr: SocketAddrV4) -> Option<u16> {
+        supervised_target(data_addr).map(|target| target.connection.stats().path.current_mtu)
+    }
+
     async fn supervisor_loop(
         data_addr: SocketAddrV4,
         control_port: u16,
@@ -856,6 +867,11 @@ pub fn supervised_token(data_addr: std::net::SocketAddrV4) -> Option<u32> {
 }
 
 #[cfg(feature = "quic")]
+pub fn supervised_path_mtu(data_addr: std::net::SocketAddrV4) -> Option<u16> {
+    supervisor::supervised_path_mtu(data_addr)
+}
+
+#[cfg(feature = "quic")]
 pub fn supervisor_handle(data_addr: std::net::SocketAddrV4) -> Option<SupervisorHandle> {
     supervisor::supervisor_handle(data_addr)
 }
@@ -898,6 +914,11 @@ pub fn is_supervised(_data_addr: std::net::SocketAddrV4) -> bool {
 
 #[cfg(not(feature = "quic"))]
 pub fn supervised_token(_data_addr: std::net::SocketAddrV4) -> Option<u32> {
+    None
+}
+
+#[cfg(not(feature = "quic"))]
+pub fn supervised_path_mtu(_data_addr: std::net::SocketAddrV4) -> Option<u16> {
     None
 }
 

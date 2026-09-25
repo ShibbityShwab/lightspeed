@@ -17,6 +17,7 @@
 //!     proxy_addr: "185.1.2.3:4434".parse().unwrap(),
 //!     fec_enabled: false,
 //!     fec_k: 4,
+//!     adaptive_fec: Default::default(),
 //!     bypass: Default::default(),
 //! };
 //!
@@ -133,6 +134,7 @@ pub fn build_config_for_game(
     proxy_addr: std::net::SocketAddrV4,
     fec_enabled: bool,
     fec_k: u8,
+    adaptive_fec: crate::tunnel::adaptive::AdaptiveConfig,
 ) -> Option<InterceptorConfig> {
     let process_names: Vec<&str> = game.process_names().to_vec();
     let info = find_game_process(&process_names);
@@ -168,6 +170,7 @@ pub fn build_config_for_game(
         proxy_addr,
         fec_enabled,
         fec_k,
+        adaptive_fec,
         bypass: bypass::default_config(),
     })
 }
@@ -437,8 +440,13 @@ mod tests {
         // Even if the process isn't running the config is returned (with empty routes).
         // At runtime, the interceptor falls back to port-range auto-detect mode.
         use crate::games::rust::RustConfig;
-        let config =
-            build_config_for_game(&RustConfig, "127.0.0.1:4434".parse().unwrap(), false, 4);
+        let config = build_config_for_game(
+            &RustConfig,
+            "127.0.0.1:4434".parse().unwrap(),
+            false,
+            4,
+            Default::default(),
+        );
         assert!(config.is_some());
         let cfg = config.unwrap();
         assert_eq!(cfg.game_name, "Rust");
@@ -462,6 +470,7 @@ mod tests {
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
             fec_enabled: true,
             fec_k: 4,
+            adaptive_fec: Default::default(),
             bypass: Default::default(),
         };
 
@@ -496,6 +505,7 @@ mod tests {
                 proxy_addr: "127.0.0.1:4434".parse().unwrap(),
                 fec_enabled: false,
                 fec_k: 4,
+                adaptive_fec: Default::default(),
                 bypass: Default::default(),
             })
             .unwrap();

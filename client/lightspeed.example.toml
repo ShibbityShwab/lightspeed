@@ -74,6 +74,12 @@ adaptive_fec = false
 # loss the adaptive mode never adds more parity than this.
 fec_max_overhead_pct = 25
 
+# Discover the real client-to-relay path MTU (DPLPMTUD) and raise the tunnel
+# payload budget when the path supports it. Off by default: with it off the
+# client uses today's fixed conservative clamp. Any failure or ambiguity falls
+# back to that clamp. Also available as --path-mtu-discovery.
+path_mtu_discovery = false
+
 [route]
 # Route selection strategy: "nearest" (default), "ml", or "multipath".
 strategy = "nearest"

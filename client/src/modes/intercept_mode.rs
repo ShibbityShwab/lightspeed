@@ -25,6 +25,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::interceptor::{build_config_for_game, create_interceptor, Route, TransportProtocol};
+use crate::tunnel::adaptive::AdaptiveConfig;
 
 /// Start the OOP TrafficInterceptor for a game and run until interrupted.
 ///
@@ -36,6 +37,7 @@ pub async fn run_intercept_mode(
     proxy_addr: SocketAddrV4,
     fec: bool,
     fec_k: u8,
+    adaptive_fec: AdaptiveConfig,
     server_addr: Option<SocketAddrV4>,
 ) -> anyhow::Result<()> {
     // ── Resolve game profile ────────────────────────────────────────
@@ -44,8 +46,8 @@ pub async fn run_intercept_mode(
     info!("🎮 Game: {} (ports: {:?})", game_name, game.ports());
 
     // ── Build interceptor config (runs ProcessScanner) ──────────────
-    let mut config =
-        build_config_for_game(game.as_ref(), proxy_addr, fec, fec_k).ok_or_else(|| {
+    let mut config = build_config_for_game(game.as_ref(), proxy_addr, fec, fec_k, adaptive_fec)
+        .ok_or_else(|| {
             anyhow::anyhow!(
                 "Failed to build interceptor config for '{}'. \
              Is the game running and connected to a server?",

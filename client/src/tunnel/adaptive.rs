@@ -354,6 +354,140 @@ impl AdaptiveFec {
     }
 }
 
+/// Per-path adaptive FEC gate for the inline intercept/redirect encoders.
+///
+/// The tunnel data plane ([`crate::tunnel::relay::UdpRelay`]) consults an
+/// [`AdaptiveFec`] controller per path. The inline paths (Linux nftables,
+/// WinDivert, and the userspace redirect) own their own encoder/decoder and
+/// used to emit a parity packet for every completed block unconditionally.
+/// This gate wraps the same controller so those paths make the same decision
+/// from the same signal: the controller observes one loss sample per decoded
+/// response, using an FEC recovery as the loss, and parity follows
+/// [`AdaptiveFec::parity_k`].
+///
+/// When the controller is disabled the gate reproduces the historical fixed
+/// behaviour exactly: [`InlineFecGate::block_k`] is the fixed K and
+/// [`InlineFecGate::emit_parity`] is always `true`, so an opted-out client
+/// produces the same bytes as before.
+#[derive(Debug)]
+pub struct InlineFecGate {
+    /// The opt-in controller, present only when adaptive mode is enabled.
+    controller: Option<AdaptiveFec>,
+    /// Block size used when adaptive mode is disabled.
+    fixed_k: u8,
+    /// Previous response RTT, for the same jitter estimate the relay uses.
+    last_rtt_us: Option<u32>,
+}
+
+impl InlineFecGate {
+    /// Create a gate for one inline path.
+    ///
+    /// When `cfg.enabled` is set this publishes a clean start to the shared
+    /// duplication gate, exactly as [`crate::tunnel::relay::UdpRelay`] does, so
+    /// duplication is earned only by measured loss. A disabled config leaves
+    /// every process-wide flag untouched.
+    pub fn new(cfg: AdaptiveConfig, fixed_k: u8) -> Self {
+        let controller = cfg.enabled.then(|| AdaptiveFec::new(cfg));
+        if controller.is_some() {
+            crate::session::set_duplication_allowed(false);
+        }
+        Self {
+            controller,
+            fixed_k,
+            last_rtt_us: None,
+        }
+    }
+
+    /// Whether the opt-in adaptive controller is active.
+    pub fn enabled(&self) -> bool {
+        self.controller.is_some()
+    }
+
+    /// The block size the inline encoder must be built with: the clamped
+    /// effective K when adaptive is on, otherwise the fixed K.
+    pub fn block_k(&self) -> u8 {
+        match &self.controller {
+            Some(ctrl) => ctrl.effective_k(),
+            None => self.fixed_k,
+        }
+    }
+
+    /// Whether this block's parity packet must be emitted.
+    ///
+    /// Always `true` when adaptive is disabled, so the fixed `K=4/P=1`
+    /// behaviour is byte-for-byte preserved.
+    pub fn emit_parity(&self) -> bool {
+        match &self.controller {
+            Some(ctrl) => ctrl.parity_k().is_some(),
+            None => true,
+        }
+    }
+
+    /// The current parity-to-data ratio (`0.0` when suppressed).
+    pub fn parity_ratio(&self) -> f64 {
+        match &self.controller {
+            Some(ctrl) => ctrl.parity_ratio(),
+            None => 0.0,
+        }
+    }
+
+    /// The current parity-to-data ratio in basis points, for the shared
+    /// atomic counters that make it observable outside the owning task.
+    pub fn parity_ratio_bp(&self) -> u64 {
+        (self.parity_ratio() * 10_000.0).round() as u64
+    }
+
+    /// The current loss estimate, in percent.
+    pub fn loss_pct(&self) -> f64 {
+        match &self.controller {
+            Some(ctrl) => ctrl.loss_estimate_pct(),
+            None => 0.0,
+        }
+    }
+
+    /// Whether packet duplication is currently earned.
+    pub fn duplicating(&self) -> bool {
+        match &self.controller {
+            Some(ctrl) => ctrl.should_duplicate(),
+            None => false,
+        }
+    }
+
+    /// Record a completed block and whether its parity was emitted.
+    pub fn record_block(&mut self, parity_emitted: bool) {
+        if let Some(ctrl) = self.controller.as_mut() {
+            ctrl.record_block(parity_emitted);
+        }
+    }
+
+    /// Feed one decoded proxy response to the controller.
+    ///
+    /// `recovered` is `true` when a parity packet triggered FEC recovery, which
+    /// is the same loss signal the relay uses. Jitter is derived from the
+    /// tunnel timestamp, again matching [`crate::tunnel::relay::UdpRelay`], so
+    /// there is no separate inline estimate. A no-op when adaptive is disabled,
+    /// which is what keeps the opt-out path free of process-wide side effects.
+    pub fn observe_response(&mut self, recovered: bool, timestamp_us: u32, now_us: u32) {
+        let Some(ctrl) = self.controller.as_mut() else {
+            return;
+        };
+        let rtt_us = now_us.wrapping_sub(timestamp_us);
+        let jitter_us = self
+            .last_rtt_us
+            .map(|last| rtt_us.abs_diff(last))
+            .unwrap_or(0);
+        self.last_rtt_us = Some(rtt_us);
+        let jitter_ms = jitter_us as f32 / 1000.0;
+        let loss_pct = if recovered {
+            100.0 / f64::from(ctrl.effective_k())
+        } else {
+            0.0
+        };
+        ctrl.observe_sample(loss_pct, jitter_ms);
+        crate::session::set_duplication_allowed(ctrl.should_duplicate());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +640,66 @@ mod tests {
         ctrl.record_block(true);
         assert_eq!(ctrl.blocks_data(), 3);
         assert_eq!(ctrl.blocks_parity(), 1);
+    }
+
+    #[test]
+    fn inline_gate_disabled_keeps_fixed_parity() {
+        let _guard = crate::session::token_test_guard();
+        let gate = InlineFecGate::new(AdaptiveConfig::default(), DEFAULT_K);
+        assert!(!gate.enabled(), "the inline gate must default to opt-out");
+        assert_eq!(gate.block_k(), DEFAULT_K);
+        assert!(
+            gate.emit_parity(),
+            "an opted-out inline path must keep the fixed parity"
+        );
+        assert_eq!(gate.parity_ratio_bp(), 0);
+        assert!(!gate.duplicating());
+    }
+
+    #[test]
+    fn inline_gate_clean_link_suppresses_parity() {
+        let _guard = crate::session::token_test_guard();
+        let mut gate = InlineFecGate::new(enabled_config(), DEFAULT_K);
+        assert!(gate.enabled());
+        assert_eq!(gate.block_k(), DEFAULT_K);
+        for _ in 0..32 {
+            gate.observe_response(false, 1_000, 1_000);
+        }
+        assert!(
+            !gate.emit_parity(),
+            "a clean inline link must send no parity"
+        );
+        assert_eq!(gate.parity_ratio_bp(), 0);
+        assert!(!gate.duplicating());
+    }
+
+    #[test]
+    fn inline_gate_recovery_enables_parity() {
+        let _guard = crate::session::token_test_guard();
+        let mut gate = InlineFecGate::new(enabled_config(), DEFAULT_K);
+        gate.observe_response(true, 1_000, 1_000);
+        assert!(
+            gate.emit_parity(),
+            "an FEC recovery must turn inline parity back on"
+        );
+        assert_eq!(gate.parity_ratio_bp(), 2_500);
+        assert!(gate.loss_pct() > 1.0);
+        assert!(gate.duplicating(), "the recovery also earns duplication");
+    }
+
+    #[test]
+    fn inline_gate_returns_to_baseline_after_recovery_stops() {
+        let _guard = crate::session::token_test_guard();
+        let mut gate = InlineFecGate::new(enabled_config(), DEFAULT_K);
+        gate.observe_response(true, 1_000, 1_000);
+        assert!(gate.emit_parity());
+        for _ in 0..64 {
+            gate.observe_response(false, 1_000, 1_000);
+        }
+        assert!(
+            !gate.emit_parity(),
+            "inline parity must be suppressed again once recovery stops"
+        );
+        assert_eq!(gate.parity_ratio_bp(), 0);
     }
 }

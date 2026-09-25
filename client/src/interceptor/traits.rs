@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use super::bypass::BypassConfig;
 use super::teardown::TeardownAck;
+use crate::tunnel::adaptive::AdaptiveConfig;
 use tokio::sync::oneshot;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +107,10 @@ pub struct InterceptorConfig {
     /// FEC block size (K data packets per parity packet).
     pub fec_k: u8,
 
+    /// Adaptive FEC/duplication policy for this path. Disabled by default,
+    /// which keeps the fixed `fec_k` block with parity on every block.
+    pub adaptive_fec: AdaptiveConfig,
+
     /// Do-no-harm bypass gate configuration.
     pub bypass: BypassConfig,
 }
@@ -145,6 +150,9 @@ pub struct InterceptorCounters {
     /// Game payloads forwarded with fragmentation allowed because they
     /// exceeded the conservative tunnel payload budget.
     pub payloads_over_budget: AtomicU64,
+    /// Current inline adaptive parity-to-data ratio in basis points
+    /// (2500 = 1/4). Zero while adaptive FEC is off or parity is suppressed.
+    pub adaptive_parity_ratio_bp: AtomicU64,
     /// Times the bypass gate decided Direct and the action layer honoured it.
     pub bypass_allowed: AtomicU64,
     /// Times a bypass was computed but not applied (dry run, fail-open, or an
@@ -176,6 +184,7 @@ impl Default for InterceptorCounters {
             packets_from_proxy: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             payloads_over_budget: AtomicU64::new(0),
+            adaptive_parity_ratio_bp: AtomicU64::new(0),
             bypass_allowed: AtomicU64::new(0),
             bypass_refused: AtomicU64::new(0),
             bypass_decisions: AtomicU64::new(0),
@@ -198,6 +207,7 @@ impl InterceptorCounters {
             packets_from_proxy: self.packets_from_proxy.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             payloads_over_budget: self.payloads_over_budget.load(Ordering::Relaxed),
+            adaptive_parity_ratio_bp: self.adaptive_parity_ratio_bp.load(Ordering::Relaxed),
             bypass_allowed: self.bypass_allowed.load(Ordering::Relaxed),
             bypass_refused: self.bypass_refused.load(Ordering::Relaxed),
             bypass_decisions: self.bypass_decisions.load(Ordering::Relaxed),
@@ -222,6 +232,8 @@ pub struct InterceptorStats {
     /// Payloads forwarded with fragmentation allowed for exceeding the
     /// conservative tunnel payload budget.
     pub payloads_over_budget: u64,
+    /// Current inline adaptive parity-to-data ratio in basis points.
+    pub adaptive_parity_ratio_bp: u64,
     /// Times the bypass gate decided Direct and it was honoured.
     pub bypass_allowed: u64,
     /// Times a bypass was computed but not applied, so the relay was kept.
@@ -442,6 +454,7 @@ mod tests {
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
             fec_enabled: false,
             fec_k: 4,
+            adaptive_fec: Default::default(),
             bypass: Default::default(),
         }
     }

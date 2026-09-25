@@ -826,9 +826,16 @@ impl LightSpeedEngine {
         let game_box = crate::games::detect_game(game_key).map_err(|e| e.to_string())?;
 
         // Build config: runs ProcessScanner synchronously on the calling thread.
-        let config =
-            crate::interceptor::build_config_for_game(game_box.as_ref(), proxy_addr, fec, fec_k)
-                .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?;
+        // The GUI keeps the fixed FEC policy; the CLI paths thread the opt-in
+        // adaptive policy through explicitly.
+        let config = crate::interceptor::build_config_for_game(
+            game_box.as_ref(),
+            proxy_addr,
+            fec,
+            fec_k,
+            crate::tunnel::adaptive::AdaptiveConfig::default(),
+        )
+        .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?;
 
         let interceptor = crate::interceptor::create_interceptor();
 

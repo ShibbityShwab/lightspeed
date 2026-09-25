@@ -41,6 +41,7 @@ use super::teardown::TeardownAck;
 use super::traits::{
     InterceptorConfig, InterceptorCounters, InterceptorHandle, PlatformTeardown, TrafficInterceptor,
 };
+use crate::tunnel::adaptive::InlineFecGate;
 
 const RECV_POLL_TIMEOUT_MS: libc::c_int = 200;
 const RECV_MAX_RETRIES: u32 = 5;
@@ -120,6 +121,9 @@ impl TrafficInterceptor for NftablesInterceptor {
         let config_proxy = config.proxy_addr;
         let fec_enabled = config.fec_enabled;
         let fec_k = config.fec_k;
+        let adaptive_cfg = config.adaptive_fec;
+        // Adaptive mode turns the codec on at its clamped effective K.
+        let fec_active = fec_enabled || adaptive_cfg.enabled;
         let bypass_config = config.bypass;
         let dynamic = config.dynamic_server();
         let process_names = crate::games::process_names_for_name(&config.game_name);
@@ -240,8 +244,9 @@ impl TrafficInterceptor for NftablesInterceptor {
         let counters_loop = Arc::clone(&counters);
         let running_loop = Arc::clone(&running);
         tokio::spawn(async move {
-            let mut fec_encoder = if fec_enabled {
-                Some(lightspeed_protocol::FecEncoder::new(fec_k))
+            let mut fec_gate = InlineFecGate::new(adaptive_cfg, fec_k);
+            let mut fec_encoder = if fec_active {
+                Some(lightspeed_protocol::FecEncoder::new(fec_gate.block_k()))
             } else {
                 None
             };
@@ -282,7 +287,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                 &mut rotation,
                 &mut gate,
                 &counters_loop,
-                fec_enabled,
+                fec_active,
             );
 
             loop {
@@ -305,7 +310,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                             &mut rotation,
                             &mut gate,
                             &counters_loop,
-                            fec_enabled,
+                            fec_active,
                         );
                     }
 
@@ -402,25 +407,35 @@ impl TrafficInterceptor for NftablesInterceptor {
                             if let Some(ref mut enc) = fec_encoder {
                                 let block_id = enc.block_id();
                                 let index = enc.current_index();
+                                let k_size = enc.k_size();
                                 let hdr = lightspeed_protocol::TunnelHeader::new_fec(seq, ts, src, actual_dst)
                                     .with_session_token(crate::session::session_token());
-                                let fh = FecHeader::data(block_id, index, fec_k);
+                                let fh = FecHeader::data(block_id, index, k_size);
                                 let mut buf = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + len);
                                 buf.extend_from_slice(&hdr.encode_to_array());
                                 fh.encode(&mut buf);
                                 buf.extend_from_slice(payload);
                                 let parity = enc.add_packet(payload);
+                                // Same gate as the relay: drop this block's parity
+                                // while the link is clean.
+                                let emit_parity = fec_gate.emit_parity();
+                                if parity.is_some() {
+                                    fec_gate.record_block(emit_parity);
+                                }
+                                counters_loop
+                                    .adaptive_parity_ratio_bp
+                                    .store(fec_gate.parity_ratio_bp(), Ordering::Relaxed);
                                 let _ = crate::tunnel::transport::send_datagram(
                                     &tunnel_socket,
                                     &buf,
                                     crate::session::current_proxy().unwrap_or(config_proxy),
                                 )
                                 .await;
-                                if let Some(pb) = parity {
+                                if let Some(pb) = parity.filter(|_| emit_parity) {
                                     let ps = seq.wrapping_add(1);
                                     let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, src, actual_dst)
                                         .with_session_token(crate::session::session_token());
-                                    let pf = FecHeader::parity(block_id, fec_k);
+                                    let pf = FecHeader::parity(block_id, k_size);
                                     let mut pb2 = BytesMut::with_capacity(HEADER_SIZE + FEC_HEADER_SIZE + pb.len());
                                     pb2.extend_from_slice(&ph.encode_to_array());
                                     pf.encode(&mut pb2);
@@ -496,6 +511,7 @@ impl TrafficInterceptor for NftablesInterceptor {
 
                         let Some(dest) = game_src else { continue };
 
+                        let mut recovered = false;
                         let data: Option<bytes::Bytes> = if header.has_fec() {
                             if payload.len() < FEC_HEADER_SIZE { continue; }
                             let mut sl: &[u8] = &payload[..FEC_HEADER_SIZE];
@@ -506,13 +522,14 @@ impl TrafficInterceptor for NftablesInterceptor {
                             let d = &payload[FEC_HEADER_SIZE..];
                             let dec = fec_decoders.entry(src_addr).or_default();
                             if fh.is_parity() {
-                                let recovered = dec
+                                let recovered_pkt = dec
                                     .receive_parity(&fh, bytes::Bytes::copy_from_slice(d))
                                     .map(|(_, r)| r);
-                                if recovered.is_some() {
+                                recovered = recovered_pkt.is_some();
+                                if recovered {
                                     crate::telemetry::paths::record_relay_recovery(src_addr);
                                 }
-                                recovered
+                                recovered_pkt
                             } else {
                                 let b = bytes::Bytes::copy_from_slice(d);
                                 dec.receive_data(&fh, b.clone());
@@ -535,6 +552,17 @@ impl TrafficInterceptor for NftablesInterceptor {
                         } else {
                             Some(bytes::Bytes::copy_from_slice(payload))
                         };
+
+                        {
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_micros() as u32;
+                            fec_gate.observe_response(recovered, header.timestamp_us, now);
+                            counters_loop
+                                .adaptive_parity_ratio_bp
+                                .store(fec_gate.parity_ratio_bp(), Ordering::Relaxed);
+                        }
 
                         if let Some(d) = data {
                             if !d.is_empty() {

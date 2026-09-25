@@ -100,6 +100,17 @@ pub struct TunnelConfig {
     /// sustained loss the adaptive mode never adds more parity than this.
     #[serde(default = "default_fec_max_overhead_pct")]
     pub fec_max_overhead_pct: u32,
+
+    /// Discover the real client-to-relay path MTU (DPLPMTUD) and raise the
+    /// tunnel payload budget when the path supports it.
+    ///
+    /// **Off by default.** With discovery off the client uses the fixed
+    /// conservative clamp unchanged. When on, the already-encrypted QUIC
+    /// control plane's bounded DPLPMTUD result raises the effective MTU up to a
+    /// 1500-byte hard cap, and any failure or ambiguity falls back to the
+    /// clamp. Enable with `--path-mtu-discovery`.
+    #[serde(default)]
+    pub path_mtu_discovery: bool,
 }
 
 /// Proxy connection settings.
@@ -309,6 +320,7 @@ impl Default for TunnelConfig {
             dscp: false,
             adaptive_fec: false,
             fec_max_overhead_pct: default_fec_max_overhead_pct(),
+            path_mtu_discovery: false,
         }
     }
 }
@@ -396,6 +408,7 @@ mod tests {
         assert!(!config.tunnel.dscp);
         assert!(!config.tunnel.adaptive_fec);
         assert_eq!(config.tunnel.fec_max_overhead_pct, 25);
+        assert!(!config.tunnel.path_mtu_discovery);
         assert!(config.proxy.servers.is_empty());
         assert_eq!(config.proxy.quic_port, 4433);
         assert_eq!(config.proxy.data_port, 4434);
@@ -443,6 +456,7 @@ mod tests {
         assert!(!tunnel.dscp);
         assert!(!tunnel.adaptive_fec);
         assert_eq!(tunnel.fec_max_overhead_pct, 25);
+        assert!(!tunnel.path_mtu_discovery);
 
         let proxy = ProxyConfig::default();
         assert!(proxy.servers.is_empty());
@@ -493,6 +507,18 @@ mod tests {
             toml::from_str("[tunnel]\nadaptive_fec = true\nfec_max_overhead_pct = 50\n").unwrap();
         assert!(opted_in.tunnel.adaptive_fec);
         assert_eq!(opted_in.tunnel.fec_max_overhead_pct, 50);
+    }
+
+    #[test]
+    fn path_mtu_discovery_defaults_off_and_can_be_enabled() {
+        let defaulted: Config = toml::from_str("[tunnel]\nkeepalive_ms = 5000\n").unwrap();
+        assert!(
+            !defaulted.tunnel.path_mtu_discovery,
+            "path-MTU discovery must be opt-in so the default is today's clamp"
+        );
+
+        let opted_in: Config = toml::from_str("[tunnel]\npath_mtu_discovery = true\n").unwrap();
+        assert!(opted_in.tunnel.path_mtu_discovery);
     }
 
     #[test]
@@ -759,6 +785,7 @@ servers = [
         assert_eq!(config.tunnel.transport, "udp");
         assert!(!config.tunnel.adaptive_fec);
         assert_eq!(config.tunnel.fec_max_overhead_pct, 25);
+        assert!(!config.tunnel.path_mtu_discovery);
 
         assert!(config.proxy.servers.is_empty());
         assert_eq!(config.proxy.quic_port, 4433);

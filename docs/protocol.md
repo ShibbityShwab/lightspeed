@@ -241,7 +241,25 @@ cleared for that datagram, so the local kernel may fragment it, and the client
 counts it. A lost fragment loses the whole datagram, which is why the clamp
 exists; forwarding the oversized payload is a deliberate tradeoff of that
 fragmentation risk against certain loss. This is a fixed clamp over the
-client-to-relay hop, not DPLPMTUD (RFC 8899).
+client-to-relay hop.
+
+### Path-MTU discovery (opt-in)
+
+With `path_mtu_discovery = true` (or `--path-mtu-discovery`) the client enables
+bounded DPLPMTUD (RFC 8899) over the already-encrypted QUIC control plane. The
+control connection probes the path up to a 1500-byte IPv4 Ethernet hard cap and
+reports the largest UDP payload the path supports; the data plane samples that
+result (at most once every two seconds) and raises the effective path MTU from
+the 1492-byte clamp toward the cap. The 1500-byte hard cap is 1472 bytes of UDP
+payload, which also stays inside the relay's 2048-byte receive buffer.
+
+Discovery can only move the effective MTU between the clamp and the cap. Any
+failed or ambiguous probe, a missing control connection, or a path that shrinks
+falls back to the conservative clamp, so a path that never answers can never
+stall or break a session. Discovery is **off by default**; with it off the fixed
+clamp above is the whole policy. The effective MTU in force is logged
+(`client-to-relay path MTU updated`) and exposed as the `effective_path_mtu`
+stat.
 
 ### DSCP
 

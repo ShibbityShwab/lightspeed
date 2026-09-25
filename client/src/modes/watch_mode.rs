@@ -5,6 +5,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::interceptor::InterceptorHandle;
+use crate::tunnel::adaptive::AdaptiveConfig;
 
 /// Stop the active interceptor, if any, and wait for its platform owner
 /// threads to release their handles.
@@ -28,6 +29,7 @@ pub async fn run_watch_mode(
     proxy_addr: SocketAddrV4,
     fec: bool,
     fec_k: u8,
+    adaptive_fec: AdaptiveConfig,
     server_addr: Option<SocketAddrV4>,
 ) -> anyhow::Result<()> {
     let game = crate::games::detect_game(game_key)?;
@@ -72,6 +74,7 @@ pub async fn run_watch_mode(
                             proxy_addr,
                             fec,
                             fec_k,
+                            adaptive_fec,
                         )
                         .unwrap_or(crate::interceptor::InterceptorConfig {
                             game_name: game_name.clone(),
@@ -81,6 +84,7 @@ pub async fn run_watch_mode(
                             proxy_addr,
                             fec_enabled: fec,
                             fec_k,
+                            adaptive_fec,
                             bypass: Default::default(),
                         });
 
