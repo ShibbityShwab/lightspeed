@@ -391,6 +391,32 @@ if require_sourceable "(i) single relay"; then
 	assert_rc_nonzero "$rc" "(i) an unknown single-relay target is rejected"
 fi
 
+# ── (j) regression: a stdin-draining deploy step must not truncate the rollout ──
+# ssh consumes its stdin. The original rollout read its batch list from a
+# process substitution inside the loop, so the first batch swallowed the rest
+# and the deploy reported success with most of the fleet untouched.
+if require_sourceable "(j) stdin-draining deploy"; then
+	reset_rollout
+	deploy_node() {
+		rec "deploy_node $1"
+		cat >/dev/null || true
+		return 0
+	}
+	if lightspeed_rollout_canary_then_rest >/dev/null 2>&1; then rc=0; else rc=$?; fi
+	assert_rc_zero "$rc" "(j) a stdin-draining deploy still exits 0"
+	assert_calls_eq "$(printf '%s\n' \
+		'deploy_node alpha' \
+		'verify_node alpha' \
+		'deploy_node beta' \
+		'verify_node beta' \
+		'deploy_node gamma' \
+		'verify_node gamma' \
+		'deploy_node delta' \
+		'verify_node delta')" \
+		"(j) every node is deployed even when a deploy step drains stdin"
+	reset_rollout
+fi
+
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
 	printf 'deploy-canary: all assertions passed\n'

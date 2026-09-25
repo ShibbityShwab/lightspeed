@@ -475,8 +475,17 @@ lightspeed_rollout_canary_then_rest() {
 	fi
 
 	local batch_no=0 batch line
-	while IFS= read -r batch; do
-		[ -n "$batch" ] || continue
+	# Collect the batches into an array FIRST rather than reading them from a
+	# process substitution inside the loop. An ssh command executed inside a
+	# `while read` loop consumes the loop's stdin, which silently truncated the
+	# rollout after the first batch (the deploy reported success with most of
+	# the fleet untouched). Reading the list up front removes that coupling.
+	local -a batches=()
+	while IFS= read -r line; do
+		[ -n "$line" ] && batches+=("$line")
+	done < <(lightspeed_batch_nodes "$BATCH_SIZE" "${remaining[@]}")
+
+	for batch in "${batches[@]}"; do
 		batch_no=$((batch_no + 1))
 		printf '\n%s-- batch %s (size %s): %s%s\n' "$CYAN" "$batch_no" "$BATCH_SIZE" "$batch" "$NC"
 		for n in $batch; do
@@ -495,7 +504,7 @@ lightspeed_rollout_canary_then_rest() {
 			printf '  %s✅ %s verified%s\n' "$GREEN" "$n" "$NC"
 		done
 		printf '  %s✅ batch %s verified%s\n' "$GREEN" "$batch_no" "$NC"
-	done < <(lightspeed_batch_nodes "$BATCH_SIZE" "${remaining[@]}")
+	done
 
 	printf '\n%s✅ Fleet updated%s\n' "$GREEN" "$NC"
 	return 0
