@@ -37,6 +37,12 @@ mod inner {
     /// Build a quinn client config that pins the proxy's self-signed
     /// certificate (trust-on-first-use) and verifies the TLS signature.
     fn build_client_config(addr: SocketAddr) -> Result<quinn::ClientConfig, QuicError> {
+        // quinn pulls rustls with its aws-lc-rs default while this crate (and
+        // the pinning verifier) uses ring, so a workspace build has two
+        // providers compiled in and `ClientConfig::builder()` panics on
+        // auto-detection. Pin ring as the process-wide provider, exactly as the
+        // proxy does for its server config.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(super::pinning::TofuVerifier::new(addr)))
