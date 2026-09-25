@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.12] - 2026-09-25
+
+### Added
+
+- **Fleet anomaly detection** (hourly): a relay relaying nothing while up, an
+  auth-rejection spike with flat sessions, version lag, a ping-saved
+  regression, a negative-saving spike, and missing or unhealthy relays, all
+  from existing data with sustained-window guards.
+- **Canary deploy with automatic rollback**: deploy one relay, verify health,
+  both ports and a real control-plane registration, then fan out in batches and
+  revert on failure.
+- **Egress budget guard** (disabled by default): an explicit cumulative egress
+  series and an optional soft/hard budget that refuses only new sessions.
+- **`--diagnose`**: an honest, local "does LightSpeed help me?" verdict.
+
 ## [1.6.11] - 2026-09-25
 
 ### Added
