@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.10] - 2026-09-25
+
+### Added
+
+- **Safe bypass gate (dry-run by default).** The client can now decide per game
+  server whether the relay actually helps, and is built to fail open to the
+  relay on any ambiguity, cap flips at two per server, and never tear down a
+  live flow. It defaults to `dry_run` (measure and log only); `--no-bypass`
+  restores the previous behaviour exactly.
+- **Telemetry over the QUIC control plane.** Anonymous reports now travel on the
+  authenticated, encrypted control connection when the relay advertises support
+  (a backward-compatible RegisterAck capability byte), and fall back to HTTP
+  against a pre-upgrade relay. Same ingest path and k-anonymity, never blocking
+  gameplay.
+- **Relay socket hygiene**: bounded send/receive buffers and Linux busy-poll,
+  all graceful and observable. A macOS shadow-direct sampler with a
+  source-port-scoped pf exemption.
+
+### Changed
+
+- Local latency measurement is decoupled from telemetry reporting, so opting out
+  of telemetry no longer disables the measurement routing depends on.
+- Tunnel packets can be marked DSCP EF (opt-in) and oversized game payloads are
+  now forwarded with fragmentation allowed instead of dropped.
+- Relay selection can score the estimated relay-to-destination leg, and a
+  loss-responsive pacer bounds the send burst.
+
 ### Added
 
 - **WARDOGS game profile.** Added `--game wardogs` for BULKHEAD's 100-player
