@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.13] - 2026-09-25
+
+### Added
+
+- **Adaptive FEC on the inline paths**: real gameplay traffic (interception and
+  redirect) now suppresses parity on a clean link and enables it on measured
+  loss, sharing the tunnel controller and staying opt-in.
+- **Path-MTU discovery** (DPLPMTUD over the QUIC control plane): the send budget
+  rises on a proven-larger path, hard-capped at 1500 and always falling back to
+  the conservative clamp.
+- **Sustained-loss circuit breaker**: backs off, falls back to a working path
+  when a path stays bad, and recovers after a clean window; it never trips on a
+  single burst. ECN is deferred and documented.
+- Docs: operator-key succession and a bufferbloat guide.
+
+### Fixed
+
+- Redirect mode never set the proxy address on its UDP sender, so every
+  redirect-mode datagram failed with EINVAL and nothing was forwarded.
+- The deploy workflow now watches client/** so a probe-affecting client fix
+  retriggers a deploy.
+
 ## [1.6.12] - 2026-09-25
 
 ### Added
