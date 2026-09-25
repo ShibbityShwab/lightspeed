@@ -348,7 +348,8 @@ pub fn spawn_periodic_flush(
 pub fn print_notice() {
     println!(
         "📊 Anonymous telemetry on: aggregate latency stats only, no IPs. \
-         Disable with --no-telemetry or telemetry = false in lightspeed.toml."
+         Disable with --no-telemetry or telemetry = false in lightspeed.toml. \
+         Policy: https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md"
     );
 }
 

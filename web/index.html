@@ -136,7 +136,8 @@
           <p class="hero-subtitle">
             LightSpeed is an open-source network optimizer that routes your game traffic
             through the fastest path using ML-based proxy selection. No subscriptions.
-            No data harvesting. Just lower latency.
+            Anonymous aggregate telemetry is on by default and can be turned off any time.
+            Just lower latency.
           </p>
           <div class="hero-actions">
             <a href="#download" class="btn btn-lg btn-primary">
@@ -194,6 +195,23 @@
             </div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- Privacy notice (on-by-default telemetry disclosure) -->
+    <section class="section" id="privacy-notice" aria-label="Privacy notice">
+      <div class="container">
+        <p class="section-subtitle">
+          <strong>Privacy notice:</strong> Anonymous aggregate telemetry is <strong>on by default</strong>.
+          It sends aggregate latency metrics (percentiles, jitter, FEC counters, and the direct-vs-relayed
+          difference) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint.
+          A cell is suppressed until it has at least 3 reports. Turn it off any time with
+          <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the
+          GUI checkbox. Read the
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>
+          and
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Data Dictionary</a>.
+        </p>
       </div>
     </section>
 
@@ -766,7 +784,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>Privacy First</h3>
-            <p>No account required. Anonymous aggregate telemetry is on by default and can be turned off any time with <code>--no-telemetry</code> or the GUI checkbox. It sends only aggregate latency metrics to your own relay: no IP addresses, no identifiers, no packet contents, and any cell with fewer than 3 reports is suppressed (k&gt;=3). The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay.</p>
+            <p>No account required. Anonymous aggregate telemetry is on by default and can be turned off any time with <code>--no-telemetry</code> or the GUI checkbox. It sends only aggregate latency metrics over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -1062,7 +1080,7 @@
         <div class="faq-grid">
           <details class="faq-item">
             <summary>How is this free? What's the catch?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
-            <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data because we don't collect it.</p>
+            <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data. Anonymous aggregate telemetry is on by default and can be turned off any time; see the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
           </details>
           <details class="faq-item">
             <summary>Will this get me banned?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
@@ -1086,7 +1104,7 @@
           </details>
           <details class="faq-item">
             <summary>Is my data safe?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
-            <p>Anonymous aggregate telemetry is on by default. No accounts, no registration, and no personal data. It sends only aggregate network metrics (latency percentiles, jitter, FEC counters) to your own relay: no IP addresses, no identifiers, and no packet contents. Any cell with fewer than 3 reports is suppressed (k&gt;=3). Turn it off any time with <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the GUI checkbox. All traffic passes through unencrypted to avoid adding overhead. We document this transparently.</p>
+            <p>Anonymous aggregate telemetry is on by default. No accounts, no registration, and no personal data. It sends only aggregate network metrics (latency percentiles, jitter, FEC counters) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, and no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). Turn it off any time with <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the GUI checkbox. All traffic passes through unencrypted to avoid adding overhead. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a> and <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Data Dictionary</a>.</p>
           </details>
           <details class="faq-item">
             <summary>How do I get a proxy node?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
@@ -1133,6 +1151,8 @@
         <nav class="footer-links" aria-label="Legal">
           <h3>Legal</h3>
           <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE" target="_blank" rel="noopener">License</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Data Dictionary</a>
           <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/security-audit-mvp.md" target="_blank" rel="noopener">Security Audit</a>
         </nav>
       </div>

@@ -67,7 +67,7 @@ Usually 1-3 seconds after you connect to a game server. The interceptor watches 
 
 ### How does LightSpeed decide where to add relays?
 
-The proxy derives the **country** of an IP address from a locally stored DB-IP Lite database. This happens in memory, transiently, at session creation, for both the client source address and the game-server destination address. It then counts sessions per `(source_country, destination_country)` pair, so the network can see which region pairs are underserved. A k-anonymity floor of 3 suppresses any pair with fewer than 3 sessions before it is exported, and the public stats carry only coarsened region-pair counts (for example `mena-eu`). The counters contain no raw IP, and no raw IP is exported by the placement pipeline.
+The proxy derives the **country** of an IP address from a locally stored DB-IP Lite database. This happens in memory, transiently, at session creation, for both the client source address and the game-server destination address. It then counts sessions per `(source_country, destination_country)` pair, so the network can see which region pairs are underserved. A cell is suppressed until it has at least 3 sessions before it is exported, and the public stats carry only coarsened region-pair counts (for example `mena-eu`). The counters contain no raw IP, and no raw IP is exported by the placement pipeline.
 
 ---
 
@@ -134,15 +134,15 @@ LightSpeed sees UDP packet headers (source/destination IP, port, size) to route 
 
 ### Is there telemetry?
 
-Telemetry is **on by default** since v1.6.5. It sends anonymized aggregate metrics (RTT percentiles, jitter, FEC stats, and the direct/relayed/saved latency numbers) to **your own relay**. No IP addresses, tokens, identifiers, or game account data are collected, and the relay suppresses any cell with fewer than 3 reports (k=3). Turn it off any time with `--no-telemetry`, `telemetry = false` under `[general]` in `lightspeed.toml`, or the GUI's **"Share anonymous latency stats"** checkbox. See [Privacy Policy](privacy.md).
+Telemetry is **on by default** since v1.6.5. It sends anonymized aggregate metrics (RTT percentiles, jitter, FEC stats, and the direct/relayed/saved latency numbers) to the `/telemetry` endpoint of the relay you are connected to (a community or sponsor relay, or your own if you self-host). No IP addresses, tokens, identifiers, or game account data are collected. A cell is suppressed until it has at least 3 reports; this floor counts reports, not distinct people, so it is not a guarantee that 3 different people contributed. Reports are POSTed over plaintext HTTP to port 8080, and the endpoint is unauthenticated. Turn it off any time with `--no-telemetry`, `telemetry = false` under `[general]` in `lightspeed.toml`, or the GUI's **"Share anonymous latency stats"** checkbox. See [Privacy Policy](privacy.md) and the [Data Dictionary](data-dictionary.md).
 
 ### Does the proxy store my IP address?
 
-No. The proxy processes your source IP and the game-server destination IP transiently, in memory, to route packets and to derive a country for placement analysis. The address itself is not stored. What is kept is an aggregate session counter per `(source_country, destination_country)` pair, with a k>=3 floor so small cells are suppressed, and the public stats carry only coarsened region-pair counts. The placement counters contain no raw IP, and no raw IP is exported by the placement pipeline; the client telemetry contract is unchanged.
+No. The proxy processes your source IP and the game-server destination IP transiently, in memory, to route packets and to derive a country for placement analysis. The address itself is not stored. What is kept is an aggregate session counter per `(source_country, destination_country)` pair, with a floor of 3 sessions per cell so small cells are suppressed, and the public stats carry only coarsened region-pair counts. The placement counters contain no raw IP, and no raw IP is exported by the placement pipeline; the client telemetry contract is unchanged. Note that relay access logs can contain client IPs; see [What does the proxy log?](#what-does-the-proxy-log).
 
 ### What does the proxy log?
 
-Operational logs written to stdout (configurable via `RUST_LOG`) include client IPs, session start/end times, and bytes relayed. Client IPs appear there only for rate limiting and abuse detection. Those logs live on the server you run, are not exported, and are not joined to the placement counters. Retention is controlled by your logging configuration. See [Privacy Policy](privacy.md).
+Operational logs written to stdout (configurable via `RUST_LOG`) can include client IPs, session start/end times, and bytes relayed. Client IPs appear there only for rate limiting and abuse detection. Those logs live on the relay that served the session (a community or sponsor relay, or your own if you self-host), are not exported, and are not joined to the placement counters. Retention is controlled by that relay's logging configuration. See [Privacy Policy](privacy.md).
 
 ---
 
