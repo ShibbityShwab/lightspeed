@@ -54,6 +54,18 @@ jobs:
       - name: Release QUIC control-plane smoke
         run: bash infra/scripts/test_proxy_quic_smoke.sh
 
+  deploy-canary-tests:
+    name: Deploy Canary Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pure bash: sources deploy.sh and drives the canary selection, batch
+      # ordering, verification gate, and rollback paths with function doubles.
+      # No cargo, no SSH, no network.
+      - name: Canary rollout self-test
+        run: bash infra/scripts/test_deploy_canary.sh
+
   macos-smoke:
     name: macOS Smoke Test
     runs-on: macos-latest

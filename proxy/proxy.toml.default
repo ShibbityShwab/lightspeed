@@ -31,6 +31,23 @@ max_connections    = 200
 enabled       = true
 interval_secs = 10
 
+# Per-relay egress budget guard. Disabled by default: with enabled = false the
+# relay behaves exactly as it did before this guard existed. When enabled, the
+# guard watches cumulative egress (client traffic forwarded to game servers plus
+# game-server responses sent back to clients) and:
+#   * soft_threshold_pct  logs a warning and flips a metric once reached
+#   * hard_threshold_pct  refuses NEW sessions; existing sessions keep relaying
+# max_bytes is a cumulative ceiling; monthly_bytes is a per-calendar-month
+# allowance. Set either or both (the higher-utilization one is binding). The
+# counter is process-lifetime, so it resets on restart; use
+# infra/scripts/egress-budget.sh to report egress against budget per relay.
+[budget]
+enabled            = false
+max_bytes          = 0
+monthly_bytes      = 0
+soft_threshold_pct = 80
+hard_threshold_pct = 100
+
 [geo]
 # Proxy-side IP-to-country session aggregation. Only two-letter country codes
 # are exported; no raw IP is stored or logged.

@@ -44,6 +44,7 @@ use modes::{
     capture_mode::run_capture_mode,
     control_test::run_control_test,
     demo_mode::run_demo,
+    diagnose_mode::{run_diagnose, DEFAULT_WINDOW},
     intercept_mode::run_intercept_mode,
     keepalive::run_keepalive_mode,
     live_test::run_live_test,
@@ -213,6 +214,39 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
         addr: default,
         servers: vec![],
     })
+}
+
+/// Resolve the server `--diagnose` measures, in precedence order: an explicit
+/// `--target` or `--game-server`, else the first public UDP route of the
+/// running game.
+fn resolve_diagnose_server(cli: &Cli) -> anyhow::Result<SocketAddrV4> {
+    if let Some(target) = cli.target.as_deref().or(cli.game_server.as_deref()) {
+        return parse_proxy_addr(target);
+    }
+    let game = match cli.game.as_deref() {
+        Some(name) => Some(games::detect_game(name)?),
+        None => games::auto_detect().ok(),
+    };
+    let game = game.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--diagnose needs a server: pass --target <ip:port>, or run it while a supported game is connected"
+        )
+    })?;
+    let found =
+        interceptor::process_scanner::find_game_process(game.process_names()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "--diagnose could not find the {} process; pass --target <ip:port> instead",
+                game.name()
+            )
+        })?;
+    let route = found.routes.first().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--diagnose found {} (PID {}) but no active server route; connect to a server first or pass --target",
+            game.name(),
+            found.pid
+        )
+    })?;
+    Ok(route.remote)
 }
 
 /// Spawn the continuous re-routing loop when multiple relays are configured.
@@ -425,6 +459,7 @@ async fn main() -> anyhow::Result<()> {
             || cli.smoke_test
             || cli.watch
             || cli.benchmark
+            || cli.diagnose
             || cli.status
             || cli.interception_mode.is_some();
         if !has_mode {
@@ -509,6 +544,23 @@ async fn main() -> anyhow::Result<()> {
         let proxy_addr = parse_proxy_addr(proxy_str)?;
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         return run_benchmark(target_addr, proxy_addr).await;
+    }
+
+    // ── --diagnose ─────────────────────────────────────────────
+    //
+    // Self-contained "does LightSpeed help me?" report for one server. No
+    // telemetry is built or sent; it degrades to "not enough samples" rather
+    // than guessing.
+    if cli.diagnose {
+        let server = resolve_diagnose_server(&cli)?;
+        let resolved = resolve_proxy_addr(&cli, &config).await?;
+        let proxy_addr = resolved.addr;
+        info!("🔎 Diagnosing {} via {}", server, proxy_addr);
+        let token = crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        if token.is_none() {
+            warn!("   No session token; relayed probes may be dropped. The verdict will say so.");
+        }
+        return run_diagnose(server, proxy_addr, DEFAULT_WINDOW).await;
     }
 
     // ── --watch ───────────────────────────────────────────────

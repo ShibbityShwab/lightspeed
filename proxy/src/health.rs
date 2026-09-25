@@ -42,6 +42,7 @@ pub struct HealthResponse {
     pub drops_fec_malformed: u64,
     pub drops_session_setup: u64,
     pub drops_relay_send_errors: u64,
+    pub drops_egress_budget: u64,
     pub bytes_relayed: u64,
     pub fec_recoveries: u64,
     pub sessions_created: u64,
@@ -233,6 +234,7 @@ pub async fn run_health_server(
                         drops_relay_send_errors: metrics
                             .drops_relay_send_errors
                             .load(Ordering::Relaxed),
+                        drops_egress_budget: metrics.drops_egress_budget.load(Ordering::Relaxed),
                         bytes_relayed: metrics.bytes_relayed.load(Ordering::Relaxed),
                         fec_recoveries: metrics.fec_recoveries.load(Ordering::Relaxed),
                         sessions_created: metrics.sessions_created.load(Ordering::Relaxed),
@@ -315,6 +317,7 @@ mod tests {
             drops_fec_malformed: 0,
             drops_session_setup: 0,
             drops_relay_send_errors: 0,
+            drops_egress_budget: 0,
             bytes_relayed: 0,
             fec_recoveries: 0,
             sessions_created: 0,
@@ -402,6 +405,7 @@ mod tests {
             drops_fec_malformed: 5,
             drops_session_setup: 6,
             drops_relay_send_errors: 7,
+            drops_egress_budget: 0,
             bytes_relayed: 0,
             fec_recoveries: 0,
             sessions_created: 0,
@@ -420,6 +424,7 @@ mod tests {
             "drops_fec_malformed",
             "drops_session_setup",
             "drops_relay_send_errors",
+            "drops_egress_budget",
         ] {
             assert!(
                 json.contains(&format!("\"{key}\"")),
@@ -446,6 +451,7 @@ mod tests {
             drops_fec_malformed: 0,
             drops_session_setup: 0,
             drops_relay_send_errors: 0,
+            drops_egress_budget: 0,
             bytes_relayed: 0,
             fec_recoveries: 0,
             sessions_created: 0,

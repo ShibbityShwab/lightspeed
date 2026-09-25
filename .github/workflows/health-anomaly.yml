@@ -1,0 +1,61 @@
+name: Health Anomaly Monitor
+
+# Fleet degradation monitor that the liveness check cannot replace.
+# health-monitor.yml proves a relay serves /health and can register a
+# client right now; it cannot see a relay that is up but silently
+# relaying nothing, rejecting every auth while creating no sessions, or
+# drifting behind the fleet version (the 1.6.3 outage ran ~12h with
+# health checks green). This job reads the collector history off the
+# stats branch, the registry, and each relay's /health, then alerts to
+# Discord and fails the run on any anomaly.
+#
+# health-anomaly.sh owns the Discord alert (it includes the one-line
+# evidence for each anomaly); this workflow only supplies the webhook
+# and fails the run, exactly like health-monitor.yml fails on failure.
+
+on:
+  schedule:
+    # Hourly, offset from the liveness monitor's :00/:30 runs.
+    - cron: '20 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: health-anomaly
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  anomaly:
+    name: Detect fleet anomalies
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Fetch collector history from the stats branch
+        # The stats branch is written by pages.yml every 6h. A missing
+        # branch or file is not an anomaly: the monitor degrades to the
+        # registry + /health detectors only.
+        run: |
+          set -uo pipefail
+          mkdir -p .stats
+          if git fetch origin stats --depth=1 2>/dev/null; then
+            git show origin/stats:web/network-history.json > .stats/network-history.json 2>/dev/null \
+              || echo '{"version":1,"generated_at":0,"snapshots":[]}' > .stats/network-history.json
+          else
+            echo '{"version":1,"generated_at":0,"snapshots":[]}' > .stats/network-history.json
+          fi
+          echo "history: $(jq -r '.snapshots | length' .stats/network-history.json) snapshot(s)"
+
+      - name: Self-test the detectors
+        run: bash infra/scripts/test_health_anomaly.sh
+
+      - name: Detect fleet anomalies
+        # Exits non-zero (and posts the evidence to Discord when the
+        # webhook is set) if any detector fires.
+        run: |
+          bash infra/scripts/health-anomaly.sh --history .stats/network-history.json

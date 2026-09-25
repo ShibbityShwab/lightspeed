@@ -51,6 +51,7 @@ const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
+use super::budget::{BudgetExceeded, BudgetGuard};
 use super::geo::{GeoResolver, GeoSide};
 #[cfg(target_os = "linux")]
 use super::handoff::SessionSnapshot;
@@ -543,6 +544,9 @@ pub struct RelayEngine {
     /// collector so engine unit tests need no wiring; production attaches the
     /// process collector with [`RelayEngine::with_metrics`].
     socket_metrics: Arc<ProxyMetrics>,
+    /// Optional egress budget guard. `None` (the default) disables the guard
+    /// entirely, so a relay with no budget behaves exactly as before.
+    budget: Option<Arc<BudgetGuard>>,
 }
 
 impl RelayEngine {
@@ -565,6 +569,7 @@ impl RelayEngine {
             handoff_frozen: AtomicBool::new(false),
             geo: None,
             socket_metrics: Arc::new(ProxyMetrics::new()),
+            budget: None,
         }
     }
 
@@ -578,6 +583,27 @@ impl RelayEngine {
     pub fn with_metrics(mut self, metrics: Arc<ProxyMetrics>) -> Self {
         self.socket_metrics = metrics;
         self
+    }
+
+    /// Attach the egress budget guard.
+    ///
+    /// Omitted by default; when absent the hard threshold is never enforced.
+    pub fn with_budget(mut self, budget: Arc<BudgetGuard>) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// Evaluate the egress budget against `metrics` and publish the result.
+    ///
+    /// Called periodically by the session manager so the soft threshold is
+    /// logged and exported even when no new session is attempted. A no-op when
+    /// no guard is attached.
+    pub fn observe_budget(&self, metrics: &ProxyMetrics) {
+        let Some(budget) = &self.budget else {
+            return;
+        };
+        let used = metrics.bytes_relayed.load(Ordering::Relaxed);
+        budget.observe(used, super::budget::current_month_key(), metrics);
     }
 
     /// Record a newly created session's country pair, when geo is enabled.
@@ -669,6 +695,15 @@ impl RelayEngine {
         // sessions, but the fast path above already served existing ones.
         if self.is_handoff_frozen() {
             anyhow::bail!("handoff in progress: refusing to create a new session");
+        }
+        // Egress budget: refuse only NEW sessions at the hard threshold. The
+        // fast path above already returned any existing session, so live
+        // traffic is never interrupted.
+        if let Some(budget) = &self.budget {
+            let used = self.socket_metrics.bytes_relayed.load(Ordering::Relaxed);
+            budget
+                .check_new_session(used, super::budget::current_month_key())
+                .map_err(anyhow::Error::from)?;
         }
         if !self.can_accept().await {
             anyhow::bail!("Max sessions ({}) reached", self.max_sessions);
@@ -1282,8 +1317,19 @@ async fn process_inbound_packet(
     {
         Ok(s) => s,
         Err(e) => {
-            warn!(client = %client_addr, error = %e, "Failed to create session");
-            metrics.record_drop(DropReason::SessionSetup);
+            if let Some(exceeded) = e.downcast_ref::<BudgetExceeded>() {
+                warn!(
+                    client = %client_addr,
+                    limit_bytes = exceeded.limit,
+                    used_bytes = exceeded.used,
+                    used_pct = exceeded.pct,
+                    "Egress budget reached: refusing new session (existing sessions continue)"
+                );
+                metrics.record_drop(DropReason::EgressBudget);
+            } else {
+                warn!(client = %client_addr, error = %e, "Failed to create session");
+                metrics.record_drop(DropReason::SessionSetup);
+            }
             return false;
         }
     };
@@ -1758,6 +1804,10 @@ pub async fn run_session_manager(
             info!("Cleaned up {} expired sessions", removed);
         }
 
+        // Publish the egress budget state and log any threshold crossing even
+        // when no session is being created.
+        engine.observe_budget(&metrics);
+
         // Clean up abuse detector + rate limiter state. Both are keyed by
         // client address and would otherwise grow unbounded from spoofed
         // datagrams (65k source ports per IP).
@@ -2088,6 +2138,81 @@ mod tests {
             .await
             .unwrap();
         assert!(is_new, "new sessions resume after unfreeze");
+    }
+
+    /// The egress budget hard threshold refuses only new sessions: an existing
+    /// session keeps resolving, a new client is rejected, and the refusal
+    /// carries the numbers needed to record why.
+    #[tokio::test]
+    async fn egress_budget_hard_threshold_refuses_only_new_sessions() {
+        let metrics = Arc::new(ProxyMetrics::new());
+        let guard = Arc::new(crate::budget::BudgetGuard::new(
+            crate::config::BudgetConfig {
+                enabled: true,
+                max_bytes: 1000,
+                monthly_bytes: 0,
+                soft_threshold_pct: 80,
+                hard_threshold_pct: 100,
+            },
+        ));
+        let engine = RelayEngine::new(10)
+            .with_metrics(Arc::clone(&metrics))
+            .with_budget(guard);
+
+        let existing = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 1000);
+        let fresh = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 2000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+        let sender = test_udp_sender().await;
+
+        engine
+            .get_or_create_session(existing, server, false, 4, sender.clone())
+            .await
+            .unwrap();
+
+        metrics.record_relay(1000);
+
+        let (_, is_new) = engine
+            .get_or_create_session(existing, server, false, 4, sender.clone())
+            .await
+            .unwrap();
+        assert!(
+            !is_new,
+            "an existing session must keep resolving at the hard threshold"
+        );
+
+        let err = engine
+            .get_or_create_session(fresh, server, false, 4, sender)
+            .await
+            .unwrap_err();
+        let exceeded = err
+            .downcast_ref::<crate::budget::BudgetExceeded>()
+            .expect("refusal must carry the budget reason");
+        assert_eq!(exceeded.limit, 1000);
+        assert_eq!(exceeded.used, 1000);
+        assert_eq!(exceeded.pct, 100);
+    }
+
+    /// A default-configured guard is inert: with no budget configured the
+    /// engine admits new sessions no matter how much egress has accumulated.
+    #[tokio::test]
+    async fn default_budget_is_disabled() {
+        let metrics = Arc::new(ProxyMetrics::new());
+        let guard = Arc::new(crate::budget::BudgetGuard::new(
+            crate::config::BudgetConfig::default(),
+        ));
+        let engine = RelayEngine::new(10)
+            .with_metrics(Arc::clone(&metrics))
+            .with_budget(guard);
+
+        metrics.record_relay(u64::MAX / 2);
+
+        let client = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 9), 9000);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+        let (_, is_new) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .expect("a disabled budget must never refuse a session");
+        assert!(is_new);
     }
 
     /// Activity must extend a session's lifetime: a session touched halfway

@@ -395,6 +395,9 @@ pub enum DropReason {
     SessionSetup,
     /// Forwarding the payload to the game server failed at the socket.
     RelaySendError,
+    /// A new session was refused because the configured egress budget hard
+    /// threshold was reached. Existing sessions are never interrupted.
+    EgressBudget,
 }
 
 /// Proxy metrics collector.
@@ -442,6 +445,20 @@ pub struct ProxyMetrics {
     pub drops_session_setup: AtomicU64,
     /// Packets dropped because forwarding to the game server failed.
     pub drops_relay_send_errors: AtomicU64,
+    /// New sessions refused because the egress budget hard threshold was hit.
+    pub drops_egress_budget: AtomicU64,
+
+    // ── Egress budget guard ─────────────────────────────────────
+    /// Binding egress budget limit in bytes (0 when no budget is enforced).
+    pub egress_budget_limit_bytes: AtomicU64,
+    /// Egress counted against the binding budget limit.
+    pub egress_budget_used_bytes: AtomicU64,
+    /// 1 once the soft threshold has been reached.
+    pub egress_budget_soft_exceeded: AtomicU64,
+    /// 1 once the hard threshold has been reached.
+    pub egress_budget_hard_exceeded: AtomicU64,
+    /// Number of soft-threshold transitions observed.
+    pub egress_budget_soft_events: AtomicU64,
 
     // ── Session metrics ─────────────────────────────────────────
     /// Total sessions created (lifetime).
@@ -519,6 +536,12 @@ impl ProxyMetrics {
             drops_fec_malformed: AtomicU64::new(0),
             drops_session_setup: AtomicU64::new(0),
             drops_relay_send_errors: AtomicU64::new(0),
+            drops_egress_budget: AtomicU64::new(0),
+            egress_budget_limit_bytes: AtomicU64::new(0),
+            egress_budget_used_bytes: AtomicU64::new(0),
+            egress_budget_soft_exceeded: AtomicU64::new(0),
+            egress_budget_hard_exceeded: AtomicU64::new(0),
+            egress_budget_soft_events: AtomicU64::new(0),
             sessions_created: AtomicU64::new(0),
             sessions_expired: AtomicU64::new(0),
             inbound_batches_total: AtomicU64::new(0),
@@ -561,6 +584,9 @@ impl ProxyMetrics {
             }
             DropReason::RelaySendError => {
                 self.drops_relay_send_errors.fetch_add(1, Ordering::Relaxed);
+            }
+            DropReason::EgressBudget => {
+                self.drops_egress_budget.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -843,6 +869,32 @@ impl ProxyMetrics {
         self.sessions_expired.fetch_add(count, Ordering::Relaxed);
     }
 
+    /// Publish the current egress budget state.
+    ///
+    /// `soft_first` is true only on the evaluation that first crosses the soft
+    /// threshold, so the transition counter increments once per crossing.
+    pub fn record_egress_budget(
+        &self,
+        limit_bytes: u64,
+        used_bytes: u64,
+        soft_exceeded: bool,
+        hard_exceeded: bool,
+        soft_first: bool,
+    ) {
+        self.egress_budget_limit_bytes
+            .store(limit_bytes, Ordering::Relaxed);
+        self.egress_budget_used_bytes
+            .store(used_bytes, Ordering::Relaxed);
+        self.egress_budget_soft_exceeded
+            .store(u64::from(soft_exceeded), Ordering::Relaxed);
+        self.egress_budget_hard_exceeded
+            .store(u64::from(hard_exceeded), Ordering::Relaxed);
+        if soft_first {
+            self.egress_budget_soft_events
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// Get average relay latency in microseconds.
     pub fn avg_latency_us(&self) -> f64 {
         let count = self.relay_latency_count.load(Ordering::Relaxed);
@@ -873,6 +925,20 @@ impl ProxyMetrics {
         out.push_str("# TYPE lightspeed_bytes_relayed_total counter\n");
         out.push_str(&format!(
             "lightspeed_bytes_relayed_total{{{}}} {}\n",
+            labels,
+            self.bytes_relayed.load(Ordering::Relaxed)
+        ));
+
+        // Explicit egress alias of `lightspeed_bytes_relayed_total`: the relay's
+        // cumulative outbound bytes in both data-plane directions (forwarded to
+        // game servers and returned to clients). Monotonic for the process
+        // lifetime. The egress budget guard is defined against this series.
+        out.push_str(
+            "# HELP lightspeed_egress_bytes_total Cumulative relay egress in bytes: client traffic forwarded to game servers plus game-server responses sent back to clients (both data-plane directions). Monotonic per process.\n",
+        );
+        out.push_str("# TYPE lightspeed_egress_bytes_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_egress_bytes_total{{{}}} {}\n",
             labels,
             self.bytes_relayed.load(Ordering::Relaxed)
         ));
@@ -1060,6 +1126,67 @@ impl ProxyMetrics {
             "lightspeed_drops_relay_send_errors_total{{{}}} {}\n",
             labels,
             self.drops_relay_send_errors.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_drops_egress_budget_total Packets dropped because a new session was refused at the egress budget hard threshold. Existing sessions are never interrupted.\n",
+        );
+        out.push_str("# TYPE lightspeed_drops_egress_budget_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_drops_egress_budget_total{{{}}} {}\n",
+            labels,
+            self.drops_egress_budget.load(Ordering::Relaxed)
+        ));
+
+        // ── Egress budget guard ─────────────────────────────────
+        out.push_str(
+            "# HELP lightspeed_egress_budget_bytes Binding egress budget limit in bytes (0 when no budget is enforced)\n",
+        );
+        out.push_str("# TYPE lightspeed_egress_budget_bytes gauge\n");
+        out.push_str(&format!(
+            "lightspeed_egress_budget_bytes{{{}}} {}\n",
+            labels,
+            self.egress_budget_limit_bytes.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_egress_budget_used_bytes Egress counted against the binding budget limit\n",
+        );
+        out.push_str("# TYPE lightspeed_egress_budget_used_bytes gauge\n");
+        out.push_str(&format!(
+            "lightspeed_egress_budget_used_bytes{{{}}} {}\n",
+            labels,
+            self.egress_budget_used_bytes.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_egress_budget_soft_exceeded 1 when the egress budget soft threshold is reached\n",
+        );
+        out.push_str("# TYPE lightspeed_egress_budget_soft_exceeded gauge\n");
+        out.push_str(&format!(
+            "lightspeed_egress_budget_soft_exceeded{{{}}} {}\n",
+            labels,
+            self.egress_budget_soft_exceeded.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_egress_budget_hard_exceeded 1 when the egress budget hard threshold is reached (new sessions refused)\n",
+        );
+        out.push_str("# TYPE lightspeed_egress_budget_hard_exceeded gauge\n");
+        out.push_str(&format!(
+            "lightspeed_egress_budget_hard_exceeded{{{}}} {}\n",
+            labels,
+            self.egress_budget_hard_exceeded.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_egress_budget_soft_events_total Number of egress budget soft-threshold transitions observed\n",
+        );
+        out.push_str("# TYPE lightspeed_egress_budget_soft_events_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_egress_budget_soft_events_total{{{}}} {}\n",
+            labels,
+            self.egress_budget_soft_events.load(Ordering::Relaxed)
         ));
 
         // ── Session metrics ─────────────────────────────────────
@@ -1608,6 +1735,7 @@ mod tests {
             DropReason::FecMalformed,
             DropReason::SessionSetup,
             DropReason::RelaySendError,
+            DropReason::EgressBudget,
         ] {
             m.record_drop(reason);
         }
@@ -1618,9 +1746,40 @@ mod tests {
             + m.rate_limit_hits.load(Ordering::Relaxed)
             + m.drops_fec_malformed.load(Ordering::Relaxed)
             + m.drops_session_setup.load(Ordering::Relaxed)
-            + m.drops_relay_send_errors.load(Ordering::Relaxed);
+            + m.drops_relay_send_errors.load(Ordering::Relaxed)
+            + m.drops_egress_budget.load(Ordering::Relaxed);
 
         assert_eq!(categories, m.packets_dropped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_egress_series_is_explicit_and_monotonic() {
+        let m = ProxyMetrics::new();
+        m.record_relay(100);
+        let first = m.to_prometheus("test", "test-node");
+        assert!(first
+            .contains("lightspeed_egress_bytes_total{region=\"test\",node_id=\"test-node\"} 100"));
+
+        m.record_relay(250);
+        let second = m.to_prometheus("test", "test-node");
+        assert!(second
+            .contains("lightspeed_egress_bytes_total{region=\"test\",node_id=\"test-node\"} 350"));
+        assert!(second.contains("# TYPE lightspeed_egress_bytes_total counter"));
+    }
+
+    #[test]
+    fn test_egress_budget_series_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_egress_budget(1000, 800, true, false, true);
+        m.record_drop(DropReason::EgressBudget);
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains("lightspeed_egress_budget_bytes{") && output.contains("} 1000"));
+        assert!(
+            output.contains("lightspeed_egress_budget_used_bytes{") && output.contains("} 800")
+        );
+        assert!(output.contains("lightspeed_egress_budget_soft_exceeded{"));
+        assert!(output.contains("lightspeed_egress_budget_soft_events_total{"));
+        assert!(output.contains("lightspeed_drops_egress_budget_total{"));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 pub mod capture_mode;
 pub mod control_test;
+pub mod diagnose_mode;
 pub mod keepalive;
 pub mod live_test;
 pub mod proxy_probe;

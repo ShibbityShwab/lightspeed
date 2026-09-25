@@ -5,6 +5,7 @@
 
 pub mod abuse;
 pub mod auth;
+pub mod budget;
 pub mod config;
 pub mod control;
 pub mod geo;

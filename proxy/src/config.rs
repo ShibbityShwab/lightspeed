@@ -22,6 +22,10 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
 
+    /// Per-relay egress budget guard (opt-in, disabled by default).
+    #[serde(default)]
+    pub budget: BudgetConfig,
+
     /// Metrics settings.
     #[serde(default)]
     pub metrics: MetricsConfig,
@@ -117,6 +121,43 @@ pub struct RateLimitConfig {
     pub max_bps_per_ip: u64,
 }
 
+/// Per-relay egress budget guard configuration.
+///
+/// Disabled by default: with `enabled = false` the relay behaves exactly as it
+/// did before this guard existed. When enabled, the guard watches the relay's
+/// cumulative egress (bytes sent to game servers plus bytes sent back to
+/// clients) and can warn at a soft threshold and refuse new sessions at a hard
+/// threshold. Existing sessions are never interrupted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetConfig {
+    /// Master switch.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Cumulative egress byte ceiling since the process started. `0` disables
+    /// the flat ceiling.
+    #[serde(default)]
+    pub max_bytes: u64,
+
+    /// Monthly egress allowance in bytes, for metered plans billed per
+    /// calendar month. `0` disables it. When both a flat ceiling and a monthly
+    /// allowance are set, whichever has the higher utilization is binding.
+    #[serde(default)]
+    pub monthly_bytes: u64,
+
+    /// Soft threshold as a percentage of the binding limit. At or above it the
+    /// relay logs a warning and flips the soft-exceeded metric once. `0`
+    /// disables the soft warning.
+    #[serde(default = "default_soft_threshold_pct")]
+    pub soft_threshold_pct: u8,
+
+    /// Hard threshold as a percentage of the binding limit. At or above it the
+    /// relay refuses new sessions while existing sessions keep relaying. `0`
+    /// disables the hard stop.
+    #[serde(default = "default_hard_threshold_pct")]
+    pub hard_threshold_pct: u8,
+}
+
 /// Metrics export configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsConfig {
@@ -209,6 +250,12 @@ fn default_pps_per_ip() -> u64 {
 fn default_bps_per_ip() -> u64 {
     5_000_000
 } // 5 MB/s
+fn default_soft_threshold_pct() -> u8 {
+    80
+}
+fn default_hard_threshold_pct() -> u8 {
+    100
+}
 fn default_true() -> bool {
     true
 }
@@ -284,6 +331,18 @@ impl Default for MetricsConfig {
         Self {
             enabled: true,
             interval_secs: default_metrics_interval(),
+        }
+    }
+}
+
+impl Default for BudgetConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_bytes: 0,
+            monthly_bytes: 0,
+            soft_threshold_pct: default_soft_threshold_pct(),
+            hard_threshold_pct: default_hard_threshold_pct(),
         }
     }
 }
@@ -410,5 +469,39 @@ mmdb_path = "/tmp/custom.mmdb"
 
         assert!(!config.geo.enabled);
         assert_eq!(config.geo.mmdb_path, "/tmp/env.mmdb");
+    }
+
+    #[test]
+    fn test_budget_defaults_to_disabled() {
+        let config = ProxyConfig::default();
+        assert!(!config.budget.enabled);
+        assert_eq!(config.budget.max_bytes, 0);
+        assert_eq!(config.budget.monthly_bytes, 0);
+        assert_eq!(config.budget.soft_threshold_pct, 80);
+        assert_eq!(config.budget.hard_threshold_pct, 100);
+
+        let empty: ProxyConfig = toml::from_str("").unwrap();
+        assert!(!empty.budget.enabled);
+    }
+
+    #[test]
+    fn test_parse_budget_section() {
+        let config: ProxyConfig = toml::from_str(
+            r#"
+[budget]
+enabled             = true
+max_bytes           = 1073741824
+monthly_bytes       = 5368709120
+soft_threshold_pct  = 75
+hard_threshold_pct  = 95
+"#,
+        )
+        .unwrap();
+
+        assert!(config.budget.enabled);
+        assert_eq!(config.budget.max_bytes, 1_073_741_824);
+        assert_eq!(config.budget.monthly_bytes, 5_368_709_120);
+        assert_eq!(config.budget.soft_threshold_pct, 75);
+        assert_eq!(config.budget.hard_threshold_pct, 95);
     }
 }

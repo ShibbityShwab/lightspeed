@@ -80,6 +80,7 @@ LightSpeed now runs a **community relay network**: eight sponsor-funded relays i
 - **Automatic proxy selection** - probes all configured proxies and picks the fastest; the GUI auto-selects the fastest relay on first run with an "Auto (fastest)" checkbox
 - **Community relay auto-discovery** - finds the eight community relays via the signed registry with zero config, or point at your own with `--registry <url>`
 - **RTT saved** - measures the client's direct (ICMP) game-server round trip against the tunnelled round trip so you can see the estimated saving, with the caveat that the two are different instruments
+- **Does it help me?** - `--diagnose` measures one server's direct and relayed path over a few seconds and prints a plain saved/not-helped verdict, with no telemetry required
 - **ML-based route prediction** - 11-feature Random Forest model learns from your connection patterns
 - **Multipath FEC** - XOR-based Forward Error Correction that recovers a lost packet from parity with ~25% bandwidth overhead at the default block size
 - **TCP tunnel fallback** - client↔proxy leg over TCP (`--tcp`) for networks that block UDP

@@ -174,6 +174,13 @@ pub struct Cli {
     #[arg(long)]
     pub target: Option<String>,
 
+    /// Diagnose whether the relay helps for one game server, then exit.
+    /// Measures the direct (ICMP) and relayed (tunnelled) path over a short
+    /// bounded window and prints a plain saved/not-helped verdict. Uses
+    /// --target, or the running game's server, and never reports telemetry.
+    #[arg(long, default_value_t = false)]
+    pub diagnose: bool,
+
     /// Enable pcap capture mode (alternative to redirect mode).
     /// Captures game packets directly from the network interface.
     /// Requires the pcap-capture feature and elevated privileges.
@@ -275,6 +282,7 @@ mod tests {
         assert!(!cli.smoke_test);
         assert!(!cli.watch);
         assert!(!cli.benchmark);
+        assert!(!cli.diagnose);
         assert!(!cli.capture);
         assert!(!cli.intercept);
         assert!(!cli.start_interceptor);
@@ -340,6 +348,7 @@ mod tests {
             "--smoke-test",
             "--watch",
             "--benchmark",
+            "--diagnose",
             "--capture",
             "--intercept",
             "--start-interceptor",
@@ -370,6 +379,7 @@ mod tests {
         assert!(cli.smoke_test);
         assert!(cli.watch);
         assert!(cli.benchmark);
+        assert!(cli.diagnose);
         assert!(cli.capture);
         assert!(cli.intercept);
         assert!(cli.start_interceptor);

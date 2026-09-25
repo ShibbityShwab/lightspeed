@@ -14,6 +14,7 @@
 
 use lightspeed_proxy::abuse;
 use lightspeed_proxy::auth;
+use lightspeed_proxy::budget;
 use lightspeed_proxy::config;
 use lightspeed_proxy::geo;
 use lightspeed_proxy::handoff;
@@ -354,6 +355,24 @@ async fn main() -> anyhow::Result<()> {
         config.rate_limit.clone(),
     )));
     let metrics = Arc::new(metrics::ProxyMetrics::new());
+    let budget_guard = if config.budget.enabled {
+        let guard = Arc::new(budget::BudgetGuard::new(config.budget.clone()));
+        if guard.is_enabled() {
+            info!(
+                max_bytes = config.budget.max_bytes,
+                monthly_bytes = config.budget.monthly_bytes,
+                soft_threshold_pct = config.budget.soft_threshold_pct,
+                hard_threshold_pct = config.budget.hard_threshold_pct,
+                "Egress budget guard enabled"
+            );
+        } else {
+            warn!("[budget] enabled but no max_bytes or monthly_bytes set; guard is inert");
+        }
+        Some(guard)
+    } else {
+        info!("Egress budget guard disabled");
+        None
+    };
     let public_ip = parse_public_ip(config.server.public_ip.as_deref());
     if geo_resolver.is_some() && public_ip.is_none() {
         warn!(
@@ -378,11 +397,17 @@ async fn main() -> anyhow::Result<()> {
     let (authenticator, engine, data_socket) = match handoff::manifest_path_from_env() {
         Some(path) => {
             info!("Adopting in-place handoff from {}", path.display());
-            adopt_handoff(&path, &config, &metrics, geo_state.clone())
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!("handoff adoption from {} failed: {e:#}", path.display())
-                })?
+            adopt_handoff(
+                &path,
+                &config,
+                &metrics,
+                geo_state.clone(),
+                budget_guard.clone(),
+            )
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("handoff adoption from {} failed: {e:#}", path.display())
+            })?
         }
         None => {
             let authenticator = Arc::new(RwLock::new(auth::Authenticator::new(
@@ -392,6 +417,9 @@ async fn main() -> anyhow::Result<()> {
                 .with_metrics(Arc::clone(&metrics));
             if let Some(geo) = geo_state.clone() {
                 relay_engine = relay_engine.with_geo(geo);
+            }
+            if let Some(guard) = budget_guard.clone() {
+                relay_engine = relay_engine.with_budget(guard);
             }
             let engine = Arc::new(relay_engine);
             // Bind every serving plane before spawning any task, so a bind
@@ -699,6 +727,7 @@ async fn adopt_handoff(
     config: &config::ProxyConfig,
     metrics: &Arc<metrics::ProxyMetrics>,
     geo: Option<relay::GeoState>,
+    budget_guard: Option<Arc<budget::BudgetGuard>>,
 ) -> anyhow::Result<(
     Arc<RwLock<auth::Authenticator>>,
     Arc<relay::RelayEngine>,
@@ -727,6 +756,9 @@ async fn adopt_handoff(
         relay::RelayEngine::new(config.server.max_clients).with_metrics(Arc::clone(metrics));
     if let Some(geo) = geo {
         relay_engine = relay_engine.with_geo(geo);
+    }
+    if let Some(guard) = budget_guard {
+        relay_engine = relay_engine.with_budget(guard);
     }
     let engine = Arc::new(relay_engine);
     let installed = engine
@@ -765,6 +797,7 @@ async fn adopt_handoff(
     _config: &config::ProxyConfig,
     _metrics: &Arc<metrics::ProxyMetrics>,
     _geo: Option<relay::GeoState>,
+    _budget_guard: Option<Arc<budget::BudgetGuard>>,
 ) -> anyhow::Result<(
     Arc<RwLock<auth::Authenticator>>,
     Arc<relay::RelayEngine>,
