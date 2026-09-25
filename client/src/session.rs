@@ -12,7 +12,7 @@
 //! (unregistered dev mode).
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::route::multipath::MultipathState;
@@ -138,6 +138,15 @@ static CURRENT_PROXY: AtomicU64 = AtomicU64::new(0);
 /// Global multipath state (active paths + dedup window).
 static MULTIPATH: OnceLock<Mutex<MultipathState>> = OnceLock::new();
 
+/// Loss-gated duplication switch for the outbound multipath spread.
+///
+/// Defaults to `true` so multipath behaves exactly as it did before the gate
+/// existed: a client that never enables the adaptive controller still fans a
+/// packet out to every active path. An adaptive controller closes the gate on a
+/// clean link and reopens it only when loss or jitter is actually measured, so
+/// duplication is never paid for on a healthy path.
+static DUPLICATION_ALLOWED: AtomicBool = AtomicBool::new(true);
+
 const MAX_MULTIPATH_PATHS: usize = 3;
 const UNSPECIFIED: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
@@ -199,6 +208,17 @@ pub fn set_multipath_paths(addrs: Vec<SocketAddrV4>) {
     multipath().lock().unwrap().set_paths(addrs);
 }
 
+/// Whether packet duplication across active paths is currently earned.
+pub fn duplication_allowed() -> bool {
+    DUPLICATION_ALLOWED.load(Ordering::Relaxed)
+}
+
+/// Open or close the loss-gated duplication switch. Called by the adaptive
+/// controller; leaving it at its default keeps the pre-gate behaviour.
+pub fn set_duplication_allowed(allowed: bool) {
+    DUPLICATION_ALLOWED.store(allowed, Ordering::Relaxed);
+}
+
 /// The active multipath relay destinations (up to 3, UNSPECIFIED = unused).
 pub fn multipath_paths() -> [SocketAddrV4; MAX_MULTIPATH_PATHS] {
     let mut out = [UNSPECIFIED; MAX_MULTIPATH_PATHS];
@@ -257,7 +277,7 @@ pub fn send_destinations(
 ) -> ([SocketAddrV4; MAX_MULTIPATH_PATHS], usize) {
     let paths = multipath_paths();
     let active = paths.iter().filter(|p| **p != UNSPECIFIED).count();
-    if active >= 2 {
+    if active >= 2 && duplication_allowed() {
         (paths, active)
     } else {
         (
@@ -341,6 +361,7 @@ mod tests {
 
     #[test]
     fn test_current_proxy_roundtrip() {
+        let _guard = token_test_guard();
         assert_eq!(current_proxy(), None);
         let addr = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 7), 4434);
         set_current_proxy(addr);
@@ -350,5 +371,34 @@ mod tests {
             current_proxy(),
             Some(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 1))
         );
+    }
+
+    #[test]
+    fn duplication_gate_defaults_open_and_collapses_the_spread() {
+        let _guard = token_test_guard();
+        reset_all_tokens();
+        let primary = SocketAddrV4::new(Ipv4Addr::new(1, 1, 1, 1), 4434);
+        let secondary = SocketAddrV4::new(Ipv4Addr::new(2, 2, 2, 2), 4434);
+        set_current_proxy(primary);
+        set_multipath_paths(vec![primary, secondary]);
+
+        set_duplication_allowed(true);
+        let (dests, n) = send_destinations(primary);
+        assert_eq!(n, 2, "an open gate keeps the multipath spread");
+        assert!(dests.iter().take(n).any(|d| *d == primary));
+        assert!(dests.iter().take(n).any(|d| *d == secondary));
+
+        set_duplication_allowed(false);
+        let (dests, n) = send_destinations(primary);
+        assert_eq!(
+            n, 1,
+            "a closed gate must send only on the single current relay"
+        );
+        assert_eq!(dests[0], primary);
+
+        set_duplication_allowed(true);
+        set_multipath_paths(vec![]);
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+        reset_all_tokens();
     }
 }

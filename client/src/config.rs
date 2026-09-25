@@ -84,6 +84,22 @@ pub struct TunnelConfig {
     /// Ignored on Windows, where marking requires the QWAVE/QoS2 API.
     #[serde(default)]
     pub dscp: bool,
+
+    /// Enable adaptive FEC and loss-gated packet duplication.
+    ///
+    /// **Off by default.** With this off, FEC keeps the fixed block codec and
+    /// multipath duplication behaves as before. With it on, the client sends no
+    /// parity on a clean link, returns to low overhead quickly once loss stops,
+    /// and duplicates a packet only while loss or jitter is measured.
+    #[serde(default)]
+    pub adaptive_fec: bool,
+
+    /// Hard ceiling on adaptive FEC parity overhead, in percent (default 25).
+    ///
+    /// Bounds the effective block size to `ceil(100 / pct)`, so even under
+    /// sustained loss the adaptive mode never adds more parity than this.
+    #[serde(default = "default_fec_max_overhead_pct")]
+    pub fec_max_overhead_pct: u32,
 }
 
 /// Proxy connection settings.
@@ -261,6 +277,10 @@ fn default_multipath_max_paths() -> u8 {
     2
 }
 
+fn default_fec_max_overhead_pct() -> u32 {
+    25
+}
+
 fn default_min_samples() -> usize {
     50
 }
@@ -287,6 +307,8 @@ impl Default for TunnelConfig {
             mtu: default_mtu(),
             transport: default_transport(),
             dscp: false,
+            adaptive_fec: false,
+            fec_max_overhead_pct: default_fec_max_overhead_pct(),
         }
     }
 }
@@ -372,6 +394,8 @@ mod tests {
         assert_eq!(config.tunnel.timeout_ms, 10000);
         assert_eq!(config.tunnel.mtu, 1400);
         assert!(!config.tunnel.dscp);
+        assert!(!config.tunnel.adaptive_fec);
+        assert_eq!(config.tunnel.fec_max_overhead_pct, 25);
         assert!(config.proxy.servers.is_empty());
         assert_eq!(config.proxy.quic_port, 4433);
         assert_eq!(config.proxy.data_port, 4434);
@@ -417,6 +441,8 @@ mod tests {
         assert_eq!(tunnel.timeout_ms, 10000);
         assert_eq!(tunnel.mtu, 1400);
         assert!(!tunnel.dscp);
+        assert!(!tunnel.adaptive_fec);
+        assert_eq!(tunnel.fec_max_overhead_pct, 25);
 
         let proxy = ProxyConfig::default();
         assert!(proxy.servers.is_empty());
@@ -452,6 +478,21 @@ mod tests {
 
         let opted_in: Config = toml::from_str("[tunnel]\ndscp = true\n").unwrap();
         assert!(opted_in.tunnel.dscp);
+    }
+
+    #[test]
+    fn adaptive_fec_defaults_off_and_accepts_a_ceiling() {
+        let defaulted: Config = toml::from_str("[tunnel]\nkeepalive_ms = 5000\n").unwrap();
+        assert!(
+            !defaulted.tunnel.adaptive_fec,
+            "adaptive FEC must be opt-in"
+        );
+        assert_eq!(defaulted.tunnel.fec_max_overhead_pct, 25);
+
+        let opted_in: Config =
+            toml::from_str("[tunnel]\nadaptive_fec = true\nfec_max_overhead_pct = 50\n").unwrap();
+        assert!(opted_in.tunnel.adaptive_fec);
+        assert_eq!(opted_in.tunnel.fec_max_overhead_pct, 50);
     }
 
     #[test]
@@ -716,6 +757,8 @@ servers = [
         assert_eq!(config.tunnel.timeout_ms, 10000);
         assert_eq!(config.tunnel.mtu, 1400);
         assert_eq!(config.tunnel.transport, "udp");
+        assert!(!config.tunnel.adaptive_fec);
+        assert_eq!(config.tunnel.fec_max_overhead_pct, 25);
 
         assert!(config.proxy.servers.is_empty());
         assert_eq!(config.proxy.quic_port, 4433);

@@ -72,6 +72,29 @@ backed by a population of 3.
 
 ---
 
+## Published aggregates derived from the report
+
+The metrics collector (`infra/scripts/collect-metrics.sh`) folds the relays'
+Prometheus output into the bounded `web/network-history.json` history. For the
+saved-app families it keeps two views of the same already-exported data:
+
+- the collapsed per-relay totals, as before; and
+- `per_relay.<id>.sources.<region>`, the same signed saving summed by the
+  client's coarse world region. The two-letter `client_country` label is mapped
+  through `infra/geo/regions.json` before anything is retained, so a country is
+  never published, only a region. A country with no catalog entry is counted in
+  `sources_unmapped`, never invented into a region.
+
+This adds no collection and no wire field: it only re-aggregates series the
+relay already emitted, so a cell below the k floor is invisible to the collector
+and cannot be recovered. The region keys come from the trusted local catalog, so
+the retained map is bounded by the catalog's region count. The recommender
+(`infra/scripts/recommend-regions.sh`) reports the same breakdown per relay and
+source region but withholds any cell below the k=3 report floor, counts the
+withheld cells, and labels each reported row with its sample count.
+
+---
+
 ## Explicitly NOT collected
 
 The wire report contains none of the following. The protocol test

@@ -65,6 +65,17 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub dscp: bool,
 
+    /// Enable adaptive FEC and loss-gated packet duplication. Sends no parity
+    /// on a clean link, returns to low overhead quickly once loss stops, and
+    /// duplicates only while loss or jitter is measured. Off by default.
+    #[arg(long, default_value_t = false)]
+    pub adaptive_fec: bool,
+
+    /// Hard ceiling on adaptive FEC parity overhead, in percent (2-50,
+    /// default 25). Bounds the effective FEC block size.
+    #[arg(long, default_value_t = 25)]
+    pub fec_max_overhead: u32,
+
     /// Enable Cloudflare WARP for improved routing (5-10ms savings).
     /// Automatically connects WARP on startup and restores on shutdown.
     #[arg(short = 'w', long, default_value_t = false)]
@@ -248,6 +259,8 @@ mod tests {
         assert_eq!(cli.fec_k, 4);
         assert!(!cli.tcp);
         assert!(!cli.dscp);
+        assert!(!cli.adaptive_fec);
+        assert_eq!(cli.fec_max_overhead, 25);
         assert!(!cli.warp);
         assert!(!cli.no_warp);
         assert!(!cli.warp_status);
@@ -336,6 +349,7 @@ mod tests {
             "--no-bypass",
             "--force-direct",
             "--bypass-dry-run",
+            "--adaptive-fec",
         ])
         .unwrap();
         assert!(cli.verbose);
@@ -365,6 +379,7 @@ mod tests {
         assert!(cli.no_bypass);
         assert!(cli.force_direct);
         assert!(cli.bypass_dry_run);
+        assert!(cli.adaptive_fec);
     }
 
     #[test]
@@ -400,6 +415,8 @@ mod tests {
             "8888",
             "--fec-k",
             "8",
+            "--fec-max-overhead",
+            "50",
             "--route-strategy",
             "ml",
             "--interception-mode",
@@ -416,6 +433,7 @@ mod tests {
         assert_eq!(cli.game_server.as_deref(), Some("1.2.3.4:7777"));
         assert_eq!(cli.local_port, Some(8888));
         assert_eq!(cli.fec_k, 8);
+        assert_eq!(cli.fec_max_overhead, 50);
         assert_eq!(cli.route_strategy.as_deref(), Some("ml"));
         assert_eq!(cli.interception_mode.as_deref(), Some("userspace"));
         assert_eq!(cli.echo_server.as_deref(), Some("10.0.0.1:9999"));

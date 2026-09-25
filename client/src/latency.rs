@@ -71,6 +71,13 @@ pub const SHADOW_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
 pub const SHADOW_DIRECT_TTL: Duration = Duration::from_secs(300);
 /// Rolling window capacity for shadow-direct application RTT samples.
 pub const SHADOW_RING_CAPACITY: usize = 256;
+/// How long a client->relay keepalive RTT stays usable as the bypass
+/// pre-gate's first-hop input. The interceptor keepalives every 5 s, so a
+/// sample older than this means keepalives stopped (relay changed or dropped)
+/// and the gate must fail open instead of comparing stale data.
+pub const CLIENT_RELAY_TTL: Duration = Duration::from_secs(15);
+/// Rolling window capacity for client->relay keepalive RTT samples.
+pub const CLIENT_RELAY_RING_CAPACITY: usize = 16;
 
 const ECHO_PAYLOAD: &[u8] = b"lightspeed-ping";
 
@@ -257,11 +264,18 @@ struct DirectSample {
     measured_at: Instant,
 }
 
+/// Keepalive RTT samples for one relay and when the window was last refreshed.
+struct ClientRelaySample {
+    samples_ms: Vec<f32>,
+    measured_at: Instant,
+}
+
 #[derive(Default)]
 struct Inner {
     direct: HashMap<Ipv4Addr, DirectSample>,
     pending: HashMap<Ipv4Addr, Instant>,
     last_burst: HashMap<Ipv4Addr, Instant>,
+    client_relay: HashMap<SocketAddrV4, ClientRelaySample>,
     relayed: Vec<f32>,
     relayed_server: Option<Ipv4Addr>,
     shadow_pending: HashMap<Ipv4Addr, Instant>,
@@ -423,6 +437,44 @@ impl LatencyTracker {
     /// Latest direct median across servers, if a burst has produced one.
     pub fn direct_p50_ms(&self) -> Option<f32> {
         self.lock().latest_direct()
+    }
+
+    /// Record one client->relay keepalive RTT (ms) for `relay`. Non-finite and
+    /// non-positive samples are dropped, and each relay keeps its own window.
+    pub fn record_client_relay_rtt(&self, relay: SocketAddrV4, rtt_ms: f32) {
+        if !rtt_ms.is_finite() || rtt_ms <= 0.0 {
+            return;
+        }
+        let now = self.clock.now();
+        let mut inner = self.lock();
+        let sample = inner
+            .client_relay
+            .entry(relay)
+            .or_insert_with(|| ClientRelaySample {
+                samples_ms: Vec::with_capacity(CLIENT_RELAY_RING_CAPACITY),
+                measured_at: now,
+            });
+        if sample.samples_ms.len() >= CLIENT_RELAY_RING_CAPACITY {
+            sample.samples_ms.remove(0);
+        }
+        sample.samples_ms.push(rtt_ms);
+        sample.measured_at = now;
+    }
+
+    /// Median client->relay RTT (ms) for `relay`, only while a keepalive
+    /// sample arrived within [`CLIENT_RELAY_TTL`].
+    pub fn client_relay_p50_ms(&self, relay: SocketAddrV4) -> Option<f32> {
+        let now = self.clock.now();
+        let inner = self.lock();
+        let sample = inner.client_relay.get(&relay)?;
+        if sample.samples_ms.is_empty()
+            || now.saturating_duration_since(sample.measured_at) >= CLIENT_RELAY_TTL
+        {
+            return None;
+        }
+        let mut sorted = sample.samples_ms.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(TelemetryCollector::percentile(&sorted, 50.0))
     }
 
     /// Claim the shadow-direct sampling slot for `server`. Returns `true` when
@@ -698,6 +750,23 @@ pub fn shadow_direct_p50_ms() -> Option<f32> {
 /// Median relayed application RTT, or `None` when the window is empty.
 pub fn relayed_p50_ms() -> Option<f32> {
     global().and_then(|tracker| tracker.relayed_p50_ms())
+}
+
+/// Record one client->relay keepalive RTT (ms) for `relay`. Gated on local
+/// measurement; a single-hop sample, not the end-to-end relayed round trip.
+pub fn record_client_relay_rtt(relay: SocketAddrV4, rtt_ms: f32) {
+    if !is_measuring() {
+        return;
+    }
+    if let Some(tracker) = global() {
+        tracker.record_client_relay_rtt(relay, rtt_ms);
+    }
+}
+
+/// Median client->relay RTT (ms) for `relay`, or `None` when no keepalive
+/// sample arrived within [`CLIENT_RELAY_TTL`]. Reads local measurement.
+pub fn client_relay_p50_ms(relay: SocketAddrV4) -> Option<f32> {
+    global().and_then(|tracker| tracker.client_relay_p50_ms(relay))
 }
 
 /// Jitter of the direct application path, if a window exists.
@@ -1219,6 +1288,74 @@ mod tests {
         );
         t.record_shadow_inbound(SERVER);
         assert_eq!(t.shadow_direct_p50_ms(), None);
+    }
+
+    // ── Client -> relay keepalive RTT (bypass pre-gate input) ───────────────
+
+    fn relay(n: u8) -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, n), 4434)
+    }
+
+    #[test]
+    fn client_relay_rtt_is_absent_until_a_keepalive_sample_is_recorded() {
+        let t = tracker(
+            Arc::new(ScriptedProber::new(vec![])),
+            Arc::new(TestClock::new()),
+        );
+        assert_eq!(
+            t.client_relay_p50_ms(relay(1)),
+            None,
+            "an unmeasured relay must not fabricate a first-hop RTT"
+        );
+    }
+
+    #[test]
+    fn fresh_client_relay_rtt_is_published_as_the_p50() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        for rtt in [30.0, 10.0, 20.0] {
+            t.record_client_relay_rtt(relay(1), rtt);
+        }
+        assert_eq!(t.client_relay_p50_ms(relay(1)), Some(20.0));
+    }
+
+    #[test]
+    fn stale_client_relay_rtt_expires_and_the_gate_fails_open() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 100.0);
+        assert_eq!(t.client_relay_p50_ms(relay(1)), Some(100.0));
+
+        clock.advance(CLIENT_RELAY_TTL + Duration::from_millis(1));
+        assert_eq!(
+            t.client_relay_p50_ms(relay(1)),
+            None,
+            "a stale keepalive RTT must not drive the pre-gate"
+        );
+    }
+
+    #[test]
+    fn client_relay_rtt_is_tracked_per_relay() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 15.0);
+        assert_eq!(t.client_relay_p50_ms(relay(1)), Some(15.0));
+        assert_eq!(
+            t.client_relay_p50_ms(relay(2)),
+            None,
+            "a different relay has no sample of its own"
+        );
+    }
+
+    #[test]
+    fn implausible_client_relay_rtt_is_discarded() {
+        let t = tracker(
+            Arc::new(ScriptedProber::new(vec![])),
+            Arc::new(TestClock::new()),
+        );
+        t.record_client_relay_rtt(relay(1), 0.0);
+        t.record_client_relay_rtt(relay(1), f32::NAN);
+        assert_eq!(t.client_relay_p50_ms(relay(1)), None);
     }
 
     #[test]

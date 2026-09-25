@@ -775,6 +775,20 @@ impl BypassGate {
             config: self.tracker.config(),
         };
         let decision = self.tracker.pre_gate(&inp);
+        let supplied = matches!(self.mode(), BypassMode::Auto | BypassMode::DryRun)
+            && client_relay_p50_ms.is_some();
+        if supplied {
+            self.counters
+                .bypass_pre_gate_rtt
+                .fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(
+                server = %server,
+                client_relay_ms = ?client_relay_p50_ms,
+                direct_icmp_ms = ?direct_icmp_p50_ms,
+                decision = ?decision,
+                "bypass pre-gate evaluated with a live client-to-relay RTT"
+            );
+        }
         if decision == BypassDecision::Direct {
             tracing::warn!(
                 server = %server,
@@ -1268,6 +1282,26 @@ mod tests {
 
         assert_eq!(counters.bypass_allowed.load(Ordering::Relaxed), 2);
         assert_eq!(counters.bypass_refused.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn pre_gate_counts_only_a_supplied_client_relay_rtt() {
+        let counters = Arc::new(InterceptorCounters::default());
+        let mut gate = BypassGate::new(auto(), Arc::clone(&counters));
+
+        gate.pre_gate(server(20), Instant::now(), None, Some(50.0), false);
+        assert_eq!(
+            counters.bypass_pre_gate_rtt.load(Ordering::Relaxed),
+            0,
+            "a missing first-hop RTT is not real input"
+        );
+
+        gate.pre_gate(server(20), Instant::now(), Some(10.0), Some(50.0), false);
+        assert_eq!(
+            counters.bypass_pre_gate_rtt.load(Ordering::Relaxed),
+            1,
+            "a supplied first-hop RTT counts as real input"
+        );
     }
 
     #[test]

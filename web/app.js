@@ -743,6 +743,107 @@
     empty.hidden = false;
   }
 
+  // --- Per-source measured quality (latest interval, per relay) ---
+  // The relay withholds a client-locale cell until at least three distinct
+  // sources back it, so a row is shown only once the reconstructed interval
+  // holds that many paired reports. Thinner cells are counted, never
+  // estimated, and no country, address, or identifier is rendered.
+  var MIN_SOURCE_REPORTS = 3;
+
+  function sourceDelta(current, previous, reset) {
+    var c = finiteNumber(current) ? current : 0;
+    if (reset || !finiteNumber(previous) || c < previous) return c;
+    return c - previous;
+  }
+
+  function buildSourceRows(snapshots) {
+    if (snapshots.length < 2) return { rows: [], suppressed: 0 };
+    var latest = snapshots[snapshots.length - 1];
+    var previous = snapshots[snapshots.length - 2];
+    var perRelay = latest && latest.per_relay;
+    if (!perRelay || typeof perRelay !== 'object') return { rows: [], suppressed: 0 };
+
+    var rows = [];
+    var suppressed = 0;
+
+    Object.keys(perRelay).sort().forEach(function (id) {
+      var relay = perRelay[id];
+      if (!relay || typeof relay !== 'object' || relay.reachable === false) return;
+      var sources = relay.sources;
+      if (!sources || typeof sources !== 'object') return;
+      var prevRelay = previous && previous.per_relay ? previous.per_relay[id] : null;
+      var prevSources = prevRelay && prevRelay.sources && typeof prevRelay.sources === 'object'
+        ? prevRelay.sources : {};
+      var reset = relay.reset === true;
+
+      Object.keys(sources).forEach(function (region) {
+        var cur = sources[region];
+        if (!cur || typeof cur !== 'object') return;
+        var prev = prevSources[region] || {};
+        var samples = sourceDelta(cur.saved_app_ms_count, prev.saved_app_ms_count, reset);
+        var sum = sourceDelta(cur.saved_app_ms_sum, prev.saved_app_ms_sum, reset);
+        var negative = sourceDelta(cur.saved_app_ms_negative_count, prev.saved_app_ms_negative_count, reset);
+        if (!(samples > 0)) return;
+        if (samples < MIN_SOURCE_REPORTS) { suppressed += 1; return; }
+        rows.push({
+          relay: id,
+          region: region,
+          samples: samples,
+          mean: sum / samples,
+          worseShare: (negative / samples) * 100
+        });
+      });
+    });
+
+    rows.sort(function (a, b) {
+      if (b.worseShare !== a.worseShare) return b.worseShare - a.worseShare;
+      return a.mean - b.mean;
+    });
+    return { rows: rows, suppressed: suppressed };
+  }
+
+  function renderSourceQuality(snapshots) {
+    var section = document.getElementById('source-quality');
+    if (!section) return;
+    var body = section.querySelector('[data-source-quality-body]');
+    var note = section.querySelector('[data-source-quality-note]');
+    if (!body || !note) return;
+
+    var result = buildSourceRows(snapshots || []);
+    body.textContent = '';
+
+    if (!result.rows.length) {
+      section.hidden = true;
+      return;
+    }
+
+    result.rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      var cells = [
+        { text: row.relay },
+        { text: row.region.toUpperCase() },
+        { text: formatCount(row.samples), numeric: true },
+        { text: formatMs(row.mean), numeric: true },
+        { text: formatPercent(row.worseShare), numeric: true }
+      ];
+      cells.forEach(function (cell) {
+        var td = document.createElement('td');
+        td.textContent = cell.text;
+        if (cell.numeric) td.className = 'source-quality-num';
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+
+    var noteText = 'Positive saved means the relay was faster than the direct path for that client region; a higher worse share means it made things worse. Each row needs at least ' +
+      MIN_SOURCE_REPORTS + ' paired client reports.';
+    if (result.suppressed) {
+      noteText += ' ' + result.suppressed + ' thinner cell(s) are withheld below the floor.';
+    }
+    note.textContent = noteText;
+    section.hidden = false;
+  }
+
   function renderTrends(doc) {
     var grid = document.getElementById('trends-grid');
     var empty = document.getElementById('trends-empty');
@@ -751,12 +852,14 @@
     var snapshots = normalizeSnapshots(doc);
     applyLifetime(snapshots);
     if (!snapshots.length) {
+      renderSourceQuality([]);
       showTrendsEmpty('No network history has been published yet. Trends appear after the first scheduled snapshot is recorded.');
       return;
     }
 
     var model = buildTrendModel(snapshots);
     if (!model.relayIds.length && !model.hasLatency && !model.hasFec && !model.hasSaved) {
+      renderSourceQuality(snapshots);
       showTrendsEmpty('The published history has ' + snapshots.length + ' snapshot' +
         (snapshots.length === 1 ? '' : 's') + ' but no plottable relay metrics yet.');
       return;
@@ -764,6 +867,7 @@
 
     grid.textContent = '';
     empty.hidden = true;
+    renderSourceQuality(snapshots);
 
     var window = windowSummary(model);
 
@@ -871,6 +975,7 @@
       })
       .then(renderTrends)
       .catch(function () {
+        renderSourceQuality([]);
         showTrendsEmpty('Network history is unavailable or unreadable right now. Trends appear once the collector publishes a readable snapshot.');
       });
   }

@@ -4,6 +4,7 @@
 //! in the LightSpeed header, sends to proxy, receives responses, unwraps,
 //! and delivers back to the game.
 
+pub mod adaptive;
 pub mod budget;
 pub mod capture;
 pub mod header;

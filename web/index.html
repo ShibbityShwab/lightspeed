@@ -451,6 +451,31 @@
           <div class="trends-empty" id="trends-empty" data-trends-empty hidden>
             <p data-trends-empty-message>No network history has been published yet.</p>
           </div>
+          <div class="source-quality" id="source-quality" hidden>
+            <h4 class="trend-card-title">Where relays help, by client region</h4>
+            <p class="trend-card-subtitle">
+              Latest interval, per relay and client region. Positive saved means the relay beat the
+              direct path for that region. Only cells backed by at least three paired client reports
+              are shown; the client's country is coarsened to a world region and no IP address,
+              identifier, or exact location is ever collected.
+            </p>
+            <div class="source-quality-table-wrap">
+              <table class="source-quality-table">
+                <caption class="sr-only">Measured RTT saved per relay and client region</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Relay</th>
+                    <th scope="col">Client region</th>
+                    <th scope="col">Reports</th>
+                    <th scope="col">Saved (mean)</th>
+                    <th scope="col">Worse share</th>
+                  </tr>
+                </thead>
+                <tbody data-source-quality-body></tbody>
+              </table>
+            </div>
+            <p class="trend-note" data-source-quality-note></p>
+          </div>
         </div>
       </div>
     </section>

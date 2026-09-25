@@ -46,6 +46,9 @@ const RECV_POLL_TIMEOUT_MS: libc::c_int = 200;
 const RECV_MAX_RETRIES: u32 = 5;
 const RECV_BACKOFF_BASE: Duration = Duration::from_millis(10);
 const RECV_BACKOFF_MAX: Duration = Duration::from_millis(500);
+/// How long a keepalive send timestamp may wait for its echo before it is
+/// discarded. Bounded so a very late echo cannot be paired with a new probe.
+const KEEPALIVE_TIMESTAMP_TTL: Duration = Duration::from_secs(30);
 
 pub struct NftablesInterceptor;
 
@@ -178,9 +181,17 @@ impl TrafficInterceptor for NftablesInterceptor {
         );
 
         // ── Keepalive task ────────────────────────────────────────────────
+        //
+        // The send timestamps let the main loop turn each keepalive echo into
+        // the live client->relay RTT the bypass pre-gate consumes. Entries
+        // older than `KEEPALIVE_TIMESTAMP_TTL` are evicted so a late echo
+        // cannot be paired with the wrong probe.
+        let keepalive_timestamps: Arc<tokio::sync::Mutex<std::collections::HashMap<u16, Instant>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         {
             let ts = Arc::clone(&tunnel_socket);
             let running_ka = Arc::clone(&running);
+            let ka_timestamps = Arc::clone(&keepalive_timestamps);
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(5));
                 let mut seq: u16 = 60000;
@@ -192,12 +203,12 @@ impl TrafficInterceptor for NftablesInterceptor {
                         .as_micros() as u32;
                     let hdr = lightspeed_protocol::TunnelHeader::keepalive(seq, now_us)
                         .with_session_token(crate::session::session_token());
-                    let _ = ts
-                        .send_to(
-                            &hdr.encode_to_array(),
-                            crate::session::current_proxy().unwrap_or(config_proxy),
-                        )
-                        .await;
+                    let target = crate::session::current_proxy().unwrap_or(config_proxy);
+                    if ts.send_to(&hdr.encode_to_array(), target).await.is_ok() {
+                        let mut map = ka_timestamps.lock().await;
+                        map.insert(seq, Instant::now());
+                        map.retain(|_, sent| sent.elapsed() < KEEPALIVE_TIMESTAMP_TTL);
+                    }
                     seq = seq.wrapping_add(1);
                 }
             });
@@ -469,7 +480,17 @@ impl TrafficInterceptor for NftablesInterceptor {
                             Err(_) => continue,
                         };
 
-                        if header.is_keepalive() { continue; }
+                        if header.is_keepalive() {
+                            if let std::net::SocketAddr::V4(relay) = src_addr {
+                                record_keepalive_rtt(
+                                    &keepalive_timestamps,
+                                    header.sequence,
+                                    relay,
+                                )
+                                .await;
+                            }
+                            continue;
+                        }
 
                         crate::latency::record_inbound(*header.orig_src_addr().ip());
 
@@ -641,6 +662,23 @@ fn apply_action(
     }
 }
 
+/// Turn a keepalive echo into the live client->relay RTT the bypass pre-gate
+/// consumes. An echo with no pending send timestamp is ignored, and the
+/// timestamp is consumed on first use so a duplicate cannot count twice.
+async fn record_keepalive_rtt(
+    timestamps: &Arc<tokio::sync::Mutex<std::collections::HashMap<u16, Instant>>>,
+    sequence: u16,
+    relay: SocketAddrV4,
+) {
+    let Some(sent_at) = timestamps.lock().await.remove(&sequence) else {
+        return;
+    };
+    let rtt_ms = sent_at.elapsed().as_secs_f64() * 1000.0;
+    if rtt_ms.is_finite() && rtt_ms > 0.0 {
+        crate::latency::record_client_relay_rtt(relay, rtt_ms as f32);
+    }
+}
+
 /// Whether the tier-1 pre-gate says the new server should stay direct.
 ///
 /// Linux is a diverting backend, so the only safe Direct is *before* the
@@ -655,7 +693,35 @@ fn pre_gate_skips(
         return false;
     }
     let direct_icmp = crate::latency::global().and_then(|t| t.direct_p50_ms());
-    let decision = gate.pre_gate(server, Instant::now(), None, direct_icmp, fec_enabled);
+    let client_relay = client_relay_p50_for_current();
+    evaluate_pre_gate(gate, server, fec_enabled, client_relay, direct_icmp)
+}
+
+/// The keepalive client->relay RTT recorded for the chosen relay, or `None`
+/// when no fresh sample exists. A missing or stale value leaves the pre-gate
+/// inert, which is its documented fail-open to the relay.
+fn client_relay_p50_for_current() -> Option<f32> {
+    let relay = crate::session::current_proxy()?;
+    crate::latency::client_relay_p50_ms(relay)
+}
+
+/// Feed the tier-1 pre-gate its first-hop and direct-baseline inputs. Split
+/// out from [`pre_gate_skips`] so the wiring is testable without a network or
+/// process-wide globals.
+fn evaluate_pre_gate(
+    gate: &mut super::bypass::BypassGate,
+    server: SocketAddrV4,
+    fec_enabled: bool,
+    client_relay_p50_ms: Option<f32>,
+    direct_icmp_p50_ms: Option<f32>,
+) -> bool {
+    let decision = gate.pre_gate(
+        server,
+        Instant::now(),
+        client_relay_p50_ms,
+        direct_icmp_p50_ms,
+        fec_enabled,
+    );
     if decision != super::bypass::BypassDecision::Direct {
         return false;
     }
@@ -1284,5 +1350,54 @@ mod tests {
             "dry_run must never change tunneling behavior"
         );
         assert_eq!(counters.bypass_allowed.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn pre_gate_engages_with_a_fresh_client_relay_rtt() {
+        let mut gate = bypass_gate(crate::interceptor::bypass::BypassMode::Auto);
+        assert!(
+            evaluate_pre_gate(&mut gate, server(), false, Some(100.0), Some(50.0)),
+            "a fresh first hop as long as the whole direct path must decline the redirect"
+        );
+    }
+
+    #[test]
+    fn pre_gate_fails_open_without_a_client_relay_rtt() {
+        let mut gate = bypass_gate(crate::interceptor::bypass::BypassMode::Auto);
+        assert!(
+            !evaluate_pre_gate(&mut gate, server(), false, None, Some(50.0)),
+            "a missing first-hop RTT must keep the redirect"
+        );
+    }
+
+    #[test]
+    fn pre_gate_fails_open_without_a_direct_icmp_rtt() {
+        let mut gate = bypass_gate(crate::interceptor::bypass::BypassMode::Auto);
+        assert!(
+            !evaluate_pre_gate(&mut gate, server(), false, Some(100.0), None),
+            "without a direct baseline the pre-gate cannot prove anything"
+        );
+    }
+
+    #[test]
+    fn pre_gate_counts_real_rtt_input_while_dry_run_keeps_the_redirect() {
+        let counters = Arc::new(InterceptorCounters::default());
+        let mut gate = crate::interceptor::bypass::BypassGate::new(
+            crate::interceptor::bypass::BypassConfig {
+                mode: crate::interceptor::bypass::BypassMode::DryRun,
+                ..Default::default()
+            },
+            Arc::clone(&counters),
+        );
+        assert!(
+            !evaluate_pre_gate(&mut gate, server(), false, Some(100.0), Some(50.0)),
+            "dry_run must never change tunneling behavior"
+        );
+        assert_eq!(counters.bypass_allowed.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            counters.bypass_pre_gate_rtt.load(Ordering::Relaxed),
+            1,
+            "the gate must record that it received a real first-hop RTT"
+        );
     }
 }

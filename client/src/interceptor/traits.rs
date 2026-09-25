@@ -154,6 +154,9 @@ pub struct InterceptorCounters {
     pub bypass_decisions: AtomicU64,
     /// Relay<->Direct state transitions recorded by the gate.
     pub bypass_flips: AtomicU64,
+    /// Pre-gate evaluations that received a fresh client->relay RTT to
+    /// compare against the direct path (auto/dry_run).
+    pub bypass_pre_gate_rtt: AtomicU64,
     /// Auto-detected (or pre-configured) server address.
     /// SAFETY: This `std::sync::Mutex` is used from async tasks but the lock
     /// is never held across an await point.  If that changes, migrate to
@@ -177,6 +180,7 @@ impl Default for InterceptorCounters {
             bypass_refused: AtomicU64::new(0),
             bypass_decisions: AtomicU64::new(0),
             bypass_flips: AtomicU64::new(0),
+            bypass_pre_gate_rtt: AtomicU64::new(0),
             detected_server: std::sync::Mutex::new(None),
             last_error: std::sync::Mutex::new(None),
         }
@@ -198,6 +202,7 @@ impl InterceptorCounters {
             bypass_refused: self.bypass_refused.load(Ordering::Relaxed),
             bypass_decisions: self.bypass_decisions.load(Ordering::Relaxed),
             bypass_flips: self.bypass_flips.load(Ordering::Relaxed),
+            bypass_pre_gate_rtt: self.bypass_pre_gate_rtt.load(Ordering::Relaxed),
             detected_server: self.detected_server.lock().map(|g| *g).unwrap_or(None),
             last_error: self.last_error.lock().ok().and_then(|g| g.clone()),
             platform,
@@ -225,6 +230,8 @@ pub struct InterceptorStats {
     pub bypass_decisions: u64,
     /// Relay<->Direct state transitions recorded by the gate.
     pub bypass_flips: u64,
+    /// Pre-gate evaluations that received a fresh client->relay RTT.
+    pub bypass_pre_gate_rtt: u64,
     /// The game server address discovered at runtime (or pre-configured).
     pub detected_server: Option<SocketAddrV4>,
     /// Description of the most recent fatal error, if any.

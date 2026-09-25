@@ -59,27 +59,27 @@ COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed"
 
 # ── Always write valid JSON; never fail the caller ───────────
 write_json() {
-    local json="$1"
-    if ! printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
-        json="$DEFAULT_HISTORY"
-    fi
+	local json="$1"
+	if ! printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
+		json="$DEFAULT_HISTORY"
+	fi
 
-    if [ -z "$HISTORY_PATH" ]; then
-        printf '%s\n' "$json"
-        return 0
-    fi
+	if [ -z "$HISTORY_PATH" ]; then
+		printf '%s\n' "$json"
+		return 0
+	fi
 
-    mkdir -p "$(dirname "$HISTORY_PATH")" 2>/dev/null || true
-    local tmp
-    tmp="$(mktemp "$(dirname "$HISTORY_PATH")/.collect-metrics.XXXXXX" 2>/dev/null || true)"
-    if [ -n "$tmp" ]; then
-        if printf '%s\n' "$json" > "$tmp" 2>/dev/null; then
-            mv "$tmp" "$HISTORY_PATH" 2>/dev/null && return 0
-        fi
-        rm -f "$tmp" 2>/dev/null || true
-    fi
-    printf '%s\n' "$json" > "$HISTORY_PATH" 2>/dev/null || true
-    return 0
+	mkdir -p "$(dirname "$HISTORY_PATH")" 2>/dev/null || true
+	local tmp
+	tmp="$(mktemp "$(dirname "$HISTORY_PATH")/.collect-metrics.XXXXXX" 2>/dev/null || true)"
+	if [ -n "$tmp" ]; then
+		if printf '%s\n' "$json" >"$tmp" 2>/dev/null; then
+			mv "$tmp" "$HISTORY_PATH" 2>/dev/null && return 0
+		fi
+		rm -f "$tmp" 2>/dev/null || true
+	fi
+	printf '%s\n' "$json" >"$HISTORY_PATH" 2>/dev/null || true
+	return 0
 }
 
 # ── Per-relay parser: health JSON + Prometheus text -> one object ──
@@ -135,8 +135,46 @@ def geo_cells($m; $countries; $max):
   | { geo: (reduce $keys[0:$max][] as $k ({}; .[$k] = $agg.cells[$k])),
       geo_capped: (($keys | length) > $max),
       unmapped: $agg.unmapped };
+def labeled_rows($m; $name):
+  (($m // "") | split("\n")
+   | map(select(startswith($name + "{")))
+   | map(try (
+        capture("^" + $name + "\\{(?<labels>[^}]*)\\}\\s+(?<value>[-+0-9.eE]+)")
+        | ((.value | tonumber?) // null) as $v
+        | (geo_labels(.labels)) as $l
+        | select($v != null and ($l.country // null) != null)
+        | { country: $l.country, v: $v }
+      ) catch null)
+   | map(select(. != null)));
+def source_cells($m; $countries):
+  (reduce labeled_rows($m; "lightspeed_telemetry_saved_app_ms_sum")[] as $r
+     ({}; .[$r.country].saved_app_ms_sum =
+            (((.[$r.country].saved_app_ms_sum) // 0) + $r.v))) as $sums
+  | (reduce labeled_rows($m; "lightspeed_telemetry_saved_app_ms_count")[] as $r
+     ({}; .[$r.country].saved_app_ms_count =
+            (((.[$r.country].saved_app_ms_count) // 0) + $r.v))) as $counts
+  | (reduce labeled_rows($m; "lightspeed_telemetry_saved_app_ms_negative_count")[] as $r
+     ({}; .[$r.country].saved_app_ms_negative_count =
+            (((.[$r.country].saved_app_ms_negative_count) // 0) + $r.v))) as $negs
+  | ([ ($sums | keys), ($counts | keys), ($negs | keys) ] | add // []) as $cs
+  | (reduce ($cs | unique)[] as $c
+       ({ cells: {}, unmapped: 0 };
+        ($countries[$c] // null) as $reg
+        | if $reg != null
+          then .cells[$reg] = {
+                 saved_app_ms_sum: (((.cells[$reg].saved_app_ms_sum) // 0)
+                                     + (($sums[$c].saved_app_ms_sum) // 0)),
+                 saved_app_ms_count: (((.cells[$reg].saved_app_ms_count) // 0)
+                                       + (($counts[$c].saved_app_ms_count) // 0)),
+                 saved_app_ms_negative_count: (((.cells[$reg].saved_app_ms_negative_count) // 0)
+                                               + (($negs[$c].saved_app_ms_negative_count) // 0))
+               }
+          else .unmapped += 1
+          end)) as $agg
+  | { sources: $agg.cells, unmapped: $agg.unmapped };
 ($h | try fromjson catch null) as $H
 | (geo_cells($m; $countries; $maxgeo)) as $g
+| (source_cells($m; $countries)) as $s
 | {
     node_id: $id,
     reachable: $reach,
@@ -146,6 +184,7 @@ def geo_cells($m; $countries; $max):
                         else mval($m; "lightspeed_active_connections") end),
     geo: $g.geo,
     geo_capped: $g.geo_capped,
+    sources: $s.sources,
     cumulative: {
       packets_relayed: pick($H; $m; "packets_relayed"; "lightspeed_packets_relayed_total"),
       bytes_relayed: pick($H; $m; "bytes_relayed"; "lightspeed_bytes_relayed_total"),
@@ -195,6 +234,7 @@ def geo_cells($m; $countries; $max):
     }
   }
 | if $g.unmapped > 0 then .geo_unmapped_cells = $g.unmapped else . end
+| if $s.unmapped > 0 then .sources_unmapped = $s.unmapped else . end
 '
 
 # ── Delta engine: prev history + current scrape -> bounded document ──
@@ -242,6 +282,8 @@ def prev_life($pr; $k):
         geo: (.geo // {}),
         geo_capped: (.geo_capped // false),
         geo_unmapped_cells: (.geo_unmapped_cells // null),
+        sources: (.sources // {}),
+        sources_unmapped: (.sources_unmapped // null),
         cumulative: $r.cum,
         delta: $r.delta,
         lifetime: $r.lifetime,
@@ -260,6 +302,8 @@ def prev_life($pr; $k):
         geo: ($pr.geo // {}),
         geo_capped: ($pr.geo_capped // false),
         geo_unmapped_cells: ($pr.geo_unmapped_cells // null),
+        sources: ($pr.sources // {}),
+        sources_unmapped: ($pr.sources_unmapped // null),
         cumulative: ($pr.cumulative // {}),
         delta: (reduce $counters[] as $k ({}; .[$k] = 0)),
         lifetime: (reduce $counters[] as $k ({}; .[$k] = prev_life($pr; $k))),
@@ -276,6 +320,7 @@ def prev_life($pr; $k):
         active_sessions: $r.active_sessions,
          geo: $r.geo,
          geo_capped: $r.geo_capped,
+         sources: $r.sources,
          lifetime: $r.lifetime,
          cumulative: $r.cumulative,
         delta: $r.delta,
@@ -284,6 +329,10 @@ def prev_life($pr; $k):
      } + (if $r.geo_unmapped_cells == null
           then {}
           else {geo_unmapped_cells: $r.geo_unmapped_cells}
+          end)
+       + (if $r.sources_unmapped == null
+          then {}
+          else {sources_unmapped: $r.sources_unmapped}
           end))
    )) as $per_relay
 | (reduce $counters[] as $k (
@@ -314,32 +363,32 @@ def prev_life($pr; $k):
 # ── Load the country -> region catalog; absence -> empty map ─
 COUNTRY_REGIONS="{}"
 if [ -f "$REGIONS_PATH" ] && [ -r "$REGIONS_PATH" ]; then
-    loaded_regions="$(jq -c 'if (.countries | type) == "object" then .countries else {} end' \
-        "$REGIONS_PATH" 2>/dev/null || true)"
-    if [ -n "$loaded_regions" ]; then
-        COUNTRY_REGIONS="$loaded_regions"
-    fi
+	loaded_regions="$(jq -c 'if (.countries | type) == "object" then .countries else {} end' \
+		"$REGIONS_PATH" 2>/dev/null || true)"
+	if [ -n "$loaded_regions" ]; then
+		COUNTRY_REGIONS="$loaded_regions"
+	fi
 fi
 
 # ── Load prior history (normalize to a known-good shape) ─────
 prev="$DEFAULT_HISTORY"
 if [ -n "$HISTORY_PATH" ] && [ -f "$HISTORY_PATH" ] && [ -s "$HISTORY_PATH" ]; then
-    candidate="$(jq -c '{
+	candidate="$(jq -c '{
         version: 1,
         generated_at: (.generated_at // 0),
         snapshots: (.snapshots // [])
     } | select(.snapshots | type == "array")' "$HISTORY_PATH" 2>/dev/null || true)"
-    if [ -n "$candidate" ]; then
-        prev="$candidate"
-    fi
+	if [ -n "$candidate" ]; then
+		prev="$candidate"
+	fi
 fi
 
 # ── Resolve the relay inventory; failure -> empty list ───────
 nodes_json="[]"
 if resolved="$(lightspeed_resolve_nodes 2>/dev/null)"; then
-    if printf '%s' "$resolved" | jq -e 'type == "array"' >/dev/null 2>&1; then
-        nodes_json="$resolved"
-    fi
+	if printf '%s' "$resolved" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		nodes_json="$resolved"
+	fi
 fi
 
 # ── Scrape each relay; never abort on one ────────────────────
@@ -348,48 +397,48 @@ cleanup() { [ -n "${TMP_ROWS:-}" ] && rm -f "$TMP_ROWS" 2>/dev/null || true; }
 trap cleanup EXIT
 
 while IFS= read -r node; do
-    [ -z "$node" ] && continue
-    node_id="$(printf '%s' "$node" | jq -r '.node_id // empty' 2>/dev/null || true)"
-    health_url="$(printf '%s' "$node" | jq -r '.health_url // empty' 2>/dev/null || true)"
-    metrics_url="$(printf '%s' "$node" | jq -r '.metrics_url // empty' 2>/dev/null || true)"
-    [ -z "$node_id" ] && continue
+	[ -z "$node" ] && continue
+	node_id="$(printf '%s' "$node" | jq -r '.node_id // empty' 2>/dev/null || true)"
+	health_url="$(printf '%s' "$node" | jq -r '.health_url // empty' 2>/dev/null || true)"
+	metrics_url="$(printf '%s' "$node" | jq -r '.metrics_url // empty' 2>/dev/null || true)"
+	[ -z "$node_id" ] && continue
 
-    health=""
-    metrics=""
-    if [ -n "$health_url" ]; then
-        health="$(curl --silent --max-time "$TIMEOUT" "$health_url" 2>/dev/null || true)"
-    fi
-    if [ -n "$metrics_url" ]; then
-        metrics="$(curl --silent --max-time "$TIMEOUT" "$metrics_url" 2>/dev/null || true)"
-    fi
+	health=""
+	metrics=""
+	if [ -n "$health_url" ]; then
+		health="$(curl --silent --max-time "$TIMEOUT" "$health_url" 2>/dev/null || true)"
+	fi
+	if [ -n "$metrics_url" ]; then
+		metrics="$(curl --silent --max-time "$TIMEOUT" "$metrics_url" 2>/dev/null || true)"
+	fi
 
-    reach=false
-    if [ -n "$health" ] && printf '%s' "$health" | jq -e 'type == "object"' >/dev/null 2>&1; then
-        reach=true
-    elif [ -n "$metrics" ] && printf '%s' "$metrics" | jq -Rs -e 'test("lightspeed_")' >/dev/null 2>&1; then
-        reach=true
-    fi
+	reach=false
+	if [ -n "$health" ] && printf '%s' "$health" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		reach=true
+	elif [ -n "$metrics" ] && printf '%s' "$metrics" | jq -Rs -e 'test("lightspeed_")' >/dev/null 2>&1; then
+		reach=true
+	fi
 
-    row="$(jq -cn \
-        --arg id "$node_id" \
-        --arg h "$health" \
-        --arg m "$metrics" \
-        --argjson reach "$reach" \
-        --argjson countries "$COUNTRY_REGIONS" \
-        --argjson maxgeo "$MAX_GEO_CELLS" \
-        "$RELAY_JQ" 2>/dev/null || true)"
-    if [ -n "$row" ] && [ -n "${TMP_ROWS:-}" ]; then
-        printf '%s\n' "$row" >> "$TMP_ROWS"
-    fi
+	row="$(jq -cn \
+		--arg id "$node_id" \
+		--arg h "$health" \
+		--arg m "$metrics" \
+		--argjson reach "$reach" \
+		--argjson countries "$COUNTRY_REGIONS" \
+		--argjson maxgeo "$MAX_GEO_CELLS" \
+		"$RELAY_JQ" 2>/dev/null || true)"
+	if [ -n "$row" ] && [ -n "${TMP_ROWS:-}" ]; then
+		printf '%s\n' "$row" >>"$TMP_ROWS"
+	fi
 done < <(printf '%s' "$nodes_json" | jq -c '.[]?' 2>/dev/null || true)
 
 if [ -n "${TMP_ROWS:-}" ]; then
-    current_json="$(jq -s '.' "$TMP_ROWS" 2>/dev/null || echo '[]')"
+	current_json="$(jq -s '.' "$TMP_ROWS" 2>/dev/null || echo '[]')"
 else
-    current_json="[]"
+	current_json="[]"
 fi
 if ! printf '%s' "$current_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    current_json="[]"
+	current_json="[]"
 fi
 
 # ── Compute deltas, totals, and the bounded snapshot list ────
@@ -398,31 +447,31 @@ fi
 # nothing and the collector silently rewrote the previous history, freezing the
 # snapshot list on real data while the small test fixtures passed.
 ctmp="$(mktemp -d 2>/dev/null || mktemp -d -t lightspeed-collect)"
-printf '%s' "$prev" > "$ctmp/prev.json"
-printf '%s' "$current_json" > "$ctmp/current.json"
+printf '%s' "$prev" >"$ctmp/prev.json"
+printf '%s' "$current_json" >"$ctmp/current.json"
 DPROLOGUE='($prevf[0]) as $prev | ($curf[0]) as $current | '
 result="$(jq -c \
-    --slurpfile prevf "$ctmp/prev.json" \
-    --slurpfile curf "$ctmp/current.json" \
-    --argjson counters "$COUNTERS" \
-    --argjson max "$MAX_SNAPSHOTS" \
-    --argjson now "$NOW" \
-    "${DPROLOGUE}${DELTA_JQ}" <<<'null' 2>/dev/null || true)"
+	--slurpfile prevf "$ctmp/prev.json" \
+	--slurpfile curf "$ctmp/current.json" \
+	--argjson counters "$COUNTERS" \
+	--argjson max "$MAX_SNAPSHOTS" \
+	--argjson now "$NOW" \
+	"${DPROLOGUE}${DELTA_JQ}" <<<'null' 2>/dev/null || true)"
 rm -rf "$ctmp"
 
 if [ -z "$result" ]; then
-    result="$prev"
+	result="$prev"
 fi
 
 write_json "$result"
 
 # ── Summary (stdout only; never affects the document) ────────
 if [ -n "$result" ]; then
-    relay_n="$(printf '%s' "$result" | jq -r '.snapshots[-1].relay_count // 0' 2>/dev/null || echo 0)"
-    snap_n="$(printf '%s' "$result" | jq -r '.snapshots | length' 2>/dev/null || echo 0)"
-    reset_n="$(printf '%s' "$result" | jq -r '[.snapshots[-1].per_relay[]? | select(.reset)] | length' 2>/dev/null || echo 0)"
-    printf 'collect-metrics: %s relay(s), %s snapshot(s), %s reset relay(s) -> %s\n' \
-        "$relay_n" "$snap_n" "$reset_n" "${HISTORY_PATH:-<stdout>}"
+	relay_n="$(printf '%s' "$result" | jq -r '.snapshots[-1].relay_count // 0' 2>/dev/null || echo 0)"
+	snap_n="$(printf '%s' "$result" | jq -r '.snapshots | length' 2>/dev/null || echo 0)"
+	reset_n="$(printf '%s' "$result" | jq -r '[.snapshots[-1].per_relay[]? | select(.reset)] | length' 2>/dev/null || echo 0)"
+	printf 'collect-metrics: %s relay(s), %s snapshot(s), %s reset relay(s) -> %s\n' \
+		"$relay_n" "$snap_n" "$reset_n" "${HISTORY_PATH:-<stdout>}"
 fi
 
 exit 0

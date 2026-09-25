@@ -18,6 +18,8 @@
 #   (o) saved-app families (saved_app_ms_sum/_count/_negative_count)
 #       parse and delta alongside the other telemetry families
 #   (p) route attribution stays per relay; totals equal the per-relay sum
+#   (q) per-source saved-app retention coarsens the client country label
+#       to a region and passes the map through the delta engine untouched
 #
 # No network: the fake registry points health/metrics URLs at file://
 # fixtures, which curl reads locally.
@@ -37,39 +39,39 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 assert_jq() {
-    # assert_jq <file> <jq-expr> <message>
-    local file="$1" expr="$2" msg="$3"
-    if jq -e "$expr" "$file" >/dev/null 2>&1; then
-        PASS=$((PASS + 1))
-    else
-        printf '  FAIL: %s\n        expr: %s\n' "$msg" "$expr" >&2
-        FAILURES=$((FAILURES + 1))
-    fi
+	# assert_jq <file> <jq-expr> <message>
+	local file="$1" expr="$2" msg="$3"
+	if jq -e "$expr" "$file" >/dev/null 2>&1; then
+		PASS=$((PASS + 1))
+	else
+		printf '  FAIL: %s\n        expr: %s\n' "$msg" "$expr" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
 }
 
 assert_rc0() {
-    # assert_rc0 <rc> <message>
-    if [ "$1" -eq 0 ]; then
-        PASS=$((PASS + 1))
-    else
-        printf '  FAIL: %s (exit %s, expected 0)\n' "$2" "$1" >&2
-        FAILURES=$((FAILURES + 1))
-    fi
+	# assert_rc0 <rc> <message>
+	if [ "$1" -eq 0 ]; then
+		PASS=$((PASS + 1))
+	else
+		printf '  FAIL: %s (exit %s, expected 0)\n' "$2" "$1" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
 }
 
 if [ ! -f "$COLLECT" ]; then
-    printf 'collect-metrics: FAIL - implementation not found: %s\n' "$COLLECT" >&2
-    exit 1
+	printf 'collect-metrics: FAIL - implementation not found: %s\n' "$COLLECT" >&2
+	exit 1
 fi
 
 # ── Fixture writers ──────────────────────────────────────────
 # write_fixture <dir> <packets> <dropped> <bytes> <fec> <sessions> <active> <malformed> <lat_sum> <lat_count> <fec_losses> <parity>
 write_fixture() {
-    local dir="$1" p="$2" d="$3" b="$4" f="$5" s="$6" a="$7" mal="$8" lsum="$9" lcnt="${10}" floss="${11}" fpar="${12}"
-    cat > "$dir/relay-a.health.json" <<JSON
+	local dir="$1" p="$2" d="$3" b="$4" f="$5" s="$6" a="$7" mal="$8" lsum="$9" lcnt="${10}" floss="${11}" fpar="${12}"
+	cat >"$dir/relay-a.health.json" <<JSON
 {"status":"healthy","version":"1.3.2","active_connections":$a,"packets_relayed":$p,"packets_dropped":$d,"bytes_relayed":$b,"fec_recoveries":$f,"sessions_created":$s,"drops_malformed":$mal}
 JSON
-    cat > "$dir/relay-a.metrics.txt" <<METRICS
+	cat >"$dir/relay-a.metrics.txt" <<METRICS
 lightspeed_packets_relayed_total{node_id="relay-a"} $p
 lightspeed_bytes_relayed_total{node_id="relay-a"} $b
 lightspeed_packets_dropped_total{node_id="relay-a"} $d
@@ -98,31 +100,33 @@ METRICS
 
 # append_geo <dir> <prometheus-line>...
 append_geo() {
-    local dir="$1"; shift
-    local line
-    for line in "$@"; do
-        printf '%s\n' "$line" >> "$dir/relay-a.metrics.txt"
-    done
+	local dir="$1"
+	shift
+	local line
+	for line in "$@"; do
+		printf '%s\n' "$line" >>"$dir/relay-a.metrics.txt"
+	done
 }
 
 # append_metrics_file <dir> <relay-name> <prometheus-line>...
 append_metrics_file() {
-    local dir="$1" name="$2"; shift 2
-    local line
-    for line in "$@"; do
-        printf '%s\n' "$line" >> "$dir/relay-$name.metrics.txt"
-    done
+	local dir="$1" name="$2"
+	shift 2
+	local line
+	for line in "$@"; do
+		printf '%s\n' "$line" >>"$dir/relay-$name.metrics.txt"
+	done
 }
 
 # write_relay_fixture <dir> <name> <packets> <malformed> <sessions>
 # Minimal per-relay health+metrics for an arbitrary relay id, used to
 # drive the gap/reset/join reconciliation scenario.
 write_relay_fixture() {
-    local dir="$1" name="$2" p="$3" mal="$4" s="$5"
-    cat > "$dir/relay-$name.health.json" <<JSON
+	local dir="$1" name="$2" p="$3" mal="$4" s="$5"
+	cat >"$dir/relay-$name.health.json" <<JSON
 {"status":"healthy","version":"1.3.2","active_connections":0,"packets_relayed":$p,"sessions_created":$s,"drops_malformed":$mal}
 JSON
-    cat > "$dir/relay-$name.metrics.txt" <<METRICS
+	cat >"$dir/relay-$name.metrics.txt" <<METRICS
 lightspeed_packets_relayed_total{node_id="relay-$name"} $p
 lightspeed_sessions_created_total{node_id="relay-$name"} $s
 lightspeed_drops_malformed_total{node_id="relay-$name"} $mal
@@ -132,33 +136,34 @@ METRICS
 
 # write_registry <out> <nodes-json-array>
 write_registry() {
-    jq -n --argjson nodes "$2" \
-        '{registry: ({schema_version:1, nodes:$nodes} | tojson), signature:"test"}' > "$1"
+	jq -n --argjson nodes "$2" \
+		'{registry: ({schema_version:1, nodes:$nodes} | tojson), signature:"test"}' >"$1"
 }
 
 node_a="$(jq -cn \
-    --arg h "file://$TMP/relay-a.health.json" \
-    --arg m "file://$TMP/relay-a.metrics.txt" \
-    '{node_id:"relay-a",region:"us-west",health_url:$h,metrics_url:$m}')"
+	--arg h "file://$TMP/relay-a.health.json" \
+	--arg m "file://$TMP/relay-a.metrics.txt" \
+	'{node_id:"relay-a",region:"us-west",health_url:$h,metrics_url:$m}')"
 node_b="$(jq -cn \
-    --arg h "file://$TMP/relay-b.health.json" \
-    --arg m "file://$TMP/relay-b.metrics.txt" \
-    '{node_id:"relay-b",region:"us-east",health_url:$h,metrics_url:$m}')"
+	--arg h "file://$TMP/relay-b.health.json" \
+	--arg m "file://$TMP/relay-b.metrics.txt" \
+	'{node_id:"relay-b",region:"us-east",health_url:$h,metrics_url:$m}')"
 
 REG_A="$TMP/registry-a.json"
 write_registry "$REG_A" "[$node_a]"
 
 # run_collect <history-path> <registry-path> [regions-path]
 run_collect() {
-    LIGHTSPEED_NODES= LIGHTSPEED_REGISTRY_PATH="$2" LIGHTSPEED_REGIONS_PATH="${3:-}" \
-        bash "$COLLECT" "$1" >/dev/null 2>&1
-    return $?
+	LIGHTSPEED_NODES= LIGHTSPEED_REGISTRY_PATH="$2" LIGHTSPEED_REGIONS_PATH="${3:-}" \
+		bash "$COLLECT" "$1" >/dev/null 2>&1
+	return $?
 }
 
 # ── (a) absent history initializes cleanly ───────────────────
 H="$TMP/history.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
-run_collect "$H" "$REG_A"; assert_rc0 $? "(a) first run exits 0"
+run_collect "$H" "$REG_A"
+assert_rc0 $? "(a) first run exits 0"
 assert_jq "$H" '.version == 1' "(a) document version is 1"
 assert_jq "$H" '.snapshots | length == 1' "(a) absent history starts with one snapshot"
 assert_jq "$H" '.snapshots[0].relay_count == 1 and .snapshots[0].healthy_count == 1' "(a) relay/healthy counts"
@@ -175,7 +180,8 @@ assert_jq "$H" '.snapshots[0].interval.fec_parity_received == 25 and .snapshots[
 
 # ── (b) monotonic counters -> exact deltas ───────────────────
 write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
-run_collect "$H" "$REG_A"; assert_rc0 $? "(b) second run exits 0"
+run_collect "$H" "$REG_A"
+assert_rc0 $? "(b) second run exits 0"
 assert_jq "$H" '.snapshots | length == 2' "(b) history grows to two snapshots"
 assert_jq "$H" '.snapshots[1].interval.packets_relayed == 50' "(b) exact packets_relayed delta"
 assert_jq "$H" '.snapshots[1].interval.drops_malformed == 3' "(b) exact drops_malformed delta"
@@ -188,7 +194,8 @@ assert_jq "$H" '.snapshots[1].per_relay["relay-a"].cumulative.packets_relayed ==
 
 # ── (c) counter decrease -> reset delta, totals never regress ──
 write_fixture "$TMP" 30 2 200 0 1 1 1 100 3 0 10
-run_collect "$H" "$REG_A"; assert_rc0 $? "(c) third run exits 0"
+run_collect "$H" "$REG_A"
+assert_rc0 $? "(c) third run exits 0"
 assert_jq "$H" '.snapshots | length == 3' "(c) reset append grows history"
 assert_jq "$H" '.snapshots[2].interval.packets_relayed == 30' "(c) reset delta equals current value"
 assert_jq "$H" '.snapshots[2].per_relay["relay-a"].reset == true' "(c) decreased counter marks reset=true"
@@ -202,9 +209,10 @@ assert_jq "$H" '(.snapshots[2].totals as $n | .snapshots[1].totals as $p | [ ($n
 # ── (d) 360-snapshot cap trims the oldest ────────────────────
 CAP="$TMP/cap-history.json"
 jq -n '[range(1;361) | {t: ., relay_count:1, healthy_count:1, interval:{}, totals:{}, per_relay:{}}]
-       | {version:1, generated_at:360, snapshots:.}' > "$CAP"
+       | {version:1, generated_at:360, snapshots:.}' >"$CAP"
 write_fixture "$TMP" 500 10 5000 3 2 1 1 100 5 0 50
-run_collect "$CAP" "$REG_A"; assert_rc0 $? "(d) cap run exits 0"
+run_collect "$CAP" "$REG_A"
+assert_rc0 $? "(d) cap run exits 0"
 assert_jq "$CAP" '.snapshots | length == 360' "(d) history capped at 360 snapshots"
 assert_jq "$CAP" '.snapshots[0].t == 2' "(d) oldest retained snapshot is the second"
 assert_jq "$CAP" '.snapshots[-1].per_relay["relay-a"].cumulative.packets_relayed == 500' "(d) newest snapshot is the fresh scrape"
@@ -214,7 +222,8 @@ REG_AB="$TMP/registry-ab.json"
 write_registry "$REG_AB" "[$node_a,$node_b]"
 MISS="$TMP/missing-history.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
-run_collect "$MISS" "$REG_AB"; assert_rc0 $? "(e) run with a missing relay exits 0"
+run_collect "$MISS" "$REG_AB"
+assert_rc0 $? "(e) run with a missing relay exits 0"
 assert_jq "$MISS" '.version == 1 and (.snapshots | length) == 1' "(e) missing relay still writes a valid doc"
 assert_jq "$MISS" '.snapshots[0].relay_count == 2' "(e) both resolved relays appear"
 assert_jq "$MISS" '.snapshots[0].healthy_count == 1' "(e) only the reachable relay is healthy"
@@ -224,9 +233,10 @@ assert_jq "$MISS" '.snapshots[0].interval.packets_relayed == 100' "(e) unreachab
 
 # ── (f) corrupt history starts fresh ─────────────────────────
 COR=$TMP/corrupt-history.json
-printf 'not json at all {{{' > "$COR"
+printf 'not json at all {{{' >"$COR"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
-run_collect "$COR" "$REG_A"; assert_rc0 $? "(f) corrupt history run exits 0"
+run_collect "$COR" "$REG_A"
+assert_rc0 $? "(f) corrupt history run exits 0"
 assert_jq "$COR" '.version == 1 and (.snapshots | length) == 1' "(f) corrupt history reinitializes cleanly"
 
 # ── (g) proxy geo: parse, coarsen, cap, degrade ──────────────
@@ -237,15 +247,16 @@ assert_jq "$COR" '.version == 1 and (.snapshots | length) == 1' "(f) corrupt his
 GEO_H="$TMP/history-geo.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 append_geo "$TMP" \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5' \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",dst="JP",src="US"} 4' \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="US"} 7' \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="DE",dst="DE"} 3' \
-    'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="src"} 11' \
-    'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="dst"} 12' \
-    'lightspeed_geo_sessions_skipped_total{region="us-west",node_id="relay-a",reason="self_tunnel"} 13' \
-    'lightspeed_geo_sessions_rejected_total{region="us-west",node_id="relay-a"} 14'
-run_collect "$GEO_H" "$REG_A"; assert_rc0 $? "(g) geo run exits 0"
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5' \
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",dst="JP",src="US"} 4' \
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="US"} 7' \
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="DE",dst="DE"} 3' \
+	'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="src"} 11' \
+	'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="dst"} 12' \
+	'lightspeed_geo_sessions_skipped_total{region="us-west",node_id="relay-a",reason="self_tunnel"} 13' \
+	'lightspeed_geo_sessions_rejected_total{region="us-west",node_id="relay-a"} 14'
+run_collect "$GEO_H" "$REG_A"
+assert_rc0 $? "(g) geo run exits 0"
 assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-eu"] == 5' "(g) US->DE coarsens to na-eu"
 assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-apac"] == 4' "(g) dst-before-src label order parses identically"
 assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-na"] == 7 and .snapshots[-1].per_relay["relay-a"].geo["eu-eu"] == 3' "(g) all mapped cells coarsen"
@@ -260,14 +271,15 @@ assert_jq "$GEO_H" '(.snapshots[-1].per_relay["relay-a"] | has("geo_unmapped_cel
 # is exercised with a synthetic 10-region catalog and 70 distinct cells.
 jq -n '{regions: (reduce range(0;10) as $i ({}; .["r\($i)"] = {label: "r\($i)"})),
         countries: (reduce range(0;10) as $i ({}; .["A\($i)"] = "r\($i)" | .["B\($i)"] = "r\($i)"))}' \
-    > "$TMP/regions-cap.json"
+	>"$TMP/regions-cap.json"
 GEO_CAP_H="$TMP/history-geo-cap.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 for i in $(seq 0 69); do
-    printf 'lightspeed_geo_sessions_total{region="r",node_id="relay-a",src="A%s",dst="B%s"} 3\n' \
-        "$((i % 10))" "$((i / 10))" >> "$TMP/relay-a.metrics.txt"
+	printf 'lightspeed_geo_sessions_total{region="r",node_id="relay-a",src="A%s",dst="B%s"} 3\n' \
+		"$((i % 10))" "$((i / 10))" >>"$TMP/relay-a.metrics.txt"
 done
-run_collect "$GEO_CAP_H" "$REG_A" "$TMP/regions-cap.json"; assert_rc0 $? "(h) cap run exits 0"
+run_collect "$GEO_CAP_H" "$REG_A" "$TMP/regions-cap.json"
+assert_rc0 $? "(h) cap run exits 0"
 assert_jq "$GEO_CAP_H" '(.snapshots[-1].per_relay["relay-a"].geo | length) == 64' "(h) 70 cells cap to exactly 64 keys"
 assert_jq "$GEO_CAP_H" '.snapshots[-1].per_relay["relay-a"].geo_capped == true' "(h) truncation sets geo_capped"
 assert_jq "$GEO_CAP_H" '.snapshots[-1].per_relay["relay-a"].geo | has("r0-r0") and has("r9-r0")' "(h) lexicographically first keys retained"
@@ -278,10 +290,11 @@ assert_jq "$GEO_CAP_H" '([.snapshots[-1].per_relay["relay-a"].geo[]] | add) == 1
 GEO_UNMAP_H="$TMP/history-geo-unmapped.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 append_geo "$TMP" \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5' \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="ZZ",dst="US"} 6' \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="QQ"} 5'
-run_collect "$GEO_UNMAP_H" "$REG_A"; assert_rc0 $? "(i) unmapped run exits 0"
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5' \
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="ZZ",dst="US"} 6' \
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="QQ"} 5'
+run_collect "$GEO_UNMAP_H" "$REG_A"
+assert_rc0 $? "(i) unmapped run exits 0"
 assert_jq "$GEO_UNMAP_H" '.snapshots[-1].per_relay["relay-a"].geo["na-eu"] == 5 and (.snapshots[-1].per_relay["relay-a"].geo | length) == 1' "(i) unmapped cells are skipped, never fabricated"
 assert_jq "$GEO_UNMAP_H" '.snapshots[-1].per_relay["relay-a"].geo_unmapped_cells == 2' "(i) each unmapped side-counted cell increments the counter"
 assert_jq "$GEO_UNMAP_H" '.snapshots[-1].per_relay["relay-a"].geo_capped == false' "(i) skipped cells are not cap truncation"
@@ -290,7 +303,7 @@ assert_jq "$GEO_UNMAP_H" '.snapshots[-1].per_relay["relay-a"].geo_capped == fals
 GEO_MISSING_H="$TMP/history-geo-missing.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 append_geo "$TMP" \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5'
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 5'
 run_collect "$GEO_MISSING_H" "$REG_A" /nonexistent
 assert_rc0 $? "(j) missing catalog still exits 0"
 assert_jq "$GEO_MISSING_H" '.snapshots[-1].per_relay["relay-a"].geo == {}' "(j) missing catalog degrades to empty geo"
@@ -300,15 +313,16 @@ assert_jq "$GEO_MISSING_H" '.version == 1 and (.snapshots | length) == 1' "(j) d
 # ── (k) geo passes through the delta engine untouched ────────
 write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
 append_geo "$TMP" \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 9' \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",dst="JP",src="US"} 4' \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="US"} 7' \
-    'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="DE",dst="DE"} 3' \
-    'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="src"} 11' \
-    'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="dst"} 12' \
-    'lightspeed_geo_sessions_skipped_total{region="us-west",node_id="relay-a",reason="self_tunnel"} 13' \
-    'lightspeed_geo_sessions_rejected_total{region="us-west",node_id="relay-a"} 14'
-run_collect "$GEO_H" "$REG_A"; assert_rc0 $? "(k) second geo run exits 0"
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="DE"} 9' \
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",dst="JP",src="US"} 4' \
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="US",dst="US"} 7' \
+	'lightspeed_geo_sessions_total{region="us-west",node_id="relay-a",src="DE",dst="DE"} 3' \
+	'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="src"} 11' \
+	'lightspeed_geo_lookup_misses_total{region="us-west",node_id="relay-a",side="dst"} 12' \
+	'lightspeed_geo_sessions_skipped_total{region="us-west",node_id="relay-a",reason="self_tunnel"} 13' \
+	'lightspeed_geo_sessions_rejected_total{region="us-west",node_id="relay-a"} 14'
+run_collect "$GEO_H" "$REG_A"
+assert_rc0 $? "(k) second geo run exits 0"
 assert_jq "$GEO_H" '.version == 1 and (.snapshots | length) == 2' "(k) geo does not change the snapshot version"
 assert_jq "$GEO_H" '.snapshots[-1].per_relay["relay-a"].geo["na-eu"] == 9' "(k) newest cumulative geo value passed through"
 assert_jq "$GEO_H" '.snapshots[-1].interval.packets_relayed == 50' "(k) scalar delta math is unaffected by geo"
@@ -328,11 +342,13 @@ write_registry "$REG_B" "[$node_b]"
 write_registry "$REG_AB" "[$node_a,$node_b]"
 
 write_relay_fixture "$TMP" a 100 1 3
-run_collect "$RECON" "$REG_A"; assert_rc0 $? "(l) baseline run exits 0"
+run_collect "$RECON" "$REG_A"
+assert_rc0 $? "(l) baseline run exits 0"
 assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].lifetime.packets_relayed == 100' "(l) first-seen relay seeds lifetime from cumulative"
 
 write_relay_fixture "$TMP" b 50 0 2
-run_collect "$RECON" "$REG_B"; assert_rc0 $? "(l) gap run exits 0"
+run_collect "$RECON" "$REG_B"
+assert_rc0 $? "(l) gap run exits 0"
 assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].reachable == false' "(l) absent relay carried forward as unreachable"
 assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].lifetime.packets_relayed == 100' "(l) carried-forward relay keeps its lifetime"
 assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].delta.packets_relayed == 0' "(l) carried-forward relay contributes zero delta"
@@ -341,7 +357,8 @@ assert_jq "$RECON" '.snapshots[-1].totals.packets_relayed == ([.snapshots[-1].pe
 
 write_relay_fixture "$TMP" a 30 1 4
 write_relay_fixture "$TMP" b 80 0 2
-run_collect "$RECON" "$REG_AB"; assert_rc0 $? "(l) return-after-reset run exits 0"
+run_collect "$RECON" "$REG_AB"
+assert_rc0 $? "(l) return-after-reset run exits 0"
 assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].reachable == true' "(l) returning relay is reachable again"
 assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].reset == true' "(l) backward cumulative marks a reset"
 assert_jq "$RECON" '.snapshots[-1].per_relay["relay-a"].delta.packets_relayed == 30' "(l) reset delta equals the new cumulative"
@@ -356,13 +373,15 @@ assert_jq "$RECON" '.snapshots[-1].totals.drops_malformed == ([.snapshots[-1].pe
 # and totals alongside the direct/relayed/saved families.
 APP_H="$TMP/history-direct-app.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
-run_collect "$APP_H" "$REG_A"; assert_rc0 $? "(m) direct-app first run exits 0"
+run_collect "$APP_H" "$REG_A"
+assert_rc0 $? "(m) direct-app first run exits 0"
 assert_jq "$APP_H" '.snapshots[-1].per_relay["relay-a"].cumulative.direct_app_ms_sum == 500' "(m) direct-app sum parsed via sum_family"
 assert_jq "$APP_H" '.snapshots[-1].per_relay["relay-a"].cumulative.direct_app_ms_count == 10' "(m) direct-app count parsed via sum_family"
 assert_jq "$APP_H" '.snapshots[-1].interval.direct_app_ms_sum == 500 and .snapshots[-1].totals.direct_app_ms_sum == 500' "(m) first snapshot interval == totals == raw"
 
 write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
-run_collect "$APP_H" "$REG_A"; assert_rc0 $? "(m) direct-app second run exits 0"
+run_collect "$APP_H" "$REG_A"
+assert_rc0 $? "(m) direct-app second run exits 0"
 assert_jq "$APP_H" '.snapshots[-1].interval.direct_app_ms_sum == 400' "(m) direct-app sum delta"
 assert_jq "$APP_H" '.snapshots[-1].interval.direct_app_ms_count == 10' "(m) direct-app count delta"
 assert_jq "$APP_H" '.snapshots[-1].totals.direct_app_ms_sum == 900' "(m) direct-app sum totals accumulate"
@@ -374,25 +393,26 @@ assert_jq "$APP_H" '.snapshots[-1].totals.direct_app_ms_sum == 900' "(m) direct-
 ROUTE_H="$TMP/history-route.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 append_metrics_file "$TMP" a \
-    'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
-    'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 5' \
-    'lightspeed_telemetry_route_samples_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 180' \
-    'lightspeed_telemetry_route_rtt_p50_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 54.0' \
-    'lightspeed_telemetry_route_rtt_p50_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 20.0' \
-    'lightspeed_telemetry_route_rtt_p50_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
-    'lightspeed_telemetry_route_rtt_p50_ms_count{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 2' \
-    'lightspeed_telemetry_route_rtt_p95_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 75.0' \
-    'lightspeed_telemetry_route_rtt_p95_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
-    'lightspeed_telemetry_route_rtt_p99_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 90.0' \
-    'lightspeed_telemetry_route_rtt_p99_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
-    'lightspeed_telemetry_route_jitter_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3.6' \
-    'lightspeed_telemetry_route_jitter_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
-    'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 9' \
-    'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 4' \
-    'lightspeed_telemetry_route_recovered_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 6' \
-    'lightspeed_telemetry_route_dedup_saved_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
-    'lightspeed_telemetry_route_rejected_total{region="us-west",node_id="relay-a"} 1'
-run_collect "$ROUTE_H" "$REG_A"; assert_rc0 $? "(n) route run exits 0"
+	'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+	'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 5' \
+	'lightspeed_telemetry_route_samples_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 180' \
+	'lightspeed_telemetry_route_rtt_p50_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 54.0' \
+	'lightspeed_telemetry_route_rtt_p50_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 20.0' \
+	'lightspeed_telemetry_route_rtt_p50_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+	'lightspeed_telemetry_route_rtt_p50_ms_count{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 2' \
+	'lightspeed_telemetry_route_rtt_p95_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 75.0' \
+	'lightspeed_telemetry_route_rtt_p95_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+	'lightspeed_telemetry_route_rtt_p99_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 90.0' \
+	'lightspeed_telemetry_route_rtt_p99_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+	'lightspeed_telemetry_route_jitter_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3.6' \
+	'lightspeed_telemetry_route_jitter_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+	'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 9' \
+	'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 4' \
+	'lightspeed_telemetry_route_recovered_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 6' \
+	'lightspeed_telemetry_route_dedup_saved_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+	'lightspeed_telemetry_route_rejected_total{region="us-west",node_id="relay-a"} 1'
+run_collect "$ROUTE_H" "$REG_A"
+assert_rc0 $? "(n) route run exits 0"
 assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_reports == 8' "(n) route_reports sums across label sets"
 assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_samples == 180' "(n) route_samples parsed"
 assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_rtt_p50_ms_sum == 74 and .snapshots[-1].per_relay["relay-a"].cumulative.route_rtt_p50_ms_count == 5' "(n) rtt p50 sum/count parsed"
@@ -405,9 +425,10 @@ assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].lifetime.route_reports
 
 write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
 append_metrics_file "$TMP" a \
-    'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 20' \
-    'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 20'
-run_collect "$ROUTE_H" "$REG_A"; assert_rc0 $? "(n) route second run exits 0"
+	'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 20' \
+	'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 20'
+run_collect "$ROUTE_H" "$REG_A"
+assert_rc0 $? "(n) route second run exits 0"
 assert_jq "$ROUTE_H" '.snapshots[-1].interval.route_reports == 12' "(n) route_reports exact delta"
 assert_jq "$ROUTE_H" '.snapshots[-1].totals.route_reports == 20' "(n) route_reports totals accumulate"
 assert_jq "$ROUTE_H" '.snapshots[-1].interval.route_lost == 7' "(n) route_lost delta"
@@ -416,10 +437,11 @@ assert_jq "$ROUTE_H" '.snapshots[-1].interval.route_lost == 7' "(n) route_lost d
 APPQ_H="$TMP/history-saved-app.json"
 write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 append_metrics_file "$TMP" a \
-    'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 250.0' \
-    'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 10' \
-    'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 2'
-run_collect "$APPQ_H" "$REG_A"; assert_rc0 $? "(o) saved-app first run exits 0"
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 250.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 10' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 2'
+run_collect "$APPQ_H" "$REG_A"
+assert_rc0 $? "(o) saved-app first run exits 0"
 assert_jq "$APPQ_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_sum == 250' "(o) saved_app sum parsed"
 assert_jq "$APPQ_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_count == 10' "(o) saved_app count parsed"
 assert_jq "$APPQ_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_negative_count == 2' "(o) saved_app negative count parsed"
@@ -428,10 +450,11 @@ assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_negative_count == 2' "
 
 write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
 append_metrics_file "$TMP" a \
-    'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 400.0' \
-    'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 16' \
-    'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 5'
-run_collect "$APPQ_H" "$REG_A"; assert_rc0 $? "(o) saved-app second run exits 0"
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 400.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 16' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 5'
+run_collect "$APPQ_H" "$REG_A"
+assert_rc0 $? "(o) saved-app second run exits 0"
 assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_sum == 150' "(o) saved_app sum delta"
 assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_count == 6' "(o) saved_app count delta"
 assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_negative_count == 3' "(o) negative count delta"
@@ -444,19 +467,103 @@ ATTR_H="$TMP/history-route-attr.json"
 write_relay_fixture "$TMP" a 100 1 3
 write_relay_fixture "$TMP" b 50 0 2
 append_metrics_file "$TMP" a \
-    'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 4'
+	'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 4'
 append_metrics_file "$TMP" b \
-    'lightspeed_telemetry_route_reports_total{region="us-east",node_id="relay-b",game="cs2",country="DE",relay="relay-ams"} 9'
-run_collect "$ATTR_H" "$REG_AB"; assert_rc0 $? "(p) two-relay route run exits 0"
+	'lightspeed_telemetry_route_reports_total{region="us-east",node_id="relay-b",game="cs2",country="DE",relay="relay-ams"} 9'
+run_collect "$ATTR_H" "$REG_AB"
+assert_rc0 $? "(p) two-relay route run exits 0"
 assert_jq "$ATTR_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_reports == 4' "(p) relay-a keeps its own route_reports"
 assert_jq "$ATTR_H" '.snapshots[-1].per_relay["relay-b"].cumulative.route_reports == 9' "(p) relay-b keeps its own route_reports"
 assert_jq "$ATTR_H" '.snapshots[-1].totals.route_reports == 13' "(p) totals are the per-relay sum"
 
+# ── (q) per-source saved-app retention ───────────────────────
+# The saved-app families are labeled by game and the client's locale
+# country. The collector must keep a per-coarse-source-region breakdown
+# (country -> region through the catalog) alongside the collapsed scalar,
+# pass the map through the delta engine untouched like geo, and carry it
+# forward for an unreachable relay. One deliberately unmapped country (ZZ)
+# must never fabricate a region.
+SRC_H="$TMP/history-source.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+append_metrics_file "$TMP" a \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 100.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 4' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 1' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="FR"} 60.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 2' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 1' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="US"} 30.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 3' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 2' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="JP"} -10.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 3' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 2' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 10.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 1' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 0'
+run_collect "$SRC_H" "$REG_A"
+assert_rc0 $? "(q) per-source first run exits 0"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_sum == 160' "(q) eu sums DE+FR"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_count == 6' "(q) eu sums counts"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_negative_count == 2' "(q) eu sums negative counts"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources.na.saved_app_ms_sum == 30 and .snapshots[-1].per_relay["relay-a"].sources.na.saved_app_ms_count == 3' "(q) na cell retained"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources.apac.saved_app_ms_sum == -10' "(q) signed saving retained per source"
+assert_jq "$SRC_H" '(.snapshots[-1].per_relay["relay-a"].sources | has("zz")) | not' "(q) unmapped country never fabricates a region"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources_unmapped == 1' "(q) unmapped country is counted"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_sum == 190' "(q) collapsed scalar still sums every country"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_count == 13' "(q) collapsed scalar count still sums every country"
+assert_jq "$SRC_H" '(.snapshots[-1].interval | has("sources")) | not' "(q) sources never enter interval"
+assert_jq "$SRC_H" '(.snapshots[-1].totals | has("sources")) | not' "(q) sources never enter totals"
+
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
+append_metrics_file "$TMP" a \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 250.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 8' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 2' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="FR"} 60.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 2' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 1' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="US"} 30.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 3' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 2' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="JP"} -10.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 3' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 2' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 10.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 1' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 0'
+run_collect "$SRC_H" "$REG_A"
+assert_rc0 $? "(q) per-source second run exits 0"
+assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_sum == 310 and .snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_count == 10' "(q) sources track the cumulative scrape, not a delta"
+assert_jq "$SRC_H" '.snapshots[-1].interval.saved_app_ms_sum == 150' "(q) collapsed scalar delta is unaffected by per-source retention"
+
+# Carry-forward: an absent relay keeps its last per-source map with a zero
+# interval delta, exactly like its geo map.
+SRC_GF_H="$TMP/history-source-carry.json"
+write_relay_fixture "$TMP" a 100 1 3
+write_relay_fixture "$TMP" b 50 0 2
+append_metrics_file "$TMP" a \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 80.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 4' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 1'
+append_metrics_file "$TMP" b \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-east",node_id="relay-b",game="cs2",country="US"} 40.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-east",node_id="relay-b",game="cs2",country="US"} 4' \
+	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-east",node_id="relay-b",game="cs2",country="US"} 2'
+run_collect "$SRC_GF_H" "$REG_AB"
+assert_rc0 $? "(q) source carry baseline exits 0"
+assert_jq "$SRC_GF_H" '.snapshots[-1].per_relay["relay-b"].sources.na.saved_app_ms_sum == 40' "(q) relay-b source map retained"
+run_collect "$SRC_GF_H" "$REG_A"
+assert_rc0 $? "(q) source carry run exits 0"
+assert_jq "$SRC_GF_H" '.snapshots[-1].per_relay["relay-b"].reachable == false' "(q) absent relay is unreachable"
+assert_jq "$SRC_GF_H" '.snapshots[-1].per_relay["relay-b"].sources.na.saved_app_ms_sum == 40 and .snapshots[-1].per_relay["relay-b"].sources.na.saved_app_ms_count == 4' "(q) absent relay keeps its per-source map"
+assert_jq "$SRC_GF_H" '.snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_sum == 80' "(q) reachable relay keeps its own source map"
+
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
-    printf 'collect-metrics: all assertions passed\n'
-    printf '  (%s checks)\n' "$PASS"
-    exit 0
+	printf 'collect-metrics: all assertions passed\n'
+	printf '  (%s checks)\n' "$PASS"
+	exit 0
 fi
 
 printf 'collect-metrics: %s assertion(s) failed (%s passed)\n' "$FAILURES" "$PASS" >&2

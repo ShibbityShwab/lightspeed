@@ -554,6 +554,23 @@ img, svg { max-width: 100%; }
   border-radius: var(--r-md); padding: var(--sp-8) var(--sp-6);
 }
 .trends-empty p { font-size: var(--fs-base); color: var(--text-2); line-height: var(--lh-body); }
+.source-quality {
+  margin-top: var(--sp-8);
+  background: var(--bg-3); border: 1px solid var(--border-1);
+  border-radius: var(--r-md); padding: var(--sp-6);
+}
+.source-quality-table-wrap { overflow-x: auto; }
+.source-quality-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.source-quality-table th, .source-quality-table td {
+  text-align: left; padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-1);
+}
+.source-quality-table th {
+  color: var(--text-3); text-transform: uppercase;
+  letter-spacing: var(--ls-wide); font-size: var(--fs-xs); font-weight: 700;
+}
+.source-quality-table td { color: var(--text-1); }
+.source-quality-num { font-family: var(--font-mono); }
 
 /* --- Games --- */
 .games-grid {

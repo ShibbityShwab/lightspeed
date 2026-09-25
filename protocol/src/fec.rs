@@ -215,6 +215,11 @@ impl FecEncoder {
         self.data_count
     }
 
+    /// Get the configured block size (K data packets per parity).
+    pub fn k_size(&self) -> u8 {
+        self.k_size
+    }
+
     // ── New zero-alloc API (WF-008 Item L) ───────────────────────────────────
 
     /// Zero-alloc hot-path: XOR `payload` into the parity accumulator.

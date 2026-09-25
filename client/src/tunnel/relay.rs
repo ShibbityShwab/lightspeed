@@ -20,6 +20,7 @@ use lightspeed_protocol::{
 use tokio::net::UdpSocket;
 
 use crate::error::TunnelError;
+use crate::tunnel::adaptive::{AdaptiveConfig, AdaptiveFec, AdaptiveStats};
 use crate::tunnel::budget::{self, PayloadFit};
 use crate::tunnel::pacer::{Pacer, DEFAULT_CEILING_BPS};
 use crate::tunnel::transport::TunnelTransport;
@@ -84,6 +85,10 @@ pub struct UdpRelay {
     fec_encoder: Option<FecEncoder>,
     /// FEC decoder (inbound), if FEC is enabled.
     fec_decoder: Option<FecDecoder>,
+    /// Adaptive FEC/duplication controller, when the opt-in mode is enabled.
+    adaptive: Option<AdaptiveFec>,
+    /// Previous response RTT, for the jitter estimate feeding the controller.
+    last_rtt_us: Option<u32>,
     /// Conservative outbound pacer. Bounds the burst rate and backs off on
     /// measured loss; see [`crate::tunnel::pacer`].
     pacer: Pacer,
@@ -100,6 +105,8 @@ impl UdpRelay {
             stats: Arc::new(RelayStats::new()),
             fec_encoder: None,
             fec_decoder: None,
+            adaptive: None,
+            last_rtt_us: None,
             pacer: Pacer::with_ceiling(DEFAULT_CEILING_BPS, DEFAULT_CEILING_BPS),
         }
     }
@@ -121,9 +128,57 @@ impl UdpRelay {
         self
     }
 
+    /// Enable adaptive FEC and loss-gated duplication.
+    ///
+    /// This is the opt-in mode. On a clean link the encoder accumulates its
+    /// blocks but emits no parity, and the multipath spread is collapsed to the
+    /// single current relay. Parity returns only when loss is observed and is
+    /// hard-bounded by [`AdaptiveConfig::max_overhead_pct`]. Calling this also
+    /// enables the FEC encoder/decoder at the effective block size.
+    pub fn with_adaptive_fec(mut self, cfg: AdaptiveConfig) -> Self {
+        if cfg.enabled {
+            let k = cfg.effective_k();
+            self.fec_encoder = Some(FecEncoder::new(k));
+            self.fec_decoder = Some(FecDecoder::new());
+            self.adaptive = Some(AdaptiveFec::new(cfg));
+            // Start clean: duplication is earned only by measured loss/jitter.
+            crate::session::set_duplication_allowed(false);
+        }
+        self
+    }
+
+    /// The adaptive controller, when the opt-in mode is enabled.
+    pub fn adaptive(&self) -> Option<&AdaptiveFec> {
+        self.adaptive.as_ref()
+    }
+
+    /// Snapshot of the adaptive controller's parity/duplication state.
+    pub fn adaptive_stats(&self) -> Option<AdaptiveStats> {
+        self.adaptive.as_ref().map(AdaptiveFec::stats)
+    }
+
     /// Check if FEC is enabled.
     pub fn fec_enabled(&self) -> bool {
         self.fec_encoder.is_some()
+    }
+
+    /// Feed one link observation to the adaptive controller and publish the
+    /// resulting duplication decision to the process-wide gate.
+    fn observe_link(&mut self, loss_pct: f64, jitter_ms: f32) {
+        let Some(ctrl) = self.adaptive.as_mut() else {
+            return;
+        };
+        ctrl.observe_sample(loss_pct, jitter_ms);
+        crate::session::set_duplication_allowed(ctrl.should_duplicate());
+    }
+
+    /// Loss percentage a single FEC recovery implies, as one packet lost from a
+    /// block of the effective size.
+    fn recovery_loss_pct(&self) -> f64 {
+        match self.adaptive.as_ref() {
+            Some(ctrl) => 100.0 / f64::from(ctrl.effective_k()),
+            None => 100.0 / 4.0,
+        }
     }
 
     /// Bind the UDP socket.
@@ -198,7 +253,7 @@ impl UdpRelay {
             // ── FEC mode: encode with FEC header ────────────────
             let block_id = encoder.block_id();
             let index = encoder.current_index();
-            let k_size = index.max(2); // k_size for FEC header
+            let k_size = encoder.k_size();
 
             let header = TunnelHeader::new_fec(seq, now_us(), orig_src, orig_dst)
                 .with_session_token(path_token);
@@ -206,6 +261,17 @@ impl UdpRelay {
             let pkt_buf = build_fec_data_packet(&header, &fec_hdr, payload);
 
             let parity = encoder.add_packet(payload);
+            // Adaptive mode: drop the block's parity while the link is clean.
+            let emit_parity = self
+                .adaptive
+                .as_ref()
+                .map(|ctrl| ctrl.parity_k().is_some())
+                .unwrap_or(true);
+            if parity.is_some() {
+                if let Some(ctrl) = self.adaptive.as_mut() {
+                    ctrl.record_block(emit_parity);
+                }
+            }
 
             self.pacer.acquire(pkt_buf.len()).await;
             let sent = if budget::datagram_fits(pkt_buf.len()) {
@@ -226,7 +292,7 @@ impl UdpRelay {
                 "Sent FEC data packet"
             );
 
-            if let Some(parity_bytes) = parity {
+            if let Some(parity_bytes) = parity.filter(|_| emit_parity) {
                 let parity_seq = self.next_sequence();
                 let parity_header = TunnelHeader::new_fec(parity_seq, now_us(), orig_src, orig_dst)
                     .with_session_token(path_token);
@@ -335,6 +401,12 @@ impl UdpRelay {
         // Measure RTT from timestamp
         let now = now_us();
         let rtt_us = now.wrapping_sub(header.timestamp_us);
+        let jitter_us = self
+            .last_rtt_us
+            .map(|last| rtt_us.abs_diff(last))
+            .unwrap_or(0);
+        self.last_rtt_us = Some(rtt_us);
+        let jitter_ms = jitter_us as f32 / 1000.0;
         tracing::trace!(
             seq = header.sequence,
             payload_len = payload_slice.len(),
@@ -342,26 +414,30 @@ impl UdpRelay {
             "Received tunnel response"
         );
 
-        // Handle FEC if enabled and packet has FEC flag
-        if let Some(ref mut decoder) = self.fec_decoder {
-            if header.has_fec() {
-                if let Some(data) = decode_fec_payload(payload_slice, decoder) {
-                    self.stats.fec_recovered.fetch_add(1, Ordering::Relaxed);
-                    self.pacer.on_loss();
-                    tracing::info!(
-                        block = header.sequence,
-                        recovered_len = data.len(),
-                        "🔧 FEC recovered lost packet"
-                    );
-                    return Ok((header, data, proxy_addr));
-                }
-                // Parity consumed, no recovery needed — return empty
-                return Ok((header, Bytes::new(), proxy_addr));
-            }
+        // Handle FEC if enabled and packet has FEC flag. The decoder borrow is
+        // released before the adaptive controller observes the outcome.
+        let (payload, recovered) = match self.fec_decoder.as_mut() {
+            Some(decoder) if header.has_fec() => match decode_fec_payload(payload_slice, decoder) {
+                Some(data) => (data, true),
+                // Parity consumed, no recovery needed: return an empty payload.
+                None => (Bytes::new(), false),
+            },
+            _ => (Bytes::copy_from_slice(payload_slice), false),
+        };
+
+        if recovered {
+            self.stats.fec_recovered.fetch_add(1, Ordering::Relaxed);
+            self.pacer.on_loss();
+            self.observe_link(self.recovery_loss_pct(), jitter_ms);
+            tracing::info!(
+                block = header.sequence,
+                recovered_len = payload.len(),
+                "🔧 FEC recovered lost packet"
+            );
+        } else {
+            self.observe_link(0.0, jitter_ms);
         }
 
-        // Non-FEC or FEC header not present
-        let payload = Bytes::copy_from_slice(payload_slice);
         Ok((header, payload, proxy_addr))
     }
 
@@ -377,8 +453,16 @@ impl UdpRelay {
 
     /// Flush any partial FEC block (e.g., on shutdown or timeout).
     pub async fn flush_fec(&mut self, proxy_addr: SocketAddrV4) -> Result<(), TunnelError> {
+        let emit = self
+            .adaptive
+            .as_ref()
+            .map(|ctrl| ctrl.parity_k().is_some())
+            .unwrap_or(true);
         if let Some(ref mut encoder) = self.fec_encoder {
             if let Some((block_id, _k, parity_bytes)) = encoder.flush() {
+                if !emit {
+                    return Ok(());
+                }
                 if let Some(transport) = self.transport.as_mut() {
                     transport.set_proxy(proxy_addr);
                 }
@@ -510,6 +594,110 @@ mod tests {
                 1,
                 "an oversized payload must be counted"
             );
+
+            crate::session::reset_all_tokens();
+        });
+    }
+
+    #[test]
+    fn adaptive_fec_sends_no_parity_clean_and_returns_it_under_loss() {
+        let _guard = crate::session::token_test_guard();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        rt.block_on(async {
+            let receiver = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind receiver");
+            let proxy_addr = match receiver.local_addr().expect("receiver addr") {
+                std::net::SocketAddr::V4(v4) => v4,
+                std::net::SocketAddr::V6(_) => panic!("expected IPv4"),
+            };
+            crate::session::set_session_token(0xDEAD_BEEF);
+            crate::session::set_path_token(proxy_addr, 0x1234_5678);
+
+            let cfg = crate::tunnel::adaptive::AdaptiveConfig {
+                enabled: true,
+                ..crate::tunnel::adaptive::AdaptiveConfig::default()
+            };
+            let mut relay =
+                UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).with_adaptive_fec(cfg);
+            relay.bind().await.expect("bind relay");
+
+            assert!(relay.fec_enabled(), "adaptive FEC must enable the codec");
+            let clean = relay.adaptive_stats().expect("adaptive stats");
+            assert_eq!(clean.parity_ratio, 0.0, "a new link starts with no parity");
+            assert!(!clean.duplicating);
+            assert_eq!(clean.effective_k, 4);
+            assert_eq!(clean.overhead_bound_pct, 25);
+
+            let src = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000);
+            let dst = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 40001);
+
+            // One full K=4 block on a clean link: no parity may be emitted.
+            for _ in 0..4 {
+                relay
+                    .send_to_proxy(b"clean", src, dst, proxy_addr)
+                    .await
+                    .expect("send clean block");
+            }
+            let mut parity_seen = 0;
+            for _ in 0..4 {
+                let mut buf = vec![0u8; 2048];
+                let (n, _) =
+                    tokio::time::timeout(Duration::from_secs(2), receiver.recv_from(&mut buf))
+                        .await
+                        .expect("clean packet within 2s")
+                        .expect("receive clean packet");
+                let (header, body) =
+                    TunnelHeader::decode_with_payload(&buf[..n]).expect("decode header");
+                assert!(header.has_fec(), "adaptive mode still uses FEC headers");
+                let mut fec_slice: &[u8] = &body[..4];
+                let fec = FecHeader::decode(&mut fec_slice).expect("decode FEC header");
+                if fec.is_parity() {
+                    parity_seen += 1;
+                }
+            }
+            assert_eq!(parity_seen, 0, "a clean link must send no parity");
+            assert_eq!(relay.adaptive_stats().unwrap().parity_ratio, 0.0);
+
+            // Loss is observed: the next block must carry parity.
+            relay.observe_link(50.0, 0.0);
+            assert_eq!(relay.adaptive_stats().unwrap().parity_ratio, 0.25);
+            for _ in 0..4 {
+                relay
+                    .send_to_proxy(b"lossy", src, dst, proxy_addr)
+                    .await
+                    .expect("send lossy block");
+            }
+            let mut lossy_parity = 0;
+            let mut lossy_data = 0;
+            for _ in 0..5 {
+                let mut buf = vec![0u8; 2048];
+                let (n, _) =
+                    tokio::time::timeout(Duration::from_secs(2), receiver.recv_from(&mut buf))
+                        .await
+                        .expect("lossy packet within 2s")
+                        .expect("receive lossy packet");
+                let (_, body) =
+                    TunnelHeader::decode_with_payload(&buf[..n]).expect("decode header");
+                let mut fec_slice: &[u8] = &body[..4];
+                let fec = FecHeader::decode(&mut fec_slice).expect("decode FEC header");
+                if fec.is_parity() {
+                    lossy_parity += 1;
+                } else {
+                    lossy_data += 1;
+                }
+            }
+            assert_eq!(lossy_data, 4, "all four data packets arrive");
+            assert_eq!(lossy_parity, 1, "one parity packet follows the loss");
+
+            let stats = relay.adaptive_stats().unwrap();
+            assert_eq!(stats.blocks_data, 2, "two completed blocks");
+            assert_eq!(stats.blocks_parity, 1, "one block carried parity");
+            assert!(stats.overhead_bound_pct <= 25);
 
             crate::session::reset_all_tokens();
         });

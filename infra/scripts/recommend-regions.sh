@@ -71,6 +71,14 @@
 #      existing relays, so a human can see whether relays actually help.
 #      With no measured samples the ADD gate is inert and existing
 #      decisions stand.
+#  15. The per-source measured block rebuilds reset-safe saved-app deltas
+#      per (relay, coarse source region) across the window pairs, exactly
+#      as the demand matrix rebuilds geo. A cell is reported only once it
+#      clears the k=3 report floor the relay already applies; thinner cells
+#      are withheld and counted in source_quality.suppressed_cells, and
+#      every reported row carries its sample count and meets_min_samples
+#      (>= min_measured_samples). The block is advisory and never changes
+#      the ADD/MOVE decision.
 #
 # Requires: bash, jq (>= 1.6 for sin/cos/asin/sqrt).
 # ──────────────────────────────────────────────────────────────
@@ -92,96 +100,96 @@ NOW="$(date +%s)"
 # ── Argument parsing (never fatal) ───────────────────────────
 val=""
 while [ "$#" -gt 0 ]; do
-    key="$1"
-    case "$key" in
-        --history|--previous|--registry|--geo-dir|--out|--window-secs)
-            if [ "$#" -ge 2 ]; then
-                val="$2"
-                shift 2
-            else
-                val=""
-                shift
-            fi
-            ;;
-        -h|--help)
-            sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-            exit 0
-            ;;
-        *)
-            val=""
-            shift
-            ;;
-    esac
-    case "$key" in
-        --history)    [ -n "$val" ] && HISTORY_PATH="$val" ;;
-        --previous)   [ -n "$val" ] && PREVIOUS_PATH="$val" ;;
-        --registry)   [ -n "$val" ] && REGISTRY_PATH="$val" ;;
-        --geo-dir)    [ -n "$val" ] && GEO_DIR="$val" ;;
-        --out)        [ -n "$val" ] && OUT_PATH="$val" ;;
-        --window-secs) [ -n "$val" ] && WINDOW_SECS="$val" ;;
-    esac
+	key="$1"
+	case "$key" in
+	--history | --previous | --registry | --geo-dir | --out | --window-secs)
+		if [ "$#" -ge 2 ]; then
+			val="$2"
+			shift 2
+		else
+			val=""
+			shift
+		fi
+		;;
+	-h | --help)
+		sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+		exit 0
+		;;
+	*)
+		val=""
+		shift
+		;;
+	esac
+	case "$key" in
+	--history) [ -n "$val" ] && HISTORY_PATH="$val" ;;
+	--previous) [ -n "$val" ] && PREVIOUS_PATH="$val" ;;
+	--registry) [ -n "$val" ] && REGISTRY_PATH="$val" ;;
+	--geo-dir) [ -n "$val" ] && GEO_DIR="$val" ;;
+	--out) [ -n "$val" ] && OUT_PATH="$val" ;;
+	--window-secs) [ -n "$val" ] && WINDOW_SECS="$val" ;;
+	esac
 done
 
 [ -n "$GEO_DIR" ] || GEO_DIR="$GEO_DIR_DEFAULT"
 [ -n "$REGISTRY_PATH" ] || REGISTRY_PATH="$REGISTRY_DEFAULT"
 
 # ── Minimal documents (valid JSON, no jq required) ───────────
-STATIC_MINIMAL='{"schema_version":1,"generated_at":0,"status":"INSUFFICIENT_DATA","window":{"from_t":0,"to_t":0,"snapshots":0,"sessions":0,"cells":0,"min_window_sessions":20,"min_cell_sessions":3},"matrix":[],"existing":[],"ranking":[],"rejected":[],"recommendation":{"action":"NONE","candidate_id":null,"remove_node_id":null,"reason":"insufficient data"},"stability":{"top_id":null,"streak":0,"required":3,"runs":[]},"measured":{"saved_app_samples":0,"saved_app_mean_ms":null,"saved_app_negative_share":null,"route_jitter_mean_ms":null,"route_loss_ratio":null,"min_measured_samples":0,"max_negative_saving_share":0},"notes":"no data"}'
+STATIC_MINIMAL='{"schema_version":1,"generated_at":0,"status":"INSUFFICIENT_DATA","window":{"from_t":0,"to_t":0,"snapshots":0,"sessions":0,"cells":0,"min_window_sessions":20,"min_cell_sessions":3},"matrix":[],"existing":[],"ranking":[],"rejected":[],"recommendation":{"action":"NONE","candidate_id":null,"remove_node_id":null,"reason":"insufficient data"},"stability":{"top_id":null,"streak":0,"required":3,"runs":[]},"measured":{"saved_app_samples":0,"saved_app_mean_ms":null,"saved_app_negative_share":null,"route_jitter_mean_ms":null,"route_loss_ratio":null,"min_measured_samples":0,"max_negative_saving_share":0},"source_quality":{"min_samples":3,"min_measured_samples":0,"suppressed_cells":0,"relays":[]},"notes":"no data"}'
 DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"add_min_window_sessions":50,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"near_duplicate_ms":25,"idle_sessions_max":0,"max_negative_saving_share":0.5,"min_measured_samples":5}'
 
 write_json() {
-    local json="$1" minimal="$2"
-    if command -v jq >/dev/null 2>&1; then
-        if ! printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
-            json="$minimal"
-        fi
-    fi
+	local json="$1" minimal="$2"
+	if command -v jq >/dev/null 2>&1; then
+		if ! printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
+			json="$minimal"
+		fi
+	fi
 
-    if [ -z "$OUT_PATH" ]; then
-        printf '%s\n' "$json"
-        return 0
-    fi
+	if [ -z "$OUT_PATH" ]; then
+		printf '%s\n' "$json"
+		return 0
+	fi
 
-    mkdir -p "$(dirname "$OUT_PATH")" 2>/dev/null || true
-    local tmp
-    tmp="$(mktemp "$(dirname "$OUT_PATH")/.recommend-regions.XXXXXX" 2>/dev/null || true)"
-    if [ -n "$tmp" ]; then
-        if printf '%s\n' "$json" > "$tmp" 2>/dev/null; then
-            mv "$tmp" "$OUT_PATH" 2>/dev/null && return 0
-        fi
-        rm -f "$tmp" 2>/dev/null || true
-    fi
-    printf '%s\n' "$json" > "$OUT_PATH" 2>/dev/null || true
-    return 0
+	mkdir -p "$(dirname "$OUT_PATH")" 2>/dev/null || true
+	local tmp
+	tmp="$(mktemp "$(dirname "$OUT_PATH")/.recommend-regions.XXXXXX" 2>/dev/null || true)"
+	if [ -n "$tmp" ]; then
+		if printf '%s\n' "$json" >"$tmp" 2>/dev/null; then
+			mv "$tmp" "$OUT_PATH" 2>/dev/null && return 0
+		fi
+		rm -f "$tmp" 2>/dev/null || true
+	fi
+	printf '%s\n' "$json" >"$OUT_PATH" 2>/dev/null || true
+	return 0
 }
 
 if ! command -v jq >/dev/null 2>&1; then
-    write_json "$STATIC_MINIMAL" "$STATIC_MINIMAL"
-    exit 0
+	write_json "$STATIC_MINIMAL" "$STATIC_MINIMAL"
+	exit 0
 fi
 
 # ── Input loading (every failure degrades to a default) ──────
 read_json() {
-    # read_json <path> -> compact JSON on stdout, non-zero on failure
-    local path="${1:-}"
-    [ -n "$path" ] || return 1
-    [ -f "$path" ] || return 1
-    [ -s "$path" ] || return 1
-    jq -c '.' "$path" 2>/dev/null
+	# read_json <path> -> compact JSON on stdout, non-zero on failure
+	local path="${1:-}"
+	[ -n "$path" ] || return 1
+	[ -f "$path" ] || return 1
+	[ -s "$path" ] || return 1
+	jq -c '.' "$path" 2>/dev/null
 }
 
 # Params + candidates from the geo catalog.
 params_json="$DEFAULT_PARAMS"
 candidates_json='[]'
 if cand_doc="$(read_json "$GEO_DIR/candidates.json")"; then
-    if jq -e '(.params | type) == "object"' <<<"$cand_doc" >/dev/null 2>&1; then
-        merged="$(jq -c --argjson d "$DEFAULT_PARAMS" \
-            '$d * ((.params // {}) | with_entries(select(.value != null)))' \
-            <<<"$cand_doc" 2>/dev/null || true)"
-        [ -n "$merged" ] && params_json="$merged"
-    fi
-    if jq -e '(.candidates | type) == "array"' <<<"$cand_doc" >/dev/null 2>&1; then
-        candidates_json="$(jq -c '
+	if jq -e '(.params | type) == "object"' <<<"$cand_doc" >/dev/null 2>&1; then
+		merged="$(jq -c --argjson d "$DEFAULT_PARAMS" \
+			'$d * ((.params // {}) | with_entries(select(.value != null)))' \
+			<<<"$cand_doc" 2>/dev/null || true)"
+		[ -n "$merged" ] && params_json="$merged"
+	fi
+	if jq -e '(.candidates | type) == "array"' <<<"$cand_doc" >/dev/null 2>&1; then
+		candidates_json="$(jq -c '
             [ .candidates[]
               | select(type == "object"
                        and ((.id // "") | type) == "string" and (.id | length) > 0
@@ -191,32 +199,32 @@ if cand_doc="$(read_json "$GEO_DIR/candidates.json")"; then
                  provider: (.provider // ""), free_tier: (.free_tier // false),
                  viable: (.viable // true)}
             ]' <<<"$cand_doc" 2>/dev/null || echo '[]')"
-    fi
+	fi
 fi
 
 # --window-secs override (numeric only).
 if [ -n "$WINDOW_SECS" ]; then
-    case "$WINDOW_SECS" in
-        ''|*[!0-9]*) : ;;
-        *)
-            params_json="$(jq -c --argjson w "$WINDOW_SECS" '.window_secs = $w' \
-                <<<"$params_json" 2>/dev/null || printf '%s' "$params_json")"
-            ;;
-    esac
+	case "$WINDOW_SECS" in
+	'' | *[!0-9]*) : ;;
+	*)
+		params_json="$(jq -c --argjson w "$WINDOW_SECS" '.window_secs = $w' \
+			<<<"$params_json" 2>/dev/null || printf '%s' "$params_json")"
+		;;
+	esac
 fi
 
 # Region catalog.
 geo_json='{"schema_version":1,"regions":{},"countries":{},"region_aliases":{},"relays":{}}'
 if geo_doc="$(read_json "$GEO_DIR/regions.json")"; then
-    if jq -e '(.regions | type) == "object"' <<<"$geo_doc" >/dev/null 2>&1; then
-        geo_json="$geo_doc"
-    fi
+	if jq -e '(.regions | type) == "object"' <<<"$geo_doc" >/dev/null 2>&1; then
+		geo_json="$geo_doc"
+	fi
 fi
 
 # Registry: pull the embedded signed payload, keep locatable fields.
 nodes_json='[]'
 if reg_doc="$(read_json "$REGISTRY_PATH")"; then
-    nodes_json="$(jq -c '
+	nodes_json="$(jq -c '
         ((try (.registry | fromjson | (.nodes // [])) catch [])
          | [ .[]
              | select(type == "object"
@@ -229,24 +237,24 @@ fi
 # History.
 hist_json='{"version":1,"snapshots":[]}'
 if hist_doc="$(read_json "$HISTORY_PATH")"; then
-    if jq -e '((.snapshots // []) | type) == "array"' <<<"$hist_doc" >/dev/null 2>&1; then
-        normalized="$(jq -c '{version:1, generated_at: (.generated_at // 0),
+	if jq -e '((.snapshots // []) | type) == "array"' <<<"$hist_doc" >/dev/null 2>&1; then
+		normalized="$(jq -c '{version:1, generated_at: (.generated_at // 0),
                               snapshots: [.snapshots[] | select(type == "object")]}' \
-            <<<"$hist_doc" 2>/dev/null || true)"
-        [ -n "$normalized" ] && hist_json="$normalized"
-    fi
+			<<<"$hist_doc" 2>/dev/null || true)"
+		[ -n "$normalized" ] && hist_json="$normalized"
+	fi
 fi
 
 # Previous recommender output (stability history only).
 prev_json='{"stability":{"runs":[]}}'
 if [ -n "$PREVIOUS_PATH" ] && [ "$PREVIOUS_PATH" != "missing" ]; then
-    if prev_doc="$(read_json "$PREVIOUS_PATH")"; then
-        if jq -e '((.stability.runs // []) | type) == "array"' <<<"$prev_doc" >/dev/null 2>&1; then
-            prev_norm="$(jq -c '{stability:{runs: [(.stability.runs // [])[] | select(type == "object")]}}' \
-                <<<"$prev_doc" 2>/dev/null || true)"
-            [ -n "$prev_norm" ] && prev_json="$prev_norm"
-        fi
-    fi
+	if prev_doc="$(read_json "$PREVIOUS_PATH")"; then
+		if jq -e '((.stability.runs // []) | type) == "array"' <<<"$prev_doc" >/dev/null 2>&1; then
+			prev_norm="$(jq -c '{stability:{runs: [(.stability.runs // [])[] | select(type == "object")]}}' \
+				<<<"$prev_doc" 2>/dev/null || true)"
+			[ -n "$prev_norm" ] && prev_json="$prev_norm"
+		fi
+	fi
 fi
 
 # Minimal document that respects the loaded params.
@@ -266,6 +274,9 @@ minimal_json="$(jq -cn --argjson p "$params_json" --argjson now "$NOW" '{
                route_loss_ratio: null,
                min_measured_samples: ($p.min_measured_samples // 5),
                max_negative_saving_share: ($p.max_negative_saving_share // 0.5)},
+    source_quality: {min_samples: 3,
+                     min_measured_samples: ($p.min_measured_samples // 5),
+                     suppressed_cells: 0, relays: []},
     notes: "fatal parse failure or internal error; emitted minimal document"
 }' 2>/dev/null || printf '%s' "$STATIC_MINIMAL")"
 
@@ -517,6 +528,61 @@ def sum_relay_metric($snaps; $k):
      | select((.sessions // 0) <= $idle_sessions_max and .worst_retention >= $coverage_keep)
      | .node_id ]) as $prune_candidates
 
+# ── Per-source measured quality (rule 15) ────────────────────
+| ([ $pairs[] as $pair
+     | (($pair.cur.per_relay // {}) | to_entries[]) as $re
+     | ($re.value) as $rc
+     | if (($rc.reachable // true) == false) then empty
+       else
+         (($rc.sources // {}) | to_entries[]) as $se
+         | ((($pair.prev.per_relay // {})[$re.key] // {}).sources // {}) as $prev_src
+         | (($prev_src[$se.key]) // {}) as $pc
+         | ($se.value // {}) as $sc
+         | (($rc.reset // false) == true) as $rst
+         | {rid: $re.key, src: $se.key,
+            sum_d: (if $rst then ($sc.saved_app_ms_sum // 0)
+                    elif (($sc.saved_app_ms_sum // 0) > ($pc.saved_app_ms_sum // 0))
+                    then (($sc.saved_app_ms_sum // 0) - ($pc.saved_app_ms_sum // 0))
+                    else 0 end),
+            count_d: (if $rst then ($sc.saved_app_ms_count // 0)
+                      elif (($sc.saved_app_ms_count // 0) > ($pc.saved_app_ms_count // 0))
+                      then (($sc.saved_app_ms_count // 0) - ($pc.saved_app_ms_count // 0))
+                      else 0 end),
+            neg_d: (if $rst then ($sc.saved_app_ms_negative_count // 0)
+                    elif (($sc.saved_app_ms_negative_count // 0) > ($pc.saved_app_ms_negative_count // 0))
+                    then (($sc.saved_app_ms_negative_count // 0) - ($pc.saved_app_ms_negative_count // 0))
+                    else 0 end)}
+       end
+   ]) as $src_records
+| ($src_records
+   | group_by([.rid, .src])
+   | map({rid: .[0].rid, src: .[0].src,
+          sum: (map(.sum_d) | add // 0),
+          count: (map(.count_d) | add // 0),
+          neg: (map(.neg_d) | add // 0)})) as $src_totals
+| 3 as $src_k_min
+| ([ $existing[] as $r
+     | {node_id: $r.node_id,
+        region: $r.region,
+        sources: ([ $src_totals[]
+                    | select(.rid == $r.node_id and (.count | n) >= $src_k_min)
+                    | {src_region: .src,
+                       saved_app_samples: (.count | n),
+                       saved_app_mean_ms: (if (.count | n) > 0
+                                           then (((.sum | n) / (.count | n)) | r6)
+                                           else null end),
+                       saved_app_negative_share: (if (.count | n) > 0
+                                                  then (((.neg | n) / (.count | n)) | r6)
+                                                  else null end),
+                       meets_min_samples: ((.count | n) >= $min_measured_samples)}
+                  ] | sort_by(.src_region)),
+        sources_suppressed: ([ $src_totals[]
+                               | select(.rid == $r.node_id
+                                        and (.count | n) > 0
+                                        and (.count | n) < $src_k_min) ] | length)}
+   ]) as $source_quality
+| ([ $source_quality[].sources_suppressed ] | add // 0) as $source_suppressed
+
 # ── Stability ────────────────────────────────────────────────
 | (($prev.stability.runs // []) | .[-10:]) as $prev_runs
 | ({t: $to_t,
@@ -594,6 +660,12 @@ def sum_relay_metric($snaps; $k):
       min_measured_samples: $min_measured_samples,
       max_negative_saving_share: $max_neg_saving_share
     },
+    source_quality: {
+      min_samples: $src_k_min,
+      min_measured_samples: $min_measured_samples,
+      suppressed_cells: $source_suppressed,
+      relays: $source_quality
+    },
     notes: ("window \($window)s; \($snap_count) snapshot(s); \(($cells | length)) kept cell(s); \($window_sessions) session(s); \(($cand_ok | length)) ranked candidate(s), \(($rejected | length)) rejected; geo-dir \($geo_dir); history \($history_path)")
   }
 '
@@ -602,25 +674,25 @@ def sum_relay_metric($snaps; $k):
 # exceeds ARG_MAX ("Argument list too long"), which silently produced the
 # INSUFFICIENT_DATA fallback on real data while the small test fixtures passed.
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t lightspeed-rec)"
-printf '%s' "$hist_json" > "$tmpdir/hist.json"
-printf '%s' "$geo_json" > "$tmpdir/geo.json"
-printf '%s' "$candidates_json" > "$tmpdir/cands.json"
-printf '%s' "$nodes_json" > "$tmpdir/nodes.json"
-printf '%s' "$prev_json" > "$tmpdir/prev.json"
+printf '%s' "$hist_json" >"$tmpdir/hist.json"
+printf '%s' "$geo_json" >"$tmpdir/geo.json"
+printf '%s' "$candidates_json" >"$tmpdir/cands.json"
+printf '%s' "$nodes_json" >"$tmpdir/nodes.json"
+printf '%s' "$prev_json" >"$tmpdir/prev.json"
 
 PROLOGUE='($histf[0]) as $hist | ($geof[0]) as $geo | ($candsf[0]) as $cands | ($nodesf[0]) as $nodes | ($prevf[0]) as $prev | '
 
 result="$(jq -cn \
-    --slurpfile histf "$tmpdir/hist.json" \
-    --slurpfile geof "$tmpdir/geo.json" \
-    --slurpfile candsf "$tmpdir/cands.json" \
-    --slurpfile nodesf "$tmpdir/nodes.json" \
-    --slurpfile prevf "$tmpdir/prev.json" \
-    --argjson params "$params_json" \
-    --argjson now "$NOW" \
-    --arg geo_dir "$GEO_DIR" \
-    --arg history_path "${HISTORY_PATH:-<none>}" \
-    "${PROLOGUE}${MAIN_JQ}" 2>/dev/null || true)"
+	--slurpfile histf "$tmpdir/hist.json" \
+	--slurpfile geof "$tmpdir/geo.json" \
+	--slurpfile candsf "$tmpdir/cands.json" \
+	--slurpfile nodesf "$tmpdir/nodes.json" \
+	--slurpfile prevf "$tmpdir/prev.json" \
+	--argjson params "$params_json" \
+	--argjson now "$NOW" \
+	--arg geo_dir "$GEO_DIR" \
+	--arg history_path "${HISTORY_PATH:-<none>}" \
+	"${PROLOGUE}${MAIN_JQ}" 2>/dev/null || true)"
 rm -rf "$tmpdir"
 
 [ -n "$result" ] || result="$minimal_json"

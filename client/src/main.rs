@@ -53,6 +53,7 @@ use modes::{
     watch_mode::run_watch_mode,
 };
 use route::ProxyHealth;
+use tunnel::adaptive::AdaptiveConfig;
 use tunnel::relay::UdpRelay;
 
 /// Default config template written by `--write-config`.
@@ -1118,6 +1119,24 @@ async fn main() -> anyhow::Result<()> {
     // ── Relay socket (shared by tunnel/control tests + keepalive) ─
     let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
     let mut relay = UdpRelay::new(bind_addr);
+    let adaptive_cfg = AdaptiveConfig {
+        enabled: cli.adaptive_fec || config.tunnel.adaptive_fec,
+        k_size: cli.fec_k,
+        max_overhead_pct: if cli.fec_max_overhead != 25 {
+            cli.fec_max_overhead
+        } else {
+            config.tunnel.fec_max_overhead_pct
+        },
+        ..AdaptiveConfig::default()
+    };
+    if adaptive_cfg.enabled {
+        info!(
+            "Adaptive FEC: on (K={}, overhead ceiling {}%)",
+            adaptive_cfg.effective_k(),
+            adaptive_cfg.overhead_pct()
+        );
+        relay = relay.with_adaptive_fec(adaptive_cfg);
+    }
     if use_tcp {
         relay.connect_tcp(proxy_addr).await?;
     } else {

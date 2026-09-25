@@ -64,6 +64,16 @@ transport = "udp"
 # network's consent can be policed. Ignored on Windows. Default: false.
 dscp = false
 
+# Adaptive FEC and loss-gated packet duplication. Off by default. When on, the
+# client sends no parity on a clean link, returns to low overhead quickly once
+# loss stops, and duplicates a packet only while loss or jitter is measured.
+adaptive_fec = false
+
+# Hard ceiling on adaptive FEC parity overhead, in percent. Default: 25.
+# Bounds the effective block size to ceil(100 / pct), so even under sustained
+# loss the adaptive mode never adds more parity than this.
+fec_max_overhead_pct = 25
+
 [route]
 # Route selection strategy: "nearest" (default), "ml", or "multipath".
 strategy = "nearest"

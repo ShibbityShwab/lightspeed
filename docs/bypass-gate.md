@@ -34,14 +34,22 @@ Tuning keys, all in `[route]`: `bypass_margin_ms` (default 8),
 
 ## What `auto` does, per platform
 
-- **Linux / macOS (diverting):** `Direct` means *do not install the redirect
-  rule*. It is decided before capture starts. The gate never tears down a live
-  flow. A server already on the relay stays on it until the flow ends; the
-  per-server preference applies on the next install.
+- **Linux (diverting):** `Direct` means *do not install the redirect rule*. It
+  is decided before capture starts, so the gate never tears down a live flow. A
+  server already on the relay stays on it until the flow ends; the per-server
+  preference applies on the next install. The tier-1 pre-gate receives the live
+  client-to-relay RTT from the interceptor's own 5-second keepalive: a fresh
+  sample (within `CLIENT_RELAY_TTL`, 15 s) lets `auto` compare the first hop
+  against the direct path and decline the redirect when the first hop alone
+  already costs as much as the whole direct route. When keepalives stop, or the
+  relay is swapped before a new sample lands, the value goes stale and the gate
+  installs the redirect as usual. This is the input the pre-gate was designed
+  for; it is now supplied on Linux.
 - **Windows (non-diverting):** the original packet is only held, so a per-packet
   switch is safe. This wiring lands after the gate's dry-run data is collected.
-- **macOS** currently has no shadow sampler, so it fails open to the relay and
-  only uses the pre-gate. This is a known gap, not a silent decision.
+- **macOS** currently has no shadow sampler and its interceptor does not consult
+  the bypass gate, so it always keeps the relay. This is a known gap, not a
+  silent decision.
 
 ## Safety properties
 
@@ -54,13 +62,20 @@ Tuning keys, all in `[route]`: `bypass_margin_ms` (default 8),
 - The tier-1 pre-gate is a sufficient condition: if the client-to-relay first
   hop alone already costs as much as the whole direct path, the tunnel cannot
   win. It is the only check safe before a rule exists.
+- The pre-gate's client-to-relay input is time-bounded: a keepalive sample older
+  than 15 s is discarded, and a missing or stale value leaves the pre-gate inert
+  rather than comparing old data. It is never fed a relayed end-to-end RTT,
+  which would not be a first-hop cost.
 
 ## Counters and logs
 
 `EngineStatus` and `InterceptorStats` expose `bypass_allowed`,
-`bypass_refused`, `bypass_decisions`, and `bypass_flips`. The gate logs each
-decision with the server, state, computed action, smoothed advantage, reason,
-and whether it was a dry run.
+`bypass_refused`, `bypass_decisions`, `bypass_flips`, and
+`bypass_pre_gate_rtt`. The gate logs each decision with the server, state,
+computed action, smoothed advantage, reason, and whether it was a dry run.
+`bypass_pre_gate_rtt` counts pre-gate evaluations that received a real
+client-to-relay RTT, so an operator can confirm the gate is getting live input
+rather than failing open; a debug log records the same call with both inputs.
 
 ## Rollback
 
