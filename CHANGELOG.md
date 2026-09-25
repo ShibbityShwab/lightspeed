@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.11] - 2026-09-25
+
+### Added
+
+- Bypass `auto` can now engage on Linux: the keepalive client-to-relay RTT
+  (15s TTL, fail-open) feeds the pre-gate, so a domestic session whose first
+  hop already costs the whole direct path is left un-redirected.
+- Adaptive FEC and loss-gated duplication (opt-in): clean links emit no parity
+  and parity/duplication engage only on measured loss, with a bounded overhead
+  ceiling. Default behaviour is unchanged.
+- Per-relay and per-source-region measured-quality map, plus a site table that
+  shows where LightSpeed does not help. No new data collected.
+
+### Fixed
+
+- A latent FEC header bug where a data packet at index >= 2 was tagged with the
+  block size and misdecoded as parity.
+
 ## [1.6.10] - 2026-09-25
 
 ### Added
