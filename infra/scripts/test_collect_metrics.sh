@@ -13,6 +13,11 @@
 #   (g) the labeled lightspeed_geo_sessions_total family is parsed,
 #       coarsened through the region catalog, and capped at 64 keys
 #       without touching the scalar delta math
+#   (n) per-route-leg families (lightspeed_telemetry_route_*) parse,
+#       sum across their game/country/relay labels, and delta per relay
+#   (o) saved-app families (saved_app_ms_sum/_count/_negative_count)
+#       parse and delta alongside the other telemetry families
+#   (p) route attribution stays per relay; totals equal the per-relay sum
 #
 # No network: the fake registry points health/metrics URLs at file://
 # fixtures, which curl reads locally.
@@ -97,6 +102,15 @@ append_geo() {
     local line
     for line in "$@"; do
         printf '%s\n' "$line" >> "$dir/relay-a.metrics.txt"
+    done
+}
+
+# append_metrics_file <dir> <relay-name> <prometheus-line>...
+append_metrics_file() {
+    local dir="$1" name="$2"; shift 2
+    local line
+    for line in "$@"; do
+        printf '%s\n' "$line" >> "$dir/relay-$name.metrics.txt"
     done
 }
 
@@ -352,6 +366,91 @@ run_collect "$APP_H" "$REG_A"; assert_rc0 $? "(m) direct-app second run exits 0"
 assert_jq "$APP_H" '.snapshots[-1].interval.direct_app_ms_sum == 400' "(m) direct-app sum delta"
 assert_jq "$APP_H" '.snapshots[-1].interval.direct_app_ms_count == 10' "(m) direct-app count delta"
 assert_jq "$APP_H" '.snapshots[-1].totals.direct_app_ms_sum == 900' "(m) direct-app sum totals accumulate"
+
+# ── (n) route-leg telemetry families parse, sum, and delta ──
+# The per-route-leg family is labeled by game/country/relay; sum_family
+# must collapse the label dimension into the per-node scalar the
+# COUNTERS/RELAY_JQ pattern expects, then the delta engine takes over.
+ROUTE_H="$TMP/history-route.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+append_metrics_file "$TMP" a \
+    'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+    'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 5' \
+    'lightspeed_telemetry_route_samples_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 180' \
+    'lightspeed_telemetry_route_rtt_p50_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 54.0' \
+    'lightspeed_telemetry_route_rtt_p50_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 20.0' \
+    'lightspeed_telemetry_route_rtt_p50_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+    'lightspeed_telemetry_route_rtt_p50_ms_count{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 2' \
+    'lightspeed_telemetry_route_rtt_p95_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 75.0' \
+    'lightspeed_telemetry_route_rtt_p95_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+    'lightspeed_telemetry_route_rtt_p99_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 90.0' \
+    'lightspeed_telemetry_route_rtt_p99_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+    'lightspeed_telemetry_route_jitter_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3.6' \
+    'lightspeed_telemetry_route_jitter_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+    'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 9' \
+    'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="FR",relay="relay-ams"} 4' \
+    'lightspeed_telemetry_route_recovered_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 6' \
+    'lightspeed_telemetry_route_dedup_saved_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 3' \
+    'lightspeed_telemetry_route_rejected_total{region="us-west",node_id="relay-a"} 1'
+run_collect "$ROUTE_H" "$REG_A"; assert_rc0 $? "(n) route run exits 0"
+assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_reports == 8' "(n) route_reports sums across label sets"
+assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_samples == 180' "(n) route_samples parsed"
+assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_rtt_p50_ms_sum == 74 and .snapshots[-1].per_relay["relay-a"].cumulative.route_rtt_p50_ms_count == 5' "(n) rtt p50 sum/count parsed"
+assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_rtt_p95_ms_sum == 75 and .snapshots[-1].per_relay["relay-a"].cumulative.route_rtt_p99_ms_sum == 90' "(n) rtt p95/p99 sums parsed"
+assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_jitter_ms_sum == 3.6 and .snapshots[-1].per_relay["relay-a"].cumulative.route_jitter_ms_count == 3' "(n) jitter sum/count parsed"
+assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_lost == 13 and .snapshots[-1].per_relay["relay-a"].cumulative.route_recovered == 6' "(n) lost sums, recovered parsed"
+assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_dedup_saved == 3 and .snapshots[-1].per_relay["relay-a"].cumulative.route_rejected == 1' "(n) dedup_saved and rejected parsed"
+assert_jq "$ROUTE_H" '.snapshots[-1].interval.route_reports == 8 and .snapshots[-1].totals.route_reports == 8' "(n) first snapshot interval == totals == raw"
+assert_jq "$ROUTE_H" '.snapshots[-1].per_relay["relay-a"].lifetime.route_reports == 8' "(n) lifetime seeded for route counters"
+
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
+append_metrics_file "$TMP" a \
+    'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 20' \
+    'lightspeed_telemetry_route_lost_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 20'
+run_collect "$ROUTE_H" "$REG_A"; assert_rc0 $? "(n) route second run exits 0"
+assert_jq "$ROUTE_H" '.snapshots[-1].interval.route_reports == 12' "(n) route_reports exact delta"
+assert_jq "$ROUTE_H" '.snapshots[-1].totals.route_reports == 20' "(n) route_reports totals accumulate"
+assert_jq "$ROUTE_H" '.snapshots[-1].interval.route_lost == 7' "(n) route_lost delta"
+
+# ── (o) saved-app telemetry families parse and delta ─────────
+APPQ_H="$TMP/history-saved-app.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+append_metrics_file "$TMP" a \
+    'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 250.0' \
+    'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 10' \
+    'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 2'
+run_collect "$APPQ_H" "$REG_A"; assert_rc0 $? "(o) saved-app first run exits 0"
+assert_jq "$APPQ_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_sum == 250' "(o) saved_app sum parsed"
+assert_jq "$APPQ_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_count == 10' "(o) saved_app count parsed"
+assert_jq "$APPQ_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_negative_count == 2' "(o) saved_app negative count parsed"
+assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_sum == 250 and .snapshots[-1].totals.saved_app_ms_sum == 250' "(o) first snapshot interval == totals == raw"
+assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_negative_count == 2' "(o) negative count delta seeded"
+
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
+append_metrics_file "$TMP" a \
+    'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 400.0' \
+    'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 16' \
+    'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 5'
+run_collect "$APPQ_H" "$REG_A"; assert_rc0 $? "(o) saved-app second run exits 0"
+assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_sum == 150' "(o) saved_app sum delta"
+assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_count == 6' "(o) saved_app count delta"
+assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_negative_count == 3' "(o) negative count delta"
+assert_jq "$APPQ_H" '.snapshots[-1].totals.saved_app_ms_sum == 400' "(o) saved_app totals accumulate"
+
+# ── (p) route/saved_app keep per-relay attribution ───────────
+# Two relays carry different route_reports; each node keeps its own
+# scalar and totals equal their sum, never one collapsed global blob.
+ATTR_H="$TMP/history-route-attr.json"
+write_relay_fixture "$TMP" a 100 1 3
+write_relay_fixture "$TMP" b 50 0 2
+append_metrics_file "$TMP" a \
+    'lightspeed_telemetry_route_reports_total{region="us-west",node_id="relay-a",game="cs2",country="DE",relay="relay-fra"} 4'
+append_metrics_file "$TMP" b \
+    'lightspeed_telemetry_route_reports_total{region="us-east",node_id="relay-b",game="cs2",country="DE",relay="relay-ams"} 9'
+run_collect "$ATTR_H" "$REG_AB"; assert_rc0 $? "(p) two-relay route run exits 0"
+assert_jq "$ATTR_H" '.snapshots[-1].per_relay["relay-a"].cumulative.route_reports == 4' "(p) relay-a keeps its own route_reports"
+assert_jq "$ATTR_H" '.snapshots[-1].per_relay["relay-b"].cumulative.route_reports == 9' "(p) relay-b keeps its own route_reports"
+assert_jq "$ATTR_H" '.snapshots[-1].totals.route_reports == 13' "(p) totals are the per-relay sum"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

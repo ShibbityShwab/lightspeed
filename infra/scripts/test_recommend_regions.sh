@@ -23,6 +23,10 @@
 #  (12) a large accumulated history still yields a real window (ARG_MAX)
 #  (13) relay necessity and prune candidates are reported per relay
 #  (14) ADD requires stability_runs and add_min_window_sessions, not a margin alone
+#  (15) measured quality (saved-app mean, negative-saving share, route
+#       jitter/loss) is surfaced per relay and in a fleet measured block
+#  (16) a dominant measured negative-saving share blocks ADD; a positive
+#       network leaves ADD eligible
 #
 # Tests (3)-(7) use a synthetic three-region catalog under $TMP with
 # fully controlled geometry; tests (1), (2), (8), (9), (10) exercise
@@ -117,6 +121,23 @@ write_previous() {
         '{schema_version:1,
           stability:{top_id:$top, streak:$n, required:3,
                      runs:[range(0;$n) | {t:(900 + (. * 20)), top_id:$top, score:25, margin:25000}]}}' > "$1"
+}
+
+# write_quality_history <out> <hub-snap1-delta> <hub-snap2-delta> <far-snap1-delta> <far-snap2-delta>
+# Two snapshots over relay-hub-a and relay-far. Each relay carries a per-snapshot
+# delta object so measured-quality fixtures can seed saved-app and route counters
+# while the hub retains enough east-east sessions to clear the ADD floor.
+write_quality_history() {
+    local out="$1" h1="$2" h2="$3" f1="$4" f2="$5"
+    jq -cn --argjson h1 "$h1" --argjson h2 "$h2" --argjson f1 "$f1" --argjson f2 "$f2" '
+      {version:1, generated_at:0, snapshots:[
+        {t:1000, relay_count:2, healthy_count:2, per_relay:{
+          "relay-hub-a":{reachable:true,version:"test",active_sessions:0,geo:{"east-east":100},reset:false,delta:$h1},
+          "relay-far":{reachable:true,version:"test",active_sessions:0,geo:{"east-east":10},reset:false,delta:$f1}}},
+        {t:1060, relay_count:2, healthy_count:2, per_relay:{
+          "relay-hub-a":{reachable:true,version:"test",active_sessions:0,geo:{"east-east":160},reset:false,delta:$h2},
+          "relay-far":{reachable:true,version:"test",active_sessions:0,geo:{"east-east":10},reset:false,delta:$f2}}}
+      ]}' > "$out"
 }
 
 # write_synth_regions <dir>
@@ -389,6 +410,52 @@ assert_jq "$OUT14" '.status == "OK"' "(14) small window is still OK"
 assert_jq "$OUT14" '.window.sessions == 25' "(14) window is below the ADD floor"
 assert_jq "$OUT14" '.stability.streak >= 3' "(14) the leader is stable"
 assert_jq "$OUT14" '.recommendation.action == "NONE"' "(14) stability alone does not ADD below add_min_window_sessions"
+
+# ── (15) measured saved-app/jitter/loss is surfaced ──────────
+# relay-hub-a's two snapshot deltas sum to a 10 ms saved-app mean and a
+# 40% negative-saving share; relay-far reports none. Both the per-relay
+# necessity rows and the fleet measured block must carry it.
+H_QUAL="$TMP/hist-quality.json"
+write_quality_history "$H_QUAL" \
+    '{"saved_app_ms_sum":60,"saved_app_ms_count":6,"saved_app_ms_negative_count":1,"route_jitter_ms_sum":60,"route_jitter_ms_count":6,"route_lost":3,"route_recovered":2}' \
+    '{"saved_app_ms_sum":40,"saved_app_ms_count":4,"saved_app_ms_negative_count":3,"route_jitter_ms_sum":40,"route_jitter_ms_count":4,"route_lost":2,"route_recovered":1}' \
+    '{}' '{}'
+OUT15="$TMP/out15.json"
+run_rec "$H_QUAL" missing "$REG_SYNTH" "$GEO_ADD" "$OUT15"
+assert_rc0 $? "(15) measured-quality run exits 0"
+assert_jq "$OUT15" '.relay_necessity[] | select(.node_id == "relay-hub-a") | .saved_app_samples == 10' "(15) hub measured sample count"
+assert_jq "$OUT15" '.relay_necessity[] | select(.node_id == "relay-hub-a") | .saved_app_mean_ms == 10' "(15) hub measured saved-app mean"
+assert_jq "$OUT15" '.relay_necessity[] | select(.node_id == "relay-hub-a") | .saved_app_negative_share == 0.4' "(15) hub negative-saving share"
+assert_jq "$OUT15" '.relay_necessity[] | select(.node_id == "relay-far") | .saved_app_samples == 0 and .saved_app_mean_ms == null' "(15) unmeasured relay reports zero samples and a null mean"
+assert_jq "$OUT15" '.measured.saved_app_samples == 10 and .measured.saved_app_mean_ms == 10' "(15) fleet measured samples/mean"
+assert_jq "$OUT15" '.measured.saved_app_negative_share == 0.4' "(15) fleet negative-saving share"
+assert_jq "$OUT15" '.measured.route_jitter_mean_ms == 10' "(15) fleet route jitter mean"
+assert_jq "$OUT15" '.measured.route_loss_ratio == 0.625' "(15) fleet route loss ratio"
+
+# ── (16) the measured negative-saving gate blocks ADD ────────
+# Same unserved east leader and stability as (5), but the hub's window
+# shows a 70% negative-saving share: ADD is suppressed. A 20% share
+# leaves the ADD eligible.
+H_QUAL_BAD="$TMP/hist-quality-bad.json"
+write_quality_history "$H_QUAL_BAD" \
+    '{"saved_app_ms_sum":30,"saved_app_ms_count":10,"saved_app_ms_negative_count":7}' \
+    '{}' '{}' '{}'
+H_QUAL_GOOD="$TMP/hist-quality-good.json"
+write_quality_history "$H_QUAL_GOOD" \
+    '{"saved_app_ms_sum":30,"saved_app_ms_count":10,"saved_app_ms_negative_count":2}' \
+    '{}' '{}' '{}'
+PREV16="$TMP/prev16.json"
+write_previous "$PREV16" cand-east 3
+OUT16B="$TMP/out16-bad.json"
+run_rec "$H_QUAL_BAD" "$PREV16" "$REG_SYNTH" "$GEO_LEAD" "$OUT16B"
+assert_rc0 $? "(16) negative-saving run exits 0"
+assert_jq "$OUT16B" '.measured.saved_app_negative_share == 0.7' "(16) negative share is measured"
+assert_jq "$OUT16B" '.window.sessions >= 50 and .stability.streak >= 3' "(16) the leader would otherwise ADD"
+assert_jq "$OUT16B" '.recommendation.action == "NONE"' "(16) a dominant negative-saving share blocks ADD"
+OUT16G="$TMP/out16-good.json"
+run_rec "$H_QUAL_GOOD" "$PREV16" "$REG_SYNTH" "$GEO_LEAD" "$OUT16G"
+assert_rc0 $? "(16) positive-saving run exits 0"
+assert_jq "$OUT16G" '.recommendation.action == "ADD" and .recommendation.candidate_id == "cand-east"' "(16) a positive-saving network leaves ADD eligible"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

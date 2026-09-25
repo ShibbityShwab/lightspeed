@@ -55,7 +55,7 @@ REGIONS_PATH="${LIGHTSPEED_REGIONS_PATH:-$REPO_ROOT/infra/geo/regions.json}"
 
 # Cumulative counters tracked for reset-safe deltas. Keep this list in
 # sync with RELAY_JQ's `cumulative` object.
-COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","sessions_created","direct_ms_sum","direct_ms_count","relayed_ms_sum","relayed_ms_count","saved_ms_sum","saved_ms_count","direct_app_ms_sum","direct_app_ms_count"]'
+COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","sessions_created","direct_ms_sum","direct_ms_count","relayed_ms_sum","relayed_ms_count","saved_ms_sum","saved_ms_count","direct_app_ms_sum","direct_app_ms_count","saved_app_ms_sum","saved_app_ms_count","saved_app_ms_negative_count","route_reports","route_samples","route_rtt_p50_ms_sum","route_rtt_p50_ms_count","route_rtt_p95_ms_sum","route_rtt_p95_ms_count","route_rtt_p99_ms_sum","route_rtt_p99_ms_count","route_jitter_ms_sum","route_jitter_ms_count","route_lost","route_recovered","route_dedup_saved","route_rejected"]'
 
 # ── Always write valid JSON; never fail the caller ───────────
 write_json() {
@@ -167,10 +167,27 @@ def geo_cells($m; $countries; $max):
       direct_ms_count: sum_family($m; "lightspeed_telemetry_direct_ms_count"),
       direct_app_ms_sum: sum_family($m; "lightspeed_telemetry_direct_app_ms_sum"),
       direct_app_ms_count: sum_family($m; "lightspeed_telemetry_direct_app_ms_count"),
+      saved_app_ms_sum: sum_family($m; "lightspeed_telemetry_saved_app_ms_sum"),
+      saved_app_ms_count: sum_family($m; "lightspeed_telemetry_saved_app_ms_count"),
+      saved_app_ms_negative_count: sum_family($m; "lightspeed_telemetry_saved_app_ms_negative_count"),
       relayed_ms_sum: sum_family($m; "lightspeed_telemetry_relayed_ms_sum"),
       relayed_ms_count: sum_family($m; "lightspeed_telemetry_relayed_ms_count"),
       saved_ms_sum: sum_family($m; "lightspeed_telemetry_saved_ms_sum"),
       saved_ms_count: sum_family($m; "lightspeed_telemetry_saved_ms_count"),
+      route_reports: sum_family($m; "lightspeed_telemetry_route_reports_total"),
+      route_samples: sum_family($m; "lightspeed_telemetry_route_samples_total"),
+      route_rtt_p50_ms_sum: sum_family($m; "lightspeed_telemetry_route_rtt_p50_ms_sum"),
+      route_rtt_p50_ms_count: sum_family($m; "lightspeed_telemetry_route_rtt_p50_ms_count"),
+      route_rtt_p95_ms_sum: sum_family($m; "lightspeed_telemetry_route_rtt_p95_ms_sum"),
+      route_rtt_p95_ms_count: sum_family($m; "lightspeed_telemetry_route_rtt_p95_ms_count"),
+      route_rtt_p99_ms_sum: sum_family($m; "lightspeed_telemetry_route_rtt_p99_ms_sum"),
+      route_rtt_p99_ms_count: sum_family($m; "lightspeed_telemetry_route_rtt_p99_ms_count"),
+      route_jitter_ms_sum: sum_family($m; "lightspeed_telemetry_route_jitter_ms_sum"),
+      route_jitter_ms_count: sum_family($m; "lightspeed_telemetry_route_jitter_ms_count"),
+      route_lost: sum_family($m; "lightspeed_telemetry_route_lost_total"),
+      route_recovered: sum_family($m; "lightspeed_telemetry_route_recovered_total"),
+      route_dedup_saved: sum_family($m; "lightspeed_telemetry_route_dedup_saved_total"),
+      route_rejected: sum_family($m; "lightspeed_telemetry_route_rejected_total"),
       rate_limit_hits: mval($m; "lightspeed_rate_limit_hits_total"),
       rate_limit_ip_hits: mval($m; "lightspeed_rate_limit_ip_hits_total"),
       rate_limit_overflow: mval($m; "lightspeed_rate_limit_overflow_total"),

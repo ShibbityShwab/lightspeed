@@ -54,14 +54,23 @@
 #      runs with the same top candidate.
 #  11. ADD needs an unserved leader region, a streak of stability_runs, and
 #      at least add_min_window_sessions window sessions; a single margin lead
-#      is never enough. MOVE needs margin >= move_margin, stability,
-#      and some existing relay whose removal retains at least
-#      move_coverage_keep of every kept cell's current cost.
+#      is never enough. It is suppressed while the measured network shows a
+#      negative-saving share above max_negative_saving_share once at least
+#      min_measured_samples saved-app samples exist (rule 14). MOVE needs
+#      margin >= move_margin, stability, and some existing relay whose
+#      removal retains at least move_coverage_keep of every kept cell's
+#      current cost.
 #  12. Candidates within near_duplicate_ms of an existing relay are
 #      rejected as near_duplicate.
 #  13. Every existing relay is reported in relay_necessity with its window
-#      session count and the coverage retention if it were dropped;
-#      prune_candidates lists relays that are both idle and redundant.
+#      session count, the coverage retention if it were dropped, and its
+#      measured saved-app mean / negative-saving share; prune_candidates
+#      lists relays that are both idle and redundant.
+#  14. The measured block aggregates window saved-app samples, mean, and
+#      negative-saving share plus route jitter mean and loss ratio across
+#      existing relays, so a human can see whether relays actually help.
+#      With no measured samples the ADD gate is inert and existing
+#      decisions stand.
 #
 # Requires: bash, jq (>= 1.6 for sin/cos/asin/sqrt).
 # ──────────────────────────────────────────────────────────────
@@ -117,8 +126,8 @@ done
 [ -n "$REGISTRY_PATH" ] || REGISTRY_PATH="$REGISTRY_DEFAULT"
 
 # ── Minimal documents (valid JSON, no jq required) ───────────
-STATIC_MINIMAL='{"schema_version":1,"generated_at":0,"status":"INSUFFICIENT_DATA","window":{"from_t":0,"to_t":0,"snapshots":0,"sessions":0,"cells":0,"min_window_sessions":20,"min_cell_sessions":3},"matrix":[],"existing":[],"ranking":[],"rejected":[],"recommendation":{"action":"NONE","candidate_id":null,"remove_node_id":null,"reason":"insufficient data"},"stability":{"top_id":null,"streak":0,"required":3,"runs":[]},"notes":"no data"}'
-DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"add_min_window_sessions":50,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"near_duplicate_ms":25,"idle_sessions_max":0}'
+STATIC_MINIMAL='{"schema_version":1,"generated_at":0,"status":"INSUFFICIENT_DATA","window":{"from_t":0,"to_t":0,"snapshots":0,"sessions":0,"cells":0,"min_window_sessions":20,"min_cell_sessions":3},"matrix":[],"existing":[],"ranking":[],"rejected":[],"recommendation":{"action":"NONE","candidate_id":null,"remove_node_id":null,"reason":"insufficient data"},"stability":{"top_id":null,"streak":0,"required":3,"runs":[]},"measured":{"saved_app_samples":0,"saved_app_mean_ms":null,"saved_app_negative_share":null,"route_jitter_mean_ms":null,"route_loss_ratio":null,"min_measured_samples":0,"max_negative_saving_share":0},"notes":"no data"}'
+DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"add_min_window_sessions":50,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"near_duplicate_ms":25,"idle_sessions_max":0,"max_negative_saving_share":0.5,"min_measured_samples":5}'
 
 write_json() {
     local json="$1" minimal="$2"
@@ -252,6 +261,11 @@ minimal_json="$(jq -cn --argjson p "$params_json" --argjson now "$NOW" '{
     recommendation: {action: "NONE", candidate_id: null, remove_node_id: null,
                      reason: "insufficient data"},
     stability: {top_id: null, streak: 0, required: ($p.stability_runs // 3), runs: []},
+    measured: {saved_app_samples: 0, saved_app_mean_ms: null,
+               saved_app_negative_share: null, route_jitter_mean_ms: null,
+               route_loss_ratio: null,
+               min_measured_samples: ($p.min_measured_samples // 5),
+               max_negative_saving_share: ($p.max_negative_saving_share // 0.5)},
     notes: "fatal parse failure or internal error; emitted minimal document"
 }' 2>/dev/null || printf '%s' "$STATIC_MINIMAL")"
 
@@ -279,6 +293,10 @@ def streak_of($runs; $top_id):
   (reduce ($runs | reverse)[] as $run ([0, true];
      if (.[1] and ($run.top_id == $top_id)) then [.[0] + 1, true]
      else [.[0], false] end)) | .[0];
+def sum_relay_metric($snaps; $k):
+  (reduce ($snaps[]? | (.per_relay // {}) | to_entries[]) as $e
+     ({}; .[$e.key] = ((.[$e.key] // 0)
+                       + ((($e.value.delta // {}) | .[$k]) // 0))));
 
 ($params.alpha // 2 | n) as $alpha
 | ($params.window_secs // 604800 | n) as $window
@@ -292,6 +310,8 @@ def streak_of($runs; $top_id):
 | ($params.move_coverage_keep // 0.9 | n) as $coverage_keep
 | ($params.idle_sessions_max // 0 | n) as $idle_sessions_max
 | ($params.near_duplicate_ms // 25 | n) as $near_dup
+| ($params.max_negative_saving_share // 0.5 | n) as $max_neg_saving_share
+| ($params.min_measured_samples // 5 | n) as $min_measured_samples
 
 # ── Snapshot window ──────────────────────────────────────────
 | (($hist.snapshots // [])
@@ -463,11 +483,35 @@ def streak_of($runs; $top_id):
 # idle and redundant by those two measures is a prune candidate.
 | (reduce ($snaps[]?.per_relay // {} | to_entries[]) as $e
     ({}; .[$e.key] = ((.[$e.key] // 0) + ($e.value.delta.sessions_created // 0)))) as $relay_sessions
+| (sum_relay_metric($snaps; "saved_app_ms_sum")) as $saved_sum
+| (sum_relay_metric($snaps; "saved_app_ms_count")) as $saved_count
+| (sum_relay_metric($snaps; "saved_app_ms_negative_count")) as $saved_neg
+| (sum_relay_metric($snaps; "route_jitter_ms_sum")) as $route_jitter_sum
+| (sum_relay_metric($snaps; "route_jitter_ms_count")) as $route_jitter_count
+| (sum_relay_metric($snaps; "route_lost")) as $route_lost_m
+| (sum_relay_metric($snaps; "route_recovered")) as $route_recovered_m
+| (($saved_count | [.[]] | add) // 0) as $meas_samples
+| (($saved_sum | [.[]] | add) // 0) as $meas_sum
+| (($saved_neg | [.[]] | add) // 0) as $meas_neg
+| (if $meas_samples > 0 then (($meas_sum / $meas_samples) | r6) else null end) as $meas_mean
+| (if $meas_samples > 0 then (($meas_neg / $meas_samples) | r6) else null end) as $meas_neg_share
+| (($meas_samples >= $min_measured_samples) and ($meas_neg_share != null)
+   and ($meas_neg_share > $max_neg_saving_share)) as $quality_blocked
+| (($route_jitter_sum | [.[]] | add) // 0) as $jitter_sum
+| (($route_jitter_count | [.[]] | add) // 0) as $jitter_count
+| (if $jitter_count > 0 then (($jitter_sum / $jitter_count) | r6) else null end) as $jitter_mean
+| (($route_lost_m | [.[]] | add) // 0) as $lost_sum
+| (($route_recovered_m | [.[]] | add) // 0) as $rec_sum
+| (if ($lost_sum + $rec_sum) > 0 then (($lost_sum / ($lost_sum + $rec_sum)) | r6) else null end) as $loss_ratio
 | ([ $existing[] as $r
+     | (($saved_count[$r.node_id] // 0) | n) as $r_count
      | {node_id: $r.node_id,
         region: $r.region,
         sessions: (($relay_sessions[$r.node_id] // 0) | n),
-        worst_retention: (([ $removals[] | select(.node_id == $r.node_id) | .worst_retention ] | .[0]) // 1)}
+        worst_retention: (([ $removals[] | select(.node_id == $r.node_id) | .worst_retention ] | .[0]) // 1),
+        saved_app_samples: $r_count,
+        saved_app_mean_ms: (if $r_count > 0 then ((($saved_sum[$r.node_id] // 0) / $r_count) | r6) else null end),
+        saved_app_negative_share: (if $r_count > 0 then ((($saved_neg[$r.node_id] // 0) / $r_count) | r6) else null end)}
    ] | sort_by(.node_id)) as $relay_necessity
 | ([ $relay_necessity[]
      | select((.sessions // 0) <= $idle_sessions_max and .worst_retention >= $coverage_keep)
@@ -492,6 +536,12 @@ def streak_of($runs; $top_id):
       reason: (if $snap_count < 2
                then "fewer than 2 snapshots in the window"
                else "window sessions \($window_sessions) below minimum \($min_sessions)" end)}
+   elif ($top != null and (($served | index($top_region)) == null)
+         and $streak >= $stability_runs
+         and $window_sessions >= $add_min_window_sessions
+         and $quality_blocked) then
+     {action: "NONE", candidate_id: null, remove_node_id: null,
+      reason: "measured saved-app negative share \($meas_neg_share) over \($meas_samples) sample(s) exceeds max_negative_saving_share \($max_neg_saving_share); ADD of \($top.candidate_id) suppressed"}
    elif ($top != null and (($served | index($top_region)) == null)
          and $streak >= $stability_runs
          and $window_sessions >= $add_min_window_sessions) then
@@ -534,6 +584,15 @@ def streak_of($runs; $top_id):
       streak: $streak,
       required: $stability_runs,
       runs: $runs
+    },
+    measured: {
+      saved_app_samples: $meas_samples,
+      saved_app_mean_ms: $meas_mean,
+      saved_app_negative_share: $meas_neg_share,
+      route_jitter_mean_ms: $jitter_mean,
+      route_loss_ratio: $loss_ratio,
+      min_measured_samples: $min_measured_samples,
+      max_negative_saving_share: $max_neg_saving_share
     },
     notes: ("window \($window)s; \($snap_count) snapshot(s); \(($cells | length)) kept cell(s); \($window_sessions) session(s); \(($cand_ok | length)) ranked candidate(s), \(($rejected | length)) rejected; geo-dir \($geo_dir); history \($history_path)")
   }
