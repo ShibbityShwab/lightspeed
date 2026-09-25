@@ -269,6 +269,8 @@ struct Inner {
     shadow: Vec<f32>,
     shadow_server: Option<Ipv4Addr>,
     shadow_measured_at: Option<Instant>,
+    shadow_attempts: u32,
+    shadow_replies: u32,
 }
 
 impl Inner {
@@ -308,6 +310,15 @@ impl Inner {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         Some(TelemetryCollector::percentile(&sorted, 50.0))
     }
+}
+
+/// Mean of consecutive absolute RTT deltas in arrival order.
+fn ring_jitter(samples: &[f32]) -> f32 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    let deltas: f32 = samples.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>();
+    deltas / (samples.len() - 1) as f32
 }
 
 /// Direct, relayed, and shadow-direct latency tracker.
@@ -432,6 +443,7 @@ impl LatencyTracker {
             _ => {
                 inner.shadow_last.insert(server, now);
                 inner.shadow_pending.insert(server, now);
+                inner.shadow_attempts = inner.shadow_attempts.saturating_add(1);
                 true
             }
         }
@@ -456,12 +468,15 @@ impl LatencyTracker {
         if inner.shadow_server != Some(server) {
             inner.shadow.clear();
             inner.shadow_server = Some(server);
+            inner.shadow_attempts = 0;
+            inner.shadow_replies = 0;
         }
         if inner.shadow.len() >= SHADOW_RING_CAPACITY {
             inner.shadow.remove(0);
         }
         inner.shadow.push(rtt_ms as f32);
         inner.shadow_measured_at = Some(now);
+        inner.shadow_replies = inner.shadow_replies.saturating_add(1);
     }
 
     /// Median direct application RTT, only while the shadow window was
@@ -479,6 +494,39 @@ impl LatencyTracker {
     /// Median of the current relayed window, if any.
     pub fn relayed_p50_ms(&self) -> Option<f32> {
         self.lock().relayed_median()
+    }
+
+    /// Jitter of the shadow-direct window, or `None` before two samples.
+    pub fn shadow_direct_jitter_ms(&self) -> Option<f32> {
+        let inner = self.lock();
+        (inner.shadow.len() >= 2).then(|| ring_jitter(&inner.shadow))
+    }
+
+    /// Jitter of the relayed window, or `None` before two samples.
+    pub fn relayed_jitter_ms(&self) -> Option<f32> {
+        let inner = self.lock();
+        (inner.relayed.len() >= 2).then(|| ring_jitter(&inner.relayed))
+    }
+
+    /// Direct application loss ratio from shadow attempts vs replies, or
+    /// `None` until at least one sample was attempted.
+    pub fn shadow_direct_loss_ratio(&self) -> Option<f32> {
+        let inner = self.lock();
+        if inner.shadow_attempts == 0 {
+            return None;
+        }
+        let replies = inner.shadow_replies.min(inner.shadow_attempts);
+        Some(1.0 - replies as f32 / inner.shadow_attempts as f32)
+    }
+
+    /// Number of shadow-direct samples in the current window.
+    pub fn shadow_direct_samples(&self) -> u32 {
+        self.lock().shadow.len() as u32
+    }
+
+    /// Number of relayed samples in the current window.
+    pub fn relayed_samples(&self) -> u32 {
+        self.lock().relayed.len() as u32
     }
 
     /// `direct - relayed`, only when a fresh direct median and the relayed
@@ -645,6 +693,36 @@ pub fn record_shadow_inbound(server: Ipv4Addr) {
 /// decided by the reporting gate in `telemetry::TelemetryCollector::flush`.
 pub fn shadow_direct_p50_ms() -> Option<f32> {
     global().and_then(|tracker| tracker.shadow_direct_p50_ms())
+}
+
+/// Median relayed application RTT, or `None` when the window is empty.
+pub fn relayed_p50_ms() -> Option<f32> {
+    global().and_then(|tracker| tracker.relayed_p50_ms())
+}
+
+/// Jitter of the direct application path, if a window exists.
+pub fn shadow_direct_jitter_ms() -> Option<f32> {
+    global().and_then(|tracker| tracker.shadow_direct_jitter_ms())
+}
+
+/// Jitter of the relayed application path, if a window exists.
+pub fn relayed_jitter_ms() -> Option<f32> {
+    global().and_then(|tracker| tracker.relayed_jitter_ms())
+}
+
+/// Shadow-direct loss ratio (1 - replies/attempts) for the bypass gate.
+pub fn shadow_direct_loss_ratio() -> Option<f32> {
+    global().and_then(|tracker| tracker.shadow_direct_loss_ratio())
+}
+
+/// Shadow-direct sample count of the current window.
+pub fn shadow_direct_samples() -> u32 {
+    global().map_or(0, |tracker| tracker.shadow_direct_samples())
+}
+
+/// Relayed sample count of the current window.
+pub fn relayed_samples() -> u32 {
+    global().map_or(0, |tracker| tracker.relayed_samples())
 }
 
 /// Values for the next telemetry report; `(None, None)` when no tracker is

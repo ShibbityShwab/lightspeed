@@ -135,6 +135,18 @@ pub struct EngineStatus {
     pub interceptor_payloads_over_budget: u64,
     /// Error description if the interceptor failed to start.
     pub interceptor_error: Option<String>,
+
+    // ── Bypass gate ───────────────────────────────────────────────────────
+    /// Active bypass mode ("dry_run", "auto", "never", "always").
+    pub bypass_mode: String,
+    /// Bypasses the gate decided and the action layer honoured.
+    pub bypass_allowed: u64,
+    /// Bypasses computed but not applied, so the relay was kept.
+    pub bypass_refused: u64,
+    /// Bypass-gate evaluations that produced a decision.
+    pub bypass_decisions: u64,
+    /// Relay<->Direct transitions recorded by the gate.
+    pub bypass_flips: u64,
 }
 
 // ── Engine ───────────────────────────────────────────────────────────────
@@ -306,7 +318,12 @@ impl LightSpeedEngine {
         // `spawn_periodic_flush` calls `tokio::spawn`, which needs a runtime
         // context; the GUI calls engine methods from the egui thread.
         let _guard = self.rt.enter();
-        self.telemetry_flush = Some(crate::telemetry::spawn_periodic_flush(collector, host, ctx));
+        self.telemetry_flush = Some(crate::telemetry::spawn_periodic_flush(
+            collector,
+            host,
+            Some(proxy),
+            ctx,
+        ));
         tracing::info!("Telemetry flush started toward {}", proxy.ip());
     }
 
@@ -827,6 +844,7 @@ impl LightSpeedEngine {
                 )
             });
         let platform = interceptor.platform_name();
+        let bypass_mode = config.bypass.mode.as_str();
 
         self.spawn_registration(proxy_addr);
         self.note_telemetry_proxy(proxy_addr);
@@ -851,6 +869,11 @@ impl LightSpeedEngine {
             s.interceptor_errors = 0;
             s.interceptor_payloads_over_budget = 0;
             s.interceptor_error = None;
+            s.bypass_mode = bypass_mode.to_string();
+            s.bypass_allowed = 0;
+            s.bypass_refused = 0;
+            s.bypass_decisions = 0;
+            s.bypass_flips = 0;
             s.control_registered = false;
             s.session_token = None;
             s.registration_error = None;
@@ -942,6 +965,10 @@ impl LightSpeedEngine {
             snap.interceptor_injected = ist.packets_injected;
             snap.interceptor_errors = ist.errors;
             snap.interceptor_payloads_over_budget = ist.payloads_over_budget;
+            snap.bypass_allowed = ist.bypass_allowed;
+            snap.bypass_refused = ist.bypass_refused;
+            snap.bypass_decisions = ist.bypass_decisions;
+            snap.bypass_flips = ist.bypass_flips;
             snap.interceptor_platform = ist.platform;
             if let Some(srv) = ist.detected_server {
                 snap.interceptor_server = srv.to_string();

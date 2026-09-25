@@ -21,6 +21,7 @@ const MSG_REGISTER: u8 = 0x03;
 const MSG_REGISTER_ACK: u8 = 0x04;
 const MSG_DISCONNECT: u8 = 0x05;
 const MSG_SERVER_INFO: u8 = 0x06;
+const MSG_TELEMETRY: u8 = 0x07;
 
 // ── Game IDs ────────────────────────────────────────────────────────
 
@@ -156,6 +157,11 @@ pub enum ControlMessage {
         node_id: String,
         /// Proxy geographic region.
         region: String,
+        /// Whether this proxy accepts [`ControlMessage::Telemetry`] on the
+        /// control connection. Pre-upgrade proxies omit this trailing byte, so
+        /// it decodes as `false` and the client falls back to HTTP.
+        #[serde(default)]
+        telemetry_quic: bool,
     },
 
     /// Either direction: graceful disconnect.
@@ -172,6 +178,16 @@ pub enum ControlMessage {
         active_clients: u32,
         /// Maximum client capacity.
         capacity: u32,
+    },
+
+    /// Client → Proxy: an anonymised telemetry report.
+    ///
+    /// Carries the same JSON schema as the HTTP `/telemetry` body so the proxy
+    /// can feed both transports through one parse/validate/aggregate path.
+    Telemetry {
+        /// JSON-encoded report body, capped at
+        /// [`crate::telemetry::MAX_TELEMETRY_BODY`] bytes.
+        report_json: Vec<u8>,
     },
 }
 
@@ -232,12 +248,18 @@ impl ControlMessage {
                 session_token,
                 node_id,
                 region,
+                telemetry_quic,
             } => {
                 buf.put_u8(MSG_REGISTER_ACK);
                 buf.put_u32(*session_id);
                 buf.put_u32(*session_token);
                 put_short_string(&mut buf, node_id);
                 put_short_string(&mut buf, region);
+                // Trailing extension: emit it only when set, so an ack that
+                // does not advertise telemetry keeps the legacy wire form.
+                if *telemetry_quic {
+                    buf.put_u8(1);
+                }
             }
             Self::Disconnect { reason } => {
                 buf.put_u8(MSG_DISCONNECT);
@@ -252,6 +274,11 @@ impl ControlMessage {
                 buf.put_u8(*load_pct);
                 buf.put_u32(*active_clients);
                 buf.put_u32(*capacity);
+            }
+            Self::Telemetry { report_json } => {
+                buf.put_u8(MSG_TELEMETRY);
+                buf.put_u32(report_json.len() as u32);
+                buf.put_slice(report_json);
             }
         }
         buf.freeze()
@@ -314,11 +341,15 @@ impl ControlMessage {
                 let session_token = buf.get_u32();
                 let node_id = get_short_string(&mut buf)?;
                 let region = get_short_string(&mut buf)?;
+                // The telemetry capability is optional: a pre-upgrade proxy
+                // sends no trailing byte and thus cannot accept telemetry.
+                let telemetry_quic = !buf.is_empty() && buf.get_u8() != 0;
                 Ok(Self::RegisterAck {
                     session_id,
                     session_token,
                     node_id,
                     region,
+                    telemetry_quic,
                 })
             }
             MSG_DISCONNECT => {
@@ -336,6 +367,13 @@ impl ControlMessage {
                     active_clients,
                     capacity,
                 })
+            }
+            MSG_TELEMETRY => {
+                ensure_remaining(buf, 4)?;
+                let len = buf.get_u32() as usize;
+                ensure_remaining(buf, len)?;
+                let report_json = buf[..len].to_vec();
+                Ok(Self::Telemetry { report_json })
             }
             other => Err(ControlDecodeError::UnknownMessageType(other)),
         }
@@ -505,10 +543,36 @@ mod tests {
             session_token: 0xAB,
             node_id: "proxy-sea-001".into(),
             region: "sea".into(),
+            telemetry_quic: true,
         };
         let encoded = msg.encode();
         let decoded = ControlMessage::decode(&encoded).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn test_register_ack_legacy_wire_form_has_no_telemetry() {
+        // A pre-upgrade proxy emits no trailing capability byte.
+        let legacy = ControlMessage::RegisterAck {
+            session_id: 42,
+            session_token: 0xAB,
+            node_id: "proxy-sea-001".into(),
+            region: "sea".into(),
+            telemetry_quic: false,
+        }
+        .encode();
+        let decoded = ControlMessage::decode(&legacy).unwrap();
+        assert_eq!(
+            decoded,
+            ControlMessage::RegisterAck {
+                session_id: 42,
+                session_token: 0xAB,
+                node_id: "proxy-sea-001".into(),
+                region: "sea".into(),
+                telemetry_quic: false,
+            },
+            "an ack without the capability byte must decode as unsupported"
+        );
     }
 
     #[test]
@@ -531,6 +595,28 @@ mod tests {
         let encoded = msg.encode();
         let decoded = ControlMessage::decode(&encoded).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn test_telemetry_roundtrip() {
+        let msg = ControlMessage::Telemetry {
+            report_json: br#"{"game_id":2,"sample_count":10}"#.to_vec(),
+        };
+        let encoded = msg.encode();
+        let decoded = ControlMessage::decode(&encoded).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn test_telemetry_truncated_body_is_rejected() {
+        // Length prefix claims 8 bytes but only 3 follow.
+        let mut framed = vec![MSG_TELEMETRY];
+        framed.extend_from_slice(&8u32.to_be_bytes());
+        framed.extend_from_slice(b"abc");
+        assert!(matches!(
+            ControlMessage::decode(&framed),
+            Err(ControlDecodeError::BufferTooSmall { .. })
+        ));
     }
 
     #[test]

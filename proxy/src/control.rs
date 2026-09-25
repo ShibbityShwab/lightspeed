@@ -22,10 +22,12 @@ mod inner {
     use tracing::{debug, info, warn};
 
     use lightspeed_protocol::control::{disconnect_reason, ControlMessage};
+    use lightspeed_protocol::telemetry::MAX_TELEMETRY_BODY;
     use lightspeed_protocol::PROTOCOL_VERSION;
 
     use crate::auth::{Authenticator, EXPLICIT_REVOKE_GRACE, TRANSPORT_REVOKE_GRACE};
     use crate::config::ProxyConfig;
+    use crate::metrics::ProxyMetrics;
 
     // ── Types ───────────────────────────────────────────────────────
 
@@ -33,6 +35,44 @@ mod inner {
     /// connection's streams so keepalive refresh and close-time revoke reach
     /// the same token the Register handler issued.
     type ConnectionToken = Arc<tokio::sync::Mutex<Option<u32>>>;
+
+    /// Bound on distinct source IPs tracked by the control-plane telemetry
+    /// limiter, so a client cannot grow the map without bound.
+    const MAX_TELEMETRY_RATE_IPS: usize = 65_536;
+
+    /// Telemetry reports accepted per source IP per fixed window.
+    const TELEMETRY_REPORTS_PER_WINDOW: u32 = 60;
+
+    /// Fixed-window duration for control-plane telemetry throttling.
+    const TELEMETRY_RATE_WINDOW: Duration = Duration::from_secs(60);
+
+    /// Per-IP fixed-window limiter for control-plane telemetry reports.
+    ///
+    /// The HTTP endpoint relies on the general request handling; the QUIC path
+    /// gets an explicit bound so a client cannot flood the aggregator over an
+    /// authenticated connection. A new IP past the tracking cap is refused
+    /// (fail closed).
+    #[derive(Default)]
+    struct TelemetryRateLimiter {
+        ips: HashMap<Ipv4Addr, (Instant, u32)>,
+    }
+
+    impl TelemetryRateLimiter {
+        fn allow(&mut self, ip: Ipv4Addr, now: Instant) -> bool {
+            if !self.ips.contains_key(&ip) && self.ips.len() >= MAX_TELEMETRY_RATE_IPS {
+                return false;
+            }
+            let entry = self.ips.entry(ip).or_insert((now, 0));
+            if now.saturating_duration_since(entry.0) >= TELEMETRY_RATE_WINDOW {
+                *entry = (now, 0);
+            }
+            if entry.1 >= TELEMETRY_REPORTS_PER_WINDOW {
+                return false;
+            }
+            entry.1 += 1;
+            true
+        }
+    }
 
     /// A connected client session on the control plane.
     #[derive(Debug, Clone)]
@@ -63,17 +103,29 @@ mod inner {
         pub config: ProxyConfig,
         /// Shared authenticator for data-plane auth.
         pub authenticator: Arc<RwLock<Authenticator>>,
+        /// Shared metrics, including the telemetry aggregator that the HTTP
+        /// `/telemetry` endpoint also feeds, so both transports aggregate
+        /// identically.
+        pub metrics: Arc<ProxyMetrics>,
+        /// Per-IP limiter for control-plane telemetry reports.
+        telemetry_rate: tokio::sync::Mutex<TelemetryRateLimiter>,
         /// When the server started.
         pub started_at: Instant,
     }
 
     impl ControlState {
-        pub fn new(config: ProxyConfig, authenticator: Arc<RwLock<Authenticator>>) -> Self {
+        pub fn new(
+            config: ProxyConfig,
+            authenticator: Arc<RwLock<Authenticator>>,
+            metrics: Arc<ProxyMetrics>,
+        ) -> Self {
             Self {
                 sessions: RwLock::new(HashMap::new()),
                 connections: RwLock::new(HashMap::new()),
                 config,
                 authenticator,
+                metrics,
+                telemetry_rate: tokio::sync::Mutex::new(TelemetryRateLimiter::default()),
                 started_at: Instant::now(),
             }
         }
@@ -544,6 +596,7 @@ mod inner {
                     session_token,
                     node_id: state.config.server.node_id.clone(),
                     region: state.config.server.region.clone(),
+                    telemetry_quic: true,
                 })
             }
 
@@ -561,6 +614,34 @@ mod inner {
                     );
                 }
 
+                None
+            }
+
+            ControlMessage::Telemetry { report_json } => {
+                if report_json.len() > MAX_TELEMETRY_BODY {
+                    warn!(
+                        "Telemetry from {} rejected: {} bytes exceeds {} cap",
+                        remote,
+                        report_json.len(),
+                        MAX_TELEMETRY_BODY
+                    );
+                    return None;
+                }
+                let Some(ip) = extract_ipv4(&remote) else {
+                    debug!("Telemetry from non-IPv4 {} ignored", remote);
+                    return None;
+                };
+                if !state.telemetry_rate.lock().await.allow(ip, Instant::now()) {
+                    debug!("Telemetry from {} rate-limited", remote);
+                    return None;
+                }
+                // Same parse, validate, and aggregation path as the HTTP
+                // endpoint, so the metric meaning is identical across
+                // transports.
+                match crate::health::ingest_telemetry(&state.metrics, &report_json, remote.ip()) {
+                    Ok(()) => debug!("Telemetry from {} ingested over control plane", remote),
+                    Err(e) => warn!("Telemetry from {} rejected: {}", remote, e),
+                }
                 None
             }
 

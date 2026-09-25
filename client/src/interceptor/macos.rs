@@ -19,16 +19,99 @@
 //! macOS `pf` redirects on the OUTPUT path are done via the `lo0` anchor.
 //! The `rdr-to` rule intercepts packets before they leave the loopback interface,
 //! which is sufficient when game and LightSpeed both run on the same machine.
+//!
+//! ## Shadow-direct sampling
+//!
+//! macOS has the same destination-only redirect that Linux solves with `SO_MARK`,
+//! so the direct re-send probe needs an exemption or its own copy would be
+//! captured by the `rdr` rule and never reach the server. macOS `pf` has no
+//! per-socket mark, so the interceptor binds the probe socket first and emits a
+//! `no rdr` rule keyed on its source port *ahead of* the `rdr` rule (see
+//! [`super::pf_rules`]); the probe is admitted only after that rule loads. If the
+//! probe cannot bind, or no port is available, direct sampling is disabled and no
+//! copy is ever sent. The sampler is therefore enabled exactly where it can work.
 
 use std::net::SocketAddrV4;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::pf_rules::anchor_script;
 use super::teardown::TeardownAck;
 use super::traits::{
     InterceptorConfig, InterceptorCounters, InterceptorHandle, PlatformTeardown, TrafficInterceptor,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Shadow-direct probe
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Dedicated probe socket for the macOS shadow-direct sampler.
+///
+/// Sends an extra copy of the game's own bytes to the server from a socket that
+/// a pf `no rdr` rule exempts from the destination-only redirect, then times the
+/// reply. Bound non-blocking and sent from with `try_send_to`, so a probe can
+/// never park the interceptor's hot path. A probe is only kept when the
+/// exemption rule loaded; otherwise no copy is ever sent.
+struct MacShadowProbe {
+    socket: tokio::net::UdpSocket,
+    server: AtomicU32,
+}
+
+impl MacShadowProbe {
+    fn bind() -> std::io::Result<Self> {
+        let std_socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        std_socket.set_nonblocking(true)?;
+        Ok(Self {
+            socket: tokio::net::UdpSocket::from_std(std_socket)?,
+            server: AtomicU32::new(0),
+        })
+    }
+
+    fn local_port(&self) -> Option<u16> {
+        self.socket.local_addr().ok().map(|addr| addr.port())
+    }
+
+    fn send_copy(&self, payload: &[u8], server: SocketAddrV4) -> std::io::Result<()> {
+        self.server
+            .store(u32::from(*server.ip()), Ordering::Release);
+        self.socket
+            .try_send_to(payload, std::net::SocketAddr::V4(server))
+            .map(|_| ())
+    }
+
+    /// Spawn the reply reader; it pairs only the last probed server's reply.
+    fn spawn_reader(self: &Arc<Self>, running: Arc<AtomicBool>) {
+        let probe = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 65535];
+            while running.load(Ordering::Relaxed) {
+                match tokio::time::timeout(
+                    Duration::from_millis(500),
+                    probe.socket.recv_from(&mut buf),
+                )
+                .await
+                {
+                    Ok(Ok((_len, std::net::SocketAddr::V4(src)))) => {
+                        let expected = probe.server.load(Ordering::Acquire);
+                        if expected != 0 && u32::from(*src.ip()) == expected {
+                            crate::latency::record_shadow_inbound(*src.ip());
+                        }
+                    }
+                    Ok(Ok((_len, std::net::SocketAddr::V6(_)))) => {}
+                    Ok(Err(e)) => tracing::debug!("macOS shadow-direct probe recv error: {e}"),
+                    Err(_) => {}
+                }
+            }
+        });
+    }
+}
+
+/// Whether a datagram received on the redirect listener came from the probe
+/// socket itself, i.e. the destination-only redirect captured the probe's copy.
+fn is_probe_echo(probe_port: Option<u16>, src: SocketAddrV4) -> bool {
+    probe_port == Some(src.port())
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Struct
@@ -106,7 +189,32 @@ impl TrafficInterceptor for PfInterceptor {
 
         // Enable pf if not already running, then add the anchor rule.
         enable_pf()?;
-        add_pf_anchor(&anchor, server_addr, local_port)?;
+
+        // Bind the shadow-direct probe BEFORE loading the anchor: its source
+        // port is what the `no rdr` exemption is keyed on, so the port must be
+        // known when the rule is emitted. A bind failure disables direct
+        // sampling instead of risking a copy the redirect would capture.
+        let shadow_probe = match MacShadowProbe::bind() {
+            Ok(probe) => Some(Arc::new(probe)),
+            Err(e) => {
+                tracing::debug!("macOS shadow-direct probe disabled: {e}");
+                None
+            }
+        };
+        let shadow_probe_port = shadow_probe.as_ref().and_then(|p| p.local_port());
+        let shadow_probe = match (shadow_probe, shadow_probe_port) {
+            (Some(probe), Some(_)) => Some(probe),
+            (Some(_), None) => {
+                tracing::debug!("macOS shadow-direct probe disabled: no bound port");
+                None
+            }
+            (None, _) => None,
+        };
+
+        // The anchor carries the probe's `no rdr` exemption, so a probe kept
+        // past this point can escape the redirect. A bind failure dropped it
+        // above, so no unexempted copy is ever sent.
+        add_pf_anchor(&anchor, server_addr, local_port, shadow_probe_port)?;
 
         let counters = Arc::new(InterceptorCounters::default());
         {
@@ -115,6 +223,14 @@ impl TrafficInterceptor for PfInterceptor {
         }
 
         let running = Arc::new(AtomicBool::new(true));
+
+        if let Some(ref probe) = shadow_probe {
+            probe.spawn_reader(Arc::clone(&running));
+            tracing::debug!(
+                "macOS shadow-direct probe on port {:?} with pf no-rdr exemption",
+                shadow_probe_port
+            );
+        }
 
         // ── Shutdown handler ──────────────────────────────────────────────
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -219,6 +335,15 @@ impl TrafficInterceptor for PfInterceptor {
                             _ => continue,
                         };
 
+                        // The destination-only `rdr` rule can capture the
+                        // probe's own copy; drop it before it enters the tunnel.
+                        if is_probe_echo(shadow_probe_port, src) {
+                            tracing::debug!(
+                                "macOS interceptor: ignored redirected shadow-direct probe from {src}"
+                            );
+                            continue;
+                        }
+
                         if game_src.is_none() {
                             tracing::info!("🎮 Game client at {} → {}", src, server_addr);
                         }
@@ -246,6 +371,9 @@ impl TrafficInterceptor for PfInterceptor {
                             );
                         }
 
+                        let shadow_due =
+                            crate::latency::record_shadow_outbound(*server_addr.ip());
+                        let tunnel_send = async {
                         if let Some(ref mut enc) = fec_encoder {
                             let block_id = enc.block_id();
                             let index = enc.current_index();
@@ -293,7 +421,19 @@ impl TrafficInterceptor for PfInterceptor {
                                     &pkt,
                                     *d,
                                 )
-                                .await;
+                                    .await;
+                            }
+                        }
+                        };
+                        // The game's packet is tunnelled first and unchanged.
+                        // Only afterwards, when the sampler claimed a sample, is
+                        // an EXTRA copy of its own bytes sent direct.
+                        tunnel_send.await;
+                        if shadow_due {
+                            if let Some(ref probe) = shadow_probe {
+                                if let Err(e) = probe.send_copy(payload, server_addr) {
+                                    tracing::debug!("macOS shadow-direct probe send failed: {e}");
+                                }
                             }
                         }
                         seq = seq.wrapping_add(1);
@@ -425,15 +565,16 @@ fn enable_pf() -> anyhow::Result<()> {
 /// Load an anchor rule that redirects `server` UDP to `local_port`.
 ///
 /// The anchor is `/etc/pf.anchors/lightspeed_<port>` and is referenced from a
-/// temporary pf.conf line added via `pfctl -a <anchor> -f -`.
-fn add_pf_anchor(anchor: &str, server: SocketAddrV4, local_port: u16) -> anyhow::Result<()> {
-    // pf rdr rule — 127.0.0.1 is the loopback; game and LightSpeed both local.
-    let rules = format!(
-        "rdr pass proto udp from any to {srv_ip} port {srv_port} -> 127.0.0.1 port {local_port}\n",
-        srv_ip = server.ip(),
-        srv_port = server.port(),
-        local_port = local_port,
-    );
+/// temporary pf.conf line added via `pfctl -a <anchor> -f -`. When `probe_port`
+/// is `Some`, a `no rdr` exemption for the shadow-direct probe's source port is
+/// emitted ahead of the redirect so only the probe escapes it.
+fn add_pf_anchor(
+    anchor: &str,
+    server: SocketAddrV4,
+    local_port: u16,
+    probe_port: Option<u16>,
+) -> anyhow::Result<()> {
+    let rules = anchor_script(server, local_port, probe_port);
 
     let out = std::process::Command::new("/sbin/pfctl")
         .args(["-a", anchor, "-f", "-"])

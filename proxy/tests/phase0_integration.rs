@@ -50,6 +50,7 @@ fn isolate_tls_dir() {
         let state = Arc::new(ControlState::new(
             ProxyConfig::default(),
             Arc::new(RwLock::new(Authenticator::new(true))),
+            Arc::new(ProxyMetrics::new()),
         ));
         let primer = ControlServer::bind("127.0.0.1:0".parse().expect("bind addr"), state)
             .expect("prime the TLS certificate");
@@ -207,7 +208,11 @@ async fn start_proxy() -> ProxyHarness {
         });
     }
 
-    let state = Arc::new(ControlState::new(config, Arc::clone(&auth)));
+    let state = Arc::new(ControlState::new(
+        config,
+        Arc::clone(&auth),
+        Arc::clone(&metrics),
+    ));
     let server = ControlServer::bind("127.0.0.1:0".parse().expect("control addr"), state)
         .expect("bind control server");
     let control_addr = server.local_addr().expect("control local addr");
@@ -313,6 +318,18 @@ async fn wait_for_auth_rejections(metrics: &Arc<ProxyMetrics>, at_least: u64) {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+/// Total telemetry reports folded across every aggregation cell.
+fn telemetry_report_count(metrics: &Arc<ProxyMetrics>) -> u64 {
+    metrics
+        .telemetry
+        .lock()
+        .unwrap()
+        .cells
+        .values()
+        .map(|cell| cell.reports)
+        .sum()
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -514,5 +531,97 @@ async fn graceful_shutdown_announces_disconnect() -> anyhow::Result<()> {
 
     client.close();
     let _ = tokio::time::timeout(Duration::from_secs(5), h.server).await;
+    Ok(())
+}
+
+/// A well-formed report body matching the HTTP `/telemetry` schema.
+const VALID_TELEMETRY_JSON: &[u8] = br#"{"game_id":2,"client_country":"US","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":100,"fec_recoveries":1,"fec_losses":0,"client_version":"1.6.9"}"#;
+
+/// Given: a registered client on the authenticated QUIC control connection.
+/// When: it sends an anonymised telemetry report as a control message. Then:
+/// the proxy ingests it on the encrypted path and folds it into the same
+/// `(game, country)` cell the HTTP endpoint feeds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn telemetry_travels_over_control_plane() -> anyhow::Result<()> {
+    let h = start_proxy().await;
+    let client = TestClient::connect(h.control_addr).await?;
+    let token = client.register(0).await?;
+    assert!(token > 0, "registration must issue a non-zero token");
+
+    let (mut send, _recv) = client.conn.open_bi().await?;
+    ControlMessage::Telemetry {
+        report_json: VALID_TELEMETRY_JSON.to_vec(),
+    }
+    .write_to(&mut send)
+    .await?;
+    send.finish()?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while telemetry_report_count(&h.metrics) < 1 {
+        assert!(
+            Instant::now() < deadline,
+            "telemetry was not ingested over the control plane"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    {
+        let agg = h.metrics.telemetry.lock().unwrap();
+        let cell = agg.cells.values().next().expect("one telemetry cell");
+        assert_eq!(cell.reports, 1, "one report must be folded");
+        assert_eq!(cell.samples, 100, "sample_count must be carried unchanged");
+        assert_eq!(cell.p50_sum_ms, 30.0, "p50 must be carried unchanged");
+    }
+
+    client.close();
+    h.shutdown().await;
+    Ok(())
+}
+
+/// Given: a registered control client. When: it sends an oversized telemetry
+/// body followed by a valid one on the same stream. Then: the oversized body
+/// is dropped by the size cap and only the valid report is aggregated, so the
+/// control path is capped exactly like the HTTP endpoint.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn control_plane_telemetry_rejects_oversized_body() -> anyhow::Result<()> {
+    let h = start_proxy().await;
+    let client = TestClient::connect(h.control_addr).await?;
+    let token = client.register(0).await?;
+    assert!(token > 0);
+
+    // Just over the HTTP endpoint's 2048-byte body cap.
+    let oversized = format!(
+        r#"{{"game_id":2,"client_country":"US","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":100,"client_version":"{}"}}"#,
+        "x".repeat(2_100)
+    );
+
+    // Same stream, so the server processes them in order: oversized first
+    // (dropped), then the valid report (aggregated once).
+    let (mut send, _recv) = client.conn.open_bi().await?;
+    ControlMessage::Telemetry {
+        report_json: oversized.into_bytes(),
+    }
+    .write_to(&mut send)
+    .await?;
+    ControlMessage::Telemetry {
+        report_json: VALID_TELEMETRY_JSON.to_vec(),
+    }
+    .write_to(&mut send)
+    .await?;
+    send.finish()?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while telemetry_report_count(&h.metrics) < 1 {
+        assert!(Instant::now() < deadline, "valid report was not ingested");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let reports = telemetry_report_count(&h.metrics);
+    assert_eq!(
+        reports, 1,
+        "the oversized body must be dropped, not aggregated"
+    );
+
+    client.close();
+    h.shutdown().await;
     Ok(())
 }

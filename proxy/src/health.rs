@@ -13,6 +13,7 @@ use crate::handoff::HandoffHealth;
 use crate::metrics::ProxyMetrics;
 use crate::relay::RelayEngine;
 use crate::update_state::UpdateState;
+use lightspeed_protocol::telemetry::MAX_TELEMETRY_BODY;
 use lightspeed_protocol::TelemetryReport;
 use serde::Serialize;
 use std::net::IpAddr;
@@ -179,8 +180,9 @@ pub async fn run_health_server(
                     b""
                 };
 
-                // Guard: reject oversized bodies before parsing.
-                if body_slice.len() > 2048 {
+                // Guard: reject oversized bodies before parsing. Mirrors the
+                // QUIC control-plane telemetry cap.
+                if body_slice.len() > MAX_TELEMETRY_BODY {
                     let resp = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                     let _ = stream.write_all(resp.as_bytes()).await;
                     let _ = stream.shutdown().await;

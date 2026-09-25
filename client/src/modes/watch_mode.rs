@@ -81,6 +81,7 @@ pub async fn run_watch_mode(
                             proxy_addr,
                             fec_enabled: fec,
                             fec_k,
+                            bypass: Default::default(),
                         });
 
                         if let Some(addr) = server_addr {

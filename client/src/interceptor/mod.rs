@@ -17,6 +17,7 @@
 //!     proxy_addr: "185.1.2.3:4434".parse().unwrap(),
 //!     fec_enabled: false,
 //!     fec_k: 4,
+//!     bypass: Default::default(),
 //! };
 //!
 //! let interceptor = create_interceptor();
@@ -34,12 +35,14 @@
 //! | macOS   | (none)                   | pfctl          | Port+dest      |
 //! | Other   | —                        | Unsupported    | —              |
 
+pub mod bypass;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod mock;
 pub mod order;
+pub mod pf_rules;
 pub mod process_scanner;
 pub mod recovery;
 pub mod rotation;
@@ -165,6 +168,7 @@ pub fn build_config_for_game(
         proxy_addr,
         fec_enabled,
         fec_k,
+        bypass: bypass::default_config(),
     })
 }
 
@@ -458,6 +462,7 @@ mod tests {
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
             fec_enabled: true,
             fec_k: 4,
+            bypass: Default::default(),
         };
 
         let mut handle = interceptor.start(config.clone()).unwrap();
@@ -491,6 +496,7 @@ mod tests {
                 proxy_addr: "127.0.0.1:4434".parse().unwrap(),
                 fec_enabled: false,
                 fec_k: 4,
+                bypass: Default::default(),
             })
             .unwrap();
 

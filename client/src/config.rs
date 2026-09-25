@@ -136,6 +136,35 @@ pub struct RouteConfig {
     /// Maximum proxy failover attempts.
     #[serde(default = "default_max_failover")]
     pub max_failover: usize,
+
+    /// Do-no-harm bypass gate mode: "dry_run" (default), "auto", "never", or
+    /// "always".
+    ///
+    /// The gate tunnels a game session only when the relay actually helps.
+    /// **The default is `dry_run`:** it measures and logs the decision it would
+    /// make and changes nothing. `auto` lets it act, but only where acting is
+    /// safe (see the module docs in `interceptor::bypass`). `never` is the
+    /// complete rollback. `always` forces direct and is for testing only.
+    #[serde(default = "default_bypass")]
+    pub bypass: String,
+
+    /// Relay-worse threshold in milliseconds: at or below this advantage the
+    /// gate may prefer the direct path.
+    #[serde(default = "default_bypass_margin_ms")]
+    pub bypass_margin_ms: f32,
+
+    /// Relay-better threshold in milliseconds: at or above this advantage the
+    /// relay is kept.
+    #[serde(default = "default_bypass_keep_ms")]
+    pub bypass_keep_ms: f32,
+
+    /// Quiet period after a bypass decision, in seconds.
+    #[serde(default = "default_bypass_dwell_s")]
+    pub bypass_dwell_s: u64,
+
+    /// Minimum probation time before a verdict, in seconds.
+    #[serde(default = "default_bypass_probation_s")]
+    pub bypass_probation_s: u64,
 }
 
 /// ML model settings.
@@ -208,6 +237,26 @@ fn default_max_failover() -> usize {
     3
 }
 
+fn default_bypass() -> String {
+    "dry_run".into()
+}
+
+fn default_bypass_margin_ms() -> f32 {
+    8.0
+}
+
+fn default_bypass_keep_ms() -> f32 {
+    5.0
+}
+
+fn default_bypass_dwell_s() -> u64 {
+    120
+}
+
+fn default_bypass_probation_s() -> u64 {
+    20
+}
+
 fn default_multipath_max_paths() -> u8 {
     2
 }
@@ -260,6 +309,11 @@ impl Default for RouteConfig {
             multipath_max_paths: default_multipath_max_paths(),
             health_check_ms: default_health_check_ms(),
             max_failover: default_max_failover(),
+            bypass: default_bypass(),
+            bypass_margin_ms: default_bypass_margin_ms(),
+            bypass_keep_ms: default_bypass_keep_ms(),
+            bypass_dwell_s: default_bypass_dwell_s(),
+            bypass_probation_s: default_bypass_probation_s(),
         }
     }
 }
@@ -325,10 +379,30 @@ mod tests {
         assert!(!config.route.multipath);
         assert_eq!(config.route.health_check_ms, 10000);
         assert_eq!(config.route.max_failover, 3);
+        assert_eq!(config.route.bypass, "dry_run");
+        assert_eq!(config.route.bypass_margin_ms, 8.0);
+        assert_eq!(config.route.bypass_keep_ms, 5.0);
+        assert_eq!(config.route.bypass_dwell_s, 120);
+        assert_eq!(config.route.bypass_probation_s, 20);
         assert!(config.ml.model_path.is_none());
         assert!(!config.ml.online_learning);
         assert_eq!(config.ml.min_samples, 50);
         assert_eq!(config.interception.mode, "auto");
+    }
+
+    #[test]
+    fn test_bypass_defaults_to_dry_run_and_accepts_every_mode() {
+        let defaulted: Config = toml::from_str("[route]\nstrategy = \"nearest\"\n").unwrap();
+        assert_eq!(
+            defaulted.route.bypass, "dry_run",
+            "the bypass gate must be safe (no-op) by default"
+        );
+
+        for mode in &["auto", "never", "always", "dry_run"] {
+            let toml_str = format!("[route]\nbypass = \"{}\"\n", mode);
+            let config: Config = toml::from_str(&toml_str).unwrap();
+            assert_eq!(config.route.bypass, *mode);
+        }
     }
 
     #[test]
@@ -354,6 +428,11 @@ mod tests {
         assert!(!route.multipath);
         assert_eq!(route.health_check_ms, 10000);
         assert_eq!(route.max_failover, 3);
+        assert_eq!(route.bypass, "dry_run");
+        assert_eq!(route.bypass_margin_ms, 8.0);
+        assert_eq!(route.bypass_keep_ms, 5.0);
+        assert_eq!(route.bypass_dwell_s, 120);
+        assert_eq!(route.bypass_probation_s, 20);
 
         let ml = MlConfig::default();
         assert!(ml.model_path.is_none());
@@ -650,6 +729,11 @@ servers = [
         assert_eq!(config.route.multipath_max_paths, 2);
         assert_eq!(config.route.health_check_ms, 10000);
         assert_eq!(config.route.max_failover, 3);
+        assert_eq!(config.route.bypass, "dry_run");
+        assert_eq!(config.route.bypass_margin_ms, 8.0);
+        assert_eq!(config.route.bypass_keep_ms, 5.0);
+        assert_eq!(config.route.bypass_dwell_s, 120);
+        assert_eq!(config.route.bypass_probation_s, 20);
 
         assert!(config.ml.model_path.is_none());
         assert!(!config.ml.online_learning);

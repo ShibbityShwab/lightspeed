@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::bypass::BypassConfig;
 use super::teardown::TeardownAck;
 use tokio::sync::oneshot;
 
@@ -104,6 +105,9 @@ pub struct InterceptorConfig {
 
     /// FEC block size (K data packets per parity packet).
     pub fec_k: u8,
+
+    /// Do-no-harm bypass gate configuration.
+    pub bypass: BypassConfig,
 }
 
 impl InterceptorConfig {
@@ -141,6 +145,15 @@ pub struct InterceptorCounters {
     /// Game payloads forwarded with fragmentation allowed because they
     /// exceeded the conservative tunnel payload budget.
     pub payloads_over_budget: AtomicU64,
+    /// Times the bypass gate decided Direct and the action layer honoured it.
+    pub bypass_allowed: AtomicU64,
+    /// Times a bypass was computed but not applied (dry run, fail-open, or an
+    /// unsafe mid-flow teardown), so the relay was kept.
+    pub bypass_refused: AtomicU64,
+    /// Bypass-gate evaluations that produced a decision.
+    pub bypass_decisions: AtomicU64,
+    /// Relay<->Direct state transitions recorded by the gate.
+    pub bypass_flips: AtomicU64,
     /// Auto-detected (or pre-configured) server address.
     /// SAFETY: This `std::sync::Mutex` is used from async tasks but the lock
     /// is never held across an await point.  If that changes, migrate to
@@ -160,6 +173,10 @@ impl Default for InterceptorCounters {
             packets_from_proxy: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             payloads_over_budget: AtomicU64::new(0),
+            bypass_allowed: AtomicU64::new(0),
+            bypass_refused: AtomicU64::new(0),
+            bypass_decisions: AtomicU64::new(0),
+            bypass_flips: AtomicU64::new(0),
             detected_server: std::sync::Mutex::new(None),
             last_error: std::sync::Mutex::new(None),
         }
@@ -177,6 +194,10 @@ impl InterceptorCounters {
             packets_from_proxy: self.packets_from_proxy.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             payloads_over_budget: self.payloads_over_budget.load(Ordering::Relaxed),
+            bypass_allowed: self.bypass_allowed.load(Ordering::Relaxed),
+            bypass_refused: self.bypass_refused.load(Ordering::Relaxed),
+            bypass_decisions: self.bypass_decisions.load(Ordering::Relaxed),
+            bypass_flips: self.bypass_flips.load(Ordering::Relaxed),
             detected_server: self.detected_server.lock().map(|g| *g).unwrap_or(None),
             last_error: self.last_error.lock().ok().and_then(|g| g.clone()),
             platform,
@@ -196,6 +217,14 @@ pub struct InterceptorStats {
     /// Payloads forwarded with fragmentation allowed for exceeding the
     /// conservative tunnel payload budget.
     pub payloads_over_budget: u64,
+    /// Times the bypass gate decided Direct and it was honoured.
+    pub bypass_allowed: u64,
+    /// Times a bypass was computed but not applied, so the relay was kept.
+    pub bypass_refused: u64,
+    /// Bypass-gate evaluations that produced a decision.
+    pub bypass_decisions: u64,
+    /// Relay<->Direct state transitions recorded by the gate.
+    pub bypass_flips: u64,
     /// The game server address discovered at runtime (or pre-configured).
     pub detected_server: Option<SocketAddrV4>,
     /// Description of the most recent fatal error, if any.
@@ -406,6 +435,7 @@ mod tests {
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
             fec_enabled: false,
             fec_k: 4,
+            bypass: Default::default(),
         }
     }
 

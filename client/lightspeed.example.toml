@@ -80,6 +80,24 @@ health_check_ms = 10000
 # Maximum proxy failover attempts. Default: 3.
 max_failover = 3
 
+# Do-no-harm bypass gate: tunnel a session only when the relay actually helps,
+# otherwise connect directly. "dry_run" (default) measures and logs the
+# decision and changes nothing; "auto" acts only where it is safe; "never" is
+# the complete rollback; "always" forces direct (testing only).
+bypass = "dry_run"
+
+# Relay-worse threshold (ms) at which the gate may prefer the direct path.
+bypass_margin_ms = 8
+
+# Relay-better threshold (ms) at which the relay is kept.
+bypass_keep_ms = 5
+
+# Quiet period after a bypass decision (seconds).
+bypass_dwell_s = 120
+
+# Minimum probation time before a bypass verdict (seconds).
+bypass_probation_s = 20
+
 [ml]
 # Path to a pre-trained route model; unset trains on the fly.
 # model_path = "/path/to/model.bin"

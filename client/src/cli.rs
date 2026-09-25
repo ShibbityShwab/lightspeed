@@ -86,6 +86,21 @@ pub struct Cli {
     #[arg(long, value_name = "MODE")]
     pub interception_mode: Option<String>,
 
+    /// Disable the do-no-harm bypass gate: always tunnel through the relay.
+    /// This is the complete rollback; it matches the behaviour before the gate.
+    #[arg(long, default_value_t = false)]
+    pub no_bypass: bool,
+
+    /// Force the direct path for every session. Testing only: on Linux and
+    /// macOS this means the redirect rule is not installed at all.
+    #[arg(long, default_value_t = false)]
+    pub force_direct: bool,
+
+    /// Run the bypass gate in dry-run: measure and log the decision, change
+    /// nothing. This is already the built-in default.
+    #[arg(long, default_value_t = false)]
+    pub bypass_dry_run: bool,
+
     /// Probe all configured proxies and display latencies, then exit
     #[arg(long, default_value_t = false)]
     pub probe_proxies: bool,
@@ -253,6 +268,9 @@ mod tests {
         assert!(!cli.scan_processes);
         assert!(!cli.telemetry);
         assert!(!cli.no_telemetry);
+        assert!(!cli.no_bypass);
+        assert!(!cli.force_direct);
+        assert!(!cli.bypass_dry_run);
         assert!(cli.game.is_none());
         assert!(cli.proxy.is_none());
         assert!(cli.game_server.is_none());
@@ -315,6 +333,9 @@ mod tests {
             "--scan-processes",
             "--telemetry",
             "--no-telemetry",
+            "--no-bypass",
+            "--force-direct",
+            "--bypass-dry-run",
         ])
         .unwrap();
         assert!(cli.verbose);
@@ -341,6 +362,26 @@ mod tests {
         assert!(cli.scan_processes);
         assert!(cli.telemetry);
         assert!(cli.no_telemetry);
+        assert!(cli.no_bypass);
+        assert!(cli.force_direct);
+        assert!(cli.bypass_dry_run);
+    }
+
+    #[test]
+    fn test_bypass_flags() {
+        let cli = Cli::try_parse_from(["lightspeed"]).unwrap();
+        assert!(!cli.no_bypass && !cli.force_direct && !cli.bypass_dry_run);
+
+        let cli = Cli::try_parse_from(["lightspeed", "--no-bypass"]).unwrap();
+        assert!(cli.no_bypass);
+        assert!(!cli.force_direct);
+
+        let cli = Cli::try_parse_from(["lightspeed", "--force-direct"]).unwrap();
+        assert!(cli.force_direct);
+        assert!(!cli.no_bypass);
+
+        let cli = Cli::try_parse_from(["lightspeed", "--bypass-dry-run"]).unwrap();
+        assert!(cli.bypass_dry_run);
     }
 
     #[test]

@@ -76,6 +76,8 @@ mod inner {
         node_id: Option<String>,
         /// Proxy region.
         region: Option<String>,
+        /// Whether the proxy advertised control-plane telemetry in its ack.
+        telemetry_quic: bool,
     }
 
     impl ControlClient {
@@ -95,6 +97,7 @@ mod inner {
                 session_token: None,
                 node_id: None,
                 region: None,
+                telemetry_quic: false,
             })
         }
 
@@ -142,6 +145,7 @@ mod inner {
                     session_token,
                     node_id,
                     region,
+                    telemetry_quic,
                 }) => {
                     info!(
                         "Registered with proxy: session={}, token={}, node={}, region={}",
@@ -151,6 +155,7 @@ mod inner {
                     self.session_token = Some(session_token);
                     self.node_id = Some(node_id);
                     self.region = Some(region);
+                    self.telemetry_quic = telemetry_quic;
                     crate::session::set_session_token(session_token);
                 }
                 Some(ControlMessage::Disconnect { reason }) => {
@@ -277,6 +282,11 @@ mod inner {
             self.region.as_deref()
         }
 
+        /// Whether the proxy accepts telemetry on the control connection.
+        pub fn supports_quic_telemetry(&self) -> bool {
+            self.telemetry_quic
+        }
+
         /// Get the remote proxy address.
         pub fn remote_addr(&self) -> Option<SocketAddr> {
             self.remote_addr
@@ -349,6 +359,10 @@ mod inner {
             None
         }
 
+        pub fn supports_quic_telemetry(&self) -> bool {
+            false
+        }
+
         pub fn remote_addr(&self) -> Option<SocketAddr> {
             self.remote_addr
         }
@@ -371,6 +385,8 @@ mod supervisor {
     use tokio::task::JoinHandle;
     use tracing::{debug, info, warn};
 
+    use lightspeed_protocol::control::ControlMessage;
+
     use super::inner::ControlClient;
     use crate::error::QuicError;
 
@@ -378,11 +394,24 @@ mod supervisor {
     pub(super) const MIN_BACKOFF: Duration = Duration::from_millis(250);
     pub(super) const MAX_BACKOFF: Duration = Duration::from_secs(5);
 
+    /// Time budget for one best-effort telemetry send on the control
+    /// connection. Telemetry must never delay the control plane or gameplay.
+    const TELEMETRY_SEND_TIMEOUT: Duration = Duration::from_secs(2);
+
     /// First-attempt outcome awaited by [`register_session`](super::register_session).
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) enum Initial {
         Pending,
         Done(u32),
+    }
+
+    /// A live control connection plus the capabilities the relay advertised in
+    /// its registration ack. Published and cleared as one unit so a telemetry
+    /// send can never observe a connection without its capability.
+    #[derive(Clone)]
+    struct ControlTarget {
+        connection: quinn::Connection,
+        telemetry_quic: bool,
     }
 
     /// Observable handle for a running per-relay supervisor.
@@ -394,6 +423,9 @@ mod supervisor {
         pub stopped: Arc<AtomicBool>,
         /// Most recent non-zero token the relay issued (0 until registered).
         pub current_token: Arc<AtomicU32>,
+        /// Live connection + capability while registered; cleared on disconnect
+        /// or reconnect. Telemetry sends on this same connection.
+        target: Arc<Mutex<Option<ControlTarget>>>,
     }
 
     struct Entry {
@@ -473,6 +505,7 @@ mod supervisor {
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let stopped = Arc::new(AtomicBool::new(false));
         let current_token = Arc::new(AtomicU32::new(0));
+        let target = Arc::new(Mutex::new(None));
         let (initial_tx, initial_rx) = watch::channel(Initial::Pending);
         let (stop_tx, stop_rx) = watch::channel(false);
 
@@ -480,6 +513,7 @@ mod supervisor {
             generation,
             stopped: Arc::clone(&stopped),
             current_token: Arc::clone(&current_token),
+            target: Arc::clone(&target),
         };
         let join = tokio::spawn(supervisor_loop(
             data_addr,
@@ -487,6 +521,7 @@ mod supervisor {
             generation,
             stopped,
             current_token,
+            target,
             initial_tx,
             stop_rx,
         ));
@@ -564,6 +599,7 @@ mod supervisor {
         generation: u64,
         stopped: Arc<AtomicBool>,
         current_token: Arc<AtomicU32>,
+        target: Arc<Mutex<Option<ControlTarget>>>,
         initial_tx: watch::Sender<Initial>,
         mut stop_rx: watch::Receiver<bool>,
     ) {
@@ -579,6 +615,14 @@ mod supervisor {
             match connect_and_register(control_addr).await {
                 Ok(client) => {
                     let token = client.session_token().unwrap_or(0);
+                    let live = client.connection().cloned();
+                    let published = live.clone().map(|connection| ControlTarget {
+                        connection,
+                        telemetry_quic: client.supports_quic_telemetry(),
+                    });
+                    if !publish_target(data_addr, generation, &target, published) {
+                        break;
+                    }
                     if token != 0 {
                         if !publish_token(data_addr, generation, &current_token, token) {
                             break;
@@ -590,10 +634,9 @@ mod supervisor {
                         let _ = initial_tx.send_replace(Initial::Done(token));
                         first_attempt = false;
                     }
-                    let connection = client.connection().cloned();
-                    if hold_connection(&client, connection, &mut stop_rx).await
-                        == HoldOutcome::Stopped
-                    {
+                    let hold = hold_connection(&client, live, &mut stop_rx).await;
+                    clear_target(data_addr, generation, &target);
+                    if hold == HoldOutcome::Stopped {
                         break;
                     }
                 }
@@ -613,10 +656,96 @@ mod supervisor {
             }
         }
 
+        clear_target(data_addr, generation, &target);
         if first_attempt {
             let _ = initial_tx.send_replace(Initial::Done(0));
         }
         debug!(relay = %data_addr, "control-plane supervisor stopped");
+    }
+
+    /// Publish the connection + capability only while this task is still the
+    /// live supervisor for its relay. Returns `false` if it has been stopped or
+    /// superseded.
+    fn publish_target(
+        data_addr: SocketAddrV4,
+        generation: u64,
+        slot: &Mutex<Option<ControlTarget>>,
+        target: Option<ControlTarget>,
+    ) -> bool {
+        if !generation_is_current(data_addr, generation) {
+            return false;
+        }
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = target;
+        true
+    }
+
+    /// Clear the published target, unless a newer supervisor owns the slot.
+    fn clear_target(data_addr: SocketAddrV4, generation: u64, slot: &Mutex<Option<ControlTarget>>) {
+        if generation_is_current(data_addr, generation) {
+            *slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+
+    /// The live control connection and advertised capability for `data_addr`.
+    fn supervised_target(data_addr: SocketAddrV4) -> Option<ControlTarget> {
+        let handle = supervisor_handle(data_addr)?;
+        if handle.stopped.load(Ordering::Acquire) {
+            return None;
+        }
+        let target = handle
+            .target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        target
+    }
+
+    /// Send one telemetry report on the relay's live control connection.
+    ///
+    /// Best-effort and time-bounded: a missing connection, a relay that did not
+    /// advertise control-plane telemetry, or any write error returns `Err` so
+    /// the caller can fall back to HTTP. It never retries and never blocks the
+    /// keepalive or registration streams, which use separate QUIC streams.
+    pub(super) async fn send_telemetry(
+        data_addr: SocketAddrV4,
+        report_json: &[u8],
+    ) -> Result<(), QuicError> {
+        if report_json.len() > lightspeed_protocol::telemetry::MAX_TELEMETRY_BODY {
+            return Err(QuicError::ConnectionFailed(
+                "telemetry body exceeds cap".into(),
+            ));
+        }
+        let target = supervised_target(data_addr)
+            .ok_or_else(|| QuicError::ConnectionFailed("no live control connection".into()))?;
+        if !target.telemetry_quic {
+            return Err(QuicError::ConnectionFailed(
+                "relay does not accept control-plane telemetry".into(),
+            ));
+        }
+        let message = ControlMessage::Telemetry {
+            report_json: report_json.to_vec(),
+        };
+        let send = async {
+            let (mut send, _recv) = target
+                .connection
+                .open_bi()
+                .await
+                .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+            message
+                .write_to(&mut send)
+                .await
+                .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+            send.finish()
+                .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+            Ok::<(), QuicError>(())
+        };
+        tokio::time::timeout(TELEMETRY_SEND_TIMEOUT, send)
+            .await
+            .map_err(|_| QuicError::ConnectionFailed("telemetry send timed out".into()))?
     }
 
     /// Publish a fresh token unless this task has been stopped or superseded.
@@ -725,6 +854,29 @@ pub fn supervisor_handle(data_addr: std::net::SocketAddrV4) -> Option<Supervisor
     supervisor::supervisor_handle(data_addr)
 }
 
+/// Send one telemetry report over the relay's live control connection.
+///
+/// Returns `Err` when the `quic` feature is disabled or no supervised control
+/// connection is live, so callers fall back to the HTTP endpoint.
+#[cfg(feature = "quic")]
+pub async fn send_telemetry(
+    data_addr: std::net::SocketAddrV4,
+    report_json: &[u8],
+) -> Result<(), crate::error::QuicError> {
+    supervisor::send_telemetry(data_addr, report_json).await
+}
+
+/// Telemetry over QUIC is unavailable without the `quic` feature.
+#[cfg(not(feature = "quic"))]
+pub async fn send_telemetry(
+    _data_addr: std::net::SocketAddrV4,
+    _report_json: &[u8],
+) -> Result<(), crate::error::QuicError> {
+    Err(crate::error::QuicError::ConnectionFailed(
+        "quic feature disabled".into(),
+    ))
+}
+
 #[cfg(not(feature = "quic"))]
 pub fn ensure_registration(_data_addr: std::net::SocketAddrV4, _control_port: u16) {}
 
@@ -777,8 +929,8 @@ async fn register_session_inner(
 #[cfg(all(test, feature = "quic"))]
 mod supervisor_tests {
     use super::supervisor::{
-        ensure_registration, is_supervised, stop_supervisor, supervisor_handle, Backoff,
-        MAX_BACKOFF, MIN_BACKOFF,
+        ensure_registration, is_supervised, send_telemetry, stop_supervisor, supervisor_handle,
+        Backoff, MAX_BACKOFF, MIN_BACKOFF,
     };
     use std::net::{Ipv4Addr, SocketAddrV4};
     use std::time::Duration;
@@ -844,5 +996,18 @@ mod supervisor_tests {
             .generation;
         assert!(second > first, "restart must advance the generation");
         assert!(stop_supervisor(addr));
+    }
+
+    /// Given: no live supervised control connection. When: telemetry is sent.
+    /// Then: it reports failure so the caller can fall back to HTTP instead of
+    /// dropping the report silently.
+    #[tokio::test]
+    async fn telemetry_without_a_live_connection_errors() {
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42103);
+        let _ = stop_supervisor(addr);
+        assert!(
+            send_telemetry(addr, b"{}").await.is_err(),
+            "no live connection must surface as an error"
+        );
     }
 }

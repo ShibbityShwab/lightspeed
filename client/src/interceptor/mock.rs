@@ -121,6 +121,7 @@ mod tests {
             proxy_addr: SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
             fec_enabled: false,
             fec_k: 4,
+            bypass: Default::default(),
         }
     }
 

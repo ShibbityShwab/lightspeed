@@ -458,6 +458,17 @@ pub struct ProxyMetrics {
     /// `inbound_packets_received / inbound_batches_total` = avg batch size.
     pub inbound_packets_received: AtomicU64,
 
+    // ── Socket hygiene (buffers + Linux busy-poll) ───────────────
+    /// Socket options the kernel accepted. One increment per successful
+    /// `setsockopt` (receive buffer, send buffer, or busy-poll).
+    pub socket_opts_applied: AtomicU64,
+    /// Socket options the kernel refused. Each refusal is skipped and never
+    /// fatal; a non-zero value means that socket is running on a default the
+    /// kernel would not let us raise.
+    pub socket_opts_failed: AtomicU64,
+    /// Receive sockets that enabled Linux `SO_BUSY_POLL`.
+    pub busy_poll_sockets: AtomicU64,
+
     // ── Telemetry ────────────────────────────────────────────────
     /// Bounded aggregation of opt-in client telemetry, keyed by
     /// `(game_id, normalized country)`.
@@ -512,6 +523,9 @@ impl ProxyMetrics {
             sessions_expired: AtomicU64::new(0),
             inbound_batches_total: AtomicU64::new(0),
             inbound_packets_received: AtomicU64::new(0),
+            socket_opts_applied: AtomicU64::new(0),
+            socket_opts_failed: AtomicU64::new(0),
+            busy_poll_sockets: AtomicU64::new(0),
             telemetry: std::sync::Mutex::new(TelemetryAggregator::default()),
             route_telemetry: std::sync::Mutex::new(RouteTelemetryAggregator::default()),
             geo: std::sync::Mutex::new(GeoAggregator::default()),
@@ -805,6 +819,20 @@ impl ProxyMetrics {
             .fetch_add(n as u64, Ordering::Relaxed);
     }
 
+    /// Record the outcome of one attempted socket option.
+    pub fn record_socket_option(&self, applied: bool) {
+        if applied {
+            self.socket_opts_applied.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.socket_opts_failed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Record a receive socket that enabled Linux `SO_BUSY_POLL`.
+    pub fn record_busy_poll_enabled(&self) {
+        self.busy_poll_sockets.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Record a new session created.
     pub fn record_session_created(&self) {
         self.sessions_created.fetch_add(1, Ordering::Relaxed);
@@ -1074,6 +1102,37 @@ impl ProxyMetrics {
             "lightspeed_inbound_packets_received_total{{{}}} {}\n",
             labels,
             self.inbound_packets_received.load(Ordering::Relaxed)
+        ));
+
+        // ── Socket tuning ───────────────────────────────────────
+        out.push_str(
+            "# HELP lightspeed_socket_opts_applied_total Socket buffer/busy-poll options the kernel accepted\n",
+        );
+        out.push_str("# TYPE lightspeed_socket_opts_applied_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_socket_opts_applied_total{{{}}} {}\n",
+            labels,
+            self.socket_opts_applied.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_socket_opts_failed_total Socket buffer/busy-poll options the kernel refused (skipped, non-fatal)\n",
+        );
+        out.push_str("# TYPE lightspeed_socket_opts_failed_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_socket_opts_failed_total{{{}}} {}\n",
+            labels,
+            self.socket_opts_failed.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_busy_poll_sockets Receive sockets with Linux SO_BUSY_POLL enabled\n",
+        );
+        out.push_str("# TYPE lightspeed_busy_poll_sockets gauge\n");
+        out.push_str(&format!(
+            "lightspeed_busy_poll_sockets{{{}}} {}\n",
+            labels,
+            self.busy_poll_sockets.load(Ordering::Relaxed)
         ));
 
         // ── Client telemetry (aggregated, k-anonymized) ─────────

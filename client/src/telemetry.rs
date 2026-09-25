@@ -16,12 +16,16 @@
 //! - **Startup notice**: a one-line notice is printed once on startup when
 //!   telemetry runs, so users always know how to opt out.
 //!
-//! ## Endpoint
+//! ## Transport
 //!
-//! `POST http://<proxy>:8080/telemetry` with a JSON body matching
-//! [`TelemetryReport`].  Uses a hand-rolled HTTP/1.0 request so the client
-//! does not need an HTTP library dependency.
+//! A report is sent as a `Telemetry` control message on the same authenticated
+//! QUIC connection the client keeps alive for registration. When no live
+//! control connection exists (older relays, `quic` feature disabled, or a
+//! reconnect in progress) the flush falls back to
+//! `POST http://<proxy>:8080/telemetry` with the same JSON body, so older
+//! clients and relays keep working. Both paths feed the same proxy aggregator.
 
+use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::Duration;
@@ -273,16 +277,30 @@ impl TelemetryCollector {
             .drain_observations();
     }
 
-    /// Send the report to `http://<proxy_host>:8080/telemetry`.
+    /// Send the report, preferring the authenticated QUIC control plane and
+    /// falling back to `http://<proxy_host>:8080/telemetry`.
     ///
     /// Reporting is strictly opt-in: when [`is_enabled`] is false this returns
     /// [`FlushOutcome::Disabled`] without building a report or opening a
     /// connection. Local measurement is unaffected; see `crate::latency`.
-    ///
-    /// Uses a raw Tokio TCP connection + hand-rolled HTTP/1.0 POST so the
-    /// client does not need an HTTP client library. Any network error is
-    /// swallowed, because telemetry is best-effort.
     pub async fn flush(&self, proxy_host: &str, game_id: u8, country: &str) -> FlushOutcome {
+        self.flush_preferring_control(proxy_host, None, game_id, country)
+            .await
+    }
+
+    /// Send the report over `control_addr`'s live QUIC control connection when
+    /// one exists, otherwise over the plaintext HTTP endpoint.
+    ///
+    /// A report is attempted at most once per transport per flush: a failed
+    /// control-plane send falls through to HTTP rather than retrying, so
+    /// telemetry can never spin or delay gameplay or the control plane.
+    pub async fn flush_preferring_control(
+        &self,
+        proxy_host: &str,
+        control_addr: Option<SocketAddrV4>,
+        game_id: u8,
+        country: &str,
+    ) -> FlushOutcome {
         if !is_enabled() {
             debug!("Telemetry flush skipped: reporting disabled");
             return FlushOutcome::Disabled;
@@ -309,6 +327,44 @@ impl TelemetryCollector {
             }
         };
 
+        if let Some(addr) = control_addr {
+            match crate::quic::send_telemetry(addr, body.as_bytes()).await {
+                Ok(()) => {
+                    self.commit_report(&report).await;
+                    debug!(
+                        samples = report.sample_count,
+                        p50 = report.p50_ms,
+                        p99 = report.p99_ms,
+                        "📊 Telemetry flushed over control plane"
+                    );
+                    return FlushOutcome::Sent;
+                }
+                Err(e) => debug!(
+                    "Control-plane telemetry unavailable ({}); falling back to HTTP",
+                    e
+                ),
+            }
+        }
+
+        if self.post_http(proxy_host, &body).await {
+            self.commit_report(&report).await;
+            debug!(
+                samples = report.sample_count,
+                p50 = report.p50_ms,
+                p99 = report.p99_ms,
+                "📊 Telemetry flushed"
+            );
+            FlushOutcome::Sent
+        } else {
+            FlushOutcome::SendFailed
+        }
+    }
+
+    /// POST `body` to `http://<proxy_host>:8080/telemetry` with a hand-rolled
+    /// HTTP/1.0 request so the client needs no HTTP library. Returns whether
+    /// the write completed; network errors are swallowed because telemetry is
+    /// best-effort.
+    async fn post_http(&self, proxy_host: &str, body: &str) -> bool {
         let addr = format!("{}:8080", proxy_host);
         let request = format!(
             "POST /telemetry HTTP/1.0\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -321,25 +377,18 @@ impl TelemetryCollector {
             Ok(Ok(mut stream)) => {
                 if let Err(e) = stream.write_all(request.as_bytes()).await {
                     debug!("Telemetry send error: {}", e);
-                    return FlushOutcome::SendFailed;
+                    return false;
                 }
                 let _ = stream.shutdown().await;
-                self.commit_report(&report).await;
-                debug!(
-                    samples = report.sample_count,
-                    p50 = report.p50_ms,
-                    p99 = report.p99_ms,
-                    "📊 Telemetry flushed"
-                );
-                FlushOutcome::Sent
+                true
             }
             Ok(Err(e)) => {
                 debug!("Telemetry connect failed ({}): {}", addr, e);
-                FlushOutcome::SendFailed
+                false
             }
             Err(_) => {
                 debug!("Telemetry connect timed out ({})", addr);
-                FlushOutcome::SendFailed
+                false
             }
         }
     }
@@ -353,11 +402,16 @@ impl Default for TelemetryCollector {
 
 /// Spawn a background task that flushes telemetry every [`FLUSH_INTERVAL`].
 ///
+/// `control_addr` is the relay's supervised control-plane path; when a live
+/// QUIC control connection exists for it the report travels encrypted there,
+/// otherwise the flush falls back to `proxy_host`'s HTTP endpoint.
+///
 /// The returned handle's `abort()` method stops flushing on shutdown;
 /// call `collector.flush(...)` once more after aborting for the final flush.
 pub fn spawn_periodic_flush(
     collector: TelemetryCollector,
     proxy_host: String,
+    control_addr: Option<SocketAddrV4>,
     ctx: TelemetryContext,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -369,7 +423,7 @@ pub fn spawn_periodic_flush(
                 continue;
             }
             let _ = collector
-                .flush(&proxy_host, ctx.game_id, &ctx.country)
+                .flush_preferring_control(&proxy_host, control_addr, ctx.game_id, &ctx.country)
                 .await;
         }
     })

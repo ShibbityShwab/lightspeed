@@ -26,6 +26,10 @@
 //! for nft/iptables); when it fails, probing is disabled rather than sending a
 //! copy that would be captured. [`ShadowProbe::local_port`] and the
 //! interceptor's drop guard remain as defence in depth.
+//!
+//! macOS has the same destination-only redirect but no per-socket mark; its
+//! sampler lives in `macos.rs` and exempts the probe with a pf `no rdr` rule
+//! keyed on the probe's source port instead.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::fd::AsRawFd;
@@ -197,6 +201,13 @@ impl ShadowProbe {
     }
 }
 
+/// Whether a datagram received on the redirect listener came from the probe
+/// socket itself, i.e. the destination-only redirect captured the probe's own
+/// copy. Such a packet must be dropped before it can touch the game's flow.
+pub(crate) fn is_probe_echo(probe_port: Option<u16>, src: SocketAddrV4) -> bool {
+    probe_port == Some(src.port())
+}
+
 /// Tunnel the game's packet first, then, only when a sample was claimed, send an
 /// extra direct copy through `probe`.
 ///
@@ -250,6 +261,15 @@ mod tests {
             SocketAddr::V4(v4) => v4,
             SocketAddr::V6(_) => panic!("expected an IPv4 address"),
         }
+    }
+
+    #[test]
+    fn probe_echo_is_recognised_by_source_port_only() {
+        let game = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 5), 54321);
+        let probe = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 5), 40000);
+        assert!(!is_probe_echo(None, game));
+        assert!(!is_probe_echo(Some(40000), game));
+        assert!(is_probe_echo(Some(40000), probe));
     }
 
     #[test]

@@ -388,7 +388,8 @@ async fn main() -> anyhow::Result<()> {
             let authenticator = Arc::new(RwLock::new(auth::Authenticator::new(
                 config.security.require_auth,
             )));
-            let mut relay_engine = relay::RelayEngine::new(config.server.max_clients);
+            let mut relay_engine = relay::RelayEngine::new(config.server.max_clients)
+                .with_metrics(Arc::clone(&metrics));
             if let Some(geo) = geo_state.clone() {
                 relay_engine = relay_engine.with_geo(geo);
             }
@@ -411,6 +412,7 @@ async fn main() -> anyhow::Result<()> {
         let control_state = Arc::new(control::ControlState::new(
             config.clone(),
             Arc::clone(&authenticator),
+            Arc::clone(&metrics),
         ));
         control::ControlServer::bind(control_addr, control_state).map_err(|e| {
             anyhow::anyhow!("failed to bind QUIC control plane on {control_addr}: {e}")
@@ -721,7 +723,8 @@ async fn adopt_handoff(
         .await
         .restore(&manifest.auth, std::time::Instant::now());
 
-    let mut relay_engine = relay::RelayEngine::new(config.server.max_clients);
+    let mut relay_engine =
+        relay::RelayEngine::new(config.server.max_clients).with_metrics(Arc::clone(metrics));
     if let Some(geo) = geo {
         relay_engine = relay_engine.with_geo(geo);
     }

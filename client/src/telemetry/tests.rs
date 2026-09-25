@@ -2,6 +2,10 @@ use super::context::normalize_locale_territory;
 use super::*;
 use lightspeed_protocol::telemetry::MAX_ROUTE_LEGS;
 
+/// Serializes the tests that toggle the process-wide telemetry gate, since the
+/// gate is shared by every test in this binary.
+static TELEMETRY_GATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[test]
 fn test_normalize_locale_territory() {
     assert_eq!(normalize_locale_territory("en-US"), "US");
@@ -53,6 +57,7 @@ async fn test_telemetry_peek_repeats_until_commit() {
 
 #[tokio::test]
 async fn failed_post_retains_samples() {
+    let _gate = TELEMETRY_GATE_LOCK.lock().await;
     let collector = TelemetryCollector::new();
     collector.record_rtt(42.0).await;
 
@@ -69,6 +74,35 @@ async fn failed_post_retains_samples() {
         report.map(|r| r.sample_count),
         Some(1),
         "a failed POST must not drop the samples it drained"
+    );
+}
+
+/// Given: a control-plane address with no supervised connection. When: a flush
+/// runs preferring QUIC. Then: it falls back to HTTP rather than dropping the
+/// report, and a total failure retains the samples for the next flush.
+#[tokio::test]
+async fn control_plane_unavailable_falls_back_to_http() {
+    let _gate = TELEMETRY_GATE_LOCK.lock().await;
+    let collector = TelemetryCollector::new();
+    collector.record_rtt(12.0).await;
+
+    let addr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 4434);
+    set_enabled(true);
+    let outcome = collector
+        .flush_preferring_control("127.0.0.1", Some(addr), 0, "")
+        .await;
+    set_enabled(false);
+
+    assert_eq!(
+        outcome,
+        FlushOutcome::SendFailed,
+        "no control connection: the HTTP fallback must be attempted"
+    );
+    let report = collector.build_report(0, "").await;
+    assert_eq!(
+        report.map(|r| r.sample_count),
+        Some(1),
+        "a failed flush must not drop the samples it drained"
     );
 }
 

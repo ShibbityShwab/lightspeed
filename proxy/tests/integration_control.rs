@@ -112,6 +112,7 @@ async fn serve_one_stream(
                 session_token: 0xAB,
                 node_id: "test-proxy".into(),
                 region: "test-region".into(),
+                telemetry_quic: true,
             }),
             ControlMessage::Disconnect { .. } => None,
             _ => None,
@@ -169,11 +170,16 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
                 session_token,
                 node_id,
                 region,
+                telemetry_quic,
             }) => {
                 assert_eq!(session_id, 42);
                 assert_eq!(session_token, 0xAB);
                 assert_eq!(node_id, "test-proxy");
                 assert_eq!(region, "test-region");
+                assert!(
+                    telemetry_quic,
+                    "the proxy must advertise control-plane telemetry"
+                );
             }
             other => panic!("Expected RegisterAck, got: {:?}", other),
         }
@@ -241,6 +247,7 @@ async fn test_message_roundtrip_encoding() {
             session_token: 42,
             node_id: "node-abc".into(),
             region: "us-east".into(),
+            telemetry_quic: true,
         },
         ControlMessage::Disconnect {
             reason: disconnect_reason::SERVER_SHUTDOWN,

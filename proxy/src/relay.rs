@@ -57,6 +57,274 @@ use super::handoff::SessionSnapshot;
 use super::metrics::{upstream_lag, DropReason, ProxyMetrics};
 use super::rate_limit::{RateLimitResult, RateLimiter};
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Socket hygiene: bounded buffers and Linux receive busy-poll
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Three deliberate decisions, each of which degrades to a no-op rather than
+// disturbing the relay:
+//
+// 1. `SO_RCVBUF`/`SO_SNDBUF` are set explicitly and bounded. Kernel defaults
+//    (often ~208 KiB) are sized for general hosts; a relay draining bursty game
+//    traffic can drop datagrams when its task is descheduled and the receive
+//    queue overflows. The data socket gets a larger request because it carries
+//    every client; each per-session egress socket gets a smaller one because
+//    hundreds can exist at once, so per-socket memory scales with sessions.
+//    Values are clamped to [`SOCK_BUF_MIN`]..[`SOCK_BUF_MAX`]. The kernel still
+//    caps the result at `net.core.rmem_max`/`wmem_max`, so the readback below,
+//    not the request, is the truth that gets logged.
+//
+// 2. On Linux, `SO_BUSY_POLL` asks the kernel to spin briefly (50 us) on a
+//    socket's receive path after a wakeup, trading CPU for lower wakeup
+//    latency. It is advisory: with the common default `net.core.busy_poll=0`
+//    it is inert, so on a default host it costs nothing and buys nothing. This
+//    is the honest cost of the option: on a host that has enabled global busy
+//    polling it burns CPU, which is why the duration is small and the option is
+//    only requested where a kernel supports it (an unsupported kernel returns
+//    ENOPROTOOPT and the relay carries on).
+//
+// 3. `sendmmsg` is deliberately NOT used. Responses are emitted one datagram at
+//    a time from a per-session Tokio `UdpSocket`, so there is no batching point
+//    to feed a multi-message send. Issuing raw `sendmmsg` on a Tokio-managed fd
+//    would also bypass the reactor's send-readiness tracking, risking a lost
+//    wakeup or a busy-loop on the exact path that must never stall. The
+//    `recvmmsg` inbound path is unchanged and remains the only batched syscall.
+
+/// Lower bound for any requested socket buffer.
+const SOCK_BUF_MIN: usize = 64 * 1024;
+/// Upper bound, so a bad value cannot ask for gigabytes per socket.
+const SOCK_BUF_MAX: usize = 16 * 1024 * 1024;
+/// Aggregate data-plane socket buffer target.
+const DATA_SOCKET_RCVBUF: usize = 4 * 1024 * 1024;
+const DATA_SOCKET_SNDBUF: usize = 4 * 1024 * 1024;
+/// Per-session game-server socket buffer target.
+const SESSION_SOCKET_RCVBUF: usize = 512 * 1024;
+const SESSION_SOCKET_SNDBUF: usize = 512 * 1024;
+/// Linux `SO_BUSY_POLL` duration, in microseconds.
+#[cfg(target_os = "linux")]
+const BUSY_POLL_US: u32 = 50;
+
+/// Which relay socket is being tuned; selects the buffer policy.
+#[derive(Clone, Copy, Debug)]
+enum SocketRole {
+    Data,
+    Session,
+}
+
+impl SocketRole {
+    fn rcvbuf(self) -> usize {
+        match self {
+            Self::Data => DATA_SOCKET_RCVBUF,
+            Self::Session => SESSION_SOCKET_RCVBUF,
+        }
+    }
+
+    fn sndbuf(self) -> usize {
+        match self {
+            Self::Data => DATA_SOCKET_SNDBUF,
+            Self::Session => SESSION_SOCKET_SNDBUF,
+        }
+    }
+}
+
+/// What actually happened when a socket was tuned. `*_effective` is the kernel's
+/// readback (after its own cap/doubling), `None` when the option was refused.
+#[derive(Debug, Clone, Copy, Default)]
+struct SocketTuningReport {
+    rcvbuf_wanted: u32,
+    rcvbuf_effective: Option<u32>,
+    sndbuf_wanted: u32,
+    sndbuf_effective: Option<u32>,
+    busy_poll: Option<u32>,
+    failures: u32,
+}
+
+/// Clamp a requested buffer size into the sane window.
+fn clamp_buf(bytes: usize) -> u32 {
+    bytes.clamp(SOCK_BUF_MIN, SOCK_BUF_MAX) as u32
+}
+
+#[cfg(target_os = "linux")]
+fn set_int_opt(
+    fd: libc::c_int,
+    level: libc::c_int,
+    name: libc::c_int,
+    value: libc::c_int,
+) -> std::io::Result<()> {
+    // SAFETY: `value` is a live c_int and the length is exactly its size, so
+    // setsockopt reads only initialised bytes for the duration of the call.
+    let rc = unsafe {
+        libc::setsockopt(
+            fd,
+            level,
+            name,
+            std::ptr::addr_of!(value).cast::<libc::c_void>(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_int_opt(
+    fd: libc::c_int,
+    level: libc::c_int,
+    name: libc::c_int,
+) -> std::io::Result<libc::c_int> {
+    let mut value: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: `value` and `len` are valid out-pointers, and the kernel writes
+    // at most `len` initialised bytes into them.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            level,
+            name,
+            std::ptr::addr_of_mut!(value).cast::<libc::c_void>(),
+            &mut len,
+        )
+    };
+    if rc == 0 {
+        Ok(value)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Apply bounded buffers and, on Linux, busy-poll to an already-bound fd.
+///
+/// Every step is independent: a refused option increments `failures` and the
+/// caller's metrics but never aborts the socket. `fd = -1` exercises the whole
+/// failure path in tests.
+#[cfg(target_os = "linux")]
+fn configure_socket_fd(
+    fd: libc::c_int,
+    role: SocketRole,
+    metrics: &ProxyMetrics,
+) -> SocketTuningReport {
+    let mut report = SocketTuningReport {
+        rcvbuf_wanted: clamp_buf(role.rcvbuf()),
+        sndbuf_wanted: clamp_buf(role.sndbuf()),
+        ..Default::default()
+    };
+
+    match set_int_opt(
+        fd,
+        libc::SOL_SOCKET,
+        libc::SO_RCVBUF,
+        report.rcvbuf_wanted as libc::c_int,
+    ) {
+        Ok(()) => {
+            metrics.record_socket_option(true);
+            report.rcvbuf_effective = get_int_opt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF)
+                .ok()
+                .map(|v| v as u32);
+        }
+        Err(e) => {
+            metrics.record_socket_option(false);
+            report.failures += 1;
+            debug!(error = %e, role = ?role, "SO_RCVBUF refused; using kernel default");
+        }
+    }
+
+    match set_int_opt(
+        fd,
+        libc::SOL_SOCKET,
+        libc::SO_SNDBUF,
+        report.sndbuf_wanted as libc::c_int,
+    ) {
+        Ok(()) => {
+            metrics.record_socket_option(true);
+            report.sndbuf_effective = get_int_opt(fd, libc::SOL_SOCKET, libc::SO_SNDBUF)
+                .ok()
+                .map(|v| v as u32);
+        }
+        Err(e) => {
+            metrics.record_socket_option(false);
+            report.failures += 1;
+            debug!(error = %e, role = ?role, "SO_SNDBUF refused; using kernel default");
+        }
+    }
+
+    match set_int_opt(
+        fd,
+        libc::SOL_SOCKET,
+        libc::SO_BUSY_POLL,
+        BUSY_POLL_US as libc::c_int,
+    ) {
+        Ok(()) => {
+            metrics.record_socket_option(true);
+            metrics.record_busy_poll_enabled();
+            report.busy_poll = Some(BUSY_POLL_US);
+        }
+        Err(e) => {
+            metrics.record_socket_option(false);
+            report.failures += 1;
+            // Expected on kernels without SO_BUSY_POLL; not a problem.
+            debug!(error = %e, role = ?role, "SO_BUSY_POLL unavailable");
+        }
+    }
+
+    report
+}
+
+/// Tune a bound Tokio UDP socket. On Linux this really calls the kernel; on
+/// other targets it reports the requested sizes only.
+#[cfg(target_os = "linux")]
+fn configure_socket(
+    socket: &UdpSocket,
+    role: SocketRole,
+    metrics: &ProxyMetrics,
+) -> SocketTuningReport {
+    use std::os::fd::AsRawFd;
+    configure_socket_fd(socket.as_raw_fd(), role, metrics)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_socket(
+    socket: &UdpSocket,
+    role: SocketRole,
+    metrics: &ProxyMetrics,
+) -> SocketTuningReport {
+    let _ = (socket, metrics);
+    SocketTuningReport {
+        rcvbuf_wanted: clamp_buf(role.rcvbuf()),
+        sndbuf_wanted: clamp_buf(role.sndbuf()),
+        ..Default::default()
+    }
+}
+
+/// Tune and report the single aggregate data-plane socket at loop start.
+fn configure_data_socket(data_socket: &UdpSocket, metrics: &ProxyMetrics) {
+    let report = configure_socket(data_socket, SocketRole::Data, metrics);
+    info!(
+        role = "data",
+        rcvbuf_wanted = report.rcvbuf_wanted,
+        rcvbuf_effective = ?report.rcvbuf_effective,
+        sndbuf_wanted = report.sndbuf_wanted,
+        sndbuf_effective = ?report.sndbuf_effective,
+        busy_poll_us = ?report.busy_poll,
+        refusals = report.failures,
+        "Data socket tuned"
+    );
+}
+
+/// Tune one per-session egress socket; a refusal is logged, never fatal.
+fn configure_session_socket(socket: &UdpSocket, metrics: &ProxyMetrics) -> SocketTuningReport {
+    let report = configure_socket(socket, SocketRole::Session, metrics);
+    if report.failures > 0 {
+        debug!(
+            refusals = report.failures,
+            "Session socket tuning degraded; using kernel defaults"
+        );
+    }
+    report
+}
+
 /// How responses are written back to a client.
 ///
 /// UDP sessions send raw datagrams to the client's bound address.  TCP
@@ -271,6 +539,10 @@ pub struct RelayEngine {
     handoff_frozen: AtomicBool,
     /// Proxy-side geo aggregation, or `None` when geo is disabled.
     geo: Option<GeoState>,
+    /// Sink for per-session socket-tuning observations. Defaults to a private
+    /// collector so engine unit tests need no wiring; production attaches the
+    /// process collector with [`RelayEngine::with_metrics`].
+    socket_metrics: Arc<ProxyMetrics>,
 }
 
 impl RelayEngine {
@@ -292,12 +564,19 @@ impl RelayEngine {
             listener_handles: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             handoff_frozen: AtomicBool::new(false),
             geo: None,
+            socket_metrics: Arc::new(ProxyMetrics::new()),
         }
     }
 
     /// Attach proxy-side geo aggregation to this engine.
     pub fn with_geo(mut self, geo: GeoState) -> Self {
         self.geo = Some(geo);
+        self
+    }
+
+    /// Attach the process metrics collector for socket-tuning observations.
+    pub fn with_metrics(mut self, metrics: Arc<ProxyMetrics>) -> Self {
+        self.socket_metrics = metrics;
         self
     }
 
@@ -397,6 +676,7 @@ impl RelayEngine {
 
         // Bind a new outbound socket for this client's game traffic
         let outbound_socket = UdpSocket::bind("0.0.0.0:0").await?;
+        let tuning = configure_session_socket(&outbound_socket, &self.socket_metrics);
 
         // A TCP session shares its connection's cancellation token so the
         // response listener stops when the connection drops; UDP sessions get
@@ -410,6 +690,8 @@ impl RelayEngine {
             client = %client_addr,
             game_server = %game_server,
             outbound_port = %outbound_socket.local_addr()?,
+            rcvbuf_effective = ?tuning.rcvbuf_effective,
+            sndbuf_effective = ?tuning.sndbuf_effective,
             fec = fec_enabled,
             "New client session created"
         );
@@ -631,6 +913,7 @@ impl RelayEngine {
                     continue;
                 }
             };
+            configure_session_socket(&outbound_socket, &metrics);
 
             // Seal the adopted fd here, where ownership is established, so the
             // caller never touches fds of snapshots that were skipped/closed.
@@ -1137,6 +1420,7 @@ pub async fn run_relay_inbound(
     metrics: Arc<ProxyMetrics>,
 ) -> anyhow::Result<()> {
     let mut batch = BatchState::new();
+    configure_data_socket(&data_socket, &metrics);
     info!(
         "Relay inbound loop started (Linux recvmmsg, batch={})",
         BATCH
@@ -1197,6 +1481,7 @@ pub async fn run_relay_inbound(
     metrics: Arc<ProxyMetrics>,
 ) -> anyhow::Result<()> {
     let mut buf = vec![0u8; 2048];
+    configure_data_socket(&data_socket, &metrics);
     info!("Relay inbound loop started");
 
     loop {
@@ -2206,5 +2491,86 @@ mod tests {
             "a destination on the data port must still be recorded"
         );
         assert_eq!(agg.skipped_self_tunnel, 0);
+    }
+
+    // ── Socket hygiene (WIN 1) ──────────────────────────────────
+
+    #[test]
+    fn socket_buffer_requests_are_clamped_to_sane_bounds() {
+        assert_eq!(clamp_buf(1), SOCK_BUF_MIN as u32);
+        assert_eq!(clamp_buf(usize::MAX), SOCK_BUF_MAX as u32);
+        assert_eq!(clamp_buf(128 * 1024), 128 * 1024);
+        assert!(SocketRole::Data.rcvbuf() >= SocketRole::Session.rcvbuf());
+    }
+
+    /// A refused option must be counted and skipped, never fatal: `fd = -1`
+    /// makes all three `setsockopt` calls fail with EBADF.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_refused_socket_option_is_recorded_and_non_fatal() {
+        let metrics = ProxyMetrics::new();
+        let report = configure_socket_fd(-1, SocketRole::Data, &metrics);
+        assert_eq!(
+            report.failures, 3,
+            "receive buffer, send buffer and busy-poll are each attempted once"
+        );
+        assert!(report.rcvbuf_effective.is_none());
+        assert!(report.sndbuf_effective.is_none());
+        assert!(report.busy_poll.is_none());
+        assert_eq!(metrics.socket_opts_failed.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.socket_opts_applied.load(Ordering::Relaxed), 0);
+    }
+
+    /// A bound socket accepts the buffers and the result is observable in the
+    /// Prometheus surface. Busy-poll may or may not be supported, so only the
+    /// buffer counters are asserted.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn data_socket_tuning_applies_and_is_observable() {
+        let metrics = ProxyMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let report = configure_socket(&socket, SocketRole::Data, &metrics);
+
+        assert!(
+            report.rcvbuf_effective.unwrap() >= SOCK_BUF_MIN as u32,
+            "the kernel must return at least the floor it was asked for"
+        );
+        assert!(report.sndbuf_effective.is_some());
+        assert!(metrics.socket_opts_applied.load(Ordering::Relaxed) >= 2);
+
+        let prom = metrics.to_prometheus("test", "node");
+        assert!(prom.contains("lightspeed_socket_opts_applied_total"));
+        assert!(prom.contains("lightspeed_socket_opts_failed_total"));
+        assert!(prom.contains("lightspeed_busy_poll_sockets"));
+    }
+
+    /// The data socket is tuned before the receive loop starts; the existing
+    /// `recvmmsg` path must still drain every queued datagram afterwards.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn tuning_does_not_disturb_the_recvmmsg_path() {
+        let recv_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let metrics = ProxyMetrics::new();
+        configure_data_socket(&recv_sock, &metrics);
+        let recv_addr = recv_sock.local_addr().unwrap();
+
+        let send_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        for i in 0u8..8 {
+            send_sock.send_to(&[i; 32], recv_addr).await.unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let mut batch = BatchState::new();
+        let n = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            recv_batch_async(&recv_sock, &mut batch),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(n >= 1);
+        for i in 0..n {
+            assert_eq!(batch.msgs[i].msg_len as usize, 32);
+        }
     }
 }

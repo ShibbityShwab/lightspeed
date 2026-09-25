@@ -37,4 +37,14 @@ pub(crate) mod warp;
 pub mod test_support {
     pub use crate::quic::{is_supervised, register_session, stop_supervisor};
     pub use crate::session::{path_token, session_token};
+
+    /// Whether one telemetry body would be accepted on the control plane.
+    pub async fn control_telemetry_accepted(
+        data_addr: std::net::SocketAddrV4,
+        report_json: &[u8],
+    ) -> bool {
+        crate::quic::send_telemetry(data_addr, report_json)
+            .await
+            .is_ok()
+    }
 }

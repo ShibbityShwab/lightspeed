@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 use super::recovery::RecvBackoff;
 use super::rotation::{Action, RotationTracker, ROTATE_SCAN_INTERVAL};
-use super::shadow_probe::{tunnel_then_probe, ShadowProbe, PROBE_MARK};
+use super::shadow_probe::{is_probe_echo, tunnel_then_probe, ShadowProbe, PROBE_MARK};
 use super::teardown::TeardownAck;
 use super::traits::{
     InterceptorConfig, InterceptorCounters, InterceptorHandle, PlatformTeardown, TrafficInterceptor,
@@ -117,6 +117,7 @@ impl TrafficInterceptor for NftablesInterceptor {
         let config_proxy = config.proxy_addr;
         let fec_enabled = config.fec_enabled;
         let fec_k = config.fec_k;
+        let bypass_config = config.bypass;
         let dynamic = config.dynamic_server();
         let process_names = crate::games::process_names_for_name(&config.game_name);
         let initial_routes: Vec<SocketAddrV4> =
@@ -251,6 +252,8 @@ impl TrafficInterceptor for NftablesInterceptor {
             let mut shadow_disabled = false;
 
             let mut rotation = RotationTracker::new();
+            let mut gate =
+                super::bypass::BypassGate::new(bypass_config, Arc::clone(&counters_loop));
             let mut scan_timer = tokio::time::interval_at(
                 tokio::time::Instant::now() + ROTATE_SCAN_INTERVAL,
                 ROTATE_SCAN_INTERVAL,
@@ -262,7 +265,14 @@ impl TrafficInterceptor for NftablesInterceptor {
             // the first scanner interval.
             let seeds = super::order::effective_seeds(dynamic, &initial_routes);
             let action = rotation.on_scan(&seeds, Instant::now());
-            apply_action(action, &mut installer, &mut rotation, &counters_loop);
+            apply_action(
+                action,
+                &mut installer,
+                &mut rotation,
+                &mut gate,
+                &counters_loop,
+                fec_enabled,
+            );
 
             loop {
                 if !running_loop.load(Ordering::Relaxed) {
@@ -278,7 +288,14 @@ impl TrafficInterceptor for NftablesInterceptor {
                         tracing::info!(
                             "🔍 rotation scan: candidates={candidates:?} action={action:?}"
                         );
-                        apply_action(action, &mut installer, &mut rotation, &counters_loop);
+                        apply_action(
+                            action,
+                            &mut installer,
+                            &mut rotation,
+                            &mut gate,
+                            &counters_loop,
+                            fec_enabled,
+                        );
                     }
 
                     recv = pkt_rx.recv() => {
@@ -563,7 +580,7 @@ fn scan_candidates(process_names: &[&str], proxy: SocketAddrV4) -> Vec<SocketAdd
 /// captured the probe's own copy. Such a packet must be dropped before it can
 /// touch the game's flow.
 fn is_self_redirected_probe(shadow_probe_port: Option<u16>, src: SocketAddrV4) -> bool {
-    shadow_probe_port == Some(src.port())
+    is_probe_echo(shadow_probe_port, src)
 }
 
 /// Apply a [`RotationTracker`] decision, re-synchronising the tracker when a
@@ -572,29 +589,79 @@ fn apply_action(
     action: Action,
     installer: &mut Installer,
     rotation: &mut RotationTracker,
+    gate: &mut super::bypass::BypassGate,
     counters: &InterceptorCounters,
+    fec_enabled: bool,
 ) {
     match action {
         Action::Wait | Action::Keep => {}
-        Action::Install(server) => match installer.install(server) {
-            Ok(()) => publish_detected(counters, Some(server)),
-            Err(e) => {
-                record_failure(counters, format!("install {server}: {e}"));
+        Action::Install(server) => {
+            if pre_gate_skips(gate, server, fec_enabled) {
+                tracing::warn!(
+                    server = %server,
+                    "bypass gate: not installing redirect; game stays on the direct path"
+                );
                 rotation.reset();
+                return;
             }
-        },
-        Action::Swap(server) => match installer.swap(server) {
-            Ok(()) => publish_detected(counters, Some(server)),
-            Err(e) => {
-                record_failure(counters, format!("swap {server}: {e}"));
+            match installer.install(server) {
+                Ok(()) => publish_detected(counters, Some(server)),
+                Err(e) => {
+                    record_failure(counters, format!("install {server}: {e}"));
+                    rotation.reset();
+                }
+            }
+        }
+        Action::Swap(server) => {
+            if pre_gate_skips(gate, server, fec_enabled) {
+                // Rotation already required ROTATE_SILENCE before it produced a
+                // Swap, so the old flow is not live and removing its rule is
+                // safe.
+                tracing::warn!(
+                    server = %server,
+                    "bypass gate: removing the old redirect instead of swapping"
+                );
+                installer.teardown();
+                publish_detected(counters, None);
                 rotation.reset();
+                return;
             }
-        },
+            match installer.swap(server) {
+                Ok(()) => publish_detected(counters, Some(server)),
+                Err(e) => {
+                    record_failure(counters, format!("swap {server}: {e}"));
+                    rotation.reset();
+                }
+            }
+        }
         Action::Teardown => {
             installer.teardown();
             publish_detected(counters, None);
         }
     }
+}
+
+/// Whether the tier-1 pre-gate says the new server should stay direct.
+///
+/// Linux is a diverting backend, so the only safe Direct is *before* the
+/// redirect rule exists. This never tears down a live flow. The pre-gate is
+/// inert until a client->relay RTT is available; `dry_run` always proceeds.
+fn pre_gate_skips(
+    gate: &mut super::bypass::BypassGate,
+    server: SocketAddrV4,
+    fec_enabled: bool,
+) -> bool {
+    if gate.mode() == super::bypass::BypassMode::Never {
+        return false;
+    }
+    let direct_icmp = crate::latency::global().and_then(|t| t.direct_p50_ms());
+    let decision = gate.pre_gate(server, Instant::now(), None, direct_icmp, fec_enabled);
+    if decision != super::bypass::BypassDecision::Direct {
+        return false;
+    }
+    let applied = super::bypass::enact_pre_gate(gate.mode(), decision);
+    gate.report_pre_gate(applied);
+    applied
 }
 
 fn publish_detected(counters: &InterceptorCounters, server: Option<SocketAddrV4>) {
@@ -1170,5 +1237,52 @@ mod tests {
         );
 
         nft_delete_table(&nft, &tag);
+    }
+
+    fn bypass_gate(
+        mode: crate::interceptor::bypass::BypassMode,
+    ) -> crate::interceptor::bypass::BypassGate {
+        crate::interceptor::bypass::BypassGate::new(
+            crate::interceptor::bypass::BypassConfig {
+                mode,
+                ..Default::default()
+            },
+            Arc::new(InterceptorCounters::default()),
+        )
+    }
+
+    #[test]
+    fn bypass_never_mode_installs_the_redirect() {
+        let mut gate = bypass_gate(crate::interceptor::bypass::BypassMode::Never);
+        assert!(
+            !pre_gate_skips(&mut gate, server(), false),
+            "the rollback mode must keep installing the redirect"
+        );
+    }
+
+    #[test]
+    fn bypass_force_direct_skips_the_redirect() {
+        let mut gate = bypass_gate(crate::interceptor::bypass::BypassMode::Always);
+        assert!(
+            pre_gate_skips(&mut gate, server(), false),
+            "force-direct must decline the redirect"
+        );
+    }
+
+    #[test]
+    fn bypass_dry_run_keeps_installing_the_redirect() {
+        let counters = Arc::new(InterceptorCounters::default());
+        let mut gate = crate::interceptor::bypass::BypassGate::new(
+            crate::interceptor::bypass::BypassConfig {
+                mode: crate::interceptor::bypass::BypassMode::DryRun,
+                ..Default::default()
+            },
+            Arc::clone(&counters),
+        );
+        assert!(
+            !pre_gate_skips(&mut gate, server(), false),
+            "dry_run must never change tunneling behavior"
+        );
+        assert_eq!(counters.bypass_allowed.load(Ordering::Relaxed), 0);
     }
 }

@@ -1,7 +1,8 @@
 //! # Client Telemetry Protocol
 //!
-//! Defines the anonymised latency report that clients may (opt-in) POST to the
-//! proxy's `/telemetry` endpoint.
+//! Defines the anonymised latency report that opt-in clients send to the
+//! proxy, either as a `Telemetry` control message on the QUIC control
+//! connection or, as a fallback, in the body of a `POST /telemetry`.
 //!
 //! ## Privacy design
 //!
@@ -21,6 +22,12 @@ use serde::{Deserialize, Serialize};
 
 /// Maximum number of per-path observations a single report may carry.
 pub const MAX_ROUTE_LEGS: usize = 8;
+
+/// Maximum size in bytes of a serialised telemetry report body.
+///
+/// Shared by the HTTP `/telemetry` endpoint and the QUIC control-plane
+/// telemetry message so both ingest paths enforce the same cap.
+pub const MAX_TELEMETRY_BODY: usize = 2048;
 
 /// A bounded, anonymised observation of a single relay leg.
 ///

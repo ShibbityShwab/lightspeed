@@ -111,6 +111,7 @@ mod shutdown {
     use lightspeed_proxy::auth::Authenticator;
     use lightspeed_proxy::config::ProxyConfig;
     use lightspeed_proxy::control::{ControlServer, ControlState};
+    use lightspeed_proxy::metrics::ProxyMetrics;
     use tokio::sync::{watch, RwLock};
 
     /// A QUIC client endpoint that accepts the proxy's self-signed cert.
@@ -180,6 +181,7 @@ mod shutdown {
         let state = Arc::new(ControlState::new(
             ProxyConfig::default(),
             Arc::new(RwLock::new(Authenticator::new(true))),
+            Arc::new(ProxyMetrics::new()),
         ));
         let server = ControlServer::bind("127.0.0.1:0".parse()?, Arc::clone(&state))?;
         let addr = server.local_addr()?;

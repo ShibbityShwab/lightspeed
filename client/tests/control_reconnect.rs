@@ -150,6 +150,7 @@ async fn serve_connection(
                         session_token: token,
                         node_id: "test-relay".to_string(),
                         region: "test".to_string(),
+                        telemetry_quic: false,
                     };
                     let _ = ack.write_to(&mut send).await;
                     let _ = send.finish();

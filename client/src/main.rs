@@ -253,6 +253,20 @@ fn telemetry_enabled(cli: &Cli, config: &config::Config) -> bool {
     !cli.no_telemetry && (cli.telemetry || config.general.telemetry)
 }
 
+/// Resolve the do-no-harm bypass config from CLI flags and `[route]` settings.
+fn resolved_bypass_config(cli: &Cli, config: &config::Config) -> interceptor::bypass::BypassConfig {
+    interceptor::bypass::BypassConfig::resolve(
+        cli.no_bypass,
+        cli.force_direct,
+        cli.bypass_dry_run,
+        &config.route.bypass,
+        config.route.bypass_margin_ms,
+        config.route.bypass_keep_ms,
+        config.route.bypass_dwell_s,
+        config.route.bypass_probation_s,
+    )
+}
+
 // Modes that return before the shared dispatch (--watch, --start-interceptor)
 // still tunnel real gameplay, so they must spawn the periodic flush themselves.
 // Without this they record samples locally and never send them, which is
@@ -267,7 +281,12 @@ fn spawn_session_telemetry_flush(
         game_id: lightspeed_protocol::game_id::id_for_key(game_key),
         country: telemetry::context::detect_country(),
     };
-    telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_addr.ip().to_string(), ctx);
+    telemetry::spawn_periodic_flush(
+        tc.as_ref().clone(),
+        proxy_addr.ip().to_string(),
+        Some(proxy_addr),
+        ctx,
+    );
 }
 
 #[tokio::main]
@@ -306,6 +325,19 @@ async fn main() -> anyhow::Result<()> {
     // reporting is enabled. Nothing measured reaches the relay unless reporting
     // is on (enforced in telemetry::TelemetryCollector::flush).
     latency::install_measurement();
+
+    // ── Do-no-harm bypass gate ────────────────────────────────────
+    //
+    // Default is dry_run: measure and log the decision, change nothing. It is
+    // only raised to `auto` by an explicit setting, and on Linux/macOS that
+    // still means "do not install the redirect" rather than a live teardown.
+    let bypass_config = resolved_bypass_config(&cli, &config);
+    if bypass_config.mode == interceptor::bypass::BypassMode::DryRun {
+        info!("🛡️  Bypass gate: dry_run (measuring and logging only; tunneling unchanged)");
+    } else {
+        info!("🛡️  Bypass gate mode: {}", bypass_config.mode.as_str());
+    }
+    interceptor::bypass::set_default_config(bypass_config);
 
     let _token_reset = TokenResetOnShutdown;
 
@@ -1065,7 +1097,12 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref tc) = telemetry_collector {
         // `flush` appends `:8080` itself, so pass the bare relay IP only.
         let proxy_host = proxy_addr.ip().to_string();
-        telemetry::spawn_periodic_flush(tc.as_ref().clone(), proxy_host, telemetry_ctx.clone());
+        telemetry::spawn_periodic_flush(
+            tc.as_ref().clone(),
+            proxy_host,
+            Some(proxy_addr),
+            telemetry_ctx.clone(),
+        );
     }
 
     // ── --live-test ───────────────────────────────────────────────
