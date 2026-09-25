@@ -130,6 +130,8 @@ pub struct EngineStatus {
     pub interceptor_injected: u64,
     /// Errors.
     pub interceptor_errors: u64,
+    /// Payloads dropped for exceeding the conservative tunnel payload budget.
+    pub interceptor_payloads_over_budget: u64,
     /// Error description if the interceptor failed to start.
     pub interceptor_error: Option<String>,
 }
@@ -842,6 +844,7 @@ impl LightSpeedEngine {
             s.interceptor_from_proxy = 0;
             s.interceptor_injected = 0;
             s.interceptor_errors = 0;
+            s.interceptor_payloads_over_budget = 0;
             s.interceptor_error = None;
             s.control_registered = false;
             s.session_token = None;
@@ -933,6 +936,7 @@ impl LightSpeedEngine {
             snap.interceptor_from_proxy = ist.packets_from_proxy;
             snap.interceptor_injected = ist.packets_injected;
             snap.interceptor_errors = ist.errors;
+            snap.interceptor_payloads_over_budget = ist.payloads_over_budget;
             snap.interceptor_platform = ist.platform;
             if let Some(srv) = ist.detected_server {
                 snap.interceptor_server = srv.to_string();

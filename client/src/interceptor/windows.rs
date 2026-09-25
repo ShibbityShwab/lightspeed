@@ -712,6 +712,20 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 .unwrap_or_default()
                                 .as_micros() as u32;
 
+                            if let crate::tunnel::budget::PayloadFit::OverBudget {
+                                payload_len,
+                                budget,
+                            } = crate::tunnel::budget::classify(payload.len(), fec_encoder.is_some())
+                            {
+                                counters_t.payloads_over_budget.fetch_add(1, Ordering::Relaxed);
+                                tracing::warn!(
+                                    payload_len = payload_len,
+                                    budget = budget,
+                                    "WinDivert interceptor: dropped game payload over the conservative tunnel MTU budget"
+                                );
+                                continue;
+                            }
+
                             if let Some(ref mut enc) = fec_encoder {
                                 let block_id = enc.block_id();
                                 let index = enc.current_index();

@@ -15,6 +15,87 @@ use tokio::sync::Mutex;
 
 use lightspeed_protocol::framing::{read_frame, write_frame};
 
+/// Request the kernel set the don't-fragment (DF) bit on a tunnel UDP socket.
+///
+/// With DF set, a datagram larger than the path MTU is rejected with
+/// `EMSGSIZE` (surfaced as a send error) instead of being fragmented on the
+/// wire. Linux uses `IP_MTU_DISCOVER = IP_PMTUDISC_DO`; macOS uses
+/// `IP_DONTFRAG`; Windows UDP sockets already default to DF=1 since Vista, so
+/// no call is made there. A failure to set the flag is non-fatal: the payload
+/// budget is the primary guarantee and DF is defence in depth.
+pub fn set_dont_fragment(socket: &UdpSocket) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        linux_set_dont_fragment(socket)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_set_dont_fragment(socket)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = socket;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_set_dont_fragment(socket: &UdpSocket) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let value: libc::c_int = libc::IP_PMTUDISC_DO;
+    // SAFETY: `socket` owns a live fd for the duration of the call, and the
+    // value plus its size match IP_MTU_DISCOVER's documented `c_int` payload.
+    let rc = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::IPPROTO_IP,
+            libc::IP_MTU_DISCOVER,
+            std::ptr::addr_of!(value).cast::<libc::c_void>(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_set_dont_fragment(socket: &UdpSocket) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::raw::{c_int, c_uint, c_void};
+
+    extern "C" {
+        fn setsockopt(
+            fd: c_int,
+            level: c_int,
+            optname: c_int,
+            optval: *const c_void,
+            optlen: c_uint,
+        ) -> c_int;
+    }
+
+    const IPPROTO_IP: c_int = 0;
+    const IP_DONTFRAG: c_int = 28;
+    let value: c_int = 1;
+    // SAFETY: `socket` owns a live fd for the duration of the call, and the
+    // value plus its size match IP_DONTFRAG's documented `c_int` payload.
+    let rc = unsafe {
+        setsockopt(
+            socket.as_raw_fd(),
+            IPPROTO_IP,
+            IP_DONTFRAG,
+            std::ptr::addr_of!(value).cast::<c_void>(),
+            std::mem::size_of::<c_int>() as c_uint,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Transport for the client↔proxy leg of the tunnel.
 pub enum TunnelTransport {
     Udp {
@@ -32,6 +113,9 @@ impl TunnelTransport {
     /// Bind a UDP transport on `local`.
     pub async fn connect_udp(local: SocketAddrV4) -> io::Result<Self> {
         let socket = UdpSocket::bind(local).await?;
+        if let Err(e) = set_dont_fragment(&socket) {
+            tracing::warn!("Could not set don't-fragment on tunnel UDP socket: {e}");
+        }
         Ok(Self::Udp {
             socket: Arc::new(socket),
             proxy: SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0),

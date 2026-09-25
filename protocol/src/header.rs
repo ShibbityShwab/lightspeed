@@ -29,6 +29,7 @@
 //! 32 bits (4 billion values) makes brute-force packet injection infeasible,
 //! providing defense-in-depth alongside IP-based auth and rate limiting.
 
+use crate::fec::FEC_HEADER_SIZE;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 // Note: BufMut import kept for encode_with_payload; Buf for decode.
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -47,6 +48,54 @@ pub const HEADER_SIZE: usize = 24;
 
 /// Maximum payload size (MTU - IP header - UDP header - tunnel header).
 pub const MAX_PAYLOAD_SIZE: usize = 1400 - 20 - 8 - HEADER_SIZE;
+
+/// Path MTU assumed for the client-to-relay leg.
+///
+/// The transport is IPv4-only, and the lowest MTU found on common consumer
+/// IPv4 paths is PPPoE at 1492 bytes. This value is deliberately below full
+/// Ethernet (1500) so an oversized game datagram is rejected instead of being
+/// fragmented by the kernel. It is a fixed conservative clamp, *not* path-MTU
+/// discovery (RFC 8899 DPLPMTUD): a path below 1492 (some VPNs, for example)
+/// is not covered by the clamp and relies on the socket's don't-fragment flag
+/// to fail loudly.
+pub const CONSERVATIVE_PATH_MTU: usize = 1492;
+
+/// Outer IPv4 header the kernel prepends to every tunnel datagram.
+pub const OUTER_IPV4_HEADER_SIZE: usize = 20;
+
+/// Outer UDP header the kernel prepends to every tunnel datagram.
+pub const OUTER_UDP_HEADER_SIZE: usize = 8;
+
+/// Bytes of FEC parity trailer: the XOR of the block's original lengths.
+pub const FEC_PARITY_TRAILER_SIZE: usize = 2;
+
+/// Largest tunnel datagram (tunnel header(s) plus game payload) that fits the
+/// conservative path MTU. The relay forwards the original payload unchanged;
+/// only the client-to-relay hop is bounded here.
+pub const fn max_tunnel_datagram() -> usize {
+    CONSERVATIVE_PATH_MTU - OUTER_IPV4_HEADER_SIZE - OUTER_UDP_HEADER_SIZE
+}
+
+/// Largest original game payload that can be tunnelled without exceeding the
+/// conservative path MTU.
+///
+/// With FEC enabled the budget also reserves the 4-byte FEC header and the
+/// 2-byte parity trailer, so the largest parity packet a max-size block can
+/// produce still fits. This is the size the client drops on, with a counter,
+/// rather than emitting a datagram that would fragment.
+pub const fn max_game_payload(fec: bool) -> usize {
+    let mut budget = max_tunnel_datagram() - HEADER_SIZE;
+    if fec {
+        budget -= FEC_HEADER_SIZE + FEC_PARITY_TRAILER_SIZE;
+    }
+    budget
+}
+
+const _: () = assert!(CONSERVATIVE_PATH_MTU < 1500);
+const _: () = assert!(
+    max_game_payload(false) + HEADER_SIZE + OUTER_IPV4_HEADER_SIZE + OUTER_UDP_HEADER_SIZE
+        <= CONSERVATIVE_PATH_MTU
+);
 
 /// Header flags.
 pub mod flags {
@@ -421,5 +470,39 @@ mod tests {
         assert_eq!(response.orig_dst_port, src.port());
         // Response should preserve session token
         assert_eq!(response.session_token, 99);
+    }
+
+    // ── Conservative client-to-relay payload budget ──────────────────────
+    //
+    // Pinned to the actual wire header size so a change to HEADER_SIZE or
+    // FEC_HEADER_SIZE cannot silently widen the budget.
+
+    #[test]
+    fn budget_accounts_for_the_actual_wire_header_size() {
+        assert_eq!(max_tunnel_datagram(), CONSERVATIVE_PATH_MTU - 20 - 8);
+        assert_eq!(max_tunnel_datagram(), 1464);
+
+        assert_eq!(max_game_payload(false), max_tunnel_datagram() - HEADER_SIZE);
+        assert_eq!(max_game_payload(false), 1440);
+
+        // FEC parity carries a 2-byte XOR of the block's original lengths.
+        assert_eq!(
+            max_game_payload(true),
+            max_tunnel_datagram() - HEADER_SIZE - 4 - FEC_PARITY_TRAILER_SIZE
+        );
+        assert_eq!(max_game_payload(true), 1434);
+    }
+
+    #[test]
+    fn budget_composes_exactly_to_the_clamped_datagram() {
+        let v1_datagram = HEADER_SIZE + max_game_payload(false);
+        assert_eq!(v1_datagram, max_tunnel_datagram());
+
+        // A max-size FEC data payload leaves exactly the 2-byte trailer of
+        // headroom, so the largest parity the block can produce fills the
+        // budget exactly.
+        let fec_data = HEADER_SIZE + 4 + max_game_payload(true);
+        assert_eq!(fec_data, max_tunnel_datagram() - FEC_PARITY_TRAILER_SIZE);
+        assert_eq!(fec_data + FEC_PARITY_TRAILER_SIZE, max_tunnel_datagram());
     }
 }

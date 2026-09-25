@@ -136,6 +136,11 @@ impl TrafficInterceptor for PfInterceptor {
             .map_err(|e| anyhow::anyhow!("Tunnel socket bind: {e}"))?;
         tunnel_std.set_nonblocking(true)?;
         let tunnel_socket = Arc::new(UdpSocket::from_std(tunnel_std)?);
+        if let Err(e) = crate::tunnel::transport::set_dont_fragment(&tunnel_socket) {
+            tracing::warn!(
+                "macOS pf interceptor: could not set don't-fragment on tunnel socket: {e}"
+            );
+        }
 
         listener_std.set_nonblocking(true)?;
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
@@ -224,6 +229,20 @@ impl TrafficInterceptor for PfInterceptor {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_micros() as u32;
+
+                        if let crate::tunnel::budget::PayloadFit::OverBudget {
+                            payload_len,
+                            budget,
+                        } = crate::tunnel::budget::classify(len, fec_encoder.is_some())
+                        {
+                            counters_loop.payloads_over_budget.fetch_add(1, Ordering::Relaxed);
+                            tracing::warn!(
+                                payload_len = payload_len,
+                                budget = budget,
+                                "macOS pf interceptor: dropped game payload over the conservative tunnel MTU budget"
+                            );
+                            continue;
+                        }
 
                         if let Some(ref mut enc) = fec_encoder {
                             let block_id = enc.block_id();

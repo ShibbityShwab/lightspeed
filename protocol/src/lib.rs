@@ -11,8 +11,9 @@ pub mod header;
 pub mod telemetry;
 
 pub use header::{
-    flags, DecodeError, TunnelHeader, HEADER_SIZE, MAX_PAYLOAD_SIZE, PROTOCOL_VERSION,
-    PROTOCOL_VERSION_FEC,
+    flags, max_game_payload, max_tunnel_datagram, DecodeError, TunnelHeader, CONSERVATIVE_PATH_MTU,
+    FEC_PARITY_TRAILER_SIZE, HEADER_SIZE, MAX_PAYLOAD_SIZE, OUTER_IPV4_HEADER_SIZE,
+    OUTER_UDP_HEADER_SIZE, PROTOCOL_VERSION, PROTOCOL_VERSION_FEC,
 };
 
 pub use fec::{

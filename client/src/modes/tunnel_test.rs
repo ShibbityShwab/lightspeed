@@ -57,10 +57,12 @@ pub async fn run_tunnel_test(mut relay: UdpRelay, proxy_addr: SocketAddrV4) -> a
 
     let sent = relay.stats.packets_sent.load(Ordering::Relaxed);
     let bytes_sent = relay.stats.bytes_sent.load(Ordering::Relaxed);
+    let over_budget = relay.stats.payloads_over_budget.load(Ordering::Relaxed);
 
     info!("🧪 Tunnel test complete:");
     info!("   Packets sent:     {}", sent);
     info!("   Bytes sent:       {}", bytes_sent);
+    info!("   Over-budget drop: {}", over_budget);
     info!("   Responses:        {}", received);
 
     if received > 0 {

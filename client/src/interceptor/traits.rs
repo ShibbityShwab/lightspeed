@@ -138,6 +138,9 @@ pub struct InterceptorCounters {
     pub packets_from_proxy: AtomicU64,
     /// Errors (intercept or inject failures).
     pub errors: AtomicU64,
+    /// Game payloads dropped because they exceeded the conservative tunnel
+    /// payload budget and would have fragmented on the client-to-relay path.
+    pub payloads_over_budget: AtomicU64,
     /// Auto-detected (or pre-configured) server address.
     /// SAFETY: This `std::sync::Mutex` is used from async tasks but the lock
     /// is never held across an await point.  If that changes, migrate to
@@ -156,6 +159,7 @@ impl Default for InterceptorCounters {
             bytes_injected: AtomicU64::new(0),
             packets_from_proxy: AtomicU64::new(0),
             errors: AtomicU64::new(0),
+            payloads_over_budget: AtomicU64::new(0),
             detected_server: std::sync::Mutex::new(None),
             last_error: std::sync::Mutex::new(None),
         }
@@ -172,6 +176,7 @@ impl InterceptorCounters {
             bytes_injected: self.bytes_injected.load(Ordering::Relaxed),
             packets_from_proxy: self.packets_from_proxy.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
+            payloads_over_budget: self.payloads_over_budget.load(Ordering::Relaxed),
             detected_server: self.detected_server.lock().map(|g| *g).unwrap_or(None),
             last_error: self.last_error.lock().ok().and_then(|g| g.clone()),
             platform,
@@ -188,6 +193,8 @@ pub struct InterceptorStats {
     pub bytes_injected: u64,
     pub packets_from_proxy: u64,
     pub errors: u64,
+    /// Payloads dropped for exceeding the conservative tunnel payload budget.
+    pub payloads_over_budget: u64,
     /// The game server address discovered at runtime (or pre-configured).
     pub detected_server: Option<SocketAddrV4>,
     /// Description of the most recent fatal error, if any.

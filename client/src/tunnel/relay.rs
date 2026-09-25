@@ -20,6 +20,7 @@ use lightspeed_protocol::{
 use tokio::net::UdpSocket;
 
 use crate::error::TunnelError;
+use crate::tunnel::budget::{self, PayloadFit};
 use crate::tunnel::transport::TunnelTransport;
 
 /// Get current timestamp in microseconds since epoch.
@@ -41,6 +42,8 @@ pub struct RelayStats {
     pub recv_errors: AtomicU64,
     pub fec_parity_sent: AtomicU64,
     pub fec_recovered: AtomicU64,
+    /// Game payloads dropped for exceeding the conservative tunnel budget.
+    pub payloads_over_budget: AtomicU64,
 }
 
 impl RelayStats {
@@ -54,6 +57,7 @@ impl RelayStats {
             recv_errors: AtomicU64::new(0),
             fec_parity_sent: AtomicU64::new(0),
             fec_recovered: AtomicU64::new(0),
+            payloads_over_budget: AtomicU64::new(0),
         }
     }
 }
@@ -153,6 +157,24 @@ impl UdpRelay {
             transport.set_proxy(proxy_addr);
         }
         let transport = self.transport.as_ref().ok_or(TunnelError::NotConnected)?;
+
+        let fit = budget::classify(payload.len(), self.fec_encoder.is_some());
+        if let PayloadFit::OverBudget {
+            payload_len,
+            budget,
+        } = fit
+        {
+            self.stats
+                .payloads_over_budget
+                .fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                payload_len = payload_len,
+                budget = budget,
+                "Dropped game payload over the conservative tunnel MTU budget"
+            );
+            return Ok(0);
+        }
+
         let path_token = crate::session::path_token(proxy_addr);
 
         // Get sequence numbers upfront to avoid borrow conflicts

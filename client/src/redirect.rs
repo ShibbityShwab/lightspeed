@@ -40,6 +40,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 
+use crate::tunnel::budget::{self, PayloadFit};
 use crate::tunnel::transport::TunnelTransport;
 
 /// Get current timestamp in microseconds.
@@ -62,6 +63,8 @@ pub struct RedirectStats {
     pub errors: AtomicU64,
     pub fec_parity_sent: AtomicU64,
     pub fec_recovered: AtomicU64,
+    /// Game payloads dropped for exceeding the conservative tunnel budget.
+    pub payloads_over_budget: AtomicU64,
 }
 
 impl RedirectStats {
@@ -76,6 +79,7 @@ impl RedirectStats {
             errors: AtomicU64::new(0),
             fec_parity_sent: AtomicU64::new(0),
             fec_recovered: AtomicU64::new(0),
+            payloads_over_budget: AtomicU64::new(0),
         }
     }
 }
@@ -232,6 +236,20 @@ impl UdpRedirect {
                     };
 
                     let payload = &buf[..len];
+
+                    if let PayloadFit::OverBudget {
+                        payload_len,
+                        budget,
+                    } = budget::classify(len, fec_encoder.is_some())
+                    {
+                        stats.payloads_over_budget.fetch_add(1, Ordering::Relaxed);
+                        warn!(
+                            payload_len = payload_len,
+                            budget = budget,
+                            "Dropped game payload over the conservative tunnel MTU budget"
+                        );
+                        continue;
+                    }
 
                     // Remember the game client's address
                     {
@@ -475,19 +493,20 @@ impl UdpRedirect {
                     let bytes_out = stats.bytes_to_proxy.load(Ordering::Relaxed);
                     let bytes_in = stats.bytes_from_proxy.load(Ordering::Relaxed);
                     let errors = stats.errors.load(Ordering::Relaxed);
+                    let over_budget = stats.payloads_over_budget.load(Ordering::Relaxed);
 
                     if from_game > 0 || from_proxy > 0 {
                         if fec_enabled {
                             let parity = stats.fec_parity_sent.load(Ordering::Relaxed);
                             let recovered = stats.fec_recovered.load(Ordering::Relaxed);
                             info!(
-                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | FEC: {} parity sent, {} recovered | Errors: {}",
-                                to_proxy, bytes_out, to_game, bytes_in, parity, recovered, errors
+                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | FEC: {} parity sent, {} recovered | Errors: {} | Over-budget dropped: {}",
+                                to_proxy, bytes_out, to_game, bytes_in, parity, recovered, errors, over_budget
                             );
                         } else {
                             info!(
-                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | Errors: {}",
-                                to_proxy, bytes_out, to_game, bytes_in, errors
+                                "📊 Game→Proxy: {} pkts ({} bytes) | Proxy→Game: {} pkts ({} bytes) | Errors: {} | Over-budget dropped: {}",
+                                to_proxy, bytes_out, to_game, bytes_in, errors, over_budget
                             );
                         }
                     }

@@ -152,6 +152,9 @@ impl TrafficInterceptor for NftablesInterceptor {
             .map_err(|e| anyhow::anyhow!("Tunnel socket bind: {e}"))?;
         tunnel_std.set_nonblocking(true)?;
         let tunnel_socket = Arc::new(UdpSocket::from_std(tunnel_std)?);
+        if let Err(e) = crate::tunnel::transport::set_dont_fragment(&tunnel_socket) {
+            tracing::warn!("Linux interceptor: could not set don't-fragment on tunnel socket: {e}");
+        }
 
         listener_std.set_nonblocking(true)?;
         let listener_socket = Arc::new(UdpSocket::from_std(listener_std)?);
@@ -207,11 +210,12 @@ impl TrafficInterceptor for NftablesInterceptor {
                     interval.tick().await;
                     let snap = counters_s.snapshot("nftables");
                     tracing::info!(
-                        "📊 Interceptor: {} pkts out / {} pkts in / {} injected / {} errors",
+                        "📊 Interceptor: {} pkts out / {} pkts in / {} injected / {} errors / {} over-budget dropped",
                         snap.packets_intercepted,
                         snap.packets_from_proxy,
                         snap.packets_injected,
                         snap.errors,
+                        snap.payloads_over_budget,
                     );
                 }
             });
@@ -312,6 +316,20 @@ impl TrafficInterceptor for NftablesInterceptor {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_micros() as u32;
+
+                        if let crate::tunnel::budget::PayloadFit::OverBudget {
+                            payload_len,
+                            budget,
+                        } = crate::tunnel::budget::classify(len, fec_encoder.is_some())
+                        {
+                            counters_loop.payloads_over_budget.fetch_add(1, Ordering::Relaxed);
+                            tracing::warn!(
+                                payload_len = payload_len,
+                                budget = budget,
+                                "Linux interceptor: dropped game payload over the conservative tunnel MTU budget"
+                            );
+                            continue;
+                        }
 
                         // Shadow-direct sampling is gated on telemetry by the
                         // tracker. The socket opens lazily on the first due

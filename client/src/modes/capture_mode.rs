@@ -367,6 +367,7 @@ async fn run_capture_mode_inner(
     // Shared outbound counters
     let outbound_packets = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let outbound_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let over_budget_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let start_time = std::time::Instant::now();
 
     // Fill the engine's stat slot so it can poll live counters via snapshot().
@@ -556,6 +557,7 @@ async fn run_capture_mode_inner(
     let stats_handle = {
         let out_pkts = Arc::clone(&outbound_packets);
         let out_bytes = Arc::clone(&outbound_bytes);
+        let over_budget = Arc::clone(&over_budget_dropped);
         let inj_stats = Arc::clone(&injector_stats);
         let running = Arc::clone(&running);
         tokio::spawn(async move {
@@ -569,17 +571,18 @@ async fn run_capture_mode_inner(
                 let from_proxy = inj_stats.packets_from_proxy.load(Ordering::Relaxed);
                 let recovered = inj_stats.fec_recovered.load(Ordering::Relaxed);
                 let errors = inj_stats.inject_errors.load(Ordering::Relaxed);
+                let dropped = over_budget.load(Ordering::Relaxed);
 
                 if cap > 0 || from_proxy > 0 {
                     if fec_enabled {
                         info!(
-                            "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | FEC recovered: {} | Errors: {}",
-                            cap, cap_b, from_proxy, inj, inj_b, recovered, errors
+                            "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | FEC recovered: {} | Errors: {} | Over-budget dropped: {}",
+                            cap, cap_b, from_proxy, inj, inj_b, recovered, errors, dropped
                         );
                     } else {
                         info!(
-                            "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | Errors: {}",
-                            cap, cap_b, from_proxy, inj, inj_b, errors
+                            "📊 Out: {} pkts ({} B) | In: {} from proxy → {} injected ({} B) | Errors: {} | Over-budget dropped: {}",
+                            cap, cap_b, from_proxy, inj, inj_b, errors, dropped
                         );
                     }
                 }
@@ -622,6 +625,20 @@ async fn run_capture_mode_inner(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_micros() as u32;
+
+                if let crate::tunnel::budget::PayloadFit::OverBudget {
+                    payload_len,
+                    budget,
+                } = crate::tunnel::budget::classify(pkt.payload.len(), fec_encoder.is_some())
+                {
+                    over_budget_dropped.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(
+                        payload_len = payload_len,
+                        budget = budget,
+                        "Capture mode: dropped game payload over the conservative tunnel MTU budget"
+                    );
+                    continue;
+                }
 
                 if let Some(ref mut encoder) = fec_encoder {
                     let block_id = encoder.block_id();
@@ -686,6 +703,7 @@ async fn run_capture_mode_inner(
     let elapsed = start_time.elapsed();
     let out_total = outbound_packets.load(Ordering::Relaxed);
     let out_bytes_total = outbound_bytes.load(Ordering::Relaxed);
+    let over_budget_total = over_budget_dropped.load(Ordering::Relaxed);
     let inj_total = injector_stats.packets_injected.load(Ordering::Relaxed);
     let inj_bytes_total = injector_stats.bytes_injected.load(Ordering::Relaxed);
     let from_proxy_total = injector_stats.packets_from_proxy.load(Ordering::Relaxed);
@@ -700,6 +718,7 @@ async fn run_capture_mode_inner(
         "   Captured:        {} packets, {} bytes",
         out_total, out_bytes_total
     );
+    info!("   Over-budget dropped: {} packets", over_budget_total);
     if elapsed.as_secs() > 0 && out_total > 0 {
         info!(
             "   Avg PPS:         {:.0}",
