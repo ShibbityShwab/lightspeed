@@ -119,7 +119,7 @@ Recent LightSpeed builds close both the capture and inject handles on every orde
 If you still hit it:
 
 1. **Quit gracefully and wait a moment**: use the CLI Ctrl+C or the GUI's **Quit**, then give the handles a second or two to close before relaunching.
-2. **Stop the WinDivert service** (avoids a reboot in some cases; note the driver is shared with other WinDivert apps such as ExitLag):
+2. **Stop the WinDivert service** (avoids a reboot in some cases; note the driver is shared with any other WinDivert-based app on the machine):
    ```powershell
    sc stop windivert
    ```

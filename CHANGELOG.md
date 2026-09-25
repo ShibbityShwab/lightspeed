@@ -686,7 +686,7 @@ Anonymous, aggregated network-quality reporting — **off by default**, enabled 
 - **FEC module**: 8 tests passing.
 - **WARP routing**: Unit tested.
 - **UDP redirect**: Tested with game traffic simulation.
-- **Infrastructure research**: ISP path analysis, relay strategy, ExitLag gap analysis.
+- **Infrastructure research**: ISP path analysis, relay strategy, and a feature gap analysis.
 
 ## [0.1.0] — 2026-02-22
 

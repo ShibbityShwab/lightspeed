@@ -454,9 +454,16 @@
 
       var savedMs = finiteNumber(directAppMs) ? directAppMs : icmpSavedMs;
 
+      var negativeShare = null;
+      if (finiteNumber(interval.saved_app_ms_count) && interval.saved_app_ms_count > 0 &&
+          finiteNumber(interval.saved_app_ms_negative_count)) {
+        negativeShare = (interval.saved_app_ms_negative_count / interval.saved_app_ms_count) * 100;
+      }
+
       return {
         t: snap.t, relays: deltas, latencyMs: latencyMs, fecRatio: fecRatio,
-        savedMs: savedMs, savedIsDirectApp: finiteNumber(directAppMs)
+        savedMs: savedMs, savedIsDirectApp: finiteNumber(directAppMs),
+        negativeShare: negativeShare
       };
     });
 
@@ -471,6 +478,7 @@
       hasFec: points.some(function (point) { return finiteNumber(point.fecRatio); }),
       hasSaved: points.some(function (point) { return finiteNumber(point.savedMs); }),
       hasDirectApp: points.some(function (point) { return point.savedIsDirectApp; }),
+      hasNegativeShare: points.some(function (point) { return finiteNumber(point.negativeShare); }),
       hasIcmpSavedFallback: points.some(function (point) {
         return finiteNumber(point.savedMs) && !point.savedIsDirectApp;
       })
@@ -669,6 +677,13 @@
     summary.textContent = spec.summary;
     card.appendChild(summary);
 
+    if (spec.note) {
+      var note = document.createElement('p');
+      note.className = 'trend-note';
+      note.textContent = spec.note;
+      card.appendChild(note);
+    }
+
     if (spec.caveat) {
       var caveat = document.createElement('p');
       caveat.className = 'trend-caveat';
@@ -758,6 +773,12 @@
       heroSaved.textContent = savedSeries.length ? formatMs(savedSeries[savedSeries.length - 1]) : 'collecting';
     }
 
+    var heroNegative = document.getElementById('hero-negative-share');
+    if (heroNegative) {
+      var negativeSeries = model.points.map(function (point) { return point.negativeShare; }).filter(finiteNumber);
+      heroNegative.textContent = negativeSeries.length ? formatPercent(negativeSeries[negativeSeries.length - 1]) : 'collecting';
+    }
+
     if (model.relayIds.length) {
       var relayedSeries = relaySeries(model, 'relayed');
       grid.appendChild(renderTrendCard({
@@ -810,6 +831,11 @@
     } else {
       savedCaveat = 'Direct is the client\'s ICMP echo to the game server. Tunnelled is the round trip of the game traffic itself through the relay, which includes the server\'s own processing time. They are different instruments, so treat this as an estimate, not a measurement of in-game ping.';
     }
+    var negativeShareValues = model.points.map(function (point) { return point.negativeShare; });
+    var latestNegativeShare = latestFinite(negativeShareValues);
+    var negativeShareNote = finiteNumber(latestNegativeShare)
+      ? 'In the latest interval, ' + formatPercent(latestNegativeShare) + ' of paired client reports found the relayed app RTT worse than the direct app RTT. LightSpeed does not help every connection, and this is the share where it made things worse.'
+      : 'No paired client reports yet, so the share of reports where the relayed path was worse cannot be shown.';
     grid.appendChild(renderTrendCard({
       title: 'RTT saved by LightSpeed',
       subtitle: savedSubtitle,
@@ -819,7 +845,8 @@
       description: chartDescription('RTT saved by LightSpeed', [{ label: 'saved', values: savedValues }], formatMs),
       summary: 'Latest: ' + formatMs(latestFinite(savedValues)) + ' · ' + window,
       emptyMessage: 'No client latency reports yet, so there is no direct-versus-tunnelled comparison to plot.',
-      caveat: savedCaveat
+      caveat: savedCaveat,
+      note: negativeShareNote
     }));
 
     var fecValues = model.points.map(function (point) { return point.fecRatio; });

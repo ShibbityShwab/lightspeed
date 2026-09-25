@@ -81,7 +81,7 @@ LightSpeed now runs a **community relay network**: eight sponsor-funded relays i
 - **Community relay auto-discovery** - finds the eight community relays via the signed registry with zero config, or point at your own with `--registry <url>`
 - **RTT saved** - measures the client's direct (ICMP) game-server round trip against the tunnelled round trip so you can see the estimated saving, with the caveat that the two are different instruments
 - **ML-based route prediction** - 11-feature Random Forest model learns from your connection patterns
-- **Multipath FEC** - XOR-based Forward Error Correction with ~25% bandwidth overhead (vs. ExitLag's 200%)
+- **Multipath FEC** - XOR-based Forward Error Correction that recovers a lost packet from parity with ~25% bandwidth overhead at the default block size
 - **TCP tunnel fallback** - client↔proxy leg over TCP (`--tcp`) for networks that block UDP
 
 ### Packet Interception

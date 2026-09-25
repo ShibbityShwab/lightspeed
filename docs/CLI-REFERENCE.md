@@ -58,6 +58,7 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | Flag | Description |
 |------|-------------|
 | `--tcp` | Use TCP for the client→proxy leg (for networks that block or throttle UDP). The proxy must have its TCP listener enabled (on by default). |
+| `--dscp` | Mark tunnel packets with DSCP EF (46) so the local router/ISP may prioritise them. Off by default; only helps on the player's local hop and is ignored on Windows. Also configurable as `dscp = true` under `[tunnel]`. |
 
 ### FEC (Forward Error Correction)
 

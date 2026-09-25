@@ -112,7 +112,7 @@ Bench pre-loads K-1 data packets, then triggers recovery on parity arrival.
 | K=16| 459.9 ns| 504.6 ns| 644.2 ns| 695.1 ns|
 
 **Recovery at K=4, 256 B = 217 ns** — single lost packet recovered in well under 1 µs.
-This is the primary competitive differentiator vs. bandwidth-doubling duplication approaches.
+This is the primary differentiator from bandwidth-doubling duplication approaches.
 
 ---
 

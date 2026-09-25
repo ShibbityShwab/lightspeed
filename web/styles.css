@@ -535,6 +535,10 @@ img, svg { max-width: 100%; }
   margin-top: var(--sp-4); font-family: var(--font-mono); font-size: var(--fs-xs);
   color: var(--text-3); line-height: 1.6;
 }
+.trend-note {
+  margin-top: var(--sp-3); padding-left: var(--sp-3); border-left: 2px solid var(--text-3);
+  font-size: var(--fs-sm); color: var(--text-2); line-height: 1.6;
+}
 .trend-caveat {
   margin-top: var(--sp-3); padding-left: var(--sp-3); border-left: 2px solid var(--accent);
   font-size: var(--fs-sm); color: var(--text-2); line-height: 1.6;

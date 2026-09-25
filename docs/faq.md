@@ -10,7 +10,7 @@ Yes. LightSpeed is free for personal, non-commercial use under the LightSpeed So
 
 ### Will LightSpeed get me banned?
 
-No. LightSpeed uses the same class of network driver (WinDivert/nftables/pfctl) as ExitLag, WTFast, and NoPing. It does not modify game files, memory, or processes. All major anti-cheat systems (EAC, VAC, BattlEye, Riot Vanguard) permit this. Game servers see your real IP address - this is a transparent tunnel, not a VPN or anonymizer.
+No. LightSpeed uses the same class of OS-level network driver (WinDivert/nftables/pfctl) that other packet-capture tools use. It does not modify game files, memory, or processes. All major anti-cheat systems (EAC, VAC, BattlEye, Riot Vanguard) permit this. Game servers see your real IP address - this is a transparent tunnel, not a VPN or anonymizer.
 
 ### Why does the interceptor need root/Administrator?
 
@@ -75,7 +75,7 @@ The proxy derives the **country** of an IP address from a locally stored DB-IP L
 
 ### What is FEC?
 
-Forward Error Correction. The proxy sends a small amount of redundant data (~25%) alongside your packets. If a packet is lost, it can be reconstructed without retransmission. Much more efficient than ExitLag's packet duplication (which sends every packet 2-3 times, using 200-300% bandwidth).
+Forward Error Correction. The proxy sends a small amount of redundant data (~25% at the default block size) alongside your packets. If a packet is lost, it can be reconstructed from the parity without retransmission, so recovery does not need a round trip to the game server.
 
 ### When should I enable it?
 

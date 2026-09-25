@@ -78,7 +78,7 @@ LightSpeed is compatible with all major anti-cheat systems:
 | **Byfron (Hyperion)** | Roblox | ✅ Permitted |
 | **Elytra (VAIIYA)** | WARDOGS | ✅ Permitted |
 
-LightSpeed uses standard OS-level network drivers (WinDivert, nftables, pfctl) - the same class used by commercial optimizers like ExitLag, WTFast, and NoPing. It does **not**:
+LightSpeed uses standard OS-level network drivers (WinDivert, nftables, pfctl). It does **not**:
 - Modify game files or memory
 - Hook into game processes
 - Bypass kernel-level anti-cheat protection

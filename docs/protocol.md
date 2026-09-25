@@ -219,28 +219,38 @@ Client                          Proxy
 
 ## MTU Considerations
 
-### v1 (Plain)
+The client wraps each game datagram in the 24-byte LightSpeed header (plus a
+4-byte FEC header and a 2-byte parity trailer when FEC is on), then the kernel
+prepends the outer IPv4 (20) and UDP (8) headers. The client-to-relay leg is
+clamped to a conservative path MTU of 1492 bytes (PPPoE):
+
 ```
-Typical Internet MTU:  1500 bytes
-IP header:               20 bytes
-UDP header:               8 bytes
-LightSpeed v1 header:   20 bytes
-Available payload:     1452 bytes
-Safe payload target:   1400 bytes
+Conservative path MTU:  1492 bytes
+Outer IP header:          20 bytes
+Outer UDP header:           8 bytes
+LightSpeed header:         24 bytes
+Plain payload budget:    1440 bytes
+FEC payload budget:      1434 bytes  (also reserves the 4-byte FEC header
+                                      and the 2-byte parity trailer)
 ```
 
-### v2 (FEC)
-```
-Typical Internet MTU:  1500 bytes
-IP header:               20 bytes
-UDP header:               8 bytes
-LightSpeed v2 header:   24 bytes
-Available payload:     1446 bytes
-Safe payload target:   1400 bytes
-```
+A payload within budget is sent with the socket's don't-fragment bit set, so it
+is never fragmented. A payload over budget is **not dropped** (dropping a
+world-state packet stutters the game): it is forwarded with don't-fragment
+cleared for that datagram, so the local kernel may fragment it, and the client
+counts it. A lost fragment loses the whole datagram, which is why the clamp
+exists; forwarding the oversized payload is a deliberate tradeoff of that
+fragmentation risk against certain loss. This is a fixed clamp over the
+client-to-relay hop, not DPLPMTUD (RFC 8899).
 
-- Game packets typically 50-500 bytes → well within limits for both v1 and v2
-- FEC parity packets are padded to the max payload size in the group
+### DSCP
+
+With `dscp = true` (or `--dscp`) the client marks tunnel UDP sockets with IPv4
+DSCP EF (46), the standard low-latency class, on Linux and macOS. Only the
+player's own router or ISP can act on it; every later hop may ignore or
+reclassify it, and the proxy-to-game-server hop is not marked. Windows is not
+marked because doing so needs the QWAVE/QoS2 API rather than a plain `IP_TOS`
+call. Marking is off by default.
 
 ---
 

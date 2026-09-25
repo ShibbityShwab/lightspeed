@@ -162,6 +162,10 @@
               <dt class="stat-label">Median RTT saved</dt>
               <dd class="stat-value"><span id="hero-ping-saved">collecting</span></dd>
             </div>
+            <div class="stat">
+              <dt class="stat-label">Reports where relay was worse</dt>
+              <dd class="stat-value"><span id="hero-negative-share">collecting</span></dd>
+            </div>
           </dl>
         </div>
         <div class="hero-visual" aria-hidden="true">
@@ -729,11 +733,11 @@
           <article class="bench-card">
             <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-life-buoy"></use></svg> FEC Recovery</h3>
             <div class="bench-value">25<span class="bench-unit">%</span> overhead</div>
-            <p>XOR-based Forward Error Correction recovers lost packets with just 25% bandwidth overhead. ExitLag uses 200-300%.</p>
+            <p>XOR-based Forward Error Correction recovers a lost packet from parity with just 25% bandwidth overhead at the default block size.</p>
             <div class="bench-bar">
               <div class="bench-bar-fill" style="width: 25%"></div>
             </div>
-            <p class="bench-bar-label">25% vs ExitLag's 200-300%</p>
+            <p class="bench-bar-label">25% overhead at the default block size</p>
           </article>
           <article class="bench-card">
             <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-gauge"></use></svg> WARP Boost</h3>
@@ -771,7 +775,7 @@
       <div class="container">
         <p class="section-eyebrow">Why LightSpeed</p>
         <h2 class="section-title">Why LightSpeed?</h2>
-        <p class="section-subtitle">We're not another ExitLag clone. Here's what makes us different.</p>
+        <p class="section-subtitle">Here's what makes LightSpeed different.</p>
         <div class="compare-grid">
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-badge-dollar"></use></svg></div>
@@ -815,82 +819,52 @@
           </div>
         </div>
 
-        <!-- Comparison Table -->
+        <!-- Capabilities -->
         <div class="compare-table-wrapper">
           <table class="compare-table">
-            <caption class="sr-only">Feature comparison between LightSpeed and other route optimizers</caption>
+            <caption class="sr-only">LightSpeed capabilities</caption>
             <thead>
               <tr>
-                <th scope="col"><span class="sr-only">Feature</span></th>
+                <th scope="col">Capability</th>
                 <th scope="col" class="compare-us">LightSpeed</th>
-                <th scope="col">ExitLag</th>
-                <th scope="col">WTFast</th>
-                <th scope="col">Mudfish</th>
               </tr>
             </thead>
             <tbody>
               <tr>
                 <th scope="row">Price</th>
                 <td class="compare-us"><strong>$0/forever</strong></td>
-                <td>$6.50/mo</td>
-                <td>$9.99/mo</td>
-                <td>Pay-per-use</td>
               </tr>
               <tr>
                 <th scope="row">Open Source</th>
                 <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>Full</span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
               </tr>
               <tr>
                 <th scope="row">ML Routing</th>
                 <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>ML Model</span></td>
-                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Basic</span></td>
-                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Basic</span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
               </tr>
               <tr>
                 <th scope="row">Privacy</th>
                 <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>No accounts</span></td>
-                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Account required</span></td>
-                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Account required</span></td>
-                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>Account required</span></td>
               </tr>
               <tr>
                 <th scope="row">Self-Hostable</th>
                 <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
               </tr>
               <tr>
                 <th scope="row">Packet Recovery (FEC)</th>
                 <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>25% overhead</span></td>
-                <td><span class="cell-status is-partial"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span class="sr-only">Limited: </span>200-300% (duplication)</span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
               </tr>
               <tr>
                 <th scope="row">WARP Integration</th>
                 <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>Auto-detect</span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
               </tr>
               <tr>
                 <th scope="row">Token Authentication</th>
                 <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span>Per-packet</span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
               </tr>
               <tr>
                 <th scope="row">TCP Tunnel</th>
                 <td class="compare-us"><span class="cell-status"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg><span class="sr-only">Supported: </span><code>--tcp</code></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
-                <td><span class="cell-status is-no"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg><span class="sr-only">Not supported</span></span></td>
               </tr>
             </tbody>
           </table>

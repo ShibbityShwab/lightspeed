@@ -67,18 +67,25 @@ population of 3.
   from any source that can reach port 8080. It validates the JSON body shape,
   but it does not verify who sent it.
 
-### What opting in also triggers
+### Local measurement vs. reporting
 
-Turning telemetry on does more than send a report. While it is enabled, the
-client:
+Anonymous reporting is opt-in, and it is separate from the measurement the
+client does to optimize your connection. While a tunnel or interceptor is
+active, the client measures the paths it is choosing between, whether or not
+reporting is on:
 
 - **ICMP-probes the game server** to measure the direct (un-relayed) path.
 - **Re-injects a small sample of the game's own packets on the direct path**
   (the "shadow direct" sampler). The packet is the game's own packet, sent
   unchanged, so the client can compare like-for-like direct and relayed RTT.
-  No synthetic packet is generated.
+  No synthetic packet is generated. It is rate-limited to at most one packet
+  per game server per 30 seconds and runs only while the interceptor is active.
 
-Both stop when telemetry is off.
+These probes go to the game server, never to the relay. The numbers stay on
+your machine unless anonymous reporting is enabled. With `--no-telemetry`, no
+report is built or sent, and the relay receives nothing.
+
+Turning telemetry **on** is what sends the aggregate report described below.
 
 The client measures both the direct RTT to the game server and the tunnelled
 round trip, and the relay aggregates the difference. That difference is the

@@ -16,7 +16,7 @@
 
 ## Routing & Performance
 
-**FEC (Forward Error Correction):** XOR-based packet loss recovery. For every K data packets, one parity packet is sent. If any single packet in the block is lost, it can be reconstructed from the remaining packets. Uses ~25% bandwidth at K=4 (vs. ExitLag's 200% duplication approach).
+**FEC (Forward Error Correction):** XOR-based packet loss recovery. For every K data packets, one parity packet is sent. If any single packet in the block is lost, it can be reconstructed from the remaining packets. Uses ~25% bandwidth at the default K=4.
 
 **K (Block Size):** Number of data packets per FEC parity packet. Default is 4 (25% overhead). Higher K = less overhead but less protection against burst loss.
 
