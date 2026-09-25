@@ -24,6 +24,7 @@
 //! - **Rocket League**: `RocketLeague.exe`
 //! - **World of Tanks**: `WorldOfTanks.exe`
 //! - **Roblox**: `RobloxPlayerBeta.exe`
+//! - **WARDOGS**: `WardogsClient-Win64-Shipping.exe`
 //!
 //! ## Capture Filters
 //!
@@ -46,6 +47,7 @@ pub mod roblox;
 pub mod rocketleague;
 pub mod rust;
 pub mod valorant;
+pub mod wardogs;
 pub mod wot;
 pub mod zomboid;
 
@@ -146,8 +148,9 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "zomboid" | "projectzomboid" | "project-zomboid" | "pz" => {
             Ok(Box::new(zomboid::ZomboidConfig))
         }
+        "wardogs" => Ok(Box::new(wardogs::WardogsConfig)),
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid",
+            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid, wardogs",
             name
         ),
     }
@@ -157,7 +160,7 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
 ///
 /// This is the single source of truth: [`detect_game`] resolves the keys and
 /// [`all_games`] / [`all_game_keys`] derive from it. Register every new game
-/// here (the `games` tests enforce the 18-entry count and key/name agreement).
+/// here (the `games` tests enforce the 19-entry count and key/name agreement).
 pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("fortnite", "Fortnite"),
     ("cs2", "Counter-Strike 2"),
@@ -177,6 +180,7 @@ pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("roblox", "Roblox"),
     ("wot", "World of Tanks"),
     ("zomboid", "Project Zomboid"),
+    ("wardogs", "WARDOGS"),
 ];
 
 /// Return every CLI key paired with its display name.
@@ -312,6 +316,8 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         "RobloxPlayerBeta.exe",
         "ProjectZomboid64.exe",
         "ProjectZomboid",
+        "WardogsClient-Win64-Shipping.exe",
+        "WardogsLauncher-Shipping.exe",
     ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
@@ -320,7 +326,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid"
+         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid, wardogs"
     )
 }
 
@@ -471,6 +477,8 @@ mod tests {
         "projectzomboid",
         "project-zomboid",
         "pz",
+        // WARDOGS
+        "wardogs",
     ];
 
     #[test]
@@ -487,11 +495,11 @@ mod tests {
     }
 
     #[test]
-    fn test_all_game_keys_has_eighteen_entries() {
+    fn test_all_game_keys_has_nineteen_entries() {
         assert_eq!(
             all_game_keys().len(),
-            18,
-            "GAME_REGISTRY must stay in sync with the 18 supported games"
+            19,
+            "GAME_REGISTRY must stay in sync with the 19 supported games"
         );
     }
 
@@ -742,6 +750,18 @@ mod tests {
         assert!(bodycam.uses_sdr());
         assert!(bodycam.typical_pps() > 0);
         assert_eq!(bodycam.anti_cheat(), "None");
+
+        let wardogs = wardogs::WardogsConfig;
+        assert_eq!(wardogs.name(), "WARDOGS");
+        assert!(wardogs
+            .process_names()
+            .contains(&"WardogsClient-Win64-Shipping.exe"));
+        assert_eq!(wardogs.ports(), (7777, 7788));
+        assert_eq!(wardogs.redirect_port(), 7777);
+        assert!(!wardogs.uses_sdr());
+        assert!(wardogs.dynamic_server());
+        assert!(wardogs.typical_pps() > 0);
+        assert_eq!(wardogs.anti_cheat(), "Elytra (kernel-mode)");
     }
 
     #[test]

@@ -68,6 +68,7 @@ LightSpeed now runs a **community relay network**: eight sponsor-funded relays i
 | Bodycam | `--game bodycam` | None | ✅ |
 | Roblox | `--game roblox` | Byfron (Hyperion) | ✅ |
 | Project Zomboid | `--game zomboid` | None | ✅ |
+| WARDOGS | `--game wardogs` | Elytra (kernel) | ✅ |
 
 📖 **[Full Game List →](docs/supported-games.md)**
 

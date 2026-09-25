@@ -60,6 +60,8 @@ pub mod game_id {
     pub const ROBLOX: u8 = 17;
     /// The Indie Stone's Project Zomboid (isometric survival).
     pub const ZOMBOID: u8 = 18;
+    /// BULKHEAD's WARDOGS (100-player tactical FPS, Unreal Engine 5).
+    pub const WARDDOGS: u8 = 19;
 
     /// Canonical CLI key mapped to its wire id, ordered by ascending id.
     ///
@@ -84,6 +86,7 @@ pub mod game_id {
         ("bodycam", BODYCAM),
         ("roblox", ROBLOX),
         ("zomboid", ZOMBOID),
+        ("wardogs", WARDDOGS),
     ];
 
     /// Resolve a CLI game key to its wire id, or [`UNKNOWN`] when absent.
@@ -564,19 +567,19 @@ mod tests {
 
     #[test]
     fn test_game_ids_unique_and_stable() {
-        assert_eq!(game_id::GAME_IDS.len(), 18, "every real game needs one id");
+        assert_eq!(game_id::GAME_IDS.len(), 19, "every real game needs one id");
 
-        // Each id 1..=18 must appear exactly once (0 stays reserved for UNKNOWN).
-        let mut seen = [0u8; 19];
+        // Each id 1..=19 must appear exactly once (0 stays reserved for UNKNOWN).
+        let mut seen = [0u8; 20];
         for (key, id) in game_id::GAME_IDS.iter().copied() {
             assert!(
-                (1..=18).contains(&id),
+                (1..=19).contains(&id),
                 "key {key:?} has out-of-range id {id}"
             );
             assert_eq!(seen[id as usize], 0, "duplicate id {id}");
             seen[id as usize] += 1;
         }
-        for id in 1..=18u8 {
+        for id in 1..=19u8 {
             assert_eq!(seen[id as usize], 1, "id {id} missing or duplicated");
         }
 
@@ -598,6 +601,7 @@ mod tests {
         assert_eq!(game_id::BODYCAM, 16);
         assert_eq!(game_id::ROBLOX, 17);
         assert_eq!(game_id::ZOMBOID, 18);
+        assert_eq!(game_id::WARDDOGS, 19);
     }
 
     #[test]
