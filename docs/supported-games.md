@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 18 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 19 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -26,11 +26,18 @@ LightSpeed includes built-in profiles for 18 popular multiplayer games. Each pro
 | 16 | **CS:GO Legacy** | `--game csgo` | 27000-27050 | VAC | `csgo.exe` |
 | 17 | **Roblox** | `--game roblox` | 49152-65535 | Byfron (Hyperion) | `RobloxPlayerBeta.exe` |
 | 18 | **Project Zomboid** | `--game zomboid` | 16261-16262 | None | `ProjectZomboid64.exe` |
+| 19 | **WARDOGS** | `--game wardogs` | 7777-7788 | Elytra (kernel-mode) | `WardogsClient-Win64-Shipping.exe` |
 
 > **Roblox note:** Roblox has no native Linux client. On Linux, run it through
 > Wine/Proton, where the process name may appear truncated. Roblox picks its
 > outbound UDP source port from the high ephemeral range (49152-65535) per
 > server instance, so capture/intercept mode works better than redirect mode.
+
+> **WARDOGS note:** Bulkhead has not published a client port list, and the
+> dedicated server binds an operator-chosen `-port`, so the 7777-7788 range is
+> an unverified third-party observation (Unreal's default is 7777). Confirm it
+> with a packet capture. WARDOGS is Windows-only for now: its kernel-level
+> Elytra anti-cheat blocks Proton on Linux, so capture must run on Windows.
 
 ---
 
@@ -69,6 +76,7 @@ LightSpeed is compatible with all major anti-cheat systems:
 | **Blizzard Warden** | Overwatch 2 | ✅ Permitted |
 | **Nexon Game Security (NGS)** | MapleStory | ✅ Permitted |
 | **Byfron (Hyperion)** | Roblox | ✅ Permitted |
+| **Elytra (VAIIYA)** | WARDOGS | ✅ Permitted |
 
 LightSpeed uses standard OS-level network drivers (WinDivert, nftables, pfctl) - the same class used by commercial optimizers like ExitLag, WTFast, and NoPing. It does **not**:
 - Modify game files or memory

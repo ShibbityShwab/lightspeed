@@ -82,7 +82,7 @@ lightspeed/
 ├── client/         # Rust client (packet capture + routing)
 │   └── src/
 │       ├── capture/    # pcap backends (Linux/macOS/Windows)
-│       ├── games/      # Game-specific profiles (18 games: Rust, CS2, Fortnite, ...)
+│       ├── games/      # Game-specific profiles (19 games: Rust, CS2, Fortnite, ...)
 │       ├── ml/         # ML route selection (linfa)
 │       ├── route/      # Route selector + failover
 │       └── tunnel/     # UDP tunnel engine

@@ -15,7 +15,7 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | Flag | Description |
 |------|-------------|
 | `-c, --config <PATH>` | Path to config file (default: `lightspeed.toml`) |
-| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot`, `deadbydaylight`, `bodycam`, `csgo`, `roblox`, `zomboid` (run `--list-games` for the full list) |
+| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot`, `deadbydaylight`, `bodycam`, `csgo`, `roblox`, `zomboid`, `wardogs` (run `--list-games` for the full list) |
 | `-p, --proxy <ADDR>` | Proxy server address (`host:port`). Auto-selects from config if omitted |
 | `-v, --verbose` | Enable verbose logging |
 

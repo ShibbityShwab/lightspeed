@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **WARDOGS game profile.** Added `--game wardogs` for BULKHEAD's 100-player
+  tactical FPS (Steam App ID 1867240). WARDOGS runs dedicated servers behind a
+  server browser, so the profile marks it dynamic-server and non-SDR. The port
+  range (7777-7788) is an unverified third-party observation because Bulkhead
+  has not published a client port list; confirm with a capture. Kernel-level
+  Elytra anti-cheat means Windows-only capture (Proton is currently blocked).
+
 ## [1.6.9] - 2026-09-23
 
 ### Fixed
