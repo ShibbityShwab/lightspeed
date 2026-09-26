@@ -20,15 +20,76 @@ use crate::ml::RouteModel;
 /// real samples.
 const PRIOR_CONFIDENCE: f64 = 0.25;
 
+/// Largest measured uncertainty priced into a candidate's score. A very noisy
+/// sample is capped so a single bad window cannot dominate the ranking.
+const MEASURED_UNCERTAINTY_CAP_US: u64 = 25_000;
+
+/// Flat uncertainty charged to a borrowed destination leg, which describes a
+/// different relay's path and is therefore always less trustworthy than a
+/// direct measurement.
+const BORROWED_UNCERTAINTY_US: u64 = 20_000;
+
+/// Flat uncertainty charged to a region-prior destination leg, which is a
+/// great-circle heuristic rather than a measurement.
+const PRIOR_UNCERTAINTY_US: u64 = 15_000;
+
+/// Scores within this window are treated as tied and resolved by provenance,
+/// so a difference smaller than the measurement floor cannot flip the choice.
+const PROVENANCE_TIE_BAND_US: u64 = 1_000;
+
+/// Where a destination leg came from, ordered from most to least preferred
+/// within the tie-band: real samples beat another relay's pooled samples, which
+/// beat a region-level distance heuristic.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Provenance {
+    /// Direct client-to-relay samples for this destination.
+    Measured,
+    /// Another relay's pooled estimate, borrowed for an unmeasured candidate.
+    Borrowed,
+    /// A coarse region-level distance heuristic.
+    Prior,
+}
+
+/// The estimated relay-to-destination leg for one candidate: the point
+/// estimate, advisory confidence, provenance, and the uncertainty charged when
+/// ranking.
+#[derive(Clone, Copy)]
+struct DestLeg {
+    /// Estimated relay-to-destination round trip in microseconds.
+    dest_leg_us: u64,
+    /// Advisory confidence in `0.0..=1.0` (see [`DestinationEstimate`]).
+    confidence: f64,
+    /// Uncertainty charged to the risk-adjusted score, in microseconds.
+    penalty_us: u64,
+    /// Where this leg's estimate came from.
+    provenance: Provenance,
+}
+
+/// A scored candidate: the proxy plus every field the comparator orders on.
+struct Candidate<'a> {
+    proxy: &'a ProxyNode,
+    score_us: u64,
+    provenance: Provenance,
+    confidence: f64,
+    client_leg_us: u64,
+}
+
 /// Destination-aware selector: ranks relays by the whole path, not just the
 /// client-to-relay leg.
 ///
 /// For each healthy candidate it adds the locally measured client leg
 /// ([`ProxyNode::latency_us`]) to the estimated relay-to-destination leg from
-/// [`RelayDestinationEstimator`]. A candidate with no destination signal of its
-/// own borrows the pooled estimate across relays that do have one. When no
-/// candidate has any destination signal, this delegates to [`NearestSelector`],
-/// so behaviour is never worse than the MVP selector.
+/// [`RelayDestinationEstimator`]. The ranking is risk-adjusted: each leg's
+/// uncertainty is priced in with a capped penalty (measured uncertainty up to
+/// [`MEASURED_UNCERTAINTY_CAP_US`], [`PRIOR_UNCERTAINTY_US`] for a region
+/// prior, [`BORROWED_UNCERTAINTY_US`] for a pooled borrow), so a stable path
+/// beats a noisy one of the same point estimate and a thin measurement cannot
+/// outrank solid evidence or freeze out an unmeasured relay whose prior is
+/// genuinely better. Candidates within [`PROVENANCE_TIE_BAND_US`] are separated
+/// by provenance rather than by noise. A candidate with no destination signal
+/// of its own borrows the pooled estimate across relays that do have one. When
+/// no candidate has any destination signal, this delegates to
+/// [`NearestSelector`], so behaviour is never worse than the MVP selector.
 pub struct DestinationAwareSelector {
     estimator: Option<Arc<RelayDestinationEstimator>>,
 }
@@ -84,19 +145,29 @@ impl RouteSelector for DestinationAwareSelector {
         // Measured evidence for this destination wins; an unmeasured relay
         // falls back to a region prior when both regions are known, and relays
         // with neither rely on the pooled borrow below.
-        let legs: Vec<Option<(u64, f64)>> = healthy
+        let legs: Vec<Option<DestLeg>> = healthy
             .iter()
             .zip(measured.iter())
             .map(|(proxy, estimate)| {
-                let (dest_leg, confidence) = match estimate {
-                    Some(est) => (est.dest_leg_us, est.confidence),
+                let leg = match estimate {
+                    Some(est) => DestLeg {
+                        dest_leg_us: est.dest_leg_us,
+                        confidence: est.confidence,
+                        penalty_us: measured_penalty_us(est.uncertainty_us),
+                        provenance: Provenance::Measured,
+                    },
                     None => {
                         let prior =
                             regions::prior_dest_leg_us(&proxy.region, dest_region.as_deref()?)?;
-                        (prior, PRIOR_CONFIDENCE)
+                        DestLeg {
+                            dest_leg_us: prior,
+                            confidence: PRIOR_CONFIDENCE,
+                            penalty_us: PRIOR_UNCERTAINTY_US,
+                            provenance: Provenance::Prior,
+                        }
                     }
                 };
-                Some((dest_leg, confidence))
+                Some(leg)
             })
             .collect();
 
@@ -106,34 +177,46 @@ impl RouteSelector for DestinationAwareSelector {
             return nearest.select(game_server, available_proxies);
         }
 
-        let borrow: (u64, f64) = match &pooled {
-            Some(est) => (est.dest_leg_us, est.confidence * 0.5),
+        let borrow: DestLeg = match &pooled {
+            Some(est) => DestLeg {
+                dest_leg_us: est.dest_leg_us,
+                confidence: est.confidence * 0.5,
+                penalty_us: BORROWED_UNCERTAINTY_US,
+                provenance: Provenance::Borrowed,
+            },
             None => {
-                let known: Vec<u64> = legs
-                    .iter()
-                    .flatten()
-                    .map(|(dest_leg, _)| *dest_leg)
-                    .collect();
-                (median_u64(&known).unwrap_or(0), PRIOR_CONFIDENCE * 0.5)
+                let known: Vec<u64> = legs.iter().flatten().map(|leg| leg.dest_leg_us).collect();
+                DestLeg {
+                    dest_leg_us: median_u64(&known).unwrap_or(0),
+                    confidence: PRIOR_CONFIDENCE * 0.5,
+                    penalty_us: BORROWED_UNCERTAINTY_US,
+                    provenance: Provenance::Borrowed,
+                }
             }
         };
 
-        let mut scored: Vec<(&ProxyNode, u64, f64)> = healthy
+        let mut scored: Vec<Candidate<'_>> = healthy
             .iter()
             .zip(legs.iter())
             .map(|(proxy, leg)| {
                 let client_leg = proxy.latency_us.unwrap_or(u64::MAX);
-                let (dest_leg, confidence) = leg.unwrap_or(borrow);
-                (*proxy, client_leg.saturating_add(dest_leg), confidence)
+                let leg = leg.unwrap_or(borrow);
+                Candidate {
+                    proxy,
+                    score_us: risk_adjusted_score(client_leg, leg.dest_leg_us, leg.penalty_us),
+                    provenance: leg.provenance,
+                    confidence: leg.confidence,
+                    client_leg_us: client_leg,
+                }
             })
             .collect();
-        scored.sort_by_key(|(_, score, _)| *score);
+        scored.sort_by(compare_candidates);
 
-        let confidence_sum: f64 = scored.iter().map(|(_, _, c)| *c).sum();
+        let confidence_sum: f64 = scored.iter().map(|c| c.confidence).sum();
         let confidence = (0.4 + 0.5 * confidence_sum / scored.len() as f64).clamp(0.3, 0.9);
 
-        let primary = scored[0].0.clone();
-        let backups: Vec<ProxyNode> = scored[1..].iter().map(|(p, _, _)| (*p).clone()).collect();
+        let primary = scored[0].proxy.clone();
+        let backups: Vec<ProxyNode> = scored[1..].iter().map(|c| c.proxy.clone()).collect();
 
         Ok(SelectedRoute {
             primary,
@@ -160,6 +243,26 @@ fn median_u64(values: &[u64]) -> Option<u64> {
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
     Some(sorted[sorted.len() / 2])
+}
+
+fn measured_penalty_us(uncertainty_us: u64) -> u64 {
+    uncertainty_us.min(MEASURED_UNCERTAINTY_CAP_US)
+}
+
+fn risk_adjusted_score(client_leg_us: u64, dest_leg_us: u64, penalty_us: u64) -> u64 {
+    client_leg_us
+        .saturating_add(dest_leg_us)
+        .saturating_add(penalty_us)
+}
+
+fn compare_candidates(a: &Candidate<'_>, b: &Candidate<'_>) -> std::cmp::Ordering {
+    let a_band = a.score_us / PROVENANCE_TIE_BAND_US;
+    let b_band = b.score_us / PROVENANCE_TIE_BAND_US;
+    a_band
+        .cmp(&b_band)
+        .then(a.provenance.cmp(&b.provenance))
+        .then(b.confidence.total_cmp(&a.confidence))
+        .then(a.client_leg_us.cmp(&b.client_leg_us))
 }
 
 // ── Nearest Selector (MVP Default) ──────────────────────────
@@ -575,6 +678,19 @@ mod tests {
         }
     }
 
+    fn feed_varied(
+        estimator: &RelayDestinationEstimator,
+        addr: SocketAddrV4,
+        destination: Ipv4Addr,
+        client_us: u64,
+        tunnelled_us: &[u64],
+    ) {
+        for &sample in tunnelled_us {
+            estimator.observe_client_leg(addr, client_us);
+            estimator.observe_tunnelled(addr, destination, sample);
+        }
+    }
+
     fn node_in_region(id: &str, addr: &str, latency_us: u64, region: &str) -> ProxyNode {
         let mut proxy = node(id, addr, latency_us);
         proxy.region = region.into();
@@ -762,6 +878,160 @@ mod tests {
         let result = selector.select(game_server, &proxies).unwrap();
         assert_eq!(result.primary.id, "a");
         assert_eq!(result.strategy, RouteStrategy::Nearest);
+    }
+
+    #[test]
+    fn test_worked_case_scores_match_the_expected_penalties() {
+        assert_eq!(measured_penalty_us(20_000), 20_000);
+        assert_eq!(measured_penalty_us(2_000), 2_000);
+        assert_eq!(measured_penalty_us(500_000), MEASURED_UNCERTAINTY_CAP_US);
+        // measured(30ms, u=20ms) scores 50ms; measured(35ms, u=2ms) scores 37ms.
+        assert_eq!(
+            risk_adjusted_score(0, 30_000, measured_penalty_us(20_000)),
+            50_000
+        );
+        assert_eq!(
+            risk_adjusted_score(0, 35_000, measured_penalty_us(2_000)),
+            37_000
+        );
+        // prior(10ms) scores 25ms; measured(30ms, u=2ms) scores 32ms.
+        assert_eq!(risk_adjusted_score(0, 10_000, PRIOR_UNCERTAINTY_US), 25_000);
+        assert_eq!(
+            risk_adjusted_score(0, 30_000, measured_penalty_us(2_000)),
+            32_000
+        );
+        assert!(Provenance::Measured < Provenance::Borrowed);
+        assert!(Provenance::Borrowed < Provenance::Prior);
+    }
+
+    #[test]
+    fn test_worked_case_solid_measurement_beats_noisy() {
+        let destination: Ipv4Addr = "1.2.3.4".parse().unwrap();
+        let estimator = Arc::new(RelayDestinationEstimator::new());
+        // Noisy: client 10ms, dest 20ms, u=20ms -> point 30ms, score 50ms.
+        feed_varied(
+            &estimator,
+            "10.0.1.1:4434".parse().unwrap(),
+            destination,
+            10_000,
+            &[
+                10_000, 10_000, 10_000, 30_000, 30_000, 50_000, 50_000, 50_000,
+            ],
+        );
+        // Solid: client 10ms, dest 25ms, u=2ms -> point 35ms, score 37ms.
+        feed_varied(
+            &estimator,
+            "10.0.2.1:4434".parse().unwrap(),
+            destination,
+            10_000,
+            &[
+                33_000, 33_000, 33_000, 35_000, 35_000, 37_000, 37_000, 37_000,
+            ],
+        );
+
+        let selector = DestinationAwareSelector::with_estimator(estimator);
+        let proxies = vec![
+            node("noisy", "10.0.1.1:4434", 10_000),
+            node("solid", "10.0.2.1:4434", 10_000),
+        ];
+
+        let result = selector
+            .select(SocketAddrV4::new(destination, 27015), &proxies)
+            .unwrap();
+        assert_eq!(
+            result.primary.id, "solid",
+            "a tighter measured estimate must beat a lower-point but noisy one"
+        );
+        assert_eq!(result.backups[0].id, "noisy");
+    }
+
+    #[test]
+    fn test_worked_case_prior_stays_eligible() {
+        let destination: Ipv4Addr = "203.0.113.10".parse().unwrap();
+        let game_server = SocketAddrV4::new(destination, 27015);
+        let estimator = Arc::new(RelayDestinationEstimator::new());
+        estimator.set_destination_region(destination, "oceania");
+        // Measured: client 10ms, dest 20ms, u=2ms -> score 32ms.
+        feed_varied(
+            &estimator,
+            "10.0.1.1:4434".parse().unwrap(),
+            destination,
+            10_000,
+            &[
+                28_000, 28_000, 28_000, 30_000, 30_000, 32_000, 32_000, 32_000,
+            ],
+        );
+
+        let selector = DestinationAwareSelector::with_estimator(estimator);
+        let proxies = vec![
+            node_in_region("sydney", "10.0.3.1:4434", 0, "ap-southeast-2"),
+            node_in_region("near", "10.0.1.1:4434", 10_000, "us-west"),
+        ];
+
+        let result = selector.select(game_server, &proxies).unwrap();
+        assert_eq!(
+            result.primary.id, "sydney",
+            "a genuinely closer unmeasured relay must not be frozen out by its prior"
+        );
+    }
+
+    #[test]
+    fn test_noisy_measurement_cannot_freeze_out_the_region_prior() {
+        let destination: Ipv4Addr = "203.0.113.10".parse().unwrap();
+        let game_server = SocketAddrV4::new(destination, 27015);
+        let estimator = Arc::new(RelayDestinationEstimator::new());
+        estimator.set_destination_region(destination, "oceania");
+        // Lax: point 35ms but u=25ms -> score 60ms. Sydney prior: point 40ms,
+        // score 55ms. The noisy alternative must not bury the prior.
+        feed_varied(
+            &estimator,
+            "10.0.1.1:4434".parse().unwrap(),
+            destination,
+            5_000,
+            &[5_000, 5_000, 5_000, 35_000, 35_000, 55_000, 55_000, 55_000],
+        );
+
+        let selector = DestinationAwareSelector::with_estimator(estimator);
+        let proxies = vec![
+            node_in_region("sydney", "10.0.3.1:4434", 30_000, "ap-southeast-2"),
+            node_in_region("lax", "10.0.1.1:4434", 5_000, "us-west"),
+        ];
+
+        let result = selector.select(game_server, &proxies).unwrap();
+        assert_eq!(
+            result.primary.id, "sydney",
+            "a coarse but stable prior must outrank a noisier measured path"
+        );
+    }
+
+    #[test]
+    fn test_prior_within_tie_band_loses_to_measured() {
+        let destination: Ipv4Addr = "203.0.113.10".parse().unwrap();
+        let game_server = SocketAddrV4::new(destination, 27015);
+        let estimator = Arc::new(RelayDestinationEstimator::new());
+        estimator.set_destination_region(destination, "oceania");
+        // Lax measured: client 5ms, dest 15ms, u=5ms -> score 25ms.
+        feed_varied(
+            &estimator,
+            "10.0.1.1:4434".parse().unwrap(),
+            destination,
+            5_000,
+            &[
+                15_000, 15_000, 15_000, 20_000, 20_000, 25_000, 25_000, 25_000,
+            ],
+        );
+
+        let selector = DestinationAwareSelector::with_estimator(estimator);
+        let proxies = vec![
+            node_in_region("sydney", "10.0.3.1:4434", 0, "ap-southeast-2"),
+            node_in_region("lax", "10.0.1.1:4434", 5_000, "us-west"),
+        ];
+
+        let result = selector.select(game_server, &proxies).unwrap();
+        assert_eq!(
+            result.primary.id, "lax",
+            "measured evidence must beat a prior of the same nominal score"
+        );
     }
 
     #[test]
