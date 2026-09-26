@@ -11,7 +11,7 @@ use tokio::sync::watch;
 
 use crate::route::ProxyHealth;
 
-use super::proxy_probe::select_best_proxy;
+use super::proxy_probe::{select_best_proxy, ProbeCandidate};
 
 /// How often to re-probe and consider switching relays.
 const REROUTE_INTERVAL: Duration = Duration::from_secs(30);
@@ -97,12 +97,12 @@ fn log_multipath_stats() {
 
 /// Run the continuous re-routing loop until `shutdown` fires.
 ///
-/// Re-probes `servers` every [`REROUTE_INTERVAL`], re-selects the best relay,
-/// and updates the process-global current relay (re-registering for a fresh
-/// session token) when a meaningfully better relay is found. The interceptor
-/// engine reads the global on every packet send.
+/// Re-probes `candidates` every [`REROUTE_INTERVAL`], re-selects the best
+/// relay, and updates the process-global current relay (re-registering for a
+/// fresh session token) when a meaningfully better relay is found. The
+/// interceptor engine reads the global on every packet send.
 pub async fn run_continuous_rerouting(
-    servers: Vec<String>,
+    candidates: Vec<ProbeCandidate>,
     data_port: u16,
     control_port: u16,
     game_server: SocketAddrV4,
@@ -120,18 +120,13 @@ pub async fn run_continuous_rerouting(
             _ = tokio::time::sleep(REROUTE_INTERVAL) => {}
         }
 
-        let route = match select_best_proxy(
-            &servers,
-            data_port,
-            control_port,
-            game_server,
-            &strategy,
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+        let route =
+            match select_best_proxy(&candidates, data_port, control_port, game_server, &strategy)
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
 
         let best = route.primary;
 

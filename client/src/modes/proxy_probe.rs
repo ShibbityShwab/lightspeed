@@ -12,6 +12,11 @@ use crate::cli::parse_proxy_addr;
 use crate::route::selector::{DestinationAwareSelector, NearestSelector};
 use crate::route::{destination, ProxyHealth, ProxyNode, RouteSelector, SelectedRoute};
 
+/// A relay to probe: `(id, data_addr, region)`. The region is the coarse
+/// registry label (for example `ap-southeast-2`); a manually configured relay
+/// with no registry entry uses `"unknown"`.
+pub type ProbeCandidate = (String, String, String);
+
 /// Probe a single proxy by sending keepalive packets and measuring RTT.
 ///
 /// Sends `num_pings` keepalive packets and returns the **median** RTT in
@@ -76,10 +81,16 @@ pub async fn probe_all_proxies(
     data_port: u16,
     quic_port: u16,
 ) -> Vec<ProxyNode> {
-    let candidates: Vec<(String, String)> = servers
+    let candidates: Vec<ProbeCandidate> = servers
         .iter()
         .enumerate()
-        .map(|(i, server_str)| (format!("proxy-{}", i), server_str.clone()))
+        .map(|(i, server_str)| {
+            (
+                format!("proxy-{}", i),
+                server_str.clone(),
+                "unknown".to_string(),
+            )
+        })
         .collect();
     probe_labeled(&candidates, data_port, quic_port).await
 }
@@ -88,13 +99,13 @@ pub async fn probe_all_proxies(
 /// `ProxyNode` list with measured latencies. Each tuple is
 /// `(label, addr_str)`, and the resulting `ProxyNode.id` is the supplied label.
 pub async fn probe_labeled(
-    candidates: &[(String, String)],
+    candidates: &[ProbeCandidate],
     data_port: u16,
     quic_port: u16,
 ) -> Vec<ProxyNode> {
     let mut handles = Vec::new();
 
-    for (id, server_str) in candidates {
+    for (id, server_str, region) in candidates {
         let addr = match parse_proxy_addr(server_str) {
             Ok(a) => {
                 // If the server string has no port component, use the config data_port
@@ -111,16 +122,17 @@ pub async fn probe_labeled(
         };
 
         let id = id.clone();
+        let region = region.clone();
         handles.push(tokio::spawn(async move {
             let latency = probe_single_proxy(addr, 3, 2000).await;
-            (id, addr, latency)
+            (id, addr, region, latency)
         }));
     }
 
     destination::ensure_global();
     let mut nodes = Vec::new();
     for handle in handles {
-        if let Ok((id, addr, latency)) = handle.await {
+        if let Ok((id, addr, region, latency)) = handle.await {
             let health = match latency {
                 Some(us) if us < 500_000 => ProxyHealth::Healthy, // < 500 ms
                 Some(_) => ProxyHealth::Degraded,                 // ≥ 500 ms
@@ -131,7 +143,7 @@ pub async fn probe_labeled(
                 id,
                 data_addr: addr,
                 control_addr: SocketAddrV4::new(*addr.ip(), quic_port),
-                region: "unknown".into(),
+                region,
                 health,
                 latency_us: latency,
                 load: 0.0,
@@ -154,13 +166,13 @@ pub async fn probe_labeled(
 /// Probes all proxies, builds a `ProxyNode` list, and runs the
 /// `RouteSelector`.
 pub async fn select_best_proxy(
-    servers: &[String],
+    candidates: &[ProbeCandidate],
     data_port: u16,
     quic_port: u16,
     game_server: SocketAddrV4,
     strategy: &str,
 ) -> anyhow::Result<SelectedRoute> {
-    let nodes = probe_all_proxies(servers, data_port, quic_port).await;
+    let nodes = probe_labeled(candidates, data_port, quic_port).await;
 
     if nodes.is_empty() {
         anyhow::bail!("No proxy servers could be resolved");

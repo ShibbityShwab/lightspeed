@@ -48,7 +48,7 @@ use modes::{
     intercept_mode::run_intercept_mode,
     keepalive::run_keepalive_mode,
     live_test::run_live_test,
-    proxy_probe::{probe_labeled, select_best_proxy},
+    proxy_probe::{probe_labeled, select_best_proxy, ProbeCandidate},
     smoke_test::run_smoke_test,
     tunnel_test::run_tunnel_test,
     watch_mode::run_watch_mode,
@@ -60,11 +60,13 @@ use tunnel::relay::UdpRelay;
 /// Default config template written by `--write-config`.
 const EXAMPLE_CONFIG: &str = include_str!("../lightspeed.example.toml");
 
-/// A resolved proxy choice plus the full set of candidate relay addresses it
-/// was discovered from, for feeding multipath/continuous rerouting.
+/// A resolved proxy choice plus the full set of candidate relays it was
+/// discovered from, for feeding multipath/continuous rerouting. Each candidate
+/// carries the registry region so re-selection can still place an unmeasured
+/// relay.
 struct ResolvedProxy {
     addr: SocketAddrV4,
-    servers: Vec<String>,
+    candidates: Vec<ProbeCandidate>,
 }
 
 /// Zeroes the process-global data-plane tokens when the client exits.
@@ -89,7 +91,11 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
         info!("🌐 Proxy (explicit): {}", addr);
         return Ok(ResolvedProxy {
             addr,
-            servers: vec![proxy_str.clone()],
+            candidates: vec![(
+                format!("proxy-{}", addr.ip()),
+                proxy_str.clone(),
+                "unknown".to_string(),
+            )],
         });
     }
     if !config.proxy.servers.is_empty() {
@@ -107,8 +113,21 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
             config.proxy.servers.len(),
             strategy
         );
+        let candidates: Vec<ProbeCandidate> = config
+            .proxy
+            .servers
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                (
+                    format!("configured-{}", i),
+                    s.clone(),
+                    "unknown".to_string(),
+                )
+            })
+            .collect();
         let selected = select_best_proxy(
-            &config.proxy.servers,
+            &candidates,
             config.proxy.data_port,
             config.proxy.quic_port,
             game_server_addr,
@@ -116,7 +135,7 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
         )
         .await?;
         info!(
-            "🌐 Proxy (auto-selected): {} [{}] — {:.1}ms latency, strategy: {:?}",
+            "🌐 Proxy (auto-selected): {} [{}] - {:.1}ms latency, strategy: {:?}",
             selected.primary.data_addr,
             selected.primary.id,
             selected.primary.latency_us.unwrap_or(0) as f64 / 1000.0,
@@ -139,7 +158,7 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
         }
         return Ok(ResolvedProxy {
             addr: selected.primary.data_addr,
-            servers: config.proxy.servers.clone(),
+            candidates,
         });
     }
 
@@ -157,8 +176,8 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
         .as_deref()
         .filter(|k| !k.is_empty())
         .unwrap_or(crate::registry::DEFAULT_OPERATOR_PUBKEY_B64);
-    match crate::registry::discover_nodes(registry_url, operator_key, config.proxy.quic_port) {
-        Ok(nodes) if !nodes.is_empty() => {
+    match crate::registry::discover_relays(registry_url, operator_key, config.proxy.quic_port) {
+        Ok(relays) if !relays.is_empty() => {
             let strategy = cli
                 .route_strategy
                 .as_deref()
@@ -168,40 +187,44 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
                 .as_ref()
                 .and_then(|s| parse_proxy_addr(s).ok())
                 .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
-            let addrs: Vec<String> = nodes.iter().map(|(_, addr)| addr.clone()).collect();
-            for (id, addr) in &nodes {
-                if let Ok(a) = parse_proxy_addr(addr) {
-                    telemetry::paths::register_relay_node(a, id);
+            let candidates: Vec<ProbeCandidate> = relays
+                .iter()
+                .map(|relay| {
+                    (
+                        relay.node_id.clone(),
+                        relay.addr.clone(),
+                        relay.region.clone(),
+                    )
+                })
+                .collect();
+            for relay in &relays {
+                if let Ok(a) = parse_proxy_addr(&relay.addr) {
+                    telemetry::paths::register_relay_node(a, &relay.node_id);
                 }
             }
             info!(
                 "🔍 Registry: {} relay(s) discovered; probing (strategy: {})...",
-                addrs.len(),
+                candidates.len(),
                 strategy
             );
             let selected = select_best_proxy(
-                &addrs,
+                &candidates,
                 config.proxy.data_port,
                 config.proxy.quic_port,
                 game_server_addr,
                 strategy,
             )
             .await?;
-            let selected_id = nodes
-                .iter()
-                .find(|(_, addr)| addr == &selected.primary.data_addr.to_string())
-                .map(|(id, _)| id.clone())
-                .unwrap_or_else(|| selected.primary.id.clone());
             info!(
                 "🌐 Proxy (registry): {} [{}], {:.1}ms latency, strategy: {:?}",
                 selected.primary.data_addr,
-                selected_id,
+                selected.primary.id,
                 selected.primary.latency_us.unwrap_or(0) as f64 / 1000.0,
                 selected.strategy,
             );
             return Ok(ResolvedProxy {
                 addr: selected.primary.data_addr,
-                servers: addrs,
+                candidates,
             });
         }
         Ok(_) => warn!("Registry returned no relays; falling back to default proxy"),
@@ -212,7 +235,7 @@ async fn resolve_proxy_addr(cli: &Cli, config: &config::Config) -> anyhow::Resul
     warn!("No proxy specified, using default: {}", default);
     Ok(ResolvedProxy {
         addr: default,
-        servers: vec![],
+        candidates: vec![],
     })
 }
 
@@ -250,8 +273,8 @@ fn resolve_diagnose_server(cli: &Cli) -> anyhow::Result<SocketAddrV4> {
 }
 
 /// Spawn the continuous re-routing loop when multiple relays are configured.
-fn start_continuous_rerouting(servers: &[String], config: &config::Config, cli: &Cli) {
-    if servers.len() <= 1 {
+fn start_continuous_rerouting(candidates: &[ProbeCandidate], config: &config::Config, cli: &Cli) {
+    if candidates.len() <= 1 {
         return;
     }
     let strategy = cli
@@ -265,7 +288,7 @@ fn start_continuous_rerouting(servers: &[String], config: &config::Config, cli: 
         .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0));
     let (_tx, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(crate::modes::reroute::run_continuous_rerouting(
-        servers.to_vec(),
+        candidates.to_vec(),
         config.proxy.data_port,
         config.proxy.quic_port,
         game_server,
@@ -498,20 +521,20 @@ async fn main() -> anyhow::Result<()> {
 
     // ── --list-interfaces ─────────────────────────────────────────
     //
-    // Also runs before game detection — no point scanning processes
+    // Also runs before game detection - no point scanning processes
     // when the user only wants to list NICs.
     if cli.list_interfaces {
         info!("🔌 Available network interfaces:");
         let interfaces = capture::list_interfaces();
         if interfaces.is_empty() {
-            info!("   (none found — pcap-capture feature may not be enabled)");
+            info!("   (none found - pcap-capture feature may not be enabled)");
             info!("   Rebuild with: cargo build --features pcap-capture");
         } else {
             for iface in &interfaces {
                 let status = if iface.is_up { "UP" } else { "DOWN" };
                 let kind = if iface.is_loopback { " (loopback)" } else { "" };
                 info!(
-                    "   • {} [{}]{} — {}",
+                    "   • {} [{}]{} - {}",
                     iface.name, status, kind, iface.description
                 );
             }
@@ -539,7 +562,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.write_config {
         let path = "lightspeed.toml";
         if std::path::Path::new(path).exists() {
-            warn!("{} already exists — not overwriting", path);
+            warn!("{} already exists - not overwriting", path);
         } else {
             std::fs::write(path, EXAMPLE_CONFIG)?;
             info!("📝 Wrote default config to {}", path);
@@ -594,7 +617,7 @@ async fn main() -> anyhow::Result<()> {
             .transpose()?;
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         crate::session::set_current_proxy(proxy_addr);
-        start_continuous_rerouting(&resolved.servers, &config, &cli);
+        start_continuous_rerouting(&resolved.candidates, &config, &cli);
         spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
         return run_watch_mode(
             game_key,
@@ -771,9 +794,9 @@ async fn main() -> anyhow::Result<()> {
         let interceptor = interceptor::create_interceptor();
         let platform = interceptor.platform_name();
         match interceptor.check_availability() {
-            Ok(()) => info!("   ✅ Interceptor backend: {} — available", platform),
+            Ok(()) => info!("   ✅ Interceptor backend: {} - available", platform),
             Err(e) => {
-                warn!("   ❌ Interceptor backend: {} — {}", platform, e);
+                warn!("   ❌ Interceptor backend: {} - {}", platform, e);
                 all_ok = false;
             }
         }
@@ -796,7 +819,7 @@ async fn main() -> anyhow::Result<()> {
             if is_root {
                 info!("   ✅ Running as root");
             } else {
-                warn!("   ⚠️  Not running as root — interceptor needs sudo");
+                warn!("   ⚠️  Not running as root - interceptor needs sudo");
             }
         }
 
@@ -814,7 +837,7 @@ async fn main() -> anyhow::Result<()> {
                             p.routes.len()
                         ),
                         None => info!(
-                            "   ⚠️  Game '{}' not running — port-range fallback will be used",
+                            "   ⚠️  Game '{}' not running - port-range fallback will be used",
                             game.name()
                         ),
                     }
@@ -825,7 +848,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         } else {
-            info!("   ℹ️  No --game specified — skipping game detection");
+            info!("   ℹ️  No --game specified - skipping game detection");
         }
 
         // 4. Proxy reachability (quick UDP probe)
@@ -861,20 +884,20 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
             match probe() {
-                Ok(ms) => info!("   ✅ Proxy {} — reachable (echo {}ms)", proxy_addr, ms),
+                Ok(ms) => info!("   ✅ Proxy {} - reachable (echo {}ms)", proxy_addr, ms),
                 Err(e) => {
-                    warn!("   ❌ Proxy {} — no echo within 1s ({})", proxy_addr, e);
+                    warn!("   ❌ Proxy {} - no echo within 1s ({})", proxy_addr, e);
                     all_ok = false;
                 }
             }
         } else {
-            info!("   ℹ️  No --proxy specified — skipping proxy check");
+            info!("   ℹ️  No --proxy specified - skipping proxy check");
         }
 
         if all_ok {
             info!("✅ All checks passed");
         } else {
-            warn!("❌ Some checks failed — see above");
+            warn!("❌ Some checks failed - see above");
             return Err(anyhow::anyhow!("Some checks failed"));
         }
         return Ok(());
@@ -913,7 +936,7 @@ async fn main() -> anyhow::Result<()> {
             info!("   No matching game processes found.");
         } else {
             for p in &results {
-                info!("   PID {} ({}) — {} routes:", p.pid, p.name, p.routes.len());
+                info!("   PID {} ({}) - {} routes:", p.pid, p.name, p.routes.len());
                 for r in &p.routes {
                     info!("      {} → {}", r.local, r.remote);
                 }
@@ -967,11 +990,11 @@ async fn main() -> anyhow::Result<()> {
                                 info!("      {} → {}", r.local, r.remote);
                             }
                             if cfg.initial_routes.is_empty() {
-                                info!("   (No server routes found — game may need to be connected to a server)");
+                                info!("   (No server routes found - game may need to be connected to a server)");
                             }
                         }
                         None => {
-                            warn!("   Could not build interceptor config — see logs above.");
+                            warn!("   Could not build interceptor config - see logs above.");
                         }
                     }
                 }
@@ -1002,7 +1025,7 @@ async fn main() -> anyhow::Result<()> {
         };
         crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
         crate::session::set_current_proxy(proxy_addr);
-        start_continuous_rerouting(&resolved.servers, &config, &cli);
+        start_continuous_rerouting(&resolved.candidates, &config, &cli);
         spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
         return run_intercept_mode(
             game_key,
@@ -1023,7 +1046,7 @@ async fn main() -> anyhow::Result<()> {
         }
         None => {
             if cli.game_server.is_some() {
-                info!("Redirect mode — game detection skipped");
+                info!("Redirect mode - game detection skipped");
                 None
             } else {
                 info!("Auto-detecting running game...");
@@ -1048,7 +1071,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── --dry-run ─────────────────────────────────────────────────
     if cli.dry_run {
-        info!("Dry run mode — showing configuration and exiting");
+        info!("Dry run mode - showing configuration and exiting");
         info!("Config: {:?}", config);
         if let Some(ref game) = game {
             info!("Game: {}", game.name());
@@ -1070,7 +1093,7 @@ async fn main() -> anyhow::Result<()> {
         } else {
             match warp_manager.connect() {
                 Ok(()) => {
-                    info!("🌐 WARP enabled — traffic routed through Cloudflare NTT backbone");
+                    info!("🌐 WARP enabled - traffic routed through Cloudflare NTT backbone");
                 }
                 Err(e) => {
                     warn!("🌐 WARP connection failed: {}", e);
@@ -1081,7 +1104,7 @@ async fn main() -> anyhow::Result<()> {
     } else if !cli.no_warp {
         match warp_manager.status() {
             warp::WarpStatus::Connected => {
-                info!("🌐 WARP detected and connected — traffic uses NTT backbone");
+                info!("🌐 WARP detected and connected - traffic uses NTT backbone");
             }
             warp::WarpStatus::Disconnected => {
                 info!("🌐 WARP installed but disconnected. Use --warp to enable (saves 5-10ms)");
@@ -1098,12 +1121,18 @@ async fn main() -> anyhow::Result<()> {
     // report, and exit. It runs before `resolve_proxy_addr`/reroute setup so a
     // probe never mutates global session state or spawns background tasks.
     if cli.probe_proxies {
-        let mut candidates: Vec<(String, String)> = config
+        let mut candidates: Vec<ProbeCandidate> = config
             .proxy
             .servers
             .iter()
             .enumerate()
-            .map(|(i, s)| (format!("configured-{}", i), s.clone()))
+            .map(|(i, s)| {
+                (
+                    format!("configured-{}", i),
+                    s.clone(),
+                    "unknown".to_string(),
+                )
+            })
             .collect();
 
         let registry_url = cli
@@ -1120,7 +1149,11 @@ async fn main() -> anyhow::Result<()> {
         match crate::registry::discover_relays(registry_url, operator_key, config.proxy.quic_port) {
             Ok(relays) if !relays.is_empty() => {
                 info!("🔍 Registry: {} relay(s) discovered", relays.len());
-                candidates.extend(relays.into_iter().map(|relay| (relay.node_id, relay.addr)));
+                candidates.extend(
+                    relays
+                        .into_iter()
+                        .map(|relay| (relay.node_id, relay.addr, relay.region)),
+                );
             }
             Ok(_) => warn!("Registry returned no relays"),
             Err(e) => warn!("Registry fetch failed: {e}"),
@@ -1164,7 +1197,7 @@ async fn main() -> anyhow::Result<()> {
     let resolved = resolve_proxy_addr(&cli, &config).await?;
     let proxy_addr = resolved.addr;
     crate::session::set_current_proxy(proxy_addr);
-    start_continuous_rerouting(&resolved.servers, &config, &cli);
+    start_continuous_rerouting(&resolved.candidates, &config, &cli);
 
     // ── Telemetry context + periodic flush (all session modes) ────
     //
@@ -1371,7 +1404,7 @@ async fn main() -> anyhow::Result<()> {
                     info!("🚀 Starting live interceptor mode (kernel)");
                     crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
                     crate::session::set_current_proxy(proxy_addr);
-                    start_continuous_rerouting(&resolved.servers, &config, &cli);
+                    start_continuous_rerouting(&resolved.candidates, &config, &cli);
                     return run_intercept_mode(
                         game_ref.name(),
                         proxy_addr,

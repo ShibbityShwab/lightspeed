@@ -4,11 +4,12 @@
 //! Routes can be selected via:
 //! - **Nearest**: Simple geographic/latency-based selection
 //! - **ML**: AI-powered route prediction using linfa
-//! - **Multipath**: Send on multiple paths, use fastest arrival (planned — engine not yet implemented)
+//! - **Multipath**: Send on multiple paths, use fastest arrival (planned - engine not yet implemented)
 
 pub mod destination;
 pub mod failover;
 pub mod multipath;
+pub mod regions;
 pub mod selector;
 
 use std::net::SocketAddrV4;
@@ -47,14 +48,14 @@ pub enum ProxyHealth {
     Unknown,
 }
 
-/// A selected route — the result of route selection.
+/// A selected route - the result of route selection.
 #[derive(Debug, Clone)]
 pub struct SelectedRoute {
     /// Primary proxy to use.
     pub primary: ProxyNode,
     /// Backup proxies for failover (ordered by preference).
     pub backups: Vec<ProxyNode>,
-    /// Confidence score (0.0 - 1.0) — how confident the selector is.
+    /// Confidence score (0.0 - 1.0) - how confident the selector is.
     pub confidence: f64,
     /// Which strategy selected this route.
     pub strategy: RouteStrategy,
@@ -70,16 +71,16 @@ pub enum RouteStrategy {
     DestinationAware,
     /// ML-predicted optimal route.
     MlPredicted,
-    /// Multipath — use multiple proxies simultaneously (not yet implemented).
+    /// Multipath - use multiple proxies simultaneously (not yet implemented).
     #[allow(dead_code)]
     Multipath,
-    /// Failover — using backup after primary failed.
+    /// Failover - using backup after primary failed.
     Failover,
-    /// Direct — no proxy (bypass mode).
+    /// Direct - no proxy (bypass mode).
     Direct,
 }
 
-/// Trait for route selection — choose the best proxy for a given target.
+/// Trait for route selection - choose the best proxy for a given target.
 pub trait RouteSelector: Send + Sync {
     /// Select the best route to the given game server.
     fn select(

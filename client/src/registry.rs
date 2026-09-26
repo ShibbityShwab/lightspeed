@@ -11,7 +11,7 @@
 //! The signature covers the exact raw bytes of the registry JSON string, so no
 //! canonicalization is needed: the signer and verifier see identical bytes.
 //! Nodes are identified by their own Ed25519 public key (generated on first
-//! boot — see `infra/scripts/provision-oci.sh`).
+//! boot - see `infra/scripts/provision-oci.sh`).
 
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,7 @@ pub struct RegistryNode {
     /// Data-plane address ("ip:port") the client tunnels game traffic to.
     pub data_addr: String,
     pub health_url: String,
-    /// Base64-encoded Ed25519 public key — the node's identity.
+    /// Base64-encoded Ed25519 public key - the node's identity.
     pub pubkey: String,
     /// Hex SHA-256 fingerprint of the node's QUIC certificate, used to pin the
     /// control plane against the registry (empty = fall back to TOFU).
@@ -40,7 +40,7 @@ pub struct RegistryNode {
     pub note: String,
 }
 
-/// The registry payload — the exact bytes the signature covers.
+/// The registry payload - the exact bytes the signature covers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Registry {
     pub schema_version: u32,
@@ -69,6 +69,9 @@ pub struct RelayInfo {
     pub node_id: String,
     /// Data-plane address as `"ip:port"`.
     pub addr: String,
+    /// Registry region label (e.g. `ap-southeast-2`), kept so the selector can
+    /// place the relay before it has any measured evidence.
+    pub region: String,
 }
 
 /// Verify a signed registry against an operator Ed25519 public key (base64)
@@ -100,7 +103,7 @@ pub fn verify_registry(
 }
 
 /// Sign a registry with an operator Ed25519 key pair, producing a
-/// `SignedRegistry`. Used by operator tooling (and tests) — the client only
+/// `SignedRegistry`. Used by operator tooling (and tests) - the client only
 /// ever verifies.
 pub fn sign_registry(
     registry: &Registry,
@@ -198,12 +201,18 @@ fn discover_relays_inner(
     operator_public_key_b64: &str,
     control_port: u16,
 ) -> anyhow::Result<Vec<RelayInfo>> {
-    Ok(
-        discover_nodes_inner(url, operator_public_key_b64, control_port)?
-            .into_iter()
-            .map(|(node_id, addr)| RelayInfo { node_id, addr })
-            .collect(),
-    )
+    let registry = fetch_registry_inner(url, operator_public_key_b64)?;
+    pre_pin_nodes(&registry, control_port);
+    Ok(registry
+        .nodes
+        .iter()
+        .filter(|n| !is_revoked(&registry, n))
+        .map(|n| RelayInfo {
+            node_id: n.node_id.clone(),
+            addr: n.data_addr.clone(),
+            region: n.region.clone(),
+        })
+        .collect())
 }
 
 /// Pre-pin the control-plane certificate fingerprint for each non-revoked
@@ -229,7 +238,7 @@ pub fn pre_pin_nodes(registry: &Registry, control_port: u16) -> usize {
 }
 
 /// Fetch a signed registry over HTTPS and verify it against the operator key.
-/// Returns the parsed, trusted registry (revoked nodes are NOT filtered out —
+/// Returns the parsed, trusted registry (revoked nodes are NOT filtered out -
 /// callers filter via `is_revoked`).
 pub fn fetch_registry(url: &str, operator_public_key_b64: &str) -> anyhow::Result<Registry> {
     validate_registry_url(url)?;
@@ -568,6 +577,7 @@ mod tests {
         let expected = vec![RelayInfo {
             node_id: registry.nodes[0].node_id.clone(),
             addr: registry.nodes[0].data_addr.clone(),
+            region: registry.nodes[0].region.clone(),
         }];
         let signed = sign_registry(&registry, &key_pair);
 
@@ -576,6 +586,7 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(relays, expected);
+        assert_eq!(relays[0].region, "us-east-1");
     }
 
     #[test]

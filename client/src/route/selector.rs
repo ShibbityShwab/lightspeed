@@ -1,18 +1,24 @@
 //! # Route Selector Implementations
 //!
 //! Concrete route selection strategies:
-//! - **NearestSelector** — picks proxy with lowest measured latency (MVP default)
-//! - **MlSelector** — AI-powered route prediction using linfa model
+//! - **NearestSelector** - picks proxy with lowest measured latency (MVP default)
+//! - **MlSelector** - AI-powered route prediction using linfa model
 
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
 use std::sync::Arc;
 
 use super::destination::{self, DestinationEstimate, RelayDestinationEstimator};
+use super::regions;
 use super::{ProxyHealth, ProxyNode, RouteSelector, RouteStrategy, SelectedRoute};
 use crate::error::RouteError;
 use crate::ml::features::{extract_features, LatencyTracker, NetworkFeatures};
 use crate::ml::RouteModel;
+
+/// Advisory confidence carried by a region-prior destination leg. The prior is
+/// a distance heuristic, not a measurement, so it must never look as certain as
+/// real samples.
+const PRIOR_CONFIDENCE: f64 = 0.25;
 
 /// Destination-aware selector: ranks relays by the whole path, not just the
 /// client-to-relay leg.
@@ -67,26 +73,57 @@ impl RouteSelector for DestinationAwareSelector {
             return nearest.select(game_server, available_proxies);
         };
 
-        let per_relay: Vec<Option<DestinationEstimate>> = healthy
+        let destination = *game_server.ip();
+        let dest_region = estimator.destination_region(destination);
+
+        let measured: Vec<Option<DestinationEstimate>> = healthy
             .iter()
-            .map(|p| estimator.estimate(p.data_addr))
+            .map(|p| estimator.estimate(p.data_addr, destination))
             .collect();
-        if per_relay.iter().all(Option::is_none) {
+
+        // Measured evidence for this destination wins; an unmeasured relay
+        // falls back to a region prior when both regions are known, and relays
+        // with neither rely on the pooled borrow below.
+        let legs: Vec<Option<(u64, f64)>> = healthy
+            .iter()
+            .zip(measured.iter())
+            .map(|(proxy, estimate)| {
+                let (dest_leg, confidence) = match estimate {
+                    Some(est) => (est.dest_leg_us, est.confidence),
+                    None => {
+                        let prior =
+                            regions::prior_dest_leg_us(&proxy.region, dest_region.as_deref()?)?;
+                        (prior, PRIOR_CONFIDENCE)
+                    }
+                };
+                Some((dest_leg, confidence))
+            })
+            .collect();
+
+        let has_signal = legs.iter().any(Option::is_some);
+        let pooled = estimator.pooled_estimate();
+        if !has_signal && pooled.is_none() {
             return nearest.select(game_server, available_proxies);
         }
-        let pooled = estimator
-            .pooled_estimate()
-            .ok_or(RouteError::AllUnhealthy)?;
+
+        let borrow: (u64, f64) = match &pooled {
+            Some(est) => (est.dest_leg_us, est.confidence * 0.5),
+            None => {
+                let known: Vec<u64> = legs
+                    .iter()
+                    .flatten()
+                    .map(|(dest_leg, _)| *dest_leg)
+                    .collect();
+                (median_u64(&known).unwrap_or(0), PRIOR_CONFIDENCE * 0.5)
+            }
+        };
 
         let mut scored: Vec<(&ProxyNode, u64, f64)> = healthy
             .iter()
-            .zip(per_relay.iter())
-            .map(|(proxy, estimate)| {
+            .zip(legs.iter())
+            .map(|(proxy, leg)| {
                 let client_leg = proxy.latency_us.unwrap_or(u64::MAX);
-                let (dest_leg, confidence) = match estimate {
-                    Some(est) => (est.dest_leg_us, est.confidence),
-                    None => (pooled.dest_leg_us, pooled.confidence * 0.5),
-                };
+                let (dest_leg, confidence) = leg.unwrap_or(borrow);
                 (*proxy, client_leg.saturating_add(dest_leg), confidence)
             })
             .collect();
@@ -116,9 +153,18 @@ impl RouteSelector for DestinationAwareSelector {
     }
 }
 
+fn median_u64(values: &[u64]) -> Option<u64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    Some(sorted[sorted.len() / 2])
+}
+
 // ── Nearest Selector (MVP Default) ──────────────────────────
 
-/// Nearest-proxy selector — picks the proxy with lowest measured latency.
+/// Nearest-proxy selector - picks the proxy with lowest measured latency.
 /// This is the default MVP strategy.
 pub struct NearestSelector;
 
@@ -160,7 +206,7 @@ impl RouteSelector for NearestSelector {
     }
 
     fn feedback(&mut self, _proxy_id: &str, _observed_latency_us: u64) {
-        // NearestSelector doesn't learn — ML selector does
+        // NearestSelector doesn't learn - ML selector does
     }
 
     fn strategy(&self) -> RouteStrategy {
@@ -268,7 +314,7 @@ impl MlSelector {
                         meta.geographic_distance_km,
                     )
                 } else {
-                    // No historical data yet — use proxy's reported latency
+                    // No historical data yet - use proxy's reported latency
                     NetworkFeatures {
                         current_latency_ms: proxy
                             .latency_us
@@ -338,7 +384,7 @@ impl RouteSelector for MlSelector {
 
         // If model isn't loaded, fall back to nearest
         if !self.model.is_loaded() {
-            tracing::warn!("ML model not loaded — falling back to nearest selector");
+            tracing::warn!("ML model not loaded - falling back to nearest selector");
             let nearest = NearestSelector::new();
             return nearest.select(_game_server, available_proxies);
         }
@@ -413,6 +459,7 @@ impl RouteSelector for MlSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
     fn make_test_proxies() -> Vec<ProxyNode> {
         vec![
@@ -518,13 +565,20 @@ mod tests {
     fn feed_legs(
         estimator: &RelayDestinationEstimator,
         addr: SocketAddrV4,
+        destination: Ipv4Addr,
         client_us: u64,
         tunnelled_us: u64,
     ) {
         for _ in 0..super::destination::MIN_DEST_SAMPLES {
             estimator.observe_client_leg(addr, client_us);
-            estimator.observe_tunnelled(addr, tunnelled_us);
+            estimator.observe_tunnelled(addr, destination, tunnelled_us);
         }
+    }
+
+    fn node_in_region(id: &str, addr: &str, latency_us: u64, region: &str) -> ProxyNode {
+        let mut proxy = node(id, addr, latency_us);
+        proxy.region = region.into();
+        proxy
     }
 
     #[test]
@@ -533,9 +587,10 @@ mod tests {
         // Relay B is farther from the client but nearly on top of the server.
         let near_client: SocketAddrV4 = "10.0.1.1:4434".parse().unwrap();
         let near_server: SocketAddrV4 = "10.0.2.1:4434".parse().unwrap();
+        let destination: Ipv4Addr = "1.2.3.4".parse().unwrap();
         let estimator = Arc::new(RelayDestinationEstimator::new());
-        feed_legs(&estimator, near_client, 10_000, 100_000); // dest 90ms
-        feed_legs(&estimator, near_server, 40_000, 50_000); // dest 10ms
+        feed_legs(&estimator, near_client, destination, 10_000, 100_000); // dest 90ms
+        feed_legs(&estimator, near_server, destination, 40_000, 50_000); // dest 10ms
 
         let selector = DestinationAwareSelector::with_estimator(estimator);
         let proxies = vec![
@@ -582,9 +637,10 @@ mod tests {
     fn test_destination_aware_tie_break_keeps_input_order() {
         let a: SocketAddrV4 = "10.0.1.1:4434".parse().unwrap();
         let b: SocketAddrV4 = "10.0.2.1:4434".parse().unwrap();
+        let destination: Ipv4Addr = "1.2.3.4".parse().unwrap();
         let estimator = Arc::new(RelayDestinationEstimator::new());
-        feed_legs(&estimator, a, 10_000, 60_000);
-        feed_legs(&estimator, b, 10_000, 60_000);
+        feed_legs(&estimator, a, destination, 10_000, 60_000);
+        feed_legs(&estimator, b, destination, 10_000, 60_000);
         let selector = DestinationAwareSelector::with_estimator(estimator);
         let proxies = vec![
             node("first", "10.0.1.1:4434", 10_000),
@@ -598,6 +654,114 @@ mod tests {
             result.primary.id, "first",
             "equal scores must keep the input order, matching the nearest selector"
         );
+    }
+
+    #[test]
+    fn test_samples_do_not_contaminate_across_servers() {
+        // "far" is farther from the client but has a great measured path to
+        // server A. Selecting for server B must not reuse server A's samples:
+        // B has no signal, so the nearest relay wins.
+        let far: SocketAddrV4 = "10.0.2.1:4434".parse().unwrap();
+        let near: SocketAddrV4 = "10.0.1.1:4434".parse().unwrap();
+        let server_a: Ipv4Addr = "1.2.3.4".parse().unwrap();
+        let server_b: SocketAddrV4 = "5.6.7.8:27015".parse().unwrap();
+        let estimator = Arc::new(RelayDestinationEstimator::new());
+        feed_legs(&estimator, far, server_a, 40_000, 50_000); // dest 10ms
+        feed_legs(&estimator, near, server_a, 10_000, 100_000); // dest 90ms
+
+        let selector = DestinationAwareSelector::with_estimator(estimator);
+        let proxies = vec![
+            node("near", "10.0.1.1:4434", 10_000),
+            node("far", "10.0.2.1:4434", 40_000),
+        ];
+
+        let for_a = selector
+            .select(SocketAddrV4::new(server_a, 27015), &proxies)
+            .unwrap();
+        assert_eq!(
+            for_a.primary.id, "far",
+            "server A's measured path decides the route to server A"
+        );
+
+        let for_b = selector.select(server_b, &proxies).unwrap();
+        assert_eq!(
+            for_b.primary.id, "near",
+            "server A's samples must not decide the route to server B"
+        );
+    }
+
+    #[test]
+    fn test_region_prior_lets_an_unmeasured_relay_win_but_yields_to_measurement() {
+        let destination: Ipv4Addr = "203.0.113.10".parse().unwrap();
+        let game_server = SocketAddrV4::new(destination, 27015);
+        let lax: SocketAddrV4 = "10.0.1.1:4434".parse().unwrap();
+        let near: SocketAddrV4 = "10.0.4.1:4434".parse().unwrap();
+
+        let estimator = Arc::new(RelayDestinationEstimator::new());
+        estimator.set_destination_region(destination, "oceania");
+        // Lax is nearest to the client but has a measured, poor path to this
+        // server; Sydney is farther from the client but in the server's region.
+        feed_legs(&estimator, lax, destination, 5_000, 95_000); // dest 90ms
+
+        let selector = DestinationAwareSelector::with_estimator(estimator.clone());
+        let proxies = vec![
+            node_in_region("sydney", "10.0.3.1:4434", 30_000, "ap-southeast-2"),
+            node_in_region("lax", "10.0.1.1:4434", 5_000, "us-west"),
+        ];
+
+        // Sydney: 30ms client + 10ms intra-region prior = 40ms.
+        // Lax: 5ms client + 90ms measured = 95ms.
+        let result = selector.select(game_server, &proxies).unwrap();
+        assert_eq!(
+            result.primary.id, "sydney",
+            "the region prior must let an unmeasured relay beat a worse measured one"
+        );
+
+        // A relay with a genuinely better measurement still wins.
+        feed_legs(&estimator, near, destination, 1_000, 6_000); // dest 5ms
+        let proxies = vec![
+            node_in_region("sydney", "10.0.3.1:4434", 30_000, "ap-southeast-2"),
+            node_in_region("lax", "10.0.1.1:4434", 5_000, "us-west"),
+            node_in_region("near", "10.0.4.1:4434", 1_000, "oceania"),
+        ];
+        let result = selector.select(game_server, &proxies).unwrap();
+        assert_eq!(
+            result.primary.id, "near",
+            "solid measurement must beat the region prior when it is genuinely closer"
+        );
+    }
+
+    #[test]
+    fn test_unknown_destination_region_keeps_previous_behaviour() {
+        // Resolvable relay regions are not enough: with no destination region
+        // there is no prior, so the measured relay wins exactly as before.
+        let destination: Ipv4Addr = "203.0.113.20".parse().unwrap();
+        let game_server = SocketAddrV4::new(destination, 27015);
+        let near_client: SocketAddrV4 = "10.0.1.1:4434".parse().unwrap();
+        let near_server: SocketAddrV4 = "10.0.2.1:4434".parse().unwrap();
+        let estimator = Arc::new(RelayDestinationEstimator::new());
+        feed_legs(&estimator, near_client, destination, 10_000, 100_000);
+        feed_legs(&estimator, near_server, destination, 40_000, 50_000);
+        let selector = DestinationAwareSelector::with_estimator(estimator);
+        let proxies = vec![
+            node_in_region("near-client", "10.0.1.1:4434", 10_000, "us-east"),
+            node_in_region("near-server", "10.0.2.1:4434", 40_000, "us-east"),
+        ];
+        let result = selector.select(game_server, &proxies).unwrap();
+        assert_eq!(result.primary.id, "near-server");
+
+        // With no measurement and no resolvable relay region, the nearest
+        // selector is used unchanged even when the destination region is known.
+        let empty = Arc::new(RelayDestinationEstimator::new());
+        empty.set_destination_region(destination, "oceania");
+        let selector = DestinationAwareSelector::with_estimator(empty);
+        let proxies = vec![
+            node("a", "10.0.1.1:4434", 10_000),
+            node("b", "10.0.2.1:4434", 40_000),
+        ];
+        let result = selector.select(game_server, &proxies).unwrap();
+        assert_eq!(result.primary.id, "a");
+        assert_eq!(result.strategy, RouteStrategy::Nearest);
     }
 
     #[test]

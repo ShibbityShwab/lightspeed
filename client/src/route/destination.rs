@@ -65,26 +65,27 @@ pub struct DestinationEstimate {
     pub confidence: f64,
 }
 
+/// Per-relay samples: the client-to-relay leg is shared by every destination,
+/// while the end-to-end tunnelled leg is kept per destination so a sample for
+/// one game server can never be misread as an estimate for another.
 #[derive(Default)]
-struct LegSamples {
+struct RelaySamples {
     client_leg_us: VecDeque<u64>,
-    tunnelled_us: VecDeque<u64>,
+    tunnelled: HashMap<Ipv4Addr, VecDeque<u64>>,
 }
 
-impl LegSamples {
-    fn is_ready(&self) -> bool {
-        self.client_leg_us.len() >= MIN_DEST_SAMPLES && self.tunnelled_us.len() >= MIN_DEST_SAMPLES
-    }
-
-    fn sample_count(&self) -> usize {
-        self.client_leg_us.len().min(self.tunnelled_us.len())
-    }
-}
-
-/// Rolling per-relay estimator of the relay-to-destination leg.
+/// Rolling estimator of the relay-to-destination leg.
+///
+/// The client-to-relay leg is keyed by relay alone. The tunnelled leg is keyed
+/// by `(relay, destination)`, so an estimate describes one relay's path to one
+/// game server. A relay that has never carried traffic to a destination has no
+/// measured estimate for it and must rely on the region prior.
 #[derive(Default)]
 pub struct RelayDestinationEstimator {
-    relays: StdMutex<HashMap<SocketAddrV4, LegSamples>>,
+    relays: StdMutex<HashMap<SocketAddrV4, RelaySamples>>,
+    /// Destination IPv4 to canonical region key, populated from the relay's
+    /// registration ack when the relay can resolve the destination country.
+    dest_regions: StdMutex<HashMap<Ipv4Addr, String>>,
 }
 
 impl RelayDestinationEstimator {
@@ -93,8 +94,14 @@ impl RelayDestinationEstimator {
         Self::default()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<SocketAddrV4, LegSamples>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<SocketAddrV4, RelaySamples>> {
         self.relays.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_regions(&self) -> std::sync::MutexGuard<'_, HashMap<Ipv4Addr, String>> {
+        self.dest_regions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Record one observed client-to-relay round trip for `relay`.
@@ -105,46 +112,56 @@ impl RelayDestinationEstimator {
             return;
         }
         let mut relays = self.lock();
-        let leg = relays.entry(relay).or_default();
-        push_bounded(&mut leg.client_leg_us, rtt_us);
+        let samples = relays.entry(relay).or_default();
+        push_bounded(&mut samples.client_leg_us, rtt_us);
     }
 
-    /// Record one observed end-to-end tunnelled round trip for `relay`.
+    /// Record one observed end-to-end tunnelled round trip from `relay` to
+    /// `destination`.
     ///
     /// Zero, over-long, and clamped samples are dropped.
-    pub fn observe_tunnelled(&self, relay: SocketAddrV4, rtt_us: u64) {
+    pub fn observe_tunnelled(&self, relay: SocketAddrV4, destination: Ipv4Addr, rtt_us: u64) {
         if !is_plausible(rtt_us) {
             return;
         }
         let mut relays = self.lock();
-        let leg = relays.entry(relay).or_default();
-        push_bounded(&mut leg.tunnelled_us, rtt_us);
+        let samples = relays.entry(relay).or_default();
+        let tunnelled = samples.tunnelled.entry(destination).or_default();
+        push_bounded(tunnelled, rtt_us);
     }
 
-    /// The current estimate for `relay`, or `None` while either leg is short
-    /// of [`MIN_DEST_SAMPLES`] or the implied destination leg is implausible.
-    pub fn estimate(&self, relay: SocketAddrV4) -> Option<DestinationEstimate> {
+    /// The current estimate for the `(relay, destination)` pair, or `None`
+    /// while either leg is short of [`MIN_DEST_SAMPLES`] or the implied
+    /// destination leg is implausible.
+    pub fn estimate(
+        &self,
+        relay: SocketAddrV4,
+        destination: Ipv4Addr,
+    ) -> Option<DestinationEstimate> {
         let relays = self.lock();
-        let leg = relays.get(&relay)?;
-        estimate_from(leg)
+        let samples = relays.get(&relay)?;
+        let tunnelled = samples.tunnelled.get(&destination)?;
+        estimate_from(&samples.client_leg_us, tunnelled)
     }
 
-    /// A pooled destination-leg estimate across every relay that has one.
+    /// A pooled destination-leg estimate across every measured relay pair.
     ///
     /// Used as a prior for a candidate whose own destination leg is not yet
-    /// measured; `None` until at least one relay has an estimate.
+    /// measured; `None` until at least one pair has an estimate.
     pub fn pooled_estimate(&self) -> Option<DestinationEstimate> {
         let relays = self.lock();
         let mut dests: Vec<u64> = Vec::new();
         let mut samples = 0usize;
         let mut uncertainty_sum = 0u64;
         let mut confidence_sum = 0.0f64;
-        for leg in relays.values() {
-            if let Some(est) = estimate_from(leg) {
-                dests.push(est.dest_leg_us);
-                samples += est.samples;
-                uncertainty_sum = uncertainty_sum.saturating_add(est.uncertainty_us);
-                confidence_sum += est.confidence;
+        for relay in relays.values() {
+            for tunnelled in relay.tunnelled.values() {
+                if let Some(est) = estimate_from(&relay.client_leg_us, tunnelled) {
+                    dests.push(est.dest_leg_us);
+                    samples += est.samples;
+                    uncertainty_sum = uncertainty_sum.saturating_add(est.uncertainty_us);
+                    confidence_sum += est.confidence;
+                }
             }
         }
         if dests.is_empty() {
@@ -160,18 +177,38 @@ impl RelayDestinationEstimator {
         })
     }
 
+    /// Record the region of a destination, resolved from the relay's
+    /// registration ack. Unknown or unparseable regions are ignored, so a
+    /// missing value simply leaves the destination without a prior.
+    pub fn set_destination_region(&self, destination: Ipv4Addr, region: &str) {
+        let Some(key) = super::regions::resolve_region(region) else {
+            return;
+        };
+        self.lock_regions().insert(destination, key.to_string());
+    }
+
+    /// The canonical region of a destination, if one was recorded.
+    pub fn destination_region(&self, destination: Ipv4Addr) -> Option<String> {
+        self.lock_regions().get(&destination).cloned()
+    }
+
     /// Drop every sample. Test-only convenience, but harmless in production.
     pub fn clear(&self) {
         self.lock().clear();
+        self.lock_regions().clear();
     }
 }
 
-fn estimate_from(leg: &LegSamples) -> Option<DestinationEstimate> {
-    if !leg.is_ready() {
+fn estimate_from(
+    client_leg_us: &VecDeque<u64>,
+    tunnelled_us: &VecDeque<u64>,
+) -> Option<DestinationEstimate> {
+    if client_leg_us.len() < MIN_DEST_SAMPLES || tunnelled_us.len() < MIN_DEST_SAMPLES {
         return None;
     }
-    let mut client = leg.client_leg_us.iter().copied().collect::<Vec<_>>();
-    let mut tunnelled = leg.tunnelled_us.iter().copied().collect::<Vec<_>>();
+    let sample_count = client_leg_us.len().min(tunnelled_us.len());
+    let mut client = client_leg_us.iter().copied().collect::<Vec<_>>();
+    let mut tunnelled = tunnelled_us.iter().copied().collect::<Vec<_>>();
     client.sort_unstable();
     tunnelled.sort_unstable();
 
@@ -190,12 +227,12 @@ fn estimate_from(leg: &LegSamples) -> Option<DestinationEstimate> {
     } else {
         (uncertainty_us as f64 / tunnelled_median as f64).clamp(0.0, 1.0)
     };
-    let count_factor = (leg.sample_count() as f64 / (MIN_DEST_SAMPLES as f64 * 4.0)).min(1.0);
+    let count_factor = (sample_count as f64 / (MIN_DEST_SAMPLES as f64 * 4.0)).min(1.0);
     let confidence = (count_factor * (1.0 - relative_spread)).clamp(0.0, 1.0);
 
     Some(DestinationEstimate {
         dest_leg_us: dest_leg,
-        samples: leg.sample_count(),
+        samples: sample_count,
         uncertainty_us,
         confidence,
     })
@@ -257,11 +294,18 @@ pub fn observe_client_leg(relay: SocketAddrV4, rtt_us: u64) {
     }
 }
 
-/// Record an end-to-end tunnelled sample into the global estimator, if
-/// installed.
-pub fn observe_tunnelled(relay: SocketAddrV4, rtt_us: u64) {
+/// Record an end-to-end tunnelled sample for `(relay, destination)` into the
+/// global estimator, if installed.
+pub fn observe_tunnelled(relay: SocketAddrV4, destination: Ipv4Addr, rtt_us: u64) {
     if let Some(estimator) = global() {
-        estimator.observe_tunnelled(relay, rtt_us);
+        estimator.observe_tunnelled(relay, destination, rtt_us);
+    }
+}
+
+/// Record a destination's region into the global estimator, if installed.
+pub fn set_destination_region(destination: Ipv4Addr, region: &str) {
+    if let Some(estimator) = global() {
+        estimator.set_destination_region(destination, region);
     }
 }
 
@@ -322,7 +366,7 @@ pub fn note_inbound(server: Ipv4Addr) {
         return;
     };
     let rtt_us = now.saturating_duration_since(sample.sent_at).as_micros() as u64;
-    observe_tunnelled(relay, rtt_us);
+    observe_tunnelled(relay, server, rtt_us);
 }
 
 #[cfg(test)]
@@ -334,16 +378,21 @@ mod tests {
         SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, a), 4434)
     }
 
+    fn server(a: u8) -> Ipv4Addr {
+        Ipv4Addr::new(8, 8, 8, a)
+    }
+
     fn feed(
         estimator: &RelayDestinationEstimator,
         r: SocketAddrV4,
+        destination: Ipv4Addr,
         client: u64,
         tunnelled: u64,
         n: usize,
     ) {
         for _ in 0..n {
             estimator.observe_client_leg(r, client);
-            estimator.observe_tunnelled(r, tunnelled);
+            estimator.observe_tunnelled(r, destination, tunnelled);
         }
     }
 
@@ -351,20 +400,75 @@ mod tests {
     fn estimate_requires_minimum_samples_on_both_legs() {
         let estimator = RelayDestinationEstimator::new();
         // One sample short of the threshold on both legs.
-        feed(&estimator, relay(1), 10_000, 50_000, MIN_DEST_SAMPLES - 1);
-        assert_eq!(estimator.estimate(relay(1)), None);
+        feed(
+            &estimator,
+            relay(1),
+            server(1),
+            10_000,
+            50_000,
+            MIN_DEST_SAMPLES - 1,
+        );
+        assert_eq!(estimator.estimate(relay(1), server(1)), None);
 
-        feed(&estimator, relay(1), 10_000, 50_000, 1);
-        assert!(estimator.estimate(relay(1)).is_some());
+        feed(&estimator, relay(1), server(1), 10_000, 50_000, 1);
+        assert!(estimator.estimate(relay(1), server(1)).is_some());
     }
 
     #[test]
     fn dest_leg_is_tunnelled_median_minus_client_median() {
         let estimator = RelayDestinationEstimator::new();
-        feed(&estimator, relay(1), 10_000, 60_000, MIN_DEST_SAMPLES);
-        let est = estimator.estimate(relay(1)).expect("estimate");
+        feed(
+            &estimator,
+            relay(1),
+            server(1),
+            10_000,
+            60_000,
+            MIN_DEST_SAMPLES,
+        );
+        let est = estimator.estimate(relay(1), server(1)).expect("estimate");
         assert_eq!(est.dest_leg_us, 50_000);
         assert_eq!(est.samples, MIN_DEST_SAMPLES);
+    }
+
+    #[test]
+    fn samples_are_keyed_per_destination_and_do_not_contaminate() {
+        let estimator = RelayDestinationEstimator::new();
+        feed(
+            &estimator,
+            relay(1),
+            server(1),
+            10_000,
+            60_000,
+            MIN_DEST_SAMPLES,
+        );
+        // The same relay has served one destination, not the other.
+        assert!(
+            estimator.estimate(relay(1), server(1)).is_some(),
+            "the measured destination must have an estimate"
+        );
+        assert_eq!(
+            estimator.estimate(relay(1), server(2)),
+            None,
+            "a sample for one game server must never describe another"
+        );
+
+        // The other destination's own samples are independent.
+        feed(
+            &estimator,
+            relay(1),
+            server(2),
+            10_000,
+            30_000,
+            MIN_DEST_SAMPLES,
+        );
+        assert_eq!(
+            estimator.estimate(relay(1), server(2)).unwrap().dest_leg_us,
+            20_000
+        );
+        assert_eq!(
+            estimator.estimate(relay(1), server(1)).unwrap().dest_leg_us,
+            50_000
+        );
     }
 
     #[test]
@@ -372,9 +476,9 @@ mod tests {
         let estimator = RelayDestinationEstimator::new();
         for _ in 0..MIN_DEST_SAMPLES {
             estimator.observe_client_leg(relay(1), 0);
-            estimator.observe_tunnelled(relay(1), u64::MAX);
+            estimator.observe_tunnelled(relay(1), server(1), u64::MAX);
         }
-        assert_eq!(estimator.estimate(relay(1)), None);
+        assert_eq!(estimator.estimate(relay(1), server(1)), None);
     }
 
     #[test]
@@ -382,8 +486,15 @@ mod tests {
         let estimator = RelayDestinationEstimator::new();
         // Tunnelled round trip below the client leg is impossible; the
         // estimator must publish nothing rather than a zero destination leg.
-        feed(&estimator, relay(1), 50_000, 40_000, MIN_DEST_SAMPLES);
-        assert_eq!(estimator.estimate(relay(1)), None);
+        feed(
+            &estimator,
+            relay(1),
+            server(1),
+            50_000,
+            40_000,
+            MIN_DEST_SAMPLES,
+        );
+        assert_eq!(estimator.estimate(relay(1), server(1)), None);
     }
 
     #[test]
@@ -391,11 +502,11 @@ mod tests {
         let estimator = RelayDestinationEstimator::new();
         for _ in 0..MIN_DEST_SAMPLES {
             estimator.observe_client_leg(relay(1), 10_000);
-            estimator.observe_tunnelled(relay(1), 60_000);
+            estimator.observe_tunnelled(relay(1), server(1), 60_000);
         }
         // One late spike must not move the median.
-        estimator.observe_tunnelled(relay(1), 5_000_000);
-        let est = estimator.estimate(relay(1)).expect("estimate");
+        estimator.observe_tunnelled(relay(1), server(1), 5_000_000);
+        let est = estimator.estimate(relay(1), server(1)).expect("estimate");
         assert_eq!(est.dest_leg_us, 50_000);
     }
 
@@ -407,12 +518,12 @@ mod tests {
         }
         // Half the samples at 50ms, half at 70ms: IQR is 20ms, half is 10ms.
         for _ in 0..MIN_DEST_SAMPLES / 2 {
-            estimator.observe_tunnelled(relay(1), 60_000);
+            estimator.observe_tunnelled(relay(1), server(1), 60_000);
         }
         for _ in 0..MIN_DEST_SAMPLES / 2 {
-            estimator.observe_tunnelled(relay(1), 80_000);
+            estimator.observe_tunnelled(relay(1), server(1), 80_000);
         }
-        let est = estimator.estimate(relay(1)).expect("estimate");
+        let est = estimator.estimate(relay(1), server(1)).expect("estimate");
         assert!(est.uncertainty_us > 0, "spread must be reported");
         assert!(est.confidence < 1.0);
     }
@@ -420,16 +531,23 @@ mod tests {
     #[test]
     fn tighter_spread_has_higher_confidence() {
         let steady = RelayDestinationEstimator::new();
-        feed(&steady, relay(1), 10_000, 60_000, MIN_DEST_SAMPLES * 4);
+        feed(
+            &steady,
+            relay(1),
+            server(1),
+            10_000,
+            60_000,
+            MIN_DEST_SAMPLES * 4,
+        );
         let noisy = RelayDestinationEstimator::new();
         for _ in 0..MIN_DEST_SAMPLES * 4 {
             noisy.observe_client_leg(relay(1), 10_000);
         }
         for i in 0..MIN_DEST_SAMPLES * 4 {
-            noisy.observe_tunnelled(relay(1), 40_000 + (i as u64 % 2) * 40_000);
+            noisy.observe_tunnelled(relay(1), server(1), 40_000 + (i as u64 % 2) * 40_000);
         }
-        let s = steady.estimate(relay(1)).unwrap();
-        let n = noisy.estimate(relay(1)).unwrap();
+        let s = steady.estimate(relay(1), server(1)).unwrap();
+        let n = noisy.estimate(relay(1), server(1)).unwrap();
         assert!(s.confidence > n.confidence);
     }
 
@@ -437,17 +555,46 @@ mod tests {
     fn pooled_estimate_is_defined_once_any_relay_is_ready() {
         let estimator = RelayDestinationEstimator::new();
         assert_eq!(estimator.pooled_estimate(), None);
-        feed(&estimator, relay(1), 10_000, 60_000, MIN_DEST_SAMPLES);
+        feed(
+            &estimator,
+            relay(1),
+            server(1),
+            10_000,
+            60_000,
+            MIN_DEST_SAMPLES,
+        );
         let pooled = estimator.pooled_estimate().expect("pooled");
         assert_eq!(pooled.dest_leg_us, 50_000);
     }
 
     #[test]
+    fn destination_region_cache_roundtrips_and_rejects_unknown() {
+        let estimator = RelayDestinationEstimator::new();
+        assert_eq!(estimator.destination_region(server(1)), None);
+        estimator.set_destination_region(server(1), "AP-SOUTHEAST-2");
+        assert_eq!(
+            estimator.destination_region(server(1)).as_deref(),
+            Some("oceania")
+        );
+        estimator.set_destination_region(server(2), "atlantis");
+        assert_eq!(estimator.destination_region(server(2)), None);
+    }
+
+    #[test]
     fn clear_drops_all_samples() {
         let estimator = RelayDestinationEstimator::new();
-        feed(&estimator, relay(1), 10_000, 60_000, MIN_DEST_SAMPLES);
-        assert!(estimator.estimate(relay(1)).is_some());
+        feed(
+            &estimator,
+            relay(1),
+            server(1),
+            10_000,
+            60_000,
+            MIN_DEST_SAMPLES,
+        );
+        estimator.set_destination_region(server(1), "oceania");
+        assert!(estimator.estimate(relay(1), server(1)).is_some());
         estimator.clear();
-        assert_eq!(estimator.estimate(relay(1)), None);
+        assert_eq!(estimator.estimate(relay(1), server(1)), None);
+        assert_eq!(estimator.destination_region(server(1)), None);
     }
 }
