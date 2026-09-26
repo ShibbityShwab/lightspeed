@@ -59,18 +59,26 @@
   }
 
   // --- Scroll: fade-in elements (skipped entirely under reduced motion) ---
-  var faders = document.querySelectorAll('.step, .game-card, .bench-card, .compare-card, .download-card, .faq-item, .relay-card');
+  // Relay cards are rendered later from network-stats.json, so they are
+  // observed by observeFade() when they are created rather than queried here.
+  var fadeObserver = null;
+  function observeFade(el) {
+    if (!fadeObserver) return;
+    el.classList.add('fade-in');
+    fadeObserver.observe(el);
+  }
+
+  var faders = document.querySelectorAll('.step, .game-card, .bench-card, .compare-card, .download-card, .faq-item');
   if (!prefersReduced && faders.length && 'IntersectionObserver' in window) {
-    faders.forEach(function (el) { el.classList.add('fade-in'); });
-    var observer = new IntersectionObserver(function (entries) {
+    fadeObserver = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (entry.isIntersecting) {
           entry.target.classList.add('visible');
-          observer.unobserve(entry.target);
+          fadeObserver.unobserve(entry.target);
         }
       });
     }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
-    faders.forEach(function (el) { observer.observe(el); });
+    faders.forEach(function (el) { observeFade(el); });
   }
 
   // --- Animate benchmark bars on scroll (instant under reduced motion) ---
@@ -188,41 +196,130 @@
     return String(Math.floor(value));
   }
 
+  // The relay grid is built entirely from network-stats.json relays[], so a
+  // newly published relay appears without a markup change. Cards are keyed by
+  // data-node-id and updated in place; stale cards are removed.
+  function fillRelayCard(card, relay) {
+    var status = relayStatus(relay.status);
+    card.textContent = '';
+
+    var head = document.createElement('div');
+    head.className = 'relay-head';
+
+    var chip = document.createElement('span');
+    chip.className = 'node-chip';
+    chip.setAttribute('aria-hidden', 'true');
+    chip.textContent = nodeCode(relay.node_id);
+
+    var info = document.createElement('div');
+    var title = document.createElement('h3');
+    if (relay.flag) {
+      var flag = document.createElement('span');
+      flag.className = 'relay-flag';
+      flag.setAttribute('aria-hidden', 'true');
+      flag.textContent = relay.flag;
+      title.appendChild(flag);
+      title.appendChild(document.createTextNode(' '));
+    }
+    title.appendChild(document.createTextNode(relay.location || relay.node_id));
+    var region = document.createElement('div');
+    region.className = 'relay-region';
+    region.textContent = relay.area || relay.region || 'Relay';
+    info.appendChild(title);
+    info.appendChild(region);
+    head.appendChild(chip);
+    head.appendChild(info);
+
+    var statusEl = document.createElement('div');
+    statusEl.className = status.cardClass;
+    var dot = document.createElement('span');
+    dot.className = 'status-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    var statusLabel = document.createElement('span');
+    statusLabel.setAttribute('data-relay-status', '');
+    statusLabel.textContent = status.label;
+    statusEl.appendChild(dot);
+    statusEl.appendChild(statusLabel);
+
+    var meta = document.createElement('div');
+    meta.className = 'relay-meta';
+    meta.textContent = 'v' + (relay.version || '--') + ' \u00b7 up ' + formatUptime(relay.uptime_secs);
+
+    var packets = document.createElement('div');
+    packets.className = 'relay-meta relay-meta-packets';
+    packets.textContent = formatCount(relay.packets_relayed) + ' relayed \u00b7 ' +
+      formatCount(relay.packets_dropped) + ' filtered \u00b7 ' +
+      formatCount(relay.sessions_created) + ' sessions';
+
+    card.appendChild(head);
+    card.appendChild(statusEl);
+    card.appendChild(meta);
+    card.appendChild(packets);
+    return card;
+  }
+
+  function relayCardEl(relay) {
+    var card = document.createElement('article');
+    card.className = 'relay-card';
+    card.setAttribute('data-node-id', relay.node_id);
+    return fillRelayCard(card, relay);
+  }
+
+  function sortRelays(relays) {
+    return relays.slice().sort(function (a, b) {
+      var areaA = String(a.area || a.region || '');
+      var areaB = String(b.area || b.region || '');
+      if (areaA !== areaB) return areaA < areaB ? -1 : 1;
+      var locA = String(a.location || a.node_id);
+      var locB = String(b.location || b.node_id);
+      return locA < locB ? -1 : locA > locB ? 1 : 0;
+    });
+  }
+
   function renderRelayCards(relays) {
-    var byId = {};
-    relays.forEach(function (relay) {
-      if (relay && relay.node_id) byId[relay.node_id] = relay;
-    });
-    document.querySelectorAll('[data-node-id]').forEach(function (card) {
-      var relay = byId[card.getAttribute('data-node-id')];
-      if (!relay) return;
-      var status = relayStatus(relay.status);
+    var grid = document.querySelector('[data-relay-grid]');
+    if (!grid) return;
 
-      var chip = card.querySelector('.node-chip');
-      if (chip) chip.textContent = nodeCode(relay.node_id);
+    var ordered = sortRelays(relays.filter(function (relay) {
+      return relay && relay.node_id;
+    }));
 
-      var statusEl = card.querySelector('.relay-status');
-      if (statusEl) {
-        statusEl.className = status.cardClass;
-        var label = statusEl.querySelector('[data-relay-status]');
-        if (label) label.textContent = status.label;
+    var note = grid.querySelector('.relay-grid-note');
+    if (!ordered.length) {
+      if (!note) {
+        note = document.createElement('p');
+        note.className = 'relay-grid-note';
+        grid.appendChild(note);
       }
+      note.textContent = 'The latest snapshot lists no relays. The signed registry is still published.';
+      grid.setAttribute('aria-busy', 'false');
+      return;
+    }
+    if (note) note.remove();
 
-      var versionEl = card.querySelector('[data-relay-version]');
-      if (versionEl && relay.version) versionEl.textContent = relay.version;
-
-      var uptimeEl = card.querySelector('[data-relay-uptime]');
-      if (uptimeEl) uptimeEl.textContent = formatUptime(relay.uptime_secs);
-
-      var relayedEl = card.querySelector('[data-relay-packets-relayed]');
-      if (relayedEl) relayedEl.textContent = formatCount(relay.packets_relayed);
-
-      var droppedEl = card.querySelector('[data-relay-packets-dropped]');
-      if (droppedEl) droppedEl.textContent = formatCount(relay.packets_dropped);
-
-      var sessionsEl = card.querySelector('[data-relay-sessions]');
-      if (sessionsEl) sessionsEl.textContent = formatCount(relay.sessions_created);
+    var existing = {};
+    grid.querySelectorAll('[data-node-id]').forEach(function (card) {
+      existing[card.getAttribute('data-node-id')] = card;
     });
+
+    ordered.forEach(function (relay, index) {
+      var card = existing[relay.node_id];
+      delete existing[relay.node_id];
+      if (card) {
+        fillRelayCard(card, relay);
+      } else {
+        card = relayCardEl(relay);
+        observeFade(card);
+      }
+      var at = grid.children[index];
+      if (at !== card) grid.insertBefore(card, at || null);
+    });
+
+    Object.keys(existing).forEach(function (id) {
+      existing[id].remove();
+    });
+
+    grid.setAttribute('aria-busy', 'false');
   }
 
   function renderRelayHealthList(relays) {
@@ -341,6 +438,8 @@
     if (relays.length) {
       lastRelays = relays;
       applyRelayStats(relays);
+    } else {
+      renderRelayCards([]);
     }
 
     var healthBar = document.getElementById('network-health-bar');
@@ -350,8 +449,24 @@
     }
   }
 
+  function showRelayGridUnavailable() {
+    var grid = document.querySelector('[data-relay-grid]');
+    if (!grid || grid.querySelector('[data-node-id]')) return;
+    var note = grid.querySelector('.relay-grid-note');
+    if (!note) {
+      note = document.createElement('p');
+      note.className = 'relay-grid-note';
+      grid.appendChild(note);
+    }
+    note.textContent = 'The live relay snapshot could not be loaded right now. The signed node list is still published in the registry.';
+    grid.setAttribute('aria-busy', 'false');
+  }
+
   function loadNetworkStats() {
-    if (!window.fetch) return;
+    if (!window.fetch) {
+      showRelayGridUnavailable();
+      return;
+    }
     fetch('network-stats.json', { cache: 'no-cache' })
       .then(function (response) {
         if (!response.ok) throw new Error('network-stats.json: HTTP ' + response.status);
@@ -361,6 +476,7 @@
       .catch(function () {
         // Snapshot unavailable: keep the neutral placeholders.
         updateSnapshotStatus('Live relay snapshot is unavailable right now. Placeholders are shown.');
+        showRelayGridUnavailable();
       });
   }
 
@@ -802,6 +918,15 @@
     return { rows: rows, suppressed: suppressed };
   }
 
+  function syncTableScrollHint() {
+    var wrap = document.getElementById('source-quality-table-wrap');
+    var hint = document.querySelector('[data-table-scroll-hint]');
+    if (!wrap || !hint) return;
+    var scrollable = wrap.scrollWidth > wrap.clientWidth + 2;
+    wrap.classList.toggle('is-scrollable', scrollable);
+    hint.hidden = !scrollable;
+  }
+
   function renderSourceQuality(snapshots) {
     var section = document.getElementById('source-quality');
     if (!section) return;
@@ -820,15 +945,22 @@
     result.rows.forEach(function (row) {
       var tr = document.createElement('tr');
       var cells = [
-        { text: row.relay },
-        { text: row.region.toUpperCase() },
-        { text: formatCount(row.samples), numeric: true },
-        { text: formatMs(row.mean), numeric: true },
-        { text: formatPercent(row.worseShare), numeric: true }
+        { label: 'Relay', text: row.relay },
+        { label: 'Client region', text: row.region.toUpperCase() },
+        { label: 'Reports', text: formatCount(row.samples), numeric: true },
+        { label: 'Saved', text: formatMs(row.mean), numeric: true },
+        { label: 'Worse', text: formatPercent(row.worseShare), numeric: true }
       ];
       cells.forEach(function (cell) {
         var td = document.createElement('td');
-        td.textContent = cell.text;
+        var label = document.createElement('span');
+        label.className = 'source-quality-label';
+        label.textContent = cell.label;
+        var value = document.createElement('span');
+        value.className = 'source-quality-value';
+        value.textContent = cell.text;
+        td.appendChild(label);
+        td.appendChild(value);
         if (cell.numeric) td.className = 'source-quality-num';
         tr.appendChild(td);
       });
@@ -842,7 +974,18 @@
     }
     note.textContent = noteText;
     section.hidden = false;
+    syncTableScrollHint();
   }
+
+  var tableHintTicking = false;
+  window.addEventListener('resize', function () {
+    if (tableHintTicking) return;
+    tableHintTicking = true;
+    window.requestAnimationFrame(function () {
+      tableHintTicking = false;
+      syncTableScrollHint();
+    });
+  }, { passive: true });
 
   function renderTrends(doc) {
     var grid = document.getElementById('trends-grid');
