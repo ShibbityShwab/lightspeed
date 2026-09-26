@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.14] - 2026-09-26
+
+### Added
+
+- **Region-aware relay selection**: the destination leg is now keyed per
+  (relay, game server) instead of per relay, and a relay that has never carried
+  traffic is scored with a region prior derived from the relay and destination
+  regions. The relay returns the destination region over the control plane
+  (an optional trailing field on Register/RegisterAck, backward compatible in
+  both directions), so a genuinely closer relay such as Sydney or Mumbai can
+  win instead of losing to whichever relay the client already used.
+- **Uncertainty-aware scoring**: relay ranking now charges a capped penalty for
+  estimate uncertainty (measured min(uncertainty, 25 ms), borrowed 20 ms flat,
+  prior 15 ms flat) with a 1 ms provenance-first tie-band, so a thin noisy
+  estimate cannot beat solid measured evidence.
+- **Two-leg redundancy in the placement recommender**: the near-duplicate filter
+  is now a demand-weighted two-leg predicate (proximity floor 15 ms, redundancy
+  band 0.10, distinct minimum 5 ms) and a new ADD_REDUNDANT action lets the
+  operator add a genuinely distinct relay in a region already served.
+- **Paired-observation telemetry**: client reports carry a `saved_app_pairs`
+  count so the published sample count reflects real paired measurements rather
+  than one per report. The k-anonymity floor is unchanged: cells are withheld
+  until seen from 3 distinct source IPs.
+
+### Changed
+
+- **Session-weighted retention** in the placement recommender: a thin
+  intra-region cell can no longer dominate the worst-case coverage metric. On
+  the live history Frankfurt moves from 0.23 to 0.85.
+- **Explicit routing strategy dispatch**: `nearest`, `destination`, `multipath`
+  and `ml` now map to their real selectors, the shipped default is named
+  honestly as `destination`, and an unknown value warns instead of silently
+  changing behaviour.
+- **Steady-state do-no-harm evaluation** now runs on Windows and macOS (it was
+  dead code) and reads a same-server like-for-like accessor that fails open.
+  It stays measurement-only under the default `dry_run`.
+- **Measurement gate rescaled**: `min_measured_samples` for the advisory
+  negative-saving gate moves from 5 to 20 so a lone inflated report cannot
+  suppress a legitimate ADD.
+- **Privacy docs corrected**: they now state the real distinct-source-IP export
+  floor and document `saved_app_pairs` instead of claiming a report-count floor.
+
 ## [1.6.13] - 2026-09-25
 
 ### Added
