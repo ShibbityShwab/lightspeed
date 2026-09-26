@@ -1430,13 +1430,29 @@ mod tests {
         let counters = Arc::new(InterceptorCounters::default());
         let mut gate = BypassGate::new(auto(), Arc::clone(&counters));
 
-        let _ = steady_state_step(&mut gate, server(30), Instant::now(), true, false);
-        let _ = steady_state_step(&mut gate, server(30), Instant::now(), true, false);
+        let first = steady_state_step(&mut gate, server(30), Instant::now(), true, false);
+        let second = steady_state_step(&mut gate, server(30), Instant::now(), true, false);
 
         assert_eq!(
             counters.bypass_evaluations.load(Ordering::Relaxed),
             2,
             "every steady-state tick must invoke evaluate and increment the counter"
+        );
+        assert_eq!(
+            counters.bypass_relay.load(Ordering::Relaxed),
+            2,
+            "a fail-open tick is still counted under the action it chose"
+        );
+        assert_eq!(
+            counters.bypass_decisions.load(Ordering::Relaxed),
+            0,
+            "an unpairable window is an evaluation, not a decision"
+        );
+        assert_eq!(first.decision, BypassDecision::Relay);
+        assert_eq!(second.decision, BypassDecision::Relay);
+        assert!(
+            !enact_steady_state(gate.mode(), first.computed),
+            "the step must stay measurement-only on every backend"
         );
     }
 

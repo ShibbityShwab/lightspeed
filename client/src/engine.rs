@@ -1152,6 +1152,7 @@ async fn run_keepalive(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
@@ -1159,6 +1160,7 @@ mod tests {
         apply_registration_result, wait_for_redirect_ack, EngineStatus, LightSpeedEngine,
         DEFAULT_CONTROL_PORT,
     };
+    use crate::interceptor::{mock::MockInterceptor, InterceptorConfig, TrafficInterceptor};
 
     fn test_engine() -> LightSpeedEngine {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -1245,5 +1247,37 @@ mod tests {
         assert!(!status.control_registered);
         assert_eq!(status.session_token, None);
         assert!(status.registration_error.is_some());
+    }
+
+    #[test]
+    fn snapshot_surfaces_bypass_evaluations_from_the_interceptor() {
+        let mut engine = test_engine();
+        let handle = MockInterceptor::new()
+            .start(InterceptorConfig {
+                game_name: "TestGame".into(),
+                pid: Some(12345),
+                port_range: (27015, 27017),
+                initial_routes: Vec::new(),
+                proxy_addr: std::net::SocketAddrV4::new(
+                    std::net::Ipv4Addr::new(127, 0, 0, 1),
+                    4434,
+                ),
+                fec_enabled: false,
+                fec_k: 4,
+                adaptive_fec: Default::default(),
+                bypass: Default::default(),
+            })
+            .expect("mock interceptor starts");
+        handle
+            .counters
+            .bypass_evaluations
+            .fetch_add(3, Ordering::Relaxed);
+        engine.interceptor_handle = Some(handle);
+
+        assert_eq!(
+            engine.snapshot().bypass_evaluations,
+            3,
+            "the engine snapshot must surface the interceptor's steady-state count"
+        );
     }
 }

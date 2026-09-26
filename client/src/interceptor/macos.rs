@@ -34,7 +34,7 @@
 use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::pf_rules::anchor_script;
 use super::teardown::TeardownAck;
@@ -175,6 +175,7 @@ impl TrafficInterceptor for PfInterceptor {
         let adaptive_cfg = config.adaptive_fec;
         // Adaptive mode turns the codec on at its clamped effective K.
         let fec_active = fec_enabled || adaptive_cfg.enabled;
+        let bypass_config = config.bypass;
 
         // ── Bind listener socket ──────────────────────────────────────────
         let listener_std = std::net::UdpSocket::bind("127.0.0.1:0")
@@ -312,6 +313,16 @@ impl TrafficInterceptor for PfInterceptor {
                 std::net::SocketAddr,
                 lightspeed_protocol::FecDecoder,
             > = std::collections::HashMap::new();
+
+            // The steady-state do-no-harm gate. macOS is a diverting backend,
+            // but its exempt shadow-direct probe produces same-server samples,
+            // so the gate can measure whether the relay still helps. Evaluated
+            // on a timer rather than per packet; the gate degrades to
+            // measurement-only and never tears down the live redirect.
+            let mut gate =
+                super::bypass::BypassGate::new(bypass_config, Arc::clone(&counters_loop));
+            let mut eval_timer = tokio::time::interval(super::bypass::EVAL_INTERVAL);
+            eval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
             let mut seq: u16 = 0;
             let mut out_buf = vec![0u8; 65535];
@@ -552,6 +563,21 @@ impl TrafficInterceptor for PfInterceptor {
                             }
                         }
                     }
+
+                    // Steady-state bypass evaluation. Counts and logs the
+                    // decision; it never enacts one, because a Direct here would
+                    // mean tearing a live pf redirect off the tunnel.
+                    _ = eval_timer.tick() => {
+                        if !gate.is_disabled() {
+                            let _ = super::bypass::steady_state_step(
+                                &mut gate,
+                                server_addr,
+                                Instant::now(),
+                                true,
+                                fec_active,
+                            );
+                        }
+                    }
                 }
             }
 
@@ -574,7 +600,7 @@ impl TrafficInterceptor for PfInterceptor {
 //  pfctl helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ensure pf is enabled (`pfctl -e`). Idempotent — if already enabled the
+/// Ensure pf is enabled (`pfctl -e`). Idempotent - if already enabled the
 /// error "pf already enabled" is suppressed.
 fn enable_pf() -> anyhow::Result<()> {
     let out = std::process::Command::new("/sbin/pfctl")
