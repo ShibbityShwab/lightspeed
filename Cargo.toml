@@ -13,7 +13,7 @@ edition = "2021"
 authors = ["LightSpeed Contributors"]
 license = "LicenseRef-LightSpeed-NC-1.0"
 repository = "https://github.com/ShibbityShwab/lightspeed"
-description = "Zero-cost global network optimizer — reduce and stabilize ping for multiplayer games"
+description = "Zero-cost global network optimizer - reduce and stabilize ping for multiplayer games"
 
 [workspace.dependencies]
 # Async runtime
