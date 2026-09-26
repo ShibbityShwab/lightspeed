@@ -31,44 +31,64 @@ rounded to one decimal place in milliseconds.
 
 | Field | Type | Granularity | Purpose | Aggregation key | Suppression | Retention | Transport |
 |-------|------|-------------|---------|-----------------|-------------|-----------|-----------|
-| `game_id` | `u8` | Per game profile | Bucket metrics per game type | Part of `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `client_country` | `String` (2-char ISO 3166-1 alpha-2, or `""`) | Per client, from OS locale | Coarse region context; **never derived from IP** | Part of `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `p50_ms` | `f32` | Per client report | Median RTT to the relay | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `p95_ms` | `f32` | Per client report | 95th-percentile RTT | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `p99_ms` | `f32` | Per client report | 99th-percentile RTT | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `jitter_ms` | `f32` | Per client report | Mean of absolute consecutive RTT deltas (a jitter proxy, **not** a standard deviation) | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `sample_count` | `u32` | Per client report | Number of RTT samples the report is based on | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `fec_recoveries` | `u32` | Per client report | Packets recovered by FEC during the session segment | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `fec_losses` | `u32` | Per client report | FEC blocks where recovery was not possible | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `direct_p50_ms` | `Option<f32>` | Per client report | Median direct (un-relayed) RTT to the game server, from an ICMP probe. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `relayed_p50_ms` | `Option<f32>` | Per client report | Median tunnelled round trip through the relay. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `direct_app_p50_ms` | `Option<f32>` | Per client report | Median direct application RTT, measured by timing a sample of the game's own packets on the un-relayed path. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `game_id` | `u8` | Per game profile | Bucket metrics per game type | Part of `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `client_country` | `String` (2-char ISO 3166-1 alpha-2, or `""`) | Per client, from OS locale | Coarse region context; **never derived from IP** | Part of `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `p50_ms` | `f32` | Per client report | Median RTT to the relay | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `p95_ms` | `f32` | Per client report | 95th-percentile RTT | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `p99_ms` | `f32` | Per client report | 99th-percentile RTT | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `jitter_ms` | `f32` | Per client report | Mean of absolute consecutive RTT deltas (a jitter proxy, **not** a standard deviation) | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `sample_count` | `u32` | Per client report | Number of RTT samples the report is based on | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `fec_recoveries` | `u32` | Per client report | Packets recovered by FEC during the session segment | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `fec_losses` | `u32` | Per client report | FEC blocks where recovery was not possible | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `direct_p50_ms` | `Option<f32>` | Per client report | Median direct (un-relayed) RTT to the game server, from an ICMP probe. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `relayed_p50_ms` | `Option<f32>` | Per client report | Median tunnelled round trip through the relay. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `direct_app_p50_ms` | `Option<f32>` | Per client report | Median direct application RTT, measured by timing a sample of the game's own packets on the un-relayed path. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `saved_app_pairs` | `u32` (defaults to 1; max 100,000) | Per client report | Count of paired direct-application and relayed samples behind `direct_app_p50_ms` / `relayed_p50_ms`. Aggregate and non-identifying, like `sample_count`. Weights the saved-app sample counter, signed sum, and negative counter so a report covering several pairs counts as several samples. Legacy reports default to 1 | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `client_version` | `String` (SemVer, max 32 chars) | Per client | Compatibility tracking only. **Not aggregated or used by the relay; being coarsened** | None (not aggregated) | n/a | Not retained as an aggregate | Plaintext HTTP POST |
-| `route_legs` | `Vec<PathObservation>` (max 8) | Per relay leg | Opt-in multipath quality reporting. Empty vector is valid | `(normalized relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `route_legs` | `Vec<PathObservation>` (max 8) | Per relay leg | Opt-in multipath quality reporting. Empty vector is valid | `(normalized relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 
 ### `route_legs` sub-fields (`PathObservation`)
 
 | Field | Type | Granularity | Purpose | Aggregation key | Suppression | Retention | Transport |
 |-------|------|-------------|---------|-----------------|-------------|-----------|-----------|
-| `relay` | `String` (1-64 chars, registry id like `relay-fra`) | Per relay leg | Stable registry node identifier; never a raw address | Part of `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `rtt_p50_ms` | `f32` | Per relay leg | Median RTT on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `rtt_p95_ms` | `f32` | Per relay leg | 95th-percentile RTT on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `rtt_p99_ms` | `f32` | Per relay leg | 99th-percentile RTT on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `jitter_ms` | `f32` | Per relay leg | Mean of absolute consecutive RTT deltas on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `samples` | `u32` | Per relay leg | Number of RTT samples this leg is based on | `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `lost` | `u32` | Per relay leg | Packets observed lost on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `recovered` | `u32` | Per relay leg | Packets recovered by FEC on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `dedup_saved` | `u32` | Per relay leg | Duplicate packets suppressed by the dedup window on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 reports | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `relay` | `String` (1-64 chars, registry id like `relay-fra`) | Per relay leg | Stable registry node identifier; never a raw address | Part of `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `rtt_p50_ms` | `f32` | Per relay leg | Median RTT on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `rtt_p95_ms` | `f32` | Per relay leg | 95th-percentile RTT on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `rtt_p99_ms` | `f32` | Per relay leg | 99th-percentile RTT on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `jitter_ms` | `f32` | Per relay leg | Mean of absolute consecutive RTT deltas on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `samples` | `u32` | Per relay leg | Number of RTT samples this leg is based on | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `lost` | `u32` | Per relay leg | Packets observed lost on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `recovered` | `u32` | Per relay leg | Packets recovered by FEC on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `dedup_saved` | `u32` | Per relay leg | Duplicate packets suppressed by the dedup window on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 
 ---
 
 ## Suppression rule
 
-`MIN_TELEMETRY_CELL_REPORTS = 3` (`proxy/src/metrics.rs`). A cell is withheld
-from `/metrics` until it holds at least 3 reports. This floor counts **reports**,
-not distinct people: one client flushing every 15 minutes can reach it alone. It
-limits how small a cell can be before export; it does not prove that a cell is
-backed by a population of 3.
+Two floors apply, depending on whether the aggregator has a source address to
+key on.
+
+**Client telemetry cells** (the flat `(game_id, country)` report cell, and the
+per-`(relay, game_id, country)` route-leg cell) floor on **distinct source IPs**:
+`MIN_TELEMETRY_CELL_SOURCE_IPS = 3`, enforced in `proxy/src/metrics.rs:1358`
+(flat cell) and `proxy/src/metrics.rs:1516` (route-leg cell). A cell is withheld
+from `/metrics` until it has been seen from at least 3 distinct source addresses.
+This is the real k-anonymity floor for client-submitted reports: a single client
+can inflate a report count by flushing repeatedly, but it cannot manufacture
+distinct source addresses. The relay keeps a bounded set of at most 3 addresses
+per cell (`MAX_TELEMETRY_CELL_SOURCE_IPS`), uses it only to make the export
+decision, and never exports or logs the addresses. The set stops growing exactly
+at the floor, which bounds memory even when a client rotates addresses.
+
+**The session-geo aggregator**, which has no source address to key on, floors on
+**observations**: `MIN_TELEMETRY_CELL_REPORTS = 3`, enforced in
+`proxy/src/metrics.rs:1621`. A cell is withheld from `/metrics` until it holds at
+least 3 observations. This floor counts observations, not distinct people: it
+limits how small a cell can be before export, but it does not prove that a cell
+is backed by a population of 3.
+
+Both floors match the published k = 3 promise. The `source_ips` set is not a wire
+field and is never serialized; it exists only inside the relay's in-memory cell.
 
 ---
 
@@ -92,6 +112,20 @@ the retained map is bounded by the catalog's region count. The recommender
 (`infra/scripts/recommend-regions.sh`) reports the same breakdown per relay and
 source region but withholds any cell below the k=3 report floor, counts the
 withheld cells, and labels each reported row with its sample count.
+
+Note on scale: the recommender's per-source `saved_app_samples` counts are
+summed from the relay's `saved_app_ms_count`, which is weighted by
+`saved_app_pairs`. A single report can therefore contribute more than one sample
+to that count. This does **not** change the k-anonymity floor: the relay still
+withholds a cell until it has seen 3 distinct source IPs, and `saved_app_pairs`
+cannot manufacture a distinct source. What the pair weighting does change is the
+scale of the recommender's advisory `min_measured_samples` gate, which is
+calibrated to 20 pair-weighted samples so that a lone inflated report (a client
+reporting `saved_app_pairs` up to 8) stays below the floor and cannot suppress a
+legitimate ADD on its own. The gate is a quality floor on the pair-weighted
+sample count, not a k-anonymity guarantee; the k floor is the distinct-source
+rule above. See the recommender's `source_quality` block and
+`min_measured_samples`.
 
 ---
 

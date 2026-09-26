@@ -82,15 +82,25 @@
 #      negative-saving share plus route jitter mean and loss ratio across
 #      existing relays, so a human can see whether relays actually help.
 #      With no measured samples the ADD gate is inert and existing
-#      decisions stand.
+#      decisions stand. The sample count is pair-weighted: the relay's
+#      saved_app_ms_count is incremented by saved_app_pairs per report
+#      (proxy/src/metrics.rs), so one client can contribute several samples
+#      in a single flush. min_measured_samples is therefore calibrated to 20
+#      rather than the old 5, so a lone inflated report (a client reporting
+#      saved_app_pairs up to 8) stays below the floor and cannot suppress a
+#      legitimate ADD on its own; a genuinely populated window still blocks.
 #  15. The per-source measured block rebuilds reset-safe saved-app deltas
 #      per (relay, coarse source region) across the window pairs, exactly
-#      as the demand matrix rebuilds geo. A cell is reported only once it
-#      clears the k=3 report floor the relay already applies; thinner cells
-#      are withheld and counted in source_quality.suppressed_cells, and
-#      every reported row carries its sample count and meets_min_samples
-#      (>= min_measured_samples). The block is advisory and never changes
-#      the ADD/MOVE decision.
+#      as the demand matrix rebuilds geo. A cell is reported once its
+#      pair-weighted sample count reaches the low display floor of 3; this
+#      is a visibility filter, not a k-anonymity guarantee, because the
+#      count is pair-weighted and one client can reach it. The relay's own
+#      k floor is distinct source IPs and was already applied before export.
+#      Thinner cells are withheld and counted in
+#      source_quality.suppressed_cells, and every reported row carries its
+#      sample count and meets_min_samples (>= min_measured_samples) so the
+#      operator can judge how thin a shown row is. The block is advisory and
+#      never changes the ADD/MOVE decision.
 #  16. Retention is session-weighted. For each kept cell, retention is
 #      pre / post, where pre is the minimum path cost over all existing
 #      relays and post is the minimum over the remaining relays. A relay's
@@ -167,7 +177,7 @@ done
 
 # ── Minimal documents (valid JSON, no jq required) ───────────
 STATIC_MINIMAL='{"schema_version":1,"generated_at":0,"status":"INSUFFICIENT_DATA","window":{"from_t":0,"to_t":0,"snapshots":0,"sessions":0,"cells":0,"min_window_sessions":20,"min_cell_sessions":3},"matrix":[],"existing":[],"ranking":[],"rejected":[],"recommendation":{"action":"NONE","candidate_id":null,"remove_node_id":null,"reason":"insufficient data"},"stability":{"top_id":null,"streak":0,"required":3,"runs":[]},"measured":{"saved_app_samples":0,"saved_app_mean_ms":null,"saved_app_negative_share":null,"route_jitter_mean_ms":null,"route_loss_ratio":null,"min_measured_samples":0,"max_negative_saving_share":0},"source_quality":{"min_samples":3,"min_measured_samples":0,"suppressed_cells":0,"relays":[]},"notes":"no data"}'
-DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"add_min_window_sessions":50,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"redundancy_band":0.1,"distinct_min_ms":5,"redundancy_min_gain":3,"idle_sessions_max":0,"max_negative_saving_share":0.5,"min_measured_samples":5}'
+DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"add_min_window_sessions":50,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"redundancy_band":0.1,"distinct_min_ms":5,"redundancy_min_gain":3,"idle_sessions_max":0,"max_negative_saving_share":0.5,"min_measured_samples":20}'
 
 write_json() {
 	local json="$1" minimal="$2"
@@ -304,10 +314,10 @@ minimal_json="$(jq -cn --argjson p "$params_json" --argjson now "$NOW" '{
     measured: {saved_app_samples: 0, saved_app_mean_ms: null,
                saved_app_negative_share: null, route_jitter_mean_ms: null,
                route_loss_ratio: null,
-               min_measured_samples: ($p.min_measured_samples // 5),
+               min_measured_samples: ($p.min_measured_samples // 20),
                max_negative_saving_share: ($p.max_negative_saving_share // 0.5)},
     source_quality: {min_samples: 3,
-                     min_measured_samples: ($p.min_measured_samples // 5),
+                     min_measured_samples: ($p.min_measured_samples // 20),
                      suppressed_cells: 0, relays: []},
     notes: "fatal parse failure or internal error; emitted minimal document"
 }' 2>/dev/null || printf '%s' "$STATIC_MINIMAL")"
@@ -357,7 +367,7 @@ def sum_relay_metric($snaps; $k):
 | ($params.distinct_min_ms // 5 | n) as $distinct_min
 | ($params.redundancy_min_gain // 3 | n) as $redundancy_min_gain
 | ($params.max_negative_saving_share // 0.5 | n) as $max_neg_saving_share
-| ($params.min_measured_samples // 5 | n) as $min_measured_samples
+| ($params.min_measured_samples // 20 | n) as $min_measured_samples
 
 # ── Snapshot window ──────────────────────────────────────────
 | (($hist.snapshots // [])

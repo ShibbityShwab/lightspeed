@@ -37,6 +37,10 @@
 #  (20) flat coverage with high redundancy in a served region -> ADD_REDUNDANT
 #  (21) a thin window cannot fire ADD_REDUNDANT
 #  (22) a dominant measured negative-saving share blocks ADD_REDUNDANT
+#  (23) the measured gate is calibrated to the pair-weighted sample count:
+#       a lone inflated report cannot block ADD, a decisive count does
+#  (24) the per-source display floor is pair-weighted and distinct from the
+#       advisory min_measured_samples flag
 #
 # Tests (3)-(7) use a synthetic three-region catalog under $TMP with
 # fully controlled geometry; tests (1), (2), (8), (9), (10) exercise
@@ -535,15 +539,15 @@ assert_jq "$OUT15" '.measured.route_loss_ratio == 0.625' "(15) fleet route loss 
 
 # ── (16) the measured negative-saving gate blocks ADD ────────
 # Same unserved east leader and stability as (5), but the hub's window
-# shows a 70% negative-saving share: ADD is suppressed. A 20% share
-# leaves the ADD eligible.
+# shows a 70% negative-saving share over 20 pair-weighted samples: ADD is
+# suppressed. A 20% share over the same count leaves the ADD eligible.
 H_QUAL_BAD="$TMP/hist-quality-bad.json"
 write_quality_history "$H_QUAL_BAD" \
-	'{"saved_app_ms_sum":30,"saved_app_ms_count":10,"saved_app_ms_negative_count":7}' \
+	'{"saved_app_ms_sum":30,"saved_app_ms_count":20,"saved_app_ms_negative_count":14}' \
 	'{}' '{}' '{}'
 H_QUAL_GOOD="$TMP/hist-quality-good.json"
 write_quality_history "$H_QUAL_GOOD" \
-	'{"saved_app_ms_sum":30,"saved_app_ms_count":10,"saved_app_ms_negative_count":2}' \
+	'{"saved_app_ms_sum":30,"saved_app_ms_count":20,"saved_app_ms_negative_count":4}' \
 	'{}' '{}' '{}'
 PREV16="$TMP/prev16.json"
 write_previous "$PREV16" cand-east 3
@@ -559,14 +563,14 @@ assert_rc0 $? "(16) positive-saving run exits 0"
 assert_jq "$OUT16G" '.recommendation.action == "ADD" and .recommendation.candidate_id == "cand-east"' "(16) a positive-saving network leaves ADD eligible"
 
 # ── (17) per-source measured quality is reported per relay ───
-# relay-hub-a's eu delta is 6 reports / 60 ms / 1 negative, so 10 ms mean
-# and a 1/6 negative share, and it clears min_measured_samples. Its apac
-# delta is 2 reports, below the k=3 floor, so the cell is withheld and
+# relay-hub-a's eu delta is 24 pair-weighted samples / 240 ms / 4 negative, so
+# 10 ms mean and a 1/6 negative share, and it clears min_measured_samples. Its
+# apac delta is 2 samples, below the k=3 floor, so the cell is withheld and
 # counted. relay-far reports nothing, so its source list stays empty.
 H_SOURCE="$TMP/hist-source.json"
 write_source_history "$H_SOURCE" \
 	'{"eu":{"saved_app_ms_sum":40,"saved_app_ms_count":4,"saved_app_ms_negative_count":0}}' \
-	'{"eu":{"saved_app_ms_sum":100,"saved_app_ms_count":10,"saved_app_ms_negative_count":1},"apac":{"saved_app_ms_sum":10,"saved_app_ms_count":2,"saved_app_ms_negative_count":1}}' \
+	'{"eu":{"saved_app_ms_sum":280,"saved_app_ms_count":28,"saved_app_ms_negative_count":4},"apac":{"saved_app_ms_sum":10,"saved_app_ms_count":2,"saved_app_ms_negative_count":1}}' \
 	'{}' '{}'
 OUT17="$TMP/out17.json"
 run_rec "$H_SOURCE" missing "$REG_SYNTH" "$GEO_ADD" "$OUT17"
@@ -576,10 +580,10 @@ assert_jq "$OUT17" '.source_quality.suppressed_cells == 1' "(17) below-floor cel
 assert_jq "$OUT17" '(.source_quality.relays | length) == (.existing | length)' "(17) one row per existing relay"
 assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources | length == 1' "(17) hub reports one cleared source"
 assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].src_region == "eu"' "(17) cleared source is eu"
-assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].saved_app_samples == 6' "(17) row carries the sample count"
+assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].saved_app_samples == 24' "(17) row carries the sample count"
 assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].saved_app_mean_ms == 10' "(17) row carries the measured mean"
 assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].saved_app_negative_share == 0.166667' "(17) row carries the negative share"
-assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].meets_min_samples == true' "(17) 6 samples clear min_measured_samples"
+assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].meets_min_samples == true' "(17) 24 samples clear min_measured_samples"
 assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources_suppressed == 1' "(17) hub withheld-cell count"
 assert_jq "$OUT17" '[.source_quality.relays[] | select(.node_id == "relay-far")][0].sources == []' "(17) unmeasured relay has an empty source list"
 assert_jq "$OUT17" '([.source_quality.relays[].sources[] | select(.src_region == "apac")] | length) == 0' "(17) withheld source never appears"
@@ -682,6 +686,56 @@ assert_rc0 $? "(22) negative-saving redundancy run exits 0"
 assert_jq "$OUT22" '.measured.saved_app_samples == 20 and .measured.saved_app_negative_share == 0.7' "(22) the fleet negative-saving share is measured"
 assert_jq "$OUT22" '.ranking[0].redundancy_gain >= 3 and .ranking[0].coverage_gain == 0' "(22) the leader would otherwise ADD_REDUNDANT"
 assert_jq "$OUT22" '.recommendation.action == "NONE"' "(22) a dominant negative-saving share blocks ADD_REDUNDANT"
+
+# ── (23) the measured gate is calibrated to the pair-weighted count ─
+# `saved_app_ms_count` is weighted by `saved_app_pairs` (proxy/src/metrics.rs),
+# so one report can contribute several samples. A single client reporting
+# saved_app_pairs=8 with a negative saving yields a count of 8: above the old
+# default floor of 5, so one client alone could suppress a legitimate ADD. The
+# floor is calibrated to 20 so that a lone inflated report stays below it and
+# only a genuinely populated window blocks. A 24-sample window is decisive.
+H_PAIRS_LONE="$TMP/hist-pairs-lone.json"
+write_quality_history "$H_PAIRS_LONE" \
+	'{"saved_app_ms_sum":20,"saved_app_ms_count":8,"saved_app_ms_negative_count":8}' \
+	'{}' '{}' '{}'
+PREV23="$TMP/prev23.json"
+write_previous "$PREV23" cand-east 3
+OUT23="$TMP/out23.json"
+run_rec "$H_PAIRS_LONE" "$PREV23" "$REG_SYNTH" "$GEO_LEAD" "$OUT23"
+assert_rc0 $? "(23) lone inflated report exits 0"
+assert_jq "$OUT23" '.measured.saved_app_samples == 8' "(23) the lone pair-weighted count is measured"
+assert_jq "$OUT23" '.window.sessions >= 50 and .stability.streak >= 3' "(23) the leader would otherwise ADD"
+assert_jq "$OUT23" '.recommendation.action == "ADD" and .recommendation.candidate_id == "cand-east"' "(23) one inflated report is below the calibrated floor and cannot block ADD"
+
+H_PAIRS_DECISIVE="$TMP/hist-pairs-decisive.json"
+write_quality_history "$H_PAIRS_DECISIVE" \
+	'{"saved_app_ms_sum":60,"saved_app_ms_count":24,"saved_app_ms_negative_count":16}' \
+	'{}' '{}' '{}'
+OUT23D="$TMP/out23-decisive.json"
+run_rec "$H_PAIRS_DECISIVE" "$PREV23" "$REG_SYNTH" "$GEO_LEAD" "$OUT23D"
+assert_rc0 $? "(23) decisive pair-weighted run exits 0"
+assert_jq "$OUT23D" '.measured.saved_app_samples == 24' "(23) the decisive count reaches the fleet measured block"
+assert_jq "$OUT23D" '.measured.saved_app_negative_share == 0.666667' "(23) the decisive negative share is measured"
+assert_jq "$OUT23D" '.recommendation.action == "NONE"' "(23) a decisive pair-weighted count blocks ADD"
+
+# ── (24) the per-source display floor is pair-weighted, not a k floor ─
+# A single client reporting saved_app_pairs=3 yields a per-source count of 3,
+# which clears the low display floor and is shown, but it is one client, not
+# three, so meets_min_samples is false. This proves the display floor and the
+# advisory min_measured_samples flag are distinct: the row is visible with its
+# count, and the operator can see it is thin.
+H_SRC_DISPLAY="$TMP/hist-src-display.json"
+write_source_history "$H_SRC_DISPLAY" \
+	'{"eu":{"saved_app_ms_sum":0,"saved_app_ms_count":0,"saved_app_ms_negative_count":0}}' \
+	'{"eu":{"saved_app_ms_sum":30,"saved_app_ms_count":3,"saved_app_ms_negative_count":0}}' \
+	'{}' '{}'
+OUT24="$TMP/out24.json"
+run_rec "$H_SRC_DISPLAY" missing "$REG_SYNTH" "$GEO_ADD" "$OUT24"
+assert_rc0 $? "(24) pair-weighted display-floor run exits 0"
+assert_jq "$OUT24" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources | length == 1' "(24) a count of 3 clears the display floor and is shown"
+assert_jq "$OUT24" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].saved_app_samples == 3' "(24) the shown row carries its pair-weighted count"
+assert_jq "$OUT24" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].meets_min_samples == false' "(24) one client is below min_measured_samples and is flagged, not hidden"
+assert_jq "$OUT24" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources_suppressed == 0' "(24) a shown cell is not counted as suppressed"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

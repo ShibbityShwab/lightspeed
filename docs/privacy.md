@@ -51,12 +51,25 @@ IP geolocation data by DB-IP (https://db-ip.com), licensed under CC BY 4.0.
 Telemetry is **on by default**. It sends anonymous aggregate metrics to the
 `/telemetry` endpoint of the relay you are connected to (a community or sponsor
 relay, or your own if you self-host). There is no central LightSpeed telemetry
-server. A cell is suppressed until it has at least **3 reports**
-(`MIN_TELEMETRY_CELL_REPORTS = 3`). This floor counts **reports**, not distinct
-people: a single client flushing every 15 minutes can reach it alone, so it is
-not a guarantee that 3 different people contributed. It limits how small a cell
-can be before it is exported; it does not prove that a cell is backed by a
-population of 3.
+server. A client telemetry cell is suppressed until it has been seen from at
+least **3 distinct source IP addresses** (`MIN_TELEMETRY_CELL_SOURCE_IPS = 3`,
+enforced in `proxy/src/metrics.rs:1358`). This floor counts **distinct sources**,
+not reports: a single client flushing every 15 minutes cannot reach it alone,
+because repeated reports from one address do not add a distinct source. The
+relay keeps a bounded set of at most 3 source addresses per cell, uses it only
+to make this export decision, and never exports or logs the addresses
+themselves. It limits how small a cell can be before it is exported; it does not
+prove that a cell is backed by a population of 3, only that at least 3 distinct
+source addresses contributed.
+
+The per-route-leg aggregator floors the same way, on **distinct source IPs**
+(`MIN_TELEMETRY_CELL_SOURCE_IPS = 3`, enforced in `proxy/src/metrics.rs:1516`).
+One aggregator has no source address to key on: the session-geo aggregator
+withholds a cell until it holds at least **3 observations**
+(`MIN_TELEMETRY_CELL_REPORTS = 3`, enforced in `proxy/src/metrics.rs:1621`). For
+that one, the floor counts observations, not distinct people. The client
+telemetry and per-route-leg cells are the ones that carry the distinct-source
+guarantee.
 
 ### Transport and endpoint
 
@@ -101,8 +114,24 @@ per-cell aggregate, never a per-client value.
 | FEC recovery rate | 12 packets recovered / 1000 | No |
 | Direct vs relayed RTT | direct p50: 61ms, relayed p50: 31ms | No |
 | RTT saved | 30ms (direct p50 minus relayed p50) | No |
+| Paired app samples | `saved_app_pairs`: 4 (count of paired direct-app/relayed observations behind the report) | No |
 | Game name | "rust" | No |
 | LightSpeed version | "1.6.5" | No |
+
+`saved_app_pairs` is a plain count of local paired observations, like
+`sample_count`: it says how many paired direct-application and relayed samples
+sit behind the reported medians. It is aggregate and non-identifying, and it
+weights the relay's saved-app sample counter so a report covering several pairs
+counts as several samples rather than one. Legacy reports that predate the field
+default to one pair, so an upgraded client's contribution is unchanged.
+
+`saved_app_pairs` does **not** change the k-anonymity floor. The floor is
+enforced in the relay (`proxy/src/metrics.rs`) on distinct source IPs, and a
+pair count is a number inside one report from one source, so it cannot
+manufacture a distinct source. The field only affects the scale of the
+recommender's advisory `min_measured_samples` quality gate, which is calibrated
+to 20 pair-weighted samples for that reason. It is not collected as an identity
+and it is not a wire field the relay stores beyond the aggregate counter.
 
 `client_version` is collected but is not aggregated or used by the relay; it is
 being coarsened. The full field list, types, and aggregation keys are in the
@@ -141,7 +170,7 @@ Client IPs appear in these logs only because the proxy needs them for rate limit
 ## Data Retention
 
 - **Client:** No data is persisted beyond the current session (in-memory only).
-- **Relay:** Logs are written to stdout. Retention is controlled by the relay's logging configuration; if you use a community or sponsor relay, that operator controls it. Placement counters are aggregate only, with a floor of 3 sessions per cell, and carry no raw IPs.
+- **Relay:** Logs are written to stdout. Retention is controlled by the relay's logging configuration; if you use a community or sponsor relay, that operator controls it. Placement counters are aggregate only, with a floor of 3 sessions per cell, and carry no raw IPs. Client telemetry cells are aggregate only, withheld until seen from 3 distinct source IPs, and the source addresses are never exported or retained beyond that bounded set.
 - **Telemetry:** Data is sent to the relay's `/telemetry` endpoint. The relay operator controls retention.
 
 ---
