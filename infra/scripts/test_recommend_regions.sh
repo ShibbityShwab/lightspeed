@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
-# LightSpeed — Self-test for recommend-regions.sh
+# LightSpeed - Self-test for recommend-regions.sh
 #
 # Proves the load-bearing behaviours of the relay placement
 # recommender:
@@ -160,6 +160,23 @@ write_source_history() {
       ]}' >"$out"
 }
 
+# write_retention_history <out> <hub-geo-1> <hub-geo-2> <far-geo-1> <far-geo-2>
+# Two snapshots over relay-hub-a and relay-far with caller-chosen cumulative
+# geo maps, so a fixture can pair one large cell with one thin cell and show
+# which of the two drives a relay's reported retention.
+write_retention_history() {
+	local out="$1" h1="$2" h2="$3" f1="$4" f2="$5"
+	jq -cn --argjson h1 "$h1" --argjson h2 "$h2" --argjson f1 "$f1" --argjson f2 "$f2" '
+      {version:1, generated_at:0, snapshots:[
+        {t:1000, relay_count:2, healthy_count:2, per_relay:{
+          "relay-hub-a":{reachable:true,version:"test",active_sessions:0,geo:$h1,reset:false},
+          "relay-far":{reachable:true,version:"test",active_sessions:0,geo:$f1,reset:false}}},
+        {t:1060, relay_count:2, healthy_count:2, per_relay:{
+          "relay-hub-a":{reachable:true,version:"test",active_sessions:0,geo:$h2,reset:false},
+          "relay-far":{reachable:true,version:"test",active_sessions:0,geo:$f2,reset:false}}}
+      ]}' >"$out"
+}
+
 # write_synth_regions <dir>
 write_synth_regions() {
 	mkdir -p "$1"
@@ -277,6 +294,20 @@ assert_jq "$OUT2" '.matrix == [{"src":"na","dst":"eu","sessions":25}]' "(2) matr
 assert_jq "$OUT2" '(.ranking | length) > 0' "(2) ranking is non-empty"
 assert_jq "$OUT2" '((.existing | length) >= 1) and (.existing[0] | (has("node_id") and has("region") and has("lat") and has("lon")))' "(2) existing relays are located"
 assert_jq "$OUT2" '[.ranking[] | has("candidate_id") and has("region") and has("score") and has("coverage_gain") and has("redundancy_gain") and has("margin")] | all' "(2) ranking entries carry the full schema"
+# The real EU catalog must offer redundancy away from Frankfurt. The live
+# registry already serves eu from relay-fra, and every Western EU city sits
+# inside the 25 ms near_duplicate_ms floor of Frankfurt, so those candidates
+# are correctly rejected there. Rank the same real catalog against a registry
+# with no EU relay to prove the catalog itself carries a second EU placement.
+REG_NO_EU="$TMP/registry-no-eu.json"
+write_registry "$REG_NO_EU" \
+	'[{"node_id":"relay-lax-1","region":"us-west","data_addr":"10.0.0.1:4434"},
+      {"node_id":"relay-sgp-1","region":"ap-southeast","data_addr":"10.0.0.2:4434"}]'
+OUT2EU="$TMP/out2-eu.json"
+run_rec "$H_REAL" missing "$REG_NO_EU" "$GEO_REAL" "$OUT2EU"
+assert_rc0 $? "(2) real-catalog EU-redundancy run exits 0"
+assert_jq "$OUT2EU" '[.ranking[] | select(.region == "eu") | .candidate_id] | length > 0' "(2) real catalog ranks at least one eu candidate"
+assert_jq "$OUT2EU" '[.ranking[] | select(.region == "eu") | .candidate_id | select(test("lon1|ams1|par1"))] | length > 0' "(2) a non-Frankfurt EU candidate appears in the ranking"
 
 # --window-secs override: a 30s window keeps only the last snapshot
 run_rec "$H_REAL" missing "$REGISTRY_REAL" "$GEO_REAL" "$TMP/out2b.json" --window-secs 30
@@ -516,6 +547,33 @@ run_rec "$H_SOURCE_RESET" missing "$REG_SYNTH" "$GEO_ADD" "$OUT17R"
 assert_rc0 $? "(17) reset source run exits 0"
 assert_jq "$OUT17R" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].saved_app_samples == 4' "(17) reset uses current as the delta"
 assert_jq "$OUT17R" '[.source_quality.relays[] | select(.node_id == "relay-hub-a")][0].sources[0].saved_app_mean_ms == 10' "(17) reset mean recomputed from the current window"
+
+# ── (18) retention is weighted by cell session volume ────────
+# The live defect: relay-fra reads a critical-looking 0.23 driven by a thin
+# eu->eu cell (both endpoints collapsed onto one centroid) while the far
+# larger africa->eu cell retains 0.895. These fixtures replay that shape on
+# the synthetic catalog. far-far is the thin intra-region cell where
+# relay-far is the nearest relay, so dropping relay-far roughly halves its
+# retention; hub-east is the large inter-region cell that relay-hub-a already
+# serves, so dropping relay-far leaves it untouched (retention 1). With the
+# large cell carrying the volume, relay-far must read as well retained; flip
+# the volumes and it must still read as critical.
+H_RET_WEIGHTED="$TMP/hist-ret-weighted.json"
+write_retention_history "$H_RET_WEIGHTED" \
+	'{"hub-east":100}' '{"hub-east":260}' '{"far-far":5}' '{"far-far":13}'
+OUT18="$TMP/out18.json"
+run_rec "$H_RET_WEIGHTED" missing "$REG_SYNTH" "$GEO_ADD" "$OUT18"
+assert_rc0 $? "(18) weighted-retention run exits 0"
+assert_jq "$OUT18" '.matrix == [{"src":"far","dst":"far","sessions":8},{"src":"hub","dst":"east","sessions":160}]' "(18) fixture pairs a thin intra-region cell with a large inter-region cell"
+assert_jq "$OUT18" '.relay_necessity[] | select(.node_id == "relay-far") | .worst_retention > 0.9' "(18) the large inter-region cell dominates the thin cell"
+
+H_RET_CRITICAL="$TMP/hist-ret-critical.json"
+write_retention_history "$H_RET_CRITICAL" \
+	'{"hub-east":5}' '{"hub-east":13}' '{"far-far":100}' '{"far-far":260}'
+OUT18C="$TMP/out18c.json"
+run_rec "$H_RET_CRITICAL" missing "$REG_SYNTH" "$GEO_ADD" "$OUT18C"
+assert_rc0 $? "(18) critical-retention run exits 0"
+assert_jq "$OUT18C" '.relay_necessity[] | select(.node_id == "relay-far") | .worst_retention < 0.6' "(18) a large cell that depends on relay-far still drives retention down"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

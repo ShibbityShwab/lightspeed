@@ -115,6 +115,36 @@
       "note": "No free tier. DigitalOcean Credits for Projects gives renewable open-source credits (about $60 to $20k per year by GitHub stars), renewed yearly."
     },
     {
+      "id": "digitalocean-lon1",
+      "provider": "DigitalOcean",
+      "region": "eu",
+      "lat": 51.51,
+      "lon": -0.13,
+      "free_tier": false,
+      "viable": true,
+      "note": "No free tier. DigitalOcean Credits for Projects gives renewable open-source credits (about $60 to $20k per year by GitHub stars), renewed yearly. London is a distinct EU-West peering basin from Frankfurt, so it adds redundancy rather than duplicating the FRA1 placement."
+    },
+    {
+      "id": "vultr-ams1",
+      "provider": "Vultr",
+      "region": "eu",
+      "lat": 52.37,
+      "lon": 4.90,
+      "free_tier": false,
+      "viable": true,
+      "note": "No free tier in Amsterdam: the Vultr Free Tier covers Miami, Seattle, and Frankfurt only. Paid Amsterdam is a sponsor-viable EU-West option with strong AMS-IX peering, distinct from the Frankfurt free-tier location."
+    },
+    {
+      "id": "scaleway-par1",
+      "provider": "Scaleway",
+      "region": "eu",
+      "lat": 48.86,
+      "lon": 2.35,
+      "free_tier": false,
+      "viable": true,
+      "note": "No ongoing free tier. Scaleway PAR1 is a sponsor-viable EU-West option; Paris is a separate peering basin from Frankfurt and Amsterdam, so it adds redundancy rather than duplicating existing coverage."
+    },
+    {
       "id": "oracle-me-dubai-1",
       "provider": "Oracle Cloud Infrastructure",
       "region": "mena",

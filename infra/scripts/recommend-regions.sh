@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
-# LightSpeed — Relay Placement Recommender
+# LightSpeed - Relay Placement Recommender
 #
 # Scores candidate relay locations against the demand matrix
 # reconstructed from the reset-safe metrics history and emits an
@@ -58,14 +58,14 @@
 #      negative-saving share above max_negative_saving_share once at least
 #      min_measured_samples saved-app samples exist (rule 14). MOVE needs
 #      margin >= move_margin, stability, and some existing relay whose
-#      removal retains at least move_coverage_keep of every kept cell's
-#      current cost.
+#      session-weighted retention (rule 16) stays at or above
+#      move_coverage_keep.
 #  12. Candidates within near_duplicate_ms of an existing relay are
 #      rejected as near_duplicate.
 #  13. Every existing relay is reported in relay_necessity with its window
-#      session count, the coverage retention if it were dropped, and its
-#      measured saved-app mean / negative-saving share; prune_candidates
-#      lists relays that are both idle and redundant.
+#      session count, its session-weighted coverage retention (rule 16) if it
+#      were dropped, and its measured saved-app mean / negative-saving share;
+#      prune_candidates lists relays that are both idle and redundant.
 #  14. The measured block aggregates window saved-app samples, mean, and
 #      negative-saving share plus route jitter mean and loss ratio across
 #      existing relays, so a human can see whether relays actually help.
@@ -79,6 +79,16 @@
 #      every reported row carries its sample count and meets_min_samples
 #      (>= min_measured_samples). The block is advisory and never changes
 #      the ADD/MOVE decision.
+#  16. Retention is session-weighted. For each kept cell, retention is
+#      pre / post, where pre is the minimum path cost over all existing
+#      relays and post is the minimum over the remaining relays. A relay's
+#      reported retention is the session-weighted mean
+#      sum(sessions * retention) / sum(sessions) over the kept cells. The
+#      per-cell session counts already in the demand matrix decide, so a
+#      high-volume cell dominates and a thin intra-region cell (both
+#      endpoints collapsed onto one centroid) cannot set the figure on its
+#      own, while a genuinely critical high-volume cell still drives it down.
+#      The same figure gates MOVE and prune.
 #
 # Requires: bash, jq (>= 1.6 for sin/cos/asin/sqrt).
 # ──────────────────────────────────────────────────────────────
@@ -463,27 +473,38 @@ def sum_relay_metric($snaps; $k):
 | ($ranking | map(. + {margin: $margin})) as $ranking_out
 
 # ── MOVE feasibility ─────────────────────────────────────────
-# For each existing relay, find the worst per-cell retention of the
-# pre-removal cost if that relay is removed: retention = pre / post,
-# where post is the minimum path cost over the remaining relays. A
-# removal is feasible when even the worst retention >= move_coverage_keep.
+# For each existing relay, compute the session-weighted retention of the
+# pre-removal path cost if that relay is removed: per kept cell retention =
+# pre / post, where post is the minimum path cost over the remaining relays,
+# and the relay figure is sum(sessions * retention) / sum(sessions). Weighting
+# by the session counts already carried in the demand matrix lets high-volume
+# cells dominate,
+# so a thin intra-region cell (both endpoints collapsed onto one centroid)
+# cannot set the figure on its own. A low figure still means the relay serves
+# traffic that cannot be routed as well without it. A removal is feasible when
+# the weighted retention >= move_coverage_keep.
 | ([ $existing[] as $r
+     | ([ $gcells[] as $cell
+          | ([ $existing[] | select(.node_id != $r.node_id)
+               | leg_ms($cell.s_lat; $cell.s_lon; .lat; .lon)
+                 + leg_ms(.lat; .lon; $cell.d_lat; $cell.d_lon) ]) as $post_legs
+          | ([ $existing[]
+               | leg_ms($cell.s_lat; $cell.s_lon; .lat; .lon)
+                 + leg_ms(.lat; .lon; $cell.d_lat; $cell.d_lon) ]) as $pre_legs
+          | (if ($pre_legs | length) == 0 then null else ($pre_legs | min) end) as $pre
+          | (if ($post_legs | length) == 0 then null else ($post_legs | min) end) as $post
+          | (if $pre == null then 1
+             elif $post == null then 0
+             elif $post <= 0 then 1
+             elif $pre <= 0 then 0
+             else ($pre / $post) end) as $ret
+          | {sessions: ($cell.sessions | n), retention: $ret}
+        ]) as $cell_rets
+     | ([ $cell_rets[].sessions ] | add // 0) as $ret_sessions
      | {node_id: $r.node_id,
-        worst_retention: ([ $gcells[] as $cell
-            | ([ $existing[] | select(.node_id != $r.node_id)
-                 | leg_ms($cell.s_lat; $cell.s_lon; .lat; .lon)
-                   + leg_ms(.lat; .lon; $cell.d_lat; $cell.d_lon) ]) as $post_legs
-            | ([ $existing[]
-                 | leg_ms($cell.s_lat; $cell.s_lon; .lat; .lon)
-                   + leg_ms(.lat; .lon; $cell.d_lat; $cell.d_lon) ]) as $pre_legs
-            | (if ($pre_legs | length) == 0 then null else ($pre_legs | min) end) as $pre
-            | (if ($post_legs | length) == 0 then null else ($post_legs | min) end) as $post
-            | (if $pre == null then 1
-               elif $post == null then 0
-               elif $post <= 0 then 1
-               elif $pre <= 0 then 0
-               else ($pre / $post) end)
-          ] | (min // 0))}
+        worst_retention: (if $ret_sessions <= 0 then 0
+                          else (([ $cell_rets[] | (.sessions * .retention) ] | add) / $ret_sessions)
+                          end)}
    ]) as $removals
 | ([ $removals[] | select(.worst_retention >= $coverage_keep and .worst_retention > 0) ]
    | sort_by([(-.worst_retention), .node_id]) | .[0] // null) as $move_target
