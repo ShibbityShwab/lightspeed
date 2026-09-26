@@ -225,6 +225,18 @@ pub fn enact_pre_gate(mode: BypassMode, computed: BypassDecision) -> bool {
     computed == BypassDecision::Direct && matches!(mode, BypassMode::Auto | BypassMode::Always)
 }
 
+/// Whether the action layer may enact a computed steady-state `Direct`.
+///
+/// A steady-state `Direct` would mean taking a live, diverting flow off the
+/// tunnel. No backend can do that safely mid-session today: deleting a redirect
+/// does not unhook conntrack (Linux/macOS), and the WinDivert filter is not
+/// per-server removable. This stays `false` until a backend implements a safe
+/// boundary action, so a computed `Direct` is measured and logged but never
+/// tears down live traffic.
+pub fn enact_steady_state(_mode: BypassMode, _computed: BypassDecision) -> bool {
+    false
+}
+
 /// Per-server state machine position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BypassState {
@@ -306,6 +318,10 @@ pub struct BypassOutcome {
     pub dry_run: bool,
     /// True when this evaluation changed the state.
     pub flipped: bool,
+    /// True when this call reached the decision logic, past sample, probation,
+    /// interval, and dwell gating. A gated call is an evaluation, not a
+    /// decision.
+    pub evaluated: bool,
     /// Total flips recorded for this server.
     pub total_flips: u32,
 }
@@ -395,10 +411,10 @@ impl BypassTracker {
                 state.state = BypassState::RelayKeep;
                 return outcome(
                     BypassDecision::Relay,
-                    BypassDecision::Relay,
                     state,
                     "bypass disabled",
                     None,
+                    false,
                     false,
                     false,
                 );
@@ -407,10 +423,10 @@ impl BypassTracker {
                 state.state = BypassState::DirectPreferred;
                 return outcome(
                     BypassDecision::Direct,
-                    BypassDecision::Direct,
                     state,
                     "forced direct",
                     None,
+                    false,
                     false,
                     false,
                 );
@@ -429,6 +445,7 @@ impl BypassTracker {
                 None,
                 state,
                 false,
+                false,
             );
         }
 
@@ -441,6 +458,7 @@ impl BypassTracker {
                 None,
                 state,
                 false,
+                false,
             );
         };
         let Some(direct) = inp.direct_app_p50_ms else {
@@ -451,6 +469,7 @@ impl BypassTracker {
                 "no shadow-direct samples",
                 None,
                 state,
+                false,
                 false,
             );
         };
@@ -464,6 +483,7 @@ impl BypassTracker {
                 None,
                 state,
                 false,
+                false,
             );
         }
 
@@ -476,6 +496,7 @@ impl BypassTracker {
                 None,
                 state,
                 false,
+                false,
             );
         }
 
@@ -487,6 +508,7 @@ impl BypassTracker {
                 "flip cap reached",
                 state.advantage_ema,
                 state,
+                false,
                 false,
             );
         }
@@ -501,6 +523,7 @@ impl BypassTracker {
                     state.advantage_ema,
                     state,
                     false,
+                    false,
                 );
             }
         }
@@ -512,6 +535,7 @@ impl BypassTracker {
                     "dwell",
                     state.advantage_ema,
                     state,
+                    false,
                     false,
                 );
             }
@@ -543,6 +567,7 @@ impl BypassTracker {
                 Some(ema),
                 state,
                 flipped,
+                true,
             );
         }
 
@@ -563,6 +588,7 @@ impl BypassTracker {
                 Some(ema),
                 state,
                 flipped,
+                true,
             );
         }
 
@@ -577,6 +603,7 @@ impl BypassTracker {
                 Some(ema),
                 state,
                 flipped,
+                true,
             );
         }
 
@@ -590,6 +617,7 @@ impl BypassTracker {
                     Some(ema),
                     state,
                     false,
+                    true,
                 );
             }
             state.direct_votes = state.direct_votes.saturating_add(1);
@@ -603,6 +631,7 @@ impl BypassTracker {
                     Some(ema),
                     state,
                     flipped,
+                    true,
                 );
             }
             // First agreeing window only; no state change yet.
@@ -613,6 +642,7 @@ impl BypassTracker {
                 Some(ema),
                 state,
                 false,
+                true,
             );
         }
 
@@ -627,6 +657,7 @@ impl BypassTracker {
             Some(ema),
             state,
             flipped,
+            true,
         )
     }
 }
@@ -658,32 +689,33 @@ fn finish(
     advantage_ms: Option<f32>,
     server: &mut ServerState,
     flipped: bool,
+    evaluated: bool,
 ) -> BypassOutcome {
-    let decision = if dry_run {
-        BypassDecision::Relay
-    } else {
-        computed
-    };
     outcome(
-        decision,
         computed,
         server,
         reason,
         advantage_ms,
         dry_run,
         flipped,
+        evaluated,
     )
 }
 
 fn outcome(
-    decision: BypassDecision,
     computed: BypassDecision,
     server: &ServerState,
     reason: &'static str,
     advantage_ms: Option<f32>,
     dry_run: bool,
     flipped: bool,
+    evaluated: bool,
 ) -> BypassOutcome {
+    let decision = if dry_run {
+        BypassDecision::Relay
+    } else {
+        computed
+    };
     BypassOutcome {
         decision,
         computed,
@@ -692,6 +724,7 @@ fn outcome(
         advantage_ms,
         dry_run,
         flipped,
+        evaluated,
         total_flips: server.flips,
     }
 }
@@ -800,42 +833,46 @@ impl BypassGate {
         decision
     }
 
-    /// Full probation/steady-state evaluation from the live measurements.
-    pub fn evaluate(
-        &mut self,
-        server: SocketAddrV4,
-        now: Instant,
-        relay_healthy: bool,
-        fec_enabled: bool,
-    ) -> BypassOutcome {
-        let direct_icmp = crate::latency::global().and_then(|t| t.direct_p50_ms());
-        let inp = BypassInputs {
-            now,
-            server,
-            direct_app_p50_ms: crate::latency::shadow_direct_p50_ms(),
-            relay_app_p50_ms: crate::latency::relayed_p50_ms(),
-            direct_app_jitter_ms: crate::latency::shadow_direct_jitter_ms(),
-            relay_app_jitter_ms: crate::latency::relayed_jitter_ms(),
-            direct_icmp_p50_ms: direct_icmp,
-            client_relay_p50_ms: None,
-            direct_loss_ratio: crate::latency::shadow_direct_loss_ratio(),
-            relay_unrecovered_loss_ratio: None,
-            shadow_samples: crate::latency::shadow_direct_samples(),
-            relay_samples: crate::latency::relayed_samples(),
-            relay_healthy,
-            fec_enabled,
-            config: self.tracker.config(),
-        };
+    /// Evaluate one server from explicit inputs.
+    ///
+    /// The gate's own config is authoritative: `inp.config` is overwritten so a
+    /// caller cannot bypass the resolved mode. Writes the bypass counters and
+    /// logs every transition.
+    pub fn evaluate_inputs(&mut self, inp: &BypassInputs) -> BypassOutcome {
+        let mut inp = *inp;
+        inp.config = self.tracker.config();
         let out = self.tracker.evaluate(&inp);
+
         self.counters
-            .bypass_decisions
+            .bypass_evaluations
             .fetch_add(1, Ordering::Relaxed);
+        if out.evaluated {
+            self.counters
+                .bypass_decisions
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        match out.computed {
+            BypassDecision::Relay => &self.counters.bypass_relay,
+            BypassDecision::Direct => &self.counters.bypass_direct,
+            BypassDecision::Hold => &self.counters.bypass_hold,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+
         if out.flipped {
             self.counters.bypass_flips.fetch_add(1, Ordering::Relaxed);
-        }
-        if out.flipped || out.computed == BypassDecision::Direct {
             tracing::info!(
-                server = %server,
+                server = %inp.server,
+                state = out.state.as_str(),
+                computed = ?out.computed,
+                advantage_ms = ?out.advantage_ms,
+                reason = out.reason,
+                dry_run = out.dry_run,
+                total_flips = out.total_flips,
+                "bypass gate transition"
+            );
+        } else if out.computed == BypassDecision::Direct || out.dry_run {
+            tracing::debug!(
+                server = %inp.server,
                 state = out.state.as_str(),
                 computed = ?out.computed,
                 advantage_ms = ?out.advantage_ms,
@@ -843,17 +880,43 @@ impl BypassGate {
                 dry_run = out.dry_run,
                 "bypass gate decision"
             );
-        } else {
-            tracing::debug!(
-                server = %server,
-                state = out.state.as_str(),
-                computed = ?out.computed,
-                advantage_ms = ?out.advantage_ms,
-                reason = out.reason,
-                "bypass gate hold"
-            );
         }
         out
+    }
+
+    /// Full probation/steady-state evaluation from the live measurements.
+    ///
+    /// Uses only the same-server like-for-like window: when the shadow-direct
+    /// and relayed samples do not describe this `server` (different server,
+    /// stale, or empty), every application measurement is left `None` and the
+    /// gate fails open to the relay. The ICMP direct median is never compared
+    /// against the relayed path here.
+    pub fn evaluate(
+        &mut self,
+        server: SocketAddrV4,
+        now: Instant,
+        relay_healthy: bool,
+        fec_enabled: bool,
+    ) -> BypassOutcome {
+        let paired = crate::latency::like_for_like().filter(|p| p.server == *server.ip());
+        let inp = BypassInputs {
+            now,
+            server,
+            direct_app_p50_ms: paired.map(|p| p.direct_app_p50_ms),
+            relay_app_p50_ms: paired.map(|p| p.relay_app_p50_ms),
+            direct_app_jitter_ms: paired.and_then(|p| p.direct_app_jitter_ms),
+            relay_app_jitter_ms: paired.and_then(|p| p.relay_app_jitter_ms),
+            direct_icmp_p50_ms: None,
+            client_relay_p50_ms: None,
+            direct_loss_ratio: paired.and_then(|p| p.direct_loss_ratio),
+            relay_unrecovered_loss_ratio: None,
+            shadow_samples: paired.map_or(0, |p| p.shadow_samples),
+            relay_samples: paired.map_or(0, |p| p.relay_samples),
+            relay_healthy,
+            fec_enabled,
+            config: self.tracker.config(),
+        };
+        self.evaluate_inputs(&inp)
     }
 
     /// Count a pre-gate Direct that the caller either honoured or declined.
@@ -878,6 +941,24 @@ impl BypassGate {
             self.counters.bypass_refused.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+/// One steady-state gate step for a backend whose capture loop produces
+/// shadow-direct samples.
+///
+/// This is the seam the Windows capture loop calls from its evaluation timer.
+/// It counts every evaluation, applies the same-server like-for-like pairing,
+/// and returns the outcome. It never acts: a steady-state `Direct` would mean
+/// tearing down a live divert, and [`enact_steady_state`] is the single place
+/// that contract is enforced.
+pub fn steady_state_step(
+    gate: &mut BypassGate,
+    server: SocketAddrV4,
+    now: Instant,
+    relay_healthy: bool,
+    fec_enabled: bool,
+) -> BypassOutcome {
+    gate.evaluate(server, now, relay_healthy, fec_enabled)
 }
 
 #[cfg(test)]
@@ -1260,6 +1341,7 @@ mod tests {
             advantage_ms: Some(-20.0),
             dry_run: false,
             flipped: true,
+            evaluated: true,
             total_flips: 1,
         };
         gate.note_action(&direct, true);
@@ -1339,5 +1421,86 @@ mod tests {
         );
         assert!(!enact_pre_gate(BypassMode::Never, BypassDecision::Direct));
         assert!(!enact_pre_gate(BypassMode::Auto, BypassDecision::Relay));
+    }
+
+    // ── Steady-state wiring ─────────────────────────────────────────────────
+
+    #[test]
+    fn steady_state_step_invokes_evaluate_and_counts_it() {
+        let counters = Arc::new(InterceptorCounters::default());
+        let mut gate = BypassGate::new(auto(), Arc::clone(&counters));
+
+        let _ = steady_state_step(&mut gate, server(30), Instant::now(), true, false);
+        let _ = steady_state_step(&mut gate, server(30), Instant::now(), true, false);
+
+        assert_eq!(
+            counters.bypass_evaluations.load(Ordering::Relaxed),
+            2,
+            "every steady-state tick must invoke evaluate and increment the counter"
+        );
+    }
+
+    #[test]
+    fn unpairable_measurements_fail_open_to_the_relay() {
+        let counters = Arc::new(InterceptorCounters::default());
+        let mut gate = BypassGate::new(auto(), Arc::clone(&counters));
+
+        // ICMP and first-hop data exist, but no same-server shadow-direct pair.
+        let mut inp = inputs(at(Instant::now(), 60), server(31), auto());
+        inp.direct_icmp_p50_ms = Some(10.0);
+        inp.client_relay_p50_ms = Some(5.0);
+
+        let out = gate.evaluate_inputs(&inp);
+        assert_eq!(out.decision, BypassDecision::Relay);
+        assert!(
+            !out.evaluated,
+            "an unpairable window is not a decision and must not be acted on"
+        );
+    }
+
+    #[test]
+    fn dry_run_steady_state_computes_direct_but_never_enacts() {
+        let counters = Arc::new(InterceptorCounters::default());
+        let cfg = BypassConfig {
+            mode: BypassMode::DryRun,
+            ..Default::default()
+        };
+        let mut gate = BypassGate::new(cfg, Arc::clone(&counters));
+        let t0 = Instant::now();
+        let s = server(32);
+
+        let mut warm = ready(t0, s, cfg);
+        warm.direct_app_p50_ms = Some(30.0);
+        warm.relay_app_p50_ms = Some(50.0);
+        gate.evaluate_inputs(&warm);
+        let mut d1 = warm;
+        d1.now = at(t0, 21);
+        gate.evaluate_inputs(&d1);
+        let mut d2 = warm;
+        d2.now = at(t0, 42);
+        let out = gate.evaluate_inputs(&d2);
+
+        assert_eq!(
+            out.computed,
+            BypassDecision::Direct,
+            "the gate must compute Direct"
+        );
+        assert_eq!(
+            out.decision,
+            BypassDecision::Relay,
+            "dry_run must change nothing"
+        );
+        assert!(out.dry_run);
+        assert_eq!(counters.bypass_direct.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            counters.bypass_decisions.load(Ordering::Relaxed),
+            2,
+            "only the two decision-bearing windows count, not the probation warm-up"
+        );
+        assert!(!enact_steady_state(BypassMode::DryRun, out.computed));
+        assert!(
+            !enact_steady_state(BypassMode::Auto, out.computed),
+            "no backend has a safe live-teardown action yet"
+        );
     }
 }

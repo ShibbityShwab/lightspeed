@@ -149,6 +149,14 @@ pub struct EngineStatus {
     pub bypass_flips: u64,
     /// Pre-gate evaluations that received a fresh client->relay RTT.
     pub bypass_pre_gate_rtt: u64,
+    /// Every steady-state bypass evaluation that ran.
+    pub bypass_evaluations: u64,
+    /// Evaluations whose computed decision was Relay.
+    pub bypass_relay: u64,
+    /// Evaluations whose computed decision was Direct.
+    pub bypass_direct: u64,
+    /// Evaluations whose computed decision was Hold.
+    pub bypass_hold: u64,
 }
 
 // ── Engine ───────────────────────────────────────────────────────────────
@@ -884,6 +892,10 @@ impl LightSpeedEngine {
             s.bypass_decisions = 0;
             s.bypass_flips = 0;
             s.bypass_pre_gate_rtt = 0;
+            s.bypass_evaluations = 0;
+            s.bypass_relay = 0;
+            s.bypass_direct = 0;
+            s.bypass_hold = 0;
             s.control_registered = false;
             s.session_token = None;
             s.registration_error = None;
@@ -980,6 +992,10 @@ impl LightSpeedEngine {
             snap.bypass_decisions = ist.bypass_decisions;
             snap.bypass_flips = ist.bypass_flips;
             snap.bypass_pre_gate_rtt = ist.bypass_pre_gate_rtt;
+            snap.bypass_evaluations = ist.bypass_evaluations;
+            snap.bypass_relay = ist.bypass_relay;
+            snap.bypass_direct = ist.bypass_direct;
+            snap.bypass_hold = ist.bypass_hold;
             snap.interceptor_platform = ist.platform;
             if let Some(srv) = ist.detected_server {
                 snap.interceptor_server = srv.to_string();

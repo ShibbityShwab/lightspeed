@@ -11,7 +11,9 @@
     "redundancy_weight": 0.5,
     "move_coverage_keep": 0.9,
     "proximity_ms_floor": 15,
-    "near_duplicate_ms": 25
+    "redundancy_band": 0.1,
+    "distinct_min_ms": 5,
+    "redundancy_min_gain": 3
   },
   "candidates": [
     {

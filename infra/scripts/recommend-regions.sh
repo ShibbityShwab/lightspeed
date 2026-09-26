@@ -41,9 +41,18 @@
 #   5. Cells are smoothed toward the row mean by alpha (the prior).
 #   6. Existing relay positions come from regions.json relays, or the
 #      region centroid of the registry's region alias.
-#   7. coverage_gain is the demand-weighted latency improvement a
-#      candidate adds; redundancy_gain rewards cells currently served
-#      by exactly one relay when the candidate is "within 10 percent".
+#   7. coverage_gain and redundancy_gain are demand-weighted over the two-leg
+#      path cost (candidate or relay -> src -> dst, summed). For each kept cell
+#      of weight w: coverage fires when there is no existing provider (full
+#      weight) or when the candidate cuts at least proximity_ms_floor off the
+#      best existing two-leg path, scaled by (ce - cand) / max(ce, 1) so the
+#      relative improvement decides. redundancy fires when the candidate
+#      two-leg path is within redundancy_band of the single existing provider
+#      in that band and the candidate is at least distinct_min_ms from every
+#      in-band provider, so a genuine second path scores while a co-located
+#      clone does not. A cell contributes its weight to whichever effect it
+#      triggers; the two can both fire when a candidate is both a large
+#      improvement and a distinct within-band path.
 #   8. Distances are haversine km * 0.01 = approximate RTT ms.
 #   9. Ranking is score desc, candidate id asc. margin is the relative
 #      lead of the top candidate over the best candidate in a *different*
@@ -60,8 +69,11 @@
 #      margin >= move_margin, stability, and some existing relay whose
 #      session-weighted retention (rule 16) stays at or above
 #      move_coverage_keep.
-#  12. Candidates within near_duplicate_ms of an existing relay are
-#      rejected as near_duplicate.
+#  12. A candidate is rejected as near_duplicate only when it earns no
+#      coverage and no redundancy on any kept cell and sits within
+#      distinct_min_ms of an existing relay. A near-but-distinct candidate
+#      (for example London against Frankfurt) is never rejected on distance
+#      alone, so a redundant EU location can be requested at all.
 #  13. Every existing relay is reported in relay_necessity with its window
 #      session count, its session-weighted coverage retention (rule 16) if it
 #      were dropped, and its measured saved-app mean / negative-saving share;
@@ -89,6 +101,16 @@
 #      endpoints collapsed onto one centroid) cannot set the figure on its
 #      own, while a genuinely critical high-volume cell still drives it down.
 #      The same figure gates MOVE and prune.
+#  17. ADD_REDUNDANT covers a region that is already served. It needs the same
+#      status, stability, window, and measured-quality gates as ADD, plus a top
+#      candidate whose redundancy gain clears redundancy_min_gain and whose
+#      redundancy share, redundancy / (coverage + redundancy), is at least 0.5.
+#      The floor defaults to 3, mirroring min_cell_sessions: one min-size
+#      demand-weighted cell of redundant demand is the floor, while the real
+#      thin-data guards are the add_min_window_sessions window floor, the
+#      stability_runs streak, and the quality gate. So a flat-coverage,
+#      strongly redundant second path can be requested without pretending it
+#      adds new coverage, and thin windows still cannot fire it.
 #
 # Requires: bash, jq (>= 1.6 for sin/cos/asin/sqrt).
 # ──────────────────────────────────────────────────────────────
@@ -145,7 +167,7 @@ done
 
 # ── Minimal documents (valid JSON, no jq required) ───────────
 STATIC_MINIMAL='{"schema_version":1,"generated_at":0,"status":"INSUFFICIENT_DATA","window":{"from_t":0,"to_t":0,"snapshots":0,"sessions":0,"cells":0,"min_window_sessions":20,"min_cell_sessions":3},"matrix":[],"existing":[],"ranking":[],"rejected":[],"recommendation":{"action":"NONE","candidate_id":null,"remove_node_id":null,"reason":"insufficient data"},"stability":{"top_id":null,"streak":0,"required":3,"runs":[]},"measured":{"saved_app_samples":0,"saved_app_mean_ms":null,"saved_app_negative_share":null,"route_jitter_mean_ms":null,"route_loss_ratio":null,"min_measured_samples":0,"max_negative_saving_share":0},"source_quality":{"min_samples":3,"min_measured_samples":0,"suppressed_cells":0,"relays":[]},"notes":"no data"}'
-DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"add_min_window_sessions":50,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"near_duplicate_ms":25,"idle_sessions_max":0,"max_negative_saving_share":0.5,"min_measured_samples":5}'
+DEFAULT_PARAMS='{"alpha":2,"window_secs":604800,"min_window_sessions":20,"min_cell_sessions":3,"stability_runs":3,"add_margin":0.10,"add_min_window_sessions":50,"move_margin":0.20,"redundancy_weight":0.5,"move_coverage_keep":0.9,"proximity_ms_floor":15,"redundancy_band":0.1,"distinct_min_ms":5,"redundancy_min_gain":3,"idle_sessions_max":0,"max_negative_saving_share":0.5,"min_measured_samples":5}'
 
 write_json() {
 	local json="$1" minimal="$2"
@@ -330,7 +352,10 @@ def sum_relay_metric($snaps; $k):
 | ($params.redundancy_weight // 0.5 | n) as $redundancy_weight
 | ($params.move_coverage_keep // 0.9 | n) as $coverage_keep
 | ($params.idle_sessions_max // 0 | n) as $idle_sessions_max
-| ($params.near_duplicate_ms // 25 | n) as $near_dup
+| ($params.proximity_ms_floor // 15 | n) as $proximity_floor
+| ($params.redundancy_band // 0.10 | n) as $redundancy_band
+| ($params.distinct_min_ms // 5 | n) as $distinct_min
+| ($params.redundancy_min_gain // 3 | n) as $redundancy_min_gain
 | ($params.max_negative_saving_share // 0.5 | n) as $max_neg_saving_share
 | ($params.min_measured_samples // 5 | n) as $min_measured_samples
 
@@ -417,20 +442,13 @@ def sum_relay_metric($snaps; $k):
        end
    ) | sort_by(.node_id)) as $existing
 
-# ── Near-duplicate rejection ─────────────────────────────────
-| ($cands | map(
-     . as $c
-     | (($c.lat | n)) as $clat
-     | (($c.lon | n)) as $clon
-     | ([ $existing[] | select(leg_ms($clat; $clon; .lat; .lon) <= $near_dup) ] | length) as $near_n
-     | {c: $c, near_n: $near_n}
-   )) as $cand_checked
-| ([ $cand_checked[] | select(.near_n > 0)
-     | {candidate_id: .c.id, reason: "near_duplicate"}] | sort_by(.candidate_id)) as $rejected
-| ([ $cand_checked[] | select(.near_n == 0) | .c ]) as $cand_ok
-
-# ── Candidate scoring ────────────────────────────────────────
-| ([ $cand_ok[] as $c
+# ── Candidate scoring: demand-weighted two-leg predicate ─────
+# Every candidate is scored on the two-leg path cost. A kept cell adds its
+# weight w to coverage when the candidate cuts at least proximity_ms_floor off
+# the best existing path (or no provider exists), scaled by the relative cut,
+# and to redundancy when the candidate is within redundancy_band of the single
+# in-band provider path and at least distinct_min_ms away from it.
+| ([ $cands[] as $c
      | (($c.lat | n)) as $clat
      | (($c.lon | n)) as $clon
      | (reduce $gcells[] as $cell (
@@ -438,26 +456,45 @@ def sum_relay_metric($snaps; $k):
           ($cell.s_lat) as $slat | ($cell.s_lon) as $slon
           | ($cell.d_lat) as $dlat | ($cell.d_lon) as $dlon
           | ([ $existing[]
-               | leg_ms($slat; $slon; .lat; .lon) + leg_ms(.lat; .lon; $dlat; $dlon) ]) as $legs
-          | (if ($legs | length) == 0 then null else ($legs | min) end) as $ce
+               | {lat: (.lat | n), lon: (.lon | n),
+                  leg: (leg_ms($slat; $slon; .lat; .lon) + leg_ms(.lat; .lon; $dlat; $dlon))} ]) as $provs
+          | ([ $provs[].leg ] | if length == 0 then null else min end) as $ce
           | (leg_ms($slat; $slon; $clat; $clon) + leg_ms($clat; $clon; $dlat; $dlon)) as $cc
           | ($cell.weight | n) as $w
           | if $ce == null then
               .coverage_gain += $w
             else
-              (if $cc < $ce then $cc else $ce end) as $cw
-              | ((if $ce > $cc then ($ce - $cc) else 0 end) / (if $ce > 1 then $ce else 1 end)) as $factor
-              | .coverage_gain += ($w * $factor)
-              | (([ $legs[] | select(. <= ($ce * 1.1)) ] | length) == 1) as $exactly_one
-              | (if ($exactly_one and ($cc <= ($ce * 1.1))) then .redundancy_gain += $w else . end)
+              ($ce - $cc) as $improve
+              | (if $improve >= $proximity_floor
+                 then .coverage_gain += ($w * ($improve / (if $ce > 1 then $ce else 1 end)))
+                 else . end)
+              | ([ $provs[] | select(.leg <= ($ce * (1 + $redundancy_band))) ]) as $in_band
+              | (if (($in_band | length) == 1)
+                    and ($cc <= ($ce * (1 + $redundancy_band)))
+                    and (([ $in_band[] | leg_ms($clat; $clon; .lat; .lon) ] | min // 0) >= $distinct_min)
+                 then .redundancy_gain += $w
+                 else . end)
             end
         )) as $metrics
+     | (([ $existing[] | leg_ms($clat; $clon; .lat; .lon) ] | min) // 1e9) as $nearest_relay
      | {candidate_id: $c.id,
         region: ($c.region // ""),
-        coverage_gain: (($metrics.coverage_gain) | r6),
-        redundancy_gain: (($metrics.redundancy_gain) | r6),
-        score: (($metrics.coverage_gain + ($redundancy_weight * $metrics.redundancy_gain)) | r6)}
-   ]) as $ranking0
+        coverage_raw: (($metrics.coverage_gain) | n),
+        redundancy_raw: (($metrics.redundancy_gain) | n),
+        nearest_relay: (($nearest_relay) | n)}
+   ]) as $scored
+| ([ $scored[]
+     | select((.coverage_raw <= 0) and (.redundancy_raw <= 0) and (.nearest_relay < $distinct_min))
+     | {candidate_id, reason: "near_duplicate"}] | sort_by(.candidate_id)) as $rejected
+| ([ $scored[]
+     | select((.coverage_raw > 0) or (.redundancy_raw > 0) or (.nearest_relay >= $distinct_min))
+     | {candidate_id,
+        region,
+        coverage_gain: (.coverage_raw | r6),
+        redundancy_gain: (.redundancy_raw | r6),
+        score: (((.coverage_raw) + ($redundancy_weight * (.redundancy_raw))) | r6)}
+   ]) as $cand_ok
+| ($cand_ok) as $ranking0
 | ($ranking0 | sort_by([(-.score), .candidate_id])) as $ranking
 | (if ($ranking | length) > 0 then $ranking[0] else null end) as $top
 | (if $top == null then null
@@ -618,22 +655,36 @@ def sum_relay_metric($snaps; $k):
 | (if $top == null then null
    else (($geo.region_aliases[($top.region // "")]) // ($top.region // "")) end) as $top_region
 | (if $margin == null then "none" else ($margin | tostring) end) as $margin_display
+| ($streak >= $stability_runs and $window_sessions >= $add_min_window_sessions) as $stable_window
+| (if $top == null then 0
+   else (($top.coverage_gain + $top.redundancy_gain) as $denom
+         | if $denom > 0 then (($top.redundancy_gain / $denom) | r6) else 0 end)
+   end) as $top_redundancy_share
 | (if $status != "OK" then
      {action: "NONE", candidate_id: null, remove_node_id: null,
       reason: (if $snap_count < 2
                then "fewer than 2 snapshots in the window"
                else "window sessions \($window_sessions) below minimum \($min_sessions)" end)}
    elif ($top != null and (($served | index($top_region)) == null)
-         and $streak >= $stability_runs
-         and $window_sessions >= $add_min_window_sessions
-         and $quality_blocked) then
+         and $stable_window and $quality_blocked) then
      {action: "NONE", candidate_id: null, remove_node_id: null,
       reason: "measured saved-app negative share \($meas_neg_share) over \($meas_samples) sample(s) exceeds max_negative_saving_share \($max_neg_saving_share); ADD of \($top.candidate_id) suppressed"}
    elif ($top != null and (($served | index($top_region)) == null)
-         and $streak >= $stability_runs
-         and $window_sessions >= $add_min_window_sessions) then
+         and $stable_window) then
      {action: "ADD", candidate_id: $top.candidate_id, remove_node_id: null,
       reason: "unserved leader \($top.candidate_id) stable for \($streak) run(s) with \($window_sessions) window sessions >= \($add_min_window_sessions)"}
+   elif ($top != null and (($served | index($top_region)) != null)
+         and $stable_window and $quality_blocked
+         and $top.redundancy_gain >= $redundancy_min_gain
+         and $top_redundancy_share >= 0.5) then
+     {action: "NONE", candidate_id: null, remove_node_id: null,
+      reason: "measured saved-app negative share \($meas_neg_share) over \($meas_samples) sample(s) exceeds max_negative_saving_share \($max_neg_saving_share); ADD_REDUNDANT of \($top.candidate_id) suppressed"}
+   elif ($top != null and (($served | index($top_region)) != null)
+         and $stable_window
+         and $top.redundancy_gain >= $redundancy_min_gain
+         and $top_redundancy_share >= 0.5) then
+     {action: "ADD_REDUNDANT", candidate_id: $top.candidate_id, remove_node_id: null,
+      reason: "served region \($top_region) has a distinct redundant leader \($top.candidate_id): redundancy gain \($top.redundancy_gain) >= \($redundancy_min_gain), redundancy share \($top_redundancy_share) >= 0.5 over \($window_sessions) window sessions"}
    elif ($top != null and $has_margin and $margin >= $move_margin and $streak >= $stability_runs
          and $move_target != null) then
      {action: "MOVE", candidate_id: $top.candidate_id, remove_node_id: $move_target.node_id,

@@ -324,6 +324,44 @@ impl Inner {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         Some(TelemetryCollector::percentile(&sorted, 50.0))
     }
+
+    /// Direct application loss ratio from shadow attempts vs replies, or `None`
+    /// until at least one sample was attempted.
+    fn shadow_loss_ratio(&self) -> Option<f32> {
+        if self.shadow_attempts == 0 {
+            return None;
+        }
+        let replies = self.shadow_replies.min(self.shadow_attempts);
+        Some(1.0 - replies as f32 / self.shadow_attempts as f32)
+    }
+}
+
+/// A same-server, fresh shadow-direct and relayed window, ready for a
+/// like-for-like bypass comparison.
+///
+/// Both windows are keyed by server and come from the same moment, so the
+/// difference between the two medians is meaningful. It carries sample counts
+/// and the raw jitter/loss so the bypass gate can apply its own thresholds;
+/// this type never decides anything. Absent or mismatched windows yield `None`,
+/// which the gate treats as fail-open to the relay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LikeForLike {
+    /// The server both windows describe.
+    pub server: Ipv4Addr,
+    /// Shadow-direct application p50 (ms).
+    pub direct_app_p50_ms: f32,
+    /// Relayed application p50 (ms).
+    pub relay_app_p50_ms: f32,
+    /// Shadow-direct jitter (ms), once two samples exist.
+    pub direct_app_jitter_ms: Option<f32>,
+    /// Relayed jitter (ms), once two samples exist.
+    pub relay_app_jitter_ms: Option<f32>,
+    /// Direct application loss ratio, once a sample was attempted.
+    pub direct_loss_ratio: Option<f32>,
+    /// Shadow-direct samples in the current window.
+    pub shadow_samples: u32,
+    /// Relayed samples in the current window.
+    pub relay_samples: u32,
 }
 
 /// Mean of consecutive absolute RTT deltas in arrival order.
@@ -563,12 +601,34 @@ impl LatencyTracker {
     /// Direct application loss ratio from shadow attempts vs replies, or
     /// `None` until at least one sample was attempted.
     pub fn shadow_direct_loss_ratio(&self) -> Option<f32> {
+        self.lock().shadow_loss_ratio()
+    }
+
+    /// A fresh same-server shadow-direct and relayed window, or `None` when
+    /// the two windows describe different servers, the shadow window is stale,
+    /// or either window is empty. Returning `None` is the fail-open signal: the
+    /// bypass gate must keep relaying rather than compare unrelated data.
+    pub fn like_for_like(&self) -> Option<LikeForLike> {
+        let now = self.clock.now();
         let inner = self.lock();
-        if inner.shadow_attempts == 0 {
+        let server = inner.relayed_server?;
+        if inner.shadow_server != Some(server) {
             return None;
         }
-        let replies = inner.shadow_replies.min(inner.shadow_attempts);
-        Some(1.0 - replies as f32 / inner.shadow_attempts as f32)
+        let measured_at = inner.shadow_measured_at?;
+        if now.saturating_duration_since(measured_at) >= SHADOW_DIRECT_TTL {
+            return None;
+        }
+        Some(LikeForLike {
+            server,
+            direct_app_p50_ms: inner.shadow_median()?,
+            relay_app_p50_ms: inner.relayed_median()?,
+            direct_app_jitter_ms: (inner.shadow.len() >= 2).then(|| ring_jitter(&inner.shadow)),
+            relay_app_jitter_ms: (inner.relayed.len() >= 2).then(|| ring_jitter(&inner.relayed)),
+            direct_loss_ratio: inner.shadow_loss_ratio(),
+            shadow_samples: inner.shadow.len() as u32,
+            relay_samples: inner.relayed.len() as u32,
+        })
     }
 
     /// Number of shadow-direct samples in the current window.
@@ -805,6 +865,12 @@ pub fn relayed_jitter_ms() -> Option<f32> {
 /// Shadow-direct loss ratio (1 - replies/attempts) for the bypass gate.
 pub fn shadow_direct_loss_ratio() -> Option<f32> {
     global().and_then(|tracker| tracker.shadow_direct_loss_ratio())
+}
+
+/// A fresh same-server shadow-direct and relayed window for the bypass gate, or
+/// `None` when the pairing is stale or mismatched (fail open to the relay).
+pub fn like_for_like() -> Option<LikeForLike> {
+    global().and_then(|tracker| tracker.like_for_like())
 }
 
 /// Shadow-direct sample count of the current window.
@@ -1367,6 +1433,99 @@ mod tests {
             t.shadow_direct_p50_ms(),
             None,
             "no direct-app median is reused after commit"
+        );
+    }
+
+    // ── Like-for-like bypass pairing ────────────────────────────────────────
+
+    fn paired_windows(
+        t: &LatencyTracker,
+        clock: &TestClock,
+        server: Ipv4Addr,
+        relay_ms: u64,
+        shadow_ms: u64,
+    ) {
+        t.note_outbound(server);
+        clock.advance(Duration::from_millis(relay_ms));
+        t.record_inbound(server);
+        assert!(t.record_shadow_outbound(server));
+        clock.advance(Duration::from_millis(shadow_ms));
+        t.record_shadow_inbound(server);
+    }
+
+    #[test]
+    fn like_for_like_pairs_same_server_shadow_and_relayed_windows() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        paired_windows(&t, &clock, SERVER, 40, 80);
+        clock.advance(Duration::from_secs(30));
+        paired_windows(&t, &clock, SERVER, 50, 100);
+
+        let paired = t
+            .like_for_like()
+            .expect("same-server shadow and relayed windows must pair");
+        assert_eq!(paired.server, SERVER);
+        assert_eq!(paired.relay_samples, 2);
+        assert_eq!(paired.shadow_samples, 2);
+        assert!(
+            paired.direct_app_p50_ms > paired.relay_app_p50_ms,
+            "the shadow-direct median must describe the slower direct path here"
+        );
+    }
+
+    #[test]
+    fn like_for_like_rejects_a_single_server_pairing() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        t.note_outbound(SERVER);
+        clock.advance(Duration::from_millis(30));
+        t.record_inbound(SERVER);
+
+        assert!(t.record_shadow_outbound(OTHER_SERVER));
+        clock.advance(Duration::from_millis(90));
+        t.record_shadow_inbound(OTHER_SERVER);
+
+        assert_eq!(
+            t.like_for_like(),
+            None,
+            "a shadow window from another server must fail open, not pair"
+        );
+    }
+
+    #[test]
+    fn like_for_like_is_none_without_a_relayed_window() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        assert!(t.record_shadow_outbound(SERVER));
+        clock.advance(Duration::from_millis(90));
+        t.record_shadow_inbound(SERVER);
+
+        assert_eq!(
+            t.like_for_like(),
+            None,
+            "a shadow window alone must not fabricate a comparison"
+        );
+    }
+
+    #[test]
+    fn like_for_like_is_none_when_the_shadow_window_is_stale() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        paired_windows(&t, &clock, SERVER, 40, 80);
+        assert!(
+            t.like_for_like().is_some(),
+            "a fresh pair must be usable before it goes stale"
+        );
+
+        clock.advance(SHADOW_DIRECT_TTL);
+        assert_eq!(
+            t.like_for_like(),
+            None,
+            "a stale shadow window must fail open to the relay"
         );
     }
 

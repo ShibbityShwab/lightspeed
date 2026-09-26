@@ -30,6 +30,13 @@
 #  (17) per-source saved-app quality is reported per relay and coarse
 #       source region, with the k floor withholding thin cells and the
 #       sample count plus meets_min_samples flag on every reported row
+#  (18) retention is weighted by cell session volume, so a thin cell cannot
+#       set a relay's figure on its own
+#  (19) a near-but-distinct candidate survives on redundancy while an exact
+#       duplicate is rejected as near_duplicate
+#  (20) flat coverage with high redundancy in a served region -> ADD_REDUNDANT
+#  (21) a thin window cannot fire ADD_REDUNDANT
+#  (22) a dominant measured negative-saving share blocks ADD_REDUNDANT
 #
 # Tests (3)-(7) use a synthetic three-region catalog under $TMP with
 # fully controlled geometry; tests (1), (2), (8), (9), (10) exercise
@@ -200,6 +207,28 @@ write_synth_regions() {
 JSON
 }
 
+# write_redundancy_regions <dir>
+# Two regions for the redundancy fixtures: eu is already served by one relay
+# at the eu centroid, and far sits 100 degrees east so every candidate shares
+# one long two-leg path. A candidate offset north of the relay stays within
+# redundancy_band while earning no coverage, because the offset makes its path
+# slightly worse.
+write_redundancy_regions() {
+	mkdir -p "$1"
+	cat >"$1/regions.json" <<'JSON'
+{
+  "schema_version": 1,
+  "regions": {
+    "eu":  {"label": "Europe", "lat": 0, "lon": 0},
+    "far": {"label": "Far",    "lat": 0, "lon": 100}
+  },
+  "countries": {"EU": "eu", "FA": "far"},
+  "region_aliases": {"eu": "eu", "far": "far"},
+  "relays": {"relay-fra": {"lat": 0, "lon": 0}}
+}
+JSON
+}
+
 # write_synth_candidates <dir> <candidates-json-array>
 write_synth_candidates() {
 	jq -cn --argjson cands "$2" \
@@ -251,6 +280,26 @@ write_synth_candidates "$GEO_MOVE" "[$CAND_HUB,$CAND_WEST,$CAND_NEAR]"
 GEO_SINGLE="$TMP/geo-single"
 write_synth_regions "$GEO_SINGLE"
 write_synth_candidates "$GEO_SINGLE" "[$CAND_EAST]"
+
+# geo-redundancy: eu is served by relay-fra; eu-london is a distinct second
+# path within redundancy_band, and eu-frankfurt-dup is an exact copy of the
+# relay. Both candidates sit in the already-served eu region.
+CAND_LON='{"id":"eu-london","provider":"test","region":"eu","lat":7.2,"lon":0,"free_tier":true,"viable":true,"note":""}'
+CAND_FRA_DUP='{"id":"eu-frankfurt-dup","provider":"test","region":"eu","lat":0,"lon":0,"free_tier":true,"viable":true,"note":""}'
+REG_RED="$TMP/registry-redundancy.json"
+write_registry "$REG_RED" '[{"node_id":"relay-fra","region":"eu","data_addr":"10.0.0.1:4434"}]'
+GEO_RED="$TMP/geo-redundancy"
+write_redundancy_regions "$GEO_RED"
+write_synth_candidates "$GEO_RED" "[$CAND_LON,$CAND_FRA_DUP]"
+
+# 60 sessions on the shared eu->far path, enough to clear add_min_window_sessions
+H_RED="$TMP/hist-redundancy.json"
+write_history "$H_RED" \
+	"[$(snap 1000 relay-fra false '{"eu-far":100}'),$(snap 1060 relay-fra false '{"eu-far":160}')]"
+# 25 sessions: OK, stable, redundancy above the gain floor, but under the ADD floor
+H_RED_THIN="$TMP/hist-redundancy-thin.json"
+write_history "$H_RED_THIN" \
+	"[$(snap 1000 relay-fra false '{"eu-far":100}'),$(snap 1060 relay-fra false '{"eu-far":125}')]"
 
 # 25 reconstructed sessions in one kept cell
 H_SYNTH="$TMP/hist-synth.json"
@@ -574,6 +623,65 @@ OUT18C="$TMP/out18c.json"
 run_rec "$H_RET_CRITICAL" missing "$REG_SYNTH" "$GEO_ADD" "$OUT18C"
 assert_rc0 $? "(18) critical-retention run exits 0"
 assert_jq "$OUT18C" '.relay_necessity[] | select(.node_id == "relay-far") | .worst_retention < 0.6' "(18) a large cell that depends on relay-far still drives retention down"
+
+# ── (19) near-but-distinct survives; exact duplicate is rejected
+# relay-fra serves eu at the eu centroid. eu-london is 800 km north of it:
+# within redundancy_band of the shared two-leg path, but far enough to be a
+# distinct second path rather than a clone. The candidate at the relay
+# coordinates earns nothing and sits within distinct_min_ms, so it is the
+# only near_duplicate. This is the London-against-Frankfurt case.
+OUT19="$TMP/out19.json"
+run_rec "$H_RED" missing "$REG_RED" "$GEO_RED" "$OUT19"
+assert_rc0 $? "(19) redundancy fixture exits 0"
+assert_jq "$OUT19" '.status == "OK" and .window.sessions == 60' "(19) redundancy fixture is OK"
+assert_jq "$OUT19" '[.ranking[] | select(.candidate_id == "eu-london")] | length == 1' "(19) near-but-distinct candidate survives"
+assert_jq "$OUT19" '[.ranking[] | select(.candidate_id == "eu-london")][0].redundancy_gain > 0' "(19) survivor earns redundancy"
+assert_jq "$OUT19" '[.ranking[] | select(.candidate_id == "eu-london")][0].coverage_gain == 0' "(19) survivor earns no coverage: flat coverage"
+assert_jq "$OUT19" '.rejected == [{"candidate_id":"eu-frankfurt-dup","reason":"near_duplicate"}]' "(19) exact duplicate is rejected as near_duplicate"
+assert_jq "$OUT19" '.recommendation.action == "NONE"' "(19) no stability yet, so no ADD_REDUNDANT"
+
+# ── (20) flat coverage with high redundancy -> ADD_REDUNDANT ─
+PREV20="$TMP/prev20.json"
+write_previous "$PREV20" eu-london 3
+OUT20="$TMP/out20.json"
+run_rec "$H_RED" "$PREV20" "$REG_RED" "$GEO_RED" "$OUT20"
+assert_rc0 $? "(20) ADD_REDUNDANT run exits 0"
+assert_jq "$OUT20" '.recommendation.action == "ADD_REDUNDANT" and .recommendation.candidate_id == "eu-london"' "(20) a stable redundant leader in a served region ADDs a redundant relay"
+assert_jq "$OUT20" '.recommendation.remove_node_id == null' "(20) ADD_REDUNDANT removes nothing"
+assert_jq "$OUT20" '.ranking[0].coverage_gain == 0 and .ranking[0].redundancy_gain >= 3' "(20) the branch is driven by redundancy, not new coverage"
+assert_jq "$OUT20" '.stability.streak >= 3 and .window.sessions >= 50' "(20) the same stability and window gates as ADD are met"
+
+# ── (21) thin data does not produce ADD_REDUNDANT ────────────
+PREV21="$TMP/prev21.json"
+write_previous "$PREV21" eu-london 3
+OUT21="$TMP/out21.json"
+run_rec "$H_RED_THIN" "$PREV21" "$REG_RED" "$GEO_RED" "$OUT21"
+assert_rc0 $? "(21) thin redundancy run exits 0"
+assert_jq "$OUT21" '.status == "OK" and .window.sessions == 25' "(21) thin redundancy window is OK but below the ADD floor"
+assert_jq "$OUT21" '.stability.streak >= 3' "(21) the redundant leader is stable"
+assert_jq "$OUT21" '.ranking[0].candidate_id == "eu-london" and .ranking[0].redundancy_gain >= 3' "(21) the leader clears the redundancy gain floor"
+assert_jq "$OUT21" '.recommendation.action == "NONE"' "(21) a thin window cannot fire ADD_REDUNDANT"
+
+# ── (22) a negative-saving network blocks ADD_REDUNDANT too ──
+# Same served-region redundant leader as (20), but the relay window carries a
+# 70% negative-saving share over 20 samples, so the measured-quality gate that
+# suppresses an unserved ADD must suppress the redundant ADD as well.
+H_RED_BAD="$TMP/hist-redundancy-bad.json"
+jq -cn '
+  {version:1,generated_at:0,snapshots:[
+    {t:1000,relay_count:1,healthy_count:1,per_relay:{
+      "relay-fra":{reachable:true,version:"test",active_sessions:0,geo:{"eu-far":100},reset:false,
+                   delta:{saved_app_ms_sum:30,saved_app_ms_count:10,saved_app_ms_negative_count:7}}}},
+    {t:1060,relay_count:1,healthy_count:1,per_relay:{
+      "relay-fra":{reachable:true,version:"test",active_sessions:0,geo:{"eu-far":160},reset:false,
+                   delta:{saved_app_ms_sum:30,saved_app_ms_count:10,saved_app_ms_negative_count:7}}}}
+  ]}' >"$H_RED_BAD"
+OUT22="$TMP/out22.json"
+run_rec "$H_RED_BAD" "$PREV20" "$REG_RED" "$GEO_RED" "$OUT22"
+assert_rc0 $? "(22) negative-saving redundancy run exits 0"
+assert_jq "$OUT22" '.measured.saved_app_samples == 20 and .measured.saved_app_negative_share == 0.7' "(22) the fleet negative-saving share is measured"
+assert_jq "$OUT22" '.ranking[0].redundancy_gain >= 3 and .ranking[0].coverage_gain == 0' "(22) the leader would otherwise ADD_REDUNDANT"
+assert_jq "$OUT22" '.recommendation.action == "NONE"' "(22) a dominant negative-saving share blocks ADD_REDUNDANT"
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

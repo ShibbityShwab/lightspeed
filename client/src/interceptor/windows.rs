@@ -671,6 +671,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let fec_k = config.fec_k;
             let adaptive_cfg = config.adaptive_fec;
             let fec_active = fec_enabled || adaptive_cfg.enabled;
+            let bypass_config = config.bypass;
             let running_loop = Arc::clone(&running);
             let ack_loop = ack_tx.clone();
 
@@ -685,6 +686,16 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     std::net::SocketAddr,
                     lightspeed_protocol::FecDecoder,
                 > = std::collections::HashMap::new();
+
+                // The steady-state do-no-harm gate. WinDivert is the backend
+                // that re-injects the game's own packets onto the direct path,
+                // so it is the one that produces same-server shadow-direct
+                // samples for the gate to compare. Evaluated on a timer rather
+                // than per packet; the gate degrades to measurement-only.
+                let mut gate =
+                    super::bypass::BypassGate::new(bypass_config, Arc::clone(&counters_t));
+                let mut eval_timer = tokio::time::interval(super::bypass::EVAL_INTERVAL);
+                eval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
                 let mut seq: u16 = 0;
                 let mut buf = vec![0u8; 65535];
@@ -890,6 +901,21 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                         counters_t.errors.fetch_add(1, Ordering::Relaxed);
                                     }
                                 }
+                            }
+                        }
+
+                        // Steady-state bypass evaluation. Counts and logs the
+                        // decision; it never enacts one, because a Direct here
+                        // would mean tearing a live divert off the tunnel.
+                        _ = eval_timer.tick() => {
+                            if let Some(server) = active_server.filter(|_| !gate.is_disabled()) {
+                                let _ = super::bypass::steady_state_step(
+                                    &mut gate,
+                                    server,
+                                    Instant::now(),
+                                    true,
+                                    fec_active,
+                                );
                             }
                         }
                     }

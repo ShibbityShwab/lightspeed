@@ -22,8 +22,10 @@ locations with their current cost basis.
 - Region keys are short lowercase slugs. Region keys are stable identifiers,
   not display names. The human readable name lives in `regions.<key>.label`.
 - Country keys are uppercase ISO 3166-1 alpha-2 codes.
-- Distances in `candidates.json` `params` (for example `proximity_ms_floor` and
-  `near_duplicate_ms`) are milliseconds of one-way latency.
+- Latency knobs in `candidates.json` `params`: `proximity_ms_floor` and
+  `distinct_min_ms` are milliseconds of one-way latency, `redundancy_band` is a
+  dimensionless fraction, and `redundancy_min_gain` is in the same
+  demand-weighted units as the gains it floors.
 - `window_secs` is a duration in seconds.
 
 ## regions.json schema
@@ -79,8 +81,12 @@ one hard integrity rule of the catalog.
   improvement thresholds for adding a node and for moving one. `redundancy_weight`
   down-weights a candidate that duplicates existing coverage.
   `move_coverage_keep` is the fraction of coverage that must survive a move.
-  `proximity_ms_floor` and `near_duplicate_ms` are latency floors that prevent
-  treating co-located nodes as new coverage.
+  `proximity_ms_floor` is the two-leg latency improvement a candidate must
+  reach before a cell counts as new coverage. `redundancy_band` and
+  `distinct_min_ms` define a distinct second path: a candidate must sit within
+  the band of the single in-band provider and at least `distinct_min_ms` away
+  from it. `redundancy_min_gain` floors the demand-weighted redundancy a
+  served-region candidate needs before an `ADD_REDUNDANT` is emitted.
 - `candidates[].id` is a stable slug unique within the file.
 - `candidates[].free_tier` is `true` only when there is a genuine ongoing $0
   basis as of 2026, meaning an Always Free allowance or an active renewable
