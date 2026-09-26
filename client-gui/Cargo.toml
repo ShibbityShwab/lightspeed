@@ -45,7 +45,7 @@ webbrowser = "1"
 # that never use it; keeping it global pulled gtk -> glib 0.18 into the
 # Linux build, triggering GHSA-wrw7-89jp-8q8g.
 [target.'cfg(windows)'.dependencies]
-tray-icon = "0.24.1"
+tray-icon = "0.25.1"
 windivert = { version = "0.6", optional = true, features = ["vendored"] }
 
 # Override lightspeed-client features on Windows
