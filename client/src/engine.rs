@@ -1,4 +1,4 @@
-//! Background keepalive + redirect engine — drives the tunnel loop from a GUI context.
+//! Background keepalive + redirect engine - drives the tunnel loop from a GUI context.
 //!
 //! [`LightSpeedEngine`] can be created on any thread.  It spawns async tasks
 //! onto the provided Tokio [`Handle`] and updates a shared [`EngineStatus`]
@@ -20,7 +20,7 @@ use crate::redirect::{RedirectStats, UdpRedirect};
 
 // ── Public types ─────────────────────────────────────────────────────────
 
-/// Snapshot of tunnel state — cheap to clone, safe to share.
+/// Snapshot of tunnel state - cheap to clone, safe to share.
 #[derive(Clone, Debug, Default)]
 pub struct EngineStatus {
     /// Whether the keepalive loop is actively running.
@@ -35,7 +35,7 @@ pub struct EngineStatus {
     pub packets_sent: u64,
     /// Total keepalive echo packets received this session.
     pub packets_received: u64,
-    /// Generation counter — incremented each time `connect()` is called.
+    /// Generation counter - incremented each time `connect()` is called.
     /// Used to prevent old tasks from overwriting status after reconnect.
     pub keepalive_generation: u64,
 
@@ -431,7 +431,7 @@ impl LightSpeedEngine {
         self.note_telemetry_proxy(proxy_addr);
         self.rt.spawn(async move {
             // run_with_shutdown takes &self and is Send, but UdpRedirect isn't
-            // Arc'd — we move it into the task.
+            // Arc'd - we move it into the task.
             match redirect.run_with_shutdown(rx).await {
                 Ok(()) => {
                     tracing::info!("Redirect stopped cleanly");
@@ -466,7 +466,7 @@ impl LightSpeedEngine {
     /// Start transparent pcap capture mode for the given game key.
     ///
     /// Sniffs game UDP directly from the NIC, tunnels through `proxy_addr`,
-    /// and injects responses back — no server IP or game console command needed.
+    /// and injects responses back - no server IP or game console command needed.
     /// Requires Npcap installed and the process running as Administrator.
     ///
     /// Returns `Err(msg)` if the game key is unknown; start errors (e.g., not
@@ -509,7 +509,7 @@ impl LightSpeedEngine {
             resolved_interface.as_deref().unwrap_or("(none found)")
         );
 
-        // Create the stat slot — the capture task will fill it once running.
+        // Create the stat slot - the capture task will fill it once running.
         let stat_slot: CaptureStatSlot = Arc::new(Mutex::new(None));
         self.capture_stat_slot = Some(Arc::clone(&stat_slot));
 
@@ -606,7 +606,7 @@ impl LightSpeedEngine {
     /// Start WinDivert kernel-level packet interception.
     ///
     /// Intercepts outbound game UDP to `server_addr`, tunnels through
-    /// `proxy_addr`, and injects spoofed responses back — severs the game's
+    /// `proxy_addr`, and injects spoofed responses back - severs the game's
     /// direct path so in-game ping reflects the proxy RTT.
     /// Requires WinDivert64.sys + WinDivert.dll next to the exe and
     /// Administrator privileges.
@@ -681,7 +681,7 @@ impl LightSpeedEngine {
         Ok(())
     }
 
-    /// Stub for non-Windows / feature-disabled builds — always returns `Err`.
+    /// Stub for non-Windows / feature-disabled builds - always returns `Err`.
     #[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
     pub fn start_windivert(
         &mut self,
@@ -695,7 +695,7 @@ impl LightSpeedEngine {
 
     /// Start WinDivert kernel-level interception using a game's port range.
     ///
-    /// No server IP is required — the first outbound Game UDP packet whose
+    /// No server IP is required - the first outbound Game UDP packet whose
     /// destination port falls in `[port_lo, port_hi]` is treated as the game
     /// server.  All subsequent game packets are tunnelled through `proxy_addr`.
     /// Non-game traffic that accidentally passes the broad filter is re-injected
@@ -816,7 +816,7 @@ impl LightSpeedEngine {
     /// 3. Creates the best available interceptor for the current OS.
     /// 4. Starts kernel-level MITM interception automatically.
     ///
-    /// On Windows this uses WinDivert with a per-process PID filter — zero false
+    /// On Windows this uses WinDivert with a per-process PID filter - zero false
     /// positives even on shared game-server ports.
     /// On Linux/macOS it uses nftables/pfctl with a server-specific redirect rule.
     ///

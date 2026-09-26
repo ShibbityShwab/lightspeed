@@ -1,8 +1,8 @@
-//! Windows `WinDivertInterceptor` — kernel-level traffic interception via WinDivert.
+//! Windows `WinDivertInterceptor` - kernel-level traffic interception via WinDivert.
 //!
 //! This is the gold-standard implementation on Windows.  WinDivert is a signed
 //! NDIS lightweight filter driver that holds each matching packet in the
-//! kernel until userspace either re-injects or drops it — identical in
+//! kernel until userspace either re-injects or drops it - identical in
 //! principle to how other packet-capture tools operate.
 //!
 //! ## Improvements over legacy `windivert_redirect.rs`
@@ -14,7 +14,7 @@
 //!   intercepted.
 //! - Routes pre-seeded from [`ProcessScanner`] let the engine skip the
 //!   debounce accumulation window: interception starts with the first packet.
-//! - Stale-server timeout unchanged (5 s) — still auto-resets on map change.
+//! - Stale-server timeout unchanged (5 s) - still auto-resets on map change.
 //!
 //! ## Requirements
 //! - Windows only.
@@ -76,7 +76,7 @@ impl Default for WinDivertInterceptor {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  TrafficInterceptor — full implementation (gated on feature + platform)
+//  TrafficInterceptor - full implementation (gated on feature + platform)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -199,7 +199,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             }
         };
 
-        // Open inject handle (no filter — write-only for injecting inbound spoofs).
+        // Open inject handle (no filter - write-only for injecting inbound spoofs).
         tracing::info!("⚡ Opening WinDivert inject handle...");
         let wd_inject =
             match OwnedHandle::open("false", WinDivertLayer::Network, 0, WinDivertFlags::new()) {
@@ -441,7 +441,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                             let _ = wd_ic.send(data, &addr);
                                         }
                                         Decision::ResetToDetection => {
-                                            tracing::info!("🔄 Locked server stale — re-detecting");
+                                            tracing::info!("🔄 Locked server stale - re-detecting");
                                             reported_server = None;
                                             if let Ok(mut g) = counters_ic.detected_server.lock() {
                                                 *g = None;
@@ -454,7 +454,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     }
                                 }
                                 None => {
-                                    // Non-IPv4/UDP — re-inject unchanged.
+                                    // Non-IPv4/UDP - re-inject unchanged.
                                     let _ = wd_ic.send(data, &addr);
                                 }
                             }
@@ -625,7 +625,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             add_fw_rule(tunnel_port);
             tracing::info!("✅ Firewall rule added");
 
-            tracing::info!("⚡ WinDivert active — tunnel socket port {}", tunnel_port);
+            tracing::info!("⚡ WinDivert active - tunnel socket port {}", tunnel_port);
 
             // Keepalive timestamps
             let ka_ts: Arc<tokio::sync::Mutex<HashMap<u16, Instant>>> =
@@ -827,7 +827,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             }
 
                             if header.is_keepalive() {
-                                continue; // keepalive echo — RTT measured by keepalive task
+                                continue; // keepalive echo - RTT measured by keepalive task
                             }
 
                             let game_src = match game_src_learned {
@@ -897,7 +897,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     let raw = build_ipv4_udp(spoof_src, game_src, &data);
                                     counters_t.bytes_injected.fetch_add(data.len() as u64, Ordering::Relaxed);
                                     if inject_tx.try_send(raw).is_err() {
-                                        tracing::warn!("Inject channel full — dropping response");
+                                        tracing::warn!("Inject channel full - dropping response");
                                         counters_t.errors.fetch_add(1, Ordering::Relaxed);
                                     }
                                 }

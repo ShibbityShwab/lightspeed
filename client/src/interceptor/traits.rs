@@ -81,7 +81,7 @@ pub struct InterceptorConfig {
 
     /// OS process ID to target precisely, if already known.
     ///
-    /// On Windows, WinDivert can filter by `processId == N` — zero false
+    /// On Windows, WinDivert can filter by `processId == N` - zero false
     /// positives even on crowded game-server ports.  Leave `None` to use the
     /// broader port-range filter.
     pub pid: Option<u32>,
@@ -348,7 +348,7 @@ impl InterceptorHandle {
         }
     }
 
-    /// Snapshot the live counters — cheap, no lock held.
+    /// Snapshot the live counters - cheap, no lock held.
     pub fn snapshot(&self) -> InterceptorStats {
         self.counters.snapshot(self.platform)
     }
@@ -403,7 +403,7 @@ impl Drop for InterceptorHandle {
 ///
 /// Implementations intercept outbound game-UDP packets at the OS/kernel level,
 /// tunnel them through the LightSpeed proxy, and inject spoofed server→game
-/// responses — all transparently.
+/// responses - all transparently.
 ///
 /// # Platform map
 ///
@@ -413,7 +413,7 @@ impl Drop for InterceptorHandle {
 /// | Linux    | nftables TPROXY / iptables REDIRECT | cgroup or UID  |
 /// | macOS    | pfctl `rdr-to` anchor             | Port-based        |
 ///
-/// All implementations preserve the user's real IP end-to-end (NOT a VPN —
+/// All implementations preserve the user's real IP end-to-end (NOT a VPN -
 /// the game server always sees the client's original source address).
 pub trait TrafficInterceptor: Send + Sync {
     /// Start intercepting traffic according to `config`.
@@ -436,7 +436,7 @@ pub trait TrafficInterceptor: Send + Sync {
 //  Stub for unsupported platforms
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A `TrafficInterceptor` that always fails — used when no backend is compiled in.
+/// A `TrafficInterceptor` that always fails - used when no backend is compiled in.
 pub struct UnsupportedInterceptor {
     reason: String,
 }
