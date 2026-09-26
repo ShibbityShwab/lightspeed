@@ -144,7 +144,12 @@ pub struct RegistryConfig {
 /// Route selection settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteConfig {
-    /// Route selection strategy: "nearest", "ml", "multipath".
+    /// Route selection strategy: "destination" (default), "nearest",
+    /// "multipath", or "ml". "destination" ranks relays by the whole path;
+    /// "nearest" opts into client-proximity selection. Unknown values fall
+    /// back to "nearest" with a warning. The "multipath" value selects
+    /// destination-aware routing; the multipath spread itself is controlled
+    /// by the `multipath` flag below.
     #[serde(default = "default_strategy")]
     pub strategy: String,
 
@@ -253,7 +258,7 @@ fn default_data_port() -> u16 {
 }
 
 fn default_strategy() -> String {
-    "nearest".into()
+    "destination".into()
 }
 
 fn default_health_check_ms() -> u64 {
@@ -412,7 +417,7 @@ mod tests {
         assert!(config.proxy.servers.is_empty());
         assert_eq!(config.proxy.quic_port, 4433);
         assert_eq!(config.proxy.data_port, 4434);
-        assert_eq!(config.route.strategy, "nearest");
+        assert_eq!(config.route.strategy, "destination");
         assert!(!config.route.multipath);
         assert_eq!(config.route.health_check_ms, 10000);
         assert_eq!(config.route.max_failover, 3);
@@ -464,7 +469,7 @@ mod tests {
         assert_eq!(proxy.data_port, 4434);
 
         let route = RouteConfig::default();
-        assert_eq!(route.strategy, "nearest");
+        assert_eq!(route.strategy, "destination");
         assert!(!route.multipath);
         assert_eq!(route.health_check_ms, 10000);
         assert_eq!(route.max_failover, 3);
@@ -564,7 +569,7 @@ keepalive_ms = 10000
         assert!(config.general.telemetry); // default preserved (on by default)
         assert_eq!(config.tunnel.keepalive_ms, 10000);
         assert_eq!(config.tunnel.timeout_ms, 10000); // default preserved
-        assert_eq!(config.route.strategy, "nearest"); // default preserved
+        assert_eq!(config.route.strategy, "destination"); // default preserved
     }
 
     #[test]
@@ -794,7 +799,7 @@ servers = [
         assert!(config.registry.url.is_none());
         assert!(config.registry.operator_key.is_none());
 
-        assert_eq!(config.route.strategy, "nearest");
+        assert_eq!(config.route.strategy, "destination");
         assert!(!config.route.multipath);
         assert_eq!(config.route.multipath_max_paths, 2);
         assert_eq!(config.route.health_check_ms, 10000);

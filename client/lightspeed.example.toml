@@ -81,8 +81,10 @@ fec_max_overhead_pct = 25
 path_mtu_discovery = false
 
 [route]
-# Route selection strategy: "nearest" (default), "ml", or "multipath".
-strategy = "nearest"
+# Route selection strategy: "destination" (default), "nearest", "multipath",
+# or "ml". "destination" ranks relays by the whole path; "nearest" opts into
+# client-proximity selection. Unknown values fall back to "nearest".
+strategy = "destination"
 
 # Send on multiple relay paths and use the fastest. Default: false.
 multipath = false

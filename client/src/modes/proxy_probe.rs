@@ -174,7 +174,33 @@ pub async fn select_best_proxy(
         warn!("⚠️  No healthy proxies found, trying degraded nodes...");
     }
 
-    let selector: Box<dyn RouteSelector> = match strategy {
+    let selector = selector_for_strategy(strategy);
+
+    selector
+        .select(game_server, &nodes)
+        .map_err(|e| anyhow::anyhow!("Route selection failed: {}", e))
+}
+
+/// Build the [`RouteSelector`] for a configured strategy name.
+///
+/// Accepted values:
+/// - `"nearest"` selects [`NearestSelector`] (lowest client-to-relay latency).
+/// - `"destination"` selects [`DestinationAwareSelector`] (whole-path ranking).
+/// - `"multipath"` selects [`DestinationAwareSelector`]; the multipath spread
+///   itself is driven by the separate `route.multipath` flag, not by this
+///   selector, so the primary relay is still chosen destination-aware.
+/// - `"ml"` selects [`MlSelector`], falling back to nearest if training fails.
+/// - anything else logs a warning and falls back to [`NearestSelector`].
+///
+/// The shipped default is `"nearest"` in config, but the historical catch-all
+/// sent every non-`"ml"` value to destination-aware selection. To keep the
+/// shipped behaviour identical, the default is expressed explicitly here as
+/// destination-aware rather than relying on a catch-all.
+fn selector_for_strategy(strategy: &str) -> Box<dyn RouteSelector> {
+    match strategy {
+        "nearest" => Box::new(NearestSelector::new()),
+        "destination" => Box::new(DestinationAwareSelector::new()),
+        "multipath" => Box::new(DestinationAwareSelector::new()),
         "ml" => match crate::route::selector::MlSelector::with_synthetic_training(100) {
             Ok(ml) => {
                 tracing::info!("   Using ML route selector");
@@ -185,10 +211,62 @@ pub async fn select_best_proxy(
                 Box::new(NearestSelector::new())
             }
         },
-        _ => Box::new(DestinationAwareSelector::new()),
-    };
+        other => {
+            warn!(
+                "   Unknown route strategy {:?}, falling back to nearest",
+                other
+            );
+            Box::new(NearestSelector::new())
+        }
+    }
+}
 
-    selector
-        .select(game_server, &nodes)
-        .map_err(|e| anyhow::anyhow!("Route selection failed: {}", e))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::route::RouteStrategy;
+
+    #[test]
+    fn test_strategy_maps_to_expected_selector() {
+        assert_eq!(
+            selector_for_strategy("nearest").strategy(),
+            RouteStrategy::Nearest
+        );
+        assert_eq!(
+            selector_for_strategy("destination").strategy(),
+            RouteStrategy::DestinationAware
+        );
+        assert_eq!(
+            selector_for_strategy("multipath").strategy(),
+            RouteStrategy::DestinationAware
+        );
+        let ml = selector_for_strategy("ml");
+        #[cfg(feature = "ml")]
+        assert_eq!(ml.strategy(), RouteStrategy::MlPredicted);
+        #[cfg(not(feature = "ml"))]
+        assert_eq!(ml.strategy(), RouteStrategy::Nearest);
+    }
+
+    #[test]
+    fn test_unknown_strategy_falls_back_to_nearest() {
+        assert_eq!(
+            selector_for_strategy("bogus").strategy(),
+            RouteStrategy::Nearest
+        );
+        assert_eq!(selector_for_strategy("").strategy(), RouteStrategy::Nearest);
+    }
+
+    #[test]
+    fn test_default_strategy_resolves_to_destination_aware() {
+        let default = crate::config::Config::default().route.strategy;
+        assert_eq!(default, "destination");
+        assert_eq!(
+            selector_for_strategy(&default).strategy(),
+            RouteStrategy::DestinationAware
+        );
+        assert_eq!(
+            selector_for_strategy("nearest").strategy(),
+            RouteStrategy::Nearest
+        );
+    }
 }
