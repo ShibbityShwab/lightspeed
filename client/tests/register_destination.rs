@@ -92,12 +92,7 @@ async fn wait_for_seen(
     wanted: Option<Ipv4Addr>,
 ) -> Option<Ipv4Addr> {
     for _ in 0..250 {
-        if seen
-            .lock()
-            .expect("destination log")
-            .iter()
-            .any(|seen| *seen == wanted)
-        {
+        if seen.lock().expect("destination log").contains(&wanted) {
             return wanted;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
