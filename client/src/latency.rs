@@ -604,9 +604,32 @@ impl LatencyTracker {
         (direct, inner.relayed_median())
     }
 
-    /// Drain the relayed window after a report carrying it was accepted.
+    /// Drain the relayed and shadow-direct windows after a report carrying them
+    /// was accepted, so the next report measures a fresh paired window instead
+    /// of reusing a direct-app median that has already been reported.
     pub fn commit_report_values(&self) {
-        self.lock().relayed.clear();
+        let mut inner = self.lock();
+        inner.relayed.clear();
+        inner.shadow.clear();
+        inner.shadow_measured_at = None;
+    }
+
+    /// Number of paired direct-application and relayed samples behind the
+    /// report values: the smaller of the two windows when they belong to the
+    /// same server and the direct-app median is fresh, else zero.
+    pub fn saved_app_pairs(&self) -> u32 {
+        let now = self.clock.now();
+        let inner = self.lock();
+        if inner.relayed_server.is_none() || inner.shadow_server != inner.relayed_server {
+            return 0;
+        }
+        let Some(measured_at) = inner.shadow_measured_at else {
+            return 0;
+        };
+        if now.saturating_duration_since(measured_at) >= SHADOW_DIRECT_TTL {
+            return 0;
+        }
+        inner.shadow.len().min(inner.relayed.len()) as u32
     }
 
     /// Take the values for one telemetry report. The direct median is reported
@@ -817,6 +840,12 @@ pub fn commit_report_values() {
     if let Some(tracker) = global() {
         tracker.commit_report_values();
     }
+}
+
+/// Number of paired direct-application and relayed samples behind the next
+/// report. Reads local measurement; this is not the reporting gate.
+pub fn saved_app_pairs() -> u32 {
+    global().map_or(0, |tracker| tracker.saved_app_pairs())
 }
 
 #[cfg(test)]
@@ -1288,6 +1317,57 @@ mod tests {
         );
         t.record_shadow_inbound(SERVER);
         assert_eq!(t.shadow_direct_p50_ms(), None);
+    }
+
+    #[test]
+    fn paired_sample_count_matches_samples_and_drains_on_commit() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        for rtt_ms in [10u64, 20, 30] {
+            assert!(t.record_shadow_outbound(SERVER));
+            clock.advance(Duration::from_millis(rtt_ms));
+            t.record_shadow_inbound(SERVER);
+            clock.advance(Duration::from_secs(30));
+        }
+        for _ in 0..4 {
+            t.note_outbound(SERVER);
+            clock.advance(Duration::from_millis(25));
+            t.record_inbound(SERVER);
+        }
+        assert_eq!(
+            t.saved_app_pairs(),
+            3,
+            "the pair count is the smaller of the two single-server windows"
+        );
+
+        assert!(t.record_shadow_outbound(OTHER_SERVER));
+        clock.advance(Duration::from_millis(40));
+        t.record_shadow_inbound(OTHER_SERVER);
+        assert_eq!(
+            t.saved_app_pairs(),
+            0,
+            "direct-app and relayed windows from different servers are not pairs"
+        );
+
+        assert!(t.record_shadow_outbound(SERVER));
+        clock.advance(Duration::from_millis(10));
+        t.record_shadow_inbound(SERVER);
+        assert_eq!(
+            t.saved_app_pairs(),
+            1,
+            "a fresh same-server pair is counted"
+        );
+
+        t.commit_report_values();
+        assert_eq!(t.saved_app_pairs(), 0, "commit drains the paired window");
+        assert_eq!(t.shadow_direct_samples(), 0, "the shadow window drains too");
+        assert_eq!(t.relayed_samples(), 0, "the relayed window drains");
+        assert_eq!(
+            t.shadow_direct_p50_ms(),
+            None,
+            "no direct-app median is reused after commit"
+        );
     }
 
     // ── Client -> relay keepalive RTT (bypass pre-gate input) ───────────────

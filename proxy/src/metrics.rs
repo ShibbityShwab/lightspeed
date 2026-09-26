@@ -716,15 +716,20 @@ impl ProxyMetrics {
                     cell.saved_count += 1;
                 }
                 // `direct_app_p50_ms` is measured to pair with this relayed leg,
-                // so their joint presence is the client's paired comparison.
+                // so their joint presence is the client's paired comparison. Its
+                // medians summarise `saved_app_pairs` local observations, so the
+                // sample counter, signed sum, and negative counter are all
+                // weighted by that count; a legacy report without the field
+                // defaults to one pair and contributes exactly as before.
                 if let (Some(direct_app), Some(relayed)) =
                     (report.direct_app_p50_ms, report.relayed_p50_ms)
                 {
                     let saved_app = f64::from(direct_app) - f64::from(relayed);
-                    cell.saved_app_sum_ms += saved_app;
-                    cell.saved_app_count += 1;
+                    let pairs = u64::from(report.saved_app_pairs);
+                    cell.saved_app_sum_ms += saved_app * pairs as f64;
+                    cell.saved_app_count += pairs;
                     if saved_app < 0.0 {
-                        cell.saved_app_negative_count += 1;
+                        cell.saved_app_negative_count += pairs;
                     }
                 }
             }
@@ -1322,12 +1327,15 @@ impl ProxyMetrics {
         out.push_str("# TYPE lightspeed_telemetry_direct_app_ms_sum counter\n");
         out.push_str("# TYPE lightspeed_telemetry_direct_app_ms_count counter\n");
         out.push_str(
-            "# HELP lightspeed_telemetry_saved_app_ms_sum Sum of client-reported (direct app - relayed) app-to-app latency savings (ms) over reports that carried both values; positive means the relay was faster\n",
+            "# HELP lightspeed_telemetry_saved_app_ms_sum Sum of client-reported (direct app - relayed) app-to-app latency savings (ms), each report weighted by the paired observations behind its medians; positive means the relay was faster\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_saved_app_ms_sum counter\n");
+        out.push_str(
+            "# HELP lightspeed_telemetry_saved_app_ms_count Paired direct-app/relayed observations behind the reported app-to-app savings, summed across reports\n",
+        );
         out.push_str("# TYPE lightspeed_telemetry_saved_app_ms_count counter\n");
         out.push_str(
-            "# HELP lightspeed_telemetry_saved_app_negative_count Number of paired client reports where the relayed app RTT was worse than the direct app RTT (negative saving)\n",
+            "# HELP lightspeed_telemetry_saved_app_negative_count Paired direct-app/relayed observations where the relayed app RTT was worse than the direct app RTT (negative saving)\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_saved_app_negative_count counter\n");
         out.push_str(
@@ -1683,11 +1691,11 @@ mod tests {
     #[test]
     fn test_latency_histogram_buckets() {
         let m = ProxyMetrics::new();
-        // 0.05ms — fits in 0.1ms bucket
+        // 0.05ms - fits in 0.1ms bucket
         m.record_latency(50);
-        // 2ms — fits in 5ms bucket
+        // 2ms - fits in 5ms bucket
         m.record_latency(2000);
-        // 75ms — fits in 100ms bucket
+        // 75ms - fits in 100ms bucket
         m.record_latency(75000);
 
         let output = m.to_prometheus("test", "test-node");
@@ -1894,6 +1902,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "1.4.4".to_string(),
             route_legs: vec![],
         }
@@ -2262,6 +2271,45 @@ mod tests {
         assert!(output.contains(&format!(
             "lightspeed_telemetry_saved_app_negative_count{{{labels}}} 1"
         )));
+    }
+
+    /// Given: one report whose medians summarise eight paired observations and
+    /// another whose medians summarise three. When: the cell is folded. Then:
+    /// the saved-app sample counter advances by the reported pair count rather
+    /// than once per report, and the signed sum and negative count are weighted
+    /// to match.
+    #[test]
+    fn telemetry_saved_app_counter_advances_by_pairs() {
+        let m = ProxyMetrics::new();
+
+        let mut better = report(2, "US");
+        better.direct_app_p50_ms = Some(50.0);
+        better.relayed_p50_ms = Some(30.0);
+        better.saved_app_pairs = 8;
+
+        let mut worse = report(2, "US");
+        worse.direct_app_p50_ms = Some(20.0);
+        worse.relayed_p50_ms = Some(55.0);
+        worse.saved_app_pairs = 3;
+
+        m.record_telemetry_report(&better, ip(1));
+        m.record_telemetry_report(&worse, ip(2));
+
+        let agg = m.telemetry.lock().unwrap();
+        let cell = agg.cells.values().next().unwrap();
+        assert_eq!(
+            cell.saved_app_count, 11,
+            "a report with N pairs must advance the sample counter by N, not 1"
+        );
+        assert_eq!(
+            cell.saved_app_sum_ms,
+            8.0 * 20.0 + 3.0 * -35.0,
+            "the signed saving must be weighted by the pair count"
+        );
+        assert_eq!(
+            cell.saved_app_negative_count, 3,
+            "the negative count must be weighted by the pair count"
+        );
     }
 
     /// Given: a cell below the k-anonymity floor. When: metrics are rendered.

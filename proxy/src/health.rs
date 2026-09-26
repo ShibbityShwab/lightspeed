@@ -1,7 +1,7 @@
 //! # Health Check & Metrics Endpoint
 //!
 //! Lightweight HTTP server using raw Tokio TCP.
-//! No heavy web frameworks — just enough HTTP to serve:
+//! No heavy web frameworks - just enough HTTP to serve:
 //!
 //! - `GET /health`   → JSON health status
 //! - `GET /metrics`  → Prometheus exposition format
@@ -150,7 +150,7 @@ pub async fn run_health_server(
         let node_id = node_id.clone();
 
         tokio::spawn(async move {
-            // Read up to 4 KiB — large enough for any well-formed request
+            // Read up to 4 KiB - large enough for any well-formed request
             // (GET headers + POST telemetry body ≤ ~500 bytes).
             let mut buf = [0u8; 4096];
             let n = match tokio::time::timeout(
@@ -375,6 +375,7 @@ mod tests {
             direct_p50_ms: Some(42.0),
             direct_app_p50_ms: None,
             relayed_p50_ms: Some(28.0),
+            saved_app_pairs: 1,
             client_version: "0.4.0-dev".to_string(),
             route_legs: vec![],
         };

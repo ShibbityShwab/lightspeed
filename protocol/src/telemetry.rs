@@ -75,7 +75,7 @@ pub struct TelemetryReport {
     pub game_id: u8,
 
     /// Two-character ISO 3166-1 alpha-2 country code, obtained from the local
-    /// system locale — **not** from the client's IP address.
+    /// system locale - **not** from the client's IP address.
     /// Empty string `""` means the client chose not to provide this field.
     #[serde(default)]
     pub client_country: String,
@@ -87,7 +87,7 @@ pub struct TelemetryReport {
     pub p95_ms: f32,
     /// 99th-percentile round-trip latency (ms).
     pub p99_ms: f32,
-    /// Average of |consecutive RTT deltas| — a jitter proxy (ms).
+    /// Average of |consecutive RTT deltas| - a jitter proxy (ms).
     pub jitter_ms: f32,
     /// Number of RTT samples this report is based on.
     pub sample_count: u32,
@@ -118,6 +118,15 @@ pub struct TelemetryReport {
     /// `direct_p50_ms`. `None` when no direct sample has been observed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct_app_p50_ms: Option<f32>,
+    /// Number of paired direct-application and relayed samples behind the
+    /// reported `direct_app_p50_ms` / `relayed_p50_ms` medians. Aggregate and
+    /// non-identifying: it is a count of local observations, like `sample_count`.
+    ///
+    /// Defaults to one for legacy reports that predate the field: a report
+    /// carrying both app medians is one paired observation, so its contribution
+    /// to the published count is unchanged when a client upgrades.
+    #[serde(default = "default_saved_app_pairs")]
+    pub saved_app_pairs: u32,
 
     // ── Client version (for compatibility tracking only) ─────────────────────
     /// SemVer string of the `lightspeed` client binary.
@@ -128,6 +137,11 @@ pub struct TelemetryReport {
     /// clients omit this entirely).
     #[serde(default)]
     pub route_legs: Vec<PathObservation>,
+}
+
+/// Default paired-sample count for a report that predates the field.
+fn default_saved_app_pairs() -> u32 {
+    1
 }
 
 impl TelemetryReport {
@@ -163,6 +177,9 @@ impl TelemetryReport {
         }
         if self.sample_count > 100_000 {
             return Err("sample_count unreasonably large");
+        }
+        if self.saved_app_pairs > 100_000 {
+            return Err("saved_app_pairs unreasonably large");
         }
         if self.client_country.len() > 2 {
             return Err("client_country must be 2-char ISO or empty");
@@ -229,6 +246,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "0.4.0-dev".to_string(),
             route_legs: vec![],
         };
@@ -258,6 +276,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
         };
@@ -270,7 +289,7 @@ mod tests {
             game_id: 1,
             client_country: "".to_string(),
             p50_ms: 100.0,
-            p95_ms: 50.0, // p95 < p50 — invalid
+            p95_ms: 50.0, // p95 < p50 - invalid
             p99_ms: 200.0,
             jitter_ms: 1.0,
             sample_count: 10,
@@ -279,6 +298,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
         };
@@ -300,6 +320,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
         };
@@ -322,6 +343,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
             route_legs: vec![PathObservation {
                 relay: "relay-fra".to_string(),
@@ -336,6 +358,10 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&report).unwrap();
+        assert!(
+            json.contains("\"saved_app_pairs\":1"),
+            "the aggregate paired-observation count must be serialised: {json}"
+        );
         assert!(
             !json.contains("ip"),
             "IP address must not appear in telemetry JSON"
@@ -369,6 +395,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "0.5.0".to_string(),
             route_legs: vec![
                 PathObservation {
@@ -429,6 +456,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "0.5.0".to_string(),
             route_legs: legs,
         };
@@ -468,6 +496,7 @@ mod tests {
             direct_p50_ms: None,
             direct_app_p50_ms: None,
             relayed_p50_ms: None,
+            saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
             route_legs: vec![],
         }
@@ -564,5 +593,42 @@ mod tests {
         let json = r#"{"game_id":2,"client_country":"TH","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":10,"client_version":"0.4.0"}"#;
         let decoded: TelemetryReport = serde_json::from_str(json).unwrap();
         assert_eq!(decoded.direct_app_p50_ms, None);
+    }
+
+    /// Given: a report carrying a paired-observation count. When: it round-trips
+    /// through JSON and validation. Then: the count survives and validates.
+    #[test]
+    fn paired_sample_count_roundtrip() {
+        let mut report = minimal_report();
+        report.saved_app_pairs = 7;
+
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: TelemetryReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.saved_app_pairs, 7);
+        assert!(decoded.validate().is_ok());
+    }
+
+    /// Given: a legacy report body predating `saved_app_pairs`. When: it is
+    /// decoded. Then: the count defaults to one paired observation, so a legacy
+    /// report that carried both app medians keeps contributing exactly once.
+    #[test]
+    fn paired_sample_count_defaults_to_one_for_legacy_reports() {
+        let json = r#"{"game_id":2,"client_country":"TH","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":10,"client_version":"0.4.0"}"#;
+        let decoded: TelemetryReport = serde_json::from_str(json).unwrap();
+        assert_eq!(decoded.saved_app_pairs, 1);
+        assert!(decoded.validate().is_ok());
+    }
+
+    /// Given: a report whose paired-observation count is unreasonably large.
+    /// When: it is validated. Then: it is rejected, like `sample_count`.
+    #[test]
+    fn paired_sample_count_validation_rejects_unreasonable() {
+        let mut report = minimal_report();
+        report.saved_app_pairs = 100_001;
+        assert!(report.validate().is_err());
+
+        let mut ok = minimal_report();
+        ok.saved_app_pairs = 100_000;
+        assert!(ok.validate().is_ok());
     }
 }

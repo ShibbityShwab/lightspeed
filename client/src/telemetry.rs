@@ -178,12 +178,14 @@ impl TelemetryCollector {
     async fn build_report(&self, game_id: u8, country: &str) -> Option<TelemetryReport> {
         let (direct_p50_ms, relayed_p50_ms) = crate::latency::peek_report_values();
         let direct_app_p50_ms = crate::latency::shadow_direct_p50_ms();
+        let saved_app_pairs = crate::latency::saved_app_pairs();
         self.build_report_with_latency(
             game_id,
             country,
             direct_p50_ms,
             relayed_p50_ms,
             direct_app_p50_ms,
+            saved_app_pairs,
         )
         .await
     }
@@ -197,6 +199,7 @@ impl TelemetryCollector {
         direct_p50_ms: Option<f32>,
         relayed_p50_ms: Option<f32>,
         direct_app_p50_ms: Option<f32>,
+        saved_app_pairs: u32,
     ) -> Option<TelemetryReport> {
         let inner = self.inner.lock().await;
         if inner.samples.is_empty()
@@ -247,6 +250,7 @@ impl TelemetryCollector {
             direct_p50_ms,
             relayed_p50_ms,
             direct_app_p50_ms,
+            saved_app_pairs,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             route_legs,
         })

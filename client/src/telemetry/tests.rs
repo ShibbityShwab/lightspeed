@@ -135,17 +135,19 @@ async fn build_report_carries_direct_app_p50() {
     collector.record_rtt(30.0).await;
 
     let report = collector
-        .build_report_with_latency(1, "TH", None, Some(31.0), Some(47.5))
+        .build_report_with_latency(1, "TH", None, Some(31.0), Some(47.5), 9)
         .await
         .expect("report");
 
     assert_eq!(report.direct_app_p50_ms, Some(47.5));
     assert_eq!(report.relayed_p50_ms, Some(31.0));
+    assert_eq!(report.saved_app_pairs, 9);
     assert!(report.validate().is_ok(), "report must validate");
 
     let json = serde_json::to_string(&report).unwrap();
     let decoded: TelemetryReport = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded.direct_app_p50_ms, Some(47.5));
+    assert_eq!(decoded.saved_app_pairs, 9);
 }
 
 /// Given: no RTT ring samples at all. When: a direct application RTT is
@@ -154,11 +156,12 @@ async fn build_report_carries_direct_app_p50() {
 async fn direct_app_alone_produces_a_report() {
     let collector = TelemetryCollector::new();
     let report = collector
-        .build_report_with_latency(1, "US", None, None, Some(20.0))
+        .build_report_with_latency(1, "US", None, None, Some(20.0), 0)
         .await
         .expect("a direct-app sample must produce a report with no RTT ring samples");
 
     assert_eq!(report.direct_app_p50_ms, Some(20.0));
+    assert_eq!(report.saved_app_pairs, 0);
     assert!(report.validate().is_ok());
 }
 

@@ -125,6 +125,7 @@ fn report_with_legs(route_legs: Vec<PathObservation>) -> TelemetryReport {
         direct_p50_ms: None,
         direct_app_p50_ms: None,
         relayed_p50_ms: None,
+        saved_app_pairs: 1,
         client_version: "1.4.4".to_string(),
         route_legs,
     }
