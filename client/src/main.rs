@@ -272,6 +272,21 @@ fn resolve_diagnose_server(cli: &Cli) -> anyhow::Result<SocketAddrV4> {
     Ok(route.remote)
 }
 
+/// The game server known before registration: an explicit `--game-server` or
+/// `--server-addr`, else the running game's first discovered route.
+///
+/// Handed to the relay at registration so it can resolve the destination region
+/// from its MMDB. Returns `None` when no server is known yet, in which case the
+/// relay simply omits the region.
+fn known_game_server(cli: &Cli) -> Option<Ipv4Addr> {
+    if let Some(raw) = cli.game_server.as_deref().or(cli.server_addr.as_deref()) {
+        return parse_proxy_addr(raw).ok().map(|addr| *addr.ip());
+    }
+    let game = games::detect_game(cli.game.as_deref()?).ok()?;
+    let found = interceptor::process_scanner::find_game_process(game.process_names())?;
+    found.routes.first().map(|route| *route.remote.ip())
+}
+
 /// Spawn the continuous re-routing loop when multiple relays are configured.
 fn start_continuous_rerouting(candidates: &[ProbeCandidate], config: &config::Config, cli: &Cli) {
     if candidates.len() <= 1 {
@@ -581,7 +596,12 @@ async fn main() -> anyhow::Result<()> {
         let target_addr = parse_proxy_addr(target_str)?;
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         let proxy_addr = parse_proxy_addr(proxy_str)?;
-        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        crate::quic::register_session_with_destination(
+            proxy_addr,
+            config.proxy.quic_port,
+            Some(*target_addr.ip()),
+        )
+        .await;
         return run_benchmark(target_addr, proxy_addr).await;
     }
 
@@ -595,7 +615,12 @@ async fn main() -> anyhow::Result<()> {
         let resolved = resolve_proxy_addr(&cli, &config).await?;
         let proxy_addr = resolved.addr;
         info!("🔎 Diagnosing {} via {}", server, proxy_addr);
-        let token = crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        let token = crate::quic::register_session_with_destination(
+            proxy_addr,
+            config.proxy.quic_port,
+            Some(*server.ip()),
+        )
+        .await;
         if token.is_none() {
             warn!("   No session token; relayed probes may be dropped. The verdict will say so.");
         }
@@ -615,7 +640,12 @@ async fn main() -> anyhow::Result<()> {
             .as_deref()
             .map(parse_proxy_addr)
             .transpose()?;
-        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        crate::quic::register_session_with_destination(
+            proxy_addr,
+            config.proxy.quic_port,
+            known_game_server(&cli),
+        )
+        .await;
         crate::session::set_current_proxy(proxy_addr);
         start_continuous_rerouting(&resolved.candidates, &config, &cli);
         spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
@@ -1023,7 +1053,12 @@ async fn main() -> anyhow::Result<()> {
             Some(s) => Some(parse_proxy_addr(s)?),
             None => None,
         };
-        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        crate::quic::register_session_with_destination(
+            proxy_addr,
+            config.proxy.quic_port,
+            known_game_server(&cli),
+        )
+        .await;
         crate::session::set_current_proxy(proxy_addr);
         start_continuous_rerouting(&resolved.candidates, &config, &cli);
         spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
@@ -1230,7 +1265,12 @@ async fn main() -> anyhow::Result<()> {
             .echo_server
             .as_ref()
             .and_then(|s| parse_proxy_addr(s).ok());
-        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        crate::quic::register_session_with_destination(
+            proxy_addr,
+            config.proxy.quic_port,
+            echo_server.map(|addr| *addr.ip()),
+        )
+        .await;
         return run_live_test(&config, Some(proxy_addr), echo_server, cli.fec, cli.fec_k).await;
     }
 
@@ -1352,6 +1392,12 @@ async fn main() -> anyhow::Result<()> {
         if use_tcp {
             redirect_proxy = redirect_proxy.with_tcp();
         }
+        crate::quic::register_session_with_destination(
+            proxy_addr,
+            config.proxy.quic_port,
+            Some(*game_server_addr.ip()),
+        )
+        .await;
         return redirect_proxy.run().await;
     }
 
@@ -1402,7 +1448,12 @@ async fn main() -> anyhow::Result<()> {
             {
                 ResolvedMode::Kernel => {
                     info!("🚀 Starting live interceptor mode (kernel)");
-                    crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+                    crate::quic::register_session_with_destination(
+                        proxy_addr,
+                        config.proxy.quic_port,
+                        known_game_server(&cli),
+                    )
+                    .await;
                     crate::session::set_current_proxy(proxy_addr);
                     start_continuous_rerouting(&resolved.candidates, &config, &cli);
                     return run_intercept_mode(

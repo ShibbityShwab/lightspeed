@@ -182,6 +182,7 @@ mod shutdown {
             ProxyConfig::default(),
             Arc::new(RwLock::new(Authenticator::new(true))),
             Arc::new(ProxyMetrics::new()),
+            None,
         ));
         let server = ControlServer::bind("127.0.0.1:0".parse()?, Arc::clone(&state))?;
         let addr = server.local_addr()?;
@@ -202,6 +203,7 @@ mod shutdown {
                 protocol_version: PROTOCOL_VERSION,
                 game: game_id::CS2,
                 data_port: 0,
+                destination: None,
             }
             .write_to(&mut send)
             .await?;

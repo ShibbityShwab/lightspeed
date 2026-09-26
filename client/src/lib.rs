@@ -1,4 +1,4 @@
-//! LightSpeed client — library API for GUI integration.
+//! LightSpeed client - library API for GUI integration.
 //!
 //! NOTE: `dead_code` is allowed because this library exposes a wide internal
 //! API surface (`pub(crate)`) that is used by the binary (`main.rs`) but not
@@ -35,8 +35,21 @@ pub(crate) mod warp;
 #[cfg(feature = "quic")]
 #[doc(hidden)]
 pub mod test_support {
-    pub use crate::quic::{is_supervised, register_session, stop_supervisor};
+    pub use crate::quic::{
+        is_supervised, register_session, register_session_with_destination, report_destination,
+        stop_supervisor,
+    };
     pub use crate::session::{path_token, session_token};
+
+    /// Set the process-global current relay, driving [`report_destination`].
+    pub fn set_current_proxy(addr: std::net::SocketAddrV4) {
+        crate::session::set_current_proxy(addr);
+    }
+
+    /// The region the process-wide destination estimator holds for `ip`.
+    pub fn estimated_destination_region(ip: std::net::Ipv4Addr) -> Option<String> {
+        crate::route::destination::ensure_global().destination_region(ip)
+    }
 
     /// Whether one telemetry body would be accepted on the control plane.
     pub async fn control_telemetry_accepted(

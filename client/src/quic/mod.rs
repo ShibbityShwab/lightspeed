@@ -22,7 +22,7 @@ mod pinning;
 
 #[cfg(feature = "quic")]
 mod inner {
-    use std::net::SocketAddr;
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -89,6 +89,9 @@ mod inner {
         region: Option<String>,
         /// Whether the proxy advertised control-plane telemetry in its ack.
         telemetry_quic: bool,
+        /// Region of the registered destination, as resolved by the relay's
+        /// MMDB on the most recent registration ack.
+        dest_region: Option<String>,
     }
 
     impl ControlClient {
@@ -109,11 +112,28 @@ mod inner {
                 node_id: None,
                 region: None,
                 telemetry_quic: false,
+                dest_region: None,
             })
         }
 
         /// Connect to a proxy's control plane and register.
+        ///
+        /// `destination` is the game server the client intends to reach when it
+        /// is already known. The relay resolves it against its MMDB and returns
+        /// the region in the ack, which is cached via
+        /// [`crate::route::destination::set_destination_region`] so the region
+        /// prior can rank a relay that has never carried traffic to it.
         pub async fn connect(&mut self, addr: SocketAddr, game: u8) -> Result<(), QuicError> {
+            self.connect_with_destination(addr, game, None).await
+        }
+
+        /// Connect and register, reporting the destination to the relay.
+        pub async fn connect_with_destination(
+            &mut self,
+            addr: SocketAddr,
+            game: u8,
+            destination: Option<Ipv4Addr>,
+        ) -> Result<(), QuicError> {
             info!("Connecting QUIC control plane to {}", addr);
 
             self.endpoint
@@ -139,6 +159,7 @@ mod inner {
                 protocol_version: PROTOCOL_VERSION,
                 game,
                 data_port: 0,
+                destination,
             };
             register
                 .write_to(&mut send)
@@ -157,6 +178,7 @@ mod inner {
                     node_id,
                     region,
                     telemetry_quic,
+                    dest_region,
                 }) => {
                     info!(
                         "Registered with proxy: session={}, token={}, node={}, region={}",
@@ -167,6 +189,13 @@ mod inner {
                     self.node_id = Some(node_id);
                     self.region = Some(region);
                     self.telemetry_quic = telemetry_quic;
+                    self.dest_region = dest_region.clone();
+                    if let (Some(destination), Some(dest_region)) = (destination, dest_region) {
+                        crate::route::destination::set_destination_region(
+                            destination,
+                            &dest_region,
+                        );
+                    }
                     crate::session::set_session_token(session_token);
                 }
                 Some(ControlMessage::Disconnect { reason }) => {
@@ -262,6 +291,7 @@ mod inner {
             self.session_token = None;
             self.node_id = None;
             self.region = None;
+            self.dest_region = None;
             Ok(())
         }
 
@@ -293,6 +323,12 @@ mod inner {
             self.region.as_deref()
         }
 
+        /// Get the region the relay resolved for the registered destination, if
+        /// one was reported in the ack.
+        pub fn destination_region(&self) -> Option<&str> {
+            self.dest_region.as_deref()
+        }
+
         /// Whether the proxy accepts telemetry on the control connection.
         pub fn supports_quic_telemetry(&self) -> bool {
             self.telemetry_quic
@@ -315,11 +351,11 @@ mod inner {
 
 #[cfg(not(feature = "quic"))]
 mod inner {
-    use std::net::SocketAddr;
+    use std::net::{Ipv4Addr, SocketAddr};
 
     use crate::error::QuicError;
 
-    /// QUIC control plane client (stub — compile without `quic` feature).
+    /// QUIC control plane client (stub - compile without `quic` feature).
     pub struct ControlClient {
         connected: bool,
         remote_addr: Option<SocketAddr>,
@@ -333,8 +369,17 @@ mod inner {
             })
         }
 
-        pub async fn connect(&mut self, addr: SocketAddr, _game: u8) -> Result<(), QuicError> {
-            tracing::info!("QUIC disabled — stub connect to {}", addr);
+        pub async fn connect(&mut self, addr: SocketAddr, game: u8) -> Result<(), QuicError> {
+            self.connect_with_destination(addr, game, None).await
+        }
+
+        pub async fn connect_with_destination(
+            &mut self,
+            addr: SocketAddr,
+            _game: u8,
+            _destination: Option<Ipv4Addr>,
+        ) -> Result<(), QuicError> {
+            tracing::info!("QUIC disabled - stub connect to {}", addr);
             self.remote_addr = Some(addr);
             self.connected = true;
             Ok(())
@@ -387,7 +432,7 @@ pub use inner::ControlClient;
 #[cfg(feature = "quic")]
 mod supervisor {
     use std::collections::HashMap;
-    use std::net::{SocketAddr, SocketAddrV4};
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::time::Duration;
@@ -443,7 +488,18 @@ mod supervisor {
         handle: SupervisorHandle,
         initial_rx: watch::Receiver<Initial>,
         stop_tx: watch::Sender<bool>,
+        destination: Arc<Mutex<Option<Ipv4Addr>>>,
+        control_port: u16,
         _join: JoinHandle<()>,
+    }
+
+    struct SupervisorContext {
+        data_addr: SocketAddrV4,
+        generation: u64,
+        stopped: Arc<AtomicBool>,
+        current_token: Arc<AtomicU32>,
+        target: Arc<Mutex<Option<ControlTarget>>>,
+        destination: Arc<Mutex<Option<Ipv4Addr>>>,
     }
 
     static REGISTRY: OnceLock<Mutex<HashMap<SocketAddrV4, Entry>>> = OnceLock::new();
@@ -505,18 +561,30 @@ mod supervisor {
     pub(super) fn ensure_supervisor(
         data_addr: SocketAddrV4,
         control_port: u16,
+        destination: Option<Ipv4Addr>,
     ) -> watch::Receiver<Initial> {
         let mut registry = lock_registry();
         if let Some(entry) = registry.get(&data_addr) {
             if !entry.handle.stopped.load(Ordering::Acquire) {
-                return entry.initial_rx.clone();
+                let known = *entry
+                    .destination
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if destination.is_none() || known == destination {
+                    return entry.initial_rx.clone();
+                }
             }
+        }
+        if let Some(entry) = registry.remove(&data_addr) {
+            entry.handle.stopped.store(true, Ordering::Release);
+            let _ = entry.stop_tx.send(true);
         }
 
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let stopped = Arc::new(AtomicBool::new(false));
         let current_token = Arc::new(AtomicU32::new(0));
         let target = Arc::new(Mutex::new(None));
+        let destination = Arc::new(Mutex::new(destination));
         let (initial_tx, initial_rx) = watch::channel(Initial::Pending);
         let (stop_tx, stop_rx) = watch::channel(false);
 
@@ -526,16 +594,15 @@ mod supervisor {
             current_token: Arc::clone(&current_token),
             target: Arc::clone(&target),
         };
-        let join = tokio::spawn(supervisor_loop(
+        let context = SupervisorContext {
             data_addr,
-            control_port,
             generation,
             stopped,
             current_token,
             target,
-            initial_tx,
-            stop_rx,
-        ));
+            destination: Arc::clone(&destination),
+        };
+        let join = tokio::spawn(supervisor_loop(context, control_port, initial_tx, stop_rx));
 
         registry.insert(
             data_addr,
@@ -543,6 +610,8 @@ mod supervisor {
                 handle,
                 initial_rx: initial_rx.clone(),
                 stop_tx,
+                destination,
+                control_port,
                 _join: join,
             },
         );
@@ -555,8 +624,9 @@ mod supervisor {
     pub(super) async fn register_and_wait(
         data_addr: SocketAddrV4,
         control_port: u16,
+        destination: Option<Ipv4Addr>,
     ) -> Option<u32> {
-        let mut initial_rx = ensure_supervisor(data_addr, control_port);
+        let mut initial_rx = ensure_supervisor(data_addr, control_port, destination);
         if matches!(*initial_rx.borrow(), Initial::Pending) {
             let _ = initial_rx.changed().await;
         }
@@ -569,7 +639,36 @@ mod supervisor {
 
     /// Spawn a supervisor for `data_addr` without waiting for the first result.
     pub fn ensure_registration(data_addr: SocketAddrV4, control_port: u16) {
-        let _ = ensure_supervisor(data_addr, control_port);
+        let _ = ensure_supervisor(data_addr, control_port, None);
+    }
+
+    /// Spawn a supervisor for `data_addr`, reporting the game server so the
+    /// relay can resolve its region. A later call that supplies a destination
+    /// retires the live supervisor and re-registers so the new destination is
+    /// actually sent.
+    pub fn ensure_registration_with_destination(
+        data_addr: SocketAddrV4,
+        control_port: u16,
+        destination: Option<Ipv4Addr>,
+    ) {
+        let _ = ensure_supervisor(data_addr, control_port, destination);
+    }
+
+    /// Report the game server to the currently selected relay so it resolves
+    /// and caches the destination region. The supervisor's destination equality
+    /// check makes a repeat a no-op, so a relay without an MMDB is never
+    /// re-registered on every sample.
+    pub fn report_destination(server: Ipv4Addr) {
+        let Some(data_addr) = crate::session::current_proxy() else {
+            return;
+        };
+        let control_port = lock_registry()
+            .get(&data_addr)
+            .map(|entry| entry.control_port);
+        let Some(control_port) = control_port else {
+            return;
+        };
+        ensure_registration_with_destination(data_addr, control_port, Some(server));
     }
 
     /// Stop the supervisor for `data_addr`, if one is running.
@@ -611,15 +710,19 @@ mod supervisor {
     }
 
     async fn supervisor_loop(
-        data_addr: SocketAddrV4,
+        context: SupervisorContext,
         control_port: u16,
-        generation: u64,
-        stopped: Arc<AtomicBool>,
-        current_token: Arc<AtomicU32>,
-        target: Arc<Mutex<Option<ControlTarget>>>,
         initial_tx: watch::Sender<Initial>,
         mut stop_rx: watch::Receiver<bool>,
     ) {
+        let SupervisorContext {
+            data_addr,
+            generation,
+            stopped,
+            current_token,
+            target,
+            destination,
+        } = context;
         let control_addr = SocketAddr::V4(SocketAddrV4::new(*data_addr.ip(), control_port));
         let mut backoff = Backoff::new();
         let mut first_attempt = true;
@@ -629,7 +732,10 @@ mod supervisor {
                 break;
             }
 
-            match connect_and_register(control_addr).await {
+            let destination = *destination
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match connect_and_register(control_addr, destination).await {
                 Ok(client) => {
                     let token = client.session_token().unwrap_or(0);
                     let live = client.connection().cloned();
@@ -781,10 +887,17 @@ mod supervisor {
         true
     }
 
-    async fn connect_and_register(control_addr: SocketAddr) -> Result<ControlClient, QuicError> {
+    async fn connect_and_register(
+        control_addr: SocketAddr,
+        destination: Option<Ipv4Addr>,
+    ) -> Result<ControlClient, QuicError> {
         let mut client = ControlClient::new()?;
         client
-            .connect(control_addr, lightspeed_protocol::game_id::UNKNOWN)
+            .connect_with_destination(
+                control_addr,
+                lightspeed_protocol::game_id::UNKNOWN,
+                destination,
+            )
             .await?;
         Ok(client)
     }
@@ -852,6 +965,20 @@ pub fn ensure_registration(data_addr: std::net::SocketAddrV4, control_port: u16)
 }
 
 #[cfg(feature = "quic")]
+pub fn ensure_registration_with_destination(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    destination: Option<std::net::Ipv4Addr>,
+) {
+    supervisor::ensure_registration_with_destination(data_addr, control_port, destination);
+}
+
+#[cfg(feature = "quic")]
+pub fn report_destination(server: std::net::Ipv4Addr) {
+    supervisor::report_destination(server);
+}
+
+#[cfg(feature = "quic")]
 pub fn stop_supervisor(data_addr: std::net::SocketAddrV4) -> bool {
     supervisor::stop_supervisor(data_addr)
 }
@@ -903,6 +1030,17 @@ pub async fn send_telemetry(
 pub fn ensure_registration(_data_addr: std::net::SocketAddrV4, _control_port: u16) {}
 
 #[cfg(not(feature = "quic"))]
+pub fn ensure_registration_with_destination(
+    _data_addr: std::net::SocketAddrV4,
+    _control_port: u16,
+    _destination: Option<std::net::Ipv4Addr>,
+) {
+}
+
+#[cfg(not(feature = "quic"))]
+pub fn report_destination(_server: std::net::Ipv4Addr) {}
+
+#[cfg(not(feature = "quic"))]
 pub fn stop_supervisor(_data_addr: std::net::SocketAddrV4) -> bool {
     false
 }
@@ -937,12 +1075,31 @@ pub async fn register_session(data_addr: std::net::SocketAddrV4, control_port: u
     register_session_inner(data_addr, control_port).await
 }
 
+/// Register with the relay, reporting the game server so the relay can resolve
+/// its region from its MMDB. Identical to [`register_session`] otherwise.
+pub async fn register_session_with_destination(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    destination: Option<std::net::Ipv4Addr>,
+) -> Option<u32> {
+    register_session_with_destination_inner(data_addr, control_port, destination).await
+}
+
 #[cfg(feature = "quic")]
 async fn register_session_inner(
     data_addr: std::net::SocketAddrV4,
     control_port: u16,
 ) -> Option<u32> {
-    supervisor::register_and_wait(data_addr, control_port).await
+    supervisor::register_and_wait(data_addr, control_port, None).await
+}
+
+#[cfg(feature = "quic")]
+async fn register_session_with_destination_inner(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    destination: Option<std::net::Ipv4Addr>,
+) -> Option<u32> {
+    supervisor::register_and_wait(data_addr, control_port, destination).await
 }
 
 #[cfg(not(feature = "quic"))]
@@ -953,11 +1110,21 @@ async fn register_session_inner(
     None
 }
 
+#[cfg(not(feature = "quic"))]
+async fn register_session_with_destination_inner(
+    _data_addr: std::net::SocketAddrV4,
+    _control_port: u16,
+    _destination: Option<std::net::Ipv4Addr>,
+) -> Option<u32> {
+    None
+}
+
 #[cfg(all(test, feature = "quic"))]
 mod supervisor_tests {
     use super::supervisor::{
-        ensure_registration, is_supervised, send_telemetry, stop_supervisor, supervisor_handle,
-        Backoff, MAX_BACKOFF, MIN_BACKOFF,
+        ensure_registration, ensure_registration_with_destination, is_supervised,
+        report_destination, send_telemetry, stop_supervisor, supervisor_handle, Backoff,
+        MAX_BACKOFF, MIN_BACKOFF,
     };
     use std::net::{Ipv4Addr, SocketAddrV4};
     use std::time::Duration;
@@ -1036,5 +1203,77 @@ mod supervisor_tests {
             send_telemetry(addr, b"{}").await.is_err(),
             "no live connection must surface as an error"
         );
+    }
+
+    #[tokio::test]
+    async fn a_newly_learned_destination_restarts_the_supervisor() {
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42104);
+        let _ = stop_supervisor(addr);
+        ensure_registration(addr, 59993);
+        let first = supervisor_handle(addr)
+            .expect("supervisor registered")
+            .generation;
+
+        ensure_registration_with_destination(addr, 59993, Some(Ipv4Addr::new(8, 8, 8, 8)));
+        let second = supervisor_handle(addr)
+            .expect("supervisor registered")
+            .generation;
+        assert!(
+            second > first,
+            "a newly learned destination must re-register to fetch its region"
+        );
+
+        ensure_registration_with_destination(addr, 59993, Some(Ipv4Addr::new(8, 8, 8, 8)));
+        let repeated = supervisor_handle(addr)
+            .expect("supervisor registered")
+            .generation;
+        assert_eq!(
+            repeated, second,
+            "a repeated identical destination must not re-register"
+        );
+
+        ensure_registration(addr, 59993);
+        let third = supervisor_handle(addr)
+            .expect("supervisor registered")
+            .generation;
+        assert_eq!(
+            third, second,
+            "an unknown destination must not disturb a live supervisor"
+        );
+        assert!(stop_supervisor(addr));
+    }
+
+    #[tokio::test]
+    async fn report_destination_re_registers_once_per_new_server() {
+        let _guard = crate::session::token_test_guard();
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42105);
+        let server = Ipv4Addr::new(198, 51, 100, 7);
+        let _ = stop_supervisor(relay);
+        crate::session::set_current_proxy(relay);
+        ensure_registration(relay, 59994);
+        let first = supervisor_handle(relay)
+            .expect("supervisor registered")
+            .generation;
+
+        report_destination(server);
+        let second = supervisor_handle(relay)
+            .expect("supervisor registered")
+            .generation;
+        assert!(
+            second > first,
+            "the first report of a server must re-register the relay"
+        );
+
+        report_destination(server);
+        let repeated = supervisor_handle(relay)
+            .expect("supervisor registered")
+            .generation;
+        assert_eq!(
+            repeated, second,
+            "a repeated report of the same server must not re-register"
+        );
+
+        assert!(stop_supervisor(relay));
+        crate::session::set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
     }
 }

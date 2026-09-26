@@ -27,6 +27,7 @@ mod inner {
 
     use crate::auth::{Authenticator, EXPLICIT_REVOKE_GRACE, TRANSPORT_REVOKE_GRACE};
     use crate::config::ProxyConfig;
+    use crate::geo::{self, GeoResolver};
     use crate::metrics::ProxyMetrics;
 
     // ── Types ───────────────────────────────────────────────────────
@@ -107,6 +108,9 @@ mod inner {
         /// `/telemetry` endpoint also feeds, so both transports aggregate
         /// identically.
         pub metrics: Arc<ProxyMetrics>,
+        /// Geo resolver used to place a client's registered destination, when
+        /// the operator has an MMDB enabled.
+        pub geo: Option<Arc<dyn GeoResolver>>,
         /// Per-IP limiter for control-plane telemetry reports.
         telemetry_rate: tokio::sync::Mutex<TelemetryRateLimiter>,
         /// When the server started.
@@ -118,6 +122,7 @@ mod inner {
             config: ProxyConfig,
             authenticator: Arc<RwLock<Authenticator>>,
             metrics: Arc<ProxyMetrics>,
+            geo: Option<Arc<dyn GeoResolver>>,
         ) -> Self {
             Self {
                 sessions: RwLock::new(HashMap::new()),
@@ -125,6 +130,7 @@ mod inner {
                 config,
                 authenticator,
                 metrics,
+                geo,
                 telemetry_rate: tokio::sync::Mutex::new(TelemetryRateLimiter::default()),
                 started_at: Instant::now(),
             }
@@ -534,6 +540,7 @@ mod inner {
                 protocol_version,
                 game,
                 data_port,
+                destination,
             } => {
                 if protocol_version != PROTOCOL_VERSION {
                     warn!(
@@ -546,7 +553,7 @@ mod inner {
                 let current = state.active_count().await;
                 if current >= state.config.server.max_clients {
                     warn!(
-                        "Rejecting client {} — at capacity ({}/{})",
+                        "Rejecting client {} - at capacity ({}/{})",
                         remote, current, state.config.server.max_clients
                     );
                     return Some(ControlMessage::Disconnect {
@@ -597,6 +604,10 @@ mod inner {
                     node_id: state.config.server.node_id.clone(),
                     region: state.config.server.region.clone(),
                     telemetry_quic: true,
+                    dest_region: destination.and_then(|ip| {
+                        let geo = state.geo.as_deref()?;
+                        geo::destination_region(geo, ip)
+                    }),
                 })
             }
 
@@ -649,6 +660,80 @@ mod inner {
                 debug!("Unexpected message from {}: {:?}", remote, other);
                 None
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn state_with_geo(resolver: Option<Arc<dyn GeoResolver>>) -> Arc<ControlState> {
+            Arc::new(ControlState::new(
+                ProxyConfig::default(),
+                Arc::new(RwLock::new(Authenticator::new(false))),
+                Arc::new(ProxyMetrics::new()),
+                resolver,
+            ))
+        }
+
+        async fn register(
+            state: &ControlState,
+            token: &ConnectionToken,
+            destination: Ipv4Addr,
+        ) -> Option<String> {
+            let response = process_message(
+                ControlMessage::Register {
+                    protocol_version: PROTOCOL_VERSION,
+                    game: 0,
+                    data_port: 0,
+                    destination: Some(destination),
+                },
+                "127.0.0.1:40000".parse().unwrap(),
+                state,
+                token,
+            )
+            .await;
+            match response {
+                Some(ControlMessage::RegisterAck { dest_region, .. }) => dest_region,
+                other => panic!("expected RegisterAck, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn register_ack_carries_the_resolved_destination_region() {
+            let resolver: Arc<dyn GeoResolver> = Arc::new(|ip: Ipv4Addr| {
+                (ip == Ipv4Addr::new(8, 8, 8, 8)).then(|| "AU".to_string())
+            });
+            let state = state_with_geo(Some(resolver));
+            let token: ConnectionToken = Arc::new(tokio::sync::Mutex::new(None));
+
+            assert_eq!(
+                register(&state, &token, Ipv4Addr::new(8, 8, 8, 8))
+                    .await
+                    .as_deref(),
+                Some("AU"),
+                "the relay must resolve a known destination through its MMDB"
+            );
+        }
+
+        #[tokio::test]
+        async fn register_ack_omits_the_region_without_a_resolver_or_a_known_address() {
+            let token: ConnectionToken = Arc::new(tokio::sync::Mutex::new(None));
+
+            let no_resolver = state_with_geo(None);
+            assert_eq!(
+                register(&no_resolver, &token, Ipv4Addr::new(8, 8, 8, 8)).await,
+                None,
+                "a relay without an MMDB must not invent a region"
+            );
+
+            let resolver: Arc<dyn GeoResolver> = Arc::new(|_ip: Ipv4Addr| None);
+            let unplaceable = state_with_geo(Some(resolver));
+            assert_eq!(
+                register(&unplaceable, &token, Ipv4Addr::new(9, 9, 9, 9)).await,
+                None,
+                "an address the MMDB cannot place must leave the region unset"
+            );
         }
     }
 }

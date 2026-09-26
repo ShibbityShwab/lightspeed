@@ -758,7 +758,9 @@ pub fn global() -> Option<&'static Arc<LatencyTracker>> {
 /// Gated on local measurement ([`is_measuring`]), not on telemetry: a muted
 /// client still measures locally. The burst's result is not reported anywhere.
 pub fn record_outbound(server: Ipv4Addr) {
-    crate::route::destination::note_outbound(server);
+    if crate::route::destination::note_outbound(server) {
+        crate::quic::report_destination(server);
+    }
     if !is_measuring() {
         return;
     }

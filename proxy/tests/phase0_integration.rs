@@ -51,6 +51,7 @@ fn isolate_tls_dir() {
             ProxyConfig::default(),
             Arc::new(RwLock::new(Authenticator::new(true))),
             Arc::new(ProxyMetrics::new()),
+            None,
         ));
         let primer = ControlServer::bind("127.0.0.1:0".parse().expect("bind addr"), state)
             .expect("prime the TLS certificate");
@@ -132,6 +133,7 @@ impl TestClient {
             protocol_version: PROTOCOL_VERSION,
             game: game_id::CS2,
             data_port,
+            destination: None,
         }
         .write_to(&mut send)
         .await?;
@@ -212,6 +214,7 @@ async fn start_proxy() -> ProxyHarness {
         config,
         Arc::clone(&auth),
         Arc::clone(&metrics),
+        None,
     ));
     let server = ControlServer::bind("127.0.0.1:0".parse().expect("control addr"), state)
         .expect("bind control server");

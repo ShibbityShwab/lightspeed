@@ -302,11 +302,11 @@ pub fn observe_tunnelled(relay: SocketAddrV4, destination: Ipv4Addr, rtt_us: u64
     }
 }
 
-/// Record a destination's region into the global estimator, if installed.
+/// Record a destination's region into the global estimator, installing it on
+/// first use. A registration ack can arrive before routing has set the
+/// estimator up, and the region must still be cached when selection runs.
 pub fn set_destination_region(destination: Ipv4Addr, region: &str) {
-    if let Some(estimator) = global() {
-        estimator.set_destination_region(destination, region);
-    }
+    ensure_global().set_destination_region(destination, region);
 }
 
 #[derive(Clone, Copy)]
@@ -331,12 +331,16 @@ fn sampler() -> &'static StdMutex<Sampler> {
 ///
 /// Records the relay in use at send time. Rate-limited per server so the
 /// estimator samples a small fraction of gameplay rather than every packet.
-pub fn note_outbound(server: Ipv4Addr) {
+/// Returns `true` only when this call recorded a fresh sample, so callers can
+/// hang a one-shot per-server side effect off the same rate limit.
+pub fn note_outbound(server: Ipv4Addr) -> bool {
     let now = Instant::now();
     let relay = crate::session::current_proxy();
     let mut sampler = sampler().lock().unwrap_or_else(PoisonError::into_inner);
     match sampler.last_sample.get(&server) {
-        Some(last) if now.saturating_duration_since(*last) < DEST_SAMPLE_INTERVAL => return,
+        Some(last) if now.saturating_duration_since(*last) < DEST_SAMPLE_INTERVAL => {
+            return false;
+        }
         _ => sampler.last_sample.insert(server, now),
     };
     sampler.pending.insert(
@@ -346,6 +350,7 @@ pub fn note_outbound(server: Ipv4Addr) {
             relay,
         },
     );
+    true
 }
 
 /// Always-on helper: note that a response for `server` arrived through the

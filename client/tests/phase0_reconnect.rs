@@ -113,6 +113,7 @@ async fn serve_connection(
                         node_id: "phase0-relay".to_string(),
                         region: "loopback".to_string(),
                         telemetry_quic: false,
+                        dest_region: None,
                     };
                     let _ = ack.write_to(&mut send).await;
                     let _ = send.finish();

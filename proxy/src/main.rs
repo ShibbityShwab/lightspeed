@@ -10,7 +10,7 @@
 //! - Abuse detection (amplification + reflection)
 //! - Per-client rate limiting
 //!
-//! Designed to run on any small Linux VPS — current mesh uses Vultr vc2-1c-1gb (~500KB RAM).
+//! Designed to run on any small Linux VPS - current mesh uses Vultr vc2-1c-1gb (~500KB RAM).
 
 use lightspeed_proxy::abuse;
 use lightspeed_proxy::auth;
@@ -41,7 +41,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-/// LightSpeed Proxy — UDP relay node
+/// LightSpeed Proxy - UDP relay node
 #[derive(Parser, Debug)]
 #[command(name = "lightspeed-proxy", version, about)]
 struct Cli {
@@ -272,9 +272,9 @@ async fn main() -> anyhow::Result<()> {
 
         println!();
         if cli.bind_check {
-            println!("✅ All checks passed — proxy is ready to start");
+            println!("✅ All checks passed - proxy is ready to start");
         } else {
-            println!("✅ All checks passed — config is valid (ports not bound)");
+            println!("✅ All checks passed - config is valid (ports not bound)");
         }
         return Ok(());
     }
@@ -381,7 +381,7 @@ async fn main() -> anyhow::Result<()> {
              relay-to-self artifacts. Set [server] public_ip for exact filtering."
         );
     }
-    let geo_state = geo_resolver.map(|resolver| relay::GeoState {
+    let geo_state = geo_resolver.clone().map(|resolver| relay::GeoState {
         resolver,
         metrics: Arc::clone(&metrics),
         public_ip,
@@ -441,6 +441,7 @@ async fn main() -> anyhow::Result<()> {
             config.clone(),
             Arc::clone(&authenticator),
             Arc::clone(&metrics),
+            geo_resolver,
         ));
         control::ControlServer::bind(control_addr, control_state).map_err(|e| {
             anyhow::anyhow!("failed to bind QUIC control plane on {control_addr}: {e}")
@@ -622,7 +623,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    info!("⚡ LightSpeed Proxy running — press Ctrl+C to stop");
+    info!("⚡ LightSpeed Proxy running - press Ctrl+C to stop");
 
     #[cfg(unix)]
     let mut sigusr2 =

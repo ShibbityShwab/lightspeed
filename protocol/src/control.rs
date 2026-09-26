@@ -9,6 +9,8 @@
 //!
 //! Payload format: `[1 byte: message type] [type-specific fields]`
 
+use std::net::Ipv4Addr;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -144,6 +146,12 @@ pub enum ControlMessage {
         /// report one. A non-zero value binds the session to that port.
         #[serde(default)]
         data_port: u16,
+        /// The game server the client intends to reach, when known. The relay
+        /// resolves it against its local MMDB so the ack can carry the
+        /// destination region for the client's region prior. Pre-upgrade
+        /// clients omit this trailing field.
+        #[serde(default)]
+        destination: Option<Ipv4Addr>,
     },
 
     /// Proxy → Client: registration accepted.
@@ -162,6 +170,12 @@ pub enum ControlMessage {
         /// it decodes as `false` and the client falls back to HTTP.
         #[serde(default)]
         telemetry_quic: bool,
+        /// Region of the destination the client registered, as resolved by the
+        /// relay's MMDB (an ISO 3166-1 alpha-2 country code, or `None` when the
+        /// relay has no database or cannot place the address). Pre-upgrade
+        /// relays omit this trailing field.
+        #[serde(default)]
+        dest_region: Option<String>,
     },
 
     /// Either direction: graceful disconnect.
@@ -232,15 +246,20 @@ impl ControlMessage {
                 protocol_version,
                 game,
                 data_port,
+                destination,
             } => {
                 buf.put_u8(MSG_REGISTER);
                 buf.put_u8(*protocol_version);
                 buf.put_u8(*game);
-                // The data port is a trailing extension: emit it only when the
-                // client reports one, so a client that does not keeps the
-                // original 3-byte wire form.
-                if *data_port != 0 {
+                // The data port and destination are trailing extensions. The
+                // port is emitted when non-zero, or when a destination follows
+                // so the leading u16 stays unambiguously the port. The
+                // destination is four octets when the client knows it.
+                if *data_port != 0 || destination.is_some() {
                     buf.put_u16(*data_port);
+                }
+                if let Some(ip) = destination {
+                    buf.put_slice(&ip.octets());
                 }
             }
             Self::RegisterAck {
@@ -249,16 +268,22 @@ impl ControlMessage {
                 node_id,
                 region,
                 telemetry_quic,
+                dest_region,
             } => {
                 buf.put_u8(MSG_REGISTER_ACK);
                 buf.put_u32(*session_id);
                 buf.put_u32(*session_token);
                 put_short_string(&mut buf, node_id);
                 put_short_string(&mut buf, region);
-                // Trailing extension: emit it only when set, so an ack that
-                // does not advertise telemetry keeps the legacy wire form.
-                if *telemetry_quic {
-                    buf.put_u8(1);
+                // Trailing extensions: the telemetry capability byte, then the
+                // destination region. The byte is emitted when telemetry is
+                // supported or when a region follows, so a client that reads
+                // only the byte still sees the capability and ignores the rest.
+                if *telemetry_quic || dest_region.is_some() {
+                    buf.put_u8(u8::from(*telemetry_quic));
+                }
+                if let Some(dest_region) = dest_region {
+                    put_short_string(&mut buf, dest_region);
                 }
             }
             Self::Disconnect { reason } => {
@@ -325,14 +350,20 @@ impl ControlMessage {
                 ensure_remaining(buf, 2)?;
                 let protocol_version = buf.get_u8();
                 let game = buf.get_u8();
-                // data_port is optional: a client that predates the extension
-                // sends no trailing bytes and defaults to 0 (principal-only
-                // binding).
+                // data_port and destination are optional: a client that
+                // predates the extensions sends no trailing bytes and defaults
+                // to no port (principal-only binding) and no destination.
                 let data_port = if buf.len() >= 2 { buf.get_u16() } else { 0 };
+                let destination = if buf.len() >= 4 {
+                    Some(Ipv4Addr::from(buf.get_u32()))
+                } else {
+                    None
+                };
                 Ok(Self::Register {
                     protocol_version,
                     game,
                     data_port,
+                    destination,
                 })
             }
             MSG_REGISTER_ACK => {
@@ -341,15 +372,22 @@ impl ControlMessage {
                 let session_token = buf.get_u32();
                 let node_id = get_short_string(&mut buf)?;
                 let region = get_short_string(&mut buf)?;
-                // The telemetry capability is optional: a pre-upgrade proxy
-                // sends no trailing byte and thus cannot accept telemetry.
+                // The telemetry capability and destination region are optional
+                // trailing extensions: a pre-upgrade proxy sends neither, so
+                // telemetry decodes as unsupported and the region as unknown.
                 let telemetry_quic = !buf.is_empty() && buf.get_u8() != 0;
+                let dest_region = if buf.is_empty() {
+                    None
+                } else {
+                    Some(get_short_string(&mut buf)?)
+                };
                 Ok(Self::RegisterAck {
                     session_id,
                     session_token,
                     node_id,
                     region,
                     telemetry_quic,
+                    dest_region,
                 })
             }
             MSG_DISCONNECT => {
@@ -497,6 +535,7 @@ mod tests {
             protocol_version: 1,
             game: game_id::FORTNITE,
             data_port: 41234,
+            destination: Some(Ipv4Addr::new(104, 26, 1, 50)),
         };
         let encoded = msg.encode();
         let decoded = ControlMessage::decode(&encoded).unwrap();
@@ -505,8 +544,8 @@ mod tests {
 
     #[test]
     fn test_register_legacy_wire_form_decodes_without_data_port() {
-        // A client that predates the data_port extension sends only the type,
-        // protocol version, and game id.
+        // A client that predates the data_port and destination extensions sends
+        // only the type, protocol version, and game id.
         let legacy = [MSG_REGISTER, 1, game_id::CS2];
         let decoded = ControlMessage::decode(&legacy).unwrap();
         assert_eq!(
@@ -515,6 +554,7 @@ mod tests {
                 protocol_version: 1,
                 game: game_id::CS2,
                 data_port: 0,
+                destination: None,
             }
         );
     }
@@ -525,6 +565,7 @@ mod tests {
             protocol_version: 1,
             game: game_id::RUST,
             data_port: 0,
+            destination: None,
         };
         assert_eq!(msg.encode().len(), 3, "zero data_port must stay lenient");
 
@@ -532,8 +573,32 @@ mod tests {
             protocol_version: 1,
             game: game_id::RUST,
             data_port: 4434,
+            destination: None,
         };
         assert_eq!(msg.encode().len(), 5, "non-zero data_port is appended");
+    }
+
+    #[test]
+    fn test_register_destination_reserves_the_port_field() {
+        // A destination-only registration still writes the port u16 (as zero)
+        // so the decoder never reads the leading destination octet as a port.
+        let msg = ControlMessage::Register {
+            protocol_version: 1,
+            game: game_id::RUST,
+            data_port: 0,
+            destination: Some(Ipv4Addr::new(8, 8, 8, 8)),
+        };
+        let encoded = msg.encode();
+        assert_eq!(
+            encoded.len(),
+            9,
+            "type, version, game, zero port, destination"
+        );
+        assert_eq!(
+            ControlMessage::decode(&encoded).unwrap(),
+            msg,
+            "destination must survive the reserved port field"
+        );
     }
 
     #[test]
@@ -544,6 +609,7 @@ mod tests {
             node_id: "proxy-sea-001".into(),
             region: "sea".into(),
             telemetry_quic: true,
+            dest_region: Some("AU".into()),
         };
         let encoded = msg.encode();
         let decoded = ControlMessage::decode(&encoded).unwrap();
@@ -552,13 +618,14 @@ mod tests {
 
     #[test]
     fn test_register_ack_legacy_wire_form_has_no_telemetry() {
-        // A pre-upgrade proxy emits no trailing capability byte.
+        // A pre-upgrade proxy emits no trailing capability byte or region.
         let legacy = ControlMessage::RegisterAck {
             session_id: 42,
             session_token: 0xAB,
             node_id: "proxy-sea-001".into(),
             region: "sea".into(),
             telemetry_quic: false,
+            dest_region: None,
         }
         .encode();
         let decoded = ControlMessage::decode(&legacy).unwrap();
@@ -570,8 +637,70 @@ mod tests {
                 node_id: "proxy-sea-001".into(),
                 region: "sea".into(),
                 telemetry_quic: false,
+                dest_region: None,
             },
-            "an ack without the capability byte must decode as unsupported"
+            "an ack without trailing extensions must decode as unsupported and regionless"
+        );
+    }
+
+    #[test]
+    fn test_register_ack_dest_region_survives_a_false_capability() {
+        // A relay that resolves a region but does not accept QUIC telemetry
+        // still has to emit the capability byte so the region can follow.
+        let msg = ControlMessage::RegisterAck {
+            session_id: 7,
+            session_token: 0xCD,
+            node_id: "proxy-syd-001".into(),
+            region: "ap-southeast-2".into(),
+            telemetry_quic: false,
+            dest_region: Some("APAC".into()),
+        };
+        let decoded = ControlMessage::decode(&msg.encode()).unwrap();
+        assert_eq!(decoded, msg);
+
+        // The capability byte is present even though the region is absent.
+        let telemetry_only = ControlMessage::RegisterAck {
+            session_id: 7,
+            session_token: 0xCD,
+            node_id: "proxy-syd-001".into(),
+            region: "ap-southeast-2".into(),
+            telemetry_quic: true,
+            dest_region: None,
+        };
+        assert_eq!(
+            ControlMessage::decode(&telemetry_only.encode()).unwrap(),
+            telemetry_only
+        );
+    }
+
+    #[test]
+    fn test_register_and_ack_serde_defaults_accept_missing_extensions() {
+        let register: ControlMessage =
+            serde_json::from_str(r#"{"Register":{"protocol_version":1,"game":2}}"#).unwrap();
+        assert_eq!(
+            register,
+            ControlMessage::Register {
+                protocol_version: 1,
+                game: 2,
+                data_port: 0,
+                destination: None,
+            }
+        );
+
+        let ack: ControlMessage = serde_json::from_str(
+            r#"{"RegisterAck":{"session_id":1,"session_token":2,"node_id":"n","region":"r"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ack,
+            ControlMessage::RegisterAck {
+                session_id: 1,
+                session_token: 2,
+                node_id: "n".into(),
+                region: "r".into(),
+                telemetry_quic: false,
+                dest_region: None,
+            }
         );
     }
 

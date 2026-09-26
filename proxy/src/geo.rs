@@ -43,6 +43,16 @@ where
     }
 }
 
+/// Resolve the region of a destination the client registered.
+///
+/// The MMDB only knows countries, so the destination region is the normalized
+/// two-letter ISO 3166-1 code. The client coarsens it to its own region
+/// vocabulary, so the relay never carries a region catalog. `None` means the
+/// address could not be placed and the ack simply omits the region.
+pub fn destination_region(resolver: &dyn GeoResolver, ip: Ipv4Addr) -> Option<String> {
+    resolver.country(ip)
+}
+
 /// Normalize a raw country string into exactly two uppercase ASCII letters.
 ///
 /// Anything that is not exactly two ASCII letters returns `None`, so a
@@ -118,6 +128,20 @@ mod tests {
             Some("AU".to_string())
         );
         assert_eq!(resolver.country(Ipv4Addr::new(8, 8, 8, 8)), None);
+    }
+
+    #[test]
+    fn destination_region_forwards_the_resolved_country() {
+        let resolver: Arc<dyn GeoResolver> =
+            Arc::new(|ip: Ipv4Addr| (ip == Ipv4Addr::new(8, 8, 8, 8)).then(|| "AU".to_string()));
+        assert_eq!(
+            destination_region(resolver.as_ref(), Ipv4Addr::new(8, 8, 8, 8)),
+            Some("AU".to_string())
+        );
+        assert_eq!(
+            destination_region(resolver.as_ref(), Ipv4Addr::new(9, 9, 9, 9)),
+            None
+        );
     }
 
     #[test]

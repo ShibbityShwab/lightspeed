@@ -113,6 +113,7 @@ async fn serve_one_stream(
                 node_id: "test-proxy".into(),
                 region: "test-region".into(),
                 telemetry_quic: true,
+                dest_region: None,
             }),
             ControlMessage::Disconnect { .. } => None,
             _ => None,
@@ -160,6 +161,7 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
             protocol_version: PROTOCOL_VERSION,
             game: game_id::CS2,
             data_port: 0,
+            destination: None,
         };
         register.write_to(&mut send).await?;
 
@@ -171,6 +173,7 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
                 node_id,
                 region,
                 telemetry_quic,
+                dest_region,
             }) => {
                 assert_eq!(session_id, 42);
                 assert_eq!(session_token, 0xAB);
@@ -179,6 +182,10 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
                 assert!(
                     telemetry_quic,
                     "the proxy must advertise control-plane telemetry"
+                );
+                assert_eq!(
+                    dest_region, None,
+                    "the mock ack carries no destination region"
                 );
             }
             other => panic!("Expected RegisterAck, got: {:?}", other),
@@ -241,6 +248,7 @@ async fn test_message_roundtrip_encoding() {
             protocol_version: PROTOCOL_VERSION,
             game: game_id::FORTNITE,
             data_port: 4434,
+            destination: None,
         },
         ControlMessage::RegisterAck {
             session_id: 999,
@@ -248,6 +256,7 @@ async fn test_message_roundtrip_encoding() {
             node_id: "node-abc".into(),
             region: "us-east".into(),
             telemetry_quic: true,
+            dest_region: Some("US".into()),
         },
         ControlMessage::Disconnect {
             reason: disconnect_reason::SERVER_SHUTDOWN,
