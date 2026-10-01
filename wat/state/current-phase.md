@@ -1,3 +1,72 @@
+# Current Phase: WF-039 Local Rust toolchain installed (verification ceiling removed)
+
+**Workflow:** WF-039; WF-038, WF-037, WF-036, WF-035, WF-034 below
+**Agent:** DevOps
+**Status:** Implemented and verified
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-039 the workstation can finally run the repo's own quality gate
+
+**Driving evidence:** every workflow from WF-023 through WF-038 carried the same
+standing caveat - "no Rust toolchain on this host, so `cargo fmt`/`clippy`/`test`
+cannot run locally" - which meant Rust changes were CI-only and the `sha2` and
+`windows` Dependabot migrations could not even be attempted (WF-038 declined
+them for exactly this reason).
+
+**Change:** installed the stable Rust toolchain via rustup (`--profile minimal`)
+and then `rustup component add clippy rustfmt`, because `[QUALITY_STUB]` requires
+them. Free, no services, no billing: `[COST_STUB]` holds.
+
+```
+cargo 1.98.1      (2026-08-05)
+rustc 1.98.1      (2026-09-01)
+clippy 0.1.98     (2026-09-01)
+rustfmt 1.9.0     (2026-09-01)
+```
+
+**First results on the real codebase:**
+- `cargo fmt --all --check` -> **clean, rc=0**. The workspace is rustfmt-clean as
+  committed; no Rust file needed touching.
+- `cargo check -p lightspeed-protocol` -> **clean**. The pure-Rust crate compiles.
+- `cargo check --workspace` -> **rc=101**, and this round corrected an
+  over-broad claim made about it. The failure is `ring v0.17.14`'s build
+  script, then `getrandom`/`windows-sys` failing on `dlltool.exe: program not
+  found`. The repo documents the requirement itself
+  (`client/Cargo.toml:44`, `proxy/Cargo.toml:28`: "requires C compiler for
+  ring"), and this host has no `gcc`, `cc`, or `clang`.
+
+**Correction issued the same day:** the first version of this entry implied the
+protocol crate was verifiable locally. `cargo check -p lightspeed-protocol`
+passes, but `cargo check -p lightspeed-protocol --tests` **fails** - the test
+build pulls `windows-sys`/`getrandom`, which need the same missing C toolchain.
+So the accurate pre-MinGW boundary was: workspace-wide `cargo fmt`, and
+`cargo check` on the pure-Rust crate WITHOUT dev-dependencies. Anything needing
+a C compiler - `ring`, `getrandom`, `windows-sys`, every test binary, the
+client and proxy crates - was not verifiable here.
+
+**Follow-up:** with the owner's approval, a MinGW toolchain (WinLibs) is being
+installed to close the C-compiler gap. The boundary will be re-measured after
+it lands, not assumed.
+
+**Honest scope of the new capability:** rustup selected the
+`stable-x86_64-pc-windows-gnu` host tuple, while releases ship
+`x86_64-pc-windows-msvc`. That difference is real, but the Windows-only
+dependencies (`windivert`, `windows`) are `cfg(windows)`-gated rather than
+target-triple-gated, so a local Windows build does compile that code path -
+which makes this genuinely useful for the FFI-facing migrations. Where
+gnu-vs-msvc could still diverge, CI remains the authority.
+
+**What is still NOT locally verifiable:** Windows runtime behaviour - WinDivert
+driver interaction, the single-instance guard, tray failure paths. WF-023's
+"known verification gap" stands and is narrower than before, not closed.
+
+**Not changed:** no source file, no dependency, no manifest. This entry corrects
+a stale environment note that appeared in every prior workflow's status.
+
+---
+
 # Current Phase: WF-038 Dependabot PR triage (maintenance)
 
 **Workflow:** WF-038; WF-037, WF-036, WF-035, WF-034, WF-033 below
