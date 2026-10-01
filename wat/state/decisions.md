@@ -855,3 +855,28 @@ not on the owner.
 runtime dir, not on npm, no staging script), but that did not matter - the `computer`
 tool drives the real desktop and was sufficient. The API key was written only to a
 gitignored `target/` file, never echoed into any log, and deleted immediately after use.
+
+---
+
+### 2026-10-01: The Scoop bucket is current - the stale-installer thread is closed
+
+**Agent:** DevOps
+**Status:** Accepted
+**Rationale:** With Chocolatey pushed, the Scoop bucket was the last channel serving an
+old build. `dist/scoop/lightspeed.json` (the in-repo source of truth added in WF-036) was
+already at 1.6.14 with `hash = 1b8e969f...`, but nothing had replaced the bucket's copy -
+the `bump-scoop` release job only runs on a new tag, and the publish step was documented
+as needing a token this repo does not hold.
+**Impact:** the bucket now serves 1.6.14. Verified from the PUBLIC raw URL a
+`scoop install` actually reads: version 1.6.14, the v1.6.14 asset URL, and a sha256 that
+matches the release digest exactly; `checkver` and the `autoupdate` `$version` template
+survived the round-trip. Bucket commit `2de5a121`.
+**Note on the automation gap:** the sync needed write access to a SECOND repository, which
+`GITHUB_TOKEN` cannot grant - hence the manual push. `dist/scoop/README.md` already
+documents the `SCOOP_TOKEN` secret that would automate it; that remains the durable fix.
+**Alternatives Considered:** waiting for the next release tag was rejected because the
+bucket would stay stale for however long that takes, and the fix was already prepared and
+verified - the only missing piece was permission to write it.
+**Installer-channel status after this round:** Scoop current at 1.6.14; Chocolatey 1.6.14
+submitted, pending moderation (feed still 1.6.3); winget awaiting Microsoft moderator
+review on its first manifest; Homebrew current.
