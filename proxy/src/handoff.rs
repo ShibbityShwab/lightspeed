@@ -558,7 +558,11 @@ pub fn sha256_reader(mut reader: impl Read) -> std::io::Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// Lowercase-hex SHA-256 of the file at `path`.
