@@ -1,0 +1,34 @@
+{
+    "version": "1.6.14",
+    "description": "Zero-cost global network optimizer for multiplayer games (CLI client)",
+    "homepage": "https://github.com/ShibbityShwab/lightspeed",
+    "license": {
+        "identifier": "LightSpeed-NC-1.0",
+        "url": "https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE"
+    },
+    "notes": [
+        "The CLI needs a one-time admin setup for packet capture: run 'lightspeed --help'.",
+        "The tray GUI ships as an MSI: https://github.com/ShibbityShwab/lightspeed/releases",
+        "Noncommercial license (LightSpeed-NC-1.0)."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.14/lightspeed-client-x86_64-pc-windows-msvc.zip",
+            "hash": "1b8e969feb84b2ac17b2732fcb569c8c91926800cd425d75f80b96e53d234d25"
+        }
+    },
+    "bin": "lightspeed.exe",
+    "checkver": {
+        "github": "https://github.com/ShibbityShwab/lightspeed"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/ShibbityShwab/lightspeed/releases/download/v$version/lightspeed-client-x86_64-pc-windows-msvc.zip",
+                "hash": {
+                    "url": "$baseurl/lightspeed-client-x86_64-pc-windows-msvc.zip.sha256"
+                }
+            }
+        }
+    }
+}

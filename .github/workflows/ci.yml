@@ -109,6 +109,9 @@ jobs:
       - name: Package bump self-test
         run: bash infra/scripts/test_bump_packages.sh
 
+      - name: Scoop bump self-test
+        run: bash infra/scripts/test_bump_scoop.sh
+
       - name: Node inventory self-test
         run: bash infra/scripts/test_lib_nodes.sh
 

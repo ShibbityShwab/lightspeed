@@ -117,7 +117,7 @@ LightSpeed ships three packages. **You only need one**:
 | Platform | Command |
 |-----------|---------|
 | **macOS and Linux** | `brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed && brew install ShibbityShwab/lightspeed/lightspeed` (current at the latest release) |
-| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (bucket live; pinned to 1.6.3 - see note) |
+| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (the repo now owns this manifest and bumps it on each tag; the published bucket still serves 1.6.3 until the next release) |
 | **Windows (Chocolatey)** | `choco install lightspeed` (live but still at 1.6.3 - see note) |
 | **Windows (winget)** | not published yet: `winget install ShibbityShwab.LightSpeed` will fail until the first manifest merges. Use the MSI from [Releases](https://github.com/ShibbityShwab/lightspeed/releases). |
 | **Arch Linux** | `yay -S lightspeed-bin` (AUR, prepared but not yet published; Arch registration is closed) |
