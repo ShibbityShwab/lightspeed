@@ -64,6 +64,19 @@ sees.
 
 **Pushed as `9416adc`** (owner authorised the fix). CI in flight.
 
+**VERIFIED GREEN, same day:** CI run 36845378316 on `9416adc` -> **completed
+success, all 13 jobs green** - including the 8 jobs PR #109 had been failing
+(Check & Test, Coverage, E2E, macOS, Windows Build & Test, Benchmarks, Feature
+Matrix ml, Proxy QUIC Smoke). The migration is confirmed on the real build
+fleet, not just locally.
+
+**PR #109 is now CLOSED as superseded.** `master` carries `sha2 0.11.0` in
+`Cargo.lock` (line 4998), so the dependency was fixed at the source rather than
+by merging the stale PR - Dependabot closed it after the bump landed. A red PR
+that stays red because nobody can compile it, versus the same upgrade verified
+and merged with its regression test passing: the difference was purely the
+missing toolchain.
+
 ---
 
 # Current Phase: WF-039 Local Rust toolchain installed (verification ceiling removed)
