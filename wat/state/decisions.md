@@ -952,3 +952,33 @@ case), and against the real frozen history the detector reports `stale_history` 
 **Alternatives Considered:** inferring idleness from counters alone was rejected because
 frozen data and an idle fleet are genuinely indistinguishable that way; suppressing
 `fleet_idle` entirely was rejected because it fires correctly on real stops.
+
+---
+
+### 2026-10-01: zero_relay was also asserting more than the data supports
+
+**Agent:** SecOps
+**Status:** Accepted
+**Rationale:** the corrected `fleet_idle` let the fleet data become readable, and what it
+showed undercut the `zero_relay` message. That detector fired `[critical]` on relay-lax-1
+with "N client(s) were rejected - the 1.6.3 outage signature", resting on the assumption
+that auth rejections mean clients are failing. Fleet-wide, rejections track traffic
+volume rather than health:
+
+```
+relay-fra    relayed 52,753,147   auth rejections 383,738
+relay-lax-1  relayed  3,487,163   auth rejections 216,202
+```
+
+fra serves heavily and has MORE rejections than lax, so the rejections are overwhelmingly
+background scanners. A `[critical]` alert that reads like certainty could push an operator
+to restart a healthy relay.
+**Impact:** the message now states only what is known - "N auth rejection(s) were recorded
+in the window - consistent with clients failing to register (the 1.6.3 signature)" - plus
+an explicit caution that scanners also produce rejections and this is not proof of a
+fault. The rule and its severity are unchanged; only the claim it makes is.
+**Verification:** 92 checks pass (was 91; the caution has its own assertion).
+**Still open, for the owner:** relay-lax-1 has relayed nothing for ~6h with normal uptime
+and `1.6.14` while the fleet moved 2.8M packets in the window. That the counter is frozen
+is verified; whether it is a fault or simply receives no routed traffic is NOT, and this
+entry deliberately stops short of claiming either.
