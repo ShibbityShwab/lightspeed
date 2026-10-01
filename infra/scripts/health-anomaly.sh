@@ -323,7 +323,11 @@ def vcmp($a; $b):
                message: ($id + ": reachable for " + ($WL | tostring)
                          + " snapshots but relayed 0 packets while the fleet relayed "
                          + ($fleet_pkts | tostring) + ", and " + ($auth | tostring)
-                         + " client(s) were rejected - the 1.6.3 outage signature") }
+                         + " auth rejection(s) were recorded in the window - consistent "
+                         + "with clients failing to register (the 1.6.3 signature). "
+                         + "NOTE: background scanners also produce rejections, so this "
+                         + "is not proof the relay is faulty - confirm against the live "
+                         + "relay before acting") }
         else { type: "idle_relay", severity: "warning", relay: $id,
                window: $WL, packets_relayed: 0, fleet_packets: $fleet_pkts,
                auth_rejections: 0,

@@ -320,7 +320,8 @@ assert_rc 1 "(a) anomalous run exits 1"
 assert_out "zero_relay" "(a) fires zero_relay"
 assert_out "0 packets" "(a) carries the evidence"
 assert_out "[critical]" "(a) is critical"
-assert_out "were rejected" "(a) names the rejection that makes it an outage"
+assert_out "auth rejection(s) were recorded" "(a) names the rejection that makes it an outage"
+assert_out "not proof the relay is faulty" "(a) warns the rejection count is not conclusive"
 assert_not_out "auth_spike" "(a) does not invent an auth spike"
 
 # Silence WITHOUT rejections is traffic distribution, not an outage: it must
