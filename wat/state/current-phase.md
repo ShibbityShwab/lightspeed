@@ -1,3 +1,50 @@
+# Current Phase: WF-047 The GUI crate is now linted by CI
+
+**Workflow:** WF-047; WF-046, WF-045, WF-044, WF-043, WF-042 below
+**Agent:** DevOps + QAEngineer
+**Status:** Pushed (6a4f8cf + f7f1607); CI in flight
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-047 removing the mechanism, not just the lints
+
+**Driving evidence:** WF-042 fixed three lints in `lightspeed-gui` but left the
+question of how they got there. Reading the job answered it:
+
+```yaml
+windows-gui:
+  - uses: dtolnay/rust-toolchain@stable   # no clippy component
+  - run: cargo build --release -p lightspeed-gui
+  - run: cargo test -p lightspeed-gui      # builds + tests, never lints
+```
+
+And every other clippy invocation in `ci.yml` carries `--exclude
+lightspeed-gui`. So the crate was **structurally unreachable by any lint** -
+which is exactly how a manual `RangeInclusive::contains` and two
+`map_or_identity` accumulated unnoticed from the day they were written.
+
+**Change:** added the `clippy` component to that job's toolchain and one
+`Clippy GUI` step. The exact command was run locally first
+(`cargo clippy -p lightspeed-gui --all-targets` -> rc=0), so the step lands
+green instead of surfacing a backlog in CI.
+
+**Why this matters more than the lint fixes:** fixing three lints treats the
+symptom. Without the step, the next lint in this crate regresses silently in
+exactly the same way. This is the second time this session that a gap was
+invisible not because it was hard to see but because the pipeline excluded
+it - the first being the nine infra self-tests no workflow invoked (WF-027).
+Both are now wired in.
+
+**Also landed, verified the same way as the other dependency PRs:** #139
+(`tokio-test` 0.4.5 -> 0.4.6), applied on current master and `cargo check
+--workspace` -> Finished. Lockfile only.
+
+**Verification:** YAML parses with 11 jobs and the correct step order; the new
+step's exact command passes locally at rc=0; CI run in flight.
+
+---
+
 # Current Phase: WF-046 CI verified the migration; fmt check has a platform gotcha
 
 **Workflow:** WF-046; WF-045, WF-044, WF-043, WF-042, WF-041, WF-040 below
