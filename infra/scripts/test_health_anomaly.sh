@@ -493,6 +493,18 @@ assert_out "[critical]" "(g) is critical"
 run_anomaly "$H_HEALTHY" "$REG4"
 assert_not_out "fleet_idle" "(g guard) a busy fleet is not idle"
 
+# Guard: a FROZEN collector must not be read as an idle fleet.
+# Observed live 2026-10-01: the collector went 5h stale while its newest
+# snapshots kept byte-identical counters, and fleet_idle reported a
+# fleet-wide stop that had not happened - live /health showed the relay
+# actively relaying. Frozen data looks exactly like an idle fleet, so the
+# conclusion requires fresh data.
+LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 20000)) \
+	run_anomaly "$H_FLEETIDLE" "$REG2"
+assert_rc 1 "(g2) a stale history still exits 1"
+assert_out "stale_history" "(g2) reports the stopped collector"
+assert_not_out "fleet_idle" "(g2) frozen data is NOT reported as an idle fleet"
+
 # ═══════════════════════════════════════════
 # (h) stale history: the collector stopped publishing
 # ═══════════════════════════════════════════

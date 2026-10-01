@@ -339,13 +339,17 @@ def vcmp($a; $b):
      | ([ $win[] | rel_reach(.; $id) ] | all) as $up
      | select($up)] | length) as $up_count
 | (if ($WL >= $W and $W >= 2 and $up_count > 0
-        and $fleet_pkts <= 0 and $fleet_sess <= 0)
+        and $fleet_pkts <= 0 and $fleet_sess <= 0
+        and ($max_stale <= 0 or (($now - ($snaps[-1].t // 0)) <= $max_stale)))
    then [{ type: "fleet_idle", severity: "critical",
            window: $WL, relays_up: $up_count,
            fleet_packets: $fleet_pkts, fleet_sessions: $fleet_sess,
+           snapshot_age_secs: ($now - ($snaps[-1].t // 0)),
            message: (($up_count | tostring) + " relay(s) reachable for "
                      + ($WL | tostring) + " snapshots but the whole fleet relayed 0 packets "
-                     + "and created 0 sessions; this is the fleet-wide-traffic-stop signature, "
+                     + "and created 0 sessions, while the collector was still "
+                     + "publishing (newest snapshot " + (($now - ($snaps[-1].t // 0)) | tostring)
+                     + "s old); this is the fleet-wide-traffic-stop signature, "
                      + "not the single-relay zero_relay case") }]
    else [] end) as $idleFlags
 | ([ $ids[] as $id
@@ -507,7 +511,14 @@ result="$(jq -c \
 	--argjson abuse_share "$ABUSE_SHARE" \
 	--argjson max_stale "$MAX_STALENESS" \
 	--argjson now "$NOW_EPOCH" \
-	"$JQ_PROGRAM" <<<'null' 2>/dev/null || true)"
+	"$JQ_PROGRAM" <<<'null' 2>&1)"
+jq_rc=$?
+if [ "$jq_rc" -ne 0 ]; then
+	printf 'health-anomaly: the detector program failed to evaluate (jq rc=%s)\n' "$jq_rc" >&2
+	printf '%s\n' "$result" | head -4 >&2
+	printf 'health-anomaly: refusing to report "no anomalies" from a broken detector\n' >&2
+	exit 3
+fi
 
 if [ -z "$result" ] || ! printf '%s' "$result" | jq -e . >/dev/null 2>&1; then
 	result='{"window":0,"baseline":0,"snapshot_count":0,"relay_count":0,"fleet_count":0,"anomalies":[]}'
