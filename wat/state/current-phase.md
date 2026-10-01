@@ -35,8 +35,26 @@ consistently instead:
 - The resulting lockfile diff matches PR #138 exactly: the 2.x line moves
   2.0.20 -> 2.0.21, the 1.0.69 line is untouched.
 
-**Owner approved landing it.** `cargo test --workspace --exclude
-lightspeed-gui` is the final gate before the commit.
+**Owner approved landing it.** Verification complete: `cargo test --workspace
+--exclude lightspeed-gui` -> **every test binary passed, 0 failures** (including
+the 129-test client suite and the 67-test proxy suite). Landed as `cb17f86`,
+lockfile only; CI in flight.
+
+**Correction issued the same round, worth recording because it nearly misled a
+report:** a CI failure was initially attributed to the GUI lint fix commit
+`3b13a8b`. It was not. Checking the run rather than trusting the monitor's
+label showed run `36850180531` belongs to `cfb04cc` on branch
+`dependabot/cargo/windows-0.62.2` - PR #107 - while the lint-fix run
+(`36850174898`) on `3b13a8b` **passed all 13 jobs**. The misattribution is
+recorded so the next reader does not chase the wrong commit.
+
+**That wrong turn produced the real diagnosis for #107, now concrete:**
+`windows` 0.62.2 changed `HANDLE` from `pub struct HANDLE(pub isize)` to
+`pub struct HANDLE(pub *mut core::ffi::c_void)`, while `windivert-sys` 0.10.0
+still declares `WinDivertClose(handle: HANDLE)` against the 0.48 shape. So #107
+needs a `windivert-sys` upgrade AND FFI-boundary code migration - not a version
+bump. That is the "multiple breaking releases on the FFI surface" the triage
+guessed at, now stated as compiler output.
 
 ---
 
