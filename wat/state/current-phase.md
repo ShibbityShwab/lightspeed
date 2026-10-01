@@ -1,3 +1,55 @@
+# Current Phase: WF-038 Dependabot PR triage (maintenance)
+
+**Workflow:** WF-038; WF-037, WF-036, WF-035, WF-034, WF-033 below
+**Agent:** DevOps + QAEngineer
+**Status:** Assessed (no merges performed - see below)
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-038 six open Dependabot PRs, sorted by what they can actually break
+
+**Driving evidence:** six chore(deps) PRs have been open since 2026-09-21..28.
+Their CI results fall into three distinct groups, which a "are the checks
+green?" glance would flatten into one:
+
+| PR | Bump | Files | Result | Blast radius |
+|----|------|-------|--------|--------------|
+| #135 | thiserror 2.0.20 -> 2.0.21 | Cargo.lock | 15 SUCCESS, 0 fail | patch, lockfile only |
+| #136 | rust 1.98.0 -> 1.98.1 (Docker) | infra/docker/Dockerfile | 15 SUCCESS, 0 fail | patch base image |
+| #106 | tray-icon 0.24.2 -> 0.25.1 | Cargo.lock, client-gui | 14 SUCCESS, 0 fail | GUI tray; **stale** |
+| #108 | dirs 6.0.0 -> 7.0.0 | Cargo.lock, client-gui | 14 SUCCESS, 0 fail | **major**; **stale** |
+| #107 | windows 0.48.0 -> 0.62.2 | Cargo.lock, client/Cargo.toml | **3 FAILURE** | WinDivert/WFP FFI |
+| #109 | sha2 0.10.9 -> 0.11.0 | Cargo.lock | **8 FAILURE** | crypto digest API |
+
+**The two failing PRs are compile breaks, not flaky checks:**
+- **#109** fails Check & Test, Code Coverage, E2E, macOS, Windows, Benchmarks and
+  Feature Matrix (ml) - i.e. everything that compiles. The only real usage is
+  `use sha2::{Digest, Sha256}` in `proxy/src/handoff.rs:550`; sha2 0.11 changed
+  that trait's API, so the crate must be migrated before this can land.
+- **#107** fails Check & Test, Windows GUI Build and Feature Matrix (ml).
+  `windows` 0.48 -> 0.62 spans several breaking releases and this is the
+  WinDivert/WFP FFI surface, which **cannot be compiled on this workstation**
+  (no Rust toolchain), so any migration here must be driven by CI, not by me.
+
+**A green tick is not proof for the older PRs.** #106 and #108 are based on
+`922dea4f` while master is now `0f7296a0` - their checks ran against a tree that
+predates this session's changes, so they would need a fresh run to be evidence
+today. #135 and #136 are newer (2026-09-28) and touch only a lockfile and a
+Docker base image, but even they predate master's current tip.
+
+**Not done, deliberately:** no PR was merged. Merging depends on the user's
+judgement and, for #107/#109, on code migration first; merging a breaking bump
+blind would be the kind of change this mandate exists to prevent. The repo's
+own rule (`[COST_STUB]`, and the quality gate in `wat/rules.md`) is satisfied by
+CI either way, but a red PR that stays red is honest, whereas a merged one that
+breaks `master` is not.
+
+**Verification:** every claim above comes from `gh pr view` output (check
+conclusions, changed files, base commits) rather than from the PR titles.
+
+---
+
 # Current Phase: WF-037 zero_relay cried wolf on normal traffic distribution (maintenance)
 
 **Workflow:** WF-037; WF-036, WF-035, WF-034, WF-033, WF-032, WF-031 below

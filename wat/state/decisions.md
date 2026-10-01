@@ -720,3 +720,13 @@ A peer-reviewed audit (oracle plus a data analyst) of the live stats found three
 **Alternatives Considered:** removing the `$fleet_pkts > 0` guard from `zero_relay` was rejected because it would make every quiet relay look broken and turn a calm night into eight critical alerts; alerting on the collector's own heartbeat alone was rejected because it cannot distinguish "no data is arriving" (WF-028) from "data is arriving and shows no traffic" - the two conditions need different responses from an operator.
 
 **Update (same day, WF-034):** implemented and verified. Three defects surfaced during this round were all mine and all caught by execution: a missing `as $id` binding that made jq fail to compile (silently converted into an empty result by the script's error suppression), a guard rewritten into the opposite of the truth, and an assertion that matched the word `zero_relay` inside another detector's prose rather than the emitted anomaly type.
+
+---
+
+### 2026-10-01: Dependabot PRs are triaged by blast radius, not by tick colour
+
+**Agent:** DevOps + QAEngineer
+**Status:** Accepted (implemented as WF-038 - assessment only, deliberate non-merge)
+**Rationale:** six dependency PRs have sat open for one to ten days. Sorting them by "are the checks green" would have been misleading in both directions: two green PRs (#106 tray-icon, #108 dirs) are based on `922dea4f` while master is now `0f7296a0`, so their passing checks describe a tree that no longer exists; and the two that look like ordinary chores are compile breaks - #109 (`sha2` 0.10.9 -> 0.11.0) fails every compiling job because the `Digest`/`Sha256` API changed under `proxy/src/handoff.rs`, and #107 (`windows` 0.48 -> 0.62) spans several breaking releases on the WinDivert/WFP FFI surface.
+**Impact:** no dependency was merged. #135 (thiserror patch, lockfile only) and #136 (Docker rust patch) are the only two that are both recent and minimally scoped; #106/#108 need a fresh run before their green means anything; #107/#109 need code migration first, and #107 cannot be compiled on this workstation, so it must be driven by CI. Recorded so the next agent does not re-triage from zero or, worse, merge a breaking bump because a stale tick was green.
+**Alternatives Considered:** merging the four green PRs was rejected because two are stale and one (`dirs` 6 -> 7) is a major bump whose green predates today's master; closing the failing PRs was rejected because they are legitimate upgrades needing migration work, and closing them would silently drop the maintenance signal Dependabot exists to raise.
