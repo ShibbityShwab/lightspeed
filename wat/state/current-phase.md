@@ -1,3 +1,54 @@
+# Current Phase: WF-036 The repo now owns its Scoop manifest (maintenance)
+
+**Workflow:** WF-036; WF-035, WF-034, WF-033, WF-032, WF-031, WF-030 below
+**Agent:** DevOps + QAEngineer
+**Status:** Committed and pushed (a65cc8c), CI in flight
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-036 `scoop install lightspeed` served an eleven-release-old binary
+
+**Driving evidence:** the onboarding audit flagged the Windows installers as
+stale and it was still true after the pipeline was unfrozen: the Chocolatey
+feed serves **1.6.3**, the Scoop bucket manifest is pinned to **1.6.3**, and the
+latest release is **1.6.14**. Re-checking the cause with a working pipeline
+confirmed there is no publish step for either channel - for Scoop, the bucket
+held the ONLY copy of the manifest and nothing in this repository referenced it
+(`grep -rl scoop dist/ infra/` returned nothing).
+
+**Change:**
+- `dist/scoop/lightspeed.json` is now the in-repo source of truth, mirroring how
+  `dist/chocolatey` works.
+- `infra/scripts/bump-scoop.sh` rewrites version, download URL and sha256 from
+  the released Windows asset. It refuses a manifest that is not valid JSON or
+  lacks `version` / `architecture.64bit`, rather than writing a half-updated
+  document.
+- `infra/scripts/test_bump_scoop.sh` (16 checks) covers the happy path, the
+  abort-before-write case when the asset is missing, both malformed-manifest
+  cases, and that `checkver`/`autoupdate` survive a bump.
+- A `bump-scoop` release job commits the bump on every tag, mirroring
+  `bump-chocolatey`; the suite is wired into `infra-script-tests` in `ci.yml`.
+- `README.md`'s Scoop row now states what is automated instead of implying the
+  bucket is current.
+
+**Still manual, and documented rather than glossed:** publishing the copy to
+`ShibbityShwab/scoop-bucket` needs a token with write access to that second
+repository. `dist/scoop/README.md` gives the `gh api` sync command and the
+`SCOOP_TOKEN` automation path.
+
+**Verification:** both workflows parse (ci: 11 jobs / 11 infra steps; release:
+9 jobs including `bump-scoop`, with `bump-chocolatey` and `announce` intact).
+Eight local suites pass (16 new checks). The push triggered **CI**, **Security
+Audit** and **Deploy GitHub Pages** - the Pages run is independent proof of the
+WF-035 trigger fix, since this push touched `infra/scripts/**` and nothing under
+`web/`.
+
+**Not changed:** no collector logic, no catalog data, no infrastructure, and no
+publishing to any external feed.
+
+---
+
 # Current Phase: WF-035 Pages pipeline had no push trigger for its own inputs (maintenance)
 
 **Workflow:** WF-035; WF-034, WF-033, WF-032, WF-031, WF-030, WF-029, WF-028, WF-027, WF-026, WF-023 below
