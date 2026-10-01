@@ -101,7 +101,8 @@ impl OwnedHandle {
         // `WinDivertOpen` returns the raw OS handle as an `isize`, while the
         // remaining calls take a `*mut c_void`; the cast is a pure
         // representation change, not a dereference.
-        let raw = unsafe { WinDivertOpen(filter.as_ptr(), layer, priority, flags) } as WinDivertHandle;
+        let raw =
+            unsafe { WinDivertOpen(filter.as_ptr(), layer, priority, flags) } as WinDivertHandle;
         if raw.is_null() {
             return Err(io::Error::last_os_error());
         }
