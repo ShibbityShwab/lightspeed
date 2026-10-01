@@ -1289,8 +1289,35 @@ step (see the 2026-10-01 decision entry).
 
 **Workflow:** WF-023 (plus WF-025 observability, below)
 **Agent:** RustDev + QAEngineer + DevOps
-**Status:** Implemented, pending release
+**Status:** **RELEASED** - shipped in v1.6.10 (2026-09-25); both fixes verified
+present in the v1.6.14 tag. Issue #59 is still OPEN and the reporter has not been
+asked to re-test, which is the only outstanding part of this workflow.
 **Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-023 status was stale: the fix shipped six days ago
+
+**Driving evidence:** the header above read "Implemented, pending release" and had
+done since handover, but checking the tags directly showed otherwise. Commit
+`6bf0f67` ("fix(windows): resolve GUI startup + WinDivert teardown feedback (#59)")
+is an ancestor of **v1.6.10** (2026-09-25), so it is in every release since,
+including v1.6.14. Both halves verified present in the v1.6.14 tag rather than
+inferred from the commit message:
+- `client/src/interceptor/windivert_handle.rs` (the owned handle whose `Drop`
+  shuts down and closes) - present in the tag.
+- `client-gui/src/single_instance.rs` (the `SetLastError(0)` reset before
+  `CreateMutexW`) - present in the tag.
+
+**Why this mattered:** a state file that says "pending release" for something
+shipped six days earlier invites the next agent to re-investigate, re-verify, or
+believe a fixed bug is still outstanding.
+
+**Still genuinely open:** issue #59 was never followed up. The reporter's last
+substantive reply is from 2026-08-28 and the thread's last activity is
+2026-09-19, both predating the fix's release. Asking them to retest on 1.6.14+ is
+a public comment on their thread, so it is left to the owner rather than posted
+unilaterally.
 
 ---
 
