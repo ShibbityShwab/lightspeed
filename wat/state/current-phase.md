@@ -1,3 +1,50 @@
+# Current Phase: WF-046 CI verified the migration; fmt check has a platform gotcha
+
+**Workflow:** WF-046; WF-045, WF-044, WF-043, WF-042, WF-041, WF-040 below
+**Agent:** DevOps + QAEngineer
+**Status:** Verified green, lesson recorded
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-046 the Windows jobs passed, and my local fmt check lied
+
+**Driving evidence:** pushing WF-044/WF-045 (the windivert beta migration and the
+test-harness provider fix) produced CI run 36855915823 -> **failure**, but not
+where expected:
+
+```
+Windows Build & Test:  success   <- the risky change, on a real Windows runner
+Windows GUI Build:     success   <- ditto
+Check & Test:          FAILURE   <- formatting only
+```
+
+The two jobs that exercise the actual surface I had flagged as unverifiable
+locally - the beta WinDivert crates compiling and linking under MSVC - **passed**.
+That is the first real evidence the migration works on the platform it targets,
+and it is stronger than anything this workstation could produce.
+
+**The failure was mine, and its mechanism matters:** `cargo fmt --all --check`
+failed on `windivert_handle.rs:101`, where a long cast line needed wrapping.
+I had run the same check locally and reported it clean (rc=0). It WAS clean
+locally - because that file is `cfg(windows)`-gated, and rustfmt formats a
+gated-out module differently on a Windows host than on the ubuntu runner.
+
+**Lesson recorded for every future round:** a local `cargo fmt --all --check`
+passing does NOT imply it passes on Linux when the changed code is
+platform-gated. The platform-gated module is not the one rustfmt saw locally.
+For any change to `cfg(windows)`/`cfg(unix)` code, CI's formatting job is the
+first true check, not a formality.
+
+**Fix:** applied rustfmt's own suggestion (`cargo fmt --all`), re-checked clean,
+committed as `adef131` (style only, isolated from the substantive commits so it
+is separately revertable).
+
+**Post-fix CI run 36857581098:** `Check & Test => success`, and every other job
+success (Benchmark Regression still running at time of writing).
+
+---
+
 # Current Phase: WF-045 Test binaries never pinned the rustls provider
 
 **Workflow:** WF-045; WF-044, WF-043, WF-042, WF-041, WF-040 below
