@@ -982,3 +982,28 @@ fault. The rule and its severity are unchanged; only the claim it makes is.
 and `1.6.14` while the fleet moved 2.8M packets in the window. That the counter is frozen
 is verified; whether it is a fault or simply receives no routed traffic is NOT, and this
 entry deliberately stops short of claiming either.
+
+---
+
+### 2026-10-01: bump-scoop.sh was not idempotent, and fixtures never showed it
+
+**Agent:** DevOps
+**Status:** Accepted
+**Rationale:** the owner challenged the day's work as "you definitely broke something",
+which prompted running the release scripts against reality rather than re-reading them.
+`bump-scoop.sh 1.6.14` executed against a manifest ALREADY at 1.6.14 produced a 58-line
+diff (`29 insertions, 29 deletions`) - it rewrote unconditionally. The `bump-scoop` release
+job commits only when `git diff -- dist/scoop` is non-empty, so the "already up to date"
+path could never fire and every release would commit a pointless rewrite; worse, the
+rewrite went through jq, which re-indents the hand-written 4-space layout and emits LF
+where the file uses CRLF, so the manifest would churn and flip its line endings on every
+tag.
+**Impact:** an early exit when the manifest already carries this version, url and digest,
+leaving the file byte-identical. Verified by hashing the file before and after; a
+regression test covers it (bump_scoop 18 checks, was 16).
+**Why it existed:** the script had been validated ONLY through fixtures, which is precisely
+the fixtures-vs-reality gap that has now cost this repo three times in one day - the
+`fleet_idle` false positive, the `zero_relay` over-claim, and this. Running a thing against
+its own output is cheap and would have caught all three immediately.
+**Also cleaned up:** testing created `.stats/` in the repo root, which is NOT gitignored.
+Removed; tree confirmed clean. Worth adding to `.gitignore` if the harness is used again.
