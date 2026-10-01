@@ -10,8 +10,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION="$(grep -oPm1 '(?<=<version>)[^<]+' lightspeed.nuspec)"
+# POSIX extraction: `grep -oP` is a GNU extension and fails on BSD/macOS grep,
+# where the README tells users to build from source. sed is portable.
+VERSION="$(sed -n 's:.*<version>\([^<]*\)</version>.*:\1:p' lightspeed.nuspec | head -1)"
+if [ -z "$VERSION" ]; then
+  echo "build.sh: could not read <version> from lightspeed.nuspec" >&2
+  exit 1
+fi
 OUT="${1:-lightspeed.${VERSION}.nupkg}"
+
+# `command -v` is not enough: on Windows a Microsoft Store alias stub can
+# satisfy it while executing nothing. Require python3 to actually run.
+if ! python3 -c 'import sys, zipfile' >/dev/null 2>&1; then
+  echo "build.sh: python3 (with the zipfile module) is required to pack the .nupkg" >&2
+  exit 1
+fi
 
 python3 - "$OUT" <<'PY'
 import sys

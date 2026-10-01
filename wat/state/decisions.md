@@ -2,7 +2,7 @@
 
 > **Canonical log of significant technical decisions for the LightSpeed project.**
 > Each entry includes the date, deciding agent, rationale, and impact.
-> Last entry: 2026-08-28
+> Last entry: 2026-10-01
 
 ---
 
@@ -594,3 +594,129 @@ A peer-reviewed audit (oracle plus a data analyst) of the live stats found three
 **Impact:** `client/src/{latency.rs,telemetry.rs,interceptor/order.rs,interceptor/windows.rs,capture/windivert_redirect.rs}`, `protocol/src/telemetry.rs`, `proxy/src/metrics.rs`, `infra/scripts/collect-metrics.sh` (+test), `web/app.js`. New Prometheus families `lightspeed_telemetry_direct_app_ms_{sum,count}` and collector counters `direct_app_ms_{sum,count}`.
 
 **Alternatives Considered:** a synthetic probe packet was rejected outright (anti-cheat risk, and a game server will not answer arbitrary packets); overloading `Decision::PassThrough` was rejected so the detection state machine's semantics stay untouched; a non-sniff inbound handle was rejected because it would require re-injecting every observed reply and risks dropping the game's packets.
+
+---
+
+### 2026-10-01: omo-native takes over agent operation from opencode
+
+**Agent:** Architect
+**Status:** Accepted
+**Rationale:** The working clone was previously operated by an opencode-based agent. The repository carries no opencode-specific artifacts (no `.opencode/` directory, no opencode references in tracked files), so the handover is a tooling change rather than a migration: the WAT autonomy loop in `AGENTS.md` (read state -> adopt persona -> execute -> verify -> update state) is agent-agnostic and is retained unchanged as the operating contract. `.gitignore` already lists `.omo/`, so omo-native state is expected to stay untracked.
+**Impact:** Agent operation now runs under omo-native (global `~/.omo` config with `omo.jsonc`, memory, and agent directories). `AGENTS.md`, `wat/rules.md`, and `wat/archive/agents.md` remain authoritative and bound by the `[COST_STUB]` zero-cost mandate. No source, workflow, or packaging files change. Local reproducibility gains one new prerequisite: this workstation has no Rust toolchain on PATH (`cargo`, `rustc`, `rustup` all absent), so `cargo fmt`/`clippy`/`test` from `[QUALITY_STUB]` must run on a toolchain-equipped host or in CI.
+**Alternatives Considered:** rewriting `AGENTS.md` around omo-specific phrasing was rejected because the WAT loop is intentionally tool-neutral and rewriting it would discard the project's existing agent contract; vendoring an `.omo/` directory into the repo was rejected because it is gitignored and would add untracked noise.
+
+---
+
+### 2026-10-01: Fleet anomaly review - relay-fra abuse-blocked flood not covered by the detector set
+
+**Agent:** QAEngineer + SecOps
+**Status:** Accepted (implemented as WF-026)
+**Rationale:** A live review of all eight community relays plus the `stats`-branch telemetry history found a sustained abuse-flood signature that the current monitors do not report. Over the newest 2.98h snapshot window (`2026-09-30T22:47Z` -> `2026-10-01T01:46Z`), the fleet recorded 173,080 `drops_abuse_blocked` against only 93,161 relayed packets and 2 `sessions_created`; 100% of those drops are attributable to `relay-fra` (~967/minute), while the other seven relays recorded zero. Fleet-level drop rate moved 0.44% -> 30.13% -> 42.02% -> 65.06% across the last four snapshots. `health-anomaly.sh` ran successfully at `2026-10-01T05:57Z` and flagged nothing, because its detectors cover `zero_relay`, `auth_spike_no_sessions`, `version_lag`, `saved_regression`, and reachability - none of which observe abuse-blocked volume. `infra/monitoring/prometheus/alerts.yml` already defines `lightspeed_abuse_blocks_total > 5/s`, but that stack is not deployed against the public fleet. No availability or cost breach occurred: all eight relays report healthy, `drops_egress_budget` is 0 fleet-wide, and the abuse detector is absorbing the traffic as designed.
+**Impact:** No code or infrastructure changed as part of this review. Candidate follow-up (not implemented here): extend `infra/scripts/health-anomaly.sh` with an abuse-volume detector keyed on `drops_abuse_blocked` share per relay over the sustained window, so the hourly GitHub job catches this class of event without requiring the in-VPS Prometheus stack. `relay-mad-1` also warrants a look: 221,453 abuse-blocked against 1,579,063 relayed (~14%) over 109h uptime, a far higher abuse-to-traffic ratio than any other node.
+**Alternatives Considered:** relying on the existing Prometheus rule was rejected because the public fleet's only always-on monitor is the GitHub Actions job, which reads the stats branch; treating the flood as a false positive was rejected because the packets are demonstrably reaching the relay and being blocked, i.e. the relay is absorbing an attempted flood and its operator has no alerting for it.
+
+**Update (same day, WF-026):** implemented. `health-anomaly.sh` now carries an `abuse_flood` detector (warning) with `--abuse-min` (1000) and `--abuse-share` (0.9 of drops) floors; `test_health_anomaly.sh` covers a flood fixture plus tiny-count, mixed-traffic, and single-snapshot guards (69 checks total). Against the live history the detector fires `relay-fra: abuse_blocked +1153206 = 99.9% of drops ... sessions +37` and exits 1, so the hourly job now fails and alerts. Two design errors were found by testing rather than reasoning: the share denominator must be drops (not relayed+dropped, which masked the flood at 46.8%), and the rule must not require flat sessions (the real window carried +37 legitimate sessions alongside the flood). The threshold is justified by 17 matching relay-windows across the 76-snapshot history, spanning relay-fra and relay-mad-1.
+
+---
+
+### 2026-10-01: Package-manager staleness is a publish gap, not a code defect
+
+**Agent:** DevOps
+**Status:** Accepted
+**Rationale:** The Chocolatey page serves 1.6.3 and the Scoop bucket is pinned to 1.6.3 while the repo ships 1.6.14, so the installers users actually run are eleven releases old. Investigation showed the in-repo automation is healthy: `dist/chocolatey/lightspeed.nuspec` is at 1.6.14 with a matching sha256, and the `bump-chocolatey` release job commits the bump on every tag (`c892747 chore(chocolatey): bump to v1.6.14`); Homebrew is likewise current at 1.6.14 because its "tap" is this repository. The gap is downstream of the repo: `release.yml` contains no `choco push` step (its comment defers the push to a manual maintainer action), Scoop has no automation anywhere in this repo, and winget's bootstrap PR `microsoft/winget-pkgs#435790` has been open since 2026-09-16 while `#437292` was closed on 2026-09-19 pending an unsigned Microsoft CLA.
+**Impact:** No repository change is needed to fix the staleness; the remaining work requires credentials and consent that only the maintainer holds - a Chocolatey API key to push, a signed Microsoft CLA for winget, and a decision on whether to automate the Scoop bucket. Recorded here so the next agent does not waste a cycle hunting a nonexistent code bug.
+**Alternatives Considered:** adding a `choco push` step to CI was rejected for now because it requires a maintainer API key as a repository secret and would publish to a moderated public feed on every tag without human review; rewriting the bump scripts was rejected because they demonstrably work.
+
+---
+
+### 2026-10-01: Nine infra self-tests were never executed by CI
+
+**Agent:** DevOps + QAEngineer
+**Status:** Accepted (implemented as WF-027)
+**Rationale:** Auditing `.github/workflows/ci.yml` against `infra/scripts/test_*.sh` showed that only three of twelve self-test scripts were reachable from any workflow: `test_proxy_quic_smoke.sh` and `test_deploy_canary.sh` (ci.yml) and `test_health_anomaly.sh` (health-anomaly.yml). The other nine were referenced by nothing but themselves, so a regression in the metrics delta engine, the mesh analyzer, the region recommender, the egress guard, the inventory tool, or the history appender would reach `master` unverified. The tests were not stale either - they cover real behaviour (reset-safe counter deltas, 360-snapshot trimming, region coarsening with a 64-key cap, egress budget thresholds, rollout/canary ordering).
+**Impact:** `ci.yml` gains an `infra-script-tests` job on `ubuntu-latest` running six of the nine orphaned suites, which are offline (bash + curl + jq against `file://` fixtures) and need no secrets or network. Three are deliberately excluded and the reason is written into the workflow so the omission is not later mistaken for an oversight: `test_handoff_e2e.sh` (Linux + root, drives a real relay in-place exec), `test_relay_updater.sh` (`flock`), `test_relay_install.sh` (asserts Unix ownership/mode outcomes, e.g. an 0711 runtime dir). Those three would produce false reds in a container job and are exercised on the relay hosts.
+**Alternatives Considered:** running every orphaned suite in one blanket job was rejected because three of them assert Unix semantics that a container job cannot reproduce, which would have trained contributors to ignore a permanently red job; fixing `append-history.sh`'s per-invocation cost was rejected because measurement showed the cost is MSYS process-spawn overhead (~18ms per fork, uniform across `jq`, `mktemp`, and `bash -c true`) rather than an algorithmic defect, and the script has no production caller - so the CI step carries a 5-minute bound instead.
+
+---
+
+### 2026-10-01: The fleet monitor must detect a stopped collector, not just a sick relay
+
+**Agent:** QAEngineer + DevOps
+**Status:** Accepted (implemented as WF-028)
+**Rationale:** Every existing detector describes the CONTENT of the telemetry (zero relayed, auth spikes, version lag, saved-latency regression, abuse share). None observes whether the telemetry is still ARRIVING, so the monitor could not distinguish a healthy fleet from a dead pipeline. That gap was live: the hourly Pages cron stopped firing at 2026-10-01T01:46Z (its last run coincides with the repo's `pushed_at`), and at 05:57Z the anomaly job fetched the frozen history, logged `history: 76 snapshot(s)`, and reported `no anomalies` against five-hour-old data. Another scheduled workflow ran at 07:02Z, proving the GitHub scheduler was healthy and the stall was specific to Pages - which is exactly the class of failure a content-only detector can never see.
+**Impact:** `health-anomaly.sh` gains a `stale_history` detector (warning) keyed on the newest snapshot's age against a configurable `--max-staleness` (default 3h), plus a `LIGHTSPEED_NOW_EPOCH` clock seam so its tests are deterministic rather than wall-clock dependent. `health-anomaly.yml` passes the window explicitly and its incorrect "written by pages.yml every 6h" comment is corrected. An absent history is intentionally NOT stale, so a first run or new stats branch cannot false-positive.
+**Alternatives Considered:** inferring staleness from the number of snapshots was rejected because a busy fleet and a stopped collector both leave the count unchanged; failing on an absent history was rejected because the workflow explicitly supports a missing stats branch (it degrades to registry + /health detectors) and a first run would then always be red; hardcoding the limit in the detector was rejected in favour of a flag, so the boundary can be pinned by tests and tuned per environment.
+
+**Update (same day, WF-028):** implemented and verified - the suite is at 77 checks (boundary cases at +10799s silent and +10801s firing), and the real frozen feed now exits 1 with `newest snapshot is 20038s old` instead of reporting no anomalies.
+
+---
+
+### 2026-10-01: Release package-bump scripts need regression coverage before they need fixes
+
+**Agent:** QAEngineer + DevOps
+**Status:** Accepted (implemented as WF-029)
+**Rationale:** `bump-chocolatey.sh` and `bump-homebrew.sh` run automatically in `release.yml` on every tag and rewrite the version plus every sha256 in the manifests users install from, yet neither had a single test. The blast radius is the worst in the infra set: a `sed` that silently fails to match publishes a package whose checksum does not match its artifact, and the operator only finds out as a hash mismatch at install time on someone else's machine. This is the same class as the `append-history.sh` finding in WF-027 - release-critical text rewriting with no guard.
+**Impact:** new `infra/scripts/test_bump_packages.sh` (21 checks) runs both scripts against copies of the real manifests with the `gh` binary stubbed on PATH (honouring `--jq`), covering the happy path plus the failure paths that matter: missing Windows zip, wrong tarball count, one-of-four tarballs missing, and missing manifest files must each abort leaving the files byte-identical. It is wired into the `infra-script-tests` job in `ci.yml`.
+**Alternatives Considered:** calling the real `gh` was rejected because it needs network and credentials and would make CI depend on GitHub's API rate limits; asserting only the happy path was rejected because the guards are the part that protects users - and they were verified to abort BEFORE any write, which is what keeps a failed release from shipping a half-bumped package.
+
+**Update (same day, WF-029):** implemented and verified - 21 checks pass, and `git diff --stat -- dist/chocolatey Formula` is empty afterwards, proving the suite exercises copies and never mutates the shipped manifests. Not recorded as a bug fix: investigation of the scripts under a faithful stub showed both already behave correctly, so this round added coverage rather than changing behaviour.
+
+---
+
+### 2026-10-01: The shared node resolver needs tests more than any leaf script
+
+**Agent:** QAEngineer + DevOps
+**Status:** Accepted (implemented as WF-030)
+**Rationale:** `lib-nodes.sh` is sourced by `deploy.sh` and `mesh-health.sh` to decide which host an ops command targets, and it had no test. Unlike a leaf utility, its failure modes are silent and cross-cutting: resolving the wrong node aims a deploy or probe at the wrong machine, and resolving to an empty list is worse still because callers iterate it zero times and report success. The module already documented precise contracts (override precedence, two input shapes, ip/port defaults, `control_port` fallback, CWD independence) that nothing verified.
+**Impact:** new `infra/scripts/test_lib_nodes.sh` (35 checks) pins all of them plus the four failure paths, and is wired into `infra-script-tests` in `ci.yml`. Independent evidence that the fixture mirrors production: running `lightspeed_resolve_nodes` against the real `web/registry.json` returns 8 nodes, matching the eight live relays.
+**Alternatives Considered:** testing `deploy.sh` end to end was rejected because it needs SSH keys and a live host, which would be test theater in CI; leaving the resolver to integration coverage was rejected because neither `mesh-health.sh` nor `network-stats.sh` can run offline either, so the shared dependency would have stayed wholly unverified.
+
+**Update (same day, WF-030):** implemented and verified at 35 checks. Three defects surfaced during this round were all in the test harness rather than the library - a bare-array registry fixture (the real shape wraps nodes in `{schema_version, nodes}` inside a JSON string), an env assignment passed positionally, and a node-shaped object used where the object form is region-keyed - and the library correctly rejected the first, which is itself evidence the validation works.
+
+---
+
+### 2026-10-01: Install documentation must not promise commands that cannot work
+
+**Agent:** TechWriter + QAEngineer
+**Status:** Accepted (implemented as WF-031)
+**Rationale:** The README's package-manager table described the state of a submission process rather than the state of the channel, and two entries were false in the way that costs a user the most time: winget was presented as "submitted, awaiting Microsoft review" when `microsoft/winget-pkgs` has no manifest for the package at all (the bootstrap PR was closed pending an unsigned CLA), so `winget install ShibbityShwab.LightSpeed` simply fails; and Chocolatey was described as "pending moderation" when the feed is live but serving 1.6.3, so the command installs a binary many releases old. Shipping commands that do not do what the docs say is worse than shipping no command, because the user concludes the tool is broken rather than the docs stale.
+**Impact:** the README table now gives each channel's verified status with inline caveats and a short Windows advisory pointing at the release MSI; `docs/architecture.md` and `docs/protocol.md` version stamps were restamped only after their substantive claims were checked against the source (ports 4433/4434 asserted in both configs, `session_token` in the frame header, 19 game profiles, 8 live relays).
+**Alternatives Considered:** deleting the failing commands was rejected because the channels are genuinely in progress and the commands will work once published - stating the real state keeps them discoverable; bumping only the version numbers was rejected because a stamp that claims currency without re-reading the content is the same defect one order smaller.
+
+**Update (same day, WF-031):** implemented and verified. One of my own readings was wrong and is recorded so it is not repeated: I first counted 31 rows in `docs/supported-games.md` because I counted every `|` line including headers and separators; the numbered rows are exactly 19, matching both docs and the 20 files in `client/src/games/` minus `mod.rs`. The count was correct and left alone.
+
+---
+
+### 2026-10-01: The package packer must run on every platform the README supports
+
+**Agent:** DevOps + RustDev
+**Status:** Accepted (implemented as WF-032)
+**Rationale:** `dist/chocolatey/build.sh` produces the `.nupkg` that reaches the Chocolatey feed, and it used `grep -oP`, a GNU-only extension that BSD/macOS `grep` rejects outright - while the README instructs macOS users to build from source. A packaging contributor on the platform the project advertises could not run the packer at all, and the failure (`invalid option -- P`) names grep rather than the platform assumption that caused it. Separately, the script invoked `python3` blind, so on a host where the name resolves but execution does not (the Windows Microsoft Store alias stub), the user got the Store's "Python was not found" prompt instead of a build error - a message that sends them to install something rather than at the real problem.
+**Impact:** version extraction is now a portable `sed` with an explicit empty check, and the script refuses to run unless `python3 -c 'import sys, zipfile'` actually executes. Verified equivalent: both the old GNU form and the new POSIX form extract `1.6.14` from the live nuspec. Verified failure: the guard prints a specific, actionable message and exits 1, leaving no partial `.nupkg` that could be pushed.
+**Alternatives Considered:** keeping `grep -oP` and documenting a GNU-grep requirement was rejected because the repo's own install docs push macOS users toward source builds, so a doc caveat would contradict the README; using `command -v python3` as the guard was rejected after testing - the Store alias satisfies it, which is why the check now executes the interpreter.
+
+**Update (same day, WF-032):** implemented and verified. Recorded for accuracy: no workflow runs this packer (the release job bumps `dist/chocolatey` and commits; packing and pushing remain manual maintainer steps), so the fix protects a human-run path, not a CI path.
+
+---
+
+### 2026-10-01: Reference data needs the same validation as code
+
+**Agent:** QAEngineer + InfraDev
+**Status:** Accepted (implemented as WF-033)
+**Rationale:** `infra/geo/regions.json` and `infra/geo/candidates.json` encode the recommender's assumptions - WGS 84 coordinates, lowercase region slugs, ISO alpha-2 country keys, and a country-to-region mapping - and nothing validated them. Data failures differ from code failures in a way that argues FOR testing rather than against it: a dangling reference or an out-of-range coordinate does not throw, it quietly makes the recommender's advice worse, and worse advice about where to place relays is expensive to discover and hard to attribute.
+**Impact:** new `infra/scripts/test_geo_catalogs.sh` (17 checks) validates both catalogs and every cross-reference between them, and is wired into the `infra-script-tests` CI job. It carries deliberate negative controls - a country mapped to a nonexistent region, and latitude 999 - which must be DETECTED, so the suite demonstrates it can fail rather than only demonstrating that today's data is clean.
+**Alternatives Considered:** validating the catalogs inside the recommender at runtime was rejected because the recommender is operator-run and already tolerates bad geography by design (it reports unmapped cells rather than aborting) - a build-time test catches the mistake before it reaches a recommender run at all; asserting only that the files are parseable JSON was rejected because every failure mode worth catching here is semantically valid JSON.
+
+**Update (same day, WF-033):** implemented and verified at 17 checks against the current catalogs (8 regions, 143 countries, 37 aliases, no dangling references). One defect found while building the suite is worth singling out: the first `offenders` helper appended a placeholder on jq failure, which made a malformed predicate evaluate as a PASS. A test harness that converts its own errors into successes is worse than no test, and it now fails loudly instead.
+
+---
+
+### 2026-10-01: A stopped fleet and a stopped collector are two different blind spots
+
+**Agent:** SecOps + QAEngineer
+**Status:** Accepted (implemented as WF-034)
+**Rationale:** WF-028 closed the collector-stopped blind spot; this closes its twin. `zero_relay` requires the fleet to be busy (`$fleet_pkts > 0`) so that a single quiet relay is not misread as broken - correct for its case, but it means that when EVERY relay goes silent the monitor matches nothing and reports clean. That was not hypothetical: on 2026-10-01 all eight relays answered `/health` with version 1.6.14 while their cumulative counters stayed byte-identical for hours, so the fleet had stopped carrying traffic and no detector said so. A monitor that can only describe one failure shape of a two-shape failure will miss half of them.
+**Impact:** new `fleet_idle` detector (critical) fires when every reachable relay relayed zero packets and created zero sessions across the sustained window, guarded so a fleet with traffic stays silent. The suite grew to 82 checks. `zero_relay` and `fleet_idle` are now documented against each other in the detector header so they are not collapsed again.
+**Alternatives Considered:** removing the `$fleet_pkts > 0` guard from `zero_relay` was rejected because it would make every quiet relay look broken and turn a calm night into eight critical alerts; alerting on the collector's own heartbeat alone was rejected because it cannot distinguish "no data is arriving" (WF-028) from "data is arriving and shows no traffic" - the two conditions need different responses from an operator.
+
+**Update (same day, WF-034):** implemented and verified. Three defects surfaced during this round were all mine and all caught by execution: a missing `as $id` binding that made jq fail to compile (silently converted into an empty result by the script's error suppression), a guard rewritten into the opposite of the truth, and an assertion that matched the word `zero_relay` inside another detector's prose rather than the emitted anomaly type.

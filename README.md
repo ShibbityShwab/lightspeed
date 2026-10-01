@@ -115,12 +115,19 @@ LightSpeed ships three packages. **You only need one**:
 ### Package Managers
 
 | Platform | Command |
-|----------|---------|
-| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` |
-| **Windows (Chocolatey)** | `choco install lightspeed` (submitted, pending moderation) |
-| **Windows (winget)** | `winget install ShibbityShwab.LightSpeed` (submitted, awaiting Microsoft review) |
-| **macOS and Linux** | `brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed && brew install ShibbityShwab/lightspeed/lightspeed` |
-| **Arch Linux** | `yay -S lightspeed-bin` (AUR, prepared but not yet published) |
+|-----------|---------|
+| **macOS and Linux** | `brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed && brew install ShibbityShwab/lightspeed/lightspeed` (current at the latest release) |
+| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (bucket live; pinned to 1.6.3 - see note) |
+| **Windows (Chocolatey)** | `choco install lightspeed` (live but still at 1.6.3 - see note) |
+| **Windows (winget)** | not published yet: `winget install ShibbityShwab.LightSpeed` will fail until the first manifest merges. Use the MSI from [Releases](https://github.com/ShibbityShwab/lightspeed/releases). |
+| **Arch Linux** | `yay -S lightspeed-bin` (AUR, prepared but not yet published; Arch registration is closed) |
+
+> **Windows package managers are behind the current release.** The Chocolatey
+> entry and the Scoop bucket both still serve **1.6.3**, and winget has no
+> published manifest, while the latest release is newer. For Windows, prefer the
+> MSI or `.zip` from [Releases](https://github.com/ShibbityShwab/lightspeed/releases)
+> unless you specifically need a package manager. macOS and Linux users get the
+> current version from Homebrew.
 
 ### One-line Install (Linux and macOS)
 

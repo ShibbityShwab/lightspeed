@@ -66,6 +66,55 @@ jobs:
       - name: Canary rollout self-test
         run: bash infra/scripts/test_deploy_canary.sh
 
+  infra-script-tests:
+    name: Infra Script Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # These suites existed but no workflow ever invoked them, so they could
+      # only rot: a change to collect-metrics.sh, the region recommender, the
+      # egress guard, or append-history.sh shipped unverified. Each runs
+      # offline against local fixtures (bash + curl + jq reading file:// URLs),
+      # so they need no services, no secrets, and no network.
+      #
+      # Deliberately NOT run here, with the reason:
+      #   test_handoff_e2e.sh    requires Linux + root; it drives a real relay
+      #                          in-place exec and cannot run in a plain job.
+      #   test_relay_updater.sh  requires flock and Unix file-mode semantics;
+      #                          it is exercised on the relay hosts themselves.
+      #   test_relay_install.sh  asserts Unix ownership/mode outcomes (0711
+      #                          runtime dir) that a container job cannot honor.
+      # Those three stay covered by their own host-level runs; adding them here
+      # would produce false reds rather than signal.
+      - name: Metrics collector self-test
+        run: bash infra/scripts/test_collect_metrics.sh
+
+      - name: Region recommender self-test
+        run: bash infra/scripts/test_recommend_regions.sh
+
+      - name: Egress budget self-test
+        run: bash infra/scripts/test_egress_budget.sh
+
+      - name: Inventory self-test
+        run: bash infra/scripts/test_inventory.sh
+
+      - name: History appender self-test
+        timeout-minutes: 5
+        run: bash infra/scripts/test_append_history.sh
+
+      - name: Mesh analyzer self-test
+        run: bash infra/scripts/test_analyze_mesh.sh
+
+      - name: Package bump self-test
+        run: bash infra/scripts/test_bump_packages.sh
+
+      - name: Node inventory self-test
+        run: bash infra/scripts/test_lib_nodes.sh
+
+      - name: Geo catalog self-test
+        run: bash infra/scripts/test_geo_catalogs.sh
+
   macos-smoke:
     name: macOS Smoke Test
     runs-on: macos-latest

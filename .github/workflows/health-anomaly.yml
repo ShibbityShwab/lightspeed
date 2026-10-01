@@ -37,9 +37,14 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Fetch collector history from the stats branch
-        # The stats branch is written by pages.yml every 6h. A missing
-        # branch or file is not an anomaly: the monitor degrades to the
-        # registry + /health detectors only.
+        # The stats branch is written by pages.yml on an hourly cron. A
+        # missing branch or file is not an anomaly by itself: the monitor
+        # degrades to the registry + /health detectors only. But a history
+        # that EXISTS and is FROZEN is an anomaly - on 2026-10-01 the Pages
+        # schedule quietly stopped firing at 01:46Z while this job kept
+        # reporting "no anomalies" against 5-hour-old data, so the stale_history
+        # detector (see infra/scripts/health-anomaly.sh) now fails the run when
+        # the newest snapshot is older than the limit passed below.
         run: |
           set -uo pipefail
           mkdir -p .stats
@@ -57,5 +62,13 @@ jobs:
       - name: Detect fleet anomalies
         # Exits non-zero (and posts the evidence to Discord when the
         # webhook is set) if any detector fires.
+        #
+        # --max-staleness is set to 3h explicitly: the collector runs hourly,
+        # so a newest snapshot older than that means the pipeline stopped and
+        # every other detector is describing a frozen past. An absent history
+        # is not stale (it has no snapshots to age), which is what keeps a
+        # first run or a fresh stats branch from failing.
         run: |
-          bash infra/scripts/health-anomaly.sh --history .stats/network-history.json
+          bash infra/scripts/health-anomaly.sh \
+            --history .stats/network-history.json \
+            --max-staleness 10800

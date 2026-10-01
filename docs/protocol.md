@@ -1,6 +1,6 @@
 # <picture><source media="(prefers-color-scheme: dark)" srcset="../web/assets/brand/lightspeed-mark-inverse.svg"><img src="../web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> LightSpeed Tunnel Protocol v1/v2
 
-> Last updated: 2026-09-22 - v1.6.5: TCP framing (client→proxy leg), session_token stamping, QUIC control plane on UDP 4433, data on UDP 4434
+> Last updated: 2026-10-01 - Content re-verified against v1.6.14 (TCP framing on the client->proxy leg, session_token stamping, QUIC control plane on UDP 4433, data on UDP 4434 - all confirmed in the source). Originally written for v1.6.5.
 
 ---
 

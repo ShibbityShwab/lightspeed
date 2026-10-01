@@ -19,7 +19,30 @@
 #   (d) saved_regression          ping-saved drops hard vs the relay's
 #                                 own recent baseline
 #   (d) negative_saving_spike     negative-saving share spikes
-#   (e) relay_missing_from_registry / relay_health_failed
+#   (e) abuse_flood               abuse_blocked dominates a relay's
+#                                 handled traffic while real sessions
+#                                 stay flat (the relay-fra signature:
+#                                 an attempted flood absorbed by the
+#                                 abuse detector, invisible to the
+#                                 liveness gate and to detectors a-d)
+#   (f) stale_history             the newest snapshot is older than the
+#                                 collector's own interval (the
+#                                 silent-collector signature: on
+#                                 2026-10-01 the Pages cron stopped
+#                                 firing at 01:46Z and this monitor
+#                                 still reported "no anomalies" at
+#                                 05:57Z, because every detector below
+#                                 happily describes frozen data)
+#   (g) fleet_idle                EVERY reachable relay relayed zero
+#                                 packets and created zero sessions for
+#                                 the whole window. zero_relay covers
+#                                 one silent relay on a busy fleet; it
+#                                 deliberately excludes a fully idle
+#                                 fleet, so a fleet-wide traffic stop
+#                                 had no detector at all (observed live
+#                                 on 2026-10-01: all eight relays up,
+#                                 counters byte-identical for hours)
+#   (h) relay_missing_from_registry / relay_health_failed
 #
 # The window is sustained (default 3 snapshots), never a single
 # snapshot, so a legitimately idle relay is not mistaken for an outage.
@@ -63,6 +86,33 @@ NEG_SHARE_MAX=0.5
 NEG_MIN=5
 MIN_VERSION_AHEAD=2
 
+# abuse_flood: abuse_blocked must be a large absolute count AND a large
+# share of the relay's drops, sustained over the window. The share is
+# measured against DROPS, not total handled traffic: a flood absorbed
+# by the abuse detector is almost entirely drops, whereas a busy
+# healthy relay has a large relayed count that would mask it
+# (relay-fra's real 2026-10-01 flood was 99.9% of its drops but only
+# 46.8% of its relayed+dropped volume). The absolute floor keeps a tiny
+# relay from tripping it on noise.
+#
+# Unlike auth_spike_no_sessions this detector does NOT require flat
+# sessions: a real flood arrives alongside legitimate traffic (the
+# 2026-10-01 relay-fra window carried +1,153,206 abuse blocks AND +37
+# real sessions), so gating on flat sessions suppressed the very event
+# this detector exists to catch.
+ABUSE_MIN=1000   # window drops_abuse_blocked floor
+ABUSE_SHARE=0.9  # abuse_blocked / packets_dropped floor
+
+# stale_history: the newest snapshot must be recent. The collector runs
+# hourly, so an age past this many seconds means the pipeline (not the
+# relays) has stopped and every other detector is describing a frozen
+# past. 0 disables the check, for an intentionally static fixture.
+MAX_STALENESS=10800 # 3h; tolerates a couple of missed cron slots
+
+# Clock seam: tests set this to pin "now" so staleness assertions are
+# deterministic instead of racing the wall clock.
+NOW_EPOCH="${LIGHTSPEED_NOW_EPOCH:-$(date +%s)}"
+
 usage() {
 	cat <<'EOF'
 Usage: health-anomaly.sh [options]
@@ -75,6 +125,12 @@ Usage: health-anomaly.sh [options]
   --baseline N      Prior snapshots for a relay's own baseline (default 5)
   --no-probe        Do not curl /health; use the latest history reachability
   --json            Emit the anomaly document as JSON on stdout
+  --abuse-min N     Window drops_abuse_blocked floor for abuse_flood
+                    (default: $ABUSE_MIN)
+  --abuse-share P   abuse_blocked share of the relay's drops floor for
+                    abuse_flood, 0..1 (default: $ABUSE_SHARE)
+  --max-staleness S Newest-snapshot age in seconds before stale_history
+                    fires; 0 disables (default: $MAX_STALENESS)
   --timeout SECS    Per-probe curl timeout (default 5)
   -h, --help        Show this help
 
@@ -103,6 +159,18 @@ while [ $# -gt 0 ]; do
 		;;
 	--no-probe) NO_PROBE=true ;;
 	--json) JSON_OUT=true ;;
+	--abuse-min)
+		shift
+		ABUSE_MIN="${1:-1000}"
+		;;
+	--abuse-share)
+		shift
+		ABUSE_SHARE="${1:-0.9}"
+		;;
+	--max-staleness)
+		shift
+		MAX_STALENESS="${1:-10800}"
+		;;
 	--timeout)
 		shift
 		TIMEOUT="${1:-5}"
@@ -247,6 +315,20 @@ def vcmp($a; $b):
 | ([ $ids[] as $id
      | select($WL >= $W and $W >= 2)
      | ([ $win[] | rel_reach(.; $id) ] | all) as $up
+     | select($up)] | length) as $up_count
+| (if ($WL >= $W and $W >= 2 and $up_count > 0
+        and $fleet_pkts <= 0 and $fleet_sess <= 0)
+   then [{ type: "fleet_idle", severity: "critical",
+           window: $WL, relays_up: $up_count,
+           fleet_packets: $fleet_pkts, fleet_sessions: $fleet_sess,
+           message: (($up_count | tostring) + " relay(s) reachable for "
+                     + ($WL | tostring) + " snapshots but the whole fleet relayed 0 packets "
+                     + "and created 0 sessions; this is the fleet-wide-traffic-stop signature, "
+                     + "not the single-relay zero_relay case") }]
+   else [] end) as $idleFlags
+| ([ $ids[] as $id
+     | select($WL >= $W and $W >= 2)
+     | ([ $win[] | rel_reach(.; $id) ] | all) as $up
      | (($win[-1] | rel_life(.; $id; "drops_auth_rejected"))
         - ($wstart | rel_life(.; $id; "drops_auth_rejected"))) as $authRaw
      | ($authRaw | if . < 0 then 0 else . end) as $auth
@@ -325,6 +407,45 @@ def vcmp($a; $b):
          else empty end )
    ]) as $savedFlags
 | ([ $ids[] as $id
+     | select($WL >= $W and $W >= 2)
+     | ([ $win[] | rel_reach(.; $id) ] | all) as $up
+     | (($win[-1] | rel_life(.; $id; "drops_abuse_blocked"))
+        - ($wstart | rel_life(.; $id; "drops_abuse_blocked"))) as $abuseRaw
+     | ($abuseRaw | if . < 0 then 0 else . end) as $abuse
+     | (($win[-1] | rel_life(.; $id; "packets_relayed"))
+        - ($wstart | rel_life(.; $id; "packets_relayed"))) as $relayedRaw
+     | ($relayedRaw | if . < 0 then 0 else . end) as $relayed
+     | (($win[-1] | rel_life(.; $id; "packets_dropped"))
+        - ($wstart | rel_life(.; $id; "packets_dropped"))) as $droppedRaw
+     | ($droppedRaw | if . < 0 then 0 else . end) as $dropped
+     | (($win[-1] | rel_life(.; $id; "sessions_created"))
+        - ($wstart | rel_life(.; $id; "sessions_created"))) as $sessRaw
+     | ($sessRaw | if . < 0 then 0 else . end) as $sess
+     | (if $dropped > 0 then ($abuse / $dropped) else 0 end) as $share
+     | select($up and $abuse >= $abuse_min and $dropped > 0 and $share >= $abuse_share)
+     | { type: "abuse_flood", severity: "warning", relay: $id,
+         window: $WL, abuse_blocked: $abuse, packets_dropped: $dropped,
+         packets_relayed: $relayed, abuse_share: $share, sessions_created: $sess,
+         message: ($id + ": abuse_blocked +" + ($abuse | tostring)
+                   + " = " + pct($share) + " of drops ("
+                   + ($dropped | tostring) + " dropped, "
+                   + ($relayed | tostring) + " relayed, sessions +"
+                   + ($sess | tostring) + ") over " + ($WL | tostring) + " snapshots") }
+   ]) as $abuseFlags
+| ([ (if $max_stale > 0
+        then (($snaps[-1].t // 0) | n) as $newest
+        | (($now - $newest)) as $age
+        | (if $newest > 0 and $age > $max_stale
+           then { type: "stale_history", severity: "warning",
+                  newest_snapshot_t: $newest, age_secs: $age,
+                  max_staleness: $max_stale,
+                  message: ("newest snapshot is " + ($age | tostring)
+                            + "s old (limit " + ($max_stale | tostring)
+                            + "s); the collector has stopped publishing and every "
+                            + "other detector is describing frozen data") }
+           else empty end)
+        else empty end) ]) as $staleFlags
+| ([ $ids[] as $id
      | select(($regids | length) > 0 and (($regids | index($id)) == null))
      | { type: "relay_missing_from_registry", severity: "critical", relay: $id,
          message: ($id + ": present in the latest history snapshot but absent from the registry") }
@@ -334,8 +455,8 @@ def vcmp($a; $b):
      | { type: "relay_health_failed", severity: "critical", relay: $id,
          message: ($id + ": /health probe failed") }
    ]) as $healthFlags
-| ($zeroFlags + $authFlags + $verFlags + $savedFlags
-   + $missingFlags + $healthFlags) as $flags
+| ($zeroFlags + $idleFlags + $authFlags + $verFlags + $savedFlags + $abuseFlags
+   + $staleFlags + $missingFlags + $healthFlags) as $flags
 | {
     window: $W,
     baseline: $B,
@@ -360,6 +481,10 @@ result="$(jq -c \
 	--argjson neg_share "$NEG_SHARE_MAX" \
 	--argjson neg_min "$NEG_MIN" \
 	--argjson min_ahead "$MIN_VERSION_AHEAD" \
+	--argjson abuse_min "$ABUSE_MIN" \
+	--argjson abuse_share "$ABUSE_SHARE" \
+	--argjson max_stale "$MAX_STALENESS" \
+	--argjson now "$NOW_EPOCH" \
 	"$JQ_PROGRAM" <<<'null' 2>/dev/null || true)"
 
 if [ -z "$result" ] || ! printf '%s' "$result" | jq -e . >/dev/null 2>&1; then

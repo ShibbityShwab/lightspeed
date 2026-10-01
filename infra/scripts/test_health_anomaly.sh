@@ -215,7 +215,62 @@ a_negshare() {
 	mkrelay relay-a true "$STD_VER" "$(($1 * 100))" "$(($1))" "$(($1 * 2))" "$(($1 * 20))" "$(($1 * 4))" "$an" "$ac"
 }
 
+# mkrelay_abuse <id> <reach> <ver> <relayed> <dropped> <abuse> <sessions>
+# The abuse counter lives in `lifetime.drops_abuse_blocked` in the real
+# collector output, so a flood fixture has to carry it explicitly.
+mkrelay_abuse() {
+	jq -cn --arg id "$1" --argjson reach "$2" --arg ver "$3" \
+		--argjson p "$4" --argjson d "$5" --argjson ab "$6" --argjson s "$7" '
+        {node_id:$id, reachable:$reach, version:$ver, active_sessions:0,
+         lifetime:{packets_relayed:$p, packets_dropped:$d,
+                   drops_abuse_blocked:$ab, drops_auth_rejected:0,
+                   sessions_created:$s,
+                   saved_ms_sum:0, saved_ms_count:0,
+                   saved_app_ms_negative_count:0, saved_app_ms_count:0}}'
+}
+
+# A flood absorbed by the abuse detector: abuse dominates drops, and it
+# arrives ALONGSIDE real sessions (the 2026-10-01 relay-fra signature).
+a_abuse() {
+	local ab=0 sess=0
+	[ "$1" -ge 5 ] && {
+		ab=$((($1 - 4) * 400000))
+		sess=$((($1 - 4) * 12))
+	}
+	mkrelay_abuse relay-a true "$STD_VER" "$(($1 * 40000))" "$(($1 * 100 + ab))" "$ab" "$sess"
+}
+
+# Same flood shape but far too small to matter: a relay with a handful
+# of abuse blocks must stay quiet even at 100% of drops.
+a_abusetiny() {
+	local ab=0
+	[ "$1" -ge 5 ] && ab=$((($1 - 4) * 5))
+	mkrelay_abuse relay-a true "$STD_VER" "$(($1 * 40000))" "$(($1 * 10 + ab))" "$ab" "$(($1))"
+}
+
+# Abuse-heavy drops but real traffic still dominates: must stay quiet
+# because abuse is a small share of what the relay dropped.
+a_abusemixed() {
+	local ab=0
+	[ "$1" -ge 5 ] && ab=$((($1 - 4) * 3000))
+	mkrelay_abuse relay-a true "$STD_VER" "$(($1 * 40000))" "$(($1 * 30000 + ab))" "$ab" "$(($1 * 5))"
+}
+
+# A history whose newest snapshot is recent, so staleness logic in other
+# fixtures is not accidentally exercised by wall-clock drift.
+# The fixtures below emit tiny t values (1000..1700) on purpose - they are
+# synthetic counters, not real epochs - so "now" is pinned just past that
+# range. The staleness boundary cases pin their own explicit clocks.
+STD_T_BASE=1700
+
 # ── Implementation presence (RED gate) ───────────────────────
+# Pin "now" for every run so staleness assertions are deterministic:
+# the fixtures' snapshot timestamps live near STD_T_BASE, well inside the
+# default 3h limit, so stale_history stays out of the way of tests that
+# are about other detectors (and is exercised explicitly below).
+LIGHTSPEED_NOW_EPOCH="${LIGHTSPEED_NOW_EPOCH:-$((STD_T_BASE + 100))}"
+export LIGHTSPEED_NOW_EPOCH
+
 if [ ! -f "$ANOMALY" ]; then
 	printf 'health-anomaly: FAIL - implementation not found: %s\n' "$ANOMALY" >&2
 	exit 1
@@ -248,6 +303,7 @@ assert_not_out "saved_regression" "(healthy) no saved regression"
 assert_not_out "negative_saving" "(healthy) no negative-saving spike"
 assert_not_out "relay_health_failed" "(healthy) no health failure"
 assert_not_out "missing_from_registry" "(healthy) no missing registry relay"
+assert_not_out "abuse_flood" "(healthy) no abuse flood"
 
 # ══════════════════════════════════════════════════════════════
 # (a) zero relayed packets while up
@@ -266,7 +322,11 @@ run_anomaly "$H_ZERO" "$REG4" --window 1
 assert_rc 0 "(a guard) window=1 is not sustained"
 assert_not_out "zero_relay" "(a guard) no zero_relay on a single snapshot"
 
-# FP guard: an all-idle fleet raises nothing.
+# FP guard: a fully idle fleet must not be misread as the 1.6.3 outage
+# signature. zero_relay means "this relay is silent WHILE the fleet is
+# busy"; with nothing flowing anywhere there is no evidence any single
+# relay is the broken one, so it stays quiet and fleet_idle - asserted
+# separately below - carries that condition instead.
 H_IDLE="$TMP/idle.json"
 build_history "$H_IDLE" \
 	"$(mksnap 1000 "$(mkrelay relay-a true "$STD_VER" 0 0 0 0 0 0 0)" "$(mkrelay relay-b true "$STD_VER" 0 0 0 0 0 0 0)")" \
@@ -275,8 +335,8 @@ build_history "$H_IDLE" \
 REG2="$TMP/registry-2.json"
 mkreg "$REG2" relay-a relay-b
 run_anomaly "$H_IDLE" "$REG2"
-assert_rc 0 "(a guard) idle fleet exits 0"
-assert_not_out "zero_relay" "(a guard) idle relay is not an outage"
+assert_not_out "zero_relay:" "(a guard) all-idle fleet raises no zero_relay"
+assert_out "fleet_idle" "(a guard) all-idle fleet is reported as fleet_idle instead"
 
 # ══════════════════════════════════════════════════════════════
 # (b) auth_rejections spike with sessions flat
@@ -360,6 +420,89 @@ assert_rc 1 "(e) health failure run exits 1"
 assert_out "relay_health_failed" "(e) fires health failure for relay-a"
 assert_out "relay-a" "(e) health failure names relay-a"
 
+# ══════════════════════════════════════════════════
+# (f) abuse flood absorbed by the detector
+# ══════════════════════════════════════════════════
+# The signature the liveness gate and detectors a-d cannot see:
+# abuse_blocked dominates drops while real sessions keep flowing.
+H_ABUSE="$TMP/abuse.json"
+emit8 "$H_ABUSE" a_abuse
+run_anomaly "$H_ABUSE" "$REG4"
+assert_rc 1 "(f) abuse flood exits 1"
+assert_out "abuse_flood" "(f) fires abuse_flood"
+assert_out "relay-a" "(f) names the flooded relay"
+assert_out "% of drops" "(f) reports the drop share"
+assert_not_out "zero_relay" "(f) packets still relayed, so no zero_relay"
+assert_not_out "auth_spike" "(f) abuse is not an auth spike"
+
+# Guard: a handful of abuse blocks is noise, not a flood.
+H_ABUSE_TINY="$TMP/abuse-tiny.json"
+emit8 "$H_ABUSE_TINY" a_abusetiny
+run_anomaly "$H_ABUSE_TINY" "$REG4"
+assert_rc 0 "(f guard) tiny abuse count exits 0"
+assert_not_out "abuse_flood" "(f guard) absolute floor suppresses noise"
+
+# Guard: abuse-heavy, but legitimate traffic still dominates the drops.
+H_ABUSE_MIXED="$TMP/abuse-mixed.json"
+emit8 "$H_ABUSE_MIXED" a_abusemixed
+run_anomaly "$H_ABUSE_MIXED" "$REG4"
+assert_rc 0 "(f guard) mixed traffic exits 0"
+assert_not_out "abuse_flood" "(f guard) share floor suppresses mixed traffic"
+
+# Guard: the full window is required, a single snapshot is not sustained.
+run_anomaly "$H_ABUSE" "$REG4" --window 1
+assert_rc 0 "(f guard) window=1 is not sustained"
+assert_not_out "abuse_flood" "(f guard) no abuse_flood on a single snapshot"
+
+# ═══════════════════════════════════════════
+# (g) fleet-wide traffic stop
+# ═══════════════════════════════════════════
+# Every relay up, every relay relaying nothing, for the whole window.
+# This is the condition observed live on 2026-10-01 (all eight relays
+# healthy with byte-identical counters for hours) and it previously
+# raised NOTHING, because zero_relay requires a busy fleet.
+H_FLEETIDLE="$TMP/fleet-idle.json"
+build_history "$H_FLEETIDLE" \
+	"$(mksnap 1000 "$(mkrelay relay-a true "$STD_VER" 0 0 0 0 0 0 0)" "$(mkrelay relay-b true "$STD_VER" 0 0 0 0 0 0 0)")" \
+	"$(mksnap 1100 "$(mkrelay relay-a true "$STD_VER" 0 0 0 0 0 0 0)" "$(mkrelay relay-b true "$STD_VER" 0 0 0 0 0 0 0)")" \
+	"$(mksnap 1200 "$(mkrelay relay-a true "$STD_VER" 0 0 0 0 0 0 0)" "$(mkrelay relay-b true "$STD_VER" 0 0 0 0 0 0 0)")"
+run_anomaly "$H_FLEETIDLE" "$REG2"
+assert_rc 1 "(g) a fleet-wide traffic stop exits 1"
+assert_out "fleet_idle" "(g) fires fleet_idle"
+assert_out "whole fleet relayed 0 packets" "(g) carries the evidence"
+assert_out "[critical]" "(g) is critical"
+
+# A fleet with traffic must not trip it.
+run_anomaly "$H_HEALTHY" "$REG4"
+assert_not_out "fleet_idle" "(g guard) a busy fleet is not idle"
+
+# ═══════════════════════════════════════════
+# (h) stale history: the collector stopped publishing
+# ═══════════════════════════════════════════
+# Every fixture above uses t values near 1700 with "now" pinned
+# just past them, so this suite would silently stop meaning anything if
+# the staleness check were always-on. These cases pin the boundary.
+H_FRESH="$TMP/fresh.json"
+emit8 "$H_FRESH" a_healthy
+
+LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 10799)) \
+	run_anomaly "$H_FRESH" "$REG4"
+assert_rc 0 "(g guard) just inside the staleness limit exits 0"
+assert_not_out "stale_history" "(g guard) age below the limit is not stale"
+
+LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 10801)) \
+	run_anomaly "$H_FRESH" "$REG4"
+assert_rc 1 "(g) a frozen collector exits 1"
+assert_out "stale_history" "(g) fires stale_history"
+assert_out "has stopped publishing" "(g) carries the evidence"
+assert_out "[warning]" "(g) is a warning"
+
+# --max-staleness 0 disables the check outright, for static fixtures.
+LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 1000000)) \
+	run_anomaly "$H_FRESH" "$REG4" --max-staleness 0
+assert_rc 0 "(g guard) --max-staleness 0 disables the check"
+assert_not_out "stale_history" "(g guard) disabled check stays silent"
+
 # --no-probe must not flag a registry relay that has no history yet.
 H_NOHIST="$TMP/nohist.json"
 REG1="$TMP/registry-1.json"
@@ -380,6 +523,11 @@ assert_json '.anomalies | all(.severity == "critical" or .severity == "warning")
 run_anomaly "$H_HEALTHY" "$REG4" --json
 assert_rc 0 "(json) healthy run exits 0"
 assert_json '.anomalies | length == 0' "(json) no anomalies on healthy fleet"
+
+run_anomaly "$H_ABUSE" "$REG4" --json
+assert_rc 1 "(json) abuse run exits 1"
+assert_json '[.anomalies[] | select(.type == "abuse_flood" and .relay == "relay-a")] | length == 1' "(json) abuse_flood object present"
+assert_json '[.anomalies[] | select(.type == "abuse_flood") | .abuse_share] | all(. >= 0.9)' "(json) abuse share crosses the floor"
 
 # ── Discord path is taken, and a failed post is swallowed ────
 # A refused connection must not change the exit code or hide the
