@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 19 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 20 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -27,6 +27,7 @@ LightSpeed includes built-in profiles for 19 popular multiplayer games. Each pro
 | 17 | **Roblox** | `--game roblox` | 49152-65535 | Byfron (Hyperion) | `RobloxPlayerBeta.exe` |
 | 18 | **Project Zomboid** | `--game zomboid` | 16261-16262 | None | `ProjectZomboid64.exe` |
 | 19 | **WARDOGS** | `--game wardogs` | 7777-7788 | Elytra (kernel-mode) | `WardogsClient-Win64-Shipping.exe` |
+| 20 | **Minecraft** | `--game minecraft` | 19132-19133 | None | `Minecraft.Windows.exe` |
 
 > **Roblox note:** Roblox has no native Linux client. On Linux, run it through
 > Wine/Proton, where the process name may appear truncated. Roblox picks its
@@ -58,8 +59,6 @@ The following titles have been requested by the community and are under evaluati
 - Battlefield 6
 - Warface
 - Delta Force
-- Minecraft (Bedrock Edition — UDP 19132/19133. The Java Edition is TCP-only for
-  multiplayer, so it is out of scope for a UDP tunnel; see issue #137.)
 
 These are requests only. No support is promised, and no port ranges or anti-cheat compatibility claims are made for them at this time. If and when a profile ships, it will appear in the game list above.
 

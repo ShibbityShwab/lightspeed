@@ -25,6 +25,7 @@
 //! - **World of Tanks**: `WorldOfTanks.exe`
 //! - **Roblox**: `RobloxPlayerBeta.exe`
 //! - **WARDOGS**: `WardogsClient-Win64-Shipping.exe`
+//! - **Minecraft**: `Minecraft.Windows.exe` (Bedrock Edition)
 //!
 //! ## Capture Filters
 //!
@@ -41,6 +42,7 @@ pub mod fortnite;
 pub mod genshin;
 pub mod lol;
 pub mod maplestory;
+pub mod minecraft;
 pub mod ow2;
 pub mod pubg;
 pub mod roblox;
@@ -141,6 +143,9 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "lol" | "leagueoflegends" | "league-of-legends" | "league" => Ok(Box::new(lol::LolConfig)),
         "pubg" | "battlegrounds" => Ok(Box::new(pubg::PubgConfig)),
         "maplestory" | "maple" => Ok(Box::new(maplestory::MapleStoryConfig)),
+        "minecraft" | "mc" | "minecraftbedrock" | "minecraft-bedrock" => {
+            Ok(Box::new(minecraft::MinecraftConfig))
+        }
         "genshin" | "genshinimpact" | "genshin-impact" => Ok(Box::new(genshin::GenshinConfig)),
         "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
         "roblox" => Ok(Box::new(roblox::RobloxConfig)),
@@ -175,6 +180,7 @@ pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("lol", "League of Legends"),
     ("pubg", "PUBG: Battlegrounds"),
     ("maplestory", "MapleStory"),
+    ("minecraft", "Minecraft"),
     ("genshin", "Genshin Impact"),
     ("rocketleague", "Rocket League"),
     ("roblox", "Roblox"),
@@ -257,9 +263,17 @@ pub(crate) fn process_name_matches(observed: &str, known: &str) -> bool {
     if observed.eq_ignore_ascii_case(known) {
         return true;
     }
-    observed.len() == 15
+    // An image name reaching us short is one that was truncated somewhere:
+    // Linux `comm` is capped at TASK_COMM_LEN (15), and Proton/Wine inherits
+    // that, which is why the original check tested exactly 15. Any other
+    // truncation length - 25, 31 - fell through and never matched, and that hit
+    // the longest names hardest: WARDOGS is 32 and 28 characters, so it could
+    // stay undetected while cs2.exe (7) and dota2.exe (9) were unaffected. That
+    // asymmetry is what users report. Accept any truncation of at least 15: this
+    // strictly widens the old rule, since every input that matched still does.
+    observed.len() >= 15
         && known
-            .get(..15)
+            .get(..observed.len())
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case(observed))
 }
 
@@ -318,6 +332,8 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         "ProjectZomboid",
         "WardogsClient-Win64-Shipping.exe",
         "WardogsLauncher-Shipping.exe",
+        "Minecraft.Windows.exe",
+        "Minecraft.exe",
     ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
@@ -326,7 +342,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid, wardogs"
+         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, genshin, rocketleague, roblox, wot, zomboid, wardogs"
     )
 }
 
@@ -495,11 +511,11 @@ mod tests {
     }
 
     #[test]
-    fn test_all_game_keys_has_nineteen_entries() {
+    fn test_all_game_keys_has_twenty_entries() {
         assert_eq!(
             all_game_keys().len(),
-            19,
-            "GAME_REGISTRY must stay in sync with the 19 supported games"
+            20,
+            "GAME_REGISTRY must stay in sync with the 20 supported games"
         );
     }
 
@@ -582,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_detect_unknown_game() {
-        assert!(detect_game("minecraft").is_err());
+        assert!(detect_game("minecraft-java").is_err());
         // Note: "overwatch" is now a valid alias for Overwatch 2
         assert!(detect_game("warzone").is_err());
         assert!(detect_game("").is_err());
@@ -606,6 +622,26 @@ mod tests {
         assert!(!process_name_matches(
             "RustClient.exe",
             "RustClient.exe.old"
+        ));
+        // Truncation at lengths other than 15 must resolve too. These are the
+        // longest names in the registry, so they are the ones a 15-only rule
+        // silently drops while short names keep working.
+        assert!(process_name_matches(
+            "WardogsClient-Win64-Shippin",
+            "WardogsClient-Win64-Shipping.exe"
+        ));
+        assert!(process_name_matches(
+            "WardogsLauncher-Shipping.",
+            "WardogsLauncher-Shipping.exe"
+        ));
+        assert!(process_name_matches(
+            "Minecraft.Windows.exe",
+            "Minecraft.Windows.exe"
+        ));
+        // A short prefix is not a truncation and must not match.
+        assert!(!process_name_matches(
+            "Minecraft",
+            "Minecraft.Windows.exe"
         ));
         assert!(!process_name_matches(
             "Bodycam-Win64-X",
@@ -750,6 +786,21 @@ mod tests {
         assert!(bodycam.uses_sdr());
         assert!(bodycam.typical_pps() > 0);
         assert_eq!(bodycam.anti_cheat(), "None");
+
+        let minecraft = minecraft::MinecraftConfig;
+        assert_eq!(minecraft.name(), "Minecraft");
+        assert!(minecraft
+            .process_names()
+            .contains(&"Minecraft.Windows.exe"));
+        assert_eq!(minecraft.ports(), (19132, 19133));
+        assert_eq!(minecraft.redirect_port(), 19132);
+        assert!(!minecraft.uses_sdr());
+        assert!(minecraft.typical_pps() > 0);
+        assert_eq!(minecraft.anti_cheat(), "None (server-side validation)");
+        // Java Edition runs on TCP 25565, which a UDP tunnel cannot carry, so
+        // matching the shared `javaw.exe` image name would mislabel every Java
+        // process on the machine without ever accelerating the game.
+        assert!(!minecraft.process_names().contains(&"javaw.exe"));
 
         let wardogs = wardogs::WardogsConfig;
         assert_eq!(wardogs.name(), "WARDOGS");

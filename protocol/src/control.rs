@@ -65,6 +65,8 @@ pub mod game_id {
     pub const ZOMBOID: u8 = 18;
     /// BULKHEAD's WARDOGS (100-player tactical FPS, Unreal Engine 5).
     pub const WARDDOGS: u8 = 19;
+    /// Mojang's Minecraft, Bedrock Edition (UDP gameplay over 19132/19133).
+    pub const MINECRAFT: u8 = 20;
 
     /// Canonical CLI key mapped to its wire id, ordered by ascending id.
     ///
@@ -90,6 +92,7 @@ pub mod game_id {
         ("roblox", ROBLOX),
         ("zomboid", ZOMBOID),
         ("wardogs", WARDDOGS),
+        ("minecraft", MINECRAFT),
     ];
 
     /// Resolve a CLI game key to its wire id, or [`UNKNOWN`] when absent.
@@ -782,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_game_ids_unique_and_stable() {
-        assert_eq!(game_id::GAME_IDS.len(), 19, "every real game needs one id");
+        assert_eq!(game_id::GAME_IDS.len(), 20, "every real game needs one id");
 
         // Each id 1..=19 must appear exactly once (0 stays reserved for UNKNOWN).
         let mut seen = [0u8; 20];
