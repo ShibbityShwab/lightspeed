@@ -1,3 +1,57 @@
+# Current Phase: WF-037 zero_relay cried wolf on normal traffic distribution (maintenance)
+
+**Workflow:** WF-037; WF-036, WF-035, WF-034, WF-033, WF-032, WF-031 below
+**Agent:** QAEngineer + SecOps
+**Status:** Committed and pushed (d35ffd5), CI in flight
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-037 the outage detector fired on three healthy relays
+
+**Driving evidence:** running the shipped detector against live history (now that
+WF-035 restored publishing, the history had grown to 79 snapshots) produced:
+
+```
+[critical] zero_relay: relay-bom-1: reachable for 3 snapshots but relayed 0 packets while the fleet relayed 566212
+[critical] zero_relay: relay-mad-1: ...
+[critical] zero_relay: relay-syd-1: ...
+```
+
+Three criticals - and every one of them wrong. All eight relays report
+essentially the same uptime (~399,000s, about 4.6 days), so nothing restarted;
+`/health` was healthy on all three; and each has real history (bom-1 50
+sessions, mad-1 106, syd-1 49). They were simply not routed to during the
+window.
+
+**Root cause:** `zero_relay` fired on silence alone. The genuine 1.6.3 outage
+signature is silence PLUS clients being rejected - the relay is up, clients
+try, and every packet is dropped. Silence with no rejections is normal
+distribution across eight relays.
+
+**Change:** the rule now branches on whether the relay rejected any clients in
+the window:
+- `zero_relay` (critical) - silent AND rejecting: the outage signature, and the
+  message now names the rejection count that justifies it.
+- `idle_relay` (warning) - silent with no rejections: labelled as traffic
+  distribution, explicitly not a failure.
+
+**Why this mattered:** an alert that fires on healthy behaviour is worse than
+no alert, because it trains whoever is on call to ignore the detector that
+does matter. The false criticals would have buried a real outage in noise.
+
+**Verification:** the suite grew to **88 checks** (from 82). The zero_relay
+fixture now models the real outage (silence plus climbing rejections), and a
+new `idle_relay` case pins the warning path with its
+"traffic distribution, not a failure" wording and asserts it does NOT claim the
+outage signature. Against live history the three relays now report as warnings
+alongside the genuine `abuse_flood`. All eight local suites pass.
+
+**Not changed:** no source, packaging, workflow, or infrastructure file; no
+alert thresholds for the conditions that were already correct.
+
+---
+
 # Current Phase: WF-036 The repo now owns its Scoop manifest (maintenance)
 
 **Workflow:** WF-036; WF-035, WF-034, WF-033, WF-032, WF-031, WF-030 below
