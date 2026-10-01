@@ -639,10 +639,7 @@ mod tests {
             "Minecraft.Windows.exe"
         ));
         // A short prefix is not a truncation and must not match.
-        assert!(!process_name_matches(
-            "Minecraft",
-            "Minecraft.Windows.exe"
-        ));
+        assert!(!process_name_matches("Minecraft", "Minecraft.Windows.exe"));
         assert!(!process_name_matches(
             "Bodycam-Win64-X",
             "Bodycam-Win64-Shipping.exe"
@@ -789,9 +786,7 @@ mod tests {
 
         let minecraft = minecraft::MinecraftConfig;
         assert_eq!(minecraft.name(), "Minecraft");
-        assert!(minecraft
-            .process_names()
-            .contains(&"Minecraft.Windows.exe"));
+        assert!(minecraft.process_names().contains(&"Minecraft.Windows.exe"));
         assert_eq!(minecraft.ports(), (19132, 19133));
         assert_eq!(minecraft.redirect_port(), 19132);
         assert!(!minecraft.uses_sdr());
