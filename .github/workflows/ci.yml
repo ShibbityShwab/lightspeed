@@ -191,10 +191,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
 
       - name: Build GUI (release)
         run: cargo build --release -p lightspeed-gui
+
+      # The GUI crate is excluded from every clippy invocation elsewhere
+      # (`--exclude lightspeed-gui` in the Linux jobs). Without this step it is
+      # built and tested but never LINTED - which is how three lints
+      # (a manual RangeInclusive::contains and two map_or_identity) accumulated
+      # unseen until a local toolchain finally ran clippy on it.
+      - name: Clippy GUI
+        run: cargo clippy -p lightspeed-gui --all-targets
 
       - name: Test GUI
         run: cargo test -p lightspeed-gui
