@@ -121,6 +121,36 @@ assert_jq "$C" '.snapshots[0].t == 41' "(c) oldest retained snapshot is the 41st
 assert_jq "$C" '.snapshots[-1].t == 400' "(c) newest snapshot retained"
 assert_jq "$C" '.generated_at == 400' "(c) generated_at is newest t"
 
+# ── (c2) large payloads must still append ────────────────────
+# (c) uses a ~250-byte fixture, so 400 appends total only ~100 KiB and stay just
+# under Linux's 128 KiB per-argument limit - which is why it passed even while
+# the script was silently dropping appends. Production snapshots are ~20 KiB
+# (the live history is 1.7 MB at 84 snapshots), so this case uses a 160-relay
+# fixture and enough appends to CROSS the limit; a guard that stayed under it
+# would be theatre. Measured: ~14.4 KiB per snapshot, ~216 KiB at 15 appends.
+BIG="$TMP/big-history.json"
+BIG_STATS="$TMP/big-stats.json"
+BIG_RELAYS=160
+BIG_ITERS=15
+make_big_stats() {
+	# <path> <generated_at> <relayed>  - BIG_RELAYS relays per snapshot
+	{
+		printf '{"generated_at": %s, "relay_count": %s, "healthy_count": %s, "relays": [' "$2" "$BIG_RELAYS" "$BIG_RELAYS"
+		for r in $(seq 1 "$BIG_RELAYS"); do
+			[ "$r" -gt 1 ] && printf ','
+			printf '{"node_id":"relay-%s","area":"North America","region":"us-west","status":"healthy","version":"1.3.2","uptime_secs":10,"packets_relayed":%s,"packets_dropped":0,"sessions_created":0}' "$r" "$3"
+		done
+		printf ']}'
+	} > "$1"
+}
+for i in $(seq 1 "$BIG_ITERS"); do
+	make_big_stats "$BIG_STATS" "$((2000 + i))" "$i"
+	bash "$APPEND" "$BIG" "$BIG_STATS" "$BIG" >/dev/null 2>&1
+done
+BIG_BYTES=$(wc -c < "$BIG" 2>/dev/null || echo 0)
+assert_jq "$BIG" ".snapshots | length == $BIG_ITERS" "(c2) a history past the command-line limit still appends (${BIG_BYTES} bytes)"
+assert_jq "$BIG" ".snapshots[-1].t == $((2000 + BIG_ITERS))" "(c2) the newest large append is retained (${BIG_BYTES} bytes > 131072)"
+
 # ── (d) robustness: missing + garbage inputs stay valid, exit 0 ──
 MISSING_H="$TMP/missing-history.json"
 MISSING_S="$TMP/does-not-exist.json"
