@@ -265,12 +265,12 @@ impl TelemetryCollector {
             inner.samples.drain(0..reported);
         }
         self.fec_recoveries
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(report.fec_recoveries))
             })
             .ok();
         self.fec_losses
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(report.fec_losses))
             })
             .ok();
