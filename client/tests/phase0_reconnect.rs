@@ -36,6 +36,12 @@ fn now_us() -> u64 {
 }
 
 fn server_endpoint() -> quinn::Endpoint {
+    // Pin the process-wide rustls provider first: this test binary has no
+    // `main` to do it, and a `cargo test --workspace` run puts BOTH `ring`
+    // and `aws-lc-rs` in the graph (the GUI's tree), so rustls cannot
+    // auto-detect one and `ServerConfig::builder()` panics.
+    lightspeed_client::test_support::install_crypto_provider();
+
     let key_pair = rcgen::KeyPair::generate().expect("generate key");
     let params =
         rcgen::CertificateParams::new(vec!["lightspeed-proxy".to_string()]).expect("cert params");

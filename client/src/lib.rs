@@ -41,6 +41,23 @@ pub mod test_support {
     };
     pub use crate::session::{path_token, session_token};
 
+    /// Install the process-wide rustls `CryptoProvider` for a test binary.
+    ///
+    /// The shipped binaries pin `ring` early (see `client-gui/src/main.rs`),
+    /// but a test binary never runs `main`. In a `cargo test --workspace` run
+    /// the GUI's tree is part of the unified feature set, which puts BOTH
+    /// `ring` and `aws-lc-rs` in the graph; rustls then cannot auto-detect a
+    /// provider and panics on the first QUIC call
+    /// (`rustls/src/crypto/mod.rs`, "Could not automatically determine the
+    /// process-level CryptoProvider").
+    ///
+    /// Tests that build a QUIC client or server must call this once before
+    /// doing so. It is idempotent - `install_default` ignores a lost race - so
+    /// any number of test threads and binaries may call it concurrently.
+    pub fn install_crypto_provider() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     /// Set the process-global current relay, driving [`report_destination`].
     pub fn set_current_proxy(addr: std::net::SocketAddrV4) {
         crate::session::set_current_proxy(addr);

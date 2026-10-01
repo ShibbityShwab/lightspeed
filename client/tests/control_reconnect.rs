@@ -45,6 +45,12 @@ fn now_us() -> u64 {
 }
 
 fn server_endpoint() -> quinn::Endpoint {
+    // The shipped binaries pin `ring` in `main`; a test binary has no `main`
+    // to do that, and in a `cargo test --workspace` run the GUI's tree puts
+    // both `ring` and `aws-lc-rs` in the graph, so rustls cannot auto-detect a
+    // provider and `ServerConfig::builder()` panics. Pin it before building.
+    lightspeed_client::test_support::install_crypto_provider();
+
     let key_pair = rcgen::KeyPair::generate().expect("generate key");
     let params =
         rcgen::CertificateParams::new(vec!["lightspeed-proxy".to_string()]).expect("cert params");
