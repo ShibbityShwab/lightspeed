@@ -1,3 +1,39 @@
+# Current Phase: WF-048 Last dependency PR landed; the fleet resumed traffic
+
+**Workflow:** WF-048; WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Agent:** DevOps
+**Status:** Pushed (80659fe); Docker build in flight
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-048 the dependency backlog is clear
+
+**Driving evidence:** with #106, #108, #109, #138, #139 and #107 all resolved,
+re-listing the open PRs left exactly one: **#136**, a Docker base-image bump
+(rust 1.98.0 -> 1.98.1). One Dockerfile line, 15 passing checks, no failures.
+
+**Verified beyond the PR's own checks:** the tag was confirmed to exist on
+Docker Hub (`1.98.1-slim-bookworm`, amd64, active, 312 MB) rather than assuming
+a version string is published - a missing base image fails the build at pull
+time, and Dependabot's green tick describes an older base anyway.
+
+**Landed as `80659fe`.** Docker workflow in flight.
+
+**Also observed, and worth recording because it closes an earlier finding:**
+the live fleet has RESUMED relaying. `relay-fra` now reports
+`packets_relayed=19058803`, up from the 19005389 that had been frozen since
+2026-10-01T01:46Z while uptime advanced - the exact stalled-counter condition
+WF-034 (`fleet_idle`) and WF-028 (`stale_history`) were built to catch. So the
+fleet traffic stop documented in WF-034 was real and has since cleared, and the
+detectors that watch for it are in place for the next occurrence.
+
+**Open items remaining are all owner-gated:** #137 (Minecraft support request)
+and #59 (the Windows/Fortnite thread) are product calls, and the Chocolatey push
+plus the winget CLA need credentials only the owner holds.
+
+---
+
 # Current Phase: WF-047 The GUI crate is now linted by CI
 
 **Workflow:** WF-047; WF-046, WF-045, WF-044, WF-043, WF-042 below
