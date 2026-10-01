@@ -58,6 +58,8 @@ The following titles have been requested by the community and are under evaluati
 - Battlefield 6
 - Warface
 - Delta Force
+- Minecraft (Bedrock Edition — UDP 19132/19133. The Java Edition is TCP-only for
+  multiplayer, so it is out of scope for a UDP tunnel; see issue #137.)
 
 These are requests only. No support is promised, and no port ranges or anti-cheat compatibility claims are made for them at this time. If and when a profile ships, it will appear in the game list above.
 
