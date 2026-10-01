@@ -51,7 +51,20 @@ if ! printf '%s' "$json" | jq -e '.architecture."64bit" | type == "object"' >/de
   exit 1
 fi
 
-updated="$(printf '%s' "$json" | jq \
+# Idempotence. The release job commits only when `git diff -- dist/scoop` is
+# non-empty; a rewrite through jq would churn the whole file on EVERY tag even
+# when nothing changed (jq re-indents and normalises the hand-written layout),
+# so "already up to date" would never trigger. If the manifest already points
+# at this version with the right url and digest, leave it byte-identical.
+url_now="https://github.com/ShibbityShwab/lightspeed/releases/download/${tag}/${asset}"
+if [ "$(printf '%s' "$json" | jq -r '.version')" = "$version" ] \
+  && [ "$(printf '%s' "$json" | jq -r '.architecture."64bit".hash')" = "$digest" ] \
+  && [ "$(printf '%s' "$json" | jq -r '.architecture."64bit".url')" = "$url_now" ]; then
+  echo "bump-scoop: ${manifest} already at ${version}; nothing to do"
+  exit 0
+fi
+
+updated="$(printf '%s' "$json" | jq --indent 4 \
   --arg v "$version" \
   --arg tag "$tag" \
   --arg asset "$asset" \

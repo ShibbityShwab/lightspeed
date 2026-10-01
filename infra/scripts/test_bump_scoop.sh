@@ -116,6 +116,18 @@ assert_eq "$(jq -r '.architecture."64bit".url' "$F1")" \
 	"(b) url repointed at the tag the hash came from"
 
 # ══════════════════════════════════════════════════════════════
+# (b2) re-running the same version must leave the manifest byte-identical
+# ══════════════════════════════════════════════════════════════
+# The release job commits only when `git diff -- dist/scoop` is non-empty. A
+# rewrite through jq re-indents and normalises the hand-written layout, so the
+# file would churn on EVERY tag and the "already up to date" path would never
+# fire. Found by running the script against the manifest it had just written.
+SAME_BEFORE="$(cat "$F1")"
+run_bump "$F1" "$TMP/stub-ok" "9.9.9"
+assert_eq "$RC" "0" "(b2) an already-current manifest exits 0"
+assert_eq "$(cat "$F1")" "$SAME_BEFORE" "(b2) an already-current manifest is left byte-identical"
+
+# ══════════════════════════════════════════════════════════════
 # (c) a release without the Windows asset aborts and mutates nothing
 # ══════════════════════════════════════════════════════════════
 F2="$TMP/f2.json"
