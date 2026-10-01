@@ -1,3 +1,51 @@
+# Current Phase: WF-042 lightspeed-gui has never been linted by CI (maintenance)
+
+**Workflow:** WF-042; WF-041, WF-040, WF-039, WF-038, WF-037, WF-036 below
+**Agent:** QAEngineer + RustDev
+**Status:** Lints fixed and pushed (3b13a8b); CI scope decision pending owner
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-042 the GUI crate is excluded from every CI check job
+
+**Driving evidence:** a local clippy run surfaced three real lints in
+`lightspeed-gui`. Checking whose they were produced the more important finding:
+`lightspeed-gui` is excluded from **8 sites** in `ci.yml` - clippy (line 32),
+build (35, 130, 183), test (38, 133), and coverage (157, 163). The crate has
+never been linted, tested, or coverage-measured by the main pipeline, so these
+lints accumulated unseen since they were written.
+
+**Pre-existing, proven not assumed:** stashing the change and running the
+identical clippy on pristine master reproduced all three errors - the same
+procedure used for the proxy `never_loop` and the earlier GUI lint question.
+
+**Fixed (3 lines, all semantics-preserving):**
+| Site | Change |
+|------|--------|
+| `platform/windows.rs:336` | `port >= 28015 && port <= 30000` -> `(28015..=30000).contains(&port)` |
+| `update.rs:32,33` | `.map_or(0, \|v\| v)` -> `.unwrap_or(0)` |
+
+The port check was verified by hand rather than taken on the linter's word:
+BOTH bounds are inclusive in the original, which is exactly what `..=` means,
+so 28015 and 30000 stay accepted and 28014/30001 stay rejected. That code sits
+in the Rust-client process-scanning path - the same family as WF-023's Windows
+interception work - where a boundary slip would be costly.
+
+**Verification:** `RUSTFLAGS=-Dwarnings cargo clippy -p lightspeed-gui
+--all-targets` -> **clean, rc=0 - the first time this crate has been
+lint-clean** - and `cargo test -p lightspeed-gui` -> **53 passed; 0 failed;
+1 ignored**.
+
+**Open decision, deliberately NOT taken unilaterally:** whether to bring the
+crate into CI. Removing the exclusion outright is wrong - the Linux jobs
+exclude it for real GTK build-weight reasons - so the sensible shape is to
+scope clippy/build/test for this crate to the Windows job that already builds
+it (`windows-gui`). That changes what CI runs for everyone, so it is the
+owner's call rather than a maintenance edit.
+
+---
+
 # Current Phase: WF-041 Stale dependency PRs (#106/#108) are now locally verifiable
 
 **Workflow:** WF-041; WF-040, WF-039, WF-038, WF-037, WF-036 below
