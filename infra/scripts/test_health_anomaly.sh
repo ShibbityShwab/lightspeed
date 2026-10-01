@@ -154,8 +154,13 @@ emit8() {
 
 # Relay-a variants --------------------------------------------------
 a_healthy() { mkrelay relay-a true "$STD_VER" "$(($1 * 100))" "$(($1))" "$(($1 * 2))" "$(($1 * 20))" "$(($1 * 4))" 0 "$(($1 * 3))"; }
-# Zero relayed for the whole window (the 1.6.3 outage signature).
-a_zero() { mkrelay relay-a true "$STD_VER" 0 0 0 "$(($1 * 20))" "$(($1 * 4))" 0 0; }
+# Zero relayed for the whole window WITH clients being rejected: the real
+# 1.6.3 outage signature (silent AND turning clients away).
+a_zero() { mkrelay relay-a true "$STD_VER" 0 0 "$(($1 * 200))" "$(($1 * 20))" "$(($1 * 4))" 0 0; }
+# Zero relayed for the whole window with NO rejections: the relay simply
+# received no traffic. Live on 2026-10-01 every relay shared one uptime, so
+# this must not be reported as the outage signature.
+a_idle() { mkrelay relay-a true "$STD_VER" 0 0 0 "$(($1 * 20))" "$(($1 * 4))" 0 0; }
 # Auth rejections climb from snapshot 5 onward, sessions stay flat.
 a_authspike() {
 	local a=0
@@ -313,9 +318,21 @@ emit8 "$H_ZERO" a_zero
 run_anomaly "$H_ZERO" "$REG4"
 assert_rc 1 "(a) anomalous run exits 1"
 assert_out "zero_relay" "(a) fires zero_relay"
-assert_out "reachable for 3 snapshots but relayed 0 packets" "(a) carries the evidence"
+assert_out "0 packets" "(a) carries the evidence"
 assert_out "[critical]" "(a) is critical"
+assert_out "were rejected" "(a) names the rejection that makes it an outage"
 assert_not_out "auth_spike" "(a) does not invent an auth spike"
+
+# Silence WITHOUT rejections is traffic distribution, not an outage: it must
+# be a warning, and it must not claim the outage signature.
+H_IDLEONLY="$TMP/zero-idle.json"
+emit8 "$H_IDLEONLY" a_idle
+run_anomaly "$H_IDLEONLY" "$REG4"
+assert_rc 1 "(a2) a silent-but-unused relay still exits 1"
+assert_out "idle_relay" "(a2) fires idle_relay"
+assert_out "[warning]" "(a2) is a warning, not critical"
+assert_out "traffic distribution, not a failure" "(a2) says what it actually is"
+assert_not_out "zero_relay" "(a2) does not claim the outage signature"
 
 # FP guard: a single-snapshot window is not sustained enough.
 run_anomaly "$H_ZERO" "$REG4" --window 1

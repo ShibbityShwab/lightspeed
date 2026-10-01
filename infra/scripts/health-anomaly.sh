@@ -8,9 +8,16 @@
 # the liveness /health gate cannot see.
 #
 # Detectors (all from data the repo already collects; no new metrics):
-#   (a) zero_relay                relay reachable for the whole window
-#                                 but relayed 0 packets while the fleet
-#                                 was busy (the 1.6.3 outage signature)
+#   (a) zero_relay                relay reachable for the whole window,
+#                                 relayed 0 packets while the fleet was
+#                                 busy, AND rejected clients - the 1.6.3
+#                                 outage signature. Silence WITHOUT any
+#                                 rejection is reported separately as
+#                                 idle_relay (warning): all eight relays
+#                                 share one uptime, so a relay that simply
+#                                 received no traffic is not broken, and
+#                                 paging on it would train operators to
+#                                 ignore the detector that matters.
 #   (b) auth_spike_no_sessions    auth_rejections climb while
 #                                 sessions_created stays flat (the
 #                                 data-only-proxy signature)
@@ -305,12 +312,27 @@ def vcmp($a; $b):
      | (($win[-1] | rel_life(.; $id; "packets_relayed"))) as $end
      | (($wstart | rel_life(.; $id; "packets_relayed"))) as $start
      | (span($start; $end)) as $relayed
+     | (($win[-1] | rel_life(.; $id; "drops_auth_rejected"))
+        - ($wstart | rel_life(.; $id; "drops_auth_rejected"))) as $authRaw
+     | ($authRaw | if . < 0 then 0 else . end) as $auth
      | select($up and $relayed != null and $relayed <= 0 and $fleet_pkts > 0)
-     | { type: "zero_relay", severity: "critical", relay: $id,
-         window: $WL, packets_relayed: 0, fleet_packets: $fleet_pkts,
-         message: ($id + ": reachable for " + ($WL | tostring)
-                   + " snapshots but relayed 0 packets while the fleet relayed "
-                   + ($fleet_pkts | tostring)) }
+     | (if $auth > 0
+        then { type: "zero_relay", severity: "critical", relay: $id,
+               window: $WL, packets_relayed: 0, fleet_packets: $fleet_pkts,
+               auth_rejections: $auth,
+               message: ($id + ": reachable for " + ($WL | tostring)
+                         + " snapshots but relayed 0 packets while the fleet relayed "
+                         + ($fleet_pkts | tostring) + ", and " + ($auth | tostring)
+                         + " client(s) were rejected - the 1.6.3 outage signature") }
+        else { type: "idle_relay", severity: "warning", relay: $id,
+               window: $WL, packets_relayed: 0, fleet_packets: $fleet_pkts,
+               auth_rejections: 0,
+               message: ($id + ": reachable for " + ($WL | tostring)
+                         + " snapshots and handled no traffic while the fleet relayed "
+                         + ($fleet_pkts | tostring)
+                         + ", but it rejected no clients either - this is "
+                         + "traffic distribution, not a failure (severity warning)") }
+        end)
    ]) as $zeroFlags
 | ([ $ids[] as $id
      | select($WL >= $W and $W >= 2)
