@@ -880,3 +880,37 @@ verified - the only missing piece was permission to write it.
 **Installer-channel status after this round:** Scoop current at 1.6.14; Chocolatey 1.6.14
 submitted, pending moderation (feed still 1.6.3); winget awaiting Microsoft moderator
 review on its first manifest; Homebrew current.
+
+---
+
+### 2026-10-01: CI broke on a toolchain advance, and local verification could not see it
+
+**Agent:** RustDev + DevOps
+**Status:** Accepted
+**Rationale:** Two CI runs went red (`f1cbae6`, `aa2957a3`) on **docs-only** commits,
+which was the clue that the diff was not the cause. CI's `dtolnay/rust-toolchain@stable`
+had advanced to **rustc 1.99.0**, which deprecated `Atomic::fetch_update` in favour of
+`try_update`; with the repo's `RUSTFLAGS=-Dwarnings` that deprecation became a hard error
+and broke every compiling job simultaneously (Check & Test, Windows Build & Test, macOS
+Smoke, Coverage, E2E, Feature Matrix, Windows GUI Build).
+
+**Why local verification missed it:** the workstation had rustc **1.98.1**, one minor
+version behind the runner, so `-Dwarnings` was clean locally. This is the SECOND time in
+this session that local evidence diverged from CI (the first was `cfg(windows)` rustfmt
+formatting). Both times the code was fine and the *reporting* was wrong.
+
+**Impact:** `client/src/telemetry.rs` - two `fetch_update` calls renamed to `try_update`.
+Identical signature and semantics (both take success/failure orderings plus a closure and
+return `Result`), so the `saturating_sub` logic is untouched; the change is a pure rename.
+Verified on rustc **1.99.0** - the version that flagged it, which the workstation was
+updated to specifically so this could be proved rather than assumed: `-Dwarnings` check
+rc=0, GUI clippy rc=0, client tests 378 passed / 0 failed, fmt rc=0.
+
+**Process change, recorded because the mistake repeated:** from here, CI is re-checked on
+the ACTUAL PUSH for any change touching Rust, rather than inferred from a clean local run.
+A toolchain resolving to `@stable` moves under you.
+
+**Useful control:** `cargo clippy -p lightspeed-proxy` still reports `never_loop` on
+Windows. That is the pre-existing `cfg(unix)`-target artifact diagnosed earlier: CI's
+failure log names `never_loop` **0 times** and `fetch_update` **48 times**, so the two are
+cleanly distinguished rather than assumed equivalent.
