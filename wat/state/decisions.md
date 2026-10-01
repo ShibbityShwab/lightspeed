@@ -914,3 +914,41 @@ A toolchain resolving to `@stable` moves under you.
 Windows. That is the pre-existing `cfg(unix)`-target artifact diagnosed earlier: CI's
 failure log names `never_loop` **0 times** and `fetch_update` **48 times**, so the two are
 cleanly distinguished rather than assumed equivalent.
+
+---
+
+### 2026-10-01: The fleet_idle detector reported a false positive in production
+
+**Agent:** SecOps + QAEngineer
+**Status:** Accepted
+**Rationale:** `Health Anomaly Monitor` went red on 2026-10-01 with
+`[critical] fleet_idle` - the detector added in WF-034 - alongside a genuine
+`stale_history`. Live `/health` contradicted the fleet claim: relay-fra reported
+`packets_relayed=19327352` and rising, while the frozen history pinned it at `52431180`.
+**Mechanism:** the collector had stopped publishing (~5h stale), so the newest snapshots
+carried UNCHANGED counters. A zero delta across the window is indistinguishable from an
+idle fleet, so the detector concluded the fleet had stopped when in truth nobody was
+measuring. That is the exact principle WF-028 was written for - a monitor must not read
+"not receiving data" as "nothing happened" - reproduced inside `fleet_idle` itself.
+Barely two hours earlier the same detector had fired CORRECTLY on a real stop, verified
+against live `/health`; the difference is that this time the fleet was fine and only the
+collector was dead.
+**Impact:** `fleet_idle` now requires fresh data - the newest snapshot must be within
+`--max-staleness` of now - so a stopped collector yields `stale_history` alone. The
+snapshot age is carried in the message and as `snapshot_age_secs`. Caveat recorded: with
+`--max-staleness 0` the guard is disabled along with the staleness check (production
+passes 10800).
+**Second, larger fix:** a jq failure is now FATAL (exit 3, error printed). The script used
+to swallow jq's stderr and fall back to an empty result, so a MALFORMED detector reported
+`no anomalies (0 relay(s), 0 snapshot(s))` - the worst possible failure mode for a
+monitor, since it is exactly when monitoring is broken that you need to know. Proven by
+injecting a syntax error.
+**Why that mattered immediately:** while making the first change I dropped a closing
+paren, leaving the `if` condition unterminated. jq's `unexpected then` was being
+discarded, so the break presented as "0 relays" rather than an error, and it took several
+bisection attempts to find. Fixing the masking is what makes this class of bug visible.
+**Verification:** 91 checks pass (was 88; the freshness guard has its own regression
+case), and against the real frozen history the detector reports `stale_history` ONLY.
+**Alternatives Considered:** inferring idleness from counters alone was rejected because
+frozen data and an idle fleet are genuinely indistinguishable that way; suppressing
+`fleet_idle` entirely was rejected because it fires correctly on real stops.
