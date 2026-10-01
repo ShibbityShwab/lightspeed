@@ -1,3 +1,127 @@
+# Current Phase: WF-045 Test binaries never pinned the rustls provider
+
+**Workflow:** WF-045; WF-044, WF-043, WF-042, WF-041, WF-040 below
+**Agent:** RustDev + QAEngineer
+**Status:** Fixed and verified; landing with WF-044 per owner approval
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-045 `cargo test --workspace` failed 5 QUIC tests locally
+
+**Driving evidence:** while attributing a failure seen on the WF-044 branch, the
+three-way comparison settled both the cause and the blame:
+
+| Invocation | Result |
+|-----------|--------|
+| `cargo test --workspace` (GUI in graph) | **5 tests FAILED** across 2 files |
+| `cargo test --workspace --exclude lightspeed-gui` (**CI's command**) | all pass |
+| Either, on pristine master | identical to the above |
+
+So it was **pre-existing**, not caused by WF-044 - and CI never saw it, because
+excluding the GUI is exactly what avoids the trigger.
+
+**Root cause:** rustls panics at `rustls-0.23.45/src/crypto/mod.rs:249` with
+"Could not automatically determine the process-level CryptoProvider from Rustls
+crate features." The repo documents this condition itself at
+`client-gui/Cargo.toml:26-29`: the GUI's tree enables BOTH providers (ring via
+the client's QUIC stack, aws-lc-rs via reqwest/axoupdater), and its stated fix
+is that `main.rs` pins ring. **A test binary has no `main`**, so nothing pins it
+in a workspace run - and the panic names rustls configuration rather than a
+test-harness gap, sending readers after the cryptography instead of the setup.
+
+**Two of the four affected files already had private copies of the fix**
+(`quic_telemetry_capability.rs`, `register_destination.rs` each define their own
+`install_crypto_provider`), while `control_reconnect.rs` and
+`phase0_reconnect.rs` had none - the same workaround discovered twice,
+missing twice.
+
+**Change:** one shared helper in `client/src/test_support` (the module that
+exists to expose internals to integration tests) and a call at the point each
+failing test builds its QUIC config. Idempotent, so concurrent test threads and
+binaries can call it freely. The private copies in the two working files were
+left alone - they pass, and rewriting passing tests is not part of this fix.
+
+**Verification:** `cargo test --workspace` -> **every suite green, including the
+5 previously-failing QUIC tests**. Also recorded: my first two attribution
+attempts were invalid - running the test WITHOUT `--features quic` compiles the
+file to nothing (`#![cfg(feature = "quic")]`) and reports a vacuous
+`0 passed`, and a standalone run WITH the feature proved nothing about the
+workspace case. Only the three-way comparison was evidence.
+
+---
+
+# Current Phase: WF-044 windivert beta migration unblocks windows 0.62 (PR #107)
+
+**Workflow:** WF-044; WF-043, WF-042, WF-041, WF-040, WF-039 below
+**Agent:** RustDev + QAEngineer
+**Status:** Migration compiles on a branch; one pre-existing test failure being attributed
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-044 #107 was never a version bump
+
+**Driving evidence:** PR #107 (windows 0.48 -> 0.62) fails CI on Windows GUI Build. The
+owner authorised attempting the beta path, so the failure was traced to its root:
+
+```
+windivert 0.6.0       -> windows 0.48.0
+windivert-sys 0.10.0  -> windows 0.48.0   (max STABLE)
+client/Cargo.toml     -> windows 0.48      <- the only line #107 changes
+```
+
+Bumping one side of that contract gives the crate two incompatible `HANDLE`
+types (`isize` vs `*mut c_void`), which is exactly the CI error. The repo ALREADY
+documents the constraint at `client/Cargo.toml:95`: "The `windows` types must
+match windivert-sys's own 0.48 dependency so `HANDLE` is the same type."
+
+**Two further blockers found by attempting it:**
+1. `windivert-sys` declares `links = "WinDivert"`, and cargo allows only ONE
+   package per graph to own a `links` value - so 0.10 and 0.11 cannot coexist.
+2. BOTH `client` and `client-gui` declare `windivert` directly, so #107's
+   single-file change could never resolve regardless.
+
+**Migration implemented on branch `chore/windivert-beta-windows-062`** (master
+untouched): `windivert` 0.7.0-beta.4 + `windivert-sys` 0.11.0-beta.2 +
+`windows` 0.62 in both manifests, plus six FFI sites in
+`client/src/interceptor/windivert_handle.rs`:
+- `HANDLE` -> `WinDivertHandle = *mut core::ffi::c_void` (0.11 dropped the
+  `windows` dependency entirely, which is WHY the lockstep constraint disappears)
+- `raw.is_invalid()` -> `raw.is_null()`
+- `ok.as_bool()` -> a `succeeded(ok: c_int)` helper (0.11 models BOOL as c_int)
+- `WinDivertOpen` returns `isize`; cast is a representation change, not a deref
+
+**Verified:** `cargo check -p lightspeed-client --features windivert-redirect` ->
+**Finished**; `cargo check --workspace` -> **Finished**; proxy suite 387 passed;
+client lib suite 383 passed. `Cargo.lock` SHRINKS by ~87 lines because the
+windows-0.48 chain drops out.
+
+**One failure, attribution in progress - and my first two attempts at it were
+INVALID, recorded so the mistake is not repeated:**
+- Attempt 1 ran `cargo test -p lightspeed-client --test control_reconnect`
+  WITHOUT `--features quic`. The file is `#![cfg(feature = "quic")]`, so it
+  compiled to nothing and reported `0 passed; 0 failed` - a vacuous pass I
+  nearly recorded as "pre-existing, not mine".
+- Attempt 2 ran the same test standalone WITH the feature and it passed 3/3,
+  which also proved nothing about the workspace case.
+- The real reproduction is `cargo test --workspace`, where feature unification
+  activates `quic` via lightspeed-gui/proxy and the 3 tests DO run - and fail.
+
+The failure is a **rustls CryptoProvider panic** at
+`rustls-0.23.45/src/crypto/mod.rs:249`: neither provider can be auto-detected.
+The repo documents this exact condition at `client-gui/Cargo.toml:26-29`
+("The GUI's tree enables both rustls providers - ring via the client's QUIC
+stack, aws-lc-rs via reqwest/axoupdater - which makes rustls's automatic
+provider selection panic"), and its stated fix is that `main.rs` pins `ring`.
+That fix cannot help a TEST binary, which never runs `main`.
+
+**Not yet concluded:** whether this reproduces on pristine master. A stashed
+comparison is running. Either way it is unrelated to windivert - the panicking
+code path is QUIC/TLS, which this migration does not touch.
+
+---
+
 # Current Phase: WF-043 thiserror patch bump verified on current master (PR #138)
 
 **Workflow:** WF-043; WF-042, WF-041, WF-040, WF-039, WF-038 below
