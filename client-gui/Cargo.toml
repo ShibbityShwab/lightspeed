@@ -19,7 +19,7 @@ tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 anyhow = { workspace = true }
 axoupdater = "0.10.2"
-dirs = "6.0"
+dirs = "7.0"
 # GUI config persistence (config.rs) and relay /health parsing (discovery.rs).
 serde_json = { workspace = true }
 toml = { workspace = true }
@@ -45,7 +45,7 @@ webbrowser = "1"
 # that never use it; keeping it global pulled gtk -> glib 0.18 into the
 # Linux build, triggering GHSA-wrw7-89jp-8q8g.
 [target.'cfg(windows)'.dependencies]
-tray-icon = "0.24.1"
+tray-icon = "0.25.1"
 windivert = { version = "0.6", optional = true, features = ["vendored"] }
 
 # Override lightspeed-client features on Windows
