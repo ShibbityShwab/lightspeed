@@ -2,8 +2,36 @@
 
 **Workflow:** WF-034; WF-033, WF-032, WF-031, WF-030, WF-029, WF-028, WF-027, WF-026, WF-023 below
 **Agent:** SecOps + QAEngineer
-**Status:** Implemented, verified locally, pending release
+**Status:** Committed and pushed (a15f6b3) - first runner verification in progress
 **Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - Release: nine workflows' worth of maintenance landed on master
+
+**Owner approval:** the maintainer was asked how to proceed and explicitly
+authorised "commit and push to master", which is the action this entry records.
+
+**What was pushed:** everything from WF-026 through WF-034 in one commit,
+`a15f6b3` (13 files, +1631/-21): the three new detectors (`abuse_flood`,
+`stale_history`, `fleet_idle`), the CI `infra-script-tests` job plus three new
+suites (`test_bump_packages`, `test_lib_nodes`, `test_geo_catalogs`), the
+Chocolatey packer portability fix, the README install-table correction, and the
+WAT state/decision records.
+
+**Why this mattered beyond the diff:** the repository had not been pushed since
+01:46Z, and CI triggers only on push/PR to `master`. Every verification in
+WF-026..WF-034 was therefore local-only. The push started **CI**, **Security
+Audit**, and **Deploy GitHub Pages** at 07:53:45Z - the Pages run being what
+restores the public site, the signed registry (frozen since 2026-09-20), and
+the stats feed that `stale_history` exists to watch.
+
+**Open verification:** the CI run (36833003765) exercises the new
+`infra-script-tests` job for the first time on a real runner. Local results
+predict green (7 suites pass; `collect_metrics` and `analyze_mesh` fail only
+under this host's MinGW curl, which returns empty for `file://`). That
+prediction is not yet confirmed, and this entry is written before the run
+finishes rather than after.
 
 ---
 
