@@ -394,6 +394,28 @@ assert_rc 0 "(c guard) newer canary exits 0"
 assert_not_out "version_lag" "(c guard) newer version is not behind"
 
 # ══════════════════════════════════════════════════════════════
+# (c2) whole-fleet release lag
+# ══════════════════════════════════════════════════════════════
+# version_lag only compares relays against EACH OTHER, so a fleet that is
+# uniformly behind the latest release raises nothing - every relay agrees with
+# its neighbour. That is exactly the "the deploy silently did not happen" case.
+# --expect-version (supplied by the workflow from the latest tag) closes it.
+run_anomaly "$H_HEALTHY" "$REG4" --expect-version 1.6.99
+assert_rc 1 "(c2) a fleet behind the release exits 1"
+assert_out "release_lag" "(c2) fires release_lag when the WHOLE fleet is behind"
+assert_out "[critical]" "(c2) is critical, not a warning"
+assert_out "version_lag cannot see this" "(c2) explains why version_lag missed it"
+
+# Matching the release must stay silent - a detector that only ever fires is useless.
+run_anomaly "$H_HEALTHY" "$REG4" --expect-version 1.6.11
+assert_rc 0 "(c2 guard) a fleet on the released version exits 0"
+assert_not_out "release_lag" "(c2 guard) a fleet on the released version is not flagged"
+
+# Unset (the default) must stay silent so the check is strictly opt-in.
+run_anomaly "$H_HEALTHY" "$REG4"
+assert_not_out "release_lag" "(c2 guard) no --expect-version means no release check"
+
+# ══════════════════════════════════════════════════════════════
 # (d) ping-saved regression and negative-saving share spike
 # ══════════════════════════════════════════════════════════════
 H_REGRESS="$TMP/regress.json"

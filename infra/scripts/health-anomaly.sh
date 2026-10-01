@@ -115,6 +115,11 @@ ABUSE_SHARE=0.9  # abuse_blocked / packets_dropped floor
 # relays) has stopped and every other detector is describing a frozen
 # past. 0 disables the check, for an intentionally static fixture.
 MAX_STALENESS=10800 # 3h; tolerates a couple of missed cron slots
+# Optional expected release version. version_lag only compares relays against each
+# other, so a fleet that is UNIFORMLY behind the latest release raises nothing -
+# every relay agrees with its neighbour. When this is set, a fleet whose majority
+# version is behind it fires release_lag (critical).
+EXPECT_VERSION=""
 
 # Clock seam: tests set this to pin "now" so staleness assertions are
 # deterministic instead of racing the wall clock.
@@ -177,6 +182,10 @@ while [ $# -gt 0 ]; do
 	--max-staleness)
 		shift
 		MAX_STALENESS="${1:-10800}"
+		;;
+	--expect-version)
+		shift
+		EXPECT_VERSION="${1:-}"
 		;;
 	--timeout)
 		shift
@@ -395,6 +404,19 @@ def vcmp($a; $b):
          message: (.id + ": version " + .v + " behind fleet " + $refV
                    + " (" + ($maxc | tostring) + " relays ahead)") }
    ]) as $verFlags
+# Whole-fleet release lag. $verFlags covers a relay behind the fleet, but if every
+# relay is behind the RELEASE they all agree and nothing fires. Measured live on
+# 2026-10-01: the fleet was uniformly on 1.6.14 (deployed 425s after the tag), so
+# this was not tripped - it exists for the case where a deploy silently did not
+# happen, which is exactly what nothing else can see.
+| (if ($expect != "" and ($expect | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+        and $refV != null and (vcmp($refV; $expect) < 0))
+   then [{ type: "release_lag", severity: "critical",
+           fleet_version: $refV, expected_version: $expect,
+           message: ("the whole fleet is on " + $refV + " but the latest release is "
+                     + $expect + " - no relay is running the released build; "
+                     + "version_lag cannot see this because every relay agrees") }]
+   else [] end) as $relFlags
 | ([ $ids[] as $id
      | select($WL >= 2)
      | (($win[-1] | rel_life(.; $id; "saved_ms_sum"))
@@ -485,7 +507,7 @@ def vcmp($a; $b):
      | { type: "relay_health_failed", severity: "critical", relay: $id,
          message: ($id + ": /health probe failed") }
    ]) as $healthFlags
-| ($zeroFlags + $idleFlags + $authFlags + $verFlags + $savedFlags + $abuseFlags
+| ($zeroFlags + $idleFlags + $authFlags + $verFlags + $relFlags + $savedFlags + $abuseFlags
    + $staleFlags + $missingFlags + $healthFlags) as $flags
 | {
     window: $W,
@@ -514,6 +536,7 @@ result="$(jq -c \
 	--argjson abuse_min "$ABUSE_MIN" \
 	--argjson abuse_share "$ABUSE_SHARE" \
 	--argjson max_stale "$MAX_STALENESS" \
+	--arg expect "$EXPECT_VERSION" \
 	--argjson now "$NOW_EPOCH" \
 	"$JQ_PROGRAM" <<<'null' 2>&1)"
 jq_rc=$?

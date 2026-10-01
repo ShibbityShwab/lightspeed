@@ -69,6 +69,27 @@ jobs:
         # is not stale (it has no snapshots to age), which is what keeps a
         # first run or a fresh stats branch from failing.
         run: |
+          # Resolve the newest SOFTWARE release so a fleet that silently missed a
+          # deploy is caught. version_lag compares relays against each other, so
+          # a uniformly stale fleet raises nothing.
+          #
+          # Not /releases/latest: that returns whatever was published most
+          # recently, which here includes data-only tags like geoip-2026-10.
+          # Filter to semver tags, newest first.
+          #
+          # Best-effort - an API hiccup must not become a false alarm, so an
+          # unresolved tag skips the check (the detector treats "" as unset).
+          EXPECT="$(curl -fsS --max-time 20 \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=30" \
+            | jq -r '[.[].tag_name | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$"))][0] // ""' \
+            2>/dev/null | sed 's/^v//' || true)"
+          if [ -n "$EXPECT" ]; then
+            echo "expecting fleet release: $EXPECT"
+          else
+            echo "could not resolve the newest release; skipping the release-lag check"
+          fi
           bash infra/scripts/health-anomaly.sh \
             --history .stats/network-history.json \
-            --max-staleness 10800
+            --max-staleness 10800 \
+            --expect-version "$EXPECT"
