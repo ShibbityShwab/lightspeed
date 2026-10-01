@@ -1007,3 +1007,46 @@ the fixtures-vs-reality gap that has now cost this repo three times in one day -
 its own output is cheap and would have caught all three immediately.
 **Also cleaned up:** testing created `.stats/` in the repo root, which is NOT gitignored.
 Removed; tree confirmed clean. Worth adding to `.gitignore` if the harness is used again.
+
+---
+
+### 2026-10-01: append-history.sh silently discarded every append past ~93 snapshots
+
+**Agent:** DevOps + QAEngineer
+**Status:** Accepted
+**Rationale:** asked what I would fix as maintainer, I went back to the one thing I had left
+unexplained. Reproduced cleanly: appends 1..93 recorded, then EVERY append from 94 to 400
+a silent no-op that exited 0. A dropped append was indistinguishable from a successful one.
+
+**Mechanism, confirmed in source:** `append-history.sh` passed the whole history as ONE
+command-line argument (`--argjson prev "$prev"`). Past the argument limit - 32 KiB on
+Windows, **128 KiB per-argument on Linux** (`MAX_ARG_STRLEN`) - jq fails, and the fallback
+`[ -z "$result" ] && result="$prev"` keeps the previous document while still exiting 0.
+A live scale check made this concrete: the real history is **1.7 MB at 84 snapshots**
+(~20 KiB each), projecting to 7.4 MB at the 360 cap.
+
+**Why it survived:** its own test could not catch it. The fixtures are ~250 bytes, so 400
+appends total only ~100 KiB and stay just under Linux's 128 KiB limit - the suite was
+green **on the edge of the cliff**. And the script is not on the production path
+(`pages.yml` calls `collect-metrics.sh`), which had already fixed this exact thing and
+says so in a comment: *"travel as files rather than --argjson: past ARG_MAX the jq run
+produced [failure]"*.
+
+**Fix (`04c3a59`):** ported the sibling's approach - payloads travel as files
+(`--slurpfile`), bound inside the jq program so all 15 variable references are unchanged -
+and a failed computation now **fails loudly with a diagnostic** instead of silently keeping
+the old history. Verified: the 400-append loop went frozen-at-93 -> caps-at-360, and
+`test_append_history.sh` went from 4 failures to all assertions passing.
+
+**Guard (`6f6546e`):** a regression case with production-sized snapshots. Measured rather
+than assumed - a first attempt (80 relays x 12) reached only 87,099 bytes, BELOW the
+131,072 limit, and would have passed against the broken code. Sized up to 160 relays x 15
+=> **216,032 bytes**, above the limit, so it fails against `--argjson`.
+
+**Containment established by sweep, not assumption:** every other `--argjson` caller
+passes a fleet-bounded payload (<= 10 nodes) or a scalar. The two scripts that handle the
+big history in production - `collect-metrics.sh` and `health-anomaly.sh` - already use
+`--slurpfile`. So the defect was real but contained to one non-production script.
+
+**Withdrawn recommendation:** I had listed `.gitattributes` as a small win. It is not -
+setting `eol=lf` repo-wide would renormalise every tracked file on the next checkout.
