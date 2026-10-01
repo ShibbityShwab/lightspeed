@@ -787,17 +787,17 @@ mod tests {
     fn test_game_ids_unique_and_stable() {
         assert_eq!(game_id::GAME_IDS.len(), 20, "every real game needs one id");
 
-        // Each id 1..=19 must appear exactly once (0 stays reserved for UNKNOWN).
-        let mut seen = [0u8; 20];
+        // Each id 1..=20 must appear exactly once (0 stays reserved for UNKNOWN).
+        let mut seen = [0u8; 21];
         for (key, id) in game_id::GAME_IDS.iter().copied() {
             assert!(
-                (1..=19).contains(&id),
+                (1..=20).contains(&id),
                 "key {key:?} has out-of-range id {id}"
             );
             assert_eq!(seen[id as usize], 0, "duplicate id {id}");
             seen[id as usize] += 1;
         }
-        for id in 1..=19u8 {
+        for id in 1..=20u8 {
             assert_eq!(seen[id as usize], 1, "id {id} missing or duplicated");
         }
 
@@ -820,6 +820,7 @@ mod tests {
         assert_eq!(game_id::ROBLOX, 17);
         assert_eq!(game_id::ZOMBOID, 18);
         assert_eq!(game_id::WARDDOGS, 19);
+        assert_eq!(game_id::MINECRAFT, 20);
     }
 
     #[test]
@@ -828,7 +829,7 @@ mod tests {
             assert_eq!(game_id::id_for_key(key), id, "id_for_key({key:?})");
             assert_eq!(game_id::key_for_id(id), Some(key), "key_for_id({id})");
         }
-        assert_eq!(game_id::id_for_key("minecraft"), game_id::UNKNOWN);
+        assert_eq!(game_id::id_for_key("minecraft-java"), game_id::UNKNOWN);
         assert!(game_id::key_for_id(250).is_none());
     }
 
