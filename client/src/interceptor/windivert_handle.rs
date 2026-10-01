@@ -26,7 +26,20 @@ use windivert_sys::{
     WinDivertClose, WinDivertFlags, WinDivertLayer, WinDivertOpen, WinDivertRecv, WinDivertSend,
     WinDivertShutdown, WinDivertShutdownMode,
 };
-use windows::Win32::Foundation::HANDLE;
+
+/// The handle type used by `windivert-sys` 0.11.
+///
+/// It is no longer the `windows` crate's `HANDLE`: 0.11 dropped that dependency
+/// entirely (`WinDivertOpen` returns the raw OS handle, the other calls take a
+/// `*mut c_void`), so this crate no longer needs to keep its `windows` version
+/// in lockstep with windivert's - which is what blocked the windows 0.62 upgrade.
+type WinDivertHandle = *mut core::ffi::c_void;
+
+/// `windivert-sys` 0.11 models `BOOL` as a plain `c_int`, so a success test is a
+/// comparison rather than the `windows::BOOL::as_bool` helper.
+fn succeeded(ok: core::ffi::c_int) -> bool {
+    ok != 0
+}
 
 /// An owned WinDivert handle with deterministic, idempotent teardown.
 ///
@@ -40,15 +53,15 @@ use windows::Win32::Foundation::HANDLE;
 /// `close` (or drops the last clone). A `close` that races a `shutdown` could
 /// run `WinDivertShutdown` against a handle value Windows has already recycled.
 pub struct OwnedHandle {
-    raw: HANDLE,
+    raw: WinDivertHandle,
     /// Set (once) when a close has been attempted, so `Drop` never closes
     /// twice. It records the attempt, not success: a failed close leaves it
     /// set so we do not retry against a possibly recycled handle value.
     closed: AtomicBool,
 }
 
-// SAFETY: `OwnedHandle` holds the WinDivert handle as an immutable `isize`
-// value (`HANDLE`), not a raw pointer, and the only interior state is a
+// SAFETY: `OwnedHandle` holds the WinDivert handle as an opaque value (a raw
+// handle, not a Rust reference), and the only interior state is a
 // thread-safe `AtomicBool`. The WinDivert FFI explicitly supports concurrent
 // `recv`/`send`/`shutdown`/`close` calls on the same handle from different
 // threads, so moving it between threads (`Send`) and sharing references across
@@ -82,10 +95,14 @@ impl OwnedHandle {
 
         // SAFETY: [Category 8 - FFI] `filter` is a live NUL-terminated C string
         // owned by the local binding, so the pointer is valid for the whole
-        // call; the returned `HANDLE` is checked for validity below before it
+        // call; the returned handle is checked for validity below before it
         // is stored.
-        let raw = unsafe { WinDivertOpen(filter.as_ptr(), layer, priority, flags) };
-        if raw.is_invalid() {
+        //
+        // `WinDivertOpen` returns the raw OS handle as an `isize`, while the
+        // remaining calls take a `*mut c_void`; the cast is a pure
+        // representation change, not a dereference.
+        let raw = unsafe { WinDivertOpen(filter.as_ptr(), layer, priority, flags) } as WinDivertHandle;
+        if raw.is_null() {
             return Err(io::Error::last_os_error());
         }
 
@@ -136,7 +153,7 @@ impl OwnedHandle {
             )
         };
 
-        if ok.as_bool() {
+        if succeeded(ok) {
             Ok((recv_len as usize, addr))
         } else {
             Err(io::Error::last_os_error())
@@ -179,7 +196,7 @@ impl OwnedHandle {
             )
         };
 
-        if ok.as_bool() {
+        if succeeded(ok) {
             Ok(sent_len as usize)
         } else {
             Err(io::Error::last_os_error())
@@ -210,7 +227,7 @@ impl OwnedHandle {
         // mode is a plain `#[repr(u32)]` enum passed by value.
         let ok = unsafe { WinDivertShutdown(self.raw, mode) };
 
-        if ok.as_bool() {
+        if succeeded(ok) {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
@@ -241,7 +258,7 @@ impl OwnedHandle {
         // `shutdown`/`close` are serialised by the owner thread.
         let ok = unsafe { WinDivertClose(self.raw) };
 
-        if ok.as_bool() {
+        if succeeded(ok) {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
