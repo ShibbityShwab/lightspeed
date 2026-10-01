@@ -88,7 +88,9 @@ fi
 # ── Compute deltas, totals, and the bounded snapshot list ────
 JQ_PROGRAM='
 def n: (tonumber? // 0);
-($prev.snapshots // []) as $snaps
+($prevf[0]) as $prev
+| ($statsf[0]) as $stats
+| ($prev.snapshots // []) as $snaps
 | ($snaps | last) as $lastsnap
 | (($lastsnap.per_relay) // {}) as $prevrelay
 | (($lastsnap.totals) // {}) as $prevtotals
@@ -147,15 +149,37 @@ def n: (tonumber? // 0);
   }
 '
 
-result="$(jq -c \
-    --argjson prev "$prev" \
-    --argjson stats "$stats_json" \
-    --argjson max "$MAX_SNAPSHOTS" \
-    "$JQ_PROGRAM" <<<'null' 2>/dev/null || true)"
+PREV_TMP="$(mktemp)"
+STATS_TMP="$(mktemp)"
+printf '%s' "$prev" > "$PREV_TMP"
+printf '%s' "$stats_json" > "$STATS_TMP"
 
-if [ -z "$result" ]; then
+result="$(jq -c \
+    --slurpfile prevf "$PREV_TMP" \
+    --slurpfile statsf "$STATS_TMP" \
+    --argjson max "$MAX_SNAPSHOTS" \
+    "$JQ_PROGRAM" <<<'null')"
+jq_rc=$?
+
+# A failed computation must NOT masquerade as success. The old fallback kept the
+# previous history and exited 0, which is right for genuinely unusable input
+# (documented above) but silently DISCARDS a valid append when jq fails for any
+# other reason. Observed live: the history was passed via --argjson, so past the
+# command-line limit (32 KiB Windows, 128 KiB per-argument Linux) jq failed and
+# every append after the 93rd became a silent no-op with exit 0. At ~20 KiB per
+# snapshot the real history is 1.7 MB at 84 snapshots, so this was reachable.
+# Payloads now travel as files, matching collect-metrics.sh, which fixed the same
+# thing (see its "travel as files rather than --argjson" note).
+if [ "$jq_rc" -ne 0 ] || [ -z "$result" ]; then
+    rm -f "$PREV_TMP" "$STATS_TMP"
+    if [ "$prev" != "$DEFAULT_HISTORY" ] || [ -s "$STATS_PATH" ]; then
+        printf 'append-history: refusing to silently drop an append (jq rc=%s)\n' "$jq_rc" >&2
+        printf 'append-history: keeping the previous history unchanged\n' >&2
+        exit 1
+    fi
     result="$prev"
 fi
+rm -f "$PREV_TMP" "$STATS_TMP"
 
 write_json "$result"
 exit 0
