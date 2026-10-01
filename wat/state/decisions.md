@@ -730,3 +730,94 @@ A peer-reviewed audit (oracle plus a data analyst) of the live stats found three
 **Rationale:** six dependency PRs have sat open for one to ten days. Sorting them by "are the checks green" would have been misleading in both directions: two green PRs (#106 tray-icon, #108 dirs) are based on `922dea4f` while master is now `0f7296a0`, so their passing checks describe a tree that no longer exists; and the two that look like ordinary chores are compile breaks - #109 (`sha2` 0.10.9 -> 0.11.0) fails every compiling job because the `Digest`/`Sha256` API changed under `proxy/src/handoff.rs`, and #107 (`windows` 0.48 -> 0.62) spans several breaking releases on the WinDivert/WFP FFI surface.
 **Impact:** no dependency was merged. #135 (thiserror patch, lockfile only) and #136 (Docker rust patch) are the only two that are both recent and minimally scoped; #106/#108 need a fresh run before their green means anything; #107/#109 need code migration first, and #107 cannot be compiled on this workstation, so it must be driven by CI. Recorded so the next agent does not re-triage from zero or, worse, merge a breaking bump because a stale tick was green.
 **Alternatives Considered:** merging the four green PRs was rejected because two are stale and one (`dirs` 6 -> 7) is a major bump whose green predates today's master; closing the failing PRs was rejected because they are legitimate upgrades needing migration work, and closing them would silently drop the maintenance signal Dependabot exists to raise.
+
+---
+
+### 2026-10-01: The workstation's missing toolchain was the real blocker, not the work
+
+**Agent:** DevOps
+**Status:** Accepted (implemented across WF-039..WF-048)
+**Rationale:** Every workflow from WF-023 to WF-038 carried the same caveat - no Rust
+toolchain locally, so `[QUALITY_STUB]` could not run and Rust changes were CI-only. Two
+Dependabot PRs had therefore been declined outright (#109 `sha2`, #107 `windows`) not
+because they were hard but because nobody could compile them. Installing stable Rust
+plus clippy/rustfmt, then a WinLibs MinGW toolchain to satisfy the C compiler that
+`ring`/`getrandom`/`windows-sys` need, converted both into ordinary engineering. All
+free, so `[COST_STUB]` holds.
+**Impact:** the boundary moved from "no Rust verification at all" to: `cargo fmt`,
+`cargo check`, and `cargo test` across the whole workspace, plus clippy on every crate
+including `lightspeed-gui` (which CI never linted). Still NOT locally verifiable:
+Windows *runtime* behaviour - WinDivert driver interaction needs real hardware, so the
+WF-023 gap stands and is narrower, not closed.
+**Alternatives Considered:** continuing to decline the migrations was rejected because it
+left a real upgrade blocked indefinitely on an environment gap the owner could fix in
+minutes; installing MSVC Build Tools was rejected in favour of MinGW because it is a
+much larger Microsoft installer, and the `cfg(windows)`-gated deps compile under gnu too.
+
+---
+
+### 2026-10-01: Land dependency upgrades at the source, not via stale PR branches
+
+**Agent:** RustDev + DevOps
+**Status:** Accepted (WF-040, WF-041, WF-043, WF-048)
+**Rationale:** Six Dependabot PRs were resolved without merging any of them. Their green
+ticks are evidence for a COMMIT, not for current master: #106/#108 were based on
+`922dea4f` and #138 on `c115738e` while master kept moving. Each upgrade was instead
+reproduced on today's master, verified (`cargo check` / `cargo test`, or a known-answer
+test), and committed there - after which Dependabot closes its own PR as superseded.
+**Impact:** `sha2` 0.11 (with its `LowerHex` newtype break fixed and verified against the
+published SHA-256 vector AND the repo's own `sha256_file_matches_a_known_digest` test),
+`thiserror` 2.0.21, `tokio-test` 0.4.6, `tray-icon` 0.25.1, `dirs` 7.0, and the Docker
+`rust` 1.98.1 base image (tag existence checked against Docker Hub, since a missing base
+image fails at pull time).
+**Alternatives Considered:** merging the green PRs was rejected because a stale tick is
+not evidence - that reasoning was already recorded in WF-038 and applying it
+inconsistently would have been worse than either choice; hand-bumping without verifying
+was rejected because it is exactly how a breaking change reaches master unnoticed.
+
+---
+
+### 2026-10-01: Unblocking windivert required moving three crates, not one
+
+**Agent:** RustDev
+**Status:** Accepted (WF-044)
+**Rationale:** PR #107 bumped only `client`'s `windows` 0.48 -> 0.62 and could never
+compile: `windivert` 0.6 and `windivert-sys` 0.10 (both max STABLE) pin `windows` 0.48,
+so the crate held two incompatible `HANDLE` types (`isize` vs `*mut c_void`). The repo
+already warned about this at `client/Cargo.toml:95`. Two further blockers: `windivert-sys`
+declares `links = "WinDivert"` and cargo allows only one owner per graph, and BOTH client
+and client-gui declare `windivert` directly. The fix moved `windivert` 0.7.0-beta.4 +
+`windivert-sys` 0.11.0-beta.2 + `windows` 0.62 together, plus six FFI call sites.
+**Impact:** `windivert-sys` 0.11 dropped its `windows` dependency entirely, so the
+version-lockstep constraint disappears and `Cargo.lock` shrinks ~87 lines. Windows CI
+(`windows-test`, `windows-gui`) passed after the push.
+**Alternatives Considered:** pinning `windivert` to a git revision was rejected as
+unmaintainable; forcing the old `windows` version alongside 0.62 was rejected because the
+`links` constraint makes two `windivert-sys` versions impossible in one graph. Recorded
+with its caveat: this puts the packet-capture path on two BETA crates, and runtime
+behaviour still needs a real Windows machine.
+
+---
+
+### 2026-10-01: A pipeline that excludes a thing cannot catch that thing
+
+**Agent:** QAEngineer + DevOps
+**Status:** Accepted (WF-045, WF-047)
+**Rationale:** Two separate blind spots had the same shape - the pipeline structurally
+excluded the code it should have covered. (1) Nine `infra/scripts/test_*.sh` suites were
+referenced by nothing but themselves (WF-027). (2) `lightspeed-gui` was excluded from 8
+sites in `ci.yml`, including every clippy invocation, so three lints accumulated from the
+day they were written (WF-042/WF-047). A third instance surfaced in the tests: `cargo test
+--workspace` enables `quic` through feature unification, and the QUIC test binaries never
+pinned a rustls provider, so five tests failed locally with a panic that named rustls
+configuration rather than a harness gap (WF-045).
+**Impact:** all three are wired in now - the infra suites run in CI, the GUI job lints, and
+the shared `install_crypto_provider()` helper closes the provider gap. The last one had
+already been discovered twice independently (two test files carried private copies of the
+helper) and was missing twice.
+**Alternatives Considered:** only fixing the symptoms was rejected - cleaning up lints or
+test failures without removing the exclusion restores the same silent-regression path.
+**Method note recorded for the next agent:** a `#![cfg(feature = ...)]` test file run
+without its feature reports `0 passed; 0 failed`, a VACUOUS PASS that looks green. Two of
+my attribution attempts were invalid for this reason before the three-way comparison
+settled the question. Always check the test COUNT, not just the result line.
