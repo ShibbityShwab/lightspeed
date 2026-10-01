@@ -1,3 +1,45 @@
+# Current Phase: WF-043 thiserror patch bump verified on current master (PR #138)
+
+**Workflow:** WF-043; WF-042, WF-041, WF-040, WF-039, WF-038 below
+**Agent:** RustDev + DevOps
+**Status:** Verified, awaiting test run before landing
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-043 three dependency PRs resolved by fixing them at the source
+
+**Driving evidence:** the PR list changed under the session's own work. Checking
+it directly rather than from memory:
+- **#106** (`tray-icon` 0.25.1) -> **CLOSED**, superseded by `32306a9`.
+- **#108** (`dirs` 7.0) -> **CLOSED**, superseded by `32306a9`.
+- **#109** (`sha2` 0.11) -> closed earlier, superseded by `9416adc`.
+- **#138** (new): `thiserror` 2.0.20 -> 2.0.21 patch group.
+
+So three Dependabot PRs that had been open and red/stale since 2026-09-21 are
+now resolved, each by landing the upgrade on `master` with its own
+verification rather than merging a branch whose checks described an older tree.
+
+**WF-043, the new one, verified rather than waved through:** #138 is a PATCH
+bump whose checks are green (16 SUCCESS, 0 fail), which is exactly the case
+where it is tempting to skip verification. But its checks ran against base
+`c115738e` while master is now `d03beaf`, so the ticks are stale - the same
+condition that justified refusing #106/#108 in WF-038. The standard was applied
+consistently instead:
+- `cargo update -p thiserror@2.0.20 --precise 2.0.21` on current master.
+  Note the spec had to be disambiguated: the lockfile carries BOTH
+  `thiserror@1.0.69` and `thiserror@2.0.20` (different transitive majors), and a
+  bare `-p thiserror` errors as ambiguous. Bumping both lines would have been a
+  different and riskier change than the one under review.
+- `cargo check --workspace --exclude lightspeed-gui` -> **Finished**.
+- The resulting lockfile diff matches PR #138 exactly: the 2.x line moves
+  2.0.20 -> 2.0.21, the 1.0.69 line is untouched.
+
+**Owner approved landing it.** `cargo test --workspace --exclude
+lightspeed-gui` is the final gate before the commit.
+
+---
+
 # Current Phase: WF-042 lightspeed-gui has never been linted by CI (maintenance)
 
 **Workflow:** WF-042; WF-041, WF-040, WF-039, WF-038, WF-037, WF-036 below
