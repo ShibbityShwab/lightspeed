@@ -29,8 +29,8 @@ pub fn compare_versions(current: &str, latest: &str) -> bool {
 
     let count = current_segments.len().max(latest_segments.len());
     for index in 0..count {
-        let current_segment = current_segments.get(index).copied().map_or(0, |v| v);
-        let latest_segment = latest_segments.get(index).copied().map_or(0, |v| v);
+        let current_segment = current_segments.get(index).copied().unwrap_or(0);
+        let latest_segment = latest_segments.get(index).copied().unwrap_or(0);
         match current_segment.cmp(&latest_segment) {
             std::cmp::Ordering::Less => return true,
             std::cmp::Ordering::Greater => return false,

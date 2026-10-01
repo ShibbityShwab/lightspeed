@@ -333,7 +333,7 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
         // Foreign address: parts[2]
         if let Some(port_str) = parts[2].rsplit(':').next() {
             if let Ok(port) = port_str.parse::<u16>() {
-                if !ports.contains(&port) && port >= 28015 && port <= 30000 {
+                if !ports.contains(&port) && (28015..=30000).contains(&port) {
                     ports.push(port);
                 }
             }
