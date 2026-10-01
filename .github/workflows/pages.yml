@@ -3,8 +3,18 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: [master]
+    # The published stats are produced BY infra/scripts (network-stats.sh,
+    # collect-metrics.sh, recommend-regions.sh) and read web/registry.json,
+    # so both trees are inputs to this pipeline. Watching only web/** meant
+    # a change to a collector could never refresh the site it feeds, and -
+    # more importantly - gave the pipeline no push trigger at all when the
+    # hourly cron was throttled (observed 2026-10-01: the registry sat stale
+    # from 2026-09-20 while every scheduled run reported success).
     paths:
       - 'web/**'
+      - 'infra/scripts/**'
+      - 'infra/geo/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
   schedule:
     - cron: '0 * * * *'
