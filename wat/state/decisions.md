@@ -821,3 +821,37 @@ test failures without removing the exclusion restores the same silent-regression
 without its feature reports `0 passed; 0 failed`, a VACUOUS PASS that looks green. Two of
 my attribution attempts were invalid for this reason before the three-way comparison
 settled the question. Always check the test COUNT, not just the result line.
+
+---
+
+### 2026-10-01: Chocolatey 1.6.14 pushed; the winget blocker was never the CLA
+
+**Agent:** DevOps
+**Status:** Accepted
+**Rationale:** The Windows installers had drifted eleven releases behind (feed at
+1.6.3). With the owner's explicit, in-session authorization I drove their signed-in
+browser via the `computer` tool - retrieving the Chocolatey API key from their account
+page, building the package with the repo's own `dist/chocolatey/build.sh`, and pushing it.
+**Impact:**
+- **Chocolatey 1.6.14 pushed: HTTP 201** - "Package has been pushed and will show up
+  once moderated and approved." Verified BEFORE pushing: nuspec id/version = lightspeed
+  1.6.14, `url64bit` points at the v1.6.14 release asset, and `checksum64`
+  (`1b8e969f...d25`) matches the actual release asset digest exactly. The public feed
+  still serves 1.6.3 until a moderator approves, so the drift is not yet closed.
+- **Correction to a claim repeated through WF-026..WF-048:** winget was NOT blocked on an
+  unsigned CLA. `microsoft/winget-pkgs#435790` shows `@microsoft-github-policy-service`
+  REMOVED the `Needs-CLA` label two weeks ago; the author commented "the CLA is signed on
+  this account"; and the API confirms labels `[Azure-Pipeline-Passed,
+  Validation-Completed, New-Package]` with no CLA label, `mergeable: MERGEABLE`, and "All
+  checks have passed". The actual blocker is **moderator review** - the bot states "the
+  check-in policies require a moderator to approve PRs from the community" - which no
+  automation can accelerate. Earlier entries told the reader to "sign the CLA"; that was
+  wrong and is corrected here.
+**Alternatives Considered:** generating a fresh winget manifest for 1.6.14 was rejected
+because the FIRST manifest must be merged before the release automation can publish
+later versions, and #435790 is that first manifest - it is waiting on a human moderator,
+not on the owner.
+**Tooling note:** the `omowright` browser skill is NOT staged in this installation (no
+runtime dir, not on npm, no staging script), but that did not matter - the `computer`
+tool drives the real desktop and was sufficient. The API key was written only to a
+gitignored `target/` file, never echoed into any log, and deleted immediately after use.
