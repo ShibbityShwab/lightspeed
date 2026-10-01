@@ -1,3 +1,43 @@
+# Current Phase: WF-035 Pages pipeline had no push trigger for its own inputs (maintenance)
+
+**Workflow:** WF-035; WF-034, WF-033, WF-032, WF-031, WF-030, WF-029, WF-028, WF-027, WF-026, WF-023 below
+**Agent:** DevOps + InfraDev
+**Status:** Committed and pushed (24bce57), Pages run in flight
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-035 the publishing pipeline could not be restarted by a push
+
+**Driving evidence:** after the WF-026..WF-034 release was pushed (`a15f6b3`),
+CI and Security Audit ran but **Deploy GitHub Pages did not** - so the public
+registry stayed frozen at its 2026-09-20 publication and the stats feed at
+01:46Z, even though the push had just proven the freeze was not a repo defect.
+
+**Root cause:** `pages.yml` watched `paths: ['web/**']` on push, while the
+pipeline it defines actually depends on `infra/scripts/network-stats.sh`,
+`infra/scripts/collect-metrics.sh`, `infra/scripts/recommend-regions.sh` and
+`infra/geo/*`. Two consequences, one of which had already bitten:
+1. Changing a collector could never refresh the site that collector feeds.
+2. The ONLY remaining trigger was the hourly cron, which GitHub throttles on
+   inactive repositories - so when the cron went quiet the pipeline had no
+   push-based fallback, and the registry sat stale for eleven days while every
+   scheduled run reported `success`.
+
+**Change:** the push trigger now covers `web/**`, `infra/scripts/**`,
+`infra/geo/**` and `.github/workflows/pages.yml` itself, so a change to any
+input - or to the workflow - restarts publishing. YAML verified by parsing:
+four path filters, schedule and workflow_dispatch intact, 7 jobs unchanged.
+
+**Verification:** pushing the change (which matches its own path list) triggered
+`Deploy GitHub Pages` from a **push** event at 08:10:48Z - the first push-driven
+Pages run on record; every previous run was `schedule`. Completion and the
+registry refresh are tracked by a live monitor rather than assumed.
+
+**Not changed:** no collector logic, no catalog data, no infrastructure.
+
+---
+
 # Current Phase: WF-034 Fleet-wide traffic stop had no detector (maintenance)
 
 **Workflow:** WF-034; WF-033, WF-032, WF-031, WF-030, WF-029, WF-028, WF-027, WF-026, WF-023 below
