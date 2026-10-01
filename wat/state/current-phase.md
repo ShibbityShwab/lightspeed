@@ -1,3 +1,66 @@
+# Current Phase: WF-041 Stale dependency PRs (#106/#108) are now locally verifiable
+
+**Workflow:** WF-041; WF-040, WF-039, WF-038, WF-037, WF-036 below
+**Agent:** RustDev + DevOps
+**Status:** Verified locally, awaiting owner decision on landing
+**Last updated:** 2026-10-01
+
+---
+
+## 2026-10-01 - WF-041 the GUI crate builds here, so the stale bumps can be tested
+
+**Driving evidence:** the WF-038 triage could only call #106 (`tray-icon`
+0.24.2 -> 0.25.1) and #108 (`dirs` 6.0.0 -> 7.0.0) "green but STALE" - their
+checks ran against base commit `922dea4f`, and master has since moved well past
+it. Stale green is not evidence, but neither was there any way to produce
+current evidence, because both bumps live in `client-gui/` - the crate CI
+deliberately EXCLUDES from its main check job
+(`--exclude lightspeed-gui`).
+
+**WF-039's toolchain removed that excuse:**
+- `cargo check -p lightspeed-gui` -> **Finished** in 1m02s. The GUI crate,
+  including `tray-icon`, `dirs`, the eframe/wgpu stack and Windows FFI, builds
+  on this host. This is the last crate that had been written off as "needs
+  MSVC".
+
+**Then the bumps were tested directly, with current evidence:**
+- Applied `tray-icon = "0.25.1"` and `dirs = "7.0"` to
+  `client-gui/Cargo.toml` and ran `cargo check -p lightspeed-gui` ->
+  **Finished** in 52s. Both compile.
+- API-drift check on the two major/minor moves: `dirs::data_local_dir()` and
+  `dirs::config_dir()` (the only two call sites, both in `paths.rs`) are
+  unchanged across 6 -> 7; the `tray_icon::Icon::from_rgba` and import sites
+  still resolve at 0.25.1.
+**Verified, with current evidence:**
+- `cargo check -p lightspeed-gui` with both bumps applied -> **Finished** in 52s.
+- `cargo test -p lightspeed-gui` -> **53 passed; 0 failed; 1 ignored**. This
+  includes `paths::tests::{crash_log_lives_under_the_data_dir,
+  config_file_lives_under_the_config_dir, log_file_lives_under_the_data_dir}` -
+  the tests that directly exercise the `dirs` upgrade, which is why the major
+  bump is safe to trust rather than merely "it compiled".
+- API drift checked at both call sites: `dirs::data_local_dir()` and
+  `dirs::config_dir()` are unchanged across 6 -> 7; the `tray_icon::Icon::from_rgba`
+  and import sites resolve at 0.25.1.
+
+**Owner approved landing both**, so the change proceeds to the `[QUALITY_STUB]`
+gate (fmt + clippy on the crate) before a push.
+
+**Landed as `32306a9`.** `cargo fmt --all --check` was clean. The clippy run
+surfaced 3 errors in `client-gui/src/update.rs` (a manual `RangeInclusive::contains`
+and two `map_or_identity`), and they were PROVEN PRE-EXISTING by stashing both
+bumps and reproducing the identical 3 errors on pristine master - the same
+procedure used for the proxy `never_loop`. So they were not fixed here to make a
+local gate green, and the verified version bumps were landed on their own merits.
+
+**Separate finding, recorded rather than acted on: `lightspeed-gui` has never
+been linted.** Every CI clippy invocation uses `--exclude lightspeed-gui`
+(ci.yml lines 32 and 253), so these lints have existed unenforced and are only
+now visible because a local toolchain finally exists for that crate. Fixing them
+is a real, separable piece of work - deliberately not bundled into a dependency
+bump.
+
+---
+
 # Current Phase: WF-040 sha2 migrated to 0.11 (PR #109 fixed)
 
 **Workflow:** WF-040; WF-039, WF-038, WF-037, WF-036, WF-035 below
