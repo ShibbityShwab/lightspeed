@@ -1,0 +1,181 @@
+//! Orthographic globe for the route visualiser.
+//!
+//! Draws the relay fleet on a sphere with the active relay highlighted, so the
+//! window can answer "where does my traffic egress" at a glance. Deliberately
+//! dependency-free: an orthographic projection onto egui's painter is a few
+//! dozen lines and works on every platform, where pulling in a 3D engine (or a
+//! webview) for one wireframe would cost far more than it returns.
+//!
+//! Coordinates come from the registry node id, which already encodes the city
+//! (`relay-lax-1`, `relay-fra`), so no geo database is needed for the fleet.
+//! Placing an arbitrary game server would need IP geolocation, which this
+//! module does not have.
+
+use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
+
+/// Latitude/longitude in degrees.
+pub type LatLon = (f32, f32);
+
+/// Coordinates for a registry node id, matched on its city segment.
+pub fn relay_coords(node_id: &str) -> Option<LatLon> {
+    let id = node_id.to_ascii_lowercase();
+    let table: [(&str, LatLon); 8] = [
+        ("lax", (34.05, -118.24)),
+        ("ewr", (40.74, -74.17)),
+        ("sgp", (1.35, 103.82)),
+        ("fra", (50.11, 8.68)),
+        ("nrt", (35.68, 139.69)),
+        ("bom", (19.08, 72.88)),
+        ("mad", (40.42, -3.70)),
+        ("syd", (-33.87, 151.21)),
+    ];
+    table
+        .iter()
+        .find(|(code, _)| id.contains(code))
+        .map(|(_, ll)| *ll)
+}
+
+/// A point to plot: coordinates, colour, and how much to emphasise it.
+pub struct Marker {
+    pub at: LatLon,
+    pub colour: Color32,
+    pub label: String,
+    pub emphasis: f32,
+}
+
+/// Project a lat/lon to the unit sphere, then rotate so `centre` faces the camera.
+///
+/// Returns the 2D offset from the globe centre and the depth: positive depth is
+/// the near hemisphere. Callers skip anything with a negative depth, which is
+/// what hides the far side of the sphere.
+fn project(ll: LatLon, centre: LatLon) -> (Vec2, f32) {
+    let (lat, lon) = (ll.0.to_radians(), ll.1.to_radians());
+    let (clat, clon) = (centre.0.to_radians(), centre.1.to_radians());
+
+    // Sphere to cartesian, then rotate longitude so `centre`'s meridian faces us
+    // and latitude so `centre` sits at the middle of the disc.
+    let dlon = lon - clon;
+    let x = lat.cos() * dlon.sin();
+    let y = lat.sin();
+    let z = lat.cos() * dlon.cos();
+
+    let (sy, cy) = clat.sin_cos();
+    let y2 = y * cy - z * sy;
+    let z2 = y * sy + z * cy;
+
+    (Vec2::new(x, -y2), z2)
+}
+
+/// Draw the globe and its markers, centred on `centre`.
+pub fn draw(ui: &mut egui::Ui, size: f32, centre: LatLon, markers: &[Marker]) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let c = rect.center();
+    let r = size * 0.5 - 10.0;
+
+    let dim = Color32::from_rgb(0x27, 0x27, 0x36);
+    let grid = Color32::from_rgb(0x22, 0x22, 0x30);
+
+    // The sphere itself: a filled disc plus a rim, read as a ball rather than a
+    // wire cage.
+    painter.circle_filled(c, r, Color32::from_rgb(0x11, 0x11, 0x18));
+    painter.circle_stroke(c, r, Stroke::new(1.0, dim));
+
+    // Graticule every 30 degrees, near hemisphere only.
+    let line_stroke = Stroke::new(1.0, grid);
+    for i in 0..6 {
+        let lat = -60.0 + i as f32 * 30.0;
+        let pts: Vec<Pos2> = (0..=72)
+            .filter_map(|j| {
+                let lon = -180.0 + j as f32 * 5.0;
+                let (o, depth) = project((lat, lon), centre);
+                (depth > 0.0).then(|| c + o * r)
+            })
+            .collect();
+        if pts.len() > 1 {
+            painter.add(egui::Shape::line(pts, line_stroke));
+        }
+    }
+    for i in 0..12 {
+        let lon = -180.0 + i as f32 * 30.0;
+        let pts: Vec<Pos2> = (0..=72)
+            .filter_map(|j| {
+                let lat = -90.0 + j as f32 * 2.5;
+                let (o, depth) = project((lat, lon), centre);
+                (depth > 0.0).then(|| c + o * r)
+            })
+            .collect();
+        if pts.len() > 1 {
+            painter.add(egui::Shape::line(pts, line_stroke));
+        }
+    }
+
+    // Markers, far side first so near ones draw on top.
+    let mut plotted: Vec<(f32, Pos2, &Marker)> = markers
+        .iter()
+        .filter_map(|m| {
+            let (o, depth) = project(m.at, centre);
+            (depth > 0.0).then_some((depth, c + o * r, m))
+        })
+        .collect();
+    plotted.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    for (_, pos, m) in plotted {
+        let rad = 3.0 + m.emphasis * 3.0;
+        painter.circle_filled(pos, rad, m.colour);
+        if m.emphasis > 0.5 {
+            // A halo so the active relay reads from across the room.
+            painter.circle_stroke(pos, rad + 4.0, Stroke::new(1.5, m.colour));
+            painter.text(
+                pos + Vec2::new(0.0, -14.0),
+                egui::Align2::CENTER_BOTTOM,
+                &m.label,
+                egui::FontId::proportional(11.0),
+                m.colour,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn city_codes_map_to_coordinates() {
+        assert!(relay_coords("relay-lax-1").is_some());
+        assert!(relay_coords("relay-fra").is_some());
+        assert!(relay_coords("relay-syd-1").is_some());
+    }
+
+    #[test]
+    fn unknown_ids_have_no_position() {
+        assert!(relay_coords("my-custom-proxy").is_none());
+        assert!(relay_coords("").is_none());
+    }
+
+    #[test]
+    fn the_point_you_face_is_visible_and_the_far_side_is_not() {
+        let centre = (50.11, 8.68);
+        let (near, near_depth) = project(centre, centre);
+        assert!(near_depth > 0.0, "the centre of view must face the camera");
+        assert!(
+            near.length() < 0.01,
+            "the centre of view must land at the middle of the disc"
+        );
+
+        let (_, far_depth) = project((-33.87, 151.21 - 180.0), centre);
+        assert!(far_depth < near_depth);
+    }
+
+    #[test]
+    fn projection_keeps_every_point_inside_the_disc() {
+        let centre = (34.05, -118.24);
+        for lat in (-90..=90).step_by(15) {
+            for lon in (-180..=180).step_by(15) {
+                let (o, _) = project((lat as f32, lon as f32), centre);
+                assert!(o.length() <= 1.001, "({lat},{lon}) escaped the unit disc");
+            }
+        }
+    }
+}

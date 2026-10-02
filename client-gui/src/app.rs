@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use crate::config::{self, GuiConfig, ProxyEntry};
 use crate::discovery::{self, DiscoveryOutcome, RelayHealth};
+use crate::globe;
 use crate::paths;
 use crate::platform::{Platform, QuitFlag, TrayAction, TrayHandle};
 use crate::update::UpdateStatus;
@@ -852,51 +853,8 @@ impl<P: Platform> LightSpeedApp<P> {
 
         ui.add_space(theme::S3);
 
-        // Connection details: relay health and RTT history.
-        theme::card(ui, "Connection details", |ui| {
-            if self.status.connected {
-                if let Some(probe) = &self.health {
-                    ui.horizontal(|ui| {
-                        ui.label("Relay health:").on_hover_text(
-                            "Live counters from the selected relay's HTTP /health endpoint.",
-                        );
-                        match &probe.result {
-                            Some(Ok(health)) => {
-                                ui.monospace(format!("{} packets relayed", health.packets_relayed));
-                                ui.separator();
-                                ui.monospace(format!("{} sessions", health.sessions_created));
-                            }
-                            Some(Err(_)) => {
-                                ui.weak("unavailable");
-                            }
-                            None => {
-                                ui.weak("checking…");
-                            }
-                        }
-                    });
-                }
-            }
-
-            if !self.status.rtt_history.is_empty() {
-                let points: PlotPoints = self
-                    .status
-                    .rtt_history
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &v)| [i as f64, v])
-                    .collect();
-                let line = Line::new("RTT (ms)", points).color(theme::ACCENT);
-                Plot::new("rtt_plot")
-                    .height(80.0)
-                    .allow_drag(false)
-                    .allow_zoom(false)
-                    .allow_scroll(false)
-                    .show_axes([false, true])
-                    .show(ui, |plot_ui| plot_ui.line(line));
-            } else {
-                ui.add_space(80.0);
-            }
-        });
+        // Connection details live at the top of the window, beside the state
+        // banner, rather than behind this disclosure.
             });
     }
 }
@@ -996,8 +954,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             ui.horizontal(|ui| {
                 if let Some(mark) = &self.header_icon {
                     ui.add(
-                        egui::Image::from_texture(mark)
-                            .fit_to_exact_size(egui::vec2(20.0, 20.0)),
+                        egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(20.0, 20.0)),
                     );
                 }
                 ui.label(egui::RichText::new("LightSpeed").strong());
@@ -1054,9 +1011,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
             // One primary action button. When it cannot act, it says why
             // rather than only greying out, so the state is never a dead end.
-            let can_act = self.is_admin
-                && self.selected_entry().is_some()
-                && self.status.connected;
+            let can_act = self.is_admin && self.selected_entry().is_some() && self.status.connected;
             // While unelevated the only action the user can take is elevating,
             // so that is what the primary slot offers. A disabled Boost button
             // here would be the largest control on screen doing nothing.
@@ -1099,48 +1054,130 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
             if !self.is_admin && !boosting {
                 ui.add_space(theme::S2);
-                egui::Frame::new()
-                    .fill(theme::SURFACE)
-                    .corner_radius(6.0)
-                    .inner_margin(10.0)
-                    .show(ui, |ui| {
-                        ui.vertical_centered(|ui| {
-                            if ui
-                                .button("Restart as Administrator")
-                                .on_hover_text(
-                                    "Relaunches LightSpeed with elevated privileges (system permission prompt).",
-                                )
-                                .clicked()
-                            {
-                                self.restart_elevated();
-                            }
-                        });
-                    });
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new("Administrator is required to redirect game traffic")
+                            .size(theme::LABEL)
+                            .color(theme::TEXT_DIM),
+                    );
+                });
             }
 
-            ui.add_space(theme::S2);
+            ui.add_space(theme::S3);
 
-            // Compact connection stat row.
-            ui.horizontal(|ui| {
-                ui.label("Ping");
-                if self.status.connected && self.status.latest_rtt_ms > 0.0 {
-                    ui.colored_label(
-                        rtt_colour(self.status.latest_rtt_ms),
-                        format!("{:.1} ms", self.status.latest_rtt_ms),
-                    );
-                } else {
-                    ui.weak("—");
-                }
-                ui.separator();
-                ui.label("Relay");
+            // Connection details sit directly under the state banner: this is
+            // the information people look at while playing, so it stays above
+            // the fold and never inside a disclosure.
+            theme::card(ui, "Connection", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Ping");
+                    if self.status.connected && self.status.latest_rtt_ms > 0.0 {
+                        ui.colored_label(
+                            rtt_colour(self.status.latest_rtt_ms),
+                            format!("{:.1} ms", self.status.latest_rtt_ms),
+                        );
+                    } else {
+                        ui.weak("—");
+                    }
+                    ui.separator();
+                    ui.label("Relay");
+                    if self.status.connected {
+                        ui.label(&self.status.proxy_addr);
+                    } else {
+                        ui.weak("—");
+                    }
+                });
+
                 if self.status.connected {
-                    ui.label(&self.status.proxy_addr);
-                } else {
-                    ui.weak("—");
+                    if let Some(probe) = &self.health {
+                        ui.add_space(theme::S2);
+                        ui.horizontal(|ui| {
+                            ui.label("Relayed").on_hover_text(
+                                "Live counters from the selected relay's HTTP /health endpoint.",
+                            );
+                            match &probe.result {
+                                Some(Ok(health)) => {
+                                    ui.monospace(format!("{} packets", health.packets_relayed));
+                                    ui.separator();
+                                    ui.monospace(format!("{} sessions", health.sessions_created));
+                                }
+                                Some(Err(_)) => {
+                                    ui.weak("unavailable");
+                                }
+                                None => {
+                                    ui.weak("checking…");
+                                }
+                            }
+                        });
+                    }
+                }
+
+                if !self.status.rtt_history.is_empty() {
+                    ui.add_space(theme::S2);
+                    let points: PlotPoints = self
+                        .status
+                        .rtt_history
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &v)| [i as f64, v])
+                        .collect();
+                    let line = Line::new("RTT (ms)", points).color(theme::ACCENT);
+                    Plot::new("rtt_plot")
+                        .height(64.0)
+                        .allow_drag(false)
+                        .allow_zoom(false)
+                        .allow_scroll(false)
+                        .show_axes([false, true])
+                        .show(ui, |plot_ui| plot_ui.line(line));
                 }
             });
 
-            ui.add_space(theme::S6);
+            // Route: where traffic actually egresses. The node id encodes the
+            // city, so the fleet can be placed without a geo database.
+            let active_node = self
+                .selected_entry()
+                .and_then(|e| e.node_id.clone())
+                .or_else(|| self.status.node_id.clone());
+            let mut markers: Vec<globe::Marker> = Vec::new();
+            for entry in &self.proxies {
+                let Some(id) = entry.node_id.as_deref() else {
+                    continue;
+                };
+                let Some(at) = globe::relay_coords(id) else {
+                    continue;
+                };
+                let active = active_node.as_deref() == Some(id);
+                markers.push(globe::Marker {
+                    at,
+                    colour: if active { theme::ACCENT } else { theme::BORDER },
+                    label: entry.label.clone(),
+                    emphasis: if active { 1.0 } else { 0.0 },
+                });
+            }
+            let centre = active_node
+                .as_deref()
+                .and_then(globe::relay_coords)
+                .unwrap_or((30.0, 0.0));
+
+            theme::card(ui, "Route", |ui| {
+                ui.vertical_centered(|ui| {
+                    globe::draw(ui, 150.0, centre, &markers);
+                });
+                ui.add_space(theme::S2);
+                ui.vertical_centered(|ui| {
+                    let caption = match &active_node {
+                        Some(id) => format!("Egress relay: {id}"),
+                        None => "No relay selected".to_string(),
+                    };
+                    ui.label(
+                        egui::RichText::new(caption)
+                            .size(theme::LABEL)
+                            .color(theme::TEXT_DIM),
+                    );
+                });
+            });
+
+            ui.add_space(theme::S3);
 
             // Configuration scrolls under the status summary so the window
             // can stay small next to a game.
@@ -1371,7 +1408,6 @@ mod theme {
     pub const S3: f32 = 12.0;
     pub const S4: f32 = 16.0;
     pub const S5: f32 = 24.0;
-    pub const S6: f32 = 32.0;
 
     const R_INLINE: u8 = 6;
     const R_CARD: u8 = 10;

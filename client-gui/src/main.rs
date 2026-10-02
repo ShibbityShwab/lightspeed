@@ -9,6 +9,7 @@ mod app;
 mod config;
 mod crash;
 mod discovery;
+mod globe;
 mod paths;
 mod platform;
 mod single_instance;
