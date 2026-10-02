@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::config::{self, GuiConfig, ProxyEntry};
 use crate::discovery::{self, DiscoveryOutcome, RelayHealth};
 use crate::paths;
-use crate::platform::{self, Platform, QuitFlag, TrayAction, TrayHandle};
+use crate::platform::{Platform, QuitFlag, TrayAction, TrayHandle};
 use crate::update::UpdateStatus;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
@@ -132,6 +132,7 @@ pub struct LightSpeedApp<P: Platform> {
     auto_select: bool,
     relay_race: Option<Receiver<Option<SocketAddrV4>>>,
     show_proxy_manager: bool,
+    show_settings: bool,
     manager_label_input: String,
     manager_addr_input: String,
     config_error: Option<String>,
@@ -212,6 +213,7 @@ impl<P: Platform> LightSpeedApp<P> {
             auto_select,
             relay_race: None,
             show_proxy_manager: false,
+            show_settings: false,
             manager_label_input: String::new(),
             manager_addr_input: String::new(),
             config_error: None,
@@ -265,12 +267,6 @@ impl<P: Platform> LightSpeedApp<P> {
         let games = games();
         let idx = self.selected_game_idx.min(games.len().saturating_sub(1));
         &games[idx]
-    }
-
-    fn selected_game_ports(&self) -> (u16, u16) {
-        let entry = self.selected_game();
-        parse_custom_port_range(&self.custom_port_input)
-            .unwrap_or_else(|| platform::default_port_range(entry.key, entry.default_port))
     }
 
     fn connect_selected(&mut self) {
@@ -451,6 +447,467 @@ impl<P: Platform> LightSpeedApp<P> {
             *shared.lock().unwrap() = Some(result);
         });
     }
+
+    /// Start the interceptor boost for the selected game and relay.
+    fn start_boost(&mut self) {
+        // Warm up port detection for diagnostic logging.
+        let _ = parse_custom_port_range(&self.custom_port_input)
+            .unwrap_or_else(|| P::detect_game_ports(self.selected_game_idx));
+
+        if let Some(proxy) = self.selected_proxy_addr() {
+            let game_key = self.selected_game().key;
+            let mut engine = self.engine.lock().unwrap();
+            engine.set_telemetry_game(game_key);
+            let result = engine.start_interceptor(
+                game_key,
+                proxy,
+                self.fec_enabled,
+                4, // default FEC K
+            );
+            if let Err(e) = result {
+                tracing::error!("start_interceptor failed: {}", e);
+            } else {
+                self.boost_start = Some(std::time::Instant::now());
+            }
+        }
+    }
+
+    /// Stop every active boost backend and clear the start timestamp.
+    fn stop_boost(&mut self) {
+        let mut engine = self.engine.lock().unwrap();
+        engine.stop_interceptor();
+        engine.stop_windivert();
+        engine.stop_capture();
+        engine.stop_redirect();
+        self.boost_start = None;
+    }
+
+    /// Relaunch with elevated privileges so the interceptor can start.
+    fn restart_elevated(&mut self) {
+        P::relaunch_as_admin();
+    }
+
+    /// Open the GUI trace log in the OS file manager.
+    fn reveal_log_file(&self) {
+        paths::open_in_os(&paths::log_file());
+    }
+
+    /// Drop or restore the control-plane link to the current relay.
+    ///
+    /// Stopping an active boost first is deliberate: leaving the interceptor or
+    /// its tunnel running against a relay we just disconnected would strand the
+    /// engine mid-redirect, which is the state the old Disconnect button
+    /// avoided by only appearing while idle.
+    fn toggle_relay_connection(&mut self) {
+        if self.status.connected {
+            if self.status.interceptor_active {
+                self.stop_boost();
+            }
+            self.engine.lock().unwrap().disconnect();
+        } else if self.selected_entry().is_some() {
+            self.connect_selected();
+        }
+    }
+
+    /// Show the settings window when the user opened it from the header.
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_settings;
+        egui::Window::new("LightSpeed Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(420.0)
+            .show(ctx, |ui| self.settings_body(ui));
+        self.show_settings = open;
+    }
+
+    /// Contents of the settings window, one card per concern.
+    fn settings_body(&mut self, ui: &mut egui::Ui) {
+        // Boost Server: which relay carries the game traffic.
+        theme::card(ui, "Boost Server", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Boost Server:").on_hover_ui(|ui| {
+                    ui.label(
+                        "Choose the relay server closest to your game server.\n\
+                                  Closer to the game server = lower ping, even if it's\n\
+                                  farther from your physical location.",
+                    );
+                    ui.hyperlink_to(
+                        "📖 Which server should I pick?",
+                        "https://github.com/ShibbityShwab/lightspeed/wiki/Choosing-a-Boost-Server",
+                    );
+                });
+                if self.proxies.is_empty() {
+                    match &self.discovery {
+                        DiscoveryState::InFlight(_) => {
+                            ui.spinner();
+                            ui.weak("Discovering relays…");
+                        }
+                        DiscoveryState::Done => {
+                            ui.colored_label(theme::WARN, "⚠ No relays discovered")
+                                .on_hover_text(self.discovery_error.clone().unwrap_or_else(|| {
+                                    "The relay registry returned no usable relays.".to_string()
+                                }));
+                            if ui.small_button("Retry").clicked() {
+                                self.start_discovery();
+                            }
+                        }
+                    }
+                } else {
+                    let prev = self.selected_proxy_idx;
+                    for (i, entry) in self.proxies.iter().enumerate() {
+                        let btn =
+                            ui.selectable_value(&mut self.selected_proxy_idx, i, &entry.label);
+                        btn.on_hover_text(format!("{}", entry.addr));
+                    }
+                    if self.selected_proxy_idx != prev {
+                        self.auto_select = false;
+                        self.connect_selected();
+                        self.persist_config();
+                    }
+                }
+                if !self.proxies.is_empty() {
+                    let auto = ui
+                        .checkbox(&mut self.auto_select, "Auto (fastest)")
+                        .on_hover_text(
+                            "Connect to the relay with the lowest latency. \
+                             Newly discovered relays are considered too.",
+                        );
+                    if auto.changed() {
+                        self.persist_config();
+                        if self.auto_select && !self.status.connected {
+                            self.start_relay_race();
+                        }
+                    }
+                }
+                if ui.button("⚙ Manage").clicked() {
+                    self.show_proxy_manager = true;
+                }
+            });
+
+            if !self.proxies.is_empty() {
+                if let Some(err) = self.discovery_error.clone() {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 190, 60),
+                            "⚠ Relay refresh failed - using the saved list",
+                        )
+                        .on_hover_text(err);
+                        if ui.small_button("Retry").clicked() {
+                            self.start_discovery();
+                        }
+                    });
+                }
+            }
+        });
+
+        ui.add_space(theme::SECTION_GAP);
+
+        // Game: what is being boosted, plus the reliability shield.
+        theme::card(ui, "Game", |ui| {
+            if let Some(ref detected) = self.auto_detected_game {
+                ui.horizontal(|ui| {
+                    ui.colored_label(theme::OK, "🎮 Game found:")
+                        .on_hover_text("LightSpeed automatically detected a running game.");
+                    ui.label(detected);
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.weak("No game running - select your game and click Boost")
+                        .on_hover_text(
+                            "Start your game and connect to a server, then click \
+                             BOOST MY GAME. Or select your game manually below.",
+                        );
+                    if ui.small_button("🔄 Rescan").clicked() {
+                        self.auto_detected_game = try_auto_detect_game();
+                        if let Some(ref name) = self.auto_detected_game {
+                            if let Some(idx) = games()
+                                .iter()
+                                .position(|entry| entry.key.eq_ignore_ascii_case(name))
+                            {
+                                self.selected_game_idx = idx;
+                            }
+                        }
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.label("Game:  ").on_hover_text(
+                    "Select the game you want to boost. LightSpeed will \
+                                    automatically route its traffic for lower ping.",
+                );
+                egui::ComboBox::from_id_salt("game_select")
+                    .selected_text(self.selected_game().display)
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        for (i, entry) in games().iter().enumerate() {
+                            ui.selectable_value(&mut self.selected_game_idx, i, entry.display);
+                        }
+                    });
+            });
+
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut self.fec_enabled,
+                    "🛡 Reliability Shield - recover lost packets (+25% data)",
+                )
+                .on_hover_ui(|ui| {
+                    ui.label(
+                        "Reliability Shield sends extra repair data so the Boost Server \
+                         can reconstruct any packets your connection drops - no more \
+                         rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
+                    );
+                    ui.hyperlink_to(
+                        "📖 Learn more about Reliability Shield",
+                        "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield",
+                    );
+                });
+            });
+
+            ui.add_space(4.0);
+        });
+
+        ui.add_space(theme::SECTION_GAP);
+
+        // Advanced: manual server override and custom port range.
+        theme::card(ui, "Advanced", |ui| {
+            let adv_label = if self.show_advanced {
+                "v Advanced - set server manually"
+            } else {
+                "▶ Advanced - set server manually"
+            };
+            if ui
+                .small_button(adv_label)
+                .on_hover_text(
+                    "If auto-detect doesn't find your server, enter the game \
+                     server IP:port here to start boosting manually.",
+                )
+                .clicked()
+            {
+                self.show_advanced = !self.show_advanced;
+            }
+
+            if self.show_advanced {
+                ui.add_space(4.0);
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(25, 25, 35))
+                    .corner_radius(4.0)
+                    .inner_margin(8.0)
+                    .show(ui, |ui: &mut egui::Ui| {
+                        ui.weak(
+                            "Enter your game server's IP and port to start boosting \
+                             without waiting for auto-detect. Find the IP in your \
+                             game's server browser.",
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Server:");
+                            let default_port = self.selected_game().default_port;
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.server_input)
+                                    .hint_text(format!("e.g. 123.45.67.89:{}", default_port))
+                                    .desired_width(220.0),
+                            );
+                        });
+
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Custom Port Range:")
+                                .on_hover_ui(|ui| {
+                                    ui.label(
+                                        "Override the default port scan range for auto-detect. \
+                                         Use this if Packets Sent stays at 0 after 15 s.\n\
+                                         Format: lo-hi  (e.g. 28015-28999)  or a single port."
+                                    );
+                                    ui.hyperlink_to(
+                                        "📖 Port not detected - fix guide",
+                                        "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
+                                    );
+                                });
+                            let port_valid = self.custom_port_input.is_empty()
+                                || parse_custom_port_range(&self.custom_port_input).is_some();
+                            let te = egui::TextEdit::singleline(&mut self.custom_port_input)
+                                .hint_text("e.g. 28015-28999 (leave blank for auto)")
+                                .desired_width(200.0)
+                                .text_color(if port_valid {
+                                    ui.visuals().text_color()
+                                } else {
+                                    egui::Color32::from_rgb(220, 90, 90)
+                                });
+                            ui.add(te);
+                            if !port_valid {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(220, 90, 90),
+                                    "⚠ invalid",
+                                );
+                            }
+                        });
+
+                        ui.add_space(6.0);
+
+                        let server_valid = parse_server_addr(&self.server_input).is_some();
+                        let mbtn = egui::Button::new("▶  Start Boost (manual)")
+                            .fill(if server_valid {
+                                egui::Color32::from_rgb(40, 90, 55)
+                            } else {
+                                egui::Color32::from_rgb(60, 60, 60)
+                            });
+                        if ui.add_enabled(server_valid, mbtn).clicked() {
+                            if let Some(server_addr) = parse_server_addr(&self.server_input) {
+                                let entry = self.selected_game();
+                                let local_port = server_addr.port().max(entry.default_port);
+                                if let Some(proxy) = self.selected_proxy_addr() {
+                                    self.engine.lock().unwrap().start_redirect(
+                                        server_addr,
+                                        local_port,
+                                        self.fec_enabled,
+                                        4,
+                                        entry.display.to_string(),
+                                        proxy,
+                                    );
+                                }
+                            }
+                        }
+                        if !server_valid && !self.server_input.is_empty() {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 130, 50),
+                                "⚠ Enter a valid IP:port (e.g. 1.2.3.4:28015)",
+                            );
+                        }
+
+                        ui.add_space(4.0);
+                        let instruction = connect_instruction(
+                            self.selected_game(),
+                            self.server_input
+                                .parse::<SocketAddrV4>()
+                                .map(|a| a.port())
+                                .unwrap_or(self.selected_game().default_port),
+                        );
+                        ui.weak(instruction);
+
+                        ui.add_space(4.0);
+                        ui.weak(format!(
+                            "Capture backend (pcap mode): {}",
+                            if P::is_capture_available() {
+                                "available"
+                            } else {
+                                "not detected"
+                            }
+                        ));
+                    });
+            }
+        });
+
+        ui.add_space(theme::SECTION_GAP);
+
+        // Privacy: anonymous latency telemetry.
+        theme::card(ui, "Privacy", |ui| {
+            ui.horizontal(|ui| {
+                let changed = ui
+                    .checkbox(
+                        &mut self.share_latency_stats,
+                        "📊 Share anonymous latency stats",
+                    )
+                    .on_hover_text(
+                        "Send anonymous aggregate RTT, jitter, and FEC stats to your \
+                         relay so the community can see real latency improvements. No \
+                         IP address, identifier, or packet content is ever sent.",
+                    )
+                    .changed();
+                if changed {
+                    self.persist_config();
+                    self.engine
+                        .lock()
+                        .unwrap()
+                        .set_telemetry_enabled(self.share_latency_stats);
+                }
+            });
+        });
+
+        ui.add_space(theme::SECTION_GAP);
+
+        // Maintenance: self-update check.
+        theme::card(ui, "Maintenance", |ui| {
+            if ui
+                .button("Check for updates")
+                .on_hover_text("Check whether a newer version of LightSpeed is available.")
+                .clicked()
+            {
+                self.start_update_check();
+            }
+
+            // Manual link control. The status window only starts and stops
+            // boosting; dropping the relay connection is a rare, deliberate
+            // action, so it lives here rather than competing with Boost.
+            ui.add_space(theme::ROW_GAP);
+            ui.horizontal(|ui| {
+                let connected = self.status.connected;
+                let label = if connected {
+                    "Disconnect from relay"
+                } else {
+                    "Connect to relay"
+                };
+                let hint = if connected {
+                    "Drop the control-plane link to the current relay"
+                } else {
+                    "Reconnect to the selected relay"
+                };
+                if ui.button(label).on_hover_text(hint).clicked() {
+                    self.toggle_relay_connection();
+                }
+            });
+        });
+
+        ui.add_space(theme::SECTION_GAP);
+
+        // Connection details: relay health and RTT history.
+        theme::card(ui, "Connection details", |ui| {
+            if self.status.connected {
+                if let Some(probe) = &self.health {
+                    ui.horizontal(|ui| {
+                        ui.label("Relay health:").on_hover_text(
+                            "Live counters from the selected relay's HTTP /health endpoint.",
+                        );
+                        match &probe.result {
+                            Some(Ok(health)) => {
+                                ui.monospace(format!("{} packets relayed", health.packets_relayed));
+                                ui.separator();
+                                ui.monospace(format!("{} sessions", health.sessions_created));
+                            }
+                            Some(Err(_)) => {
+                                ui.weak("unavailable");
+                            }
+                            None => {
+                                ui.weak("checking…");
+                            }
+                        }
+                    });
+                }
+            }
+
+            if !self.status.rtt_history.is_empty() {
+                let points: PlotPoints = self
+                    .status
+                    .rtt_history
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &v)| [i as f64, v])
+                    .collect();
+                let line = Line::new("RTT (ms)", points).color(theme::ACCENT);
+                Plot::new("rtt_plot")
+                    .height(80.0)
+                    .allow_drag(false)
+                    .allow_zoom(false)
+                    .allow_scroll(false)
+                    .show_axes([false, true])
+                    .show(ui, |plot_ui| plot_ui.line(line));
+            } else {
+                ui.add_space(80.0);
+            }
+        });
+    }
 }
 
 // ── eframe::App impl ─────────────────────────────────────────────────────────
@@ -541,814 +998,115 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             }
         }
 
-        // ── Main panel ────────────────────────────────────────────────────
+        // ── Status window ────────────────────────────────────────────────
         egui::CentralPanel::default().show(ui, |ui| {
-            // Keep the footer action bar pinned while the status content
-            // scrolls, so the Boost button stays reachable at small sizes.
-            egui::ScrollArea::vertical()
-                .max_height((ui.available_height() - 40.0).max(120.0))
-                .show(ui, |ui| {
-            // ── Header ───────────────────────────────────────────────────
+            // Header: brand mark, app name, and the settings entry point.
             ui.horizontal(|ui| {
                 if let Some(mark) = &self.header_icon {
                     ui.add(
                         egui::Image::from_texture(mark)
-                            .fit_to_exact_size(egui::vec2(22.0, 22.0)),
+                            .fit_to_exact_size(egui::vec2(20.0, 20.0)),
                     );
                 }
-                ui.heading("LightSpeed");
+                ui.label(egui::RichText::new("LightSpeed").strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (label, colour) = if self.status.connected {
-                        ("• Connected", theme::OK)
-                    } else {
-                        ("• Disconnected", theme::BAD)
-                    };
-                    let response = ui.colored_label(colour, label);
-                    if self.status.connected {
-                        response.on_hover_text(format!("Boost Server: {}", self.status.proxy_addr));
+                    if ui.button("⚙ Settings").clicked() {
+                        self.show_settings = true;
                     }
                 });
             });
-
             ui.separator();
 
-            // ── Boost Server selector ─────────────────────────────────────
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Boost Server:")
-                    .on_hover_ui(|ui| {
-                        ui.label("Choose the relay server closest to your game server.\n\
-                                  Closer to the game server = lower ping, even if it's\n\
-                                  farther from your physical location.");
-                        ui.hyperlink_to("📖 Which server should I pick?",
-                            "https://github.com/ShibbityShwab/lightspeed/wiki/Choosing-a-Boost-Server");
-                    });
-                if self.proxies.is_empty() {
-                    match &self.discovery {
-                        DiscoveryState::InFlight(_) => {
-                            ui.spinner();
-                            ui.weak("Discovering relays…");
-                        }
-                        DiscoveryState::Done => {
-                            ui.colored_label(
-                                theme::WARN,
-                                "⚠ No relays discovered",
-                            )
-                            .on_hover_text(
-                                self.discovery_error.clone().unwrap_or_else(|| {
-                                    "The relay registry returned no usable relays.".to_string()
-                                }),
-                            );
-                            if ui.small_button("Retry").clicked() {
-                                self.start_discovery();
-                            }
-                        }
-                    }
-                } else {
-                    let prev = self.selected_proxy_idx;
-                    for (i, entry) in self.proxies.iter().enumerate() {
-                        let btn = ui.selectable_value(&mut self.selected_proxy_idx, i, &entry.label);
-                        btn.on_hover_text(format!("{}", entry.addr));
-                    }
-                    if self.selected_proxy_idx != prev {
-                        self.auto_select = false;
-                        self.connect_selected();
-                        self.persist_config();
-                    }
-                }
-                if !self.proxies.is_empty() {
-                    let auto = ui
-                        .checkbox(&mut self.auto_select, "Auto (fastest)")
-                        .on_hover_text(
-                            "Connect to the relay with the lowest latency. \
-                             Newly discovered relays are considered too.",
-                        );
-                    if auto.changed() {
-                        self.persist_config();
-                        if self.auto_select && !self.status.connected {
-                            self.start_relay_race();
-                        }
-                    }
-                }
-                if ui.button("⚙ Manage").clicked() {
-                    self.show_proxy_manager = true;
-                }
-            });
-
-            if !self.proxies.is_empty() {
-                if let Some(err) = self.discovery_error.clone() {
-                    ui.horizontal(|ui| {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(255, 190, 60),
-                            "⚠ Relay refresh failed - using the saved list",
-                        )
-                        .on_hover_text(err);
-                        if ui.small_button("Retry").clicked() {
-                            self.start_discovery();
-                        }
-                    });
-                }
-            }
-
-            // ── Connection status ────────────────────────────────────────
-            // Ping, keepalive, control-plane state, relay health and the RTT
-            // chart are one story - "how is my connection doing" - so they sit
-            // in one card rather than as four loose rows interrupted by
-            // separators. The chart keeps its own inset frame inside.
-            theme::card(ui, "Connection", |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Boost Ping:")
-                        .on_hover_ui(|ui| {
-                            ui.label("Round-trip time from your PC to the Boost Server.");
-                            ui.horizontal(|ui| {
-                                ui.colored_label(theme::OK, "• < 60ms");
-                                ui.label("  |  ");
-                                ui.colored_label(theme::WARN, "• 60-120ms");
-                                ui.label("  |  ");
-                                ui.colored_label(theme::BAD, "• > 120ms");
-                            });
-                            ui.label("This becomes your in-game ping when Boost is engaged.");
-                            ui.hyperlink_to("📖 Understanding ping",
-                                "https://github.com/ShibbityShwab/lightspeed/wiki/Understanding-Ping");
-                        });
-                    if self.status.connected && self.status.latest_rtt_ms > 0.0 {
-                        let rtt = self.status.latest_rtt_ms;
-                        ui.colored_label(rtt_colour(rtt), format!("{:.1} ms", rtt));
-                    } else if self.status.connected {
-                        ui.weak("measuring…");
-                    } else {
-                        ui.colored_label(theme::BAD, "offline");
-                    }
-                    ui.separator();
-                    ui.label(format!(
-                        "Keepalive: {} sent / {} echoed",
-                        self.status.packets_sent, self.status.packets_received
-                    ))
-                    .on_hover_text(
-                        "Keepalive pings sent to the Boost Server, and echo replies \
-                         received. '0 echoed' is normal until the relay answers and \
-                         does not affect game traffic.",
-                    );
-                });
-
-            // ── Control-plane registration ────────────────────────────────
-            ui.horizontal(|ui| {
-                ui.label("Control:")
-                    .on_hover_text("The relay's QUIC control plane registers this session and issues a token.");
-                if self.status.control_registered {
-                    let node = self.status.node_id.as_deref().unwrap_or("relay");
-                    ui.colored_label(
-                        egui::Color32::from_rgb(80, 200, 120),
-                        format!("✓ registered with {node}"),
-                    );
-                    if let Some(token) = self.status.session_token {
-                        ui.weak(format!("token 0x{token:08x}"));
-                    }
-                } else if let Some(ref err) = self.status.registration_error {
-                    ui.colored_label(theme::BAD, format!("⚠ {err}"));
-                } else {
-                    ui.weak("registering…");
-                }
-                if self.status.keepalive_generation > 0 {
-                    ui.separator();
-                    ui.weak(format!("session #{}", self.status.keepalive_generation));
-                }
-            });
-
-            // ── Relay health (optional, never blocks the frame) ───────────
-            if self.status.connected {
-                if let Some(probe) = &self.health {
-                    ui.horizontal(|ui| {
-                        ui.label("Relay health:").on_hover_text(
-                            "Live counters from the selected relay's HTTP /health endpoint.",
-                        );
-                        match &probe.result {
-                            Some(Ok(health)) => {
-                                ui.monospace(format!("{} packets relayed", health.packets_relayed));
-                                ui.separator();
-                                ui.monospace(format!("{} sessions", health.sessions_created));
-                            }
-                            Some(Err(_)) => {
-                                ui.weak("unavailable");
-                            }
-                            None => {
-                                ui.weak("checking…");
-                            }
-                        }
-                    });
-                }
-            }
-
-            // RTT sparkline
-            if !self.status.rtt_history.is_empty() {
-                let points: PlotPoints = self
-                    .status
-                    .rtt_history
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &v)| [i as f64, v])
-                    .collect();
-                let line = Line::new("RTT (ms)", points)
-                    .color(theme::ACCENT);
-                Plot::new("rtt_plot")
-                    .height(80.0)
-                    .allow_drag(false)
-                    .allow_zoom(false)
-                    .allow_scroll(false)
-                    .show_axes([false, true])
-                    .show(ui, |plot_ui| plot_ui.line(line));
+            // State banner: the single answer to "am I boosted?".
+            let boosting = self.status.interceptor_active
+                || self.status.windivert_active
+                || self.status.capture_active
+                || self.status.redirect_active;
+            let (headline, colour, fill) = if boosting {
+                ("BOOSTING", theme::OK, theme::PANEL)
+            } else if self.status.connected {
+                ("CONNECTED", theme::ACCENT, theme::PANEL_ACTION)
             } else {
-                ui.add_space(80.0);
-            }
-            });
-
-            ui.add_space(theme::SECTION_GAP);
-
-            // ── Game Routing section ──────────────────────────────────────
-            if self.status.interceptor_active {
-                // ── BOOST ENGAGED (OOP Interceptor) state ──────────────────────
-                ui.horizontal(|ui| {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(255, 200, 60),
-                        "⚡ BOOST ENGAGED",
-                    )
-                    .on_hover_text(format!(
-                        "Interceptor backend: {}",
-                        self.status.interceptor_platform
-                    ));
-                    if !self.status.interceptor_server.is_empty() {
-                        ui.label(format!(" - {}", self.status.interceptor_server))
-                            .on_hover_text("The game server your packets are being routed through the Boost Server to reach.");
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Packets Sent:")
-                        .on_hover_ui(|ui| {
-                            ui.label("Game packets captured and forwarded to the Boost Server.");
-                            ui.hyperlink_to("📖 What the numbers mean",
-                                "https://github.com/ShibbityShwab/lightspeed/wiki/What-The-Numbers-Mean");
-                        });
-                    ui.monospace(format!("{:>8}", self.status.interceptor_intercepted));
-                    ui.separator();
-                    ui.label("Returned:")
-                        .on_hover_text("Responses received from the Boost Server (relayed from game server).");
-                    ui.monospace(format!("{:>8}", self.status.interceptor_from_proxy));
-                    ui.separator();
-                    ui.label("Delivered:")
-                        .on_hover_text("Responses injected back into your game - your game sees these as coming directly from the game server.");
-                    ui.monospace(format!("{:>8}", self.status.interceptor_injected));
-                });
-                if self.status.interceptor_errors > 0 {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 80, 80),
-                        format!("⚠ Drops: {}", self.status.interceptor_errors),
-                    )
-                    .on_hover_ui(|ui| {
-                        ui.label("Packets that couldn't be delivered back to your game.\n\
-                                  Usually a firewall issue - see Troubleshooting.");
-                        ui.hyperlink_to("📖 Fix Drops",
-                            "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#packets-sent-climbing-packets-delivered-0");
-                    });
-                }
-
-                ui.add_space(4.0);
-                if self.status.interceptor_intercepted == 0 {
-                    // No packets yet - waiting for game traffic.
-                    let elapsed = self.boost_start
-                        .map(|t| t.elapsed().as_secs())
-                        .unwrap_or(0);
-
-                    if elapsed < 15 {
-                        // First 15 s: friendly "finding server" indicator.
-                        egui::Frame::new()
-                            .fill(egui::Color32::from_rgb(20, 30, 45))
-                            .corner_radius(4.0)
-                            .inner_margin(8.0)
-                            .show(ui, |ui: &mut egui::Ui| {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(120, 180, 255),
-                                    "🎯 Finding your game server…",
-                                );
-                                ui.weak(
-                                    "Launch your game and connect to a server.\n\
-                                     Your connection is passing through normally until we lock on.",
-                                );
-                            });
-                    } else {
-                        // 15 s+ with no packets → likely port mismatch - amber warning.
-                        let (lo, hi) = self.selected_game_ports();
-                        egui::Frame::new()
-                            .fill(egui::Color32::from_rgb(55, 40, 8))
-                            .corner_radius(4.0)
-                            .inner_margin(8.0)
-                            .show(ui, |ui: &mut egui::Ui| {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(255, 190, 60),
-                                    "⚠ No game traffic seen - possible port mismatch",
-                                );
-                                ui.weak(format!(
-                                    "Watching ports {lo}-{hi}. Your server may be on a \
-                                     different port.\n\
-                                     Stop Boost, open ▶ Advanced, set a Custom Port Range, \
-                                     then click BOOST MY GAME again.",
-                                ));
-                                ui.hyperlink_to(
-                                    "📖 Fix: port not detected",
-                                    "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
-                                );
-                            });
-                    }
-                } else {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(25, 40, 15))
-                        .corner_radius(4.0)
-                        .inner_margin(8.0)
-                        .show(ui, |ui: &mut egui::Ui| {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(150, 255, 150),
-                                "✅ Boost active - play normally, your game is fully optimised.",
-                            );
-                            ui.weak(
-                                "Your in-game ping now reflects the Boost Server route. \
-                                 If you switch servers, LightSpeed will re-detect automatically.",
-                            );
-                        });
-                }
-
-                ui.add_space(6.0);
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 32.0],
-                        egui::Button::new("■ Stop Boost")
-                            .fill(egui::Color32::from_rgb(160, 45, 45)),
-                    )
-                    .on_hover_text("Stop routing game traffic through the Boost Server and return to your normal connection.")
-                    .clicked()
-                {
-                    self.engine.lock().unwrap().stop_interceptor();
-                    self.boost_start = None;
-                }
-
-                if let Some(ref err) = self.status.interceptor_error {
-                    ui.add_space(4.0);
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 80, 80),
-                        format!("⚠ Error: {}", err),
-                    );
-                }
-            } else if self.status.windivert_active {
-                // ── BOOST ENGAGED (WinDivert) state ──────────────────────
-                ui.horizontal(|ui| {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(255, 200, 60),
-                        "⚡ BOOST ENGAGED",
-                    );
-                    if !self.status.windivert_server.is_empty() {
-                        ui.label(format!(" - {}", self.status.windivert_server))
-                            .on_hover_text("The game server your packets are being routed through the Boost Server to reach.");
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Packets Sent:")
-                        .on_hover_ui(|ui| {
-                            ui.label("Game packets captured and forwarded to the Boost Server.");
-                            ui.hyperlink_to("📖 What the numbers mean",
-                                "https://github.com/ShibbityShwab/lightspeed/wiki/What-The-Numbers-Mean");
-                        });
-                    ui.monospace(format!("{:>8}", self.status.windivert_intercepted));
-                    ui.separator();
-                    ui.label("Returned:")
-                        .on_hover_text("Responses received from the Boost Server (relayed from game server).");
-                    ui.monospace(format!("{:>8}", self.status.windivert_from_proxy));
-                    ui.separator();
-                    ui.label("Delivered:")
-                        .on_hover_text("Responses injected back into your game - your game sees these as coming directly from the game server.");
-                    ui.monospace(format!("{:>8}", self.status.windivert_injected));
-                });
-                if self.status.windivert_errors > 0 {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 80, 80),
-                        format!("⚠ Drops: {}", self.status.windivert_errors),
-                    )
-                    .on_hover_ui(|ui| {
-                        ui.label("Packet that couldn't be delivered back to your game.\n\
-                                  Usually a firewall issue - see Troubleshooting.");
-                        ui.hyperlink_to("📖 Fix Drops",
-                            "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#packets-sent-climbing-packets-delivered-0");
-                    });
-                }
-
-                ui.add_space(4.0);
-                if self.status.windivert_intercepted == 0 {
-                    // No packets yet - waiting for game traffic.
-                    let elapsed = self.boost_start
-                        .map(|t| t.elapsed().as_secs())
-                        .unwrap_or(0);
-
-                    if elapsed < 15 {
-                        // First 15 s: friendly "finding server" indicator.
-                        egui::Frame::new()
-                            .fill(egui::Color32::from_rgb(20, 30, 45))
-                            .corner_radius(4.0)
-                            .inner_margin(8.0)
-                            .show(ui, |ui: &mut egui::Ui| {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(120, 180, 255),
-                                    "🎯 Finding your game server…",
-                                );
-                                ui.weak(
-                                    "Launch your game and connect to a server.\n\
-                                     Your connection is passing through normally until we lock on.",
-                                );
-                            });
-                    } else {
-                        // 15 s+ with no packets → likely port mismatch - amber warning.
-                        let (lo, hi) = self.selected_game_ports();
-                        egui::Frame::new()
-                            .fill(egui::Color32::from_rgb(55, 40, 8))
-                            .corner_radius(4.0)
-                            .inner_margin(8.0)
-                            .show(ui, |ui: &mut egui::Ui| {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(255, 190, 60),
-                                    "⚠ No game traffic seen - possible port mismatch",
-                                );
-                                ui.weak(format!(
-                                    "Watching ports {lo}-{hi}. Your server may be on a \
-                                     different port.\n\
-                                     Stop Boost, open ▶ Advanced, set a Custom Port Range, \
-                                     then click BOOST MY GAME again.",
-                                ));
-                                ui.hyperlink_to(
-                                    "📖 Fix: port not detected",
-                                    "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
-                                );
-                            });
-                    }
-                } else {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(25, 40, 15))
-                        .corner_radius(4.0)
-                        .inner_margin(8.0)
-                        .show(ui, |ui: &mut egui::Ui| {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(150, 255, 150),
-                                "✅ Boost active - play normally, your game is fully optimised.",
-                            );
-                            ui.weak(
-                                "Your in-game ping now reflects the Boost Server route. \
-                                 If you switch servers, LightSpeed will re-detect automatically.",
-                            );
-                        });
-                }
-
-                ui.add_space(6.0);
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 32.0],
-                        egui::Button::new("■ Stop Boost")
-                            .fill(egui::Color32::from_rgb(160, 45, 45)),
-                    )
-                    .on_hover_text("Stop routing game traffic through the Boost Server and return to your normal connection.")
-                    .clicked()
-                {
-                    self.engine.lock().unwrap().stop_windivert();
-                    self.boost_start = None;
-                }
-
-                if let Some(ref err) = self.status.windivert_error {
-                    ui.add_space(4.0);
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 80, 80),
-                        format!("⚠ Error: {}", err),
-                    );
-                }
-            } else if self.status.capture_active {
-                // ── BOOST ACTIVE (capture/pcap mode) ─────────────────────
-                ui.horizontal(|ui| {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(80, 200, 120),
-                        "⚡ BOOST ENGAGED",
-                    );
-                    ui.label(format!(
-                        " - {} ({})",
-                        self.status.capture_game, self.status.capture_interface,
-                    ));
-                });
-
-                // Live packet stats
-                ui.horizontal(|ui| {
-                    ui.label("Packets Boosted:")
-                        .on_hover_text("Game packets captured and forwarded to the Boost Server.");
-                    ui.monospace(format!("{:>8}", self.status.capture_pkts_out));
-                    ui.separator();
-                    ui.label("Returned:")
-                        .on_hover_text("Responses received from the Boost Server.");
-                    ui.monospace(format!("{:>8}", self.status.capture_pkts_in));
-                    ui.separator();
-                    ui.label("Injected:")
-                        .on_hover_text("Responses injected back into your game.");
-                    ui.monospace(format!("{:>8}", self.status.capture_injected));
-                });
-                if !self.status.capture_bpf.is_empty() {
-                    ui.weak(format!("Filter: {}", self.status.capture_bpf))
-                        .on_hover_text("BPF capture filter in use for this session.");
-                }
-                if self.status.capture_errors > 0 {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 80, 80),
-                        format!("⚠ Drops: {}", self.status.capture_errors),
-                    )
-                    .on_hover_text("Packets that couldn't be delivered - check your firewall settings.");
-                }
-                if self.status.capture_fec && self.status.capture_fec_recovered > 0 {
-                    ui.label(format!(
-                        "🛡 Lost packets recovered: {}",
-                        self.status.capture_fec_recovered
-                    ))
-                    .on_hover_text("Reliability Shield recovered these dropped packets before your game noticed.");
-                }
-
-                // Diagnostic: proxy working but no game packets seen yet.
-                if self.status.capture_pkts_in > 5 && self.status.capture_pkts_out == 0 {
-                    ui.add_space(2.0);
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(55, 44, 8))
-                        .corner_radius(4.0)
-                        .inner_margin(8.0)
-                        .show(ui, |ui: &mut egui::Ui| {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(255, 210, 60),
-                                "⚠ No game traffic detected yet.",
-                            );
-                            ui.weak("• Make sure your game is connected to a server (not just the menu).");
-                            ui.weak("• If using a non-standard port, use Advanced - set server manually.");
-                        });
-                }
-
-                ui.add_space(4.0);
-                egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(20, 45, 30))
-                    .corner_radius(4.0)
-                    .inner_margin(8.0)
-                    .show(ui, |ui: &mut egui::Ui| {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(150, 255, 150),
-                            "✅ Boost active - just play normally.",
-                        );
-                        ui.weak("LightSpeed is silently rerouting your game traffic.");
-                    });
-
-                ui.add_space(6.0);
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 32.0],
-                        egui::Button::new("■  Stop Boost")
-                            .fill(egui::Color32::from_rgb(160, 45, 45)),
-                    )
-                    .on_hover_text("Stop the boost and return to your normal connection.")
-                    .clicked()
-                {
-                    self.engine.lock().unwrap().stop_capture();
-                }
-
-                if let Some(ref err) = self.status.capture_error {
-                    ui.add_space(4.0);
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 80, 80),
-                        format!("⚠ Error: {}", err),
-                    );
-                }
-            } else if self.status.redirect_active {
-                // ── MANUAL BOOST ACTIVE ───────────────────────────────────
-                ui.horizontal(|ui| {
-                    ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "⚡ BOOST ENGAGED (manual)");
-                    ui.label(format!(
-                        " - {} -> port {}",
-                        self.status.redirect_game, self.status.redirect_local_port,
-                    ));
-                });
-                ui.label(format!("Game server:  {}", self.status.redirect_server))
-                    .on_hover_text("The real game server your traffic is being routed to.");
-
-                ui.horizontal(|ui| {
-                    ui.label("Packets Sent:")
-                        .on_hover_text("Game packets forwarded to the Boost Server.");
-                    ui.monospace(format!("{:>8}", self.status.redirect_pkts_out));
-                    ui.separator();
-                    ui.label("Returned:")
-                        .on_hover_text("Responses from the Boost Server.");
-                    ui.monospace(format!("{:>8}", self.status.redirect_pkts_in));
-                    ui.separator();
-                    let err_colour = if self.status.redirect_errors > 0 {
-                        egui::Color32::from_rgb(220, 80, 80)
-                    } else {
-                        egui::Color32::GRAY
-                    };
-                    ui.colored_label(err_colour, format!("Drops: {}", self.status.redirect_errors))
-                        .on_hover_text("Packets dropped in transit.");
-                });
-
-                if self.status.redirect_fec {
-                    ui.label(format!(
-                        "🛡 Reliability Shield - parity: {}  recovered: {}",
-                        self.status.redirect_fec_parity, self.status.redirect_fec_recovered,
-                    ))
-                    .on_hover_ui(|ui| {
-                        ui.label("Reliability Shield (FEC) is active. Extra data is sent so dropped \
-                                  packets can be reconstructed by the Boost Server.");
-                        ui.hyperlink_to("📖 About Reliability Shield",
-                            "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield");
-                    });
-                }
-
-                ui.add_space(4.0);
-                let instruction =
-                    connect_instruction(self.selected_game(), self.status.redirect_local_port);
-                egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(30, 50, 30))
-                    .corner_radius(4.0)
-                    .inner_margin(8.0)
-                    .show(ui, |ui: &mut egui::Ui| {
-                        ui.colored_label(egui::Color32::from_rgb(150, 255, 150), &instruction);
-                    });
-
-                ui.add_space(6.0);
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 32.0],
-                        egui::Button::new("■  Stop Boost")
-                            .fill(egui::Color32::from_rgb(160, 45, 45)),
-                    )
-                    .on_hover_text("Stop boost and return to your normal connection.")
-                    .clicked()
-                {
-                    self.engine.lock().unwrap().stop_redirect();
-                }
-
-                if let Some(ref err) = self.status.redirect_error {
-                    ui.add_space(4.0);
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 80, 80),
-                        format!("⚠ Error: {}", err),
-                    );
-                }
+                ("OFFLINE", theme::MUTED, theme::PANEL)
+            };
+            let detail = if boosting {
+                format!(
+                    "{} - {:.1} ms",
+                    self.selected_game().display,
+                    self.status.latest_rtt_ms
+                )
+            } else if self.status.connected {
+                format!("{} - not boosting", self.status.proxy_addr)
             } else {
-                // ── IDLE: single Optimize button ──────────────────────────
-
-                // ── Game auto-detect banner ───────────────────────────────
-                // Grouped into one titled card with the picker and options
-                // below it, so this reads as a single "what am I boosting"
-                // decision rather than three loose rows.
-                theme::card(ui, "Game", |ui| {
-                    if let Some(ref detected) = self.auto_detected_game {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(theme::OK, "🎮 Game found:")
-                                .on_hover_text("LightSpeed automatically detected a running game.");
-                            ui.label(detected);
-                        });
-                    } else {
-                        ui.horizontal(|ui| {
-                        ui.weak("No game running - select your game and click Boost")
-                            .on_hover_text(
-                                "Start your game and connect to a server, then click \
-                                 BOOST MY GAME. Or select your game manually below.",
-                            );
-                        if ui.small_button("🔄 Rescan").clicked() {
-                            self.auto_detected_game = try_auto_detect_game();
-                            if let Some(ref name) = self.auto_detected_game {
-                                if let Some(idx) = games()
-                                    .iter()
-                                    .position(|entry| entry.key.eq_ignore_ascii_case(name))
-                                {
-                                    self.selected_game_idx = idx;
-                                }
-                            }
-                        }
-                    });
-                }
-                    ui.horizontal(|ui| {
-                        ui.label("Game:  ")
-                            .on_hover_text("Select the game you want to boost. LightSpeed will \
-                                            automatically route its traffic for lower ping.");
-                        egui::ComboBox::from_id_salt("game_select")
-                            .selected_text(self.selected_game().display)
-                            .width(200.0)
-                            .show_ui(ui, |ui| {
-                                for (i, entry) in games().iter().enumerate() {
-                                    ui.selectable_value(&mut self.selected_game_idx, i, entry.display);
-                                }
-                            });
-                    });
-
-                    ui.add_space(4.0);
-
-                    // ── Reliability Shield (FEC) toggle ───────────────────────
-                    ui.horizontal(|ui| {
-                        ui.checkbox(
-                            &mut self.fec_enabled,
-                            "🛡 Reliability Shield - recover lost packets (+25% data)",
-                        )
-                        .on_hover_ui(|ui| {
-                            ui.label(
-                                "Reliability Shield sends extra repair data so the Boost Server \
-                                 can reconstruct any packets your connection drops - no more \
-                                 rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
-                            );
-                            ui.hyperlink_to(
-                                "📖 Learn more about Reliability Shield",
-                                "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield",
-                            );
-                        });
-                    });
-
-                    ui.add_space(4.0);
+                "No boost server".to_string()
+            };
+            egui::Frame::new()
+                .fill(fill)
+                .corner_radius(8.0)
+                .inner_margin(14.0)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(
+                        egui::RichText::new(headline)
+                            .color(colour)
+                            .size(26.0)
+                            .strong(),
+                    );
+                    ui.add_space(theme::ROW_GAP);
+                    ui.label(detail);
                 });
 
-                ui.add_space(theme::SECTION_GAP);
+            ui.add_space(theme::ROW_GAP);
 
-                // ── Anonymous telemetry toggle ────────────────────────────
-                ui.horizontal(|ui| {
-                    let changed = ui
-                        .checkbox(
-                            &mut self.share_latency_stats,
-                            "📊 Share anonymous latency stats",
-                        )
-                        .on_hover_text(
-                            "Send anonymous aggregate RTT, jitter, and FEC stats to your \
-                             relay so the community can see real latency improvements. No \
-                             IP address, identifier, or packet content is ever sent.",
-                        )
-                        .changed();
-                    if changed {
-                        self.persist_config();
-                        self.engine
-                            .lock()
-                            .unwrap()
-                            .set_telemetry_enabled(self.share_latency_stats);
-                    }
-                });
-
-                ui.add_space(8.0);
-
-                // ── Method info strip ─────────────────────────────────────
-                if self.is_admin {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(20, 35, 50))
-                        .corner_radius(6.0)
-                        .inner_margin(10.0)
-                        .show(ui, |ui: &mut egui::Ui| {
-                            ui.horizontal(|ui| {
-                                ui.colored_label(
-                                    theme::OK,
-                                    "⚡ Mode: Deep Boost (OS-level interception)",
-                                )
-                                .on_hover_ui(|ui| {
-                                    ui.label(
-                                        "Deep Boost intercepts game traffic at the OS level, \
-                                         giving the lowest possible ping improvement. Your game \
-                                         will show the Boost Server ping as its connection ping - \
-                                         this is normal.",
-                                    );
-                                    ui.hyperlink_to(
-                                        "📖 How Deep Boost works",
-                                        "https://github.com/ShibbityShwab/lightspeed/wiki/How-It-Works",
-                                    );
-                                });
-                            });
-                            ui.weak(
-                                "All game traffic is routed through the Boost Server. \
-                                 Your in-game ping = your ping to the Boost Server.",
-                            );
-                        });
+            // One primary action button. When it cannot act, it says why
+            // rather than only greying out, so the state is never a dead end.
+            let can_act = self.is_admin
+                && self.selected_entry().is_some()
+                && self.status.connected;
+            let enabled = boosting || can_act;
+            let (label, fill, why) = if boosting {
+                ("■  STOP BOOST", theme::BAD, "Stop routing game traffic")
+            } else if can_act {
+                ("⚡  BOOST MY GAME", theme::ACCENT, "Start routing game traffic")
+            } else if !self.is_admin {
+                (
+                    "⚡  BOOST MY GAME",
+                    theme::PANEL,
+                    "Needs Administrator - use the button below",
+                )
+            } else if !self.status.connected {
+                ("⚡  BOOST MY GAME", theme::PANEL, "Connecting to a relay…")
+            } else {
+                (
+                    "⚡  BOOST MY GAME",
+                    theme::PANEL,
+                    "Pick a boost server in Settings first",
+                )
+            };
+            let primary = ui.add_enabled_ui(enabled, |ui| {
+                ui.add_sized(
+                    [ui.available_width(), 46.0],
+                    egui::Button::new(egui::RichText::new(label).size(17.0).strong())
+                        .fill(fill),
+                )
+            });
+            primary.response.on_hover_text(why);
+            if primary.inner.clicked() {
+                if boosting {
+                    self.stop_boost();
                 } else {
-                    // Not admin - an inline note, not a second call to action.
-                    // The Restart button lives here; the BOOST button below stays
-                    // the single primary, so the two never compete for the click.
-                    egui::Frame::new()
-                        .fill(theme::PANEL_ATTENTION)
-                        .corner_radius(6.0)
-                        .inner_margin(10.0)
-                        .show(ui, |ui: &mut egui::Ui| {
-                            ui.horizontal(|ui| {
-                                ui.colored_label(
-                                    theme::WARN,
-                                    "⚠ Needs to run as Administrator to boost your game.",
-                                )
-                                .on_hover_ui(|ui| {
-                                    ui.label(
-                                        "Deep Boost needs Administrator access to intercept \
-                                         game traffic at the OS level. Click the button below \
-                                         to relaunch with the required permissions.",
-                                    );
-                                    ui.hyperlink_to(
-                                        "📖 Why Administrator?",
-                                        "https://github.com/ShibbityShwab/lightspeed/wiki/FAQ#why-admin",
-                                    );
-                                });
-                            });
-                            ui.add_space(theme::ROW_GAP);
+                    self.start_boost();
+                }
+            }
+
+            if !self.is_admin && !boosting {
+                ui.add_space(theme::ROW_GAP);
+                egui::Frame::new()
+                    .fill(theme::PANEL_ATTENTION)
+                    .corner_radius(6.0)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
                             if ui
                                 .button("🔑 Restart as Administrator")
                                 .on_hover_text(
@@ -1356,252 +1114,55 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                 )
                                 .clicked()
                             {
-                                P::relaunch_as_admin();
+                                self.restart_elevated();
                             }
                         });
-                }
-
-                ui.add_space(theme::SECTION_GAP);
-
-                // ── THE OPTIMIZE BUTTON ───────────────────────────────────
-                let has_relay = self.selected_entry().is_some();
-                let can_boost = self.is_admin && has_relay;
-                let btn_color = if can_boost {
-                    theme::PANEL_ACTION
-                } else {
-                    theme::MUTED
-                };
-                let btn_label = if !has_relay {
-                    "⚡  BOOST MY GAME  (no relay available)"
-                } else if self.is_admin {
-                    "⚡  BOOST MY GAME"
-                } else {
-                    "⚡  BOOST MY GAME  (requires Administrator)"
-                };
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 40.0],
-                        egui::Button::new(
-                            egui::RichText::new(btn_label)
-                                .size(16.0)
-                                .color(if can_boost {
-                                    egui::Color32::from_rgb(255, 210, 100)
-                                } else {
-                                    egui::Color32::from_rgb(140, 140, 140)
-                                }),
-                        )
-                        .fill(btn_color),
-                    )
-                    .on_hover_text(if !has_relay {
-                        "No relay is available. Check your internet connection, or \
-                         add a custom proxy in Manage."
-                    } else if self.is_admin {
-                        "Click Boost, then launch your game and join any server.\n\
-                         LightSpeed automatically finds your game server and routes \
-                         traffic through the Boost Server for lower ping."
-                    } else {
-                        "Run LightSpeed as Administrator to boost your game."
-                    })
-                    .clicked()
-                    && can_boost
-                {
-                    // Warm up port detection for diagnostic logging.
-                    let _ = parse_custom_port_range(&self.custom_port_input)
-                        .unwrap_or_else(|| P::detect_game_ports(self.selected_game_idx));
-
-                    if let Some(proxy) = self.selected_proxy_addr() {
-                        let game_key = self.selected_game().key;
-                        let mut engine = self.engine.lock().unwrap();
-                        engine.set_telemetry_game(game_key);
-                        let result = engine.start_interceptor(
-                            game_key,
-                            proxy,
-                            self.fec_enabled,
-                            4, // default FEC K
-                        );
-                        if let Err(e) = result {
-                            tracing::error!("start_interceptor failed: {}", e);
-                        } else {
-                            self.boost_start = Some(std::time::Instant::now());
-                        }
-                    }
-                }
-
-                ui.add_space(6.0);
-
-                // ── Advanced expander (manual server IP fallback) ─────────
-                let adv_label = if self.show_advanced {
-                    "v Advanced - set server manually"
-                } else {
-                    "▶ Advanced - set server manually"
-                };
-                if ui
-                    .small_button(adv_label)
-                    .on_hover_text(
-                        "If auto-detect doesn't find your server, enter the game \
-                         server IP:port here to start boosting manually.",
-                    )
-                    .clicked()
-                {
-                    self.show_advanced = !self.show_advanced;
-                }
-
-                if self.show_advanced {
-                    ui.add_space(4.0);
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(25, 25, 35))
-                        .corner_radius(4.0)
-                        .inner_margin(8.0)
-                        .show(ui, |ui: &mut egui::Ui| {
-                            ui.weak(
-                                "Enter your game server's IP and port to start boosting \
-                                 without waiting for auto-detect. Find the IP in your \
-                                 game's server browser.",
-                            );
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.label("Server:");
-                                let default_port = self.selected_game().default_port;
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.server_input)
-                                        .hint_text(format!("e.g. 123.45.67.89:{}", default_port))
-                                        .desired_width(220.0),
-                                );
-                            });
-
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.label("Custom Port Range:")
-                                    .on_hover_ui(|ui| {
-                                        ui.label(
-                                            "Override the default port scan range for auto-detect. \
-                                             Use this if Packets Sent stays at 0 after 15 s.\n\
-                                             Format: lo-hi  (e.g. 28015-28999)  or a single port."
-                                        );
-                                        ui.hyperlink_to(
-                                            "📖 Port not detected - fix guide",
-                                            "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
-                                        );
-                                    });
-                                let port_valid = self.custom_port_input.is_empty()
-                                    || parse_custom_port_range(&self.custom_port_input).is_some();
-                                let te = egui::TextEdit::singleline(&mut self.custom_port_input)
-                                    .hint_text("e.g. 28015-28999 (leave blank for auto)")
-                                    .desired_width(200.0)
-                                    .text_color(if port_valid {
-                                        ui.visuals().text_color()
-                                    } else {
-                                        egui::Color32::from_rgb(220, 90, 90)
-                                    });
-                                ui.add(te);
-                                if !port_valid {
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(220, 90, 90),
-                                        "⚠ invalid",
-                                    );
-                                }
-                            });
-
-                            ui.add_space(6.0);
-
-                            let server_valid = parse_server_addr(&self.server_input).is_some();
-                            let mbtn = egui::Button::new("▶  Start Boost (manual)")
-                                .fill(if server_valid {
-                                    egui::Color32::from_rgb(40, 90, 55)
-                                } else {
-                                    egui::Color32::from_rgb(60, 60, 60)
-                                });
-                            if ui.add_enabled(server_valid, mbtn).clicked() {
-                                if let Some(server_addr) = parse_server_addr(&self.server_input) {
-                                    let entry = self.selected_game();
-                                    let local_port = server_addr.port().max(entry.default_port);
-                                    if let Some(proxy) = self.selected_proxy_addr() {
-                                        self.engine.lock().unwrap().start_redirect(
-                                            server_addr,
-                                            local_port,
-                                            self.fec_enabled,
-                                            4,
-                                            entry.display.to_string(),
-                                            proxy,
-                                        );
-                                    }
-                                }
-                            }
-                            if !server_valid && !self.server_input.is_empty() {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(220, 130, 50),
-                                    "⚠ Enter a valid IP:port (e.g. 1.2.3.4:28015)",
-                                );
-                            }
-
-                            ui.add_space(4.0);
-                            let instruction = connect_instruction(
-                                self.selected_game(),
-                                self.server_input
-                                    .parse::<SocketAddrV4>()
-                                    .map(|a| a.port())
-                                    .unwrap_or(self.selected_game().default_port),
-                            );
-                            ui.weak(instruction);
-
-                            ui.add_space(4.0);
-                            ui.weak(format!(
-                                "Capture backend (pcap mode): {}",
-                                if P::is_capture_available() {
-                                    "available"
-                                } else {
-                                    "not detected"
-                                }
-                            ));
-                        });
-                }
+                    });
             }
-                });
 
-            ui.add_space(8.0);
-            ui.separator();
+            ui.add_space(theme::ROW_GAP);
 
-            // ── Footer controls ───────────────────────────────────────────
+            // Compact connection stat row.
             ui.horizontal(|ui| {
+                ui.label("Ping");
+                if self.status.connected && self.status.latest_rtt_ms > 0.0 {
+                    ui.colored_label(
+                        rtt_colour(self.status.latest_rtt_ms),
+                        format!("{:.1} ms", self.status.latest_rtt_ms),
+                    );
+                } else {
+                    ui.weak("—");
+                }
+                ui.separator();
+                ui.label("Relay");
                 if self.status.connected {
-                    if ui
-                        .small_button("Disconnect Boost Server")
-                        .on_hover_text("Disconnect from the Boost Server. Your game will use its normal connection.")
-                        .clicked()
-                    {
-                        self.engine.lock().unwrap().disconnect();
-                    }
-                } else if ui
-                    .add_enabled(
-                        self.selected_entry().is_some(),
-                        egui::Button::new("Reconnect Boost Server").small(),
-                    )
-                    .on_hover_text("Reconnect to the Boost Server.")
-                    .clicked()
-                {
-                    self.connect_selected();
+                    ui.label(&self.status.proxy_addr);
+                } else {
+                    ui.weak("—");
+                }
+            });
+
+            ui.add_space(theme::ROW_GAP);
+
+            // Bottom action row.
+            ui.horizontal(|ui| {
+                if self.tray_available() && ui.small_button("Hide to tray").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+                if ui.small_button("Open log file").clicked() {
+                    self.reveal_log_file();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("Check for updates")
-                        .on_hover_text("Check whether a newer version of LightSpeed is available.")
-                        .clicked()
-                    {
-                        self.start_update_check();
-                    }
-                    if ui
-                        .small_button("Open log file")
-                        .on_hover_text("Open gui-trace.log in your file manager.")
-                        .clicked()
-                    {
-                        paths::open_in_os(&paths::log_file());
-                    }
-                    if self.tray_available() && ui.small_button("Hide to tray").clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    if ui.small_button("Quit").clicked() {
+                        self.quit.store(true, Ordering::SeqCst);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
             });
         });
+
+        // ── Settings window ──────────────────────────────────────────────
+        self.settings_window(&ctx);
 
         // ── Proxy manager window ─────────────────────────────────────────
         if self.show_proxy_manager {

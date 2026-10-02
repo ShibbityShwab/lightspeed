@@ -76,9 +76,13 @@ fn run() -> anyhow::Result<()> {
 
     let quit: platform::QuitFlag = Arc::new(AtomicBool::new(false));
 
+    // The status window is intentionally small: it shows connection state, the
+    // current ping and one action, so a tall window would just be empty. The
+    // settings live in their own window (see app.rs `settings_window`).
     let viewport = egui::ViewportBuilder::default()
-        .with_inner_size([520.0, 660.0])
-        .with_min_inner_size([340.0, 280.0])
+        .with_inner_size([360.0, 300.0])
+        .with_min_inner_size([320.0, 260.0])
+        .with_resizable(true)
         .with_title("LightSpeed");
     // A failed icon decode must not abort startup.
     let viewport = match window_icon() {
