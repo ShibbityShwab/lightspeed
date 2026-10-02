@@ -2,7 +2,44 @@
 
 > **Canonical log of significant technical decisions for the LightSpeed project.**
 > Each entry includes the date, deciding agent, rationale, and impact.
-> Last entry: 2026-10-01
+> Last entry: 2026-10-02
+
+---
+
+### 2026-10-02: A monitor that fails on everything is not a monitor
+
+**Agent:** DevOps + QAEngineer
+**Status:** Accepted (implemented in c34413d, e07774b)
+**Rationale:** The Health Anomaly Monitor had failed every scheduled run since
+2026-10-01 - five in a row - and the fleet was entirely healthy throughout
+(8/8 relays on v1.6.14, traffic flowing). Replaying the real production history
+the detector reads showed the failures were the detector's own assumptions:
+`stale_history` carried a 3h limit against a collector cron GitHub throttles to
+3.5-6h, and `abuse_flood`'s absolute floor was calibrated for hour-long windows
+that the throttled cron had stretched to 8-13h.
+**Impact:** two design changes, both about making a detector mean the same thing
+regardless of the infrastructure's real behaviour:
+1. The abuse floor is now **per hour, scaled by the window's real duration**,
+   and re-derived from data (background scanning measured at 47/h and 319/h on
+   quiet relays, a genuine flood at 9,350/h; the floor moved 1000 -> 5000/h to
+   sit in that gap rather than just above the noise).
+2. `idle_relay` and `abuse_flood` are **NON_FATAL_TYPES** - alerted, not
+   build-failing - because a relay having a quiet window is traffic
+   distribution, which the detector's own message already said. Every other
+   detector still fails the run, so genuine degradation (a stopped collector, a
+   ping-saved regression) is still caught. `LIGHTSPEED_ANOMALY_STRICT=1`
+   restores fail-on-anything.
+The general principle: an alert's threshold belongs to the phenomenon it
+watches, not to the cadence of the pipeline that happens to feed it.
+**Alternatives Considered:** raising only the thresholds was rejected because it
+leaves the same failure for the next cadence change; changing the exit code
+wholesale (making no warning fail) was rejected because it would have silenced
+`stale_history` and the ping-saved regressions, which are real. The narrow
+non-fatal list keeps those fatal.
+**Note on the process:** both the unbound-variable bug and the `--json` stdout
+corruption were introduced by the first version of this change and caught by
+running it against real data and the suite rather than by review - the same
+lesson as the append-history ARG_MAX work.
 
 ---
 

@@ -1,9 +1,78 @@
+# Current Phase: WF-049 The monitor's red runs were its own throttled cron
+
+**Workflow:** WF-049; WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Agent:** DevOps + QAEngineer
+**Status:** Pushed (e07774b); winget PR #445619 open
+**Last updated:** 2026-10-02
+
+---
+
+## 2026-10-02 - WF-049 five red monitor runs, none of them a fleet problem
+
+**Driving evidence:** asked to check GitHub, the network, and the GUI client.
+The network was healthy - 8/8 relays on v1.6.14, all `/health` 200, traffic
+flowing (relay-fra 20.9M packets, up from the frozen 19.0M of WF-034). The GUI
+was healthy - the installed 1.6.14 registered over QUIC to relay-lax-1 and its
+53 tests passed. But **every scheduled Health Anomaly Monitor run has failed
+since 2026-10-01** (13:18, 18:55, 23:13, 02:16, 08:35).
+
+**Reproduced against live production history rather than guessed at.** Fetching
+the stats branch's 90 snapshots and running the detector locally showed the
+real cause: **GitHub throttles the collector's hourly cron to ~3.5-6h**
+(measured pages.yml gaps of 215m, 219m, 368m), and two detectors read that
+throttling as an outage.
+
+1. `stale_history` had a 3h limit against a cron that runs every 3.5-6h, so it
+   fired on nearly every run - reporting the known throttling as new.
+2. `abuse_flood`'s floor was calibrated for HOUR-LONG windows. With windows
+   stretched to 8-13h, ordinary scanner traffic summed past the fixed 1000
+   floor.
+
+**The floor's value was re-derived from live data, not tweaked until green.**
+Over a 136h uptime the quiet relays logged relay-ewr-1 **47 abuse/h** and
+relay-syd-1 **319/h** of background scanning; the one genuine flood, relay-fra,
+ran at **9,350/h**. The old 1000/h floor sat just above scanner noise; 5000/h
+sits in the gap - clear of noise, ~2x under a real flood. The floor is now also
+scaled by the window's real duration, so it means "this much abuse per hour" at
+any cadence.
+
+**Then a third, more basic defect:** after the cadence fixes the run still
+failed on `idle_relay` - "a relay that is UP but had a quiet window". Its own
+message says "traffic distribution, not a failure", and live data confirms it
+(relay-nrt 4.2M lifetime packets, relay-bom-1 1.6M - both merely quiet during
+the window). `idle_relay` and `abuse_flood` are now NON_FATAL_TYPES: still
+printed, still posted to Discord, no longer failing the build. Every other
+detector still fails the run, including the warning-severity ones that mean
+real degradation (`stale_history`, `saved_regression`, `negative_saving_spike`,
+`version_lag`), so a stopped collector is still caught.
+
+**Verified both directions, not just the green one:** real production history
+with the workflow's exact flags -> **EXIT 0** where every run has failed since
+2026-10-01; a history faked 9h stale -> **EXIT 1** on `stale_history`; a
+synthetic flood at relay-fra's real 9,350/h rate -> still caught; `--json`
+stdout still parses (the notice moved into the human-readable branch only).
+**103 self-test checks pass.**
+
+**One bug found by that verification rather than shipped:** the gate first
+referenced `$NON_FATAL_TYPES` from inside the output block, before it was
+defined, so `set -u` aborted it with "unbound variable" and printed a
+contradictory notice. `fatal_count` is now computed once, before both uses.
+
+**Also found and recorded, not fixed (owner-gated):** the package channels.
+Scoop is current (bucket synced to 1.6.14); **Chocolatey still serves 1.6.3**
+and winget has **never been bootstrapped**. The Chocolatey 1.6.14 package is
+built and correct but cannot be pushed - no API key exists on this host or in
+the repo's secrets. That is recorded in `dist/chocolatey/README.md` with the
+exact push command so it is a one-step fix for the owner.
+
+---
+
 # Current Phase: WF-048 Last dependency PR landed; the fleet resumed traffic
 
-**Workflow:** WF-048; WF-047, WF-046, WF-045, WF-044, WF-043 below
-**Agent:** DevOps
-**Status:** Pushed (80659fe); Docker build in flight
-**Last updated:** 2026-10-01
+**Workflow:** WF-049; WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Agent:** DevOps + QAEngineer
+**Status:** Pushed (e07774b); winget PR #445619 open
+**Last updated:** 2026-10-02
 
 ---
 
