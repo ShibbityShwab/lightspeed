@@ -649,40 +649,46 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 }
             }
 
-            ui.horizontal(|ui| {
-                ui.label("Boost Ping:")
-                    .on_hover_ui(|ui| {
-                        ui.label("Round-trip time from your PC to the Boost Server.");
-                        ui.horizontal(|ui| {
-                            ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "• < 60ms");
-                            ui.label("  |  ");
-                            ui.colored_label(egui::Color32::from_rgb(255, 210, 0), "• 60-120ms");
-                            ui.label("  |  ");
-                            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "• > 120ms");
+            // ── Connection status ────────────────────────────────────────
+            // Ping, keepalive, control-plane state, relay health and the RTT
+            // chart are one story - "how is my connection doing" - so they sit
+            // in one card rather than as four loose rows interrupted by
+            // separators. The chart keeps its own inset frame inside.
+            theme::card(ui, "Connection", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Boost Ping:")
+                        .on_hover_ui(|ui| {
+                            ui.label("Round-trip time from your PC to the Boost Server.");
+                            ui.horizontal(|ui| {
+                                ui.colored_label(theme::OK, "• < 60ms");
+                                ui.label("  |  ");
+                                ui.colored_label(theme::WARN, "• 60-120ms");
+                                ui.label("  |  ");
+                                ui.colored_label(theme::BAD, "• > 120ms");
+                            });
+                            ui.label("This becomes your in-game ping when Boost is engaged.");
+                            ui.hyperlink_to("📖 Understanding ping",
+                                "https://github.com/ShibbityShwab/lightspeed/wiki/Understanding-Ping");
                         });
-                        ui.label("This becomes your in-game ping when Boost is engaged.");
-                        ui.hyperlink_to("📖 Understanding ping",
-                            "https://github.com/ShibbityShwab/lightspeed/wiki/Understanding-Ping");
-                    });
-                if self.status.connected && self.status.latest_rtt_ms > 0.0 {
-                    let rtt = self.status.latest_rtt_ms;
-                    ui.colored_label(rtt_colour(rtt), format!("{:.1} ms", rtt));
-                } else if self.status.connected {
-                    ui.weak("measuring…");
-                } else {
-                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "offline");
-                }
-                ui.separator();
-                ui.label(format!(
-                    "Keepalive: {} sent / {} echoed",
-                    self.status.packets_sent, self.status.packets_received
-                ))
-                .on_hover_text(
-                    "Keepalive pings sent to the Boost Server, and echo replies \
-                     received. '0 echoed' is normal until the relay answers and \
-                     does not affect game traffic.",
-                );
-            });
+                    if self.status.connected && self.status.latest_rtt_ms > 0.0 {
+                        let rtt = self.status.latest_rtt_ms;
+                        ui.colored_label(rtt_colour(rtt), format!("{:.1} ms", rtt));
+                    } else if self.status.connected {
+                        ui.weak("measuring…");
+                    } else {
+                        ui.colored_label(theme::BAD, "offline");
+                    }
+                    ui.separator();
+                    ui.label(format!(
+                        "Keepalive: {} sent / {} echoed",
+                        self.status.packets_sent, self.status.packets_received
+                    ))
+                    .on_hover_text(
+                        "Keepalive pings sent to the Boost Server, and echo replies \
+                         received. '0 echoed' is normal until the relay answers and \
+                         does not affect game traffic.",
+                    );
+                });
 
             // ── Control-plane registration ────────────────────────────────
             ui.horizontal(|ui| {
@@ -698,7 +704,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         ui.weak(format!("token 0x{token:08x}"));
                     }
                 } else if let Some(ref err) = self.status.registration_error {
-                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("⚠ {err}"));
+                    ui.colored_label(theme::BAD, format!("⚠ {err}"));
                 } else {
                     ui.weak("registering…");
                 }
@@ -742,7 +748,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     .map(|(i, &v)| [i as f64, v])
                     .collect();
                 let line = Line::new("RTT (ms)", points)
-                    .color(egui::Color32::from_rgb(100, 180, 255));
+                    .color(theme::ACCENT);
                 Plot::new("rtt_plot")
                     .height(80.0)
                     .allow_drag(false)
@@ -753,13 +759,11 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             } else {
                 ui.add_space(80.0);
             }
+            });
 
-            ui.separator();
+            ui.add_space(theme::SECTION_GAP);
 
             // ── Game Routing section ──────────────────────────────────────
-            ui.heading("🎮 Game Routing");
-            ui.add_space(4.0);
-
             if self.status.interceptor_active {
                 // ── BOOST ENGAGED (OOP Interceptor) state ──────────────────────
                 ui.horizontal(|ui| {
@@ -1778,6 +1782,8 @@ mod theme {
     pub const BAD: Color32 = Color32::from_rgb(220, 80, 80);
     /// Secondary text that must still be readable against the panel fill.
     pub const MUTED: Color32 = Color32::from_rgb(150, 152, 168);
+    /// Chart and accent lines.
+    pub const ACCENT: Color32 = Color32::from_rgb(100, 180, 255);
 
     /// Panel fill for a grouped section.
     pub const PANEL: Color32 = Color32::from_rgb(24, 25, 38);
