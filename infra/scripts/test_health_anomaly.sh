@@ -522,8 +522,11 @@ assert_not_out "fleet_idle" "(g guard) a busy fleet is not idle"
 # fleet-wide stop that had not happened - live /health showed the relay
 # actively relaying. Frozen data looks exactly like an idle fleet, so the
 # conclusion requires fresh data.
+# --max-staleness is passed explicitly so this case pins the boundary it
+# means to test rather than riding the production default, which is tuned
+# to the collector's real (throttled) cadence.
 LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 20000)) \
-	run_anomaly "$H_FLEETIDLE" "$REG2"
+	run_anomaly "$H_FLEETIDLE" "$REG2" --max-staleness 10800
 assert_rc 1 "(g2) a stale history still exits 1"
 assert_out "stale_history" "(g2) reports the stopped collector"
 assert_not_out "fleet_idle" "(g2) frozen data is NOT reported as an idle fleet"
@@ -538,12 +541,12 @@ H_FRESH="$TMP/fresh.json"
 emit8 "$H_FRESH" a_healthy
 
 LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 10799)) \
-	run_anomaly "$H_FRESH" "$REG4"
+	run_anomaly "$H_FRESH" "$REG4" --max-staleness 10800
 assert_rc 0 "(g guard) just inside the staleness limit exits 0"
 assert_not_out "stale_history" "(g guard) age below the limit is not stale"
 
 LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 10801)) \
-	run_anomaly "$H_FRESH" "$REG4"
+	run_anomaly "$H_FRESH" "$REG4" --max-staleness 10800
 assert_rc 1 "(g) a frozen collector exits 1"
 assert_out "stale_history" "(g) fires stale_history"
 assert_out "has stopped publishing" "(g) carries the evidence"
@@ -554,6 +557,21 @@ LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 1000000)) \
 	run_anomaly "$H_FRESH" "$REG4" --max-staleness 0
 assert_rc 0 "(g guard) --max-staleness 0 disables the check"
 assert_not_out "stale_history" "(g guard) disabled check stays silent"
+
+# Regression: the DEFAULT staleness limit must tolerate the collector's real
+# cadence. GitHub throttles scheduled workflows on this repo, so pages.yml now
+# runs every ~3.5-6h rather than hourly (measured 2026-10-02: gaps of 215m,
+# 219m, 368m). A default of 3h made stale_history fire on nearly every run and
+# buried the detections that matter. 6h5m (21900s) is inside the observed
+# worst case and must stay silent; anything past 8h is a genuine stop.
+LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 21900)) \
+	run_anomaly "$H_FRESH" "$REG4"
+assert_not_out "stale_history" "(g guard) worst observed cron gap is not stale"
+
+LIGHTSPEED_NOW_EPOCH=$((STD_T_BASE + 28801)) \
+	run_anomaly "$H_FRESH" "$REG4"
+assert_rc 1 "(g) a collector stopped past 8h still exits 1"
+assert_out "stale_history" "(g) the default catches a genuine stop"
 
 # --no-probe must not flag a registry relay that has no history yet.
 H_NOHIST="$TMP/nohist.json"

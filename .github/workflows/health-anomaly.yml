@@ -63,11 +63,15 @@ jobs:
         # Exits non-zero (and posts the evidence to Discord when the
         # webhook is set) if any detector fires.
         #
-        # --max-staleness is set to 3h explicitly: the collector runs hourly,
-        # so a newest snapshot older than that means the pipeline stopped and
-        # every other detector is describing a frozen past. An absent history
-        # is not stale (it has no snapshots to age), which is what keeps a
-        # first run or a fresh stats branch from failing.
+        # --max-staleness is set explicitly because the collector's SLOT is
+        # hourly but GitHub throttles scheduled workflows on this repo, so the
+        # real cadence is ~3.5-6h (measured 2026-10-02: pages.yml schedule gaps
+        # of 215m, 219m, 368m). At the old 3h limit stale_history fired on
+        # almost every run, reporting the known throttling as an outage and
+        # burying the detections that matter. 8h sits above the worst observed
+        # gap, so it fires only when the pipeline has genuinely stopped.
+        # An absent history is not stale (it has no snapshots to age), which is
+        # what keeps a first run or a fresh stats branch from failing.
         run: |
           # Resolve the newest SOFTWARE release so a fleet that silently missed a
           # deploy is caught. version_lag compares relays against each other, so
@@ -91,5 +95,5 @@ jobs:
           fi
           bash infra/scripts/health-anomaly.sh \
             --history .stats/network-history.json \
-            --max-staleness 10800 \
+            --max-staleness 28800 \
             --expect-version "$EXPECT"

@@ -107,14 +107,33 @@ MIN_VERSION_AHEAD=2
 # 2026-10-01 relay-fra window carried +1,153,206 abuse blocks AND +37
 # real sessions), so gating on flat sessions suppressed the very event
 # this detector exists to catch.
-ABUSE_MIN=1000   # window drops_abuse_blocked floor
+ABUSE_MIN=5000   # window drops_abuse_blocked floor, per HOUR of window
 ABUSE_SHARE=0.9  # abuse_blocked / packets_dropped floor
 
-# stale_history: the newest snapshot must be recent. The collector runs
-# hourly, so an age past this many seconds means the pipeline (not the
-# relays) has stopped and every other detector is describing a frozen
-# past. 0 disables the check, for an intentionally static fixture.
-MAX_STALENESS=10800 # 3h; tolerates a couple of missed cron slots
+# abuse_flood's absolute floor is expressed PER HOUR and scaled by the
+# window's real duration (the detector's original hourly-window calibration
+# broke when GitHub began throttling the collector cron to ~3.5-6h).
+#
+# The value itself was re-derived from live fleet data on 2026-10-02 rather
+# than left at the original 1000, which was below the internet's own
+# background scanner rate: over a 136h uptime the quiet relays logged
+# relay-ewr-1 47 abuse blocks/h and relay-syd-1 319/h, so a 1000/h floor sat
+# just above ordinary background noise and tipped over it on any window that
+# stretched. The one genuine flood on the same fleet, relay-fra, ran at
+# 9,350/h - nearly 30x the noisiest benign relay. 5000/h sits in that gap:
+# well clear of scanner noise, still an order of magnitude under a real
+# flood, so it fires on the event it exists to catch and not on the
+# background. The share test is dimensionless and unaffected.
+
+# stale_history: the newest snapshot must be recent. The collector is
+# SCHEDULED hourly, but GitHub throttles scheduled workflows on this repo,
+# so the observed cadence is ~3.5-6h (measured 2026-10-02: gaps of 215m,
+# 219m, 368m between pages.yml runs). A limit of 3h therefore fired on
+# essentially every run - reporting the known throttling as if it were a
+# new outage, which buried the detections that matter. The limit is set
+# above the observed worst-case gap so it fires only on a genuine stop,
+# not on the schedule's normal behaviour. 0 disables the check.
+MAX_STALENESS=28800 # 8h; above the ~6h worst observed cron gap
 # Optional expected release version. version_lag only compares relays against each
 # other, so a fleet that is UNIFORMLY behind the latest release raises nothing -
 # every relay agrees with its neighbour. When this is set, a fleet whose majority
@@ -306,8 +325,13 @@ def vcmp($a; $b):
 | ([ $cur | keys[] ]) as $ids
 | ([ $nodes[].node_id ] | map(select(. != null and . != "")) | unique) as $regids
 | ([ $win[] | (.per_relay // {} | keys[]) ] | unique) as $winids
-| ($win | length) as $WL
-| ($base | length) as $BL
+| (($win | length)) as $WL
+| (($base | length)) as $BL
+| ([ $win[] | (.t // empty) | n ]) as $wtimes
+| (if ($wtimes | length) >= 2
+   then ((($wtimes[-1] - $wtimes[0]) / 3600) | if . < 1 then 1 else . end)
+   else 1 end) as $win_hours
+| (($abuse_min * $win_hours) | floor) as $abuse_floor
 | ([ $winids[] as $id
      | ($win[-1] | rel_life(.; $id; "packets_relayed"))
        - ($wstart | rel_life(.; $id; "packets_relayed")) ] | add // 0) as $fleet_pkts
@@ -474,7 +498,7 @@ def vcmp($a; $b):
         - ($wstart | rel_life(.; $id; "sessions_created"))) as $sessRaw
      | ($sessRaw | if . < 0 then 0 else . end) as $sess
      | (if $dropped > 0 then ($abuse / $dropped) else 0 end) as $share
-     | select($up and $abuse >= $abuse_min and $dropped > 0 and $share >= $abuse_share)
+     | select($up and $abuse >= $abuse_floor and $dropped > 0 and $share >= $abuse_share)
      | { type: "abuse_flood", severity: "warning", relay: $id,
          window: $WL, abuse_blocked: $abuse, packets_dropped: $dropped,
          packets_relayed: $relayed, abuse_share: $share, sessions_created: $sess,
@@ -482,7 +506,9 @@ def vcmp($a; $b):
                    + " = " + pct($share) + " of drops ("
                    + ($dropped | tostring) + " dropped, "
                    + ($relayed | tostring) + " relayed, sessions +"
-                   + ($sess | tostring) + ") over " + ($WL | tostring) + " snapshots") }
+                   + ($sess | tostring) + ") over " + ($WL | tostring) + " snapshots"
+                   + " (~" + ($win_hours | tostring) + "h, floor "
+                   + ($abuse_floor | tostring) + ")") }
    ]) as $abuseFlags
 | ([ (if $max_stale > 0
         then (($snaps[-1].t // 0) | n) as $newest
