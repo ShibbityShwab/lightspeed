@@ -210,6 +210,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn great_circle_starts_and_ends_at_its_endpoints() {
+        let from = (50.11, 8.68);
+        let to = (34.05, -118.24);
+        let arc = great_circle(from, to, 16);
+        assert_eq!(arc.len(), 17);
+        assert!((arc[0].0 - from.0).abs() < 0.01 && (arc[0].1 - from.1).abs() < 0.01);
+        assert!(
+            (arc[16].0 - to.0).abs() < 0.01 && (arc[16].1 - to.1).abs() < 0.01,
+            "arc must land on the far endpoint, got {:?}",
+            arc[16]
+        );
+    }
+
+    #[test]
+    fn great_circle_bows_away_from_a_naive_average() {
+        // The whole point of slerp: a straight lat/lon interpolation between
+        // Frankfurt and Los Angeles dips far south of the true great circle.
+        let mid = great_circle((50.11, 8.68), (34.05, -118.24), 2)[1];
+        let naive_lat = (50.11 + 34.05) / 2.0;
+        assert!(
+            mid.0 > naive_lat + 3.0,
+            "great circle should track north of the naive average; got {} vs {naive_lat}",
+            mid.0
+        );
+    }
+
+    #[test]
     fn city_codes_map_to_coordinates() {
         assert!(relay_coords("relay-lax-1").is_some());
         assert!(relay_coords("relay-fra").is_some());

@@ -83,7 +83,7 @@ fn run() -> anyhow::Result<()> {
     // current ping and one action, so a tall window would just be empty. The
     // settings live in their own window (see app.rs `settings_window`).
     let viewport = egui::ViewportBuilder::default()
-        .with_inner_size([420.0, 620.0])
+        .with_inner_size([440.0, 800.0])
         .with_min_inner_size([360.0, 400.0])
         .with_resizable(true)
         .with_title("LightSpeed");
