@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hunt: Showdown profile** (`--game hunt`): Crytek's extraction shooter, whose
+  regular multiplayer runs on UDP 20000-20099. Its TCP 61088 backend port is
+  deliberately excluded, since the interceptor and tunnel are UDP-only and a TCP
+  port in the capture range would generate a filter that never matches. Closes
+  the game request in #141.
+
+### Fixed
+
+- **Chocolatey releases now publish.** The `bump-chocolatey` release job moved
+  `dist/chocolatey` to each new version but never pushed the built `.nupkg`, so
+  the community feed served 1.6.3 while the repo shipped 1.6.14. A gated push
+  step now publishes on every tag.
+- **Anomaly monitor no longer fails on the collector's own throttling.**
+  `stale_history` used a 3h limit against a collector cron GitHub throttles to
+  3.5-6h, and `abuse_flood`'s floor was calibrated for hour-long windows. Both
+  fired on nearly every scheduled run with a healthy fleet. The staleness limit
+  is now 8h, the abuse floor is per-hour and duration-scaled, and the two
+  traffic-distribution detectors warn instead of failing the build.
+
 ## [1.6.14] - 2026-09-26
 
 ### Added

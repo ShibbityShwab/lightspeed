@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 20 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 21 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -28,6 +28,13 @@ LightSpeed includes built-in profiles for 20 popular multiplayer games. Each pro
 | 18 | **Project Zomboid** | `--game zomboid` | 16261-16262 | None | `ProjectZomboid64.exe` |
 | 19 | **WARDOGS** | `--game wardogs` | 7777-7788 | Elytra (kernel-mode) | `WardogsClient-Win64-Shipping.exe` |
 | 20 | **Minecraft** | `--game minecraft` | 19132-19133 | None | `Minecraft.Windows.exe` |
+| 21 | **Hunt: Showdown** | `--game hunt` | 20000-20099 | Easy Anti-Cheat (EAC) | `HuntGame.exe` |
+
+> **Hunt: Showdown note:** the UDP gameplay block is 20000-20099, which is
+> what the tunnel carries. The game also opens TCP **61088** for its
+> backend/menu connection; that port is deliberately NOT part of the profile,
+> because LightSpeed captures and tunnels UDP only and a TCP port in the
+> capture range would produce a filter that matches nothing.
 
 > **Roblox note:** Roblox has no native Linux client. On Linux, run it through
 > Wine/Proton, where the process name may appear truncated. Roblox picks its

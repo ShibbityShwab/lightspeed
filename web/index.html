@@ -232,7 +232,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>Launch LightSpeed</h3>
-            <p>Run the lightweight client before your game. It auto-detects 19 built-in profiles: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, and WARDOGS.</p>
+            <p>Run the lightweight client before your game. It auto-detects 21 built-in profiles: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft, and Hunt: Showdown.</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -398,7 +398,7 @@
       <div class="container">
         <p class="section-eyebrow">Compatibility</p>
         <h2 class="section-title">Supported Games</h2>
-        <p class="section-subtitle">Built-in profiles for 19 games. Drop-in and play.</p>
+        <p class="section-subtitle">Built-in profiles for 21 games. Drop-in and play.</p>
         <div class="games-grid">
           <article class="game-card">
             <div class="game-head">
@@ -626,6 +626,30 @@
               <span class="game-tag">Elytra</span>
             </div>
             <p>Dedicated servers behind a server browser. Transparent UDP forwarding stays compatible with Elytra, since packets are never modified. Windows capture only while Proton is blocked.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">MC</span>
+              <h3>Minecraft</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 19132-19133</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>Bedrock Edition multiplayer over UDP 19132/19133, on desktop and console servers alike. Java Edition is not supported: its gameplay runs on TCP, and LightSpeed tunnels UDP only.</p>
+            <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">HS</span>
+              <h3>Hunt: Showdown</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 20000-20099</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>Matchmaker-assigned dedicated servers for Crytek's extraction shooter. Easy Anti-Cheat safe: UDP is forwarded transparently and never modified.</p>
             <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
           </article>
         </div>
@@ -1024,7 +1048,7 @@
           </details>
           <details class="faq-item">
             <summary>What games are supported?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
-            <p>Currently 19 games: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, and WARDOGS all have built-in profiles. Just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
+            <p>Currently 21 games: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft, and Hunt: Showdown all have built-in profiles. Just run with <code>--game &lt;name&gt;</code> or let auto-detection pick it up. Any other UDP-based game can work with manual port configuration.</p>
           </details>
           <details class="faq-item">
             <summary>Is my data safe?<svg class="icon icon-sm faq-chevron" aria-hidden="true" focusable="false"><use href="#i-chevron-down"></use></svg></summary>
