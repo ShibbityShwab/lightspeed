@@ -39,6 +39,12 @@ load-test-results.json
 # Logs
 *.log
 
+# Client runtime state, written to the working directory when the client or GUI
+# is run from a checkout: pinned relay certificates and the cached registry
+# signature. Regenerated on demand, never source.
+.lightspeed-proxy-fingerprints
+.lightspeed-registry-state
+
 # Node.js
 node_modules/
 
