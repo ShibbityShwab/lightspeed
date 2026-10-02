@@ -509,16 +509,47 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// Show the settings window when the user opened it from the header.
+    /// Open the settings in their own OS window.
+    ///
+    /// This was an `egui::Window`, which is a floating child drawn *inside*
+    /// the status viewport - so it was clipped by the small status window and
+    /// could not be dragged out of it. `show_viewport_immediate` with a
+    /// dedicated `ViewportId` produces a real top-level window instead, which
+    /// is what the split into "status" and "settings" was meant to give.
+    ///
+    /// Note `embed_viewports` must be false for this to take effect: egui
+    /// defaults it to true, and in that mode even `show_viewport_immediate`
+    /// silently falls back to embedding. See `enable_real_viewports`.
     fn settings_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_settings;
-        egui::Window::new("LightSpeed Settings")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_width(420.0)
-            .show(ctx, |ui| self.settings_body(ui));
-        self.show_settings = open;
+        if !self.show_settings {
+            return;
+        }
+
+        let viewport_id = egui::ViewportId::from_hash_of("lightspeed-settings");
+        // A separate window needs its own size and title; it is not bound by
+        // the status window's geometry once it is a real viewport.
+        let builder = egui::ViewportBuilder::default()
+            .with_title("LightSpeed Settings")
+            .with_inner_size([440.0, 560.0])
+            .with_min_inner_size([360.0, 320.0]);
+
+        let mut still_open = true;
+        ctx.show_viewport_immediate(viewport_id, builder, |ui, _class| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().inner_margin(12.0))
+                .show(ui, |ui| {
+                    self.settings_body(ui);
+                });
+
+            // This must be read from inside the viewport: `ctx.input` reports
+            // the ROOT viewport's state, so checking it outside the callback
+            // never sees this window's own close button.
+            if ui.ctx().input(|i| i.viewport().close_requested()) {
+                still_open = false;
+            }
+        });
+
+        self.show_settings = still_open;
     }
 
     /// Contents of the settings window, one card per concern.
@@ -914,6 +945,11 @@ impl<P: Platform> LightSpeedApp<P> {
 
 impl<P: Platform> eframe::App for LightSpeedApp<P> {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // egui embeds sub-viewports inside the parent window unless this is
+        // turned off, which would put the settings back inside the status
+        // window - the exact problem the two-window split set out to fix.
+        // Setting it needs doing only once, but it is cheap and idempotent.
+        ui.ctx().set_embed_viewports(false);
         let ctx = ui.ctx().clone();
 
         // One-time first-frame setup: platform-specific fonts and the
