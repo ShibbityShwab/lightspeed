@@ -334,8 +334,15 @@ jobs:
           git push origin HEAD:master
 
   # The Chocolatey package pins a release URL and sha256 inside the install
-  # script, so each tag must move dist/chocolatey to the new version and sums.
-  # Committing it here keeps the next `choco push` current without a manual step.
+  # script, so each tag must move dist/chocolatey to the new version and sums,
+  # then PUSH the built .nupkg to the community feed. Both halves live here so
+  # a release cannot leave the feed behind again: before this step existed the
+  # bump ran (sources stayed current) but nothing pushed, so the feed served
+  # 1.6.3 while the repo shipped 1.6.14.
+  #
+  # CHOCO_API_KEY is a Chocolatey Community API key (account shibbityshwab).
+  # Pushes are moderated, so a freshly pushed version stays unlisted until a
+  # moderator approves it - that is normal and not a failure.
   bump-chocolatey:
     needs:
       - plan
@@ -344,6 +351,8 @@ jobs:
     permissions:
       contents: write
     runs-on: "ubuntu-22.04"
+    env:
+      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -363,6 +372,26 @@ jobs:
           git add dist/chocolatey
           git commit -m "chore(chocolatey): bump to v${VERSION}"
           git push origin HEAD:master
+
+      - name: Push the .nupkg to the community feed
+        # Gated on the secret so a fork or a repo without it still builds; the
+        # bump above is the part every checkout needs.
+        if: ${{ env.CHOCO_API_KEY != '' }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash dist/chocolatey/build.sh
+          nupkg="dist/chocolatey/lightspeed.${VERSION}.nupkg"
+          [ -f "$nupkg" ] || nupkg="$(ls dist/chocolatey/lightspeed.*.nupkg | head -1)"
+          echo "pushing $nupkg"
+          curl -fsS -X PUT \
+            -H "X-NuGet-ApiKey: ${CHOCO_API_KEY}" \
+            --data-binary "@${nupkg}" \
+            https://push.chocolatey.org/api/v2/package/ \
+            -o /dev/null -w 'push HTTP %{http_code}\n'
+
+      - name: Note the secret is absent
+        if: ${{ env.CHOCO_API_KEY == '' }}
+        run: echo "::notice::CHOCO_API_KEY is not set; the package source was bumped but not pushed to the community feed."
 
   # The Scoop bucket (ShibbityShwab/scoop-bucket) is what `scoop install
   # lightspeed` reads. Before this job the bucket held the only copy of the
