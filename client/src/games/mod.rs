@@ -26,6 +26,7 @@
 //! - **Roblox**: `RobloxPlayerBeta.exe`
 //! - **WARDOGS**: `WardogsClient-Win64-Shipping.exe`
 //! - **Minecraft**: `Minecraft.Windows.exe` (Bedrock Edition)
+//! - **Hunt: Showdown**: `HuntGame.exe`
 //!
 //! ## Capture Filters
 //!
@@ -40,6 +41,7 @@ pub mod deadbydaylight;
 pub mod dota2;
 pub mod fortnite;
 pub mod genshin;
+pub mod hunt;
 pub mod lol;
 pub mod maplestory;
 pub mod minecraft;
@@ -154,8 +156,11 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
             Ok(Box::new(zomboid::ZomboidConfig))
         }
         "wardogs" => Ok(Box::new(wardogs::WardogsConfig)),
+        "hunt" | "huntshowdown" | "hunt-showdown" | "hunt showdown" => {
+            Ok(Box::new(hunt::HuntConfig))
+        }
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid, wardogs",
+            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt",
             name
         ),
     }
@@ -165,7 +170,7 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
 ///
 /// This is the single source of truth: [`detect_game`] resolves the keys and
 /// [`all_games`] / [`all_game_keys`] derive from it. Register every new game
-/// here (the `games` tests enforce the 19-entry count and key/name agreement).
+/// here (the `games` tests enforce the 20-entry count and key/name agreement).
 pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("fortnite", "Fortnite"),
     ("cs2", "Counter-Strike 2"),
@@ -187,6 +192,7 @@ pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("wot", "World of Tanks"),
     ("zomboid", "Project Zomboid"),
     ("wardogs", "WARDOGS"),
+    ("hunt", "Hunt: Showdown"),
 ];
 
 /// Return every CLI key paired with its display name.
@@ -495,6 +501,11 @@ mod tests {
         "pz",
         // WARDOGS
         "wardogs",
+        // Hunt: Showdown
+        "hunt",
+        "huntshowdown",
+        "hunt-showdown",
+        "hunt showdown",
     ];
 
     #[test]
@@ -514,8 +525,8 @@ mod tests {
     fn test_all_game_keys_has_twenty_entries() {
         assert_eq!(
             all_game_keys().len(),
-            20,
-            "GAME_REGISTRY must stay in sync with the 20 supported games"
+            21,
+            "GAME_REGISTRY must stay in sync with the 21 supported games"
         );
     }
 

@@ -67,6 +67,8 @@ pub mod game_id {
     pub const WARDDOGS: u8 = 19;
     /// Mojang's Minecraft, Bedrock Edition (UDP gameplay over 19132/19133).
     pub const MINECRAFT: u8 = 20;
+    /// Crytek's Hunt: Showdown 1896 (UDP gameplay over 20000-20099).
+    pub const HUNT: u8 = 21;
 
     /// Canonical CLI key mapped to its wire id, ordered by ascending id.
     ///
@@ -93,6 +95,7 @@ pub mod game_id {
         ("zomboid", ZOMBOID),
         ("wardogs", WARDDOGS),
         ("minecraft", MINECRAFT),
+        ("hunt", HUNT),
     ];
 
     /// Resolve a CLI game key to its wire id, or [`UNKNOWN`] when absent.
@@ -785,19 +788,19 @@ mod tests {
 
     #[test]
     fn test_game_ids_unique_and_stable() {
-        assert_eq!(game_id::GAME_IDS.len(), 20, "every real game needs one id");
+        assert_eq!(game_id::GAME_IDS.len(), 21, "every real game needs one id");
 
-        // Each id 1..=20 must appear exactly once (0 stays reserved for UNKNOWN).
-        let mut seen = [0u8; 21];
+        // Each id 1..=21 must appear exactly once (0 stays reserved for UNKNOWN).
+        let mut seen = [0u8; 22];
         for (key, id) in game_id::GAME_IDS.iter().copied() {
             assert!(
-                (1..=20).contains(&id),
+                (1..=21).contains(&id),
                 "key {key:?} has out-of-range id {id}"
             );
             assert_eq!(seen[id as usize], 0, "duplicate id {id}");
             seen[id as usize] += 1;
         }
-        for id in 1..=20u8 {
+        for id in 1..=21u8 {
             assert_eq!(seen[id as usize], 1, "id {id} missing or duplicated");
         }
 
@@ -821,6 +824,7 @@ mod tests {
         assert_eq!(game_id::ZOMBOID, 18);
         assert_eq!(game_id::WARDDOGS, 19);
         assert_eq!(game_id::MINECRAFT, 20);
+        assert_eq!(game_id::HUNT, 21);
     }
 
     #[test]
