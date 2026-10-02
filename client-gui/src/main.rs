@@ -119,6 +119,11 @@ fn run() -> anyhow::Result<()> {
 ///
 /// A decode failure is logged and treated as "no icon" so a bad asset can
 /// never stop the window from opening.
+///
+/// This covers only the window the app already owns (`WM_SETICON`). The
+/// shell's taskbar button and every Explorer surface are served from the
+/// exe-level resource that `build.rs` compiles in, so both paths are needed:
+/// removing either one leaves a generic icon somewhere.
 fn window_icon() -> Option<egui::IconData> {
     const ICON_PNG: &[u8] = include_bytes!("../../web/assets/brand/icon-256.png");
     let rgba = match image::load_from_memory(ICON_PNG) {
