@@ -66,8 +66,14 @@ fn project(ll: LatLon, centre: LatLon) -> (Vec2, f32) {
     (Vec2::new(x, -y2), z2)
 }
 
-/// Draw the globe and its markers, centred on `centre`.
-pub fn draw(ui: &mut egui::Ui, size: f32, centre: LatLon, markers: &[Marker]) {
+/// Draw the globe, its markers, and optionally the route between two points.
+pub fn draw(
+    ui: &mut egui::Ui,
+    size: f32,
+    centre: LatLon,
+    markers: &[Marker],
+    route: Option<(LatLon, LatLon)>,
+) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
     let painter = ui.painter_at(rect);
     let c = rect.center();
@@ -110,6 +116,28 @@ pub fn draw(ui: &mut egui::Ui, size: f32, centre: LatLon, markers: &[Marker]) {
         }
     }
 
+    // The route before the markers so the endpoints sit on top of the line.
+    if let Some((from, to)) = route {
+        let arc = great_circle(from, to, 48);
+        let stroke = Stroke::new(2.0, Color32::from_rgb(0x6C, 0x5C, 0xE7));
+        let mut run: Vec<Pos2> = Vec::new();
+        for point in arc {
+            let (o, depth) = project(point, centre);
+            // Break the line where it passes behind the sphere instead of
+            // drawing a chord straight across the near face.
+            if depth > 0.0 {
+                run.push(c + o * r);
+            } else if run.len() > 1 {
+                painter.add(egui::Shape::line(std::mem::take(&mut run), stroke));
+            } else {
+                run.clear();
+            }
+        }
+        if run.len() > 1 {
+            painter.add(egui::Shape::line(run, stroke));
+        }
+    }
+
     // Markers, far side first so near ones draw on top.
     let mut plotted: Vec<(f32, Pos2, &Marker)> = markers
         .iter()
@@ -135,6 +163,46 @@ pub fn draw(ui: &mut egui::Ui, size: f32, centre: LatLon, markers: &[Marker]) {
             );
         }
     }
+}
+
+/// Sample the great circle between two points, in lat/lon.
+///
+/// Interpolating latitude and longitude directly would bow the line toward the
+/// poles; a great circle is the actual shortest path a packet takes. Slerp on
+/// the unit vectors is the cheap way to get it.
+fn great_circle(from: LatLon, to: LatLon, steps: usize) -> Vec<LatLon> {
+    let a = to_unit(from);
+    let b = to_unit(to);
+    let dot = (a.0 * b.0 + a.1 * b.1 + a.2 * b.2).clamp(-1.0, 1.0);
+    let omega = dot.acos();
+
+    (0..=steps)
+        .map(|i| {
+            let t = i as f32 / steps as f32;
+            let (wa, wb) = if omega.abs() < 1e-4 {
+                (1.0 - t, t)
+            } else {
+                let s = omega.sin();
+                (((1.0 - t) * omega).sin() / s, (t * omega).sin() / s)
+            };
+            let v = (
+                a.0 * wa + b.0 * wb,
+                a.1 * wa + b.1 * wb,
+                a.2 * wa + b.2 * wb,
+            );
+            let len = (v.0 * v.0 + v.1 * v.1 + v.2 * v.2).sqrt();
+            let (x, y, z) = (v.0 / len, v.1 / len, v.2 / len);
+            (
+                y.clamp(-1.0, 1.0).asin().to_degrees(),
+                x.atan2(z).to_degrees(),
+            )
+        })
+        .collect()
+}
+
+fn to_unit(ll: LatLon) -> (f32, f32, f32) {
+    let (lat, lon) = (ll.0.to_radians(), ll.1.to_radians());
+    (lat.cos() * lon.sin(), lat.sin(), lat.cos() * lon.cos())
 }
 
 #[cfg(test)]

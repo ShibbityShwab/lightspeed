@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use crate::config::{self, GuiConfig, ProxyEntry};
 use crate::discovery::{self, DiscoveryOutcome, RelayHealth};
+use crate::geo;
 use crate::globe;
 use crate::paths;
 use crate::platform::{Platform, QuitFlag, TrayAction, TrayHandle};
@@ -1159,9 +1160,30 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 .and_then(globe::relay_coords)
                 .unwrap_or((30.0, 0.0));
 
+            // The game server comes from whichever mode is running; its address
+            // is "ip:port", and only an IPv4 literal can be geolocated.
+            let server_ip = [
+                self.status.redirect_server.as_str(),
+                self.status.windivert_server.as_str(),
+            ]
+            .iter()
+            .find_map(|s| s.split(':').next()?.parse::<std::net::Ipv4Addr>().ok());
+
+            let server_at = server_ip.and_then(geo::locate).map(|(code, at)| {
+                markers.push(globe::Marker {
+                    at,
+                    colour: theme::WARN,
+                    label: code.to_string(),
+                    emphasis: 0.8,
+                });
+                at
+            });
+
+            let route = server_at.map(|to| (centre, to));
+
             theme::card(ui, "Route", |ui| {
                 ui.vertical_centered(|ui| {
-                    globe::draw(ui, 150.0, centre, &markers);
+                    globe::draw(ui, 150.0, centre, &markers, route);
                 });
                 ui.add_space(theme::S2);
                 ui.vertical_centered(|ui| {

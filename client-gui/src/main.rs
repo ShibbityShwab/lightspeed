@@ -9,6 +9,8 @@ mod app;
 mod config;
 mod crash;
 mod discovery;
+mod geo;
+mod geo_countries;
 mod globe;
 mod paths;
 mod platform;
