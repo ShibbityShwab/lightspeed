@@ -1057,17 +1057,20 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             let can_act = self.is_admin
                 && self.selected_entry().is_some()
                 && self.status.connected;
-            let enabled = boosting || can_act;
+            // While unelevated the only action the user can take is elevating,
+            // so that is what the primary slot offers. A disabled Boost button
+            // here would be the largest control on screen doing nothing.
+            let enabled = boosting || can_act || !self.is_admin;
             let (label, _fill, why) = if boosting {
                 ("■  STOP BOOST", theme::BAD, "Stop routing game traffic")
-            } else if can_act {
-                ("BOOST MY GAME", theme::ACCENT, "Start routing game traffic")
             } else if !self.is_admin {
                 (
-                    "BOOST MY GAME",
-                    theme::SURFACE,
-                    "Needs Administrator - use the button below",
+                    "RESTART AS ADMINISTRATOR",
+                    theme::ACCENT,
+                    "Required to redirect game traffic",
                 )
+            } else if can_act {
+                ("BOOST MY GAME", theme::ACCENT, "Start routing game traffic")
             } else if !self.status.connected {
                 ("BOOST MY GAME", theme::SURFACE, "Connecting to a relay…")
             } else {
@@ -1087,6 +1090,8 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             if primary.inner.clicked() {
                 if boosting {
                     self.stop_boost();
+                } else if !self.is_admin {
+                    self.restart_elevated();
                 } else {
                     self.start_boost();
                 }
