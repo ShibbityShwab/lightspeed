@@ -84,7 +84,7 @@ fn run() -> anyhow::Result<()> {
     // settings live in their own window (see app.rs `settings_window`).
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([440.0, 800.0])
-        .with_min_inner_size([360.0, 400.0])
+        .with_min_inner_size([320.0, 400.0])
         .with_resizable(true)
         .with_title("LightSpeed");
     // A failed icon decode must not abort startup.

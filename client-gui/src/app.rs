@@ -865,6 +865,10 @@ impl<P: Platform> LightSpeedApp<P> {
 impl<P: Platform> eframe::App for LightSpeedApp<P> {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Windows get snapped narrow on a small screen or beside a game, so the
+        // layout adapts rather than clipping: tighter margins and a smaller
+        // globe below this width.
+        let narrow = ui.available_width() < 380.0;
 
         // One-time first-frame setup: platform-specific fonts and the
         // branded header mark texture.
@@ -974,16 +978,20 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             } else {
                 ("OFFLINE", theme::TEXT_DIM)
             };
-            let detail = if boosting {
-                format!(
-                    "{} - {:.1} ms",
+            // The headline answers the two questions a player actually has, in
+            // one glance: is it on, and how good is it. The relay address is
+            // detail, so it lives in the card below rather than here.
+            let detail = match (boosting, self.status.connected) {
+                (true, _) => format!(
+                    "{} - {:.0} ms",
                     self.selected_game().display,
                     self.status.latest_rtt_ms
-                )
-            } else if self.status.connected {
-                format!("{} - not boosting", self.status.proxy_addr)
-            } else {
-                "No boost server".to_string()
+                ),
+                (false, true) if self.status.latest_rtt_ms > 0.0 => {
+                    format!("Not boosting - {:.0} ms", self.status.latest_rtt_ms)
+                }
+                (false, true) => "Not boosting - measuring".to_string(),
+                (false, false) => "No boost server".to_string(),
             };
             egui::Frame::new()
                 .fill(theme::SURFACE)
@@ -1000,10 +1008,19 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                 .strong(),
                         );
                         ui.add_space(theme::S1);
+                        // The ping carries its own quality colour, so the one
+                        // glance that answers "is it on and is it good" does
+                        // not need reading.
+                        let detail_colour =
+                            if self.status.connected && self.status.latest_rtt_ms > 0.0 {
+                                rtt_colour(self.status.latest_rtt_ms)
+                            } else {
+                                theme::TEXT_DIM
+                            };
                         ui.label(
                             egui::RichText::new(detail)
                                 .size(theme::LABEL)
-                                .color(theme::TEXT_DIM),
+                                .color(detail_colour),
                         );
                     });
                 });
@@ -1071,16 +1088,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             // the fold and never inside a disclosure.
             theme::card(ui, "Connection", |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Ping");
-                    if self.status.connected && self.status.latest_rtt_ms > 0.0 {
-                        ui.colored_label(
-                            rtt_colour(self.status.latest_rtt_ms),
-                            format!("{:.1} ms", self.status.latest_rtt_ms),
-                        );
-                    } else {
-                        ui.weak("—");
-                    }
-                    ui.separator();
                     ui.label("Relay");
                     if self.status.connected {
                         ui.label(&self.status.proxy_addr);
@@ -1183,7 +1190,13 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
             theme::card(ui, "Route", |ui| {
                 ui.vertical_centered(|ui| {
-                    globe::draw(ui, 150.0, centre, &markers, route);
+                    globe::draw(
+                        ui,
+                        if narrow { 106.0 } else { 150.0 },
+                        centre,
+                        &markers,
+                        route,
+                    );
                 });
                 ui.add_space(theme::S2);
                 ui.vertical_centered(|ui| {
