@@ -40,6 +40,15 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json"] }
 webbrowser = "1"
 
+# Build-time icon embedding: build.rs renders the brand PNG into a multi-size
+# ICO and compiles it into the exe, which is the only way Windows will show the
+# brand mark on the taskbar button and in Explorer. The `ico` codec lives here
+# rather than on the runtime dep above so the shipped binary carries no
+# encoder it never calls. Windows-only because the resource step is skipped
+# everywhere else.
+[target.'cfg(windows)'.build-dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+
 # Windows-only: the real system tray (tray-icon) plus WinDivert support.
 # tray-icon is Windows-only because the Linux/macOS tray backends are stubs
 # that never use it; keeping it global pulled gtk -> glib 0.18 into the
