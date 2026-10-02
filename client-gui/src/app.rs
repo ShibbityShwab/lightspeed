@@ -132,7 +132,6 @@ pub struct LightSpeedApp<P: Platform> {
     auto_select: bool,
     relay_race: Option<Receiver<Option<SocketAddrV4>>>,
     show_proxy_manager: bool,
-    show_settings: bool,
     manager_label_input: String,
     manager_addr_input: String,
     config_error: Option<String>,
@@ -213,7 +212,6 @@ impl<P: Platform> LightSpeedApp<P> {
             auto_select,
             relay_race: None,
             show_proxy_manager: false,
-            show_settings: false,
             manager_label_input: String::new(),
             manager_addr_input: String::new(),
             config_error: None,
@@ -509,51 +507,8 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// Open the settings in their own OS window.
-    ///
-    /// This was an `egui::Window`, which is a floating child drawn *inside*
-    /// the status viewport - so it was clipped by the small status window and
-    /// could not be dragged out of it. `show_viewport_immediate` with a
-    /// dedicated `ViewportId` produces a real top-level window instead, which
-    /// is what the split into "status" and "settings" was meant to give.
-    ///
-    /// Note `embed_viewports` must be false for this to take effect: egui
-    /// defaults it to true, and in that mode even `show_viewport_immediate`
-    /// silently falls back to embedding. See `enable_real_viewports`.
-    fn settings_window(&mut self, ctx: &egui::Context) {
-        if !self.show_settings {
-            return;
-        }
-
-        let viewport_id = egui::ViewportId::from_hash_of("lightspeed-settings");
-        // A separate window needs its own size and title; it is not bound by
-        // the status window's geometry once it is a real viewport.
-        let builder = egui::ViewportBuilder::default()
-            .with_title("LightSpeed Settings")
-            .with_inner_size([440.0, 560.0])
-            .with_min_inner_size([360.0, 320.0]);
-
-        let mut still_open = true;
-        ctx.show_viewport_immediate(viewport_id, builder, |ui, _class| {
-            egui::CentralPanel::default()
-                .frame(egui::Frame::new().inner_margin(12.0))
-                .show(ui, |ui| {
-                    self.settings_body(ui);
-                });
-
-            // This must be read from inside the viewport: `ctx.input` reports
-            // the ROOT viewport's state, so checking it outside the callback
-            // never sees this window's own close button.
-            if ui.ctx().input(|i| i.viewport().close_requested()) {
-                still_open = false;
-            }
-        });
-
-        self.show_settings = still_open;
-    }
-
-    /// Contents of the settings window, one card per concern.
-    fn settings_body(&mut self, ui: &mut egui::Ui) {
+    /// Configuration section: relay, game, and advanced settings in one scroll.
+    fn config_body(&mut self, ui: &mut egui::Ui) {
         // Boost Server: which relay carries the game traffic.
         theme::card(ui, "Boost Server", |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -702,8 +657,12 @@ impl<P: Platform> LightSpeedApp<P> {
 
         ui.add_space(theme::SECTION_GAP);
 
-        // Advanced: manual server override and custom port range.
-        theme::card(ui, "Advanced", |ui| {
+        // Rarely-used options folded behind a single collapsed section.
+        egui::CollapsingHeader::new("More")
+            .default_open(false)
+            .show(ui, |ui| {
+                // Advanced: manual server override and custom port range.
+                theme::card(ui, "Advanced", |ui| {
             let adv_label = if self.show_advanced {
                 "v Advanced - set server manually"
             } else {
@@ -938,6 +897,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.add_space(80.0);
             }
         });
+            });
     }
 }
 
@@ -945,11 +905,6 @@ impl<P: Platform> LightSpeedApp<P> {
 
 impl<P: Platform> eframe::App for LightSpeedApp<P> {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // egui embeds sub-viewports inside the parent window unless this is
-        // turned off, which would put the settings back inside the status
-        // window - the exact problem the two-window split set out to fix.
-        // Setting it needs doing only once, but it is cheap and idempotent.
-        ui.ctx().set_embed_viewports(false);
         let ctx = ui.ctx().clone();
 
         // One-time first-frame setup: platform-specific fonts and the
@@ -1045,11 +1000,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     );
                 }
                 ui.label(egui::RichText::new("LightSpeed").strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("⚙ Settings").clicked() {
-                        self.show_settings = true;
-                    }
-                });
             });
             ui.separator();
 
@@ -1180,6 +1130,16 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
             ui.add_space(theme::ROW_GAP);
 
+            // Configuration scrolls under the status summary so the window
+            // can stay small next to a game.
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    self.config_body(ui);
+                });
+
+            ui.add_space(theme::ROW_GAP);
+
             // Bottom action row.
             ui.horizontal(|ui| {
                 if self.tray_available() && ui.small_button("Hide to tray").clicked() {
@@ -1196,9 +1156,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 });
             });
         });
-
-        // ── Settings window ──────────────────────────────────────────────
-        self.settings_window(&ctx);
 
         // ── Proxy manager window ─────────────────────────────────────────
         if self.show_proxy_manager {
