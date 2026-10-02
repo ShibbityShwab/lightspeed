@@ -559,9 +559,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 ui.heading("LightSpeed");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (label, colour) = if self.status.connected {
-                        ("• Connected", egui::Color32::from_rgb(80, 200, 120))
+                        ("• Connected", theme::OK)
                     } else {
-                        ("• Disconnected", egui::Color32::from_rgb(220, 80, 80))
+                        ("• Disconnected", theme::BAD)
                     };
                     let response = ui.colored_label(colour, label);
                     if self.status.connected {
@@ -590,7 +590,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         }
                         DiscoveryState::Done => {
                             ui.colored_label(
-                                egui::Color32::from_rgb(255, 190, 60),
+                                theme::WARN,
                                 "⚠ No relays discovered",
                             )
                             .on_hover_text(
@@ -1194,14 +1194,18 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 // ── IDLE: single Optimize button ──────────────────────────
 
                 // ── Game auto-detect banner ───────────────────────────────
-                if let Some(ref detected) = self.auto_detected_game {
-                    ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "🎮 Game found:")
-                            .on_hover_text("LightSpeed automatically detected a running game.");
-                        ui.label(detected);
-                    });
-                } else {
-                    ui.horizontal(|ui| {
+                // Grouped into one titled card with the picker and options
+                // below it, so this reads as a single "what am I boosting"
+                // decision rather than three loose rows.
+                theme::card(ui, "Game", |ui| {
+                    if let Some(ref detected) = self.auto_detected_game {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(theme::OK, "🎮 Game found:")
+                                .on_hover_text("LightSpeed automatically detected a running game.");
+                            ui.label(detected);
+                        });
+                    } else {
+                        ui.horizontal(|ui| {
                         ui.weak("No game running - select your game and click Boost")
                             .on_hover_text(
                                 "Start your game and connect to a server, then click \
@@ -1220,44 +1224,45 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         }
                     });
                 }
-
-                // ── Game dropdown ─────────────────────────────────────────
-                ui.horizontal(|ui| {
-                    ui.label("Game:  ")
-                        .on_hover_text("Select the game you want to boost. LightSpeed will \
-                                        automatically route its traffic for lower ping.");
-                    egui::ComboBox::from_id_salt("game_select")
-                        .selected_text(self.selected_game().display)
-                        .width(200.0)
-                        .show_ui(ui, |ui| {
-                            for (i, entry) in games().iter().enumerate() {
-                                ui.selectable_value(&mut self.selected_game_idx, i, entry.display);
-                            }
-                        });
-                });
-
-                ui.add_space(4.0);
-
-                // ── Reliability Shield (FEC) toggle ───────────────────────
-                ui.horizontal(|ui| {
-                    ui.checkbox(
-                        &mut self.fec_enabled,
-                        "🛡 Reliability Shield - recover lost packets (+25% data)",
-                    )
-                    .on_hover_ui(|ui| {
-                        ui.label(
-                            "Reliability Shield sends extra repair data so the Boost Server \
-                             can reconstruct any packets your connection drops - no more \
-                             rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
-                        );
-                        ui.hyperlink_to(
-                            "📖 Learn more about Reliability Shield",
-                            "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield",
-                        );
+                    ui.horizontal(|ui| {
+                        ui.label("Game:  ")
+                            .on_hover_text("Select the game you want to boost. LightSpeed will \
+                                            automatically route its traffic for lower ping.");
+                        egui::ComboBox::from_id_salt("game_select")
+                            .selected_text(self.selected_game().display)
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                for (i, entry) in games().iter().enumerate() {
+                                    ui.selectable_value(&mut self.selected_game_idx, i, entry.display);
+                                }
+                            });
                     });
+
+                    ui.add_space(4.0);
+
+                    // ── Reliability Shield (FEC) toggle ───────────────────────
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut self.fec_enabled,
+                            "🛡 Reliability Shield - recover lost packets (+25% data)",
+                        )
+                        .on_hover_ui(|ui| {
+                            ui.label(
+                                "Reliability Shield sends extra repair data so the Boost Server \
+                                 can reconstruct any packets your connection drops - no more \
+                                 rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
+                            );
+                            ui.hyperlink_to(
+                                "📖 Learn more about Reliability Shield",
+                                "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield",
+                            );
+                        });
+                    });
+
+                    ui.add_space(4.0);
                 });
 
-                ui.add_space(4.0);
+                ui.add_space(theme::SECTION_GAP);
 
                 // ── Anonymous telemetry toggle ────────────────────────────
                 ui.horizontal(|ui| {
@@ -1287,12 +1292,12 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 if self.is_admin {
                     egui::Frame::new()
                         .fill(egui::Color32::from_rgb(20, 35, 50))
-                        .corner_radius(4.0)
-                        .inner_margin(8.0)
+                        .corner_radius(6.0)
+                        .inner_margin(10.0)
                         .show(ui, |ui: &mut egui::Ui| {
                             ui.horizontal(|ui| {
                                 ui.colored_label(
-                                    egui::Color32::from_rgb(100, 180, 255),
+                                    theme::OK,
                                     "⚡ Mode: Deep Boost (OS-level interception)",
                                 )
                                 .on_hover_ui(|ui| {
@@ -1314,15 +1319,17 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             );
                         });
                 } else {
-                    // Not admin - show restart nudge inline
+                    // Not admin - an inline note, not a second call to action.
+                    // The Restart button lives here; the BOOST button below stays
+                    // the single primary, so the two never compete for the click.
                     egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(55, 40, 10))
-                        .corner_radius(4.0)
-                        .inner_margin(8.0)
+                        .fill(theme::PANEL_ATTENTION)
+                        .corner_radius(6.0)
+                        .inner_margin(10.0)
                         .show(ui, |ui: &mut egui::Ui| {
                             ui.horizontal(|ui| {
                                 ui.colored_label(
-                                    egui::Color32::from_rgb(255, 180, 50),
+                                    theme::WARN,
                                     "⚠ Needs to run as Administrator to boost your game.",
                                 )
                                 .on_hover_ui(|ui| {
@@ -1337,7 +1344,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                     );
                                 });
                             });
-                            ui.add_space(4.0);
+                            ui.add_space(theme::ROW_GAP);
                             if ui
                                 .button("🔑 Restart as Administrator")
                                 .on_hover_text(
@@ -1350,15 +1357,15 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         });
                 }
 
-                ui.add_space(10.0);
+                ui.add_space(theme::SECTION_GAP);
 
                 // ── THE OPTIMIZE BUTTON ───────────────────────────────────
                 let has_relay = self.selected_entry().is_some();
                 let can_boost = self.is_admin && has_relay;
                 let btn_color = if can_boost {
-                    egui::Color32::from_rgb(80, 50, 5)
+                    theme::PANEL_ACTION
                 } else {
-                    egui::Color32::from_rgb(55, 55, 55)
+                    theme::MUTED
                 };
                 let btn_label = if !has_relay {
                     "⚡  BOOST MY GAME  (no relay available)"
@@ -1753,13 +1760,76 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
 // ── Pure helpers (no platform dependency) ─────────────────────────────────────
 
+/// Named palette and shared spacing for the window.
+///
+/// Before this existed the UI carried 62 colour literals inline at their use
+/// sites and re-typed the same `Frame::new().fill(..).corner_radius(4.0)
+/// .inner_margin(8.0)` recipe a dozen times, so no two panels were guaranteed
+/// to agree on anything. Centralising them is what makes the surfaces below
+/// read as one interface instead of a stack of separately-styled rows.
+mod theme {
+    use eframe::egui::{Color32, Frame, RichText, Ui};
+
+    /// Positive state: connected, game found, healthy relay.
+    pub const OK: Color32 = Color32::from_rgb(80, 200, 120);
+    /// Caution: degraded but working (higher ping, partial state).
+    pub const WARN: Color32 = Color32::from_rgb(255, 210, 0);
+    /// Failure or blocked action (driver missing, not connected).
+    pub const BAD: Color32 = Color32::from_rgb(220, 80, 80);
+    /// Secondary text that must still be readable against the panel fill.
+    pub const MUTED: Color32 = Color32::from_rgb(150, 152, 168);
+
+    /// Panel fill for a grouped section.
+    pub const PANEL: Color32 = Color32::from_rgb(24, 25, 38);
+    /// Panel fill for the primary call-to-action block, one step lighter so
+    /// the action reads as the thing to do rather than one row among many.
+    pub const PANEL_ACTION: Color32 = Color32::from_rgb(31, 33, 52);
+    /// Attention strip for a blocking prerequisite (needs Administrator).
+    pub const PANEL_ATTENTION: Color32 = Color32::from_rgb(48, 40, 22);
+
+    /// Vertical rhythm between sections. One value, used everywhere, so the
+    /// eye can tell a new group from a new row without reading the content.
+    pub const SECTION_GAP: f32 = 12.0;
+    /// Gap between rows inside one section.
+    pub const ROW_GAP: f32 = 6.0;
+
+    /// A grouped section: a titled card that every region of the window uses.
+    ///
+    /// The title is the cheap part of the fix - with a consistent header the
+    /// window reads top-to-bottom as a sequence of named regions instead of an
+    /// undifferentiated column.
+    pub fn card<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
+        card_with_fill(ui, title, PANEL, body)
+    }
+
+    /// As [`card`], with a caller-chosen fill for action or attention blocks.
+    pub fn card_with_fill<R>(
+        ui: &mut Ui,
+        title: &str,
+        fill: Color32,
+        body: impl FnOnce(&mut Ui) -> R,
+    ) -> R {
+        Frame::new()
+            .fill(fill)
+            .corner_radius(6.0)
+            .inner_margin(10.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(title).strong());
+                ui.add_space(ROW_GAP);
+                body(ui)
+            })
+            .inner
+    }
+}
+
 fn rtt_colour(rtt_ms: f64) -> egui::Color32 {
     if rtt_ms < 60.0 {
-        egui::Color32::from_rgb(80, 200, 120)
+        theme::OK
     } else if rtt_ms < 120.0 {
-        egui::Color32::from_rgb(255, 210, 0)
+        theme::WARN
     } else {
-        egui::Color32::from_rgb(220, 80, 80)
+        theme::BAD
     }
 }
 
