@@ -110,6 +110,18 @@ MIN_VERSION_AHEAD=2
 ABUSE_MIN=5000   # window drops_abuse_blocked floor, per HOUR of window
 ABUSE_SHARE=0.9  # abuse_blocked / packets_dropped floor
 
+# Traffic-distribution detectors: reported and alerted, but not build-failing.
+# idle_relay names a relay that was UP but had a quiet window - its own
+# message says "traffic distribution, not a failure", and live data confirms
+# it (2026-10-02: all three relays it named had real lifetime traffic -
+# relay-nrt 4.2M packets, relay-bom-1 1.6M - and merely had a quiet window).
+# abuse_flood is background scanner traffic. Failing CI on these made every
+# scheduled run red on a healthy fleet, which is how a monitor stops being
+# read. Everything else still fails the run, including the warning-severity
+# detectors that describe real degradation. LIGHTSPEED_ANOMALY_STRICT=1
+# restores fail-on-anything.
+NON_FATAL_TYPES='"idle_relay","abuse_flood"'
+
 # abuse_flood's absolute floor is expressed PER HOUR and scaled by the
 # window's real duration (the detector's original hourly-window calibration
 # broke when GitHub began throttling the collector cron to ~3.5-6h).
@@ -580,8 +592,18 @@ fi
 anomaly_count="$(printf '%s' "$result" | jq -r '.anomalies | length' 2>/dev/null || echo 0)"
 snapshot_count="$(printf '%s' "$result" | jq -r '.snapshot_count // 0' 2>/dev/null || echo 0)"
 relay_count="$(printf '%s' "$result" | jq -r '.relay_count // 0' 2>/dev/null || echo 0)"
+# Anomalies other than the traffic-distribution pair; any of these fails the
+# run. Computed once so the output notice and the exit gate cannot disagree.
+fatal_count="$(
+	printf '%s' "$result" | jq -r \
+		--argjson nonfatal "[$NON_FATAL_TYPES]" \
+		'[.anomalies[] | select(.type as $t | ($nonfatal | index($t)) == null)] | length' \
+		2>/dev/null || echo 0
+)"
 
 # ── Output ───────────────────────────────────────────────────
+# In --json mode stdout carries the document and nothing else, so the
+# severity-gate notice below lives in the human-readable branch.
 if [ "$JSON_OUT" = true ]; then
 	printf '%s\n' "$result"
 else
@@ -592,6 +614,11 @@ else
 		printf 'health-anomaly: %s anomaly(ies) (%s relay(s), %s snapshot(s), window=%s)\n' \
 			"$anomaly_count" "$relay_count" "$snapshot_count" "$WINDOW"
 		printf '%s' "$result" | jq -r '.anomalies[] | "  [" + .severity + "] " + .type + ": " + .message'
+		# Only a non-fatal (traffic-distribution) anomaly fails nothing; say so
+		# plainly when we are about to exit 0 with something on the board.
+		if [ "$fatal_count" -eq 0 ] && [ "${LIGHTSPEED_ANOMALY_STRICT:-0}" != "1" ]; then
+			printf 'health-anomaly: warning(s) only - not failing the run (set LIGHTSPEED_ANOMALY_STRICT=1 to fail on any)\n'
+		fi
 	fi
 fi
 
@@ -606,7 +633,24 @@ $(printf '%s' "$result" | jq -r '.anomalies[] | "[" + .severity + "] " + .type +
 	fi
 fi
 
+# ── Severity gate ────────────────────────────────────────────
+# Every anomaly alerts (it is printed and posted to Discord), but only a
+# CRITICAL one fails the run. A relay having a quiet window is a true
+# observation - the idle_relay message says so itself ("traffic
+# distribution, not a failure") - and treating it as a build failure made
+# every scheduled run red on a fleet that was entirely healthy, which is
+# how a monitor stops being read. critical remains an outage signature:
+# zero_relay (clients failing to register), fleet_idle, release_lag,
+# relay_health_failed, relay_missing_from_registry, auth_spike_no_sessions.
+#
+# Set LIGHTSPEED_ANOMALY_STRICT=1 to restore fail-on-any-anomaly.
+# ── Severity gate ────────────────────────────────────────────
+# See NON_FATAL_TYPES above: a run fails only when a detector other than the
+# two traffic-distribution ones fired.
 if [ "$anomaly_count" -gt 0 ]; then
+	if [ "$fatal_count" -eq 0 ] && [ "${LIGHTSPEED_ANOMALY_STRICT:-0}" != "1" ]; then
+		exit 0
+	fi
 	exit 1
 fi
 exit 0

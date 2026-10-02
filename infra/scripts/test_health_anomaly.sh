@@ -325,15 +325,20 @@ assert_out "not proof the relay is faulty" "(a) warns the rejection count is not
 assert_not_out "auth_spike" "(a) does not invent an auth spike"
 
 # Silence WITHOUT rejections is traffic distribution, not an outage: it must
-# be a warning, and it must not claim the outage signature.
+# be a warning, and it must not claim the outage signature. A warning does
+# NOT fail the run (only critical does) - it is still reported, and
+# LIGHTSPEED_ANOMALY_STRICT=1 restores fail-on-any.
 H_IDLEONLY="$TMP/zero-idle.json"
 emit8 "$H_IDLEONLY" a_idle
 run_anomaly "$H_IDLEONLY" "$REG4"
-assert_rc 1 "(a2) a silent-but-unused relay still exits 1"
+assert_rc 0 "(a2) a silent-but-unused relay warns without failing the run"
 assert_out "idle_relay" "(a2) fires idle_relay"
 assert_out "[warning]" "(a2) is a warning, not critical"
 assert_out "traffic distribution, not a failure" "(a2) says what it actually is"
 assert_not_out "zero_relay" "(a2) does not claim the outage signature"
+
+LIGHTSPEED_ANOMALY_STRICT=1 run_anomaly "$H_IDLEONLY" "$REG4"
+assert_rc 1 "(a2 strict) an operator opt-in still fails on a warning"
 
 # FP guard: a single-snapshot window is not sustained enough.
 run_anomaly "$H_ZERO" "$REG4" --window 1
@@ -468,12 +473,14 @@ assert_out "relay-a" "(e) health failure names relay-a"
 H_ABUSE="$TMP/abuse.json"
 emit8 "$H_ABUSE" a_abuse
 run_anomaly "$H_ABUSE" "$REG4"
-assert_rc 1 "(f) abuse flood exits 1"
+assert_rc 0 "(f) abuse flood warns without failing the run"
 assert_out "abuse_flood" "(f) fires abuse_flood"
-assert_out "relay-a" "(f) names the flooded relay"
 assert_out "% of drops" "(f) reports the drop share"
 assert_not_out "zero_relay" "(f) packets still relayed, so no zero_relay"
 assert_not_out "auth_spike" "(f) abuse is not an auth spike"
+
+LIGHTSPEED_ANOMALY_STRICT=1 run_anomaly "$H_ABUSE" "$REG4"
+assert_rc 1 "(f strict) an operator opt-in still fails on a warning"
 
 # Guard: a handful of abuse blocks is noise, not a flood.
 H_ABUSE_TINY="$TMP/abuse-tiny.json"
@@ -595,7 +602,7 @@ assert_rc 0 "(json) healthy run exits 0"
 assert_json '.anomalies | length == 0' "(json) no anomalies on healthy fleet"
 
 run_anomaly "$H_ABUSE" "$REG4" --json
-assert_rc 1 "(json) abuse run exits 1"
+assert_rc 0 "(json) abuse run does not fail the run"
 assert_json '[.anomalies[] | select(.type == "abuse_flood" and .relay == "relay-a")] | length == 1' "(json) abuse_flood object present"
 assert_json '[.anomalies[] | select(.type == "abuse_flood") | .abuse_share] | all(. >= 0.9)' "(json) abuse share crosses the floor"
 
