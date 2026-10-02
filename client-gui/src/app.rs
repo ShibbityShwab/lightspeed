@@ -519,7 +519,7 @@ impl<P: Platform> LightSpeedApp<P> {
                                   farther from your physical location.",
                     );
                     ui.hyperlink_to(
-                        "📖 Which server should I pick?",
+                        "Which server should I pick?",
                         "https://github.com/ShibbityShwab/lightspeed/wiki/Choosing-a-Boost-Server",
                     );
                 });
@@ -530,7 +530,7 @@ impl<P: Platform> LightSpeedApp<P> {
                             ui.weak("Discovering relays…");
                         }
                         DiscoveryState::Done => {
-                            ui.colored_label(theme::WARN, "⚠ No relays discovered")
+                            ui.colored_label(theme::WARN, "No relays discovered")
                                 .on_hover_text(self.discovery_error.clone().unwrap_or_else(|| {
                                     "The relay registry returned no usable relays.".to_string()
                                 }));
@@ -566,7 +566,7 @@ impl<P: Platform> LightSpeedApp<P> {
                         }
                     }
                 }
-                if ui.button("⚙ Manage").clicked() {
+                if ui.button("Manage").clicked() {
                     self.show_proxy_manager = true;
                 }
             });
@@ -576,7 +576,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     ui.horizontal(|ui| {
                         ui.colored_label(
                             egui::Color32::from_rgb(255, 190, 60),
-                            "⚠ Relay refresh failed - using the saved list",
+                            "Relay refresh failed - using the saved list",
                         )
                         .on_hover_text(err);
                         if ui.small_button("Retry").clicked() {
@@ -587,13 +587,13 @@ impl<P: Platform> LightSpeedApp<P> {
             }
         });
 
-        ui.add_space(theme::SECTION_GAP);
+        ui.add_space(theme::S3);
 
         // Game: what is being boosted, plus the reliability shield.
         theme::card(ui, "Game", |ui| {
             if let Some(ref detected) = self.auto_detected_game {
                 ui.horizontal(|ui| {
-                    ui.colored_label(theme::OK, "🎮 Game found:")
+                    ui.colored_label(theme::OK, "Game found:")
                         .on_hover_text("LightSpeed automatically detected a running game.");
                     ui.label(detected);
                 });
@@ -604,7 +604,7 @@ impl<P: Platform> LightSpeedApp<P> {
                             "Start your game and connect to a server, then click \
                              BOOST MY GAME. Or select your game manually below.",
                         );
-                    if ui.small_button("🔄 Rescan").clicked() {
+                    if ui.small_button("Rescan").clicked() {
                         self.auto_detected_game = try_auto_detect_game();
                         if let Some(ref name) = self.auto_detected_game {
                             if let Some(idx) = games()
@@ -637,7 +637,7 @@ impl<P: Platform> LightSpeedApp<P> {
             ui.horizontal(|ui| {
                 ui.checkbox(
                     &mut self.fec_enabled,
-                    "🛡 Reliability Shield - recover lost packets (+25% data)",
+                    "Reliability Shield - recover lost packets (+25% data)",
                 )
                 .on_hover_ui(|ui| {
                     ui.label(
@@ -646,7 +646,7 @@ impl<P: Platform> LightSpeedApp<P> {
                          rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
                     );
                     ui.hyperlink_to(
-                        "📖 Learn more about Reliability Shield",
+                        "Learn more about Reliability Shield",
                         "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield",
                     );
                 });
@@ -655,7 +655,7 @@ impl<P: Platform> LightSpeedApp<P> {
             ui.add_space(4.0);
         });
 
-        ui.add_space(theme::SECTION_GAP);
+        ui.add_space(theme::S3);
 
         // Rarely-used options folded behind a single collapsed section.
         egui::CollapsingHeader::new("More")
@@ -712,7 +712,7 @@ impl<P: Platform> LightSpeedApp<P> {
                                          Format: lo-hi  (e.g. 28015-28999)  or a single port."
                                     );
                                     ui.hyperlink_to(
-                                        "📖 Port not detected - fix guide",
+                                        "Port not detected - fix guide",
                                         "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
                                     );
                                 });
@@ -730,7 +730,7 @@ impl<P: Platform> LightSpeedApp<P> {
                             if !port_valid {
                                 ui.colored_label(
                                     egui::Color32::from_rgb(220, 90, 90),
-                                    "⚠ invalid",
+                                    "invalid",
                                 );
                             }
                         });
@@ -763,7 +763,7 @@ impl<P: Platform> LightSpeedApp<P> {
                         if !server_valid && !self.server_input.is_empty() {
                             ui.colored_label(
                                 egui::Color32::from_rgb(220, 130, 50),
-                                "⚠ Enter a valid IP:port (e.g. 1.2.3.4:28015)",
+                                "Enter a valid IP:port (e.g. 1.2.3.4:28015)",
                             );
                         }
 
@@ -790,7 +790,7 @@ impl<P: Platform> LightSpeedApp<P> {
             }
         });
 
-        ui.add_space(theme::SECTION_GAP);
+        ui.add_space(theme::S3);
 
         // Privacy: anonymous latency telemetry.
         theme::card(ui, "Privacy", |ui| {
@@ -798,7 +798,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 let changed = ui
                     .checkbox(
                         &mut self.share_latency_stats,
-                        "📊 Share anonymous latency stats",
+                        "Share anonymous latency stats",
                     )
                     .on_hover_text(
                         "Send anonymous aggregate RTT, jitter, and FEC stats to your \
@@ -816,7 +816,7 @@ impl<P: Platform> LightSpeedApp<P> {
             });
         });
 
-        ui.add_space(theme::SECTION_GAP);
+        ui.add_space(theme::S3);
 
         // Maintenance: self-update check.
         theme::card(ui, "Maintenance", |ui| {
@@ -831,7 +831,7 @@ impl<P: Platform> LightSpeedApp<P> {
             // Manual link control. The status window only starts and stops
             // boosting; dropping the relay connection is a rare, deliberate
             // action, so it lives here rather than competing with Boost.
-            ui.add_space(theme::ROW_GAP);
+            ui.add_space(theme::S2);
             ui.horizontal(|ui| {
                 let connected = self.status.connected;
                 let label = if connected {
@@ -850,7 +850,7 @@ impl<P: Platform> LightSpeedApp<P> {
             });
         });
 
-        ui.add_space(theme::SECTION_GAP);
+        ui.add_space(theme::S3);
 
         // Connection details: relay health and RTT history.
         theme::card(ui, "Connection details", |ui| {
@@ -911,6 +911,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // branded header mark texture.
         if !self.fonts_setup {
             self.fonts_setup = true;
+            theme::apply(&ctx);
             P::setup_fonts(&ctx);
             self.header_icon = brand_mark_texture(&ctx);
         }
@@ -1001,19 +1002,19 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 }
                 ui.label(egui::RichText::new("LightSpeed").strong());
             });
-            ui.separator();
+            ui.add_space(theme::S5);
 
             // State banner: the single answer to "am I boosted?".
             let boosting = self.status.interceptor_active
                 || self.status.windivert_active
                 || self.status.capture_active
                 || self.status.redirect_active;
-            let (headline, colour, fill) = if boosting {
-                ("BOOSTING", theme::OK, theme::PANEL)
+            let (headline, colour) = if boosting {
+                ("BOOSTING", theme::OK)
             } else if self.status.connected {
-                ("CONNECTED", theme::ACCENT, theme::PANEL_ACTION)
+                ("CONNECTED", theme::ACCENT)
             } else {
-                ("OFFLINE", theme::MUTED, theme::PANEL)
+                ("OFFLINE", theme::TEXT_DIM)
             };
             let detail = if boosting {
                 format!(
@@ -1027,22 +1028,29 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 "No boost server".to_string()
             };
             egui::Frame::new()
-                .fill(fill)
-                .corner_radius(8.0)
-                .inner_margin(14.0)
+                .fill(theme::SURFACE)
+                .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                .corner_radius(egui::CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(theme::S4 as i8))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(
-                        egui::RichText::new(headline)
-                            .color(colour)
-                            .size(26.0)
-                            .strong(),
-                    );
-                    ui.add_space(theme::ROW_GAP);
-                    ui.label(detail);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new(headline)
+                                .color(colour)
+                                .size(theme::DISPLAY)
+                                .strong(),
+                        );
+                        ui.add_space(theme::S1);
+                        ui.label(
+                            egui::RichText::new(detail)
+                                .size(theme::LABEL)
+                                .color(theme::TEXT_DIM),
+                        );
+                    });
                 });
 
-            ui.add_space(theme::ROW_GAP);
+            ui.add_space(theme::S2);
 
             // One primary action button. When it cannot act, it says why
             // rather than only greying out, so the state is never a dead end.
@@ -1050,30 +1058,29 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 && self.selected_entry().is_some()
                 && self.status.connected;
             let enabled = boosting || can_act;
-            let (label, fill, why) = if boosting {
+            let (label, _fill, why) = if boosting {
                 ("■  STOP BOOST", theme::BAD, "Stop routing game traffic")
             } else if can_act {
-                ("⚡  BOOST MY GAME", theme::ACCENT, "Start routing game traffic")
+                ("BOOST MY GAME", theme::ACCENT, "Start routing game traffic")
             } else if !self.is_admin {
                 (
-                    "⚡  BOOST MY GAME",
-                    theme::PANEL,
+                    "BOOST MY GAME",
+                    theme::SURFACE,
                     "Needs Administrator - use the button below",
                 )
             } else if !self.status.connected {
-                ("⚡  BOOST MY GAME", theme::PANEL, "Connecting to a relay…")
+                ("BOOST MY GAME", theme::SURFACE, "Connecting to a relay…")
             } else {
                 (
-                    "⚡  BOOST MY GAME",
-                    theme::PANEL,
+                    "BOOST MY GAME",
+                    theme::SURFACE,
                     "Pick a boost server in Settings first",
                 )
             };
             let primary = ui.add_enabled_ui(enabled, |ui| {
                 ui.add_sized(
                     [ui.available_width(), 46.0],
-                    egui::Button::new(egui::RichText::new(label).size(17.0).strong())
-                        .fill(fill),
+                    theme::primary_button(label, enabled),
                 )
             });
             primary.response.on_hover_text(why);
@@ -1086,15 +1093,15 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             }
 
             if !self.is_admin && !boosting {
-                ui.add_space(theme::ROW_GAP);
+                ui.add_space(theme::S2);
                 egui::Frame::new()
-                    .fill(theme::PANEL_ATTENTION)
+                    .fill(theme::SURFACE)
                     .corner_radius(6.0)
                     .inner_margin(10.0)
                     .show(ui, |ui| {
                         ui.vertical_centered(|ui| {
                             if ui
-                                .button("🔑 Restart as Administrator")
+                                .button("Restart as Administrator")
                                 .on_hover_text(
                                     "Relaunches LightSpeed with elevated privileges (system permission prompt).",
                                 )
@@ -1106,7 +1113,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     });
             }
 
-            ui.add_space(theme::ROW_GAP);
+            ui.add_space(theme::S2);
 
             // Compact connection stat row.
             ui.horizontal(|ui| {
@@ -1128,7 +1135,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 }
             });
 
-            ui.add_space(theme::ROW_GAP);
+            ui.add_space(theme::S6);
 
             // Configuration scrolls under the status summary so the window
             // can stay small next to a game.
@@ -1138,8 +1145,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     self.config_body(ui);
                 });
 
-            ui.add_space(theme::ROW_GAP);
+            ui.add_space(theme::S2);
 
+            ui.add_space(theme::S5);
             // Bottom action row.
             ui.horizontal(|ui| {
                 if self.tray_available() && ui.small_button("Hide to tray").clicked() {
@@ -1325,61 +1333,153 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 /// .inner_margin(8.0)` recipe a dozen times, so no two panels were guaranteed
 /// to agree on anything. Centralising them is what makes the surfaces below
 /// read as one interface instead of a stack of separately-styled rows.
+/// Design tokens and the single place that styles the application.
+///
+/// Rationale for these values is in `client-gui/DESIGN.md` beside the source.
 mod theme {
-    use eframe::egui::{Color32, Frame, RichText, Ui};
+    use eframe::egui::{
+        self, Color32, CornerRadius, FontId, Frame, Margin, RichText, Stroke, TextStyle, Ui,
+    };
 
-    /// Positive state: connected, game found, healthy relay.
-    pub const OK: Color32 = Color32::from_rgb(80, 200, 120);
-    /// Caution: degraded but working (higher ping, partial state).
-    pub const WARN: Color32 = Color32::from_rgb(255, 210, 0);
-    /// Failure or blocked action (driver missing, not connected).
-    pub const BAD: Color32 = Color32::from_rgb(220, 80, 80);
-    /// Secondary text that must still be readable against the panel fill.
-    pub const MUTED: Color32 = Color32::from_rgb(150, 152, 168);
-    /// Chart and accent lines.
-    pub const ACCENT: Color32 = Color32::from_rgb(100, 180, 255);
+    pub const BG: Color32 = Color32::from_rgb(0x0B, 0x0B, 0x0F);
+    pub const SURFACE: Color32 = Color32::from_rgb(0x15, 0x15, 0x1D);
+    pub const SURFACE_RAISED: Color32 = Color32::from_rgb(0x1D, 0x1D, 0x28);
+    pub const BORDER: Color32 = Color32::from_rgb(0x27, 0x27, 0x36);
 
-    /// Panel fill for a grouped section.
-    pub const PANEL: Color32 = Color32::from_rgb(24, 25, 38);
-    /// Panel fill for the primary call-to-action block, one step lighter so
-    /// the action reads as the thing to do rather than one row among many.
-    pub const PANEL_ACTION: Color32 = Color32::from_rgb(31, 33, 52);
-    /// Attention strip for a blocking prerequisite (needs Administrator).
-    pub const PANEL_ATTENTION: Color32 = Color32::from_rgb(48, 40, 22);
+    pub const TEXT: Color32 = Color32::from_rgb(0xEC, 0xEC, 0xF2);
+    pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8B, 0x8B, 0xA3);
 
-    /// Vertical rhythm between sections. One value, used everywhere, so the
-    /// eye can tell a new group from a new row without reading the content.
-    pub const SECTION_GAP: f32 = 12.0;
-    /// Gap between rows inside one section.
-    pub const ROW_GAP: f32 = 6.0;
+    pub const ACCENT: Color32 = Color32::from_rgb(0x6C, 0x5C, 0xE7);
+    pub const OK: Color32 = Color32::from_rgb(0x34, 0xD3, 0x99);
+    pub const WARN: Color32 = Color32::from_rgb(0xFB, 0xBF, 0x24);
+    pub const BAD: Color32 = Color32::from_rgb(0xF8, 0x71, 0x71);
 
-    /// A grouped section: a titled card that every region of the window uses.
-    ///
-    /// The title is the cheap part of the fix - with a consistent header the
-    /// window reads top-to-bottom as a sequence of named regions instead of an
-    /// undifferentiated column.
-    pub fn card<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
-        card_with_fill(ui, title, PANEL, body)
+    pub const CAPTION: f32 = 11.0;
+    pub const LABEL: f32 = 12.0;
+    pub const BODY: f32 = 13.0;
+    pub const EMPHASIS: f32 = 15.0;
+    pub const HEADING: f32 = 20.0;
+    pub const DISPLAY: f32 = 34.0;
+
+    pub const S1: f32 = 4.0;
+    pub const S2: f32 = 8.0;
+    pub const S3: f32 = 12.0;
+    pub const S4: f32 = 16.0;
+    pub const S5: f32 = 24.0;
+    pub const S6: f32 = 32.0;
+
+    const R_INLINE: u8 = 6;
+    const R_CARD: u8 = 10;
+    const R_BUTTON: u8 = 12;
+
+    /// Install the application theme. Called once, on the first frame.
+    pub fn apply(ctx: &egui::Context) {
+        let mut v = egui::Visuals::dark();
+        v.panel_fill = BG;
+        v.window_fill = SURFACE;
+        v.extreme_bg_color = BG;
+        v.faint_bg_color = SURFACE;
+        v.code_bg_color = SURFACE;
+        v.text_edit_bg_color = Some(BG);
+        v.window_stroke = Stroke::new(1.0, BORDER);
+        v.window_corner_radius = CornerRadius::same(R_CARD);
+        v.menu_corner_radius = CornerRadius::same(R_INLINE);
+        v.override_text_color = Some(TEXT);
+        v.weak_text_color = Some(TEXT_DIM);
+        v.hyperlink_color = ACCENT;
+        v.warn_fg_color = WARN;
+        v.error_fg_color = BAD;
+        v.selection.bg_fill = ACCENT.gamma_multiply(0.35);
+        v.selection.stroke = Stroke::new(1.0, TEXT);
+
+        let line = Stroke::new(1.0, BORDER);
+        v.widgets.noninteractive.bg_fill = SURFACE;
+        v.widgets.noninteractive.weak_bg_fill = SURFACE;
+        v.widgets.noninteractive.bg_stroke = line;
+        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_DIM);
+        v.widgets.noninteractive.corner_radius = CornerRadius::same(R_INLINE);
+
+        v.widgets.inactive.bg_fill = SURFACE_RAISED;
+        v.widgets.inactive.weak_bg_fill = SURFACE_RAISED;
+        v.widgets.inactive.bg_stroke = line;
+        v.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
+        v.widgets.inactive.corner_radius = CornerRadius::same(R_INLINE);
+
+        v.widgets.hovered.bg_fill = BORDER;
+        v.widgets.hovered.weak_bg_fill = BORDER;
+        v.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.6));
+        v.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
+        v.widgets.hovered.corner_radius = CornerRadius::same(R_INLINE);
+
+        v.widgets.active.bg_fill = ACCENT;
+        v.widgets.active.weak_bg_fill = ACCENT;
+        v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+        v.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+        v.widgets.active.corner_radius = CornerRadius::same(R_INLINE);
+
+        v.widgets.open.bg_fill = SURFACE_RAISED;
+        v.widgets.open.weak_bg_fill = SURFACE_RAISED;
+        v.widgets.open.bg_stroke = line;
+        v.widgets.open.fg_stroke = Stroke::new(1.0, TEXT);
+        v.widgets.open.corner_radius = CornerRadius::same(R_INLINE);
+
+        let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
+        style.visuals = v;
+        style.spacing.item_spacing = egui::vec2(S2, S2);
+        style.spacing.button_padding = egui::vec2(S3, S2);
+        style.spacing.window_margin = Margin::same(S4 as i8);
+        style.spacing.menu_margin = Margin::same(S2 as i8);
+        style.spacing.interact_size.y = 26.0;
+        style.spacing.icon_width = 14.0;
+        style.text_styles = [
+            (TextStyle::Heading, FontId::proportional(HEADING)),
+            (TextStyle::Body, FontId::proportional(BODY)),
+            (TextStyle::Button, FontId::proportional(BODY)),
+            (TextStyle::Small, FontId::proportional(CAPTION)),
+            (TextStyle::Monospace, FontId::monospace(LABEL)),
+        ]
+        .into();
+        ctx.set_style_of(egui::Theme::Dark, style);
+        ctx.set_theme(egui::Theme::Dark);
     }
 
-    /// As [`card`], with a caller-chosen fill for action or attention blocks.
-    pub fn card_with_fill<R>(
-        ui: &mut Ui,
-        title: &str,
-        fill: Color32,
-        body: impl FnOnce(&mut Ui) -> R,
-    ) -> R {
+    /// A section: a hairline on a near-background surface, never a bright block.
+    pub fn card<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
         Frame::new()
-            .fill(fill)
-            .corner_radius(6.0)
-            .inner_margin(10.0)
+            .fill(SURFACE)
+            .stroke(Stroke::new(1.0, BORDER))
+            .corner_radius(CornerRadius::same(R_CARD))
+            .inner_margin(Margin::same(S3 as i8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(title).strong());
-                ui.add_space(ROW_GAP);
+                ui.label(
+                    RichText::new(title.to_uppercase())
+                        .size(CAPTION)
+                        .color(TEXT_DIM)
+                        .strong(),
+                );
+                ui.add_space(S2);
                 body(ui)
             })
             .inner
+    }
+
+    /// The one bright control on screen.
+    pub fn primary_button(text: &str, ready: bool) -> egui::Button<'static> {
+        let (fill, ink) = if ready {
+            (ACCENT, Color32::WHITE)
+        } else {
+            (SURFACE_RAISED, TEXT_DIM)
+        };
+        egui::Button::new(
+            RichText::new(text.to_string())
+                .size(EMPHASIS)
+                .strong()
+                .color(ink),
+        )
+        .fill(fill)
+        .stroke(Stroke::new(1.0, if ready { ACCENT } else { BORDER }))
+        .corner_radius(CornerRadius::same(R_BUTTON))
     }
 }
 
