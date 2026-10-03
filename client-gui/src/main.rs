@@ -105,7 +105,8 @@ fn run() -> anyhow::Result<()> {
     eframe::run_native(
         "LightSpeed",
         native_options,
-        Box::new(move |_cc: &eframe::CreationContext<'_>| {
+        Box::new(move |cc: &eframe::CreationContext<'_>| {
+            app::install_fonts(&cc.egui_ctx);
             let app = app::LightSpeedApp::<platform::CurrentPlatform>::new(
                 Arc::clone(&engine_for_closure),
                 Arc::clone(&quit_for_closure),

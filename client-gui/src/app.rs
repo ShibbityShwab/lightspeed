@@ -1005,7 +1005,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             egui::RichText::new(headline)
                                 .color(colour)
                                 .size(theme::DISPLAY)
-                                .strong(),
+                                .family(theme::semibold()),
                         );
                         ui.add_space(theme::S1);
                         // The ping carries its own quality colour, so the one
@@ -1394,6 +1394,17 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 /// .inner_margin(8.0)` recipe a dozen times, so no two panels were guaranteed
 /// to agree on anything. Centralising them is what makes the surfaces below
 /// read as one interface instead of a stack of separately-styled rows.
+/// Install the bundled fonts.
+///
+/// Must run BEFORE the first frame, which is why `main.rs` calls it from the
+/// eframe creation context rather than from `theme::apply`: `set_fonts` only
+/// takes effect on the next frame, and the UI reaches for the named family
+/// immediately, so binding them late panics with "FontFamily::Name(..) is not
+/// bound to any fonts".
+pub(crate) fn install_fonts(ctx: &egui::Context) {
+    theme::install_fonts(ctx);
+}
+
 /// Design tokens and the single place that styles the application.
 ///
 /// Values mirror the website's `styles.css` custom properties so the app and the
@@ -1504,6 +1515,59 @@ mod theme {
         ctx.set_theme(egui::Theme::Dark);
     }
 
+    /// The font family for emphasised text, matching the website's font weights.
+    pub fn semibold() -> egui::FontFamily {
+        egui::FontFamily::Name("semibold".into())
+    }
+
+    /// Inter and JetBrains Mono, the same faces the website loads.
+    ///
+    /// Both are inserted at the FRONT of their family and egui's own fallbacks
+    /// are left behind them. The bundled files are latin subsets, and the UI
+    /// draws geometric glyphs (the stop square, the disclosure triangle, the
+    /// em dash, the ellipsis) that would otherwise come out as tofu.
+    pub(super) fn install_fonts(ctx: &egui::Context) {
+        use std::sync::Arc;
+
+        let mut fonts = egui::FontDefinitions::default();
+        for (name, bytes) in [
+            (
+                "inter",
+                include_bytes!("../assets/fonts/Inter-Regular.ttf") as &[u8],
+            ),
+            (
+                "inter_semibold",
+                include_bytes!("../assets/fonts/Inter-SemiBold.ttf"),
+            ),
+            (
+                "jbmono",
+                include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+            ),
+        ] {
+            fonts.font_data.insert(
+                name.to_owned(),
+                Arc::new(egui::FontData::from_static(bytes)),
+            );
+        }
+
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "inter".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .insert(0, "jbmono".to_owned());
+        fonts.families.insert(
+            semibold(),
+            vec!["inter_semibold".to_owned(), "inter".to_owned()],
+        );
+
+        ctx.set_fonts(fonts);
+    }
+
     /// A section: a hairline on a near-background surface, never a bright block.
     pub fn card<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
         Frame::new()
@@ -1517,7 +1581,7 @@ mod theme {
                     RichText::new(title.to_uppercase())
                         .size(CAPTION)
                         .color(TEXT_DIM)
-                        .strong(),
+                        .family(semibold()),
                 );
                 ui.add_space(S2);
                 body(ui)
@@ -1535,8 +1599,8 @@ mod theme {
         egui::Button::new(
             RichText::new(text.to_string())
                 .size(EMPHASIS)
-                .strong()
-                .color(ink),
+                .color(ink)
+                .family(semibold()),
         )
         .fill(fill)
         .stroke(Stroke::new(1.0, if ready { ACCENT } else { BORDER }))
@@ -1720,6 +1784,33 @@ mod tests {
 
     fn addr(s: &str) -> SocketAddrV4 {
         s.parse().expect("test address")
+    }
+
+    /// Renders one frame with the app's fonts and theme installed.
+    ///
+    /// Catches the typography wiring headlessly: an unregistered or misspelled
+    /// named family panics inside epaint the moment text uses it, which is
+    /// exactly how the bundled Inter crash reached a real user.
+    #[test]
+    fn the_theme_renders_a_frame_using_the_emphasis_family() {
+        let ctx = eframe::egui::Context::default();
+        super::install_fonts(&ctx);
+        super::theme::apply(&ctx);
+
+        let raw = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                eframe::egui::pos2(0.0, 0.0),
+                eframe::egui::vec2(420.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            ui.label(eframe::egui::RichText::new("Emphasis").family(super::theme::semibold()));
+            ui.label("body");
+            ui.monospace("207.246.106.36:4434");
+        });
+        out.textures_delta.clear();
+        assert!(!out.shapes.is_empty(), "a frame with text drew nothing");
     }
 
     #[test]
