@@ -283,6 +283,41 @@ mod tests {
     }
 
     #[test]
+    fn a_route_emits_geometry_the_bare_globe_does_not() {
+        // Renders through egui headlessly, so the arc's drawing path runs
+        // without a window: this is the check the GUI screenshots could not
+        // give without a server configured.
+        fn shapes_for(route: Option<(LatLon, LatLon)>) -> usize {
+            let ctx = egui::Context::default();
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(400.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            let markers = vec![Marker {
+                at: (34.05, -118.24),
+                colour: Color32::RED,
+                label: "LAX".to_string(),
+                emphasis: 1.0,
+            }];
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, 150.0, (34.05, -118.24), &markers, route);
+            });
+            out.textures_delta.clear();
+            out.shapes.len()
+        }
+
+        let without = shapes_for(None);
+        let with = shapes_for(Some(((34.05, -118.24), (50.11, 8.68))));
+        assert!(
+            with > without,
+            "the route added no geometry: {without} -> {with}"
+        );
+    }
+
+    #[test]
     fn city_codes_map_to_coordinates() {
         assert!(relay_coords("relay-lax-1").is_some());
         assert!(relay_coords("relay-fra").is_some());
