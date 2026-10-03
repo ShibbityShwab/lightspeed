@@ -39,22 +39,36 @@ Type scale (px) — six steps, no ad-hoc sizes:
 
 Spacing — 4pt grid, six steps: `4 8 12 16 24 32`.
 
-Colour — neutral surfaces, one accent, three semantic states:
+Colour - neutral surfaces, one accent, three semantic states. These mirror the website's
+`styles.css` custom properties exactly, so the app and the site read as one product; change them in
+both places or not at all:
 
-| Token | Value | Role |
-|---|---|---|
-| `BG` | `#0B0B0F` | window background |
-| `SURFACE` | `#15151D` | cards |
-| `SURFACE_RAISED` | `#1D1D28` | hovered / active rows |
-| `BORDER` | `#272736` | 1px hairlines, used instead of heavy fills |
-| `TEXT` | `#ECECF2` | primary text |
-| `TEXT_DIM` | `#8B8BA3` | secondary text |
-| `ACCENT` | `#6C5CE7` | brand purple: primary action, focus |
-| `OK` | `#34D399` | connected / healthy |
-| `WARN` | `#FBBF24` | degraded / attention |
-| `BAD` | `#F87171` | failed / blocked |
+| Token | Website variable | Value | Role |
+|---|---|---|---|
+| `BG` | `--bg-1` | `#0a0a1a` | window background |
+| `SURFACE` | `--bg-2` | `#101024` | cards |
+| `SURFACE_RAISED` | `--bg-3` | `#16162e` | hovered / active rows |
+| `BORDER` | `--border-1` | `#23233f` | 1px hairlines, used instead of heavy fills |
+| `TEXT` | `--text-1` | `#f2f2fa` | primary text |
+| `TEXT_DIM` | `--text-3` | `#8a8aa8` | secondary text |
+| `ACCENT` | `--accent` | `#6c5ce7` | brand purple: primary action, focus |
+| `OK` | `--signal` | `#00d68f` | connected / healthy |
+| `WARN` | `--warn` | `#fdcb6e` | degraded / attention |
+| `BAD` | `--danger` | `#ff6b6b` | failed / blocked |
 
 Radii: `6` inline controls, `10` cards, `12` primary button.
+
+## The globe
+
+The route globe draws three layers, in this order: land outlines, then the route arc, then the
+markers. Land comes from Natural Earth 1:110m (public domain) reduced to a 20 KB committed table by
+`infra/scripts/build-world-outline.py`. Outlines rather than filled land: filling needs spherical
+polygon triangulation, and at 106-150 px a coastline against the graticule already reads as a
+continent. Every layer clips to the near hemisphere, breaking the stroke where it passes behind the
+sphere rather than drawing a chord across the face.
+
+Relay positions come from the registry node id, which encodes the city. A game server's position
+comes from the offline IP table in `geo.rs`.
 
 ## Rules
 

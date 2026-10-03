@@ -1083,14 +1083,70 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
             ui.add_space(theme::S3);
 
-            // Connection details sit directly under the state banner: this is
-            // the information people look at while playing, so it stays above
-            // the fold and never inside a disclosure.
+            // One card for the whole connection: where it egresses, and what it
+            // has carried. Two cards made three views of the same thing.
             theme::card(ui, "Connection", |ui| {
+                // Route geometry: the node id encodes the city, and a game
+                // server's address is geolocated offline, so both ends place.
+                let active_node = self
+                    .selected_entry()
+                    .and_then(|e| e.node_id.clone())
+                    .or_else(|| self.status.node_id.clone());
+                let mut markers: Vec<globe::Marker> = Vec::new();
+                for entry in &self.proxies {
+                    let Some(id) = entry.node_id.as_deref() else {
+                        continue;
+                    };
+                    let Some(at) = globe::relay_coords(id) else {
+                        continue;
+                    };
+                    let active = active_node.as_deref() == Some(id);
+                    markers.push(globe::Marker {
+                        at,
+                        colour: if active { theme::ACCENT } else { theme::BORDER },
+                        label: entry.label.clone(),
+                        emphasis: if active { 1.0 } else { 0.0 },
+                    });
+                }
+                let centre = active_node
+                    .as_deref()
+                    .and_then(globe::relay_coords)
+                    .unwrap_or((30.0, 0.0));
+
+                // The game server comes from whichever mode is running; its
+                // address is "ip:port", and only an IPv4 literal geolocates.
+                let server_ip = [
+                    self.status.redirect_server.as_str(),
+                    self.status.windivert_server.as_str(),
+                ]
+                .iter()
+                .find_map(|s| s.split(':').next()?.parse::<std::net::Ipv4Addr>().ok());
+                let server_at = server_ip.and_then(geo::locate).map(|(code, at)| {
+                    markers.push(globe::Marker {
+                        at,
+                        colour: theme::WARN,
+                        label: code.to_string(),
+                        emphasis: 0.8,
+                    });
+                    at
+                });
+                let route = server_at.map(|to| (centre, to));
+
+                ui.vertical_centered(|ui| {
+                    globe::draw(
+                        ui,
+                        if narrow { 104.0 } else { 132.0 },
+                        centre,
+                        &markers,
+                        route,
+                    );
+                });
+                ui.add_space(theme::S2);
+
                 ui.horizontal(|ui| {
                     ui.label("Relay");
                     if self.status.connected {
-                        ui.label(&self.status.proxy_addr);
+                        ui.monospace(&self.status.proxy_addr);
                     } else {
                         ui.weak("—");
                     }
@@ -1138,78 +1194,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         .show_axes([false, true])
                         .show(ui, |plot_ui| plot_ui.line(line));
                 }
-            });
-
-            // Route: where traffic actually egresses. The node id encodes the
-            // city, so the fleet can be placed without a geo database.
-            let active_node = self
-                .selected_entry()
-                .and_then(|e| e.node_id.clone())
-                .or_else(|| self.status.node_id.clone());
-            let mut markers: Vec<globe::Marker> = Vec::new();
-            for entry in &self.proxies {
-                let Some(id) = entry.node_id.as_deref() else {
-                    continue;
-                };
-                let Some(at) = globe::relay_coords(id) else {
-                    continue;
-                };
-                let active = active_node.as_deref() == Some(id);
-                markers.push(globe::Marker {
-                    at,
-                    colour: if active { theme::ACCENT } else { theme::BORDER },
-                    label: entry.label.clone(),
-                    emphasis: if active { 1.0 } else { 0.0 },
-                });
-            }
-            let centre = active_node
-                .as_deref()
-                .and_then(globe::relay_coords)
-                .unwrap_or((30.0, 0.0));
-
-            // The game server comes from whichever mode is running; its address
-            // is "ip:port", and only an IPv4 literal can be geolocated.
-            let server_ip = [
-                self.status.redirect_server.as_str(),
-                self.status.windivert_server.as_str(),
-            ]
-            .iter()
-            .find_map(|s| s.split(':').next()?.parse::<std::net::Ipv4Addr>().ok());
-
-            let server_at = server_ip.and_then(geo::locate).map(|(code, at)| {
-                markers.push(globe::Marker {
-                    at,
-                    colour: theme::WARN,
-                    label: code.to_string(),
-                    emphasis: 0.8,
-                });
-                at
-            });
-
-            let route = server_at.map(|to| (centre, to));
-
-            theme::card(ui, "Route", |ui| {
-                ui.vertical_centered(|ui| {
-                    globe::draw(
-                        ui,
-                        if narrow { 106.0 } else { 150.0 },
-                        centre,
-                        &markers,
-                        route,
-                    );
-                });
-                ui.add_space(theme::S2);
-                ui.vertical_centered(|ui| {
-                    let caption = match &active_node {
-                        Some(id) => format!("Egress relay: {id}"),
-                        None => "No relay selected".to_string(),
-                    };
-                    ui.label(
-                        egui::RichText::new(caption)
-                            .size(theme::LABEL)
-                            .color(theme::TEXT_DIM),
-                    );
-                });
             });
 
             ui.add_space(theme::S3);
@@ -1412,24 +1396,25 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 /// read as one interface instead of a stack of separately-styled rows.
 /// Design tokens and the single place that styles the application.
 ///
-/// Rationale for these values is in `client-gui/DESIGN.md` beside the source.
+/// Values mirror the website's `styles.css` custom properties so the app and the
+/// site read as one product; rationale is in `client-gui/DESIGN.md`.
 mod theme {
     use eframe::egui::{
         self, Color32, CornerRadius, FontId, Frame, Margin, RichText, Stroke, TextStyle, Ui,
     };
 
-    pub const BG: Color32 = Color32::from_rgb(0x0B, 0x0B, 0x0F);
-    pub const SURFACE: Color32 = Color32::from_rgb(0x15, 0x15, 0x1D);
-    pub const SURFACE_RAISED: Color32 = Color32::from_rgb(0x1D, 0x1D, 0x28);
-    pub const BORDER: Color32 = Color32::from_rgb(0x27, 0x27, 0x36);
+    pub const BG: Color32 = Color32::from_rgb(0x0A, 0x0A, 0x1A);
+    pub const SURFACE: Color32 = Color32::from_rgb(0x10, 0x10, 0x24);
+    pub const SURFACE_RAISED: Color32 = Color32::from_rgb(0x16, 0x16, 0x2E);
+    pub const BORDER: Color32 = Color32::from_rgb(0x23, 0x23, 0x3F);
 
-    pub const TEXT: Color32 = Color32::from_rgb(0xEC, 0xEC, 0xF2);
-    pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8B, 0x8B, 0xA3);
+    pub const TEXT: Color32 = Color32::from_rgb(0xF2, 0xF2, 0xFA);
+    pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8A, 0x8A, 0xA8);
 
     pub const ACCENT: Color32 = Color32::from_rgb(0x6C, 0x5C, 0xE7);
-    pub const OK: Color32 = Color32::from_rgb(0x34, 0xD3, 0x99);
-    pub const WARN: Color32 = Color32::from_rgb(0xFB, 0xBF, 0x24);
-    pub const BAD: Color32 = Color32::from_rgb(0xF8, 0x71, 0x71);
+    pub const OK: Color32 = Color32::from_rgb(0x00, 0xD6, 0x8F);
+    pub const WARN: Color32 = Color32::from_rgb(0xFD, 0xCB, 0x6E);
+    pub const BAD: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x6B);
 
     pub const CAPTION: f32 = 11.0;
     pub const LABEL: f32 = 12.0;
