@@ -542,30 +542,53 @@ impl<P: Platform> LightSpeedApp<P> {
                         }
                     }
                 } else {
-                    let prev = self.selected_proxy_idx;
-                    for (i, entry) in self.proxies.iter().enumerate() {
-                        let btn =
-                            ui.selectable_value(&mut self.selected_proxy_idx, i, &entry.label);
-                        btn.on_hover_text(format!("{}", entry.addr));
+                    // One dropdown rather than a pill per relay plus a separate
+                    // Auto switch: the pills highlighted the current pick even
+                    // when Auto had made it, so Auto looked off while it was on.
+                    let current = if self.auto_select {
+                        "Auto (fastest)".to_string()
+                    } else {
+                        self.selected_entry()
+                            .map(|e| e.label.clone())
+                            .unwrap_or_else(|| "Select a relay".to_string())
+                    };
+                    let mut auto = self.auto_select;
+                    let mut chosen: Option<usize> = None;
+
+                    egui::ComboBox::from_id_salt("boost_server_select")
+                        .selected_text(current)
+                        .width(200.0)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(auto, "Auto (fastest)").clicked() {
+                                auto = true;
+                            }
+                            ui.separator();
+                            for (i, entry) in self.proxies.iter().enumerate() {
+                                let picked = !auto && i == self.selected_proxy_idx;
+                                if ui.selectable_label(picked, &entry.label).clicked() {
+                                    auto = false;
+                                    chosen = Some(i);
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "Auto uses the lowest-latency relay and reacts as new ones \
+                             appear. Picking one by name pins it instead.",
+                        );
+
+                    if auto != self.auto_select {
+                        self.auto_select = auto;
+                        self.persist_config();
+                        if auto && !self.status.connected {
+                            self.start_relay_race();
+                        }
                     }
-                    if self.selected_proxy_idx != prev {
+                    if let Some(i) = chosen {
+                        self.selected_proxy_idx = i;
                         self.auto_select = false;
                         self.connect_selected();
                         self.persist_config();
-                    }
-                }
-                if !self.proxies.is_empty() {
-                    let auto = ui
-                        .checkbox(&mut self.auto_select, "Auto (fastest)")
-                        .on_hover_text(
-                            "Connect to the relay with the lowest latency. \
-                             Newly discovered relays are considered too.",
-                        );
-                    if auto.changed() {
-                        self.persist_config();
-                        if self.auto_select && !self.status.connected {
-                            self.start_relay_race();
-                        }
                     }
                 }
                 if ui.button("Manage").clicked() {
