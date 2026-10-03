@@ -51,7 +51,11 @@ pub fn locate(ip: Ipv4Addr) -> Option<(&'static str, (f32, f32))> {
     if c == UNKNOWN {
         return None;
     }
-    let (code, lat, lon) = COUNTRIES[c as usize];
+    // Bounds-checked rather than indexed: the country table and the range blob
+    // are generated together, so a table regenerated with fewer entries than
+    // the blob's indices would otherwise panic on lookup instead of simply not
+    // placing the address.
+    let (code, lat, lon) = *COUNTRIES.get(c as usize)?;
     Some((code, (lat, lon)))
 }
 

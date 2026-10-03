@@ -83,8 +83,13 @@ pub fn parse_ipv4_udp(raw: &[u8]) -> Option<(SocketAddrV4, SocketAddrV4, &[u8])>
     if raw[9] != 17 {
         return None; // not UDP
     }
+    // IHL counts 32-bit words and must be at least 5 (RFC 791). Without the
+    // lower bound a packet with IHL 0 passes both length checks above and every
+    // field then reads at the wrong offset - the ports come out of the IP
+    // header itself and the payload is mis-framed - so a malformed datagram
+    // would route on garbage instead of being rejected.
     let ihl = ((raw[0] & 0x0f) as usize) * 4;
-    if raw.len() < ihl + 8 {
+    if ihl < 20 || raw.len() < ihl + 8 {
         return None;
     }
     let src_ip = Ipv4Addr::new(raw[12], raw[13], raw[14], raw[15]);
@@ -866,4 +871,72 @@ pub async fn run_windivert_redirect(
          Build with: cargo build --features windivert-redirect\n\
          Also requires WinDivert64.sys next to the executable."
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ipv4_udp;
+
+    /// A minimal valid IPv4+UDP datagram with the given IHL nibble.
+    ///
+    /// Padded to at least 20 bytes so the fixture itself is well formed even
+    /// when the IHL it advertises is not; the parser is what should reject it.
+    fn datagram(ihl_words: u8, port: u16) -> Vec<u8> {
+        let ihl = (ihl_words as usize) * 4;
+        let mut p = vec![0u8; (ihl + 8).max(20)];
+        p[0] = 0x40 | ihl_words;
+        p[9] = 17; // UDP
+        p[12..16].copy_from_slice(&[192, 168, 1, 2]);
+        p[16..20].copy_from_slice(&[10, 0, 0, 1]);
+        if p.len() >= ihl + 8 {
+            p[ihl..ihl + 2].copy_from_slice(&port.to_be_bytes());
+            p[ihl + 2..ihl + 4].copy_from_slice(&7777u16.to_be_bytes());
+        }
+        p
+    }
+
+    #[test]
+    fn parses_a_well_formed_datagram() {
+        let packet = datagram(5, 30000);
+        let (src, dst, payload) = parse_ipv4_udp(&packet).expect("should parse");
+        assert_eq!(src.port(), 30000);
+        assert_eq!(dst.port(), 7777);
+        assert!(payload.is_empty(), "no payload in this fixture");
+    }
+
+    #[test]
+    fn rejects_an_ihl_below_the_minimum() {
+        // IHL 0 is malformed (RFC 791 requires >= 5). It satisfies every length
+        // check, so without an explicit lower bound the port would be read out
+        // of the IP header itself and a bad datagram would parse as valid.
+        assert!(
+            parse_ipv4_udp(&datagram(0, 30000)).is_none(),
+            "IHL 0 must be rejected, not parsed"
+        );
+        assert!(
+            parse_ipv4_udp(&datagram(4, 30000)).is_none(),
+            "IHL 16 is too short"
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_and_non_udp_input() {
+        assert!(parse_ipv4_udp(&[]).is_none(), "empty input");
+        assert!(
+            parse_ipv4_udp(&[0u8; 19]).is_none(),
+            "shorter than an IP header"
+        );
+
+        let mut tcp = datagram(5, 30000);
+        tcp[9] = 6; // TCP
+        assert!(parse_ipv4_udp(&tcp).is_none(), "non-UDP must be rejected");
+
+        let mut v6 = datagram(5, 30000);
+        v6[0] = 0x65; // version 6, IHL 5
+        assert!(parse_ipv4_udp(&v6).is_none(), "non-IPv4 must be rejected");
+
+        // Header claims 20 bytes and UDP needs 8, so 24 is the floor.
+        let truncated = datagram(5, 30000)[..27].to_vec();
+        assert!(parse_ipv4_udp(&truncated).is_none());
+    }
 }
