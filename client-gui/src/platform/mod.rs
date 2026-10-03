@@ -112,7 +112,8 @@ pub trait Platform {
         None
     }
 
-    fn relaunch_as_admin() -> !;
+    /// Relaunch elevated, or do nothing when already elevated.
+    fn relaunch_as_admin();
 }
 
 // ── Platform selection ──────────────────────────────────────────────────

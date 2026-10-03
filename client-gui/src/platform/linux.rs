@@ -74,7 +74,7 @@ impl Platform for LinuxPlatform {
         detect_rust_ports_ss()
     }
 
-    fn relaunch_as_admin() -> ! {
+    fn relaunch_as_admin() {
         let exe = std::env::current_exe().unwrap_or_default();
         let exe_str = exe.display().to_string();
 

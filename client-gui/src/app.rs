@@ -877,6 +877,12 @@ impl<P: Platform> LightSpeedApp<P> {
 
         ui.add_space(theme::S3);
 
+        // About carries the brand mark that used to sit above the state banner,
+        // where the OS title bar was already showing the same logo and name.
+        about(ui, self.header_icon.as_ref());
+
+        ui.add_space(theme::S3);
+
         // Connection details live at the top of the window, beside the state
         // banner, rather than behind this disclosure.
             });
@@ -978,17 +984,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
         // ── Status window ────────────────────────────────────────────────
         egui::CentralPanel::default().show(ui, |ui| {
-            // Header: brand mark, app name, and the settings entry point.
-            ui.horizontal(|ui| {
-                if let Some(mark) = &self.header_icon {
-                    ui.add(
-                        egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(20.0, 20.0)),
-                    );
-                }
-                ui.label(egui::RichText::new("LightSpeed").strong());
-            });
-            ui.add_space(theme::S5);
-
+            // No in-app brand row: the OS title bar already says "LightSpeed"
+            // and carries the mark, so repeating it here was duplication. The
+            // logo and the project links live in the About card instead.
             // State banner: the single answer to "am I boosted?".
             let boosting = self.status.interceptor_active
                 || self.status.windivert_active
@@ -1793,6 +1791,66 @@ fn parse_custom_port_range(s: &str) -> Option<(u16, u16)> {
         let p = s.parse::<u16>().ok()?;
         Some((p, p))
     }
+}
+
+/// Project identity, links, and the ask to star the repository.
+///
+/// Lives at the foot of the settings column rather than at the top of the
+/// window: the OS title bar already shows the mark and the name, so repeating
+/// them above the status banner said nothing the user did not already know.
+fn about(ui: &mut egui::Ui, mark: Option<&egui::TextureHandle>) {
+    theme::card(ui, "About", |ui| {
+        ui.horizontal(|ui| {
+            if let Some(mark) = mark {
+                ui.add(egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(28.0, 28.0)));
+            }
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("LightSpeed").size(theme::EMPHASIS));
+                ui.label(
+                    egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                        .size(theme::CAPTION)
+                        .color(theme::TEXT_DIM),
+                );
+            });
+        });
+
+        ui.add_space(theme::S2);
+        ui.label(
+            egui::RichText::new(
+                "Free and open source, with no accounts and no telemetry you cannot turn off.",
+            )
+            .size(theme::LABEL)
+            .color(theme::TEXT_DIM),
+        );
+
+        ui.add_space(theme::S3);
+        ui.horizontal(|ui| {
+            ui.hyperlink_to("GitHub", "https://github.com/ShibbityShwab/lightspeed")
+                .on_hover_text("Source code, issues and releases");
+            ui.separator();
+            ui.hyperlink_to("Website", "https://shibbityshwab.github.io/lightspeed/")
+                .on_hover_text("Live relay status, benchmarks and docs");
+            ui.separator();
+            ui.hyperlink_to(
+                "Releases",
+                "https://github.com/ShibbityShwab/lightspeed/releases",
+            );
+        });
+
+        ui.add_space(theme::S3);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Enjoying it?")
+                    .size(theme::LABEL)
+                    .color(theme::TEXT_DIM),
+            );
+            ui.hyperlink_to(
+                egui::RichText::new("Star it on GitHub").family(theme::semibold()),
+                "https://github.com/ShibbityShwab/lightspeed/stargazers",
+            )
+            .on_hover_text("Stars help other players find LightSpeed");
+        });
+    });
 }
 
 #[cfg(test)]

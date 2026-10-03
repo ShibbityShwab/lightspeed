@@ -76,7 +76,7 @@ impl Platform for MacosPlatform {
         detect_rust_ports_lsof()
     }
 
-    fn relaunch_as_admin() -> ! {
+    fn relaunch_as_admin() {
         let exe = std::env::current_exe().unwrap_or_default();
         let exe_str = exe.display().to_string();
         // Wrap the path in AppleScript's `quoted form of` so spaces, quotes and

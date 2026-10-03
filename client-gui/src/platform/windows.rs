@@ -177,13 +177,58 @@ impl Platform for WindowsPlatform {
         tray
     }
 
+    /// Whether this process can raise an interface (needs the driver).
+    ///
+    /// Reads the process token rather than shelling out to `net session`,
+    /// which also fails when the Server service is merely stopped - reporting a
+    /// limited user on a machine where the process is in fact elevated.
     fn is_admin() -> bool {
-        use std::process::Command;
-        Command::new("net")
-            .args(["session"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        // Declared locally: pulling in `windows-sys` for one token query would
+        // add a dependency with a dozen features for three calls.
+        #[link(name = "advapi32")]
+        extern "system" {
+            fn OpenProcessToken(
+                process: *mut core::ffi::c_void,
+                desired_access: u32,
+                token: *mut *mut core::ffi::c_void,
+            ) -> i32;
+            fn GetTokenInformation(
+                token: *mut core::ffi::c_void,
+                class: i32,
+                info: *mut core::ffi::c_void,
+                len: u32,
+                returned: *mut u32,
+            ) -> i32;
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> *mut core::ffi::c_void;
+            fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+        }
+
+        const TOKEN_QUERY: u32 = 0x0008;
+        const TOKEN_ELEVATION_CLASS: i32 = 20;
+
+        // SAFETY: `token` is only read after a successful `OpenProcessToken`
+        // and is closed on every path; the buffer passed to
+        // `GetTokenInformation` is exactly the size of the struct it fills.
+        unsafe {
+            let mut token: *mut core::ffi::c_void = std::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return false;
+            }
+            let mut elevated: u32 = 0;
+            let mut returned: u32 = 0;
+            let ok = GetTokenInformation(
+                token,
+                TOKEN_ELEVATION_CLASS,
+                &mut elevated as *mut u32 as *mut core::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+                &mut returned,
+            );
+            CloseHandle(token);
+            ok != 0 && elevated != 0
+        }
     }
 
     fn is_capture_available() -> bool {
@@ -210,7 +255,18 @@ impl Platform for WindowsPlatform {
         detect_rust_ports_netstat()
     }
 
-    fn relaunch_as_admin() -> ! {
+    /// Relaunch elevated, but only when that would actually change anything.
+    ///
+    /// The previous version always tore the process down and respawned it, so
+    /// pressing the button on an already-elevated install restarted the app as
+    /// admin at itself - a pointless flash of the window and a dropped session.
+    /// When this process is already elevated there is nothing to raise, so it
+    /// says so and does nothing.
+    fn relaunch_as_admin() {
+        if Self::is_admin() {
+            tracing::info!("already elevated; not relaunching");
+            return;
+        }
         let exe = std::env::current_exe()
             .unwrap_or_default()
             .display()
