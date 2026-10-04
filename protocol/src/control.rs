@@ -24,6 +24,8 @@ const MSG_REGISTER_ACK: u8 = 0x04;
 const MSG_DISCONNECT: u8 = 0x05;
 const MSG_SERVER_INFO: u8 = 0x06;
 const MSG_TELEMETRY: u8 = 0x07;
+const MSG_ROTATE_REQUEST: u8 = 0x08;
+const MSG_ROTATE_ACK: u8 = 0x09;
 
 // ── Game IDs ────────────────────────────────────────────────────────
 
@@ -184,6 +186,28 @@ pub enum ControlMessage {
         dest_region: Option<String>,
     },
 
+    /// Client → Proxy: request a fresh data-plane session token.
+    ///
+    /// Carries the token the client currently holds so the relay can bind the
+    /// rotation to the live session. A relay that predates this message decodes
+    /// the type byte as [`ControlDecodeError::UnknownMessageType`] and ignores
+    /// the frame, so a client that never rotates sees today's behaviour.
+    RotateRequest {
+        /// The data-plane session token the client is currently using.
+        current_token: u32,
+    },
+
+    /// Proxy → Client: session token rotated.
+    ///
+    /// The old token stays valid only until the client acknowledges it on the
+    /// data plane, so the ack names both tokens explicitly.
+    RotateAck {
+        /// The replacement data-plane session token.
+        new_token: u32,
+        /// The token this rotation replaces.
+        old_token: u32,
+    },
+
     /// Either direction: graceful disconnect.
     Disconnect {
         /// Reason code (see [`disconnect_reason`]).
@@ -292,6 +316,18 @@ impl ControlMessage {
                     put_short_string(&mut buf, dest_region);
                 }
             }
+            Self::RotateRequest { current_token } => {
+                buf.put_u8(MSG_ROTATE_REQUEST);
+                buf.put_u32(*current_token);
+            }
+            Self::RotateAck {
+                new_token,
+                old_token,
+            } => {
+                buf.put_u8(MSG_ROTATE_ACK);
+                buf.put_u32(*new_token);
+                buf.put_u32(*old_token);
+            }
             Self::Disconnect { reason } => {
                 buf.put_u8(MSG_DISCONNECT);
                 buf.put_u8(*reason);
@@ -394,6 +430,20 @@ impl ControlMessage {
                     region,
                     telemetry_quic,
                     dest_region,
+                })
+            }
+            MSG_ROTATE_REQUEST => {
+                ensure_remaining(buf, 4)?;
+                let current_token = buf.get_u32();
+                Ok(Self::RotateRequest { current_token })
+            }
+            MSG_ROTATE_ACK => {
+                ensure_remaining(buf, 8)?;
+                let new_token = buf.get_u32();
+                let old_token = buf.get_u32();
+                Ok(Self::RotateAck {
+                    new_token,
+                    old_token,
                 })
             }
             MSG_DISCONNECT => {
@@ -707,6 +757,75 @@ mod tests {
                 telemetry_quic: false,
                 dest_region: None,
             }
+        );
+    }
+
+    #[test]
+    fn test_rotate_request_and_ack_roundtrip() {
+        let request = ControlMessage::RotateRequest {
+            current_token: 0xDEAD_BEEF,
+        };
+        assert_eq!(ControlMessage::decode(&request.encode()).unwrap(), request);
+
+        let ack = ControlMessage::RotateAck {
+            new_token: 0x0102_0304,
+            old_token: 0xDEAD_BEEF,
+        };
+        let encoded = ack.encode();
+        // New token then old token, each a big-endian u32.
+        assert_eq!(
+            encoded,
+            Bytes::from_static(&[
+                MSG_ROTATE_ACK,
+                0x01,
+                0x02,
+                0x03,
+                0x04,
+                0xDE,
+                0xAD,
+                0xBE,
+                0xEF
+            ])
+        );
+        assert_eq!(ControlMessage::decode(&encoded).unwrap(), ack);
+    }
+
+    #[test]
+    fn test_rotate_frames_reject_truncated_payload_cleanly() {
+        // A rotate request needs all four token bytes: three is malformed.
+        let truncated_request = [MSG_ROTATE_REQUEST, 0x11, 0x22, 0x33];
+        assert!(matches!(
+            ControlMessage::decode(&truncated_request),
+            Err(ControlDecodeError::BufferTooSmall { got: 3, need: 4 })
+        ));
+
+        // A rotate ack needs both tokens: a half-written pair is malformed.
+        let truncated_ack = [MSG_ROTATE_ACK, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+        assert!(matches!(
+            ControlMessage::decode(&truncated_ack),
+            Err(ControlDecodeError::BufferTooSmall { got: 7, need: 8 })
+        ));
+
+        // A bare type byte is rejected, not silently defaulted to zero.
+        assert!(matches!(
+            ControlMessage::decode(&[MSG_ROTATE_REQUEST]),
+            Err(ControlDecodeError::BufferTooSmall { got: 0, need: 4 })
+        ));
+    }
+
+    #[test]
+    fn test_rotate_request_wire_form_is_pinned_by_hardcoded_bytes() {
+        // Hand-built frame: type tag 0x08 (rotate request) followed by the
+        // big-endian current token 0x11223344. The bytes are literals on
+        // purpose - with no rotate variant the tag is unknown, `decode` returns
+        // UnknownMessageType, and this test fails, pinning the whole feature to
+        // the wire format.
+        let frame = [0x08u8, 0x11, 0x22, 0x33, 0x44];
+        let decoded = ControlMessage::decode(&frame).unwrap();
+        assert_eq!(
+            decoded.encode().as_ref(),
+            frame.as_slice(),
+            "a rotate request must round-trip its pinned wire bytes"
         );
     }
 

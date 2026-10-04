@@ -13,6 +13,27 @@
 pub mod discovery;
 pub mod health;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Default session-token rotation interval in seconds, matching
+/// `config::TunnelConfig`'s serde default.
+pub const DEFAULT_TOKEN_ROTATION_SECS: u64 = 1800;
+
+/// Session-token rotation interval in seconds (0 = disabled). The control-plane
+/// supervisor reads it; the engine applies the configured value through
+/// [`set_token_rotation_secs`].
+static TOKEN_ROTATION_SECS: AtomicU64 = AtomicU64::new(DEFAULT_TOKEN_ROTATION_SECS);
+
+/// Set the session-token rotation interval in seconds (`0` disables rotation).
+pub fn set_token_rotation_secs(secs: u64) {
+    TOKEN_ROTATION_SECS.store(secs, Ordering::Relaxed);
+}
+
+/// The session-token rotation interval in seconds (0 = disabled).
+pub(crate) fn token_rotation_secs() -> u64 {
+    TOKEN_ROTATION_SECS.load(Ordering::Relaxed)
+}
+
 pub(crate) mod fingerprint;
 
 #[cfg(feature = "quic")]
@@ -33,6 +54,11 @@ mod inner {
     use lightspeed_protocol::PROTOCOL_VERSION;
 
     use crate::error::QuicError;
+
+    /// Time budget for one token-rotation exchange over the control connection.
+    /// A relay that predates the rotation message may never answer, so the
+    /// exchange must not be able to stall pings or the reconnection loop.
+    const ROTATE_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Build a quinn client config that pins the proxy's self-signed
     /// certificate (trust-on-first-use) and verifies the TLS signature.
@@ -270,6 +296,56 @@ mod inner {
                     other
                 ))),
             }
+        }
+
+        /// Request a fresh data-plane session token from the relay.
+        ///
+        /// Returns `(new_token, old_token)`; the caller applies the rotation to
+        /// the session store. Bounded by [`ROTATE_TIMEOUT`], so a relay that
+        /// predates the rotation message and never answers cannot stall pings
+        /// or the reconnection loop.
+        pub async fn rotate_token(&self, current_token: u32) -> Result<(u32, u32), QuicError> {
+            let exchange = async {
+                let conn = self
+                    .connection
+                    .as_ref()
+                    .ok_or_else(|| QuicError::ConnectionFailed("Not connected".into()))?;
+
+                let (mut send, mut recv) = conn
+                    .open_bi()
+                    .await
+                    .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+
+                let request = ControlMessage::RotateRequest { current_token };
+                request
+                    .write_to(&mut send)
+                    .await
+                    .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+                send.finish()
+                    .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+
+                let response = ControlMessage::read_from(&mut recv)
+                    .await
+                    .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+                match response {
+                    Some(ControlMessage::RotateAck {
+                        new_token,
+                        old_token,
+                    }) => Ok((new_token, old_token)),
+                    Some(ControlMessage::Disconnect { reason }) => {
+                        Err(QuicError::ConnectionFailed(format!(
+                            "relay rejected token rotation (reason={reason})"
+                        )))
+                    }
+                    other => Err(QuicError::ConnectionFailed(format!(
+                        "unexpected rotation response: {other:?}"
+                    ))),
+                }
+            };
+
+            tokio::time::timeout(ROTATE_TIMEOUT, exchange)
+                .await
+                .map_err(|_| QuicError::ConnectionFailed("token rotation timed out".into()))?
         }
 
         /// Disconnect from the proxy gracefully.
@@ -757,7 +833,15 @@ mod supervisor {
                         let _ = initial_tx.send_replace(Initial::Done(token));
                         first_attempt = false;
                     }
-                    let hold = hold_connection(&client, live, &mut stop_rx).await;
+                    let hold = hold_connection(
+                        &client,
+                        data_addr,
+                        generation,
+                        &current_token,
+                        live,
+                        &mut stop_rx,
+                    )
+                    .await;
                     clear_target(data_addr, generation, &target);
                     if hold == HoldOutcome::Stopped {
                         break;
@@ -908,8 +992,47 @@ mod supervisor {
         Disconnected,
     }
 
+    /// Ask the relay for a fresh token and apply it to the session store.
+    ///
+    /// Best-effort: any error (including a relay that predates the rotation
+    /// message) is logged and the current token stays in force until its
+    /// expiry. Rotation never tears the control connection or the session down.
+    async fn rotate_once(
+        client: &ControlClient,
+        data_addr: SocketAddrV4,
+        generation: u64,
+        current_token: &AtomicU32,
+    ) {
+        let current = current_token.load(Ordering::Acquire);
+        match client.rotate_token(current).await {
+            Ok((new_token, old_token)) => {
+                if new_token == 0 || !generation_is_current(data_addr, generation) {
+                    return;
+                }
+                current_token.store(new_token, Ordering::Release);
+                crate::session::rotate_session_token(data_addr, new_token);
+                info!(
+                    relay = %data_addr,
+                    old_token,
+                    new_token,
+                    "session token rotated"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    relay = %data_addr,
+                    %error,
+                    "token rotation failed; keeping the current token"
+                );
+            }
+        }
+    }
+
     async fn hold_connection(
         client: &ControlClient,
+        data_addr: SocketAddrV4,
+        generation: u64,
+        current_token: &AtomicU32,
         connection: Option<quinn::Connection>,
         stop_rx: &mut watch::Receiver<bool>,
     ) -> HoldOutcome {
@@ -919,6 +1042,19 @@ mod supervisor {
         let mut interval = tokio::time::interval(PING_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
+
+        // Token rotation is opt-out: a 0 interval disables the timer entirely,
+        // so a client that does not rotate behaves exactly as it did before.
+        let rotation_secs = super::token_rotation_secs();
+        let mut rotation = (rotation_secs > 0).then(|| {
+            let mut interval = tokio::time::interval(Duration::from_secs(rotation_secs));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval
+        });
+        if let Some(interval) = rotation.as_mut() {
+            // The first tick fires immediately; count the interval from now.
+            interval.tick().await;
+        }
 
         loop {
             tokio::select! {
@@ -933,7 +1069,20 @@ mod supervisor {
                         return HoldOutcome::Disconnected;
                     }
                 }
+                _ = rotation_tick(&mut rotation) => {
+                    rotate_once(client, data_addr, generation, current_token).await;
+                }
             }
+        }
+    }
+
+    /// Await the next rotation tick, or pend forever when rotation is disabled.
+    async fn rotation_tick(rotation: &mut Option<tokio::time::Interval>) {
+        match rotation {
+            Some(interval) => {
+                interval.tick().await;
+            }
+            None => std::future::pending::<()>().await,
         }
     }
 

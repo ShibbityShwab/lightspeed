@@ -33,6 +33,13 @@ struct TokenStore {
     paths: [AtomicU64; MAX_TOKEN_PATHS],
     /// Per-path tokens, parallel to `paths`. Zero tokens are never stored.
     tokens: [AtomicU32; MAX_TOKEN_PATHS],
+    /// The token a rotation of the single-path default replaced, still
+    /// accepted during the transition window (0 = none).
+    prev_default: AtomicU32,
+    /// Per-path previous tokens, parallel to `paths`/`tokens`: the token a
+    /// rotation replaced, kept valid so in-flight packets stamped with it are
+    /// still accepted during the transition window.
+    prev_tokens: [AtomicU32; MAX_TOKEN_PATHS],
     /// Serializes writers only; readers never lock.
     write_lock: Mutex<()>,
 }
@@ -43,6 +50,8 @@ impl TokenStore {
             default: AtomicU32::new(0),
             paths: [const { AtomicU64::new(0) }; MAX_TOKEN_PATHS],
             tokens: [const { AtomicU32::new(0) }; MAX_TOKEN_PATHS],
+            prev_default: AtomicU32::new(0),
+            prev_tokens: [const { AtomicU32::new(0) }; MAX_TOKEN_PATHS],
             write_lock: Mutex::new(()),
         }
     }
@@ -57,6 +66,9 @@ impl TokenStore {
     }
 
     fn set_default(&self, token: u32) {
+        // A freshly registered default supersedes any rotation in flight, so
+        // the previous-token window closes with it.
+        self.prev_default.store(0, Ordering::Relaxed);
         self.default.store(token, Ordering::Relaxed);
     }
 
@@ -69,8 +81,16 @@ impl TokenStore {
             .write_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for (path, slot) in self.paths.iter().zip(self.tokens.iter()) {
+        for ((path, slot), prev) in self
+            .paths
+            .iter()
+            .zip(self.tokens.iter())
+            .zip(self.prev_tokens.iter())
+        {
             if path.load(Ordering::Relaxed) == packed {
+                // A freshly registered token supersedes any rotation in flight,
+                // so the previous-token window closes with it.
+                prev.store(0, Ordering::Relaxed);
                 slot.store(token, Ordering::Relaxed);
                 return;
             }
@@ -85,6 +105,7 @@ impl TokenStore {
         // All slots busy (unreachable at MAX_TOKEN_PATHS = 8): evict slot 0,
         // clearing the key first so readers never pair it with the new token.
         self.paths[0].store(0, Ordering::Release);
+        self.prev_tokens[0].store(0, Ordering::Relaxed);
         self.tokens[0].store(token, Ordering::Relaxed);
         self.paths[0].store(packed, Ordering::Release);
     }
@@ -105,13 +126,81 @@ impl TokenStore {
             .write_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for (path, slot) in self.paths.iter().zip(self.tokens.iter()) {
+        for ((path, slot), prev) in self
+            .paths
+            .iter()
+            .zip(self.tokens.iter())
+            .zip(self.prev_tokens.iter())
+        {
             if path.load(Ordering::Relaxed) == packed {
                 path.store(0, Ordering::Release);
                 slot.store(0, Ordering::Relaxed);
+                prev.store(0, Ordering::Relaxed);
                 return;
             }
         }
+    }
+
+    /// Rotate the token a path resolves to: publish `new_token` and keep the
+    /// token it replaces in that path's previous slot, so in-flight packets
+    /// still carrying the old token are accepted during the transition window.
+    ///
+    /// An explicit per-path entry is rotated in place; otherwise the
+    /// single-path default the lookup would resolve to is rotated. Atomic with
+    /// respect to every other writer through `write_lock`. Returns the replaced
+    /// token, or `None` when there is nothing to rotate (no active session, or
+    /// a zero replacement that must never clobber a valid token).
+    fn rotate(&self, addr: SocketAddrV4, new_token: u32) -> Option<u32> {
+        if new_token == 0 {
+            return None;
+        }
+        let packed = Self::pack(addr);
+        let _writer = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for ((path, slot), prev) in self
+            .paths
+            .iter()
+            .zip(self.tokens.iter())
+            .zip(self.prev_tokens.iter())
+        {
+            if path.load(Ordering::Relaxed) == packed {
+                let old = slot.load(Ordering::Relaxed);
+                if old == 0 {
+                    return None;
+                }
+                prev.store(old, Ordering::Relaxed);
+                slot.store(new_token, Ordering::Relaxed);
+                return Some(old);
+            }
+        }
+        let old = self.default.load(Ordering::Relaxed);
+        if old == 0 {
+            return None;
+        }
+        self.prev_default.store(old, Ordering::Relaxed);
+        self.default.store(new_token, Ordering::Relaxed);
+        Some(old)
+    }
+
+    /// The previous token retained for a path (0 when no rotation is in
+    /// flight). Falls back to the default's previous token for a path with no
+    /// explicit entry, mirroring [`Self::path`].
+    fn previous(&self, addr: SocketAddrV4) -> u32 {
+        let packed = Self::pack(addr);
+        for (path, prev) in self.paths.iter().zip(self.prev_tokens.iter()) {
+            if path.load(Ordering::Acquire) == packed {
+                return prev.load(Ordering::Relaxed);
+            }
+        }
+        self.prev_default.load(Ordering::Relaxed)
+    }
+
+    /// Whether `candidate` is accepted for a path: its current token, or the
+    /// previous token an in-flight rotation still honours.
+    fn accepts(&self, addr: SocketAddrV4, candidate: u32) -> bool {
+        candidate != 0 && (self.path(addr) == candidate || self.previous(addr) == candidate)
     }
 
     fn reset_all(&self) {
@@ -119,11 +208,18 @@ impl TokenStore {
             .write_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for (path, slot) in self.paths.iter().zip(self.tokens.iter()) {
+        for ((path, slot), prev) in self
+            .paths
+            .iter()
+            .zip(self.tokens.iter())
+            .zip(self.prev_tokens.iter())
+        {
             path.store(0, Ordering::Relaxed);
             slot.store(0, Ordering::Relaxed);
+            prev.store(0, Ordering::Relaxed);
         }
         self.default.store(0, Ordering::Relaxed);
+        self.prev_default.store(0, Ordering::Relaxed);
     }
 }
 
@@ -184,6 +280,29 @@ pub fn clear_path_token(path: SocketAddrV4) {
 /// Clear every token, per-path and default. Shutdown only.
 pub fn reset_all_tokens() {
     TOKENS.reset_all();
+}
+
+/// Apply a session-token rotation acknowledged by a relay.
+///
+/// Publishes `new_token` for `path` (its explicit per-path entry when one
+/// exists, otherwise the single-path default) and retains the replaced token
+/// in that path's previous-token slot, so packets already stamped with the old
+/// token stay accepted during the transition window. Atomic with respect to
+/// every other writer. Returns the replaced token, or `None` when there is no
+/// active session to rotate.
+pub fn rotate_session_token(path: SocketAddrV4, new_token: u32) -> Option<u32> {
+    TOKENS.rotate(path, new_token)
+}
+
+/// The previous token retained for a path after a rotation (0 when none).
+pub fn previous_token(path: SocketAddrV4) -> u32 {
+    TOKENS.previous(path)
+}
+
+/// Whether `candidate` is accepted for a path: its current token or the
+/// previous token an in-flight rotation still honours.
+pub fn token_accepted(path: SocketAddrV4, candidate: u32) -> bool {
+    TOKENS.accepts(path, candidate)
 }
 
 /// Set the current relay destination.
@@ -399,6 +518,83 @@ mod tests {
         set_duplication_allowed(true);
         set_multipath_paths(vec![]);
         set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+        reset_all_tokens();
+    }
+
+    #[test]
+    fn rotation_publishes_the_new_token() {
+        let _guard = token_test_guard();
+        reset_all_tokens();
+        let relay = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 9), 4434);
+        set_session_token(0xAA);
+
+        assert_eq!(rotate_session_token(relay, 0xBB), Some(0xAA));
+        assert_eq!(session_token(), 0xBB, "the new token is live");
+        assert_eq!(
+            path_token(relay),
+            0xBB,
+            "the path resolves to the new token"
+        );
+        reset_all_tokens();
+    }
+
+    #[test]
+    fn rotation_keeps_the_replaced_token_as_previous() {
+        let _guard = token_test_guard();
+        reset_all_tokens();
+        let relay = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 10), 4434);
+        set_path_token(relay, 0x11);
+
+        assert_eq!(rotate_session_token(relay, 0x22), Some(0x11));
+        assert_eq!(path_token(relay), 0x22, "the new token is live");
+        assert_eq!(
+            previous_token(relay),
+            0x11,
+            "the replaced token stays in the previous slot"
+        );
+        assert!(token_accepted(relay, 0x22), "the current token is accepted");
+        assert!(
+            token_accepted(relay, 0x11),
+            "an in-flight packet stamped with the old token is still accepted"
+        );
+        assert!(!token_accepted(relay, 0x33), "an unknown token is rejected");
+        reset_all_tokens();
+    }
+
+    #[test]
+    fn rotation_without_an_active_session_is_a_no_op() {
+        let _guard = token_test_guard();
+        reset_all_tokens();
+        let relay = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 11), 4434);
+
+        assert_eq!(rotate_session_token(relay, 0x99), None);
+        assert_eq!(session_token(), 0, "nothing was published");
+        assert_eq!(path_token(relay), 0);
+        assert_eq!(previous_token(relay), 0);
+
+        // A zero replacement must never clobber an active session either.
+        set_session_token(0xAA);
+        assert_eq!(rotate_session_token(relay, 0), None);
+        assert_eq!(session_token(), 0xAA);
+        reset_all_tokens();
+    }
+
+    #[test]
+    fn rotation_of_a_per_path_token_updates_only_that_path() {
+        let _guard = token_test_guard();
+        reset_all_tokens();
+        set_session_token(0xAA);
+        let relay = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 12), 4434);
+        let other = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 13), 4434);
+        set_path_token(relay, 0x11);
+        set_path_token(other, 0x22);
+
+        assert_eq!(rotate_session_token(relay, 0x33), Some(0x11));
+        assert_eq!(path_token(relay), 0x33);
+        assert_eq!(previous_token(relay), 0x11);
+        assert_eq!(path_token(other), 0x22, "the other path is untouched");
+        assert_eq!(previous_token(other), 0);
+        assert_eq!(session_token(), 0xAA, "the default is untouched");
         reset_all_tokens();
     }
 }

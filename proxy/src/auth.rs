@@ -15,8 +15,9 @@
 //! hold independent authorizations and closing one does not revoke the other.
 //! A same-principal re-registration demotes the previous token to a short
 //! [`PREVIOUS_TOKEN_GRACE`] window, and a transport close revokes with a grace
-//! window sized for a client reconnect. [`Authenticator::sweep`] drops expired
-//! entries.
+//! window sized for a client reconnect. An explicit rotation request demotes
+//! the token it supersedes through that same window. [`Authenticator::sweep`]
+//! drops expired entries.
 //!
 //! ## Security Properties
 //! - **Principal binding**: the entry records the IP observed at registration
@@ -57,6 +58,18 @@ pub struct AuthEntry {
     principal: Ipv4Addr,
     bound_port: Option<u16>,
     expires_at: Instant,
+}
+
+/// Cap an entry's deadline to the short [`PREVIOUS_TOKEN_GRACE`] window.
+///
+/// Shared by same-principal re-registration and by [`Authenticator::rotate`],
+/// so a superseded token is demoted through exactly one mechanism. A token
+/// already closer to expiry is left untouched.
+fn demote_to_previous_grace(entry: &mut AuthEntry, now: Instant) {
+    let deadline = now + PREVIOUS_TOKEN_GRACE;
+    if entry.expires_at > deadline {
+        entry.expires_at = deadline;
+    }
 }
 
 /// Token-based authenticator for the data plane.
@@ -117,13 +130,9 @@ impl Authenticator {
         // same-principal token would let two clients behind one NAT truncate
         // each other to the previous-token grace window.
         if data_port != 0 {
-            let previous_deadline = now + PREVIOUS_TOKEN_GRACE;
             for entry in self.tokens.values_mut() {
-                if entry.principal == principal
-                    && entry.bound_port == Some(data_port)
-                    && entry.expires_at > previous_deadline
-                {
-                    entry.expires_at = previous_deadline;
+                if entry.principal == principal && entry.bound_port == Some(data_port) {
+                    demote_to_previous_grace(entry, now);
                 }
             }
         }
@@ -158,6 +167,56 @@ impl Authenticator {
         if let Some(entry) = self.tokens.get_mut(&token) {
             entry.expires_at = now + TOKEN_TTL;
         }
+    }
+
+    /// Rotate a live token for `principal`: issue a fresh random token and
+    /// demote `current_token` to the short [`PREVIOUS_TOKEN_GRACE`] window.
+    ///
+    /// The presented token authenticates the request: it must be live and
+    /// belong to `principal`, so a caller cannot rotate a token it does not
+    /// hold. The fresh token inherits the old token's port binding and starts
+    /// a full [`TOKEN_TTL`]. Rotation obeys the same fail-closed table cap as
+    /// registration, so it is no unbounded path to new entries.
+    ///
+    /// Returns the fresh token, or `None` when `current_token` is unknown,
+    /// foreign, expired, or the table is full.
+    pub fn rotate(&mut self, principal: Ipv4Addr, current_token: u32, now: Instant) -> Option<u32> {
+        let current = *self.tokens.get(&current_token)?;
+        if current.principal != principal || current.expires_at <= now {
+            tracing::debug!(
+                principal = %principal,
+                token = current_token,
+                "Refusing to rotate an unknown, foreign, or expired token"
+            );
+            return None;
+        }
+        if self.tokens.len() >= self.max_entries {
+            tracing::warn!(
+                principal = %principal,
+                "Auth token table full, refusing to rotate session token"
+            );
+            return None;
+        }
+
+        let new_token = Self::generate_token();
+        if let Some(entry) = self.tokens.get_mut(&current_token) {
+            demote_to_previous_grace(entry, now);
+        }
+        self.tokens.insert(
+            new_token,
+            AuthEntry {
+                principal,
+                bound_port: current.bound_port,
+                expires_at: now + TOKEN_TTL,
+            },
+        );
+        tracing::info!(
+            principal = %principal,
+            old_token = current_token,
+            new_token = new_token,
+            "Rotated data-plane token"
+        );
+        Some(new_token)
     }
 
     /// Remove every token for `principal` immediately (abuse ban, no grace).
@@ -382,6 +441,105 @@ mod tests {
         assert!(auth.validate(shared, 40_000, 111, within));
         assert!(!auth.validate(shared, 40_000, 111, after));
         assert!(auth.validate(shared, 40_000, 222, after));
+    }
+
+    #[test]
+    fn rotate_swaps_the_active_token_and_demotes_the_old_one() {
+        let mut auth = Authenticator::new(true);
+        let principal = ip(1);
+        let now = t0();
+        auth.authorize(principal, 40_000, 111, now);
+
+        let new_token = auth
+            .rotate(principal, 111, now)
+            .expect("live token rotates");
+        assert_ne!(new_token, 111, "rotation must issue a fresh token");
+
+        // The fresh token runs for a full TTL while the superseded one is
+        // demoted to the previous-token grace window.
+        assert!(auth.validate(
+            principal,
+            40_000,
+            new_token,
+            now + TOKEN_TTL - Duration::from_secs(1)
+        ));
+        assert!(auth.validate(
+            principal,
+            40_000,
+            111,
+            now + PREVIOUS_TOKEN_GRACE - Duration::from_secs(1)
+        ));
+        assert!(!auth.validate(
+            principal,
+            40_000,
+            111,
+            now + PREVIOUS_TOKEN_GRACE + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn rotate_without_a_registered_token_is_refused() {
+        let mut auth = Authenticator::new(true);
+        let principal = ip(1);
+        let now = t0();
+
+        assert_eq!(
+            auth.rotate(principal, 999, now),
+            None,
+            "unknown token refused"
+        );
+        assert_eq!(auth.client_count(), 0);
+
+        // A token that exists but belongs to another principal is refused too:
+        // presenting it must not mint a token for the caller.
+        auth.authorize(ip(2), 0, 111, now);
+        assert_eq!(
+            auth.rotate(principal, 111, now),
+            None,
+            "foreign token refused"
+        );
+        assert!(auth.validate(ip(2), 0, 111, now));
+        assert_eq!(auth.client_count(), 1);
+    }
+
+    #[test]
+    fn rotated_old_token_is_rejected_after_grace_expiry() {
+        let mut auth = Authenticator::new(true);
+        let principal = ip(1);
+        let now = t0();
+        auth.authorize(principal, 0, 111, now);
+
+        let new_token = auth.rotate(principal, 111, now).unwrap();
+        let expired = now + PREVIOUS_TOKEN_GRACE + Duration::from_secs(1);
+
+        assert!(!auth.validate(principal, 0, 111, expired));
+        assert!(auth.validate(principal, 0, new_token, expired));
+        assert_eq!(auth.sweep(expired), 1, "the demoted token is swept");
+    }
+
+    #[test]
+    fn rotate_obeys_the_fail_closed_table_cap() {
+        let now = t0();
+        let principal = ip(1);
+
+        let mut full = Authenticator::with_max_entries(true, 2);
+        full.authorize(principal, 0, 111, now);
+        full.authorize(ip(2), 0, 222, now);
+        assert_eq!(
+            full.rotate(principal, 111, now),
+            None,
+            "a full table refuses"
+        );
+        assert_eq!(full.client_count(), 2, "a refused rotation adds no entry");
+        assert!(full.validate(principal, 0, 111, now));
+
+        // With a free slot the same rotation succeeds, so it is the table cap
+        // - not a new per-rotation limit - that bounds rotations.
+        let mut roomy = Authenticator::with_max_entries(true, 2);
+        roomy.authorize(principal, 0, 111, now);
+        let fresh = roomy.rotate(principal, 111, now).expect("room to rotate");
+        assert!(roomy.validate(principal, 0, fresh, now));
+        assert_eq!(roomy.client_count(), 2);
     }
 
     #[test]

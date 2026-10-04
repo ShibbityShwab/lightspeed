@@ -611,6 +611,53 @@ mod inner {
                 })
             }
 
+            ControlMessage::RotateRequest { current_token } => {
+                let Some(ipv4) = extract_ipv4(&remote) else {
+                    warn!("Rotate request from non-IPv4 {} ignored", remote);
+                    return None;
+                };
+
+                // Only the token this connection was actually issued may be
+                // rotated: an unregistered connection holds none, and a client
+                // cannot rotate a token it was never given.
+                let held = *issued_token.lock().await;
+                if held != Some(current_token) {
+                    debug!(
+                        "Rotate request from {} refused: token {} is not this connection's",
+                        remote, current_token
+                    );
+                    return None;
+                }
+
+                // Rotation adds an entry and demotes the presented token, so a
+                // full table refuses it exactly as registration does.
+                let now = Instant::now();
+                let rotated = {
+                    let mut auth = state.authenticator.write().await;
+                    auth.rotate(ipv4, current_token, now)
+                };
+                let new_token = rotated?;
+
+                // Move the connection and its session record onto the fresh
+                // token so keepalive refresh and close-time revoke both target
+                // the token the client will now use.
+                *issued_token.lock().await = Some(new_token);
+                for session in state.sessions.write().await.values_mut() {
+                    if session.remote_addr == remote {
+                        session.session_token = new_token;
+                    }
+                }
+
+                info!(
+                    "Rotated session token for {}: {} -> {}",
+                    remote, current_token, new_token
+                );
+                Some(ControlMessage::RotateAck {
+                    new_token,
+                    old_token: current_token,
+                })
+            }
+
             ControlMessage::Disconnect { reason } => {
                 info!("Client {} disconnecting (reason={})", remote, reason);
 
@@ -676,6 +723,39 @@ mod inner {
             ))
         }
 
+        fn state_with_auth() -> Arc<ControlState> {
+            Arc::new(ControlState::new(
+                ProxyConfig::default(),
+                Arc::new(RwLock::new(Authenticator::new(true))),
+                Arc::new(ProxyMetrics::new()),
+                None,
+            ))
+        }
+
+        /// Register over `process_message` and return the issued session token.
+        async fn register_for_token(
+            state: &ControlState,
+            token: &ConnectionToken,
+            data_port: u16,
+        ) -> u32 {
+            let response = process_message(
+                ControlMessage::Register {
+                    protocol_version: PROTOCOL_VERSION,
+                    game: 0,
+                    data_port,
+                    destination: None,
+                },
+                "127.0.0.1:40000".parse().unwrap(),
+                state,
+                token,
+            )
+            .await;
+            match response {
+                Some(ControlMessage::RegisterAck { session_token, .. }) => session_token,
+                other => panic!("expected RegisterAck, got {other:?}"),
+            }
+        }
+
         async fn register(
             state: &ControlState,
             token: &ConnectionToken,
@@ -734,6 +814,108 @@ mod inner {
                 None,
                 "an address the MMDB cannot place must leave the region unset"
             );
+        }
+
+        #[tokio::test]
+        async fn rotate_request_swaps_the_connections_token() {
+            let state = state_with_auth();
+            let token: ConnectionToken = Arc::new(tokio::sync::Mutex::new(None));
+            let remote: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+
+            let old = register_for_token(&state, &token, 0).await;
+            let response = process_message(
+                ControlMessage::RotateRequest { current_token: old },
+                remote,
+                &state,
+                &token,
+            )
+            .await;
+
+            let (new, acked_old) = match response {
+                Some(ControlMessage::RotateAck {
+                    new_token,
+                    old_token,
+                }) => (new_token, old_token),
+                other => panic!("expected RotateAck, got {other:?}"),
+            };
+            assert_eq!(acked_old, old, "the ack names the superseded token");
+            assert_ne!(new, old, "the ack carries a fresh token");
+            assert_eq!(
+                *token.lock().await,
+                Some(new),
+                "the connection must hold the token it was just issued"
+            );
+
+            let principal = Ipv4Addr::new(127, 0, 0, 1);
+            let now = Instant::now();
+            {
+                let auth = state.authenticator.read().await;
+                assert!(auth.validate(principal, 0, new, now), "new token is live");
+                assert!(
+                    auth.validate(principal, 0, old, now),
+                    "old token is in grace"
+                );
+                assert!(
+                    !auth.validate(Ipv4Addr::new(10, 0, 0, 9), 0, new, now),
+                    "the fresh token stays bound to the requesting principal"
+                );
+            }
+
+            let sessions = state.sessions.read().await;
+            assert!(
+                sessions.values().any(|s| s.session_token == new),
+                "the session record must track the rotated token"
+            );
+        }
+
+        #[tokio::test]
+        async fn rotate_without_registration_is_refused() {
+            let state = state_with_auth();
+            let token: ConnectionToken = Arc::new(tokio::sync::Mutex::new(None));
+            let remote: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+
+            let response = process_message(
+                ControlMessage::RotateRequest {
+                    current_token: 0xABCD_1234,
+                },
+                remote,
+                &state,
+                &token,
+            )
+            .await;
+
+            assert!(
+                response.is_none(),
+                "an unregistered connection must not rotate"
+            );
+            assert_eq!(state.authenticator.read().await.client_count(), 0);
+        }
+
+        #[tokio::test]
+        async fn rotate_with_a_token_this_connection_does_not_hold_is_refused() {
+            let state = state_with_auth();
+            let token: ConnectionToken = Arc::new(tokio::sync::Mutex::new(None));
+            let remote: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+
+            let held = register_for_token(&state, &token, 0).await;
+            let response = process_message(
+                ControlMessage::RotateRequest {
+                    current_token: held ^ 0xFFFF_FFFF,
+                },
+                remote,
+                &state,
+                &token,
+            )
+            .await;
+
+            assert!(response.is_none(), "a foreign token must not rotate");
+            assert_eq!(*token.lock().await, Some(held));
+            assert!(state.authenticator.read().await.validate(
+                Ipv4Addr::new(127, 0, 0, 1),
+                0,
+                held,
+                Instant::now()
+            ));
         }
     }
 }

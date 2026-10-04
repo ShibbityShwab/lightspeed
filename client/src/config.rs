@@ -111,6 +111,16 @@ pub struct TunnelConfig {
     /// clamp. Enable with `--path-mtu-discovery`.
     #[serde(default)]
     pub path_mtu_discovery: bool,
+
+    /// Session-token rotation interval in seconds.
+    ///
+    /// **On by default (1800 s).** Every interval, the control-plane task asks
+    /// the relay for a fresh data-plane session token and swaps it in
+    /// atomically, keeping the old token valid for a short transition so
+    /// in-flight packets are not dropped. Set to `0` to disable rotation and
+    /// keep exactly the previous behaviour.
+    #[serde(default = "default_token_rotation_secs")]
+    pub token_rotation_secs: u64,
 }
 
 /// Proxy connection settings.
@@ -302,6 +312,10 @@ fn default_fec_max_overhead_pct() -> u32 {
     25
 }
 
+fn default_token_rotation_secs() -> u64 {
+    1800
+}
+
 fn default_min_samples() -> usize {
     50
 }
@@ -331,6 +345,7 @@ impl Default for TunnelConfig {
             adaptive_fec: default_adaptive_fec(),
             fec_max_overhead_pct: default_fec_max_overhead_pct(),
             path_mtu_discovery: false,
+            token_rotation_secs: default_token_rotation_secs(),
         }
     }
 }
@@ -389,6 +404,10 @@ impl Config {
         }
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
+        // The control-plane supervisor runs without access to the `Config`
+        // value, so publish the one setting it reads directly. A missing file
+        // falls back to `Config::default()`, which matches the global default.
+        crate::quic::set_token_rotation_secs(config.tunnel.token_rotation_secs);
         Ok(config)
     }
 
@@ -419,6 +438,7 @@ mod tests {
         assert!(config.tunnel.adaptive_fec);
         assert_eq!(config.tunnel.fec_max_overhead_pct, 25);
         assert!(!config.tunnel.path_mtu_discovery);
+        assert_eq!(config.tunnel.token_rotation_secs, 1800);
         assert!(config.proxy.servers.is_empty());
         assert_eq!(config.proxy.quic_port, 4433);
         assert_eq!(config.proxy.data_port, 4434);
@@ -467,6 +487,7 @@ mod tests {
         assert!(tunnel.adaptive_fec);
         assert_eq!(tunnel.fec_max_overhead_pct, 25);
         assert!(!tunnel.path_mtu_discovery);
+        assert_eq!(tunnel.token_rotation_secs, 1800);
 
         let proxy = ProxyConfig::default();
         assert!(proxy.servers.is_empty());
@@ -704,6 +725,9 @@ keepalive_ms = "not_a_number"
 
     #[test]
     fn test_save_and_load_roundtrip() {
+        // `Config::load` publishes the rotation interval to a process global,
+        // so serialise against the other test that loads a config file.
+        let _guard = crate::session::token_test_guard();
         let mut config = Config::default();
         config.general.log_level = "debug".into();
         config.tunnel.keepalive_ms = 7500;
@@ -729,6 +753,30 @@ keepalive_ms = "not_a_number"
 
         // Clean up
         let _ = std::fs::remove_file(&tmp_file);
+    }
+
+    #[test]
+    fn config_load_publishes_the_token_rotation_interval() {
+        let _guard = crate::session::token_test_guard();
+        let tmp_file = std::env::temp_dir().join("lightspeed_token_rotation_config.toml");
+        let path_str = tmp_file.to_str().unwrap();
+
+        std::fs::write(&tmp_file, "[tunnel]\ntoken_rotation_secs = 0\n").unwrap();
+        let loaded = Config::load(path_str).unwrap();
+        assert_eq!(loaded.tunnel.token_rotation_secs, 0);
+        assert_eq!(
+            crate::quic::token_rotation_secs(),
+            0,
+            "0 must disable the control-plane rotation timer"
+        );
+
+        std::fs::write(&tmp_file, "[tunnel]\ntoken_rotation_secs = 90\n").unwrap();
+        let loaded = Config::load(path_str).unwrap();
+        assert_eq!(loaded.tunnel.token_rotation_secs, 90);
+        assert_eq!(crate::quic::token_rotation_secs(), 90);
+
+        let _ = std::fs::remove_file(&tmp_file);
+        crate::quic::set_token_rotation_secs(crate::quic::DEFAULT_TOKEN_ROTATION_SECS);
     }
 
     #[test]
