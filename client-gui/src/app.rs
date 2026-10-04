@@ -3,6 +3,11 @@
 //! Main egui application state, UI layout, and pure helper functions.
 //! Wraps [`LightSpeedEngine`] in a platform-generic `<P: Platform>` struct
 //! so the same GUI code works on Windows (tray-icon) and Linux (stub tray).
+//!
+//! The window is a **status instrument**: a full-bleed state rail, one fixed
+//! action slot, the route card (the one true card), a single scrolling config
+//! region, and a pinned footer - the `scroll-body-shell`. Every colour comes
+//! from [`crate::design`]; there are no inline colour literals here.
 
 use std::net::SocketAddrV4;
 use std::sync::atomic::Ordering;
@@ -11,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::{self, GuiConfig, ProxyEntry};
+use crate::design::*;
 use crate::discovery::{self, DiscoveryOutcome, RelayHealth};
 use crate::geo;
 use crate::globe;
@@ -19,7 +25,7 @@ use crate::platform::{Platform, QuitFlag, TrayAction, TrayHandle};
 use crate::race_watch::decide_switch;
 use crate::update::UpdateStatus;
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
+use lightspeed_client::{EngineStatus, LightSpeedEngine};
 
 // ── Tray state enum ──────────────────────────────────────────────────────────
 
@@ -31,7 +37,6 @@ pub enum TrayState {
     Optimizing,
     Error,
 }
-use lightspeed_client::{EngineStatus, LightSpeedEngine};
 
 /// While auto-select is on and the tunnel is up, how often to re-run the relay
 /// race so a better - or newly faster - relay can take over.
@@ -174,8 +179,9 @@ pub struct LightSpeedApp<P: Platform> {
     fonts_setup: bool,
     header_icon: Option<egui::TextureHandle>,
 
-    // ── Advanced panel toggle ─────────────────────────────────────────────
-    show_advanced: bool,
+    // ── Sheets and pickers ────────────────────────────────────────────────
+    show_settings: bool,
+    show_game_picker: bool,
 
     // ── Boost diagnostics ─────────────────────────────────────────────────
     boost_start: Option<std::time::Instant>,
@@ -279,7 +285,8 @@ impl<P: Platform> LightSpeedApp<P> {
             is_admin,
             fonts_setup: false,
             header_icon: None,
-            show_advanced: false,
+            show_settings: false,
+            show_game_picker: false,
             boost_start: None,
             custom_port_input: String::new(),
             update_check: UpdateCheckState::Idle,
@@ -655,383 +662,940 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// Configuration section: relay, game, and advanced settings in one scroll.
-    fn config_body(&mut self, ui: &mut egui::Ui) {
-        // Boost Server: which relay carries the game traffic.
-        theme::card(ui, "Boost Server", |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Boost Server:").on_hover_ui(|ui| {
+    // ── Rail / route readouts ──────────────────────────────────────────────
+
+    /// The full-bleed state rail: the state word, the live round trip, and the
+    /// one-line description of what is happening.
+    fn state_rail(&self, ui: &mut egui::Ui, boosting: bool, narrow: bool) {
+        let (word, word_color) = if boosting {
+            ("BOOSTING", signal)
+        } else if self.status.connected {
+            ("CONNECTED", text_1)
+        } else {
+            ("NOT BOOSTED", text_1)
+        };
+
+        let sub_line = if boosting {
+            let relay = self
+                .selected_entry()
+                .and_then(|e| e.node_id.as_deref())
+                .map(discovery::friendly_label)
+                .unwrap_or_else(|| self.status.proxy_addr.clone());
+            format!("{}  \u{2192}  {}", self.selected_game().display, relay)
+        } else if self.status.connected {
+            match &self.auto_detected_game {
+                Some(name) => format!("Relay ready, {name} selected"),
+                None => "Relay ready, pick your game".to_string(),
+            }
+        } else {
+            "No boost server".to_string()
+        };
+
+        // The live round trip. On a narrow window it moves to its own row:
+        // sharing the headline's row made the value overlap the state word at
+        // 320px, and the state word must never be occluded (skill: state
+        // legibility first).
+        let metric = if self.status.connected {
+            let text = if self.status.latest_rtt_ms > 0.0 {
+                format!("{:>3.0} ms", self.status.latest_rtt_ms)
+            } else {
+                "-- ms".to_string()
+            };
+            let color = if self.status.latest_rtt_ms > 0.0 {
+                rtt_colour(self.status.latest_rtt_ms)
+            } else {
+                text_3
+            };
+            Some((text, color))
+        } else {
+            None
+        };
+
+        let hero_h = 34.0;
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), hero_h),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_height(hero_h);
+                ui.label(
+                    egui::RichText::new(word)
+                        .size(STATE)
+                        .family(semibold())
+                        .color(word_color),
+                );
+                if let Some((text, color)) = &metric {
+                    if !narrow {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(text.as_str())
+                                    .size(METRIC)
+                                    .family(egui::FontFamily::Monospace)
+                                    .color(*color),
+                            );
+                        });
+                    }
+                }
+            },
+        );
+        if let Some((text, color)) = &metric {
+            if narrow {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        "Choose the relay server closest to your game server.\n\
-                                  Closer to the game server = lower ping, even if it's\n\
-                                  farther from your physical location.",
-                    );
-                    ui.hyperlink_to(
-                        "Which server should I pick?",
-                        "https://github.com/ShibbityShwab/lightspeed/wiki/Choosing-a-Boost-Server",
+                        egui::RichText::new(text.as_str())
+                            .size(METRIC)
+                            .family(egui::FontFamily::Monospace)
+                            .color(*color),
                     );
                 });
-                if self.proxies.is_empty() {
-                    match &self.discovery {
-                        DiscoveryState::InFlight(_) => {
-                            ui.spinner();
-                            ui.weak("Discovering relays…");
-                        }
-                        DiscoveryState::Done => {
-                            ui.colored_label(theme::WARN, "No relays discovered")
-                                .on_hover_text(self.discovery_error.clone().unwrap_or_else(|| {
-                                    "The relay registry returned no usable relays.".to_string()
-                                }));
-                            if ui.small_button("Retry").clicked() {
-                                self.start_discovery();
-                            }
-                        }
-                    }
-                } else {
-                    // One dropdown rather than a pill per relay plus a separate
-                    // Auto switch: the pills highlighted the current pick even
-                    // when Auto had made it, so Auto looked off while it was on.
-                    let current = if self.auto_select {
-                        "Auto (fastest)".to_string()
-                    } else {
-                        self.selected_entry()
-                            .map(|e| e.label.clone())
-                            .unwrap_or_else(|| "Select a relay".to_string())
-                    };
-                    let mut auto = self.auto_select;
-                    let mut chosen: Option<usize> = None;
+            }
+        }
+        ui.add_space(S1);
+        ui.label(egui::RichText::new(sub_line).size(BODY).color(text_2));
+    }
 
-                    egui::ComboBox::from_id_salt("boost_server_select")
-                        .selected_text(current)
-                        .width(200.0)
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_label(auto, "Auto (fastest)").clicked() {
-                                auto = true;
-                            }
-                            ui.separator();
-                            for (i, entry) in self.proxies.iter().enumerate() {
-                                let picked = !auto && i == self.selected_proxy_idx;
-                                if ui.selectable_label(picked, &entry.label).clicked() {
-                                    auto = false;
-                                    chosen = Some(i);
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text(
-                            "Auto uses the lowest-latency relay and reacts as new ones \
-                             appear. Picking one by name pins it instead.",
-                        );
+    /// The one true card: the route globe and the label/value ledger. No
+    /// heading - it is identified by its position, the only rounded card in
+    /// the window.
+    fn route_card(&self, ui: &mut egui::Ui, narrow: bool) {
+        // The emphasised relay marker is only ever live while connected; with
+        // the tunnel down the globe stays at rest and nothing is highlighted.
+        let active_node = if self.status.connected {
+            self.selected_entry()
+                .and_then(|e| e.node_id.clone())
+                .or_else(|| self.status.node_id.clone())
+        } else {
+            None
+        };
+        let mut markers: Vec<globe::Marker> = Vec::new();
+        if self.status.connected {
+            for entry in &self.proxies {
+                let Some(id) = entry.node_id.as_deref() else {
+                    continue;
+                };
+                let Some(at) = globe::relay_coords(id) else {
+                    continue;
+                };
+                let active = active_node.as_deref() == Some(id);
+                markers.push(globe::Marker {
+                    at,
+                    colour: if active { accent } else { border_1 },
+                    label: entry.label.clone(),
+                    emphasis: if active { 1.0 } else { 0.0 },
+                });
+            }
+        }
+        let centre = active_node
+            .as_deref()
+            .and_then(globe::relay_coords)
+            .unwrap_or((30.0, 0.0));
 
-                    if auto != self.auto_select {
-                        self.auto_select = auto;
-                        self.persist_config();
-                        if auto && !self.status.connected {
-                            self.start_relay_race();
-                        }
-                    }
-                    if let Some(i) = chosen {
-                        self.selected_proxy_idx = i;
-                        self.auto_select = false;
-                        self.connect_selected();
-                        self.persist_config();
-                    }
-                }
-                if ui.button("Manage").clicked() {
-                    self.show_proxy_manager = true;
+        // The game server comes from whichever mode is running; its address is
+        // "ip:port", and only an IPv4 literal geolocates.
+        let server_ip = [
+            self.status.interceptor_server.as_str(),
+            self.status.redirect_server.as_str(),
+            self.status.windivert_server.as_str(),
+        ]
+        .into_iter()
+        .find_map(|s| s.split(':').next()?.parse::<std::net::Ipv4Addr>().ok());
+        let server_at = server_ip.and_then(geo::locate).map(|(code, at)| {
+            markers.push(globe::Marker {
+                at,
+                colour: warn,
+                label: code.to_string(),
+                emphasis: 0.8,
+            });
+            at
+        });
+        let route = server_at.map(|to| (centre, to));
+
+        egui::Frame::new()
+            .fill(bg_2)
+            .stroke(egui::Stroke::new(1.0, border_1))
+            .corner_radius(egui::CornerRadius::same(R_CARD))
+            .inner_margin(egui::Margin::same(S3 as i8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.vertical_centered(|ui| {
+                    globe::draw(
+                        ui,
+                        if narrow { GLOBE_SM } else { GLOBE_LG },
+                        centre,
+                        &markers,
+                        route,
+                    );
+                });
+                ui.add_space(S2);
+                self.ledger_rows(ui, narrow, false);
+                if self.status.connected && !self.status.rtt_history.is_empty() {
+                    ui.add_space(S2);
+                    sparkline(ui, &self.status.rtt_history);
                 }
             });
+    }
 
-            if !self.proxies.is_empty() {
-                if let Some(err) = self.discovery_error.clone() {
+    /// The label/value ledger. At the short-height breakpoint the `Game server`
+    /// row is dropped and the values move into the scrolling region.
+    fn ledger_rows(&self, ui: &mut egui::Ui, narrow: bool, short_mode: bool) {
+        let relay = self.relay_value();
+        self.ledger_row(ui, narrow, "Relay", &relay);
+        if !short_mode {
+            let game_server = self.game_server_value();
+            self.ledger_row(ui, narrow, "Game server", &game_server);
+        }
+        let relayed = self.relayed_value();
+        self.ledger_row(ui, narrow, "Relayed", &relayed);
+    }
+
+    fn ledger_row(&self, ui: &mut egui::Ui, narrow: bool, label: &str, value: &LedgerValue) {
+        if narrow {
+            ui.label(egui::RichText::new(label).size(CAPTION).color(text_3));
+            self.ledger_value(ui, value);
+        } else {
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), ROW_H),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ledger_label(ui, LEDGER_LABEL_W, label);
+                    self.ledger_value(ui, value);
+                },
+            );
+        }
+    }
+
+    fn ledger_value(&self, ui: &mut egui::Ui, value: &LedgerValue) {
+        match value {
+            LedgerValue::Data(text) => {
+                ui.monospace(text.as_str());
+            }
+            LedgerValue::Hint(text) => {
+                ui.label(egui::RichText::new(*text).size(BODY).color(text_3));
+            }
+        }
+    }
+
+    /// `Relay` = the human-readable label the app actually has, or the raw
+    /// proxy address as a last resort. Never a fabricated city.
+    fn relay_value(&self) -> LedgerValue {
+        if !self.status.connected {
+            return LedgerValue::Hint("--");
+        }
+        let node_id = self
+            .selected_entry()
+            .and_then(|e| e.node_id.as_deref())
+            .or(self.status.node_id.as_deref());
+        if let Some(id) = node_id {
+            LedgerValue::Data(discovery::friendly_label(id))
+        } else if self.status.proxy_addr.is_empty() {
+            LedgerValue::Hint("--")
+        } else {
+            LedgerValue::Data(self.status.proxy_addr.clone())
+        }
+    }
+
+    fn game_server_value(&self) -> LedgerValue {
+        let server = [
+            self.status.interceptor_server.as_str(),
+            self.status.redirect_server.as_str(),
+            self.status.windivert_server.as_str(),
+        ]
+        .into_iter()
+        .find(|s| !s.is_empty());
+        match server {
+            Some(s) => LedgerValue::Data(s.to_string()),
+            None => LedgerValue::Hint("-- start a boost to place it"),
+        }
+    }
+
+    fn relayed_value(&self) -> LedgerValue {
+        if !self.status.connected {
+            return LedgerValue::Hint("--");
+        }
+        if self
+            .selected_entry()
+            .and_then(|e| e.node_id.as_ref())
+            .is_none()
+        {
+            // A custom proxy without a registry node has no `/health` counters.
+            return LedgerValue::Hint("--");
+        }
+        match self.health.as_ref().and_then(|p| p.result.as_ref()) {
+            Some(Ok(health)) => LedgerValue::Data(format!(
+                "{} pkts  {} sessions",
+                group_digits(health.packets_relayed),
+                group_digits(health.sessions_created)
+            )),
+            Some(Err(_)) => LedgerValue::Hint("unavailable"),
+            None => LedgerValue::Hint("checking…"),
+        }
+    }
+
+    // ── Config region (the only scrolling part) ────────────────────────────
+
+    /// Configuration section: relay, game, and the optional game picker, in the
+    /// one scroll region. At the short-height breakpoint the route values fold
+    /// in at the top.
+    fn config_body(&mut self, ui: &mut egui::Ui, narrow: bool, short: bool) {
+        if short {
+            section_label(ui, "Route");
+            self.ledger_rows(ui, narrow, true);
+            ui.add_space(S3);
+        }
+
+        // Boost server: which relay carries the game traffic.
+        field_row(ui, narrow, "Boost server", |ui| {
+            self.boost_server_combo(ui);
+        });
+        if ui
+            .link("Manage")
+            .on_hover_text("Add, remove, or refresh the relay list.")
+            .clicked()
+        {
+            self.show_proxy_manager = true;
+        }
+
+        if !self.proxies.is_empty() {
+            if let Some(err) = self.discovery_error.clone() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new("Relay refresh failed - using the saved list")
+                            .size(CAPTION)
+                            .color(warn),
+                    )
+                    .on_hover_text(err);
+                    if ui.link("Retry").clicked() {
+                        self.start_discovery();
+                    }
+                });
+            }
+        }
+        ui.add_space(S3);
+
+        // Game: what is being boosted, plus the reliability shield.
+        field_row(ui, narrow, "Game", |ui| {
+            self.game_combo(ui);
+        });
+        if let Some(ref detected) = self.auto_detected_game {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("Game found:").size(BODY).color(signal));
+                ui.label(
+                    egui::RichText::new(detected.clone())
+                        .size(BODY)
+                        .color(text_1),
+                );
+            });
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("No game detected")
+                        .size(BODY)
+                        .color(text_2),
+                );
+                if ui.link("Choose game").clicked() {
+                    self.show_game_picker = true;
+                }
+            });
+        }
+
+        ui.add_space(S1);
+        ui.checkbox(
+            &mut self.fec_enabled,
+            egui::RichText::new("Reliability Shield")
+                .size(LABEL)
+                .family(semibold()),
+        )
+        .on_hover_ui(|ui| {
+            ui.label(
+                "Reliability Shield sends extra repair data so the Boost Server \
+                 can reconstruct any packets your connection drops - no more \
+                 rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
+            );
+            ui.hyperlink_to(
+                "Learn more about Reliability Shield",
+                "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield",
+            );
+        });
+        ui.label(
+            egui::RichText::new("Repairs lost packets · +25% upload")
+                .size(CAPTION)
+                .color(text_3),
+        );
+
+        if self.show_game_picker {
+            self.game_picker(ui, narrow);
+        }
+    }
+
+    /// The Boost Server selector: auto-select or a pinned relay, one dropdown.
+    fn boost_server_combo(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width();
+        if self.proxies.is_empty() {
+            match &self.discovery {
+                DiscoveryState::InFlight(_) => {
                     ui.horizontal(|ui| {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(255, 190, 60),
-                            "Relay refresh failed - using the saved list",
-                        )
-                        .on_hover_text(err);
-                        if ui.small_button("Retry").clicked() {
+                        ui.spinner();
+                        ui.label(egui::RichText::new("Discovering relays…").color(text_2));
+                    });
+                }
+                DiscoveryState::Done => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new("No relays discovered").color(warn))
+                            .on_hover_text(self.discovery_error.clone().unwrap_or_else(|| {
+                                "The relay registry returned no usable relays.".to_string()
+                            }));
+                        if ui.link("Retry").clicked() {
                             self.start_discovery();
                         }
                     });
                 }
             }
+            return;
+        }
+
+        let current = if self.auto_select {
+            "Auto (fastest)".to_string()
+        } else {
+            self.selected_entry()
+                .map(|e| e.label.clone())
+                .unwrap_or_else(|| "Select a relay".to_string())
+        };
+        let mut auto = self.auto_select;
+        let mut chosen: Option<usize> = None;
+
+        egui::ComboBox::from_id_salt("boost_server_select")
+            .selected_text(current)
+            .width(width)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(auto, "Auto (fastest)").clicked() {
+                    auto = true;
+                }
+                ui.separator();
+                for (i, entry) in self.proxies.iter().enumerate() {
+                    let picked = !auto && i == self.selected_proxy_idx;
+                    if ui.selectable_label(picked, &entry.label).clicked() {
+                        auto = false;
+                        chosen = Some(i);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(
+                "Auto uses the lowest-latency relay and reacts as new ones \
+                 appear. Picking one by name pins it instead.",
+            );
+
+        if auto != self.auto_select {
+            self.auto_select = auto;
+            self.persist_config();
+            if auto && !self.status.connected {
+                self.start_relay_race();
+            }
+        }
+        if let Some(i) = chosen {
+            self.selected_proxy_idx = i;
+            self.auto_select = false;
+            self.connect_selected();
+            self.persist_config();
+        }
+    }
+
+    /// The one-step game selector.
+    fn game_combo(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width();
+        egui::ComboBox::from_id_salt("game_select")
+            .selected_text(self.selected_game().display)
+            .width(width)
+            .show_ui(ui, |ui| {
+                for (i, entry) in games().iter().enumerate() {
+                    ui.selectable_value(&mut self.selected_game_idx, i, entry.display);
+                }
+            });
+    }
+
+    /// The deliberate tile grid the "Choose game" link opens: two-up at full
+    /// width, one-up when narrow, with the current selection scrolled into view
+    /// and a `Done`/`Esc` close.
+    fn game_picker(&mut self, ui: &mut egui::Ui, narrow: bool) {
+        ui.add_space(S2);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Choose game")
+                    .size(LABEL)
+                    .family(semibold())
+                    .color(text_1),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Done").clicked() {
+                    self.show_game_picker = false;
+                }
+            });
         });
 
-        ui.add_space(theme::S3);
-
-        // Game: what is being boosted, plus the reliability shield.
-        theme::card(ui, "Game", |ui| {
-            if let Some(ref detected) = self.auto_detected_game {
-                ui.horizontal(|ui| {
-                    ui.colored_label(theme::OK, "Game found:")
-                        .on_hover_text("LightSpeed automatically detected a running game.");
-                    ui.label(detected);
-                });
-            } else {
-                ui.horizontal(|ui| {
-                    ui.weak("No game running - select your game and click Boost")
-                        .on_hover_text(
-                            "Start your game and connect to a server, then click \
-                             BOOST MY GAME. Or select your game manually below.",
-                        );
-                    if ui.small_button("Rescan").clicked() {
-                        self.auto_detected_game = try_auto_detect_game();
-                        if let Some(ref name) = self.auto_detected_game {
-                            if let Some(idx) = games()
-                                .iter()
-                                .position(|entry| entry.key.eq_ignore_ascii_case(name))
-                            {
-                                self.selected_game_idx = idx;
+        let cols = if narrow { 1 } else { 2 };
+        let spacing = S2;
+        let selected_row = self.selected_game_idx / cols;
+        let offset = selected_row as f32 * (CONTROL_H + spacing);
+        egui::ScrollArea::vertical()
+            .max_height(CONTROL_H * 4.0 + spacing * 4.0)
+            .vertical_scroll_offset(offset)
+            .show(ui, |ui| {
+                egui::Grid::new("game_picker_grid")
+                    .num_columns(cols)
+                    .spacing(egui::vec2(spacing, spacing))
+                    .show(ui, |ui| {
+                        let tile_w =
+                            (ui.available_width() - spacing * (cols as f32 - 1.0)) / cols as f32;
+                        for (i, game) in games().iter().enumerate() {
+                            let selected = i == self.selected_game_idx;
+                            if game_tile(ui, game.display, selected, tile_w).clicked() {
+                                self.selected_game_idx = i;
+                                self.show_game_picker = false;
                             }
-                        }
-                    }
-                });
-            }
-            ui.horizontal(|ui| {
-                ui.label("Game:  ").on_hover_text(
-                    "Select the game you want to boost. LightSpeed will \
-                                    automatically route its traffic for lower ping.",
-                );
-                egui::ComboBox::from_id_salt("game_select")
-                    .selected_text(self.selected_game().display)
-                    .width(200.0)
-                    .show_ui(ui, |ui| {
-                        for (i, entry) in games().iter().enumerate() {
-                            ui.selectable_value(&mut self.selected_game_idx, i, entry.display);
                         }
                     });
             });
+        ui.add_space(S2);
+    }
 
-            ui.add_space(4.0);
+    // ── In-window sheets ────────────────────────────────────────────────────
 
-            ui.horizontal(|ui| {
-                ui.checkbox(
-                    &mut self.fec_enabled,
-                    "Reliability Shield - recover lost packets (+25% data)",
-                )
-                .on_hover_ui(|ui| {
-                    ui.label(
-                        "Reliability Shield sends extra repair data so the Boost Server \
-                         can reconstruct any packets your connection drops - no more \
-                         rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
-                    );
-                    ui.hyperlink_to(
-                        "Learn more about Reliability Shield",
-                        "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield",
-                    );
-                });
+    /// `Settings`: Privacy, Maintenance, Advanced, and About, in the same sheet
+    /// pattern as the Proxy Manager.
+    fn settings_sheet(&mut self, ctx: &egui::Context) {
+        let (max_w, max_h) = sheet_bounds(ctx);
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("settings_sheet"))
+            .backdrop_color(scrim)
+            .frame(sheet_frame())
+            .show(ctx, |ui| {
+                ui.set_max_width(max_w);
+                sheet_title(ui, "Settings");
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .show(ui, |ui| {
+                        self.settings_body(ui);
+                    });
+                ui.add_space(S2);
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
             });
+        if response.should_close() || close {
+            self.show_settings = false;
+        }
+    }
 
-            ui.add_space(4.0);
+    fn settings_body(&mut self, ui: &mut egui::Ui) {
+        // Privacy: anonymous latency telemetry.
+        section_label(ui, "Privacy");
+        let changed = ui
+            .checkbox(
+                &mut self.share_latency_stats,
+                egui::RichText::new("Share anonymous latency stats")
+                    .size(LABEL)
+                    .family(semibold()),
+            )
+            .on_hover_text(
+                "Send anonymous aggregate RTT, jitter, and FEC stats to your \
+                 relay so the community can see real latency improvements. No \
+                 IP address, identifier, or packet content is ever sent.",
+            )
+            .changed();
+        if changed {
+            self.persist_config();
+            self.engine
+                .lock()
+                .unwrap()
+                .set_telemetry_enabled(self.share_latency_stats);
+        }
+        ui.add_space(S3);
+
+        // Maintenance: self-update, the trace log, and the relay link.
+        section_label(ui, "Maintenance");
+        if ui
+            .button("Check for updates")
+            .on_hover_text("Check whether a newer version of LightSpeed is available.")
+            .clicked()
+        {
+            self.start_update_check();
+        }
+        ui.add_space(S1);
+        if ui.button("Open log file").clicked() {
+            self.reveal_log_file();
+        }
+        ui.add_space(S1);
+        let connected = self.status.connected;
+        let label = if connected {
+            "Disconnect from relay"
+        } else {
+            "Connect to relay"
+        };
+        let hint = if connected {
+            "Drop the control-plane link to the current relay"
+        } else {
+            "Reconnect to the selected relay"
+        };
+        if ui.button(label).on_hover_text(hint).clicked() {
+            self.toggle_relay_connection();
+        }
+        ui.add_space(S3);
+
+        // Advanced: manual server override and custom port range.
+        section_label(ui, "Advanced");
+        ui.label(
+            egui::RichText::new(
+                "Enter your game server's IP and port to start boosting without \
+                 waiting for auto-detect.",
+            )
+            .size(BODY)
+            .color(text_2),
+        );
+        ui.add_space(S2);
+        ui.horizontal(|ui| {
+            ui.label("Server:");
+            let default_port = self.selected_game().default_port;
+            ui.add(
+                egui::TextEdit::singleline(&mut self.server_input)
+                    .hint_text(format!("e.g. 123.45.67.89:{default_port}"))
+                    .desired_width(220.0),
+            );
         });
-
-        ui.add_space(theme::S3);
-
-        // Rarely-used options folded behind a single collapsed section.
-        egui::CollapsingHeader::new("More")
-            .default_open(false)
-            .show(ui, |ui| {
-                // Advanced: manual server override and custom port range.
-                theme::card(ui, "Advanced", |ui| {
-            let adv_label = if self.show_advanced {
-                "v Advanced - set server manually"
-            } else {
-                "▶ Advanced - set server manually"
-            };
-            if ui
-                .small_button(adv_label)
-                .on_hover_text(
-                    "If auto-detect doesn't find your server, enter the game \
-                     server IP:port here to start boosting manually.",
-                )
-                .clicked()
-            {
-                self.show_advanced = !self.show_advanced;
+        ui.add_space(S2);
+        ui.horizontal(|ui| {
+            ui.label("Custom Port Range:").on_hover_ui(|ui| {
+                ui.label(
+                    "Override the default port scan range for auto-detect. \
+                     Use this if Packets Sent stays at 0 after 15 s.\n\
+                     Format: lo-hi  (e.g. 28015-28999)  or a single port.",
+                );
+                ui.hyperlink_to(
+                    "Port not detected - fix guide",
+                    "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
+                );
+            });
+            let port_valid = self.custom_port_input.is_empty()
+                || parse_custom_port_range(&self.custom_port_input).is_some();
+            let valid_color = if port_valid { text_1 } else { danger };
+            ui.add(
+                egui::TextEdit::singleline(&mut self.custom_port_input)
+                    .hint_text("e.g. 28015-28999 (leave blank for auto)")
+                    .desired_width(200.0)
+                    .text_color(valid_color),
+            );
+            if !port_valid {
+                ui.label(egui::RichText::new("invalid").color(danger));
             }
+        });
+        ui.add_space(S2);
 
-            if self.show_advanced {
-                ui.add_space(4.0);
-                egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(25, 25, 35))
-                    .corner_radius(4.0)
-                    .inner_margin(8.0)
-                    .show(ui, |ui: &mut egui::Ui| {
-                        ui.weak(
-                            "Enter your game server's IP and port to start boosting \
-                             without waiting for auto-detect. Find the IP in your \
-                             game's server browser.",
-                        );
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label("Server:");
-                            let default_port = self.selected_game().default_port;
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.server_input)
-                                    .hint_text(format!("e.g. 123.45.67.89:{}", default_port))
-                                    .desired_width(220.0),
+        let server_valid = parse_server_addr(&self.server_input).is_some();
+        let manual_button = egui::Button::new("Start boost (manual)").fill(if server_valid {
+            signal_soft
+        } else {
+            bg_3
+        });
+        if ui.add_enabled(server_valid, manual_button).clicked() {
+            if let Some(server_addr) = parse_server_addr(&self.server_input) {
+                let entry = self.selected_game();
+                let local_port = server_addr.port().max(entry.default_port);
+                if let Some(proxy) = self.selected_proxy_addr() {
+                    lock_or_recover(&self.engine).start_redirect(
+                        server_addr,
+                        local_port,
+                        self.fec_enabled,
+                        4,
+                        entry.display.to_string(),
+                        proxy,
+                    );
+                }
+            }
+        }
+        if !server_valid && !self.server_input.is_empty() {
+            ui.label(egui::RichText::new("Enter a valid IP:port (e.g. 1.2.3.4:28015)").color(warn));
+        }
+
+        ui.add_space(S2);
+        let instruction = connect_instruction(
+            self.selected_game(),
+            self.server_input
+                .parse::<SocketAddrV4>()
+                .map(|a| a.port())
+                .unwrap_or(self.selected_game().default_port),
+        );
+        ui.label(egui::RichText::new(instruction).size(BODY).color(text_2));
+
+        ui.add_space(S2);
+        ui.label(
+            egui::RichText::new(format!(
+                "Capture backend (pcap mode): {}",
+                if P::is_capture_available() {
+                    "available"
+                } else {
+                    "not detected"
+                }
+            ))
+            .size(CAPTION)
+            .color(text_3),
+        );
+        ui.add_space(S3);
+
+        // About: the brand mark and the project links.
+        section_label(ui, "About");
+        ui.horizontal(|ui| {
+            if let Some(mark) = self.header_icon.as_ref() {
+                ui.add(egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(28.0, 28.0)));
+            }
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new("LightSpeed")
+                        .size(EMPHASIS)
+                        .family(semibold()),
+                );
+                ui.label(
+                    egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                        .size(CAPTION)
+                        .color(text_3),
+                );
+            });
+        });
+        ui.add_space(S2);
+        ui.label(
+            egui::RichText::new(
+                "Free and open source, with no accounts and no telemetry you cannot turn off.",
+            )
+            .size(LABEL)
+            .color(text_2),
+        );
+        ui.add_space(S2);
+        ui.horizontal_wrapped(|ui| {
+            ui.hyperlink_to("GitHub", "https://github.com/ShibbityShwab/lightspeed")
+                .on_hover_text("Source code, issues and releases");
+            ui.hyperlink_to("Website", "https://shibbityshwab.github.io/lightspeed/")
+                .on_hover_text("Live relay status, benchmarks and docs");
+            ui.hyperlink_to(
+                "Releases",
+                "https://github.com/ShibbityShwab/lightspeed/releases",
+            );
+        });
+        ui.add_space(S2);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new("Enjoying it?")
+                    .size(LABEL)
+                    .color(text_2),
+            );
+            ui.hyperlink_to(
+                egui::RichText::new("Star it on GitHub").family(semibold()),
+                "https://github.com/ShibbityShwab/lightspeed/stargazers",
+            )
+            .on_hover_text("Stars help other players find LightSpeed");
+        });
+    }
+
+    /// `Proxy Manager`: the discovered and custom relay list, plus add/remove.
+    fn proxy_manager_sheet(&mut self, ctx: &egui::Context) {
+        let (max_w, max_h) = sheet_bounds(ctx);
+        let mut remove_idx: Option<usize> = None;
+        let mut add_addr: Option<SocketAddrV4> = None;
+        let mut reset = false;
+
+        let response = egui::Modal::new(egui::Id::new("proxy_manager_sheet"))
+            .backdrop_color(scrim)
+            .frame(sheet_frame())
+            .show(ctx, |ui| {
+                ui.set_max_width(max_w);
+                sheet_title(ui, "Proxy Manager");
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .show(ui, |ui| {
+                        for (i, entry) in self.proxies.iter().enumerate() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(egui::RichText::new(&entry.label).color(text_1));
+                                ui.monospace(entry.addr.to_string());
+                                ui.label(
+                                    egui::RichText::new(
+                                        entry.node_id.as_deref().unwrap_or("custom"),
+                                    )
+                                    .size(CAPTION)
+                                    .color(text_3),
+                                );
+                                if ui.button("×").clicked() {
+                                    remove_idx = Some(i);
+                                }
+                            });
+                        }
+                        if self.proxies.is_empty() {
+                            ui.label(
+                                egui::RichText::new(
+                                    "No relays yet. Discovery runs automatically; you can \
+                                     also add a custom proxy below.",
+                                )
+                                .size(BODY)
+                                .color(text_2),
                             );
+                        }
+
+                        ui.add_space(S2);
+                        ui.horizontal(|ui| {
+                            ui.label("Label:");
+                            ui.text_edit_singleline(&mut self.manager_label_input);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Addr:");
+                            ui.text_edit_singleline(&mut self.manager_addr_input);
                         });
 
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label("Custom Port Range:")
-                                .on_hover_ui(|ui| {
-                                    ui.label(
-                                        "Override the default port scan range for auto-detect. \
-                                         Use this if Packets Sent stays at 0 after 15 s.\n\
-                                         Format: lo-hi  (e.g. 28015-28999)  or a single port."
-                                    );
-                                    ui.hyperlink_to(
-                                        "Port not detected - fix guide",
-                                        "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
-                                    );
-                                });
-                            let port_valid = self.custom_port_input.is_empty()
-                                || parse_custom_port_range(&self.custom_port_input).is_some();
-                            let te = egui::TextEdit::singleline(&mut self.custom_port_input)
-                                .hint_text("e.g. 28015-28999 (leave blank for auto)")
-                                .desired_width(200.0)
-                                .text_color(if port_valid {
-                                    ui.visuals().text_color()
-                                } else {
-                                    egui::Color32::from_rgb(220, 90, 90)
-                                });
-                            ui.add(te);
-                            if !port_valid {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(220, 90, 90),
-                                    "invalid",
-                                );
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Add Proxy").clicked()
+                                && self.manager_addr_input.parse::<SocketAddrV4>().is_ok()
+                            {
+                                add_addr = Some(self.manager_addr_input.parse().unwrap());
+                            }
+                            if ui.button("Refresh relays").clicked() {
+                                self.start_discovery();
                             }
                         });
 
-                        ui.add_space(6.0);
+                        ui.add_space(S2);
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Open config folder").clicked() {
+                                paths::open_in_os(&paths::config_dir());
+                            }
+                            if ui.button("Reset to defaults").clicked() {
+                                reset = true;
+                            }
+                        });
+                        if let Some(err) = &self.config_error {
+                            ui.label(egui::RichText::new(err).color(danger));
+                        }
+                    });
+                ui.add_space(S2);
+                if ui.button("Close").clicked() {
+                    self.show_proxy_manager = false;
+                }
+            });
 
-                        let server_valid = parse_server_addr(&self.server_input).is_some();
-                        let mbtn = egui::Button::new("▶  Start Boost (manual)")
-                            .fill(if server_valid {
-                                egui::Color32::from_rgb(40, 90, 55)
-                            } else {
-                                egui::Color32::from_rgb(60, 60, 60)
-                            });
-                        if ui.add_enabled(server_valid, mbtn).clicked() {
-                            if let Some(server_addr) = parse_server_addr(&self.server_input) {
-                                let entry = self.selected_game();
-                                let local_port = server_addr.port().max(entry.default_port);
-                                if let Some(proxy) = self.selected_proxy_addr() {
-                                    lock_or_recover(&self.engine).start_redirect(
-                                        server_addr,
-                                        local_port,
-                                        self.fec_enabled,
-                                        4,
-                                        entry.display.to_string(),
-                                        proxy,
-                                    );
+        if response.should_close() {
+            self.show_proxy_manager = false;
+        }
+
+        if let Some(idx) = remove_idx {
+            self.proxies.remove(idx);
+            self.selected_proxy_idx = self
+                .selected_proxy_idx
+                .min(self.proxies.len().saturating_sub(1));
+            self.persist_config();
+        }
+        if let Some(addr) = add_addr {
+            let label = if self.manager_label_input.is_empty() {
+                addr.to_string()
+            } else {
+                self.manager_label_input.clone()
+            };
+            self.proxies.push(ProxyEntry::custom(addr, label));
+            self.manager_label_input.clear();
+            self.manager_addr_input.clear();
+            self.persist_config();
+        }
+        if reset {
+            match config::reset(&paths::config_file()) {
+                Ok(()) => {
+                    self.proxies = env_proxies();
+                    self.selected_proxy_idx = 0;
+                    self.config_error = None;
+                    self.start_discovery();
+                    self.connect_selected();
+                }
+                Err(e) => self.config_error = Some(e),
+            }
+        }
+    }
+
+    /// The self-update check result, install handoff, and any failure.
+    fn update_sheet(&mut self, ctx: &egui::Context) {
+        let (max_w, max_h) = sheet_bounds(ctx);
+        let response = egui::Modal::new(egui::Id::new("update_sheet"))
+            .backdrop_color(scrim)
+            .frame(sheet_frame())
+            .show(ctx, |ui| {
+                ui.set_max_width(max_w);
+                sheet_title(ui, "Check for updates");
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .show(ui, |ui| {
+                        match &self.update_check {
+                            UpdateCheckState::Checking => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label("Checking for updates…");
+                                });
+                            }
+                            UpdateCheckState::Done(result) => {
+                                let current = match result {
+                                    Ok(status) => status.current.clone(),
+                                    Err(_) => env!("CARGO_PKG_VERSION").to_string(),
+                                };
+                                let latest = match result {
+                                    Ok(status) => status
+                                        .latest
+                                        .clone()
+                                        .unwrap_or_else(|| "unknown".to_string()),
+                                    Err(_) => "unknown".to_string(),
+                                };
+                                ui.label(format!("Current version: {current}"));
+                                ui.label(format!("Latest version: {latest}"));
+                                ui.add_space(S1);
+                                ui.label(crate::update::update_status_line(result));
+
+                                let installable = matches!(result, Ok(status) if status.update_available && status.installer.is_some());
+                                if installable {
+                                    ui.add_space(S1);
+                                    if ui
+                                        .button("Install update")
+                                        .on_hover_text(
+                                            "Download, verify, and install the latest version",
+                                        )
+                                        .clicked()
+                                    {
+                                        if let Ok(status) = result {
+                                            if let Some(asset) = status.installer.clone() {
+                                                *lock_or_recover(&self.install_shared) = None;
+                                                self.update_check = UpdateCheckState::Installing;
+                                                let shared = Arc::clone(&self.install_shared);
+                                                std::thread::spawn(move || {
+                                                    let outcome = crate::self_update::install_blocking(
+                                                        asset,
+                                                    );
+                                                    *lock_or_recover(&shared) = Some(outcome);
+                                                });
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        }
-                        if !server_valid && !self.server_input.is_empty() {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(220, 130, 50),
-                                "Enter a valid IP:port (e.g. 1.2.3.4:28015)",
-                            );
-                        }
-
-                        ui.add_space(4.0);
-                        let instruction = connect_instruction(
-                            self.selected_game(),
-                            self.server_input
-                                .parse::<SocketAddrV4>()
-                                .map(|a| a.port())
-                                .unwrap_or(self.selected_game().default_port),
-                        );
-                        ui.weak(instruction);
-
-                        ui.add_space(4.0);
-                        ui.weak(format!(
-                            "Capture backend (pcap mode): {}",
-                            if P::is_capture_available() {
-                                "available"
-                            } else {
-                                "not detected"
+                            UpdateCheckState::Installing => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label("Installing update…");
+                                });
+                                ui.label(
+                                    "Approve the UAC prompt if one appears; LightSpeed will restart.",
+                                );
                             }
-                        ));
+                            UpdateCheckState::Idle => {}
+                        }
                     });
-            }
-        });
-
-        ui.add_space(theme::S3);
-
-        // Privacy: anonymous latency telemetry.
-        theme::card(ui, "Privacy", |ui| {
-            ui.horizontal(|ui| {
-                let changed = ui
-                    .checkbox(
-                        &mut self.share_latency_stats,
-                        "Share anonymous latency stats",
-                    )
-                    .on_hover_text(
-                        "Send anonymous aggregate RTT, jitter, and FEC stats to your \
-                         relay so the community can see real latency improvements. No \
-                         IP address, identifier, or packet content is ever sent.",
-                    )
-                    .changed();
-                if changed {
-                    self.persist_config();
-                    self.engine
-                        .lock()
-                        .unwrap()
-                        .set_telemetry_enabled(self.share_latency_stats);
+                ui.add_space(S2);
+                if ui.button("Close").clicked() {
+                    self.show_update_dialog = false;
+                    self.update_check = UpdateCheckState::Idle;
                 }
             });
-        });
 
-        ui.add_space(theme::S3);
-
-        // Maintenance: self-update check.
-        theme::card(ui, "Maintenance", |ui| {
-            if ui
-                .button("Check for updates")
-                .on_hover_text("Check whether a newer version of LightSpeed is available.")
-                .clicked()
-            {
-                self.start_update_check();
-            }
-
-            // Manual link control. The status window only starts and stops
-            // boosting; dropping the relay connection is a rare, deliberate
-            // action, so it lives here rather than competing with Boost.
-            ui.add_space(theme::S2);
-            ui.horizontal(|ui| {
-                let connected = self.status.connected;
-                let label = if connected {
-                    "Disconnect from relay"
-                } else {
-                    "Connect to relay"
-                };
-                let hint = if connected {
-                    "Drop the control-plane link to the current relay"
-                } else {
-                    "Reconnect to the selected relay"
-                };
-                if ui.button(label).on_hover_text(hint).clicked() {
-                    self.toggle_relay_connection();
-                }
-            });
-        });
-
-        ui.add_space(theme::S3);
-
-        // About carries the brand mark that used to sit above the state banner,
-        // where the OS title bar was already showing the same logo and name.
-        about(ui, self.header_icon.as_ref());
-
-        ui.add_space(theme::S3);
-
-        // Connection details live at the top of the window, beside the state
-        // banner, rather than behind this disclosure.
-            });
+        if response.should_close() {
+            self.show_update_dialog = false;
+            self.update_check = UpdateCheckState::Idle;
+        }
     }
 }
 
@@ -1040,16 +1604,17 @@ impl<P: Platform> LightSpeedApp<P> {
 impl<P: Platform> eframe::App for LightSpeedApp<P> {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // Windows get snapped narrow on a small screen or beside a game, so the
-        // layout adapts rather than clipping: tighter margins and a smaller
-        // globe below this width.
-        let narrow = ui.available_width() < 380.0;
+        // The full window rect, read before any panel claims space, drives the
+        // narrow (width) and short (height) breakpoints.
+        let viewport = ui.available_rect_before_wrap();
+        let narrow = viewport.width() < 380.0;
+        let short = viewport.height() < 560.0;
 
         // One-time first-frame setup: platform-specific fonts and the
         // branded header mark texture.
         if !self.fonts_setup {
             self.fonts_setup = true;
-            theme::apply(&ctx);
+            apply_theme(&ctx);
             P::setup_fonts(&ctx);
             self.header_icon = brand_mark_texture(&ctx);
         }
@@ -1139,443 +1704,155 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             }
         }
 
-        // ── Status window ────────────────────────────────────────────────
-        egui::CentralPanel::default().show(ui, |ui| {
-            // No in-app brand row: the OS title bar already says "LightSpeed"
-            // and carries the mark, so repeating it here was duplication. The
-            // logo and the project links live in the About card instead.
-            // State banner: the single answer to "am I boosted?".
-            let boosting = self.status.interceptor_active
-                || self.status.windivert_active
-                || self.status.capture_active
-                || self.status.redirect_active;
-            let (headline, colour) = if boosting {
-                ("BOOSTING", theme::OK)
-            } else if self.status.connected {
-                ("CONNECTED", theme::ACCENT)
-            } else {
-                ("OFFLINE", theme::TEXT_DIM)
-            };
-            // The headline answers the two questions a player actually has, in
-            // one glance: is it on, and how good is it. The relay address is
-            // detail, so it lives in the card below rather than here.
-            let detail = match (boosting, self.status.connected) {
-                (true, _) => format!(
-                    "{} - {:.0} ms",
-                    self.selected_game().display,
-                    self.status.latest_rtt_ms
-                ),
-                (false, true) if self.status.latest_rtt_ms > 0.0 => {
-                    format!("Not boosting - {:.0} ms", self.status.latest_rtt_ms)
-                }
-                (false, true) => "Not boosting - measuring".to_string(),
-                (false, false) => "No boost server".to_string(),
-            };
-            egui::Frame::new()
-                .fill(theme::SURFACE)
-                .stroke(egui::Stroke::new(1.0, theme::BORDER))
-                .corner_radius(egui::CornerRadius::same(10))
-                .inner_margin(egui::Margin::same(theme::S4 as i8))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new(headline)
-                                .color(colour)
-                                .size(theme::DISPLAY)
-                                .family(theme::semibold()),
-                        );
-                        ui.add_space(theme::S1);
-                        // The ping carries its own quality colour, so the one
-                        // glance that answers "is it on and is it good" does
-                        // not need reading.
-                        let detail_colour =
-                            if self.status.connected && self.status.latest_rtt_ms > 0.0 {
-                                rtt_colour(self.status.latest_rtt_ms)
-                            } else {
-                                theme::TEXT_DIM
-                            };
-                        ui.label(
-                            egui::RichText::new(detail)
-                                .size(theme::LABEL)
-                                .color(detail_colour),
-                        );
-                    });
-                });
+        // ── Status window shell ──────────────────────────────────────────
+        // The "scroll-body-shell": rail, action bar, and (at normal height)
+        // route card are fixed; the config region is the only scrolling part;
+        // the footer stays pinned. At a short height the route card folds into
+        // the scroll region so the fixed chrome never crowds out the footer.
+        let boosting = self.status.interceptor_active
+            || self.status.windivert_active
+            || self.status.capture_active
+            || self.status.redirect_active;
 
-            ui.add_space(theme::S2);
+        let rail_edge = if boosting {
+            signal
+        } else if self.status.connected {
+            accent_soft
+        } else {
+            text_3
+        };
 
-            // One primary action button. When it cannot act, it says why
-            // rather than only greying out, so the state is never a dead end.
-            let can_act = self.is_admin && self.selected_entry().is_some() && self.status.connected;
-            // While unelevated the only action the user can take is elevating,
-            // so that is what the primary slot offers. A disabled Boost button
-            // here would be the largest control on screen doing nothing.
-            let enabled = boosting || can_act || !self.is_admin;
-            let (label, _fill, why) = if boosting {
-                ("■  STOP BOOST", theme::BAD, "Stop routing game traffic")
+        // Rail: full-bleed, no radius, no side margin.
+        let rail = egui::Panel::top("state_rail")
+            .frame(egui::Frame::new().fill(bg_2).inner_margin(egui::Margin {
+                left: S4 as i8,
+                right: S4 as i8,
+                top: S3 as i8,
+                bottom: S3 as i8,
+            }))
+            .show(ui, |ui| {
+                self.state_rail(ui, boosting, narrow);
+            });
+        // The 3 px left edge is painted after the frame, so it is never
+        // rounded or inset; `signal` only when actually boosting.
+        ui.painter().vline(
+            rail.response.rect.left() + 1.5,
+            rail.response.rect.y_range(),
+            egui::Stroke::new(3.0, rail_edge),
+        );
+
+        // Action bar: one slot, three gate-driven labels.
+        let has_relay = self.selected_entry().is_some();
+        let (action_label, action_ready) =
+            primary_action(self.is_admin, boosting, self.status.connected, has_relay);
+        let action_kind = if boosting {
+            ActionKind::Danger
+        } else {
+            ActionKind::Accent
+        };
+        let action = egui::Panel::top("action_bar")
+            .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
+                left: S4 as i8,
+                right: S4 as i8,
+                top: S2 as i8,
+                bottom: S2 as i8,
+            }))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                action_button(ui, action_label, action_kind, action_ready)
+            });
+        if action.inner.clicked() && action_ready {
+            if boosting {
+                self.stop_boost();
             } else if !self.is_admin {
-                (
-                    "RESTART AS ADMINISTRATOR",
-                    theme::ACCENT,
-                    "Required to redirect game traffic",
-                )
-            } else if can_act {
-                ("BOOST MY GAME", theme::ACCENT, "Start routing game traffic")
-            } else if !self.status.connected {
-                ("BOOST MY GAME", theme::SURFACE, "Connecting to a relay…")
+                self.restart_elevated();
             } else {
-                (
-                    "BOOST MY GAME",
-                    theme::SURFACE,
-                    "Pick a boost server in Settings first",
-                )
-            };
-            let primary = ui.add_enabled_ui(enabled, |ui| {
-                ui.add_sized(
-                    [ui.available_width(), 46.0],
-                    theme::primary_button(label, enabled),
-                )
-            });
-            primary.response.on_hover_text(why);
-            if primary.inner.clicked() {
-                if boosting {
-                    self.stop_boost();
-                } else if !self.is_admin {
-                    self.restart_elevated();
-                } else {
-                    self.start_boost();
-                }
+                self.start_boost();
             }
+        }
 
-            if !self.is_admin && !boosting {
-                ui.add_space(theme::S2);
-                ui.vertical_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("Administrator is required to redirect game traffic")
-                            .size(theme::LABEL)
-                            .color(theme::TEXT_DIM),
-                    );
-                });
-            }
-
-            ui.add_space(theme::S3);
-
-            // One card for the whole connection: where it egresses, and what it
-            // has carried. Two cards made three views of the same thing.
-            theme::card(ui, "Connection", |ui| {
-                // Route geometry: the node id encodes the city, and a game
-                // server's address is geolocated offline, so both ends place.
-                let active_node = self
-                    .selected_entry()
-                    .and_then(|e| e.node_id.clone())
-                    .or_else(|| self.status.node_id.clone());
-                let mut markers: Vec<globe::Marker> = Vec::new();
-                for entry in &self.proxies {
-                    let Some(id) = entry.node_id.as_deref() else {
-                        continue;
-                    };
-                    let Some(at) = globe::relay_coords(id) else {
-                        continue;
-                    };
-                    let active = active_node.as_deref() == Some(id);
-                    markers.push(globe::Marker {
-                        at,
-                        colour: if active { theme::ACCENT } else { theme::BORDER },
-                        label: entry.label.clone(),
-                        emphasis: if active { 1.0 } else { 0.0 },
-                    });
-                }
-                let centre = active_node
-                    .as_deref()
-                    .and_then(globe::relay_coords)
-                    .unwrap_or((30.0, 0.0));
-
-                // The game server comes from whichever mode is running; its
-                // address is "ip:port", and only an IPv4 literal geolocates.
-                let server_ip = [
-                    self.status.redirect_server.as_str(),
-                    self.status.windivert_server.as_str(),
-                ]
-                .iter()
-                .find_map(|s| s.split(':').next()?.parse::<std::net::Ipv4Addr>().ok());
-                let server_at = server_ip.and_then(geo::locate).map(|(code, at)| {
-                    markers.push(globe::Marker {
-                        at,
-                        colour: theme::WARN,
-                        label: code.to_string(),
-                        emphasis: 0.8,
-                    });
-                    at
-                });
-                let route = server_at.map(|to| (centre, to));
-
-                ui.vertical_centered(|ui| {
-                    globe::draw(
-                        ui,
-                        if narrow { 104.0 } else { 132.0 },
-                        centre,
-                        &markers,
-                        route,
-                    );
-                });
-                ui.add_space(theme::S2);
-
-                ui.horizontal(|ui| {
-                    ui.label("Relay");
-                    if self.status.connected {
-                        ui.monospace(&self.status.proxy_addr);
-                    } else {
-                        ui.weak("—");
-                    }
-                });
-
-                if self.status.connected {
-                    if let Some(probe) = &self.health {
-                        ui.add_space(theme::S2);
-                        ui.horizontal(|ui| {
-                            ui.label("Relayed").on_hover_text(
-                                "Live counters from the selected relay's HTTP /health endpoint.",
-                            );
-                            match &probe.result {
-                                Some(Ok(health)) => {
-                                    ui.monospace(format!("{} packets", health.packets_relayed));
-                                    ui.separator();
-                                    ui.monospace(format!("{} sessions", health.sessions_created));
-                                }
-                                Some(Err(_)) => {
-                                    ui.weak("unavailable");
-                                }
-                                None => {
-                                    ui.weak("checking…");
-                                }
-                            }
-                        });
-                    }
-                }
-
-                if !self.status.rtt_history.is_empty() {
-                    ui.add_space(theme::S2);
-                    let points: PlotPoints = self
-                        .status
-                        .rtt_history
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &v)| [i as f64, v])
-                        .collect();
-                    let line = Line::new("RTT (ms)", points).color(theme::ACCENT);
-                    Plot::new("rtt_plot")
-                        .height(64.0)
-                        .allow_drag(false)
-                        .allow_zoom(false)
-                        .allow_scroll(false)
-                        .show_axes([false, true])
-                        .show(ui, |plot_ui| plot_ui.line(line));
-                }
-            });
-
-            ui.add_space(theme::S3);
-
-            // Configuration scrolls under the status summary so the window
-            // can stay small next to a game.
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
+        // Route card: fixed at normal height.
+        if !short {
+            egui::Panel::top("route_card")
+                .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
+                    left: S4 as i8,
+                    right: S4 as i8,
+                    top: S2 as i8,
+                    bottom: S2 as i8,
+                }))
                 .show(ui, |ui| {
-                    self.config_body(ui);
+                    self.route_card(ui, narrow);
                 });
+        }
 
-            ui.add_space(theme::S2);
-
-            ui.add_space(theme::S5);
-            // Bottom action row.
-            ui.horizontal(|ui| {
-                if self.tray_available() && ui.small_button("Hide to tray").clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                }
-                if ui.small_button("Open log file").clicked() {
-                    self.reveal_log_file();
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Quit").clicked() {
+        // Footer: pinned, with a hairline above it.
+        egui::Panel::bottom("footer")
+            .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
+                left: S4 as i8,
+                right: S4 as i8,
+                top: 0,
+                bottom: S2 as i8,
+            }))
+            .show(ui, |ui| {
+                let xr = ui.max_rect().x_range();
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(xr.min, ui.max_rect().top()),
+                        egui::pos2(xr.max, ui.max_rect().top() + 1.0),
+                    ),
+                    0.0,
+                    border_1,
+                );
+                ui.add_space(S2);
+                ui.horizontal_wrapped(|ui| {
+                    if self.tray_available() && ui.button("Hide to tray").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    }
+                    if ui.button("Settings").clicked() {
+                        self.show_settings = true;
+                    }
+                    if ui.button("Quit").clicked() {
                         self.quit.store(true, Ordering::SeqCst);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
             });
-        });
 
-        // ── Proxy manager window ─────────────────────────────────────────
-        if self.show_proxy_manager {
-            let mut remove_idx: Option<usize> = None;
-            let mut add_addr: Option<SocketAddrV4> = None;
-            let mut reset = false;
-
-            egui::Window::new("Proxy Manager")
-                .resizable(false)
-                .collapsible(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(&ctx, |ui| {
-                    for (i, entry) in self.proxies.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{}.", i + 1));
-                            ui.label(&entry.label);
-                            ui.label(entry.addr.to_string());
-                            ui.weak(entry.node_id.as_deref().unwrap_or("custom"));
-                            if ui.button("×").clicked() {
-                                remove_idx = Some(i);
-                            }
-                        });
-                    }
-                    if self.proxies.is_empty() {
-                        ui.weak(
-                            "No relays yet. Discovery runs automatically; you can \
-                             also add a custom proxy below.",
-                        );
-                    }
-
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label("Label:");
-                        ui.text_edit_singleline(&mut self.manager_label_input);
+        // Config: the only scrolling region.
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
+                left: S4 as i8,
+                right: S4 as i8,
+                top: S3 as i8,
+                bottom: S3 as i8,
+            }))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.config_body(ui, narrow, short);
                     });
-                    ui.horizontal(|ui| {
-                        ui.label("Addr:");
-                        ui.text_edit_singleline(&mut self.manager_addr_input);
-                    });
+            });
 
-                    ui.horizontal(|ui| {
-                        if ui.button("Add Proxy").clicked()
-                            && self.manager_addr_input.parse::<SocketAddrV4>().is_ok()
-                        {
-                            add_addr = Some(self.manager_addr_input.parse().unwrap());
-                        }
-                        if ui.button("Refresh relays").clicked() {
-                            self.start_discovery();
-                        }
-                    });
-
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("Open config folder").clicked() {
-                            paths::open_in_os(&paths::config_dir());
-                        }
-                        if ui.button("Reset to defaults").clicked() {
-                            reset = true;
-                        }
-                        if ui.button("Close").clicked() {
-                            self.show_proxy_manager = false;
-                        }
-                    });
-                    if let Some(err) = &self.config_error {
-                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), err);
-                    }
-                });
-
-            if let Some(idx) = remove_idx {
-                self.proxies.remove(idx);
-                self.selected_proxy_idx = self
-                    .selected_proxy_idx
-                    .min(self.proxies.len().saturating_sub(1));
-                self.persist_config();
-            }
-            if let Some(addr) = add_addr {
-                let label = if self.manager_label_input.is_empty() {
-                    addr.to_string()
-                } else {
-                    self.manager_label_input.clone()
-                };
-                self.proxies.push(ProxyEntry::custom(addr, label));
-                self.manager_label_input.clear();
-                self.manager_addr_input.clear();
-                self.persist_config();
-            }
-            if reset {
-                match config::reset(&paths::config_file()) {
-                    Ok(()) => {
-                        self.proxies = env_proxies();
-                        self.selected_proxy_idx = 0;
-                        self.config_error = None;
-                        self.start_discovery();
-                        self.connect_selected();
-                    }
-                    Err(e) => self.config_error = Some(e),
-                }
-            }
+        // Esc closes the open game picker only when no sheet is in front.
+        if self.show_game_picker
+            && !self.show_settings
+            && !self.show_proxy_manager
+            && !self.show_update_dialog
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
+            self.show_game_picker = false;
         }
 
-        // ── Update check dialog ──────────────────────────────────────────
+        // ── In-window sheets ─────────────────────────────────────────────
+        if self.show_settings {
+            self.settings_sheet(&ctx);
+        }
+        if self.show_proxy_manager {
+            self.proxy_manager_sheet(&ctx);
+        }
         if self.show_update_dialog {
-            egui::Window::new("Check for updates")
-                .resizable(false)
-                .collapsible(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(&ctx, |ui| {
-                    match &self.update_check {
-                        UpdateCheckState::Checking => {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label("Checking for updates…");
-                            });
-                        }
-                        UpdateCheckState::Done(result) => {
-                            let current = match result {
-                                Ok(status) => status.current.clone(),
-                                Err(_) => env!("CARGO_PKG_VERSION").to_string(),
-                            };
-                            let latest = match result {
-                                Ok(status) => status
-                                    .latest
-                                    .clone()
-                                    .unwrap_or_else(|| "unknown".to_string()),
-                                Err(_) => "unknown".to_string(),
-                            };
-                            ui.label(format!("Current version: {current}"));
-                            ui.label(format!("Latest version: {latest}"));
-                            ui.add_space(4.0);
-                            ui.label(crate::update::update_status_line(result));
-
-                            let installable = matches!(result, Ok(status) if status.update_available && status.installer.is_some());
-                            if installable {
-                                ui.add_space(4.0);
-                                if ui
-                                    .button("Install update")
-                                    .on_hover_text("Download, verify, and install the latest version")
-                                    .clicked()
-                                {
-                                    if let Ok(status) = result {
-                                        if let Some(asset) = status.installer.clone() {
-                                            *lock_or_recover(&self.install_shared) = None;
-                                            self.update_check = UpdateCheckState::Installing;
-                                            let shared = Arc::clone(&self.install_shared);
-                                            std::thread::spawn(move || {
-                                                let outcome =
-                                                    crate::self_update::install_blocking(asset);
-                                                *lock_or_recover(&shared) = Some(outcome);
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        UpdateCheckState::Installing => {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label("Installing update…");
-                            });
-                            ui.label(
-                                "Approve the UAC prompt if one appears; LightSpeed will restart.",
-                            );
-                        }
-                        UpdateCheckState::Idle => {}
-                    }
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Close").clicked() {
-                            self.show_update_dialog = false;
-                            self.update_check = UpdateCheckState::Idle;
-                        }
-                    });
-                });
+            self.update_sheet(&ctx);
         }
 
         // ── Repaint schedule ─────────────────────────────────────────────
@@ -1599,234 +1876,148 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
 // ── Pure helpers (no platform dependency) ─────────────────────────────────────
 
-/// Named palette and shared spacing for the window.
-///
-/// Before this existed the UI carried 62 colour literals inline at their use
-/// sites and re-typed the same `Frame::new().fill(..).corner_radius(4.0)
-/// .inner_margin(8.0)` recipe a dozen times, so no two panels were guaranteed
-/// to agree on anything. Centralising them is what makes the surfaces below
-/// read as one interface instead of a stack of separately-styled rows.
 /// Install the bundled fonts.
 ///
 /// Must run BEFORE the first frame, which is why `main.rs` calls it from the
-/// eframe creation context rather than from `theme::apply`: `set_fonts` only
+/// eframe creation context rather than from `apply_theme`: `set_fonts` only
 /// takes effect on the next frame, and the UI reaches for the named family
 /// immediately, so binding them late panics with "FontFamily::Name(..) is not
 /// bound to any fonts".
 pub(crate) fn install_fonts(ctx: &egui::Context) {
-    theme::install_fonts(ctx);
-}
+    use std::sync::Arc;
 
-/// Design tokens and the single place that styles the application.
-///
-/// Values mirror the website's `styles.css` custom properties so the app and the
-/// site read as one product; rationale is in `client-gui/DESIGN.md`.
-mod theme {
-    use eframe::egui::{
-        self, Color32, CornerRadius, FontId, Frame, Margin, RichText, Stroke, TextStyle, Ui,
-    };
-
-    pub const BG: Color32 = Color32::from_rgb(0x0A, 0x0A, 0x1A);
-    pub const SURFACE: Color32 = Color32::from_rgb(0x10, 0x10, 0x24);
-    pub const SURFACE_RAISED: Color32 = Color32::from_rgb(0x16, 0x16, 0x2E);
-    pub const BORDER: Color32 = Color32::from_rgb(0x23, 0x23, 0x3F);
-
-    pub const TEXT: Color32 = Color32::from_rgb(0xF2, 0xF2, 0xFA);
-    pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8A, 0x8A, 0xA8);
-
-    pub const ACCENT: Color32 = Color32::from_rgb(0x6C, 0x5C, 0xE7);
-    pub const OK: Color32 = Color32::from_rgb(0x00, 0xD6, 0x8F);
-    pub const WARN: Color32 = Color32::from_rgb(0xFD, 0xCB, 0x6E);
-    pub const BAD: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x6B);
-
-    pub const CAPTION: f32 = 11.0;
-    pub const LABEL: f32 = 12.0;
-    pub const BODY: f32 = 13.0;
-    pub const EMPHASIS: f32 = 15.0;
-    pub const HEADING: f32 = 20.0;
-    pub const DISPLAY: f32 = 34.0;
-
-    pub const S1: f32 = 4.0;
-    pub const S2: f32 = 8.0;
-    pub const S3: f32 = 12.0;
-    pub const S4: f32 = 16.0;
-    pub const S5: f32 = 24.0;
-
-    const R_INLINE: u8 = 6;
-    const R_CARD: u8 = 10;
-    const R_BUTTON: u8 = 12;
-
-    /// Install the application theme. Called once, on the first frame.
-    pub fn apply(ctx: &egui::Context) {
-        let mut v = egui::Visuals::dark();
-        v.panel_fill = BG;
-        v.window_fill = SURFACE;
-        v.extreme_bg_color = BG;
-        v.faint_bg_color = SURFACE;
-        v.code_bg_color = SURFACE;
-        v.text_edit_bg_color = Some(BG);
-        v.window_stroke = Stroke::new(1.0, BORDER);
-        v.window_corner_radius = CornerRadius::same(R_CARD);
-        v.menu_corner_radius = CornerRadius::same(R_INLINE);
-        v.override_text_color = Some(TEXT);
-        v.weak_text_color = Some(TEXT_DIM);
-        v.hyperlink_color = ACCENT;
-        v.warn_fg_color = WARN;
-        v.error_fg_color = BAD;
-        v.selection.bg_fill = ACCENT.gamma_multiply(0.35);
-        v.selection.stroke = Stroke::new(1.0, TEXT);
-
-        let line = Stroke::new(1.0, BORDER);
-        v.widgets.noninteractive.bg_fill = SURFACE;
-        v.widgets.noninteractive.weak_bg_fill = SURFACE;
-        v.widgets.noninteractive.bg_stroke = line;
-        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_DIM);
-        v.widgets.noninteractive.corner_radius = CornerRadius::same(R_INLINE);
-
-        v.widgets.inactive.bg_fill = SURFACE_RAISED;
-        v.widgets.inactive.weak_bg_fill = SURFACE_RAISED;
-        v.widgets.inactive.bg_stroke = line;
-        v.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
-        v.widgets.inactive.corner_radius = CornerRadius::same(R_INLINE);
-
-        v.widgets.hovered.bg_fill = BORDER;
-        v.widgets.hovered.weak_bg_fill = BORDER;
-        v.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.6));
-        v.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
-        v.widgets.hovered.corner_radius = CornerRadius::same(R_INLINE);
-
-        v.widgets.active.bg_fill = ACCENT;
-        v.widgets.active.weak_bg_fill = ACCENT;
-        v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-        v.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
-        v.widgets.active.corner_radius = CornerRadius::same(R_INLINE);
-
-        v.widgets.open.bg_fill = SURFACE_RAISED;
-        v.widgets.open.weak_bg_fill = SURFACE_RAISED;
-        v.widgets.open.bg_stroke = line;
-        v.widgets.open.fg_stroke = Stroke::new(1.0, TEXT);
-        v.widgets.open.corner_radius = CornerRadius::same(R_INLINE);
-
-        let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
-        style.visuals = v;
-        style.spacing.item_spacing = egui::vec2(S2, S2);
-        style.spacing.button_padding = egui::vec2(S3, S2);
-        style.spacing.window_margin = Margin::same(S4 as i8);
-        style.spacing.menu_margin = Margin::same(S2 as i8);
-        style.spacing.interact_size.y = 26.0;
-        style.spacing.icon_width = 14.0;
-        style.text_styles = [
-            (TextStyle::Heading, FontId::proportional(HEADING)),
-            (TextStyle::Body, FontId::proportional(BODY)),
-            (TextStyle::Button, FontId::proportional(BODY)),
-            (TextStyle::Small, FontId::proportional(CAPTION)),
-            (TextStyle::Monospace, FontId::monospace(LABEL)),
-        ]
-        .into();
-        ctx.set_style_of(egui::Theme::Dark, style);
-        ctx.set_theme(egui::Theme::Dark);
-    }
-
-    /// The font family for emphasised text, matching the website's font weights.
-    pub fn semibold() -> egui::FontFamily {
-        egui::FontFamily::Name("semibold".into())
-    }
-
-    /// Inter and JetBrains Mono, the same faces the website loads.
-    ///
-    /// Both are inserted at the FRONT of their family and egui's own fallbacks
-    /// are left behind them. The bundled files are latin subsets, and the UI
-    /// draws geometric glyphs (the stop square, the disclosure triangle, the
-    /// em dash, the ellipsis) that would otherwise come out as tofu.
-    pub(super) fn install_fonts(ctx: &egui::Context) {
-        use std::sync::Arc;
-
-        let mut fonts = egui::FontDefinitions::default();
-        for (name, bytes) in [
-            (
-                "inter",
-                include_bytes!("../assets/fonts/Inter-Regular.ttf") as &[u8],
-            ),
-            (
-                "inter_semibold",
-                include_bytes!("../assets/fonts/Inter-SemiBold.ttf"),
-            ),
-            (
-                "jbmono",
-                include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
-            ),
-        ] {
-            fonts.font_data.insert(
-                name.to_owned(),
-                Arc::new(egui::FontData::from_static(bytes)),
-            );
-        }
-
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, "inter".to_owned());
-        fonts
-            .families
-            .entry(egui::FontFamily::Monospace)
-            .or_default()
-            .insert(0, "jbmono".to_owned());
-        fonts.families.insert(
-            semibold(),
-            vec!["inter_semibold".to_owned(), "inter".to_owned()],
+    let mut fonts = egui::FontDefinitions::default();
+    for (name, bytes) in [
+        (
+            "inter",
+            include_bytes!("../assets/fonts/Inter-Regular.ttf") as &[u8],
+        ),
+        (
+            "inter_semibold",
+            include_bytes!("../assets/fonts/Inter-SemiBold.ttf"),
+        ),
+        (
+            "jbmono",
+            include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+        ),
+    ] {
+        fonts.font_data.insert(
+            name.to_owned(),
+            Arc::new(egui::FontData::from_static(bytes)),
         );
-
-        ctx.set_fonts(fonts);
     }
 
-    /// A section: a hairline on a near-background surface, never a bright block.
-    pub fn card<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
-        Frame::new()
-            .fill(SURFACE)
-            .stroke(Stroke::new(1.0, BORDER))
-            .corner_radius(CornerRadius::same(R_CARD))
-            .inner_margin(Margin::same(S3 as i8))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new(title.to_uppercase())
-                        .size(CAPTION)
-                        .color(TEXT_DIM)
-                        .family(semibold()),
-                );
-                ui.add_space(S2);
-                body(ui)
-            })
-            .inner
-    }
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "inter".to_owned());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "jbmono".to_owned());
+    fonts.families.insert(
+        semibold(),
+        vec!["inter_semibold".to_owned(), "inter".to_owned()],
+    );
 
-    /// The one bright control on screen.
-    pub fn primary_button(text: &str, ready: bool) -> egui::Button<'static> {
-        let (fill, ink) = if ready {
-            (ACCENT, Color32::WHITE)
-        } else {
-            (SURFACE_RAISED, TEXT_DIM)
-        };
-        egui::Button::new(
-            RichText::new(text.to_string())
-                .size(EMPHASIS)
-                .color(ink)
-                .family(semibold()),
-        )
-        .fill(fill)
-        .stroke(Stroke::new(1.0, if ready { ACCENT } else { BORDER }))
-        .corner_radius(CornerRadius::same(R_BUTTON))
-    }
+    ctx.set_fonts(fonts);
 }
 
+/// The font family for emphasised text, matching the website's font weights.
+fn semibold() -> egui::FontFamily {
+    egui::FontFamily::Name("semibold".into())
+}
+
+/// Install the application theme. Called once, on the first frame.
+///
+/// Every colour comes from [`crate::design`]; shadows are off, and the two
+/// global hairlines use `border-1`/`border-2` rather than accent arithmetic.
+fn apply_theme(ctx: &egui::Context) {
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = bg_1;
+    v.window_fill = bg_2;
+    v.extreme_bg_color = bg_0;
+    v.faint_bg_color = bg_2;
+    v.code_bg_color = bg_2;
+    v.text_edit_bg_color = Some(bg_0);
+    v.window_stroke = egui::Stroke::new(1.0, border_1);
+    v.window_corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.window_shadow = egui::Shadow::NONE;
+    v.popup_shadow = egui::Shadow::NONE;
+    v.menu_corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.override_text_color = Some(text_1);
+    v.weak_text_color = Some(text_3);
+    v.hyperlink_color = accent_text;
+    v.warn_fg_color = warn;
+    v.error_fg_color = danger;
+    v.selection.bg_fill = accent_soft;
+    v.selection.stroke = egui::Stroke::new(1.0, accent_line);
+
+    let line = egui::Stroke::new(1.0, border_1);
+    v.widgets.noninteractive.bg_fill = bg_2;
+    v.widgets.noninteractive.weak_bg_fill = bg_2;
+    v.widgets.noninteractive.bg_stroke = line;
+    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_3);
+    v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(R_CONTROL);
+
+    v.widgets.inactive.bg_fill = bg_3;
+    v.widgets.inactive.weak_bg_fill = bg_3;
+    v.widgets.inactive.bg_stroke = line;
+    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text_1);
+    v.widgets.inactive.corner_radius = egui::CornerRadius::same(R_CONTROL);
+
+    v.widgets.hovered.bg_fill = bg_4;
+    v.widgets.hovered.weak_bg_fill = bg_4;
+    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, border_2);
+    v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text_1);
+    v.widgets.hovered.corner_radius = egui::CornerRadius::same(R_CONTROL);
+
+    v.widgets.active.bg_fill = accent_deep;
+    v.widgets.active.weak_bg_fill = accent_deep;
+    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, accent);
+    v.widgets.active.fg_stroke = egui::Stroke::new(1.0, on_accent);
+    v.widgets.active.corner_radius = egui::CornerRadius::same(R_CONTROL);
+
+    v.widgets.open.bg_fill = bg_3;
+    v.widgets.open.weak_bg_fill = bg_3;
+    v.widgets.open.bg_stroke = line;
+    v.widgets.open.fg_stroke = egui::Stroke::new(1.0, text_1);
+    v.widgets.open.corner_radius = egui::CornerRadius::same(R_CONTROL);
+
+    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
+    style.visuals = v;
+    style.spacing.item_spacing = egui::vec2(S2, S2);
+    style.spacing.button_padding = egui::vec2(S3, S2);
+    style.spacing.window_margin = egui::Margin::same(S4 as i8);
+    style.spacing.menu_margin = egui::Margin::same(S2 as i8);
+    style.spacing.interact_size.y = CONTROL_H;
+    style.spacing.icon_width = 14.0;
+    style.text_styles = [
+        (egui::TextStyle::Heading, egui::FontId::proportional(TITLE)),
+        (egui::TextStyle::Body, egui::FontId::proportional(BODY)),
+        (
+            egui::TextStyle::Button,
+            egui::FontId::new(LABEL, semibold()),
+        ),
+        (egui::TextStyle::Small, egui::FontId::proportional(CAPTION)),
+        (egui::TextStyle::Monospace, egui::FontId::monospace(VALUE)),
+    ]
+    .into();
+    ctx.set_style_of(egui::Theme::Dark, style);
+    ctx.set_theme(egui::Theme::Dark);
+}
+
+/// The quality ramp for a round trip: good under 60 ms, attention under 120 ms,
+/// bad beyond that.
 fn rtt_colour(rtt_ms: f64) -> egui::Color32 {
     if rtt_ms < 60.0 {
-        theme::OK
+        signal
     } else if rtt_ms < 120.0 {
-        theme::WARN
+        warn
     } else {
-        theme::BAD
+        danger
     }
 }
 
@@ -1839,13 +2030,10 @@ fn parse_server_addr(s: &str) -> Option<SocketAddrV4> {
 
 fn connect_instruction(game: &GameEntry, local_port: u16) -> String {
     match game.key {
-        "rust" => format!(
-            "In Rust  F1 console:  client.connect 127.0.0.1:{}",
-            local_port
-        ),
-        "cs2" => format!("In CS2 console:  connect 127.0.0.1:{}", local_port),
-        "dota2" => format!("In Dota 2 console:  connect 127.0.0.1:{}", local_port),
-        _ => format!("Connect your game to:  127.0.0.1:{}", local_port),
+        "rust" => format!("In Rust  F1 console:  client.connect 127.0.0.1:{local_port}"),
+        "cs2" => format!("In CS2 console:  connect 127.0.0.1:{local_port}"),
+        "dota2" => format!("In Dota 2 console:  connect 127.0.0.1:{local_port}"),
+        _ => format!("Connect your game to:  127.0.0.1:{local_port}"),
     }
 }
 
@@ -1867,9 +2055,9 @@ fn try_auto_detect_game() -> Option<String> {
     }
 }
 
-/// Decode the embedded brand tile into a texture for the header.
+/// Decode the embedded brand tile into a texture for the About sheet.
 ///
-/// A decode failure is logged and treated as absent so the header falls back
+/// A decode failure is logged and treated as absent so the sheet falls back
 /// to plain text.
 fn brand_mark_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     const MARK_PNG: &[u8] = include_bytes!("../../web/assets/brand/icon-256.png");
@@ -1984,64 +2172,276 @@ fn parse_custom_port_range(s: &str) -> Option<(u16, u16)> {
     }
 }
 
-/// Project identity, links, and the ask to star the repository.
+/// The one action slot, as a pure function of the gates.
 ///
-/// Lives at the foot of the settings column rather than at the top of the
-/// window: the OS title bar already shows the mark and the name, so repeating
-/// them above the status banner said nothing the user did not already know.
-fn about(ui: &mut egui::Ui, mark: Option<&egui::TextureHandle>) {
-    theme::card(ui, "About", |ui| {
-        ui.horizontal(|ui| {
-            if let Some(mark) = mark {
-                ui.add(egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(28.0, 28.0)));
+/// The returned flag is "enabled": whether the slot can act right now. The
+/// three labels plus the disabled case are the whole state machine:
+/// - `STOP BOOST` when boosting.
+/// - `RESTART AS ADMINISTRATOR TO BOOST` when unelevated (and not boosting).
+/// - `BOOST MY GAME` when elevated, connected, and a relay is selected.
+/// - `BOOST MY GAME`, disabled, otherwise (elevated but not ready).
+fn primary_action(
+    is_admin: bool,
+    boosting: bool,
+    connected: bool,
+    has_relay: bool,
+) -> (&'static str, bool) {
+    if boosting {
+        ("STOP BOOST", true)
+    } else if !is_admin {
+        ("RESTART AS ADMINISTRATOR TO BOOST", true)
+    } else if connected && has_relay {
+        ("BOOST MY GAME", true)
+    } else {
+        ("BOOST MY GAME", false)
+    }
+}
+
+/// The two treatments the action slot takes. Accent is the one bright fill;
+/// Danger is the quiet destructive control.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActionKind {
+    Accent,
+    Danger,
+}
+
+/// The one bright control: a custom-painted button so it never reads as
+/// default egui chrome. Accent uses `accent-deep` at rest (white ink on it is
+/// AA-safe) and brightens to `accent` on hover; Danger uses `bg-3` with a
+/// danger hairline and ink, tinting with `danger-soft` on hover.
+fn action_button(ui: &mut egui::Ui, text: &str, kind: ActionKind, ready: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ACTION_H),
+        egui::Sense::click(),
+    );
+    let hovered = response.hovered() && ready;
+
+    let (fill, stroke, ink) = match kind {
+        ActionKind::Accent => {
+            if !ready {
+                (bg_3, border_1, text_3)
+            } else if hovered {
+                (accent, accent, on_accent)
+            } else {
+                (accent_deep, accent_deep, on_accent)
             }
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("LightSpeed").size(theme::EMPHASIS));
-                ui.label(
-                    egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                        .size(theme::CAPTION)
-                        .color(theme::TEXT_DIM),
-                );
-            });
-        });
+        }
+        ActionKind::Danger => {
+            if !ready {
+                (bg_3, border_1, text_3)
+            } else if hovered {
+                (danger_soft, danger, danger)
+            } else {
+                (bg_3, danger, danger)
+            }
+        }
+    };
 
-        ui.add_space(theme::S2);
-        ui.label(
-            egui::RichText::new(
-                "Free and open source, with no accounts and no telemetry you cannot turn off.",
-            )
-            .size(theme::LABEL)
-            .color(theme::TEXT_DIM),
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        egui::CornerRadius::same(R_BUTTON),
+        fill,
+        egui::Stroke::new(1.0, stroke),
+        egui::StrokeKind::Inside,
+    );
+    if kind == ActionKind::Danger && ready {
+        // A painted stop square: U+25A0 lives only in the icon font, so the
+        // mark is drawn rather than typed (DESIGN.md rule 1).
+        let square = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 22.0, rect.center().y),
+            egui::vec2(10.0, 10.0),
         );
+        painter.rect_filled(square, 0.0, danger);
+    }
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::new(EMPHASIS, semibold()),
+        ink,
+    );
+    response
+}
 
-        ui.add_space(theme::S3);
-        ui.horizontal(|ui| {
-            ui.hyperlink_to("GitHub", "https://github.com/ShibbityShwab/lightspeed")
-                .on_hover_text("Source code, issues and releases");
-            ui.separator();
-            ui.hyperlink_to("Website", "https://shibbityshwab.github.io/lightspeed/")
-                .on_hover_text("Live relay status, benchmarks and docs");
-            ui.separator();
-            ui.hyperlink_to(
-                "Releases",
-                "https://github.com/ShibbityShwab/lightspeed/releases",
-            );
-        });
+/// A game-picker tile: a fixed-height selectable with the token-tinted
+/// selection state, so the 2-up grid stays rectangular and scrolls exactly.
+fn game_tile(ui: &mut egui::Ui, text: &str, selected: bool, width: f32) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, CONTROL_H), egui::Sense::click());
+    let hovered = response.hovered();
+    let (fill, stroke, ink) = if selected {
+        (accent_soft, accent_line, text_1)
+    } else if hovered {
+        (bg_3, border_2, text_1)
+    } else {
+        (bg_2, border_1, text_2)
+    };
+    ui.painter().rect(
+        rect,
+        egui::CornerRadius::same(R_CONTROL),
+        fill,
+        egui::Stroke::new(1.0, stroke),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + S3, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::new(BODY, semibold()),
+        ink,
+    );
+    response
+}
 
-        ui.add_space(theme::S3);
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Enjoying it?")
-                    .size(theme::LABEL)
-                    .color(theme::TEXT_DIM),
-            );
-            ui.hyperlink_to(
-                egui::RichText::new("Star it on GitHub").family(theme::semibold()),
-                "https://github.com/ShibbityShwab/lightspeed/stargazers",
-            )
-            .on_hover_text("Stars help other players find LightSpeed");
+/// One value in the label/value ledger.
+enum LedgerValue {
+    /// Genuine data (addresses, ports, counters): JetBrains Mono.
+    Data(String),
+    /// A dim prose hint where there is no value to show.
+    Hint(&'static str),
+}
+
+/// The ledger's label cell: caption ink, fixed width, left-aligned.
+fn ledger_label(ui: &mut egui::Ui, width: f32, text: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, ROW_H), egui::Sense::hover());
+    ui.painter().text(
+        rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(CAPTION),
+        text_3,
+    );
+}
+
+/// A config field's label cell: `label` ink, fixed width at the wide breakpoint.
+fn field_label(ui: &mut egui::Ui, width: f32, text: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, CONTROL_H), egui::Sense::hover());
+    ui.painter().text(
+        rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::new(LABEL, semibold()),
+        text_1,
+    );
+}
+
+/// A config row: label left at the wide breakpoint, label above at narrow, so
+/// the control always keeps a full-width tap target when the window is snapped
+/// beside a game.
+fn field_row(ui: &mut egui::Ui, narrow: bool, label: &str, add_field: impl FnOnce(&mut egui::Ui)) {
+    if narrow {
+        ui.label(
+            egui::RichText::new(label)
+                .size(LABEL)
+                .family(semibold())
+                .color(text_1),
+        );
+        ui.add_space(S1);
+        add_field(ui);
+    } else {
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), CONTROL_H),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                field_label(ui, LEDGER_LABEL_W, label);
+                add_field(ui);
+            },
+        );
+    }
+}
+
+/// A section heading in the config region or a sheet body.
+fn section_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(LABEL)
+            .family(semibold())
+            .color(text_1),
+    );
+    ui.add_space(S1);
+}
+
+/// A sheet title (`title` type).
+fn sheet_title(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(TITLE)
+            .family(semibold())
+            .color(text_1),
+    );
+    ui.add_space(S2);
+}
+
+/// The shared frame for every in-window sheet: `bg-0`, a `border-1` hairline,
+/// and the sheet radius.
+fn sheet_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(bg_0)
+        .stroke(egui::Stroke::new(1.0, border_1))
+        .corner_radius(egui::CornerRadius::same(R_SHEET))
+        .inner_margin(egui::Margin::same(S4 as i8))
+}
+
+/// The capped width and height a sheet may take, so a pinned sheet never
+/// overflows a 320 px window.
+fn sheet_bounds(ctx: &egui::Context) -> (f32, f32) {
+    let screen = ctx.content_rect();
+    let max_w = (screen.width() - 24.0).min(420.0);
+    let max_h = (screen.height() - 120.0).max(120.0);
+    (max_w, max_h)
+}
+
+/// A hand-painted RTT sparkline: the stroke is `text-3` and only the latest
+/// point carries the quality ramp, so latency colour never shares a channel
+/// with the state colour.
+fn sparkline(ui: &mut egui::Ui, history: &[f64]) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), PLOT_H),
+        egui::Sense::hover(),
+    );
+    if history.len() < 2 {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    let n = history.len();
+    let (min, max) = history
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
         });
-    });
+    let span = (max - min).max(1.0);
+    let pad = rect.shrink2(egui::vec2(1.0, 4.0));
+    let points: Vec<egui::Pos2> = history
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| {
+            let x = pad.left() + (i as f32 / (n - 1) as f32) * pad.width();
+            let y = pad.bottom() - ((v - min) / span) as f32 * pad.height();
+            egui::pos2(x, y)
+        })
+        .collect();
+    painter.add(egui::Shape::line(
+        points.clone(),
+        egui::Stroke::new(1.5, text_3),
+    ));
+    if let (Some(&last), Some(&point)) = (history.last(), points.last()) {
+        painter.circle_filled(point, 2.5, rtt_colour(last));
+    }
+}
+
+/// Group a counter's thousands with commas, so `12412` reads `12,412`.
+fn group_digits(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2059,8 +2459,8 @@ mod tests {
         assert_eq!(*lock_or_recover(&mutex), "state");
     }
     use super::{
-        apply_discovery_result, close_decision, games, should_apply_race, should_race,
-        CloseDecision,
+        apply_discovery_result, close_decision, games, primary_action, should_apply_race,
+        should_race, CloseDecision,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -2079,7 +2479,7 @@ mod tests {
     fn the_theme_renders_a_frame_using_the_emphasis_family() {
         let ctx = eframe::egui::Context::default();
         super::install_fonts(&ctx);
-        super::theme::apply(&ctx);
+        super::apply_theme(&ctx);
 
         let raw = eframe::egui::RawInput {
             screen_rect: Some(eframe::egui::Rect::from_min_size(
@@ -2089,7 +2489,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = ctx.run_ui(raw, |ui| {
-            ui.label(eframe::egui::RichText::new("Emphasis").family(super::theme::semibold()));
+            ui.label(eframe::egui::RichText::new("Emphasis").family(super::semibold()));
             ui.label("body");
             ui.monospace("207.246.106.36:4434");
         });
@@ -2184,5 +2584,52 @@ mod tests {
         assert_eq!(proxies[0].label, "LAX - Los Angeles");
         assert_eq!(proxies[1].label, "Local proxy");
         assert!(!proxies[1].is_discovered());
+    }
+
+    #[test]
+    fn primary_action_names_the_three_states() {
+        // Boosting: the only destructive control.
+        assert_eq!(primary_action(true, true, true, true), ("STOP BOOST", true));
+        assert_eq!(
+            primary_action(false, true, false, false),
+            ("STOP BOOST", true)
+        );
+        // Unelevated: the action is elevation.
+        assert_eq!(
+            primary_action(false, false, true, true),
+            ("RESTART AS ADMINISTRATOR TO BOOST", true)
+        );
+        assert_eq!(
+            primary_action(false, false, false, false),
+            ("RESTART AS ADMINISTRATOR TO BOOST", true)
+        );
+        // Elevated and ready: the product's action.
+        assert_eq!(
+            primary_action(true, false, true, true),
+            ("BOOST MY GAME", true)
+        );
+    }
+
+    #[test]
+    fn primary_action_disables_boost_until_connected_and_relayed() {
+        // Elevated but disconnected: keep the label, but the slot cannot act.
+        assert_eq!(
+            primary_action(true, false, false, true),
+            ("BOOST MY GAME", false)
+        );
+        // Elevated and connected, but no relay is selected.
+        assert_eq!(
+            primary_action(true, false, true, false),
+            ("BOOST MY GAME", false)
+        );
+    }
+
+    #[test]
+    fn group_digits_thousands_groups_counters() {
+        use super::group_digits;
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(41), "41");
+        assert_eq!(group_digits(12412), "12,412");
+        assert_eq!(group_digits(1_234_567), "1,234,567");
     }
 }

@@ -8,6 +8,7 @@
 mod app;
 mod config;
 mod crash;
+mod design;
 mod discovery;
 mod geo;
 mod geo_countries;
