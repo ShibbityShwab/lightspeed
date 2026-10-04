@@ -46,9 +46,13 @@ webbrowser = "1"
 # ICO and compiles it into the exe, which is the only way Windows will show the
 # brand mark on the taskbar button and in Explorer. The `ico` codec lives here
 # rather than on the runtime dep above so the shipped binary carries no
-# encoder it never calls. Windows-only because the resource step is skipped
-# everywhere else.
-[target.'cfg(windows)'.build-dependencies]
+# encoder it never calls. Unconditional rather than target-conditional: build
+# scripts compile for the BUILD HOST, and a `target.'cfg(windows)'` dependency
+# is only passed to the script when the build TARGET is Windows - so the first
+# Linux/macOS build host (the cargo-dist release matrix) failed with E0433
+# `cannot find crate image`. The script's own runtime target check still
+# keeps the work Windows-only.
+[build-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }
 
 # Windows-only: the real system tray (tray-icon) plus WinDivert support.
