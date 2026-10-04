@@ -22,7 +22,8 @@ on:
 jobs:
   push:
     runs-on: ubuntu-latest
-    if: ${{ secrets.CHOCO_API_KEY != '' }}
+    env:
+      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
     steps:
       - uses: actions/checkout@v6
 
@@ -40,9 +41,8 @@ jobs:
         run: bash dist/chocolatey/build.sh
 
       - name: Push to the community feed
+        if: ${{ env.CHOCO_API_KEY != '' }}
         shell: bash
-        env:
-          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
         run: |
           nupkg="$(ls dist/chocolatey/lightspeed.*.nupkg | head -1)"
           echo "pushing $nupkg"
@@ -51,3 +51,8 @@ jobs:
             --data-binary "@${nupkg}" \
             https://push.chocolatey.org/api/v2/package/ \
             -o /dev/null -w 'push HTTP %{http_code}\n'
+
+      - name: Note the secret is absent
+        if: ${{ env.CHOCO_API_KEY == '' }}
+        shell: bash
+        run: echo "::notice::CHOCO_API_KEY is not set; nothing was pushed."
