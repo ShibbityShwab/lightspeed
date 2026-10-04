@@ -7,16 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.7.0] - 2026-10-04
+
 ### Added
 
+- **Minecraft Java Edition support.** The tunnel grew a second transport:
+  protocol v5 with a `TcpExtHeader`, a client-side TCP terminator, and a
+  5-tuple splice on the relay. Pick **Manual / Custom…** in the Game dropdown
+  on the main view and enter your server (default port 25565). The `bedrock`
+  profile is unchanged, and every change is additive: older clients and relays
+  keep working and reject v5 the way the design pins in tests.
+- **Session-token rotation.** The protocol carries RotateRequest/RotateAck;
+  the client rotates on a timer and keeps the previous token valid during the
+  transition; the relay issues the new token and demotes the old one to its
+  existing grace window. A rotated-away token stops working, keeping the
+  replay window small.
+- **Continuous relay re-evaluation.** With Auto selected, the client re-races
+  the relays every ten minutes mid-session and switches only when the winner
+  beats the current relay by a clear hysteresis margin (20 ms), so a route
+  that degrades during a match heals without a manual re-pick.
+- **A redesigned GUI**, built from the new `lightspeed-gui-design` skill:
+  a full-bleed state rail whose headline and live round trip own the top,
+  ONE action slot whose label is driven by the elevation gate (**Optimize my
+  route** / **Restart as administrator to optimize** / **Stop optimizing**),
+  a route card ledger, and a fixed footer that no longer renders off-screen.
+  All colours now come from the site's token scale; the eight inline
+  `Color32::from_rgb` literals are gone.
+- **"Auto (detect)" in the Game field**, mirroring the relay's auto-select:
+  the default follows the detected game, a manual pick pins it, and both
+  persist.
 - **Hunt: Showdown profile** (`--game hunt`): Crytek's extraction shooter, whose
-  regular multiplayer runs on UDP 20000-20099. Its TCP 61088 backend port is
-  deliberately excluded, since the interceptor and tunnel are UDP-only and a TCP
-  port in the capture range would generate a filter that never matches. Closes
-  the game request in #141.
+  regular multiplayer runs on UDP 20000-20099. Its TCP 61088 backend port stays
+  out of the profile's capture range, which is scoped to the UDP gameplay ports.
+  Closes the game request in #141.
+
+### Changed
+
+- **Adaptive packet repair is the whole policy.** The XOR parity now adapts to
+  measured loss and is on by default; the manual "Reliability Shield" toggle
+  (fixed ~25% parity) is retired, since it contradicted the automatic policy
+  sitting next to it.
+- **The GUI speaks the product's vocabulary**: route/optimize (matching the
+  site), a "Relay" picker (was "Boost server"), and a "Relayed" counter that
+  now shows THIS session's packets instead of the relay's lifetime totals.
+- **Settings and the main view regrouped**: Disconnect moved to the relay row
+  where the connection lives; the manual-relay inputs moved from
+  Settings → Advanced into the Game dropdown; Settings gained hairline section
+  dividers, and the one duplicate game picker (and its broken tile grid) is
+  gone.
+- **Website and docs brought current**: the Minecraft card documents Java over
+  TCP instead of claiming it unsupported, the FEC copy describes adaptive
+  repair, the profile count is 22, and the FAQ/user-guide/glossary use the
+  optimize vocabulary.
 
 ### Fixed
 
+- **Console windows no longer flash on every launch.** The GUI spawns console
+  binaries (tasklist, netstat, netsh, sc, powershell) from a console-less
+  process; every one of the 27 spawn sites now runs with `CREATE_NO_WINDOW`.
+- **Settings no longer hangs the window.** It queried the capture backend with
+  a blocking `sc query npcap` process spawn on every frame; the value is
+  sampled once at startup now.
+- **Cross-platform release builds.** The GUI's build script needed `image` on
+  every build host, not only Windows targets - the first Linux/macOS release
+  runners exposed it.
+- **Two poison-tolerance lock regressions** reintroduced by the GUI rebuild
+  are restored to `lock_or_recover`.
+- **The release bump jobs no longer race**: Homebrew/Chocolatey/Scoop bumps all
+  commit to master, and on this release two lost the push and aborted their
+  later steps; they now share a concurrency group.
+- **The tray icon shows the real brand mark** instead of a hand-drawn letter,
+  with a small per-state colour dot.
 - **Chocolatey releases now publish.** The `bump-chocolatey` release job moved
   `dist/chocolatey` to each new version but never pushed the built `.nupkg`, so
   the community feed served 1.6.3 while the repo shipped 1.6.14. A gated push
