@@ -124,11 +124,10 @@ $0.00 — Always Free tiers only.
    installs now check via the GitHub releases API and install in place
    (download, verify sha256 before elevating, elevated tar-based swap, size
    check, relaunch).
-4. **Mutex-poisoning hardening (deliberate, optional).** ~12
-   `engine.lock().unwrap()` in `client-gui/src/app.rs`; one panic while holding
-   poisons the lock and every later frame panics. No reachable panic was
-   demonstrated, so it was declined as speculative - but as defence-in-depth it
-   is a clean, contained change (poison-tolerant wrapper + a test).
+4. ~~Mutex-poisoning hardening.~~ **Done 2026-10-04** (`8726d1f`, WF-052) - all 22
+   lock sites in the GUI and engine recover a poisoned lock via `into_inner()`
+   instead of panicking, with mutation-checked tests that poison a lock and
+   assert the next read still works.
 5. **Product calls (owner):** #137 (Minecraft support request), #59 (the
    Windows/Fortnite thread).
 6. **Keep the WAT state current.** Every round ends by updating
