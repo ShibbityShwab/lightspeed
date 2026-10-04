@@ -1,3 +1,42 @@
+# Current Phase: WF-052 Chocolatey pushed; locks no longer brick the window
+
+**Workflow:** WF-052; WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Agent:** DevOps + QAEngineer + RustDev
+**Status:** Pushed (`82a75f8`, `c4b0eb4`, `8726d1f`); Chocolatey 1.6.14 pushed to the community feed (moderation pending)
+**Last updated:** 2026-10-04
+
+---
+
+## 2026-10-04 - WF-052 the Chocolatey key existed all along; the push was the missing step
+
+The owner was right: `CHOCO_API_KEY` has been in the repo's GitHub secrets
+since 2026-10-02 - the earlier "no API key exists" notes were stale. The real
+gap: the v1.6.14 tag predated the secret, so the release workflow's
+bump-chocolatey job bumped the package sources but skipped the push, leaving
+the community feed serving 1.6.3 for eleven releases. The new
+`choco-push.yml` workflow dispatches pack+push for any version (nuspec
+verified against the requested version, `build.sh` packs the OPC zip, `curl`
+PUT to the push API with the key). Dispatched for 1.6.14 - run
+`37176160239` concluded **success**. Pushes are moderated, so the listing
+stays unlisted until a Chocolatey moderator approves it; that is normal.
+
+Also: a first workflow revision put `secrets` in an `if:` expression, which
+GitHub Actions rejects (HTTP 422 at dispatch); fixed to the env-gate pattern
+release.yml uses. The lesson stands from WF-050's handoff: verify the live
+endpoint, not the repo's own notes.
+
+## Poison-tolerant locks
+
+The GUI locks the engine mutex on nearly every frame; a panic under any guard
+poisons the lock permanently and every later lock panics too - one background
+failure kills the whole window. `read_or_recover`/`write_or_recover` (engine,
+7 sites) and `lock_or_recover` (gui, 15 sites) now recover via
+`into_inner()`: safe here because the guarded regions are single-field status
+assignments, not shared invariants. Tests poison each lock via a caught panic
+and assert the next read still works; the engine test was mutation-checked
+(panics at the snapshot read when the helper is reverted).
+
+---
 # Current Phase: WF-051 The GUI can now update itself in place
 
 **Workflow:** WF-051; WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
