@@ -631,43 +631,42 @@ async fn main() -> anyhow::Result<()> {
 
     // Wait for a shutdown signal, or attempt an in-place handoff on SIGUSR2.
     // A handoff that does not exec leaves this process serving and waits again.
+    // The loop is Unix-only: on Windows the body always broke after one
+    // iteration, which clippy's never_loop rightly flags.
+    #[cfg(unix)]
     loop {
-        #[cfg(unix)]
-        {
-            tokio::select! {
-                result = wait_for_shutdown_signal() => {
-                    result?;
-                    break;
+        tokio::select! {
+            result = wait_for_shutdown_signal() => {
+                result?;
+                break;
+            }
+            _ = sigusr2.recv() => {
+                info!("SIGUSR2 received: attempting in-place handoff");
+                #[cfg(target_os = "linux")]
+                {
+                    attempt_handoff(
+                        &engine,
+                        &authenticator,
+                        &data_socket,
+                        proxy_started_at_unix_ms,
+                        #[cfg(feature = "quic")]
+                        &control_shutdown_tx,
+                        #[cfg(feature = "quic")]
+                        &mut control_handle,
+                    )
+                    .await;
                 }
-                _ = sigusr2.recv() => {
-                    info!("SIGUSR2 received: attempting in-place handoff");
-                    #[cfg(target_os = "linux")]
-                    {
-                        attempt_handoff(
-                            &engine,
-                            &authenticator,
-                            &data_socket,
-                            proxy_started_at_unix_ms,
-                            #[cfg(feature = "quic")]
-                            &control_shutdown_tx,
-                            #[cfg(feature = "quic")]
-                            &mut control_handle,
-                        )
-                        .await;
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    {
-                        attempt_handoff_unsupported().await;
-                    }
-                    info!("Handoff attempt finished; proxy continues to serve");
+                #[cfg(not(target_os = "linux"))]
+                {
+                    attempt_handoff_unsupported().await;
                 }
+                info!("Handoff attempt finished; proxy continues to serve");
             }
         }
-        #[cfg(not(unix))]
-        {
-            wait_for_shutdown_signal().await?;
-            break;
-        }
+    }
+    #[cfg(not(unix))]
+    {
+        wait_for_shutdown_signal().await?;
     }
     info!("⚡ Shutdown signal received");
 
