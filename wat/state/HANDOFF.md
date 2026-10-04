@@ -118,8 +118,9 @@ $0.00 — Always Free tiers only.
 
 1. ~~Rebuild + reinstall the GUI.~~ **Done 2026-10-04** - Program Files re-synced to
    master (bug-fix build verified by size).
-2. **Owner-gated channels:** Chocolatey push (one command in
-   `dist/chocolatey/README.md`), winget bootstrap (CLA + PR #445619).
+2. **Owner-gated channels:** Chocolatey pushed (moderation pending, normal);
+   winget PR #445619 is CLA-signed and in the winget-pkgs moderation queue
+   (2026-10-02) - both are waits, not actions.
 3. ~~GUI auto-update.~~ **Done 2026-10-04** (`1d518cb`, WF-051) - receipt-less
    installs now check via the GitHub releases API and install in place
    (download, verify sha256 before elevating, elevated tar-based swap, size
