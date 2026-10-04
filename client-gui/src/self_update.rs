@@ -157,7 +157,7 @@ fn spawn_elevated(script: &Path) -> Result<(), String> {
     let inner = format!(
         "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{quoted}'"
     );
-    std::process::Command::new("powershell")
+    crate::platform::silent_command("powershell")
         .args(["-WindowStyle", "Hidden", "-Command", &inner])
         .spawn()
         .map_err(|e| format!("failed to launch the elevated installer: {e}"))?;

@@ -136,7 +136,7 @@ fn detect_rust_all_ports() -> Vec<u16> {
 /// Fetch the PID of the first running `RustClient.exe` process via `tasklist`.
 #[cfg(target_os = "windows")]
 fn rust_client_pid() -> Option<u32> {
-    let output = std::process::Command::new("tasklist")
+    let output = crate::process::silent_command("tasklist")
         .args(["/FI", "IMAGENAME eq RustClient.exe", "/FO", "CSV", "/NH"])
         .output()
         .ok()?;
@@ -171,7 +171,7 @@ fn rust_client_pid() -> Option<u32> {
 /// Steam-service ports and the LightSpeed proxy port.
 #[cfg(target_os = "windows")]
 fn rust_udp_all_ports(pid: u32) -> Vec<u16> {
-    let output = match std::process::Command::new("netstat")
+    let output = match crate::process::silent_command("netstat")
         .args(["-ano", "-p", "UDP"])
         .output()
     {

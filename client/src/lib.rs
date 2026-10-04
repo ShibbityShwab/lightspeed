@@ -20,6 +20,7 @@ pub(crate) mod error;
 pub mod latency;
 pub(crate) mod ml;
 pub(crate) mod modes;
+pub mod process;
 pub(crate) mod quic;
 pub(crate) mod redirect;
 pub mod registry;

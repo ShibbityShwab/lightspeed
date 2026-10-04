@@ -232,8 +232,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn is_capture_available() -> bool {
-        use std::process::Command;
-        Command::new("sc")
+        crate::platform::silent_command("sc")
             .args(["query", "npcap"])
             .output()
             .map(|o| o.status.success())
@@ -272,7 +271,7 @@ impl Platform for WindowsPlatform {
             .display()
             .to_string();
         let script = format!("Start-Process '{}' -Verb RunAs", exe.replace('\'', "''"));
-        let _ = std::process::Command::new("powershell")
+        let _ = crate::platform::silent_command("powershell")
             .args(["-WindowStyle", "Hidden", "-Command", &script])
             .spawn();
         std::process::exit(0);
@@ -323,9 +322,7 @@ fn in_brand_mark(px: f32, py: f32) -> bool {
 // ── Port detection ───────────────────────────────────────────────────────────
 
 fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
-    use std::process::Command;
-
-    let tl = Command::new("tasklist")
+    let tl = crate::platform::silent_command("tasklist")
         .args(["/FI", "IMAGENAME eq RustClient.exe", "/FO", "CSV", "/NH"])
         .output()
         .ok()?;
@@ -345,7 +342,7 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
 
     tracing::debug!("RustClient.exe PID = {}", pid);
 
-    let ns = Command::new("netstat")
+    let ns = crate::platform::silent_command("netstat")
         .args(["-ano", "-p", "UDP"])
         .output()
         .ok()?;

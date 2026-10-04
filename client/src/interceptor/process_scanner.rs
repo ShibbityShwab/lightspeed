@@ -179,7 +179,7 @@ fn list_pids_by_name(names: &[&str]) -> Vec<(u32, String)> {
 /// CSV columns: `"ImageName","PID","SessionName","Session#","Mem Usage"`
 #[cfg(target_os = "windows")]
 fn list_pids_windows(names: &[&str]) -> Vec<(u32, String)> {
-    let output = match std::process::Command::new("tasklist")
+    let output = match crate::process::silent_command("tasklist")
         .args(["/FO", "CSV", "/NH"])
         .output()
     {
@@ -236,7 +236,7 @@ fn list_pids_linux(names: &[&str]) -> Vec<(u32, String)> {
 /// macOS: parse `ps -e -o pid,comm=` output.
 #[cfg(target_os = "macos")]
 fn list_pids_macos(names: &[&str]) -> Vec<(u32, String)> {
-    let output = match std::process::Command::new("ps")
+    let output = match crate::process::silent_command("ps")
         .args(["-e", "-o", "pid=,comm="])
         .output()
     {
@@ -300,7 +300,7 @@ fn list_udp_sockets() -> Vec<(Ipv4Addr, u16, u16, u32)> {
 #[cfg(target_os = "windows")]
 fn list_udp_windows() -> Vec<(Ipv4Addr, u16, u16, u32)> {
     // Use `netstat -ano -p UDP` — includes PID in the last column.
-    let output = match std::process::Command::new("netstat")
+    let output = match crate::process::silent_command("netstat")
         .args(["-ano", "-p", "UDP"])
         .output()
     {
@@ -393,7 +393,7 @@ fn list_udp_linux() -> Vec<(Ipv4Addr, u16, u16, u32)> {
 /// column index.
 #[cfg(target_os = "linux")]
 fn list_udp_linux_ss() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
-    let output = std::process::Command::new("ss")
+    let output = crate::process::silent_command("ss")
         .args(["-unp", "-a"])
         .output()
         .ok()?;
@@ -587,7 +587,7 @@ fn list_udp_macos_lsof() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
     // Example output line:
     //   RustClien 1234 user  UDP  *:*
     //   RustClien 1234 user  UDP  192.168.1.5:54321->1.2.3.4:28015 (ESTABLISHED)
-    let output = std::process::Command::new("lsof")
+    let output = crate::process::silent_command("lsof")
         .args(["-i", "UDP", "-n", "-P"])
         .output()
         .ok()?;
@@ -653,7 +653,7 @@ fn list_tcp_sockets() -> Vec<(Ipv4Addr, u16, u16, u32)> {
 /// Columns: `Proto LocalAddress RemoteAddress State PID`
 #[cfg(target_os = "windows")]
 fn list_tcp_windows() -> Vec<(Ipv4Addr, u16, u16, u32)> {
-    let output = match std::process::Command::new("netstat")
+    let output = match crate::process::silent_command("netstat")
         .args(["-ano", "-p", "TCP"])
         .output()
     {
@@ -704,7 +704,7 @@ fn list_tcp_windows() -> Vec<(Ipv4Addr, u16, u16, u32)> {
 /// fixed column index, so the optional `State` column does not matter.
 #[cfg(target_os = "linux")]
 fn list_tcp_linux() -> Vec<(Ipv4Addr, u16, u16, u32)> {
-    let output = match std::process::Command::new("ss")
+    let output = match crate::process::silent_command("ss")
         .args(["-tnp", "-a"])
         .output()
     {
@@ -732,7 +732,7 @@ fn list_tcp_macos_lsof() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
     // lsof -i TCP -n -P  (no DNS lookup, numeric ports)
     // Example output line:
     //   java     1234 user  12u  IPv4  TCP  192.168.1.5:54321->104.26.1.50:25565 (ESTABLISHED)
-    let output = std::process::Command::new("lsof")
+    let output = crate::process::silent_command("lsof")
         .args(["-i", "TCP", "-n", "-P"])
         .output()
         .ok()?;

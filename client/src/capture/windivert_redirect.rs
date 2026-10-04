@@ -1592,7 +1592,7 @@ mod inner {
     fn add_windivert_firewall_rule(port: u16) {
         let exe = std::env::current_exe().unwrap_or_default();
         let name = format!("{} {}", FW_RULE_BASE, port);
-        let _ = std::process::Command::new("netsh")
+        let _ = crate::process::silent_command("netsh")
             .args([
                 "advfirewall",
                 "firewall",
@@ -1610,7 +1610,7 @@ mod inner {
 
     fn remove_windivert_firewall_rule(port: u16) {
         let name = format!("{} {}", FW_RULE_BASE, port);
-        let _ = std::process::Command::new("netsh")
+        let _ = crate::process::silent_command("netsh")
             .args([
                 "advfirewall",
                 "firewall",
@@ -1630,7 +1630,7 @@ mod inner {
     /// otherwise drop (they carry the real server's IP as source).
     fn add_tcp_firewall_rule(server_ip: Ipv4Addr, game_port: u16) {
         let name = format!("{} TCP {}", FW_RULE_BASE, game_port);
-        let _ = std::process::Command::new("netsh")
+        let _ = crate::process::silent_command("netsh")
             .args([
                 "advfirewall",
                 "firewall",
@@ -1653,7 +1653,7 @@ mod inner {
 
     fn remove_tcp_firewall_rule(game_port: u16) {
         let name = format!("{} TCP {}", FW_RULE_BASE, game_port);
-        let _ = std::process::Command::new("netsh")
+        let _ = crate::process::silent_command("netsh")
             .args([
                 "advfirewall",
                 "firewall",

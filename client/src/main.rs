@@ -19,6 +19,7 @@ mod interceptor;
 mod latency;
 mod ml;
 mod modes;
+mod process;
 mod quic;
 mod redirect;
 mod registry;

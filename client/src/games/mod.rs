@@ -535,7 +535,7 @@ fn list_running_processes_with_cmdline() -> Vec<RunningProcess> {
 /// `Win32_Process` when PowerShell is available.
 #[cfg(target_os = "windows")]
 fn list_processes_windows() -> Vec<RunningProcess> {
-    let names: Vec<String> = match std::process::Command::new("tasklist")
+    let names: Vec<String> = match crate::process::silent_command("tasklist")
         .args(["/FO", "CSV", "/NH"])
         .output()
     {
@@ -592,7 +592,7 @@ fn windows_command_lines() -> std::collections::HashMap<String, Vec<String>> {
     use std::collections::HashMap;
 
     let mut command_lines: HashMap<String, Vec<String>> = HashMap::new();
-    let output = match std::process::Command::new("powershell")
+    let output = match crate::process::silent_command("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -637,7 +637,7 @@ fn windows_command_lines() -> std::collections::HashMap<String, Vec<String>> {
 /// than matching on an ambiguous image name.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn list_processes_unix() -> Vec<RunningProcess> {
-    match std::process::Command::new("ps")
+    match crate::process::silent_command("ps")
         .args(["-e", "-o", "comm="])
         .output()
     {

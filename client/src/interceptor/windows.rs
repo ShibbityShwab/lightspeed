@@ -1073,7 +1073,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
 fn add_fw_rule(port: u16) {
     let exe = std::env::current_exe().unwrap_or_default();
     let name = format!("LightSpeed WinDivert Tunnel {}", port);
-    match std::process::Command::new("netsh")
+    match crate::process::silent_command("netsh")
         .args([
             "advfirewall",
             "firewall",
@@ -1108,7 +1108,7 @@ fn add_fw_rule(port: u16) {
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 fn remove_fw_rule(port: u16) {
     let name = format!("LightSpeed WinDivert Tunnel {}", port);
-    match std::process::Command::new("netsh")
+    match crate::process::silent_command("netsh")
         .args([
             "advfirewall",
             "firewall",

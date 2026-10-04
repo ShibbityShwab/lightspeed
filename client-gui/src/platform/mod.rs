@@ -15,6 +15,25 @@ use std::sync::Arc;
 /// it into a clean process exit.
 pub type QuitFlag = Arc<AtomicBool>;
 
+/// A [`std::process::Command`] for `program` that cannot flash a console window
+/// on Windows.
+///
+/// This GUI owns no console (`windows_subsystem = "windows"`), so spawning a
+/// console binary without `CREATE_NO_WINDOW` makes Windows allocate a NEW
+/// console window for the child. On non-Windows targets this is exactly
+/// `Command::new`.
+pub(crate) fn silent_command(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Actions returned by [`TrayHandle::poll_events`] that the app must handle
 /// because they need the Engine (owned by the app).
 ///

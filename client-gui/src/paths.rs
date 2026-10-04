@@ -48,7 +48,7 @@ pub fn open_in_os(path: &Path) {
     } else {
         "xdg-open"
     };
-    match std::process::Command::new(program).arg(path).spawn() {
+    match crate::platform::silent_command(program).arg(path).spawn() {
         Ok(_) => tracing::info!("Opened {} in OS viewer", path.display()),
         Err(e) => tracing::warn!("Failed to open {}: {e}", path.display()),
     }
