@@ -205,6 +205,7 @@ mod inner {
                     region,
                     telemetry_quic,
                     dest_region,
+                    ..
                 }) => {
                     info!(
                         "Registered with proxy: session={}, token={}, node={}, region={}",

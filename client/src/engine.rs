@@ -14,6 +14,7 @@ use tokio::net::UdpSocket;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
+use crate::games::TransportProto;
 use crate::modes::capture_mode::CaptureStatSlot;
 use crate::modes::redirect_windivert::WinDivertStatSlot;
 use crate::redirect::{RedirectStats, UdpRedirect};
@@ -638,6 +639,27 @@ impl LightSpeedEngine {
         fec: bool,
         fec_k: u8,
     ) -> Result<(), String> {
+        self.start_windivert_with_transport(
+            server_addr,
+            proxy_addr,
+            fec,
+            fec_k,
+            TransportProto::Udp,
+        )
+    }
+
+    /// [`Self::start_windivert`] with an explicit game transport, so a TCP
+    /// profile (Minecraft Java Edition) can enable the terminator path while
+    /// every existing call site keeps the UDP default.
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    pub fn start_windivert_with_transport(
+        &mut self,
+        server_addr: SocketAddrV4,
+        proxy_addr: SocketAddrV4,
+        fec: bool,
+        fec_k: u8,
+        transport: TransportProto,
+    ) -> Result<(), String> {
         self.stop_windivert();
 
         use crate::capture::windivert_redirect::WinDivertConfig;
@@ -649,6 +671,7 @@ impl LightSpeedEngine {
             proxy_addr,
             fec_enabled: fec,
             fec_k,
+            transport,
         };
 
         let stat_slot: WinDivertStatSlot = Arc::new(Mutex::new(None));
@@ -709,6 +732,19 @@ impl LightSpeedEngine {
         Err("WinDivert redirect requires Windows + windivert-redirect feature".to_string())
     }
 
+    /// Stub for non-Windows / feature-disabled builds.
+    #[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+    pub fn start_windivert_with_transport(
+        &mut self,
+        _server_addr: SocketAddrV4,
+        _proxy_addr: SocketAddrV4,
+        _fec: bool,
+        _fec_k: u8,
+        _transport: TransportProto,
+    ) -> Result<(), String> {
+        Err("WinDivert redirect requires Windows + windivert-redirect feature".to_string())
+    }
+
     /// Start WinDivert kernel-level interception using a game's port range.
     ///
     /// No server IP is required - the first outbound Game UDP packet whose
@@ -728,6 +764,28 @@ impl LightSpeedEngine {
         fec: bool,
         fec_k: u8,
     ) -> Result<(), String> {
+        self.start_windivert_for_game_with_transport(
+            port_lo,
+            port_hi,
+            proxy_addr,
+            fec,
+            fec_k,
+            TransportProto::Udp,
+        )
+    }
+
+    /// [`Self::start_windivert_for_game`] with an explicit game transport, so
+    /// a TCP profile (Minecraft Java Edition) can enable the terminator path.
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    pub fn start_windivert_for_game_with_transport(
+        &mut self,
+        port_lo: u16,
+        port_hi: u16,
+        proxy_addr: SocketAddrV4,
+        fec: bool,
+        fec_k: u8,
+        transport: TransportProto,
+    ) -> Result<(), String> {
         self.stop_windivert();
 
         use crate::capture::windivert_redirect::WinDivertConfig;
@@ -739,6 +797,7 @@ impl LightSpeedEngine {
             proxy_addr,
             fec_enabled: fec,
             fec_k,
+            transport,
         };
 
         let stat_slot: WinDivertStatSlot = Arc::new(Mutex::new(None));
@@ -796,6 +855,20 @@ impl LightSpeedEngine {
         _proxy_addr: SocketAddrV4,
         _fec: bool,
         _fec_k: u8,
+    ) -> Result<(), String> {
+        Err("WinDivert redirect requires Windows + windivert-redirect feature".to_string())
+    }
+
+    /// Stub for non-Windows / feature-disabled builds.
+    #[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+    pub fn start_windivert_for_game_with_transport(
+        &mut self,
+        _port_lo: u16,
+        _port_hi: u16,
+        _proxy_addr: SocketAddrV4,
+        _fec: bool,
+        _fec_k: u8,
+        _transport: TransportProto,
     ) -> Result<(), String> {
         Err("WinDivert redirect requires Windows + windivert-redirect feature".to_string())
     }

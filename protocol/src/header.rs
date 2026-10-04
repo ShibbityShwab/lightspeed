@@ -43,6 +43,13 @@ pub const PROTOCOL_VERSION: u8 = 3;
 /// immediately after the 20-byte tunnel header.
 pub const PROTOCOL_VERSION_FEC: u8 = 4;
 
+/// Protocol version indicating both the FEC header and the TCP extension
+/// header follow the tunnel header, in that order: `FecHeader`, then
+/// `TcpExtHeader`, then the game stream payload. Version 5 always carries
+/// both extensions — TCP without FEC is out of scope because the lossy leg
+/// needs FEC underneath the reliable layer.
+pub const PROTOCOL_VERSION_TCP: u8 = 5;
+
 /// Header size in bytes.
 pub const HEADER_SIZE: usize = 24;
 
@@ -274,7 +281,10 @@ impl TunnelHeader {
         let version = ver_flags >> 4;
         let flags = ver_flags & 0x0F;
 
-        if version != PROTOCOL_VERSION && version != PROTOCOL_VERSION_FEC {
+        if version != PROTOCOL_VERSION
+            && version != PROTOCOL_VERSION_FEC
+            && version != PROTOCOL_VERSION_TCP
+        {
             return Err(DecodeError::UnsupportedVersion {
                 version,
                 expected: PROTOCOL_VERSION,
@@ -330,9 +340,18 @@ impl TunnelHeader {
         self.flags & flags::FIN != 0
     }
 
-    /// Check if this packet has an FEC header extension (version 2).
+    /// Check if this packet carries an FEC header extension.
+    ///
+    /// True for version 4 (FEC only) and version 5 (FEC + TCP): both wire
+    /// formats start with the 4-byte [`crate::fec::FecHeader`] immediately
+    /// after the tunnel header.
     pub fn has_fec(&self) -> bool {
-        self.version == PROTOCOL_VERSION_FEC
+        self.version == PROTOCOL_VERSION_FEC || self.version == PROTOCOL_VERSION_TCP
+    }
+
+    /// Check if this packet carries the TCP extension header (version 5).
+    pub fn has_tcp(&self) -> bool {
+        self.version == PROTOCOL_VERSION_TCP
     }
 
     /// Get the original source socket address.

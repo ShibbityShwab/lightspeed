@@ -32,15 +32,18 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::net::tcp::OwnedWriteHalf;
-use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::{RwLock, Semaphore};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::sync::{mpsc, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 use lightspeed_protocol::framing::{read_frame, write_frame, MAX_FRAME_SIZE};
 use lightspeed_protocol::{
-    FecDecoder, FecEncoder, FecHeader, TunnelHeader, FEC_HEADER_SIZE, HEADER_SIZE,
+    build_fec_parity_packet, build_tcp_packet, decode_tcp_payload, tcp_flags, FecDecoder,
+    FecEncoder, FecHeader, Tcp5Tuple, TcpExtHeader, TcpReliable, TunnelHeader, FEC_HEADER_SIZE,
+    FEC_MAX_PAYLOAD, HEADER_SIZE,
 };
 
 /// Maximum size for a single outbound relay packet:
@@ -499,6 +502,90 @@ impl ClientSession {
     }
 }
 
+/// Command sent from the inbound packet path to a TCP connection task. The
+/// task buffers these until the upstream dial completes, then applies them in
+/// arrival order.
+enum TcpCmd {
+    /// A game stream payload to write to the real server.
+    Data(bytes::Bytes),
+    /// The client finished sending; shut the write half toward the server.
+    Fin,
+}
+
+/// Proxy-side connection state for one TCP-tunnelled game connection, keyed
+/// by its 5-tuple (see [`Tcp5Tuple`]).
+///
+/// The tunnel is one UDP socket per client, so the client's UDP source port
+/// is deliberately not part of the key; the 5-tuple is carried verbatim in
+/// the tunnel header and is what gets dialled on the server side.
+pub struct TcpConnState {
+    /// The connection's 5-tuple (game source and destination).
+    pub tuple: Tcp5Tuple,
+    /// The shared sequenced-reliable channel for this connection. The receiver
+    /// orders client→server bytes; the sender sequences server→client bytes.
+    /// Mutex-protected because the inbound path and the connection task each
+    /// hold one side.
+    pub reliable: tokio::sync::Mutex<TcpReliable>,
+    /// Outbound command channel toward the connection task. `None` once the
+    /// task has been spawned and taken its receiver.
+    conn_tx: std::sync::Mutex<Option<mpsc::Sender<TcpCmd>>>,
+    /// Inbound command channel receiver, owned by the connection task.
+    conn_rx: std::sync::Mutex<Option<mpsc::Receiver<TcpCmd>>>,
+    /// Cancellation token: fired on RST, idle expiry, or upstream teardown.
+    cancel: CancellationToken,
+    /// FEC decoder for inbound v5 packets on this connection. A block's data
+    /// and parity packets converge here so recovery targets the right stream.
+    pub fec_decoder: tokio::sync::Mutex<FecDecoder>,
+    /// Last activity instant, for the idle sweep.
+    last_activity: std::sync::Mutex<Instant>,
+    /// FEC block size (K) the client uses on this leg, captured from the SYN.
+    pub fec_k: u8,
+    /// Set once the upstream dial completes; the task alone writes it.
+    established: AtomicBool,
+    /// Last client packet sequence seen (echoed in responses for dedup).
+    pub last_client_seq: AtomicU16,
+}
+
+impl TcpConnState {
+    /// Create the state and its command channel. `fec_k` is the client leg's
+    /// FEC block size; `cancel` is the shared teardown signal.
+    pub fn new(tuple: Tcp5Tuple, fec_k: u8, cancel: CancellationToken) -> Self {
+        let (tx, rx) = mpsc::channel(64);
+        Self {
+            tuple,
+            reliable: tokio::sync::Mutex::new(TcpReliable::new(2, 2)),
+            conn_tx: std::sync::Mutex::new(Some(tx)),
+            conn_rx: std::sync::Mutex::new(Some(rx)),
+            cancel,
+            fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            fec_k,
+            established: AtomicBool::new(false),
+            last_client_seq: AtomicU16::new(0),
+        }
+    }
+
+    /// Take the command channel sender, returning `None` once taken.
+    fn take_conn_tx(&self) -> Option<mpsc::Sender<TcpCmd>> {
+        self.conn_tx.lock().unwrap().take()
+    }
+
+    /// Take the command channel receiver, returning `None` once taken.
+    fn take_conn_rx(&self) -> Option<mpsc::Receiver<TcpCmd>> {
+        self.conn_rx.lock().unwrap().take()
+    }
+
+    /// Refresh this connection's activity clock.
+    pub fn touch(&self) {
+        *self.last_activity.lock().unwrap() = Instant::now();
+    }
+
+    /// Idle time since the last activity.
+    pub fn idle(&self) -> Duration {
+        self.last_activity.lock().unwrap().elapsed()
+    }
+}
+
 /// Proxy-side geo aggregation context bound to a relay engine.
 ///
 /// When present, a newly created session resolves both endpoints to country
@@ -523,6 +610,10 @@ pub struct GeoState {
 pub struct RelayEngine {
     /// Active client sessions indexed by client address.
     sessions: Arc<RwLock<HashMap<SocketAddrV4, Arc<ClientSession>>>>,
+    /// Active TCP-tunnelled connections, keyed by their 5-tuple. Separate from
+    /// [`Self::sessions`] (keyed by client address, bound to the UDP data
+    /// plane) so the UDP session sweep never sees TCP keys.
+    tcp_conns: Arc<RwLock<HashMap<Tcp5Tuple, Arc<TcpConnState>>>>,
     /// Maximum concurrent sessions.
     max_sessions: usize,
     /// Session timeout (no activity).
@@ -563,6 +654,7 @@ impl RelayEngine {
     pub fn new_with_timeout(max_sessions: usize, session_timeout: Duration) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            tcp_conns: Arc::new(RwLock::new(HashMap::new())),
             max_sessions,
             session_timeout,
             listener_handles: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -823,6 +915,99 @@ impl RelayEngine {
                 false
             }
         });
+    }
+
+    /// Number of active TCP-tunnelled connections.
+    pub async fn tcp_connection_count(&self) -> usize {
+        self.tcp_conns.read().await.len()
+    }
+
+    /// Get or create the TCP connection for a 5-tuple.
+    ///
+    /// Creation counts like one session: it obeys `max_sessions` (against the
+    /// UDP session count plus the TCP connection count) and the egress budget
+    /// hard threshold. Returns `(state, true)` on creation and
+    /// `(state, false)` when the connection already existed.
+    pub async fn get_or_create_tcp_connection(
+        &self,
+        tuple: Tcp5Tuple,
+        fec_k: u8,
+    ) -> anyhow::Result<(Arc<TcpConnState>, bool)> {
+        {
+            let conns = self.tcp_conns.read().await;
+            if let Some(existing) = conns.get(&tuple) {
+                return Ok((Arc::clone(existing), false));
+            }
+        }
+
+        if self.is_handoff_frozen() {
+            anyhow::bail!("handoff in progress: refusing to create a TCP connection");
+        }
+        if let Some(budget) = &self.budget {
+            let used = self.socket_metrics.bytes_relayed.load(Ordering::Relaxed);
+            budget
+                .check_new_session(used, super::budget::current_month_key())
+                .map_err(anyhow::Error::from)?;
+        }
+
+        let conn = Arc::new(TcpConnState::new(tuple, fec_k, CancellationToken::new()));
+        let mut conns = self.tcp_conns.write().await;
+        if self.is_handoff_frozen() {
+            anyhow::bail!("handoff in progress: refusing to create a TCP connection");
+        }
+        if let Some(existing) = conns.get(&tuple) {
+            return Ok((Arc::clone(existing), false));
+        }
+        // The shared session budget: one UDP session plus one TCP connection
+        // must not exceed `max_sessions`.
+        let total = self.sessions.read().await.len() + conns.len();
+        if total >= self.max_sessions {
+            anyhow::bail!("Max sessions ({}) reached", self.max_sessions);
+        }
+        conns.insert(tuple, Arc::clone(&conn));
+        Ok((conn, true))
+    }
+
+    /// Remove a TCP connection from the table, cancelling its task.
+    pub async fn remove_tcp_connection(&self, tuple: &Tcp5Tuple) -> Option<Arc<TcpConnState>> {
+        let conn = self.tcp_conns.write().await.remove(tuple);
+        if let Some(conn) = &conn {
+            conn.cancel.cancel();
+        }
+        conn
+    }
+
+    /// Access the TCP connection table (for the connection tasks' teardown).
+    fn tcp_table(&self) -> Arc<RwLock<HashMap<Tcp5Tuple, Arc<TcpConnState>>>> {
+        Arc::clone(&self.tcp_conns)
+    }
+
+    /// Sweep TCP connections idle past the session timeout: RST both sides by
+    /// cancelling the connection task and dropping the entry. Returns how many
+    /// were removed.
+    pub async fn cleanup_expired_tcp(&self) -> usize {
+        let timeout = self.session_timeout;
+        let expired: Vec<Tcp5Tuple> = {
+            let conns = self.tcp_conns.read().await;
+            conns
+                .iter()
+                .filter_map(|(tuple, conn)| (conn.idle() >= timeout).then_some(*tuple))
+                .collect()
+        };
+        let removed = expired.len();
+        for tuple in expired {
+            if let Some(conn) = self.remove_tcp_connection(&tuple).await {
+                info!(
+                    src = %conn.tuple.src_ip,
+                    src_port = conn.tuple.src_port,
+                    dst = %conn.tuple.dst_ip,
+                    dst_port = conn.tuple.dst_port,
+                    "TCP connection expired after {:?}",
+                    conn.idle()
+                );
+            }
+        }
+        removed
     }
 
     /// Snapshot every UDP session for an in-place handoff.
@@ -1310,6 +1495,26 @@ async fn process_inbound_packet(
     // Determine FEC k_size for session creation
     let fec_k = fec_hdr.as_ref().map(|h| h.k_size).unwrap_or(4);
 
+    // ── TCP-tunnelled connection (protocol v5) ───────────────────
+    //
+    // The keepalive → auth → FIN → abuse checks above already ran on the shared
+    // tunnel header, so v5 inherits auth, rate limiting, and destination
+    // validation for free. FEC is decoded identically before this branch; the
+    // per-connection FecDecoder converges a block's parity and data packets.
+    if header.has_tcp() {
+        process_tcp_packet(
+            &header,
+            fec_hdr.as_ref(),
+            game_payload,
+            client_addr,
+            sender,
+            engine,
+            metrics,
+        )
+        .await;
+        return false;
+    }
+
     // ── Session: get or create ───────────────────────────────────
     let (session, is_new) = match engine
         .get_or_create_session(client_addr, game_server, is_fec, fec_k, sender.clone())
@@ -1444,6 +1649,353 @@ async fn process_inbound_packet(
     }
 
     false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  TCP-tunnelled connection handling (protocol v5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build a v5 data response for the client: `[TunnelHeader][FecHeader]
+/// [TcpExtHeader][payload]` with the source/destination swapped back to the
+/// client, the connection's FEC header, and the reliability layer's seq/ack.
+fn build_tcp_response_packet(
+    client_header: &TunnelHeader,
+    seq: u16,
+    fec_hdr: &FecHeader,
+    tcp_seq: u32,
+    tcp_ack: u32,
+    flags: u8,
+    payload: &[u8],
+) -> bytes::BytesMut {
+    let response_header = client_header
+        .make_response(seq, now_us())
+        .with_session_token(client_header.session_token);
+    let tcp_ext = TcpExtHeader {
+        tcp_seq,
+        tcp_ack,
+        flags,
+        window: 0,
+        reserved: [0, 0],
+    };
+    build_tcp_packet(&response_header, fec_hdr, &tcp_ext, payload)
+}
+
+/// Build a v5 RST packet (zero payload, RST flag) to tear the client's
+/// terminator down.
+fn build_tcp_rst_packet(client_header: &TunnelHeader, fec_k: u8) -> bytes::BytesMut {
+    let response_header = client_header.make_response(0, now_us());
+    let fec_hdr = FecHeader::data(0, 0, fec_k.max(2));
+    let tcp_ext = TcpExtHeader {
+        tcp_seq: 0,
+        tcp_ack: 0,
+        flags: tcp_flags::RST,
+        window: 0,
+        reserved: [0, 0],
+    };
+    build_tcp_packet(&response_header, &fec_hdr, &tcp_ext, &[])
+}
+
+/// Route one v5 packet (already past auth/abuse and FEC framing) to its
+/// per-5-tuple connection. This is the relay-side connector: on SYN it dials
+/// the real server, on data it splices bytes upstream, on FIN it shuts the
+/// write half, and on RST it tears the connection down.
+#[allow(clippy::too_many_arguments)]
+async fn process_tcp_packet(
+    client_header: &TunnelHeader,
+    fec_hdr: Option<&FecHeader>,
+    game_payload: &[u8],
+    client_addr: SocketAddrV4,
+    sender: &ClientSender,
+    engine: &Arc<RelayEngine>,
+    metrics: &Arc<ProxyMetrics>,
+) {
+    let tuple = Tcp5Tuple {
+        src_ip: client_header.orig_src_ip,
+        src_port: client_header.orig_src_port,
+        dst_ip: client_header.orig_dst_ip,
+        dst_port: client_header.orig_dst_port,
+    };
+
+    let fec_k = fec_hdr.map(|h| h.k_size).unwrap_or(4).max(2);
+
+    // SYN opens the connection; anything else needs an existing entry.
+    let is_syn = decode_tcp_payload(game_payload)
+        .map(|(ext, _)| ext.flags & tcp_flags::SYN != 0)
+        .unwrap_or(false);
+    let conn = if is_syn {
+        match engine.get_or_create_tcp_connection(tuple, fec_k).await {
+            Ok((conn, is_new)) => {
+                if is_new {
+                    metrics.record_session_created();
+                    let engine = Arc::clone(engine);
+                    let metrics = Arc::clone(metrics);
+                    let sender = sender.clone();
+                    let header = client_header.clone();
+                    let conn_clone = Arc::clone(&conn);
+                    tokio::spawn(async move {
+                        run_tcp_connection(
+                            conn_clone,
+                            client_addr,
+                            sender,
+                            header,
+                            engine,
+                            metrics,
+                        )
+                        .await;
+                    });
+                    info!(
+                        src = %tuple.src_ip,
+                        src_port = tuple.src_port,
+                        dst = %tuple.dst_ip,
+                        dst_port = tuple.dst_port,
+                        "TCP connection created"
+                    );
+                }
+                conn
+            }
+            Err(e) => {
+                if let Some(exceeded) = e.downcast_ref::<BudgetExceeded>() {
+                    warn!(
+                        client = %client_addr,
+                        limit_bytes = exceeded.limit,
+                        used_bytes = exceeded.used,
+                        "Egress budget reached: refusing TCP connection"
+                    );
+                    metrics.record_drop(DropReason::EgressBudget);
+                } else {
+                    warn!(client = %client_addr, error = %e, "Failed to create TCP connection");
+                    metrics.record_drop(DropReason::SessionSetup);
+                }
+                let _ = sender
+                    .send(&build_tcp_rst_packet(client_header, fec_k))
+                    .await;
+                return;
+            }
+        }
+    } else {
+        let Some(conn) = engine.tcp_table().read().await.get(&tuple).cloned() else {
+            trace!(
+                client = %client_addr,
+                "TCP packet for unknown 5-tuple dropped"
+            );
+            metrics.record_drop(DropReason::Malformed);
+            return;
+        };
+        conn
+    };
+
+    // ── FEC decode, per connection ───────────────────────────────
+    let decoded = {
+        let mut decoder = conn.fec_decoder.lock().await;
+        match fec_hdr {
+            Some(fh) if fh.is_parity() => {
+                metrics.record_fec_parity();
+                decoder
+                    .receive_parity(fh, bytes::Bytes::copy_from_slice(game_payload))
+                    .map(|(_, recovered)| recovered)
+            }
+            Some(fh) => {
+                metrics.record_fec_data();
+                let data = bytes::Bytes::copy_from_slice(game_payload);
+                Some(decoder.receive_data(fh, data))
+            }
+            None => Some(bytes::Bytes::copy_from_slice(game_payload)),
+        }
+    };
+
+    let Some(data) = decoded else {
+        // Parity that recovered nothing: nothing to forward.
+        return;
+    };
+
+    // ── Parse the TCP extension header and route by flags ────────
+    let Some((tcp_ext, stream_payload)) = decode_tcp_payload(&data) else {
+        debug!(client = %client_addr, "Invalid TCP extension header");
+        metrics.record_drop(DropReason::FecMalformed);
+        return;
+    };
+
+    conn.last_client_seq
+        .store(client_header.sequence, Ordering::Relaxed);
+    conn.touch();
+
+    if tcp_ext.flags & tcp_flags::RST != 0 {
+        info!(client = %client_addr, "TCP RST — tearing down connection");
+        engine.remove_tcp_connection(&tuple).await;
+        return;
+    }
+
+    if tcp_ext.flags & tcp_flags::FIN != 0 {
+        if let Some(tx) = conn.take_conn_tx() {
+            let _ = tx.send(TcpCmd::Fin).await;
+        }
+    }
+
+    if !stream_payload.is_empty() {
+        let ordered = conn
+            .reliable
+            .lock()
+            .await
+            .receiver
+            .on_segment(tcp_ext.tcp_seq, stream_payload);
+        if let Some(tx) = conn.take_conn_tx() {
+            for chunk in ordered {
+                if tx.send(TcpCmd::Data(chunk)).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// The per-connection task: dials the real server, splices buffered client
+/// payloads into it, reads server bytes back through the reliability encoder
+/// and FEC, and tears down. This is the proxy-side connector.
+#[allow(clippy::too_many_arguments)]
+async fn run_tcp_connection(
+    conn: Arc<TcpConnState>,
+    client_addr: SocketAddrV4,
+    sender: ClientSender,
+    client_header: TunnelHeader,
+    engine: Arc<RelayEngine>,
+    metrics: Arc<ProxyMetrics>,
+) {
+    let tuple = conn.tuple;
+    let dst = SocketAddrV4::new(tuple.dst_ip, tuple.dst_port);
+    let upstream = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(dst)).await
+    {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(e)) => {
+            warn!(client = %client_addr, dst = %dst, error = %e, "TCP dial failed");
+            let _ = sender
+                .send(&build_tcp_rst_packet(&client_header, conn.fec_k))
+                .await;
+            engine.remove_tcp_connection(&tuple).await;
+            return;
+        }
+        Err(_) => {
+            warn!(client = %client_addr, dst = %dst, "TCP dial timed out");
+            let _ = sender
+                .send(&build_tcp_rst_packet(&client_header, conn.fec_k))
+                .await;
+            engine.remove_tcp_connection(&tuple).await;
+            return;
+        }
+    };
+    if let Err(e) = upstream.set_nodelay(true) {
+        debug!(client = %client_addr, error = %e, "Failed to set TCP_NODELAY");
+    }
+    let (mut read_half, mut write_half): (OwnedReadHalf, OwnedWriteHalf) = upstream.into_split();
+    conn.established.store(true, Ordering::Release);
+
+    let mut rx = conn
+        .take_conn_rx()
+        .expect("connection task owns the command receiver");
+    let mut fec_encoder = FecEncoder::new(conn.fec_k);
+    let mut retransmit = tokio::time::interval(Duration::from_millis(50));
+    let mut buf = vec![0u8; 2048];
+    let mut parity_buf = [0u8; FEC_MAX_PAYLOAD + 2];
+    let mut response_seq = 0u16;
+
+    loop {
+        tokio::select! {
+            _ = conn.cancel.cancelled() => break,
+            cmd = rx.recv() => {
+                match cmd {
+                    Some(TcpCmd::Data(payload)) => {
+                        if write_half.write_all(&payload).await.is_err() {
+                            break;
+                        }
+                        conn.touch();
+                    }
+                    Some(TcpCmd::Fin) => {
+                        let _ = write_half.shutdown().await;
+                        // Keep reading until the server closes, then exit.
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            res = read_half.read(&mut buf) => {
+                match res {
+                    Ok(n) if n > 0 => {
+                        conn.touch();
+                        let payload = &buf[..n];
+                        let (tcp_seq, tcp_ack) = {
+                            let mut reliable = conn.reliable.lock().await;
+                            let Some(tcp_seq) = reliable.sender.send(payload) else {
+                                continue;
+                            };
+                            (tcp_seq, reliable.receiver.ack())
+                        };
+                        let seq = conn.last_client_seq.load(Ordering::Relaxed);
+                        let block_id = fec_encoder.block_id();
+                        let index = fec_encoder.current_index();
+                        let fec_hdr = FecHeader::data(block_id, index, conn.fec_k);
+                        let packet = build_tcp_response_packet(
+                            &client_header,
+                            seq,
+                            &fec_hdr,
+                            tcp_seq,
+                            tcp_ack,
+                            tcp_flags::ACK | tcp_flags::PSH,
+                            payload,
+                        );
+                        let _ = sender.send(&packet).await;
+                        metrics.record_relay(packet.len() as u64);
+
+                        // FEC: parity emission rides on the same block as the
+                        // data packets, matching the client leg's K.
+                        let block_complete = fec_encoder.add_packet_inplace(payload);
+                        if block_complete {
+                            let parity_len = fec_encoder.emit_parity_to(&mut parity_buf);
+                            let parity_header = client_header
+                                .make_response(response_seq, now_us())
+                                .with_session_token(client_header.session_token);
+                            let parity_fec = FecHeader::parity(block_id, conn.fec_k);
+                            let parity_packet =
+                                build_fec_parity_packet(&parity_header, &parity_fec, &parity_buf[..parity_len]);
+                            let _ = sender.send(&parity_packet).await;
+                            metrics.record_relay(parity_packet.len() as u64);
+                            fec_encoder.next_block();
+                        }
+                        response_seq = response_seq.wrapping_add(1);
+                    }
+                    Ok(_) => break, // EOF: server closed
+                    Err(_) => break,
+                }
+            }
+            _ = retransmit.tick() => {
+                let (seq, tcp_ack, payload) = {
+                    let mut reliable = conn.reliable.lock().await;
+                    let Some((seq, payload)) = reliable.sender.poll_retransmit(Instant::now()) else {
+                        continue;
+                    };
+                    (seq, reliable.receiver.ack(), payload)
+                };
+                let client_seq = conn.last_client_seq.load(Ordering::Relaxed);
+                let fec_hdr = FecHeader::data(
+                    fec_encoder.block_id(),
+                    fec_encoder.current_index(),
+                    conn.fec_k,
+                );
+                let packet = build_tcp_response_packet(
+                    &client_header,
+                    client_seq,
+                    &fec_hdr,
+                    seq,
+                    tcp_ack,
+                    tcp_flags::ACK | tcp_flags::PSH,
+                    &payload,
+                );
+                let _ = sender.send(&packet).await;
+                metrics.record_relay(packet.len() as u64);
+            }
+        }
+    }
+
+    conn.cancel.cancel();
+    engine.remove_tcp_connection(&tuple).await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1802,6 +2354,13 @@ pub async fn run_session_manager(
         if removed > 0 {
             metrics.record_session_expired(removed as u64);
             info!("Cleaned up {} expired sessions", removed);
+        }
+
+        // Clean up expired TCP-tunnelled connections (idle sweep).
+        let tcp_removed = engine.cleanup_expired_tcp().await;
+        if tcp_removed > 0 {
+            metrics.record_session_expired(tcp_removed as u64);
+            info!("Cleaned up {} expired TCP connections", tcp_removed);
         }
 
         // Publish the egress budget state and log any threshold crossing even
@@ -2486,6 +3045,165 @@ mod tests {
         assert_eq!(write_errno.raw_os_error(), Some(libc::EPIPE));
         // SAFETY: `write_end` is still owned by this test.
         unsafe { libc::close(write_end) };
+    }
+
+    // ── TCP-tunnelled connection lifecycle ─────────────────────
+
+    fn tcp_tuple(src_port: u16) -> Tcp5Tuple {
+        Tcp5Tuple {
+            src_ip: Ipv4Addr::new(192, 168, 1, 100),
+            src_port,
+            dst_ip: Ipv4Addr::new(104, 26, 1, 50),
+            dst_port: 25565,
+        }
+    }
+
+    #[tokio::test]
+    async fn tcp_connection_creation_counts_against_the_session_budget() {
+        let engine = RelayEngine::new(1);
+
+        let (conn, is_new) = engine
+            .get_or_create_tcp_connection(tcp_tuple(12345), 4)
+            .await
+            .unwrap();
+        assert!(is_new);
+        assert_eq!(engine.tcp_connection_count().await, 1);
+
+        // Same tuple resolves to the existing connection, not a new one.
+        let (same, is_new_again) = engine
+            .get_or_create_tcp_connection(tcp_tuple(12345), 4)
+            .await
+            .unwrap();
+        assert!(!is_new_again);
+        assert!(Arc::ptr_eq(&conn, &same));
+
+        // A different 5-tuple would exceed max_sessions (1), so it is refused.
+        assert!(engine
+            .get_or_create_tcp_connection(tcp_tuple(23456), 4)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn tcp_idle_sweep_removes_stale_connections() {
+        let engine = RelayEngine::new_with_timeout(10, Duration::from_millis(20));
+
+        let (_conn, is_new) = engine
+            .get_or_create_tcp_connection(tcp_tuple(12345), 4)
+            .await
+            .unwrap();
+        assert!(is_new);
+        assert_eq!(engine.tcp_connection_count().await, 1);
+
+        // Not yet idle past the timeout.
+        assert_eq!(engine.cleanup_expired_tcp().await, 0);
+
+        // Idle past the 20 ms timeout: swept, task cancellation token fired.
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(engine.cleanup_expired_tcp().await, 1);
+        assert_eq!(engine.tcp_connection_count().await, 0);
+    }
+
+    /// The connector dials the real server, splices client payloads into it,
+    /// and relays server bytes back to the client as v5 packets.
+    #[tokio::test]
+    async fn tcp_connection_dials_buffers_and_splices() {
+        // A local echo server stands in for the game server.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 256];
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(n) if n > 0 => {
+                        if stream.write_all(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        });
+
+        let client_addr = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 39000);
+        let client_sock = Arc::new(UdpSocket::bind(client_addr).await.unwrap());
+        let sender = ClientSender::Udp {
+            socket: Arc::clone(&client_sock),
+            addr: client_addr,
+        };
+
+        let tuple = Tcp5Tuple {
+            src_ip: Ipv4Addr::new(192, 168, 1, 100),
+            src_port: 12345,
+            dst_ip: Ipv4Addr::new(127, 0, 0, 1),
+            dst_port: server_addr.port(),
+        };
+        let mut header = TunnelHeader::new_fec(
+            1,
+            1_000_000,
+            SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345),
+            SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), server_addr.port()),
+        );
+        header.version = lightspeed_protocol::PROTOCOL_VERSION_TCP;
+        let engine = Arc::new(RelayEngine::new(10));
+        let conn = Arc::new(TcpConnState::new(tuple, 4, CancellationToken::new()));
+        engine
+            .tcp_table()
+            .write()
+            .await
+            .insert(tuple, Arc::clone(&conn));
+
+        let sender_for_task = sender.clone();
+        let engine_for_task = Arc::clone(&engine);
+        let conn_for_task = Arc::clone(&conn);
+        let header_for_task = header.clone();
+        tokio::spawn(async move {
+            run_tcp_connection(
+                conn_for_task,
+                client_addr,
+                sender_for_task,
+                header_for_task,
+                engine_for_task,
+                Arc::new(ProxyMetrics::new()),
+            )
+            .await;
+        });
+
+        // Data arriving before the dial completes is buffered and written once
+        // connected. The command channel sender must stay alive (as it does on
+        // the real `TcpConnState`) so the task's recv arm does not see a
+        // closed channel and tear down before reading the echo.
+        let payload = b"hello minecraft";
+        let cmd_tx = conn.take_conn_tx().unwrap();
+        cmd_tx
+            .send(TcpCmd::Data(bytes::Bytes::copy_from_slice(payload)))
+            .await
+            .unwrap();
+
+        // The server's echo comes back as a v5 packet on the client socket.
+        let mut recv_buf = [0u8; 512];
+        let (n, _) =
+            tokio::time::timeout(Duration::from_secs(2), client_sock.recv_from(&mut recv_buf))
+                .await
+                .expect("server echo must reach the client")
+                .unwrap();
+        let (resp_header, resp_payload) =
+            TunnelHeader::decode_with_payload(&recv_buf[..n]).unwrap();
+        assert!(resp_header.has_tcp());
+        assert!(resp_header.has_fec());
+        // Skip the 4-byte FEC header, decode the TCP extension, and check the
+        // game payload round-tripped through the echo server.
+        let (tcp_ext, game) =
+            decode_tcp_payload(&resp_payload[FEC_HEADER_SIZE..]).expect("tcp ext");
+        assert_eq!(
+            tcp_ext.tcp_ack, 2,
+            "the ACK acknowledges the first data byte"
+        );
+        assert_eq!(game, payload);
+
+        server.abort();
+        engine.remove_tcp_connection(&tuple).await;
     }
 
     // ── Proxy-side geo session recording ────────────────────────

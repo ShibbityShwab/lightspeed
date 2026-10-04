@@ -71,6 +71,8 @@ pub mod game_id {
     pub const MINECRAFT: u8 = 20;
     /// Crytek's Hunt: Showdown 1896 (UDP gameplay over 20000-20099).
     pub const HUNT: u8 = 21;
+    /// Mojang's Minecraft, Java Edition (TCP gameplay over 25565).
+    pub const MINECRAFT_JAVA: u8 = 22;
 
     /// Canonical CLI key mapped to its wire id, ordered by ascending id.
     ///
@@ -98,6 +100,7 @@ pub mod game_id {
         ("wardogs", WARDDOGS),
         ("minecraft", MINECRAFT),
         ("hunt", HUNT),
+        ("minecraft-java", MINECRAFT_JAVA),
     ];
 
     /// Resolve a CLI game key to its wire id, or [`UNKNOWN`] when absent.
@@ -123,6 +126,16 @@ pub mod disconnect_reason {
     pub const SERVER_SHUTDOWN: u8 = 2;
     pub const RATE_LIMITED: u8 = 3;
     pub const AUTH_FAILURE: u8 = 4;
+}
+
+/// Capability bitmap carried in the registration ack's `caps` byte.
+///
+/// A one-byte additive bitmap: bit 0 means the relay supports the TCP tunnel
+/// (protocol version 5). Pre-upgrade relays omit the byte, which decodes as
+/// zero — "no TCP".
+pub mod caps {
+    /// The relay supports the TCP tunnel (protocol version 5).
+    pub const TCP_TUNNEL: u8 = 0b0000_0001;
 }
 
 // ── Control message enum ────────────────────────────────────────────
@@ -184,6 +197,11 @@ pub enum ControlMessage {
         /// relays omit this trailing field.
         #[serde(default)]
         dest_region: Option<String>,
+        /// Capability bitmap (bit 0 = TCP tunnel support). Additive:
+        /// pre-upgrade relays omit this trailing byte, which decodes as zero,
+        /// and zero means "no TCP".
+        #[serde(default)]
+        caps: u8,
     },
 
     /// Client → Proxy: request a fresh data-plane session token.
@@ -299,6 +317,7 @@ impl ControlMessage {
                 region,
                 telemetry_quic,
                 dest_region,
+                caps,
             } => {
                 buf.put_u8(MSG_REGISTER_ACK);
                 buf.put_u32(*session_id);
@@ -306,14 +325,27 @@ impl ControlMessage {
                 put_short_string(&mut buf, node_id);
                 put_short_string(&mut buf, region);
                 // Trailing extensions: the telemetry capability byte, then the
-                // destination region. The byte is emitted when telemetry is
-                // supported or when a region follows, so a client that reads
-                // only the byte still sees the capability and ignores the rest.
-                if *telemetry_quic || dest_region.is_some() {
+                // destination region, then the capability bitmap. The telemetry
+                // byte doubles as the presence marker for the whole block, so a
+                // client that reads only that byte still sees the capability
+                // and ignores the rest.
+                let caps_present = *caps != 0;
+                if *telemetry_quic || dest_region.is_some() || caps_present {
                     buf.put_u8(u8::from(*telemetry_quic));
                 }
-                if let Some(dest_region) = dest_region {
-                    put_short_string(&mut buf, dest_region);
+                // A region slot is always framed when a trailing capability
+                // follows, so the fixed-width `caps` byte after the
+                // variable-length region stays unambiguous; an absent region is
+                // framed as a zero-length string.
+                if dest_region.is_some() || caps_present {
+                    if let Some(dest_region) = dest_region {
+                        put_short_string(&mut buf, dest_region);
+                    } else {
+                        buf.put_u8(0);
+                    }
+                }
+                if caps_present {
+                    buf.put_u8(*caps);
                 }
             }
             Self::RotateRequest { current_token } => {
@@ -414,15 +446,20 @@ impl ControlMessage {
                 let session_token = buf.get_u32();
                 let node_id = get_short_string(&mut buf)?;
                 let region = get_short_string(&mut buf)?;
-                // The telemetry capability and destination region are optional
-                // trailing extensions: a pre-upgrade proxy sends neither, so
-                // telemetry decodes as unsupported and the region as unknown.
+                // The telemetry capability, destination region, and capability
+                // bitmap are optional trailing extensions: a pre-upgrade proxy
+                // sends none of them, so telemetry decodes as unsupported, the
+                // region as unknown, and the caps as zero.
                 let telemetry_quic = !buf.is_empty() && buf.get_u8() != 0;
                 let dest_region = if buf.is_empty() {
                     None
                 } else {
-                    Some(get_short_string(&mut buf)?)
+                    match get_short_string(&mut buf)? {
+                        region if region.is_empty() => None,
+                        region => Some(region),
+                    }
                 };
+                let caps = if buf.is_empty() { 0 } else { buf.get_u8() };
                 Ok(Self::RegisterAck {
                     session_id,
                     session_token,
@@ -430,6 +467,7 @@ impl ControlMessage {
                     region,
                     telemetry_quic,
                     dest_region,
+                    caps,
                 })
             }
             MSG_ROTATE_REQUEST => {
@@ -666,6 +704,7 @@ mod tests {
             region: "sea".into(),
             telemetry_quic: true,
             dest_region: Some("AU".into()),
+            caps: caps::TCP_TUNNEL,
         };
         let encoded = msg.encode();
         let decoded = ControlMessage::decode(&encoded).unwrap();
@@ -682,6 +721,7 @@ mod tests {
             region: "sea".into(),
             telemetry_quic: false,
             dest_region: None,
+            caps: 0,
         }
         .encode();
         let decoded = ControlMessage::decode(&legacy).unwrap();
@@ -694,6 +734,7 @@ mod tests {
                 region: "sea".into(),
                 telemetry_quic: false,
                 dest_region: None,
+                caps: 0,
             },
             "an ack without trailing extensions must decode as unsupported and regionless"
         );
@@ -710,6 +751,7 @@ mod tests {
             region: "ap-southeast-2".into(),
             telemetry_quic: false,
             dest_region: Some("APAC".into()),
+            caps: 0,
         };
         let decoded = ControlMessage::decode(&msg.encode()).unwrap();
         assert_eq!(decoded, msg);
@@ -722,11 +764,58 @@ mod tests {
             region: "ap-southeast-2".into(),
             telemetry_quic: true,
             dest_region: None,
+            caps: 0,
         };
         assert_eq!(
             ControlMessage::decode(&telemetry_only.encode()).unwrap(),
             telemetry_only
         );
+    }
+
+    #[test]
+    fn test_register_ack_caps_bitmap_is_additive() {
+        // A relay advertising TCP sets bit 0; the byte rides after the region.
+        let advertised = ControlMessage::RegisterAck {
+            session_id: 5,
+            session_token: 0xEF,
+            node_id: "proxy".into(),
+            region: "sea".into(),
+            telemetry_quic: true,
+            dest_region: Some("AU".into()),
+            caps: caps::TCP_TUNNEL,
+        };
+        assert_eq!(
+            ControlMessage::decode(&advertised.encode()).unwrap(),
+            advertised
+        );
+
+        // The bitmap also survives when the region is absent (framed as an
+        // empty string so the trailing caps byte stays unambiguous).
+        let no_region = ControlMessage::RegisterAck {
+            session_id: 5,
+            session_token: 0xEF,
+            node_id: "proxy".into(),
+            region: "sea".into(),
+            telemetry_quic: false,
+            dest_region: None,
+            caps: caps::TCP_TUNNEL,
+        };
+        assert_eq!(
+            ControlMessage::decode(&no_region.encode()).unwrap(),
+            no_region
+        );
+
+        // A legacy ack with no caps byte decodes as zero — "no TCP".
+        let legacy = ControlMessage::RegisterAck {
+            session_id: 5,
+            session_token: 0xEF,
+            node_id: "proxy".into(),
+            region: "sea".into(),
+            telemetry_quic: false,
+            dest_region: None,
+            caps: 0,
+        };
+        assert_eq!(ControlMessage::decode(&legacy.encode()).unwrap(), legacy);
     }
 
     #[test]
@@ -756,6 +845,7 @@ mod tests {
                 region: "r".into(),
                 telemetry_quic: false,
                 dest_region: None,
+                caps: 0,
             }
         );
     }
@@ -907,19 +997,19 @@ mod tests {
 
     #[test]
     fn test_game_ids_unique_and_stable() {
-        assert_eq!(game_id::GAME_IDS.len(), 21, "every real game needs one id");
+        assert_eq!(game_id::GAME_IDS.len(), 22, "every real game needs one id");
 
-        // Each id 1..=21 must appear exactly once (0 stays reserved for UNKNOWN).
-        let mut seen = [0u8; 22];
+        // Each id 1..=22 must appear exactly once (0 stays reserved for UNKNOWN).
+        let mut seen = [0u8; 23];
         for (key, id) in game_id::GAME_IDS.iter().copied() {
             assert!(
-                (1..=21).contains(&id),
+                (1..=22).contains(&id),
                 "key {key:?} has out-of-range id {id}"
             );
             assert_eq!(seen[id as usize], 0, "duplicate id {id}");
             seen[id as usize] += 1;
         }
-        for id in 1..=21u8 {
+        for id in 1..=22u8 {
             assert_eq!(seen[id as usize], 1, "id {id} missing or duplicated");
         }
 
@@ -952,7 +1042,10 @@ mod tests {
             assert_eq!(game_id::id_for_key(key), id, "id_for_key({key:?})");
             assert_eq!(game_id::key_for_id(id), Some(key), "key_for_id({id})");
         }
-        assert_eq!(game_id::id_for_key("minecraft-java"), game_id::UNKNOWN);
+        assert_eq!(
+            game_id::id_for_key("minecraft-java"),
+            game_id::MINECRAFT_JAVA
+        );
         assert!(game_id::key_for_id(250).is_none());
     }
 

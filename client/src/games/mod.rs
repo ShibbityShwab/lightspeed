@@ -26,12 +26,17 @@
 //! - **Roblox**: `RobloxPlayerBeta.exe`
 //! - **WARDOGS**: `WardogsClient-Win64-Shipping.exe`
 //! - **Minecraft**: `Minecraft.Windows.exe` (Bedrock Edition)
+//! - **Minecraft Java Edition**: `javaw.exe`/`java.exe` whose command line
+//!   carries `net.minecraft.client.main.Main` (the image name alone is shared
+//!   by every Java application, so it is never trusted on its own)
 //! - **Hunt: Showdown**: `HuntGame.exe`
 //!
 //! ## Capture Filters
 //!
 //! Each game provides a `CaptureFilter` via `build_capture_filter()` that
-//! generates an appropriate BPF filter for pcap capture mode.
+//! generates an appropriate BPF filter for pcap capture mode: UDP games emit
+//! the `udp port`/`udp portrange` grammar, while a game that declares
+//! `tcp_ports()` emits the `tcp` equivalent.
 
 pub mod apex;
 pub mod bodycam;
@@ -60,6 +65,47 @@ use std::sync::OnceLock;
 
 use crate::tunnel::capture::CaptureFilter;
 
+/// Which IP transport a game's gameplay traffic uses, and which transport a
+/// tunnel leg is carrying.
+///
+/// Every profile before Minecraft Java Edition is UDP; Java Edition is the
+/// first [`TransportProto::Tcp`] profile, carried through the tunnel's v5
+/// datagram path rather than as raw TCP segments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransportProto {
+    /// UDP - the tunnel's default datagram transport.
+    #[default]
+    Udp,
+    /// TCP - terminated at both tunnel ends and carried as sequenced datagrams.
+    Tcp,
+}
+
+impl std::fmt::Display for TransportProto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            TransportProto::Udp => "UDP",
+            TransportProto::Tcp => "TCP",
+        })
+    }
+}
+
+impl TransportProto {
+    /// Whether a game on this transport is forbidden to ride a tunnel leg on
+    /// `leg`.
+    ///
+    /// TCP-in-TCP is the only forbidden pairing: the tunnel's TCP fallback
+    /// already nests a congestion controller and a retransmission loop, and a
+    /// terminated TCP game stream must not be re-nested inside it (see
+    /// `docs/tcp-tunnel-design.md`). Everything else - including a UDP game on
+    /// the TCP fallback - stays allowed.
+    pub fn forbidden_over(self, leg: Option<TransportProto>) -> bool {
+        matches!(
+            (self, leg),
+            (TransportProto::Tcp, Some(TransportProto::Tcp))
+        )
+    }
+}
+
 /// Trait for game-specific configuration.
 pub trait GameConfig: Send + Sync {
     /// Game display name.
@@ -68,8 +114,39 @@ pub trait GameConfig: Send + Sync {
     /// Process name(s) to detect the game.
     fn process_names(&self) -> &[&str];
 
-    /// UDP port range used by the game.
+    /// The game's primary network port range.
+    ///
+    /// UDP for every UDP game. A TCP game (Minecraft Java Edition) reports its
+    /// TCP port here too so diagnostics and [`GameConfig::redirect_port`] point
+    /// at the right port; the authoritative transport is
+    /// [`GameConfig::transport`].
     fn ports(&self) -> (u16, u16);
+
+    /// TCP port range used by the game, or `(0, 0)` when the game carries no
+    /// TCP gameplay traffic (the default for every UDP profile).
+    fn tcp_ports(&self) -> (u16, u16) {
+        (0, 0)
+    }
+
+    /// Which IP transport carries this game's gameplay traffic.
+    ///
+    /// Defaults to UDP. Minecraft Java Edition returns
+    /// [`TransportProto::Tcp`].
+    fn transport(&self) -> TransportProto {
+        TransportProto::Udp
+    }
+
+    /// Command-line substring that must appear in a matched process's command
+    /// line before this profile may be locked in, or `None` when the image
+    /// name alone is unambiguous (the default).
+    ///
+    /// Minecraft Java Edition is the motivating case: `javaw.exe`/`java.exe`
+    /// are shared by every Java application, so a name-only match would
+    /// mislabel IDEs and build tools as the game. Its launcher always passes
+    /// `net.minecraft.client.main.Main`.
+    fn command_line_marker(&self) -> Option<&str> {
+        None
+    }
 
     /// Known game server IP ranges (if any).
     fn server_ips(&self) -> Vec<Ipv4Addr> {
@@ -122,8 +199,34 @@ pub trait GameConfig: Send + Sync {
     ///
     /// Used with the pcap-capture feature to sniff game traffic
     /// directly from the network interface.
+    ///
+    /// UDP profiles keep the `udp port`/`udp portrange` grammar unchanged
+    /// (their `tcp_ports()` default is `(0, 0)`); a profile that declares a
+    /// TCP port range emits the `tcp` equivalent.
     fn build_capture_filter(&self) -> CaptureFilter {
-        CaptureFilter::new(self.server_ips(), self.ports())
+        let (tcp_lo, tcp_hi) = self.tcp_ports();
+        if tcp_lo == 0 && tcp_hi == 0 {
+            return CaptureFilter::new(self.server_ips(), self.ports());
+        }
+
+        let server_ips = self.server_ips();
+        let port_expr = if tcp_lo == tcp_hi {
+            format!("tcp port {tcp_lo}")
+        } else {
+            format!("tcp portrange {tcp_lo}-{tcp_hi}")
+        };
+        let bpf = if server_ips.is_empty() {
+            port_expr
+        } else {
+            let ip_filter: Vec<String> = server_ips.iter().map(|ip| format!("host {ip}")).collect();
+            format!("{port_expr} and ({})", ip_filter.join(" or "))
+        };
+
+        CaptureFilter {
+            server_ips,
+            port_range: (tcp_lo, tcp_hi),
+            bpf,
+        }
     }
 }
 
@@ -148,6 +251,9 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "minecraft" | "mc" | "minecraftbedrock" | "minecraft-bedrock" => {
             Ok(Box::new(minecraft::MinecraftConfig))
         }
+        "minecraft-java" | "minecraftjava" | "java" => {
+            Ok(Box::new(minecraft::MinecraftJavaConfig))
+        }
         "genshin" | "genshinimpact" | "genshin-impact" => Ok(Box::new(genshin::GenshinConfig)),
         "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
         "roblox" => Ok(Box::new(roblox::RobloxConfig)),
@@ -160,7 +266,7 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
             Ok(Box::new(hunt::HuntConfig))
         }
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt",
+            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, minecraft-java, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt",
             name
         ),
     }
@@ -186,6 +292,7 @@ pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("pubg", "PUBG: Battlegrounds"),
     ("maplestory", "MapleStory"),
     ("minecraft", "Minecraft"),
+    ("minecraft-java", "Minecraft Java Edition"),
     ("genshin", "Genshin Impact"),
     ("rocketleague", "Rocket League"),
     ("roblox", "Roblox"),
@@ -288,7 +395,7 @@ pub(crate) fn process_name_matches(observed: &str, known: &str) -> bool {
 /// Scans running processes and matches against known game process names.
 /// Returns the first detected game, or an error if none found.
 pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
-    let processes = list_running_processes();
+    let processes = list_running_processes_with_cmdline();
 
     if processes.is_empty() {
         tracing::debug!("Process list empty — may need elevated privileges");
@@ -299,20 +406,28 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         );
     }
 
-    // Check each supported game
-    for game in all_games() {
-        for process_name in game.process_names() {
-            if processes
+    // Check each supported game. A profile that gates on a command-line marker
+    // (Minecraft Java Edition, whose `javaw.exe`/`java.exe` image names are
+    // shared by every Java application) is checked before marker-free profiles,
+    // so a shared image name can never shadow a verified, more specific match.
+    let mut games = all_games();
+    games.sort_by_key(|g| std::cmp::Reverse(g.command_line_marker().is_some()));
+
+    for game in games {
+        let marker = game.command_line_marker();
+        let hit = game.process_names().iter().find(|&&process_name| {
+            processes
                 .iter()
-                .any(|p| process_name_matches(p, process_name))
-            {
-                tracing::info!(
-                    "🎮 Auto-detected game: {} (matched process: {})",
-                    game.name(),
-                    process_name
-                );
-                return Ok(game);
-            }
+                .any(|p| process_entry_matches(p, process_name, marker))
+        });
+
+        if let Some(&process_name) = hit {
+            tracing::info!(
+                "🎮 Auto-detected game: {} (matched process: {})",
+                game.name(),
+                process_name
+            );
+            return Ok(game);
         }
     }
 
@@ -340,6 +455,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         "WardogsLauncher-Shipping.exe",
         "Minecraft.Windows.exe",
         "Minecraft.exe",
+        "javaw.exe",
     ];
     tracing::debug!(
         "No matching processes found. Looking for: {}",
@@ -348,8 +464,40 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     anyhow::bail!(
         "No supported game detected. Use --game to specify manually.\n\
-         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, genshin, rocketleague, roblox, wot, zomboid, wardogs"
+         Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, minecraft-java, genshin, rocketleague, roblox, wot, zomboid, wardogs"
     )
+}
+
+/// A running process: its image name plus every command line observed for
+/// that image name (empty when the platform does not expose command lines).
+#[derive(Debug, Clone)]
+struct RunningProcess {
+    name: String,
+    command_lines: Vec<String>,
+}
+
+/// Whether an observed process matches `known_name` and, when the profile
+/// declares a command-line `marker`, whether any of its command lines carries
+/// that marker.
+///
+/// A profile with a marker never matches on the image name alone; that is what
+/// keeps a bare `javaw.exe` (any Java application) from being labeled
+/// Minecraft Java Edition.
+fn process_entry_matches(
+    observed: &RunningProcess,
+    known_name: &str,
+    marker: Option<&str>,
+) -> bool {
+    if !process_name_matches(&observed.name, known_name) {
+        return false;
+    }
+    match marker {
+        Some(marker) => observed
+            .command_lines
+            .iter()
+            .any(|line| line.contains(marker)),
+        None => true,
+    }
 }
 
 /// List names of currently running processes.
@@ -357,6 +505,15 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 /// Uses platform-specific commands to enumerate processes without
 /// adding external crate dependencies (e.g., sysinfo).
 fn list_running_processes() -> Vec<String> {
+    list_running_processes_with_cmdline()
+        .into_iter()
+        .map(|p| p.name)
+        .collect()
+}
+
+/// Enumerate running processes, attaching command lines where the platform
+/// exposes them.
+fn list_running_processes_with_cmdline() -> Vec<RunningProcess> {
     #[cfg(target_os = "windows")]
     {
         list_processes_windows()
@@ -374,10 +531,11 @@ fn list_running_processes() -> Vec<String> {
     }
 }
 
-/// List running processes on Windows using `tasklist`.
+/// List running processes on Windows using `tasklist`, plus command lines from
+/// `Win32_Process` when PowerShell is available.
 #[cfg(target_os = "windows")]
-fn list_processes_windows() -> Vec<String> {
-    match std::process::Command::new("tasklist")
+fn list_processes_windows() -> Vec<RunningProcess> {
+    let names: Vec<String> = match std::process::Command::new("tasklist")
         .args(["/FO", "CSV", "/NH"])
         .output()
     {
@@ -405,14 +563,80 @@ fn list_processes_windows() -> Vec<String> {
         }
         Err(e) => {
             tracing::debug!("Failed to run tasklist: {}", e);
-            vec![]
+            return vec![];
         }
+    };
+
+    let mut command_lines = windows_command_lines();
+    names
+        .into_iter()
+        .map(|name| {
+            let command_lines = command_lines
+                .remove(&name.to_lowercase())
+                .unwrap_or_default();
+            RunningProcess {
+                name,
+                command_lines,
+            }
+        })
+        .collect()
+}
+
+/// Command lines per image name (lower-cased) from `Win32_Process`.
+///
+/// PowerShell is used because `wmic` is absent from current Windows builds.
+/// Any failure is non-fatal: profiles gated on a command-line marker simply
+/// stay undetected rather than matching on an ambiguous image name.
+#[cfg(target_os = "windows")]
+fn windows_command_lines() -> std::collections::HashMap<String, Vec<String>> {
+    use std::collections::HashMap;
+
+    let mut command_lines: HashMap<String, Vec<String>> = HashMap::new();
+    let output = match std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.Name)`t$($_.CommandLine)\" }",
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            tracing::debug!(
+                "PowerShell process query failed with status: {}",
+                output.status
+            );
+            return command_lines;
+        }
+        Err(e) => {
+            tracing::debug!("Failed to run PowerShell for command lines: {}", e);
+            return command_lines;
+        }
+    };
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some((name, command_line)) = line.trim_end().split_once('\t') else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        command_lines
+            .entry(name.to_lowercase())
+            .or_default()
+            .push(command_line.to_string());
     }
+    command_lines
 }
 
 /// List running processes on Linux/macOS using `ps`.
+///
+/// These platforms do not supply command lines here; the only marker-gated
+/// profile (Minecraft Java Edition) is Windows-only, so it fails closed rather
+/// than matching on an ambiguous image name.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn list_processes_unix() -> Vec<String> {
+fn list_processes_unix() -> Vec<RunningProcess> {
     match std::process::Command::new("ps")
         .args(["-e", "-o", "comm="])
         .output()
@@ -434,6 +658,10 @@ fn list_processes_unix() -> Vec<String> {
                     }
                 })
                 .filter(|s| !s.is_empty())
+                .map(|name| RunningProcess {
+                    name,
+                    command_lines: vec![],
+                })
                 .collect()
         }
         Err(e) => {
@@ -506,6 +734,10 @@ mod tests {
         "huntshowdown",
         "hunt-showdown",
         "hunt showdown",
+        // Minecraft Java Edition (TCP)
+        "minecraft-java",
+        "minecraftjava",
+        "java",
     ];
 
     #[test]
@@ -522,12 +754,13 @@ mod tests {
     }
 
     #[test]
-    fn test_all_game_keys_has_twenty_entries() {
+    fn test_all_game_keys_count_matches_registry() {
         assert_eq!(
             all_game_keys().len(),
-            21,
-            "GAME_REGISTRY must stay in sync with the 21 supported games"
+            GAME_REGISTRY.len(),
+            "GAME_REGISTRY must stay in sync with the supported games"
         );
+        assert_eq!(GAME_REGISTRY.len(), 22, "22 supported games");
     }
 
     #[test]
@@ -609,7 +842,8 @@ mod tests {
 
     #[test]
     fn test_detect_unknown_game() {
-        assert!(detect_game("minecraft-java").is_err());
+        assert!(detect_game("minecraft-java-edition").is_err());
+        assert!(detect_game("minecraft-education").is_err());
         // Note: "overwatch" is now a valid alias for Overwatch 2
         assert!(detect_game("warzone").is_err());
         assert!(detect_game("").is_err());
@@ -803,10 +1037,28 @@ mod tests {
         assert!(!minecraft.uses_sdr());
         assert!(minecraft.typical_pps() > 0);
         assert_eq!(minecraft.anti_cheat(), "None (server-side validation)");
-        // Java Edition runs on TCP 25565, which a UDP tunnel cannot carry, so
-        // matching the shared `javaw.exe` image name would mislabel every Java
-        // process on the machine without ever accelerating the game.
+        // Java Edition runs on TCP 25565 and is now carried through the TCP
+        // path rather than the UDP tunnel, so it has its own profile. Bedrock's
+        // name list still omits the shared `javaw.exe` image name.
         assert!(!minecraft.process_names().contains(&"javaw.exe"));
+
+        let java = minecraft::MinecraftJavaConfig;
+        assert_eq!(java.name(), "Minecraft Java Edition");
+        assert!(java.process_names().contains(&"javaw.exe"));
+        assert!(java.process_names().contains(&"java.exe"));
+        assert_eq!(java.ports(), (25565, 25565));
+        assert_eq!(java.tcp_ports(), (25565, 25565));
+        assert_eq!(java.transport(), TransportProto::Tcp);
+        assert_eq!(java.redirect_port(), 25565);
+        assert_eq!(
+            java.command_line_marker(),
+            Some("net.minecraft.client.main.Main")
+        );
+        assert_eq!(java.anti_cheat(), "None (server-side validation)");
+        assert!(!java.uses_sdr());
+        assert_eq!(java.typical_pps(), 20);
+        let (jlo, jhi) = java.packet_size_range();
+        assert!(jlo < jhi, "packet_size_range lo must be < hi");
 
         let wardogs = wardogs::WardogsConfig;
         assert_eq!(wardogs.name(), "WARDOGS");
@@ -876,6 +1128,102 @@ mod tests {
         assert!(af.bpf.contains("udp"));
         assert!(af.bpf.contains("37000"));
         assert_eq!(af.port_range, (37000, 37050));
+    }
+
+    #[test]
+    fn test_tcp_ports_and_transport_default_to_udp() {
+        assert_eq!(cs2::Cs2Config.tcp_ports(), (0, 0));
+        assert_eq!(cs2::Cs2Config.transport(), TransportProto::Udp);
+        assert_eq!(TransportProto::default(), TransportProto::Udp);
+        assert_eq!(
+            cs2::Cs2Config.command_line_marker(),
+            None,
+            "name-only profiles must not require a command-line verification"
+        );
+    }
+
+    #[test]
+    fn test_tcp_game_capture_filter_uses_tcp_bpf() {
+        // Bedrock stays on the UDP grammar, byte-for-byte.
+        let bedrock = minecraft::MinecraftConfig.build_capture_filter();
+        assert!(bedrock.bpf.contains("udp"), "got {}", bedrock.bpf);
+        assert!(bedrock.bpf.contains("19132"), "got {}", bedrock.bpf);
+
+        // Java Edition emits the TCP equivalent on its single port.
+        let java = minecraft::MinecraftJavaConfig.build_capture_filter();
+        assert_eq!(java.bpf, "tcp port 25565");
+        assert_eq!(java.port_range, (25565, 25565));
+    }
+
+    #[test]
+    fn test_tcp_in_tcp_is_the_only_forbidden_transport_pairing() {
+        assert!(TransportProto::Tcp.forbidden_over(Some(TransportProto::Tcp)));
+        assert!(!TransportProto::Tcp.forbidden_over(Some(TransportProto::Udp)));
+        assert!(!TransportProto::Tcp.forbidden_over(None));
+        assert!(!TransportProto::Udp.forbidden_over(Some(TransportProto::Tcp)));
+        assert!(!TransportProto::Udp.forbidden_over(Some(TransportProto::Udp)));
+        assert!(!TransportProto::Udp.forbidden_over(None));
+    }
+
+    #[test]
+    fn test_java_profile_requires_command_line_marker() {
+        let marker = minecraft::MinecraftJavaConfig.command_line_marker();
+
+        let java_app = RunningProcess {
+            name: "javaw.exe".to_string(),
+            command_lines: vec!["\"C:\\jdk\\bin\\javaw.exe\" -jar build-tool.jar".to_string()],
+        };
+        let java_game = RunningProcess {
+            name: "javaw.exe".to_string(),
+            command_lines: vec![
+                "\"C:\\java\\bin\\javaw.exe\" --mainClass net.minecraft.client.main.Main --version 1.21"
+                    .to_string(),
+            ],
+        };
+        let no_command_line = RunningProcess {
+            name: "javaw.exe".to_string(),
+            command_lines: vec![],
+        };
+
+        // A bare javaw.exe (any Java application) must not be labeled Minecraft.
+        assert!(!process_entry_matches(&java_app, "javaw.exe", marker));
+        assert!(!process_entry_matches(
+            &no_command_line,
+            "javaw.exe",
+            marker
+        ));
+        // The launcher's main class matches.
+        assert!(process_entry_matches(&java_game, "javaw.exe", marker));
+
+        // Marker-free profiles (Bedrock) still match on the image name alone.
+        let bedrock = RunningProcess {
+            name: "Minecraft.Windows.exe".to_string(),
+            command_lines: vec![],
+        };
+        assert!(process_entry_matches(
+            &bedrock,
+            "Minecraft.Windows.exe",
+            None
+        ));
+
+        // The profile is registered in all_games() under its CLI display name.
+        let registered = all_games()
+            .into_iter()
+            .find(|g| g.name() == "Minecraft Java Edition")
+            .expect("Minecraft Java Edition must be registered in all_games()");
+        assert_eq!(
+            registered.process_names().to_vec(),
+            vec!["javaw.exe", "java.exe"]
+        );
+        assert_eq!(registered.transport(), TransportProto::Tcp);
+    }
+
+    #[test]
+    fn test_java_cli_aliases_resolve() {
+        for key in ["minecraft-java", "minecraftjava", "java"] {
+            let game = detect_game(key).unwrap_or_else(|e| panic!("detect_game({key:?}): {e}"));
+            assert_eq!(game.name(), "Minecraft Java Edition");
+        }
     }
 
     #[test]

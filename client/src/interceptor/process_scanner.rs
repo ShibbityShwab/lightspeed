@@ -1,16 +1,18 @@
 //! Cross-platform game-process scanner.
 //!
 //! Scans running OS processes, matches them against known game executables, and
-//! returns the active UDP sockets owned by those processes so the interceptor
-//! can lock onto the right server IP:port automatically.
+//! returns the active UDP and TCP sockets owned by those processes so the
+//! interceptor can lock onto the right server IP:port automatically. UDP
+//! sockets map every game; TCP sockets only matter for TCP-terminated games
+//! such as Minecraft Java Edition (port 25565).
 //!
 //! ## Platform strategies
 //!
-//! | Platform | Process list   | Socket-to-PID mapping                        |
-//! |----------|----------------|----------------------------------------------|
-//! | Windows  | `tasklist /FO CSV` | `netstat -anou` (UDP + PID)             |
-//! | Linux    | `/proc/<pid>/comm` | `/proc/<pid>/net/udp` or `ss -unp`      |
-//! | macOS    | `ps -e -o pid,comm=` | `lsof -i UDP -n -P` or `netstat -anuvp` |
+//! | Platform | Process list   | Socket-to-PID mapping                              |
+//! |----------|----------------|----------------------------------------------------|
+//! | Windows  | `tasklist /FO CSV` | `netstat -ano` (UDP + TCP, PID)               |
+//! | Linux    | `/proc/<pid>/comm` | `/proc/<pid>/net/udp`, `ss -unp`, or `ss -tnp`|
+//! | macOS    | `ps -e -o pid,comm=` | `lsof -i UDP -n -P` or `lsof -i TCP -n -P`    |
 //!
 //! The scanner intentionally avoids external crate deps (no `sysinfo`) to keep
 //! the binary small and eliminate supply-chain risk.
@@ -26,7 +28,7 @@ use crate::games::process_name_matches;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Scan the OS for any of the given process names and return matching
-/// [`ProcessInfo`] entries with their live UDP routes.
+/// [`ProcessInfo`] entries with their live UDP and TCP routes.
 ///
 /// `process_names` is a slice of image names to look for (case-insensitive),
 /// e.g. `&["RustClient.exe", "cs2.exe"]`.
@@ -39,11 +41,12 @@ pub fn scan_for_games(process_names: &[&str]) -> Vec<ProcessInfo> {
     }
 
     let udp_table = list_udp_sockets(); // (remote_ip, remote_port, local_port, pid)
+    let tcp_table = list_tcp_sockets(); // (remote_ip, remote_port, local_port, pid)
 
     pid_list
         .into_iter()
         .map(|(pid, name)| {
-            let routes = udp_table
+            let mut routes: Vec<Route> = udp_table
                 .iter()
                 .filter(|(_, _, _, owner_pid)| *owner_pid == pid)
                 .filter_map(|(rem_ip, rem_port, local_port, _)| {
@@ -59,6 +62,21 @@ pub fn scan_for_games(process_names: &[&str]) -> Vec<ProcessInfo> {
                     })
                 })
                 .collect();
+            routes.extend(
+                tcp_table
+                    .iter()
+                    .filter(|(_, _, _, owner_pid)| *owner_pid == pid)
+                    .filter_map(|(rem_ip, rem_port, local_port, _)| {
+                        if !is_public_ipv4(*rem_ip) {
+                            return None;
+                        }
+                        Some(Route {
+                            local: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, *local_port),
+                            remote: SocketAddrV4::new(*rem_ip, *rem_port),
+                            proto: TransportProtocol::Tcp,
+                        })
+                    }),
+            );
 
             ProcessInfo { pid, name, routes }
         })
@@ -589,6 +607,151 @@ fn list_udp_macos_lsof() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
             Err(_) => continue,
         };
         let name_field = parts[8]; // e.g. "192.168.1.5:54321->1.2.3.4:28015"
+        if !name_field.contains("->") {
+            continue; // Listening socket — skip
+        }
+        let mut halves = name_field.splitn(2, "->");
+        let local_str = halves.next()?;
+        let remote_str = halves.next()?;
+
+        let local_port = local_str.rsplit(':').next()?.parse::<u16>().ok()?;
+        let colon = remote_str.rfind(':')?;
+        let remote_ip: Ipv4Addr = remote_str[..colon].parse().ok()?;
+        let remote_port: u16 = remote_str[colon + 1..].parse().ok()?;
+
+        result.push((remote_ip, remote_port, local_port, pid));
+    }
+    Some(result)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Platform-specific: TCP socket table
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Return `(remote_ip, remote_port, local_port, pid)` for all active TCP
+/// sockets that are connected to a non-zero remote address.
+fn list_tcp_sockets() -> Vec<(Ipv4Addr, u16, u16, u32)> {
+    #[cfg(target_os = "windows")]
+    return list_tcp_windows();
+
+    #[cfg(target_os = "linux")]
+    return list_tcp_linux();
+
+    #[cfg(target_os = "macos")]
+    return list_tcp_macos();
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    vec![]
+}
+
+/// Windows: parse `netstat -ano -p TCP`.
+///
+/// Relevant output lines (five columns, ESTABLISHED only):
+/// ```text
+///   TCP    192.168.1.5:54321      104.26.1.50:25565       ESTABLISHED      1234
+/// ```
+/// Columns: `Proto LocalAddress RemoteAddress State PID`
+#[cfg(target_os = "windows")]
+fn list_tcp_windows() -> Vec<(Ipv4Addr, u16, u16, u32)> {
+    let output = match std::process::Command::new("netstat")
+        .args(["-ano", "-p", "TCP"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return vec![],
+    };
+
+    let mut result = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // Expected: ["TCP", "local:port", "remote:port", "STATE", "PID"]
+        if parts.len() < 5 {
+            continue;
+        }
+        if !parts[0].eq_ignore_ascii_case("TCP") {
+            continue;
+        }
+        if !parts[3].eq_ignore_ascii_case("ESTABLISHED") {
+            continue;
+        }
+        let local_str = parts[1];
+        let remote_str = parts[2];
+        // PID is the last field
+        let pid: u32 = match parts.last().and_then(|s| s.parse().ok()) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        if remote_str.contains('*') {
+            continue;
+        }
+
+        let (local_port, remote_ip, remote_port) =
+            match parse_local_remote_windows(local_str, remote_str) {
+                Some(t) => t,
+                None => continue,
+            };
+
+        result.push((remote_ip, remote_port, local_port, pid));
+    }
+    result
+}
+
+/// Linux: parse `ss -tnp -a` (same `users:(...)` anchor as the UDP path).
+///
+/// The `-n` flag keeps addresses numeric and `-p` attaches the owning PID;
+/// like the UDP parser this keys off the `users:(...)` token rather than a
+/// fixed column index, so the optional `State` column does not matter.
+#[cfg(target_os = "linux")]
+fn list_tcp_linux() -> Vec<(Ipv4Addr, u16, u16, u32)> {
+    let output = match std::process::Command::new("ss")
+        .args(["-tnp", "-a"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return vec![],
+    };
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_ss_line)
+        .collect()
+}
+
+/// macOS: parse `lsof -i TCP -n -P`.
+#[cfg(target_os = "macos")]
+fn list_tcp_macos() -> Vec<(Ipv4Addr, u16, u16, u32)> {
+    if let Some(r) = list_tcp_macos_lsof() {
+        return r;
+    }
+    vec![]
+}
+
+#[cfg(target_os = "macos")]
+fn list_tcp_macos_lsof() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
+    // lsof -i TCP -n -P  (no DNS lookup, numeric ports)
+    // Example output line:
+    //   java     1234 user  12u  IPv4  TCP  192.168.1.5:54321->104.26.1.50:25565 (ESTABLISHED)
+    let output = std::process::Command::new("lsof")
+        .args(["-i", "TCP", "-n", "-P"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut result = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        // Columns: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 9 {
+            continue;
+        }
+        let pid: u32 = match parts[1].parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let name_field = parts[8]; // e.g. "192.168.1.5:54321->104.26.1.50:25565"
         if !name_field.contains("->") {
             continue; // Listening socket — skip
         }

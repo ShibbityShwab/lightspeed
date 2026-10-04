@@ -20,6 +20,7 @@ use lightspeed_protocol::{
 use tokio::net::UdpSocket;
 
 use crate::error::TunnelError;
+use crate::games::TransportProto;
 use crate::tunnel::adaptive::{AdaptiveConfig, AdaptiveFec, AdaptiveStats};
 use crate::tunnel::breaker::{Breaker, BreakerConfig, BreakerState, BreakerStats};
 use crate::tunnel::budget::{self, PayloadFit};
@@ -354,6 +355,34 @@ impl UdpRelay {
             Some(TunnelTransport::Udp { socket, .. }) => Some(Arc::clone(socket)),
             _ => None,
         }
+    }
+
+    /// The transport kind currently carrying tunnel traffic, or `None` before
+    /// [`UdpRelay::bind`] / [`UdpRelay::connect_tcp`].
+    pub fn transport_proto(&self) -> Option<TransportProto> {
+        self.transport.as_ref().map(|transport| match transport {
+            TunnelTransport::Udp { .. } => TransportProto::Udp,
+            TunnelTransport::Tcp { .. } => TransportProto::Tcp,
+        })
+    }
+
+    /// Enforce the TCP-in-TCP ban for a game profile before it starts.
+    ///
+    /// A TCP game (Minecraft Java Edition) terminates TCP at both ends of the
+    /// tunnel and carries the stream as sequenced datagrams. Running it over
+    /// [`TunnelTransport::Tcp`] would nest two congestion controllers and two
+    /// retransmission loops, which `docs/tcp-tunnel-design.md` forbids.
+    ///
+    /// Returns an error only for that pairing. A UDP game on the TCP fallback
+    /// and a TCP game on the UDP transport both stay allowed.
+    pub fn ensure_game_transport(&self, game_transport: TransportProto) -> Result<(), TunnelError> {
+        if game_transport.forbidden_over(self.transport_proto()) {
+            return Err(TunnelError::Relay(format!(
+                "TCP-in-TCP is banned: the {game_transport} game profile cannot run over the \
+                 TCP tunnel transport; use the UDP transport for TCP games"
+            )));
+        }
+        Ok(())
     }
 
     /// Get the next sequence number.
@@ -1033,5 +1062,62 @@ mod tests {
             "a single burst must not transition"
         );
         assert!(relay.accepts_new_sessions());
+    }
+
+    #[test]
+    fn tcp_game_profile_is_refused_over_the_tcp_transport() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        rt.block_on(async {
+            // A live loopback listener so `connect_tcp` succeeds; the test never
+            // sends game traffic, it only exercises the transport gate.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind listener");
+            let proxy_addr = match listener.local_addr().expect("listener addr") {
+                std::net::SocketAddr::V4(v4) => v4,
+                std::net::SocketAddr::V6(_) => panic!("expected IPv4"),
+            };
+            tokio::spawn(async move {
+                let _ = listener.accept().await;
+            });
+
+            // Before connecting there is no transport, so no gate can trip.
+            let relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+            assert_eq!(relay.transport_proto(), None);
+            relay
+                .ensure_game_transport(TransportProto::Tcp)
+                .expect("an absent transport cannot be TCP-in-TCP");
+
+            // TCP fallback transport: a TCP game profile must be refused.
+            let mut tcp_relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+            tcp_relay
+                .connect_tcp(proxy_addr)
+                .await
+                .expect("tcp transport");
+            assert_eq!(tcp_relay.transport_proto(), Some(TransportProto::Tcp));
+            let err = tcp_relay
+                .ensure_game_transport(TransportProto::Tcp)
+                .expect_err("TCP-in-TCP must be refused");
+            assert!(
+                matches!(err, TunnelError::Relay(_)),
+                "expected a relay error, got {err:?}"
+            );
+            // A UDP game on the TCP fallback stays allowed.
+            tcp_relay
+                .ensure_game_transport(TransportProto::Udp)
+                .expect("UDP games may use the TCP fallback");
+
+            // UDP transport: a TCP game profile is allowed.
+            let mut udp_relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+            udp_relay.bind().await.expect("bind relay");
+            assert_eq!(udp_relay.transport_proto(), Some(TransportProto::Udp));
+            udp_relay
+                .ensure_game_transport(TransportProto::Tcp)
+                .expect("TCP games run over the UDP transport");
+        });
     }
 }

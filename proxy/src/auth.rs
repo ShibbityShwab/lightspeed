@@ -333,6 +333,7 @@ impl Authenticator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightspeed_protocol::{TunnelHeader, PROTOCOL_VERSION_TCP};
 
     fn ip(last: u8) -> Ipv4Addr {
         Ipv4Addr::new(10, 0, 0, last)
@@ -353,6 +354,38 @@ mod tests {
         assert!(auth.validate(principal, 0, 42, now));
         assert!(!auth.validate(principal, 0, 99, now));
         assert_eq!(auth.client_count(), 1);
+    }
+
+    #[test]
+    fn v5_packet_validates_with_the_same_token_as_v3() {
+        // Per-packet validation is version-agnostic: `validate` reads only the
+        // shared `TunnelHeader.session_token` field, so a v5 packet (the new
+        // TCP wire format) must pass with exactly the same token as a v3
+        // packet. This pins that no version-specific auth branch is needed.
+        let mut auth = Authenticator::new(true);
+        let principal = Ipv4Addr::new(192, 168, 1, 100);
+        let now = t0();
+        let token = 0xDEAD_BEEF;
+        auth.authorize(principal, 0, token, now);
+
+        let src = std::net::SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let dst = std::net::SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 25565);
+
+        // A v3 packet with the token validates.
+        let v3 = TunnelHeader::new(1, 1_000_000, src, dst).with_session_token(token);
+        assert!(auth.validate(principal, 0, v3.session_token, now));
+
+        // The same header with the version nibble changed to 5 (and its wire
+        // bytes decoded back) carries the identical token and also validates.
+        let mut v5_header = TunnelHeader::new(1, 1_000_000, src, dst).with_session_token(token);
+        v5_header.version = PROTOCOL_VERSION_TCP;
+        let decoded = TunnelHeader::decode(&v5_header.encode()).expect("v5 decodes");
+        assert_eq!(decoded.version, PROTOCOL_VERSION_TCP);
+        assert_eq!(decoded.session_token, v3.session_token);
+        assert!(auth.validate(principal, 0, decoded.session_token, now));
+
+        // A different token still fails, version regardless.
+        assert!(!auth.validate(principal, 0, 0xBAD0_0001, now));
     }
 
     #[test]
