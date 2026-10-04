@@ -21,7 +21,7 @@ mod inner {
     use tokio::sync::RwLock;
     use tracing::{debug, info, warn};
 
-    use lightspeed_protocol::control::{disconnect_reason, ControlMessage};
+    use lightspeed_protocol::control::{caps, disconnect_reason, ControlMessage};
     use lightspeed_protocol::telemetry::MAX_TELEMETRY_BODY;
     use lightspeed_protocol::PROTOCOL_VERSION;
 
@@ -608,6 +608,9 @@ mod inner {
                         let geo = state.geo.as_deref()?;
                         geo::destination_region(geo, ip)
                     }),
+                    // This proxy implements the v5 TCP splice; advertise it so
+                    // clients can offer TCP game profiles.
+                    caps: caps::TCP_TUNNEL,
                 })
             }
 

@@ -114,6 +114,7 @@ async fn serve_one_stream(
                 region: "test-region".into(),
                 telemetry_quic: true,
                 dest_region: None,
+                caps: 0,
             }),
             ControlMessage::Disconnect { .. } => None,
             _ => None,
@@ -174,6 +175,7 @@ async fn test_register_and_ping() -> anyhow::Result<()> {
                 region,
                 telemetry_quic,
                 dest_region,
+                ..
             }) => {
                 assert_eq!(session_id, 42);
                 assert_eq!(session_token, 0xAB);
@@ -257,6 +259,7 @@ async fn test_message_roundtrip_encoding() {
             region: "us-east".into(),
             telemetry_quic: true,
             dest_region: Some("US".into()),
+            caps: 0,
         },
         ControlMessage::Disconnect {
             reason: disconnect_reason::SERVER_SHUTDOWN,

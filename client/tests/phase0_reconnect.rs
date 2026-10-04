@@ -120,6 +120,7 @@ async fn serve_connection(
                         region: "loopback".to_string(),
                         telemetry_quic: false,
                         dest_region: None,
+                        caps: 0,
                     };
                     let _ = ack.write_to(&mut send).await;
                     let _ = send.finish();

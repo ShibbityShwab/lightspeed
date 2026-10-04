@@ -61,6 +61,7 @@ async fn spawn_fake_proxy(
                                 region: "test".into(),
                                 telemetry_quic: advertise,
                                 dest_region: None,
+                                caps: 0,
                             };
                             let _ = ack.write_to(&mut send).await;
                             let _ = send.finish();
