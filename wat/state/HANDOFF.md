@@ -67,7 +67,7 @@ $0.00 — Always Free tiers only.
   filter needs the full SHA; short SHAs match zero runs even when green.
 - Scheduled workflows green: Health Monitor, Health Anomaly Monitor, Deploy
   Pages (Oct 3).
-- Tests: GUI 71 pass / 0 fail; client 387 pass with `windivert-redirect`
+- Tests: GUI 74 pass / 0 fail; client 387 pass with `windivert-redirect`
   feature (feature-gated code compiles to nothing without it — always run the
   feature when testing that module); whole workspace green.
 - Gates before every push, in order: `cargo fmt --all --check`, clippy with
@@ -116,22 +116,21 @@ $0.00 — Always Free tiers only.
 
 ## What still needs to happen (ranked)
 
-1. **Rebuild + reinstall the GUI.** The installed Program Files build
-   (`590592448` bytes, Oct 3 17:56) predates `22c9623` and is missing the
-   globe/geo bounds fixes. `cargo build -p lightspeed-gui`, then
-   `scripts/install-gui.ps1` elevated (stop the app from its tray first).
+1. ~~Rebuild + reinstall the GUI.~~ **Done 2026-10-04** - Program Files re-synced to
+   master (bug-fix build verified by size).
 2. **Owner-gated channels:** Chocolatey push (one command in
    `dist/chocolatey/README.md`), winget bootstrap (CLA + PR #445619).
-3. **GUI auto-update.** "Check for updates" only notifies. The installed copy
-   drifts behind master with every merge; an in-place updater or installer ends
-   the recurring reinstall loop. Highest-leverage product improvement.
+3. ~~GUI auto-update.~~ **Done 2026-10-04** (`1d518cb`, WF-051) - receipt-less
+   installs now check via the GitHub releases API and install in place
+   (download, verify sha256 before elevating, elevated tar-based swap, size
+   check, relaunch).
 4. **Mutex-poisoning hardening (deliberate, optional).** ~12
    `engine.lock().unwrap()` in `client-gui/src/app.rs`; one panic while holding
    poisons the lock and every later frame panics. No reachable panic was
-   demonstrated, so it was declined as speculative — but as defence-in-depth it
+   demonstrated, so it was declined as speculative - but as defence-in-depth it
    is a clean, contained change (poison-tolerant wrapper + a test).
 5. **Product calls (owner):** #137 (Minecraft support request), #59 (the
    Windows/Fortnite thread).
 6. **Keep the WAT state current.** Every round ends by updating
-   `wat/state/current-phase.md` and `wat/state/decisions.md` — that is how the
+   `wat/state/current-phase.md` and `wat/state/decisions.md` - that is how the
    next agent resumes without re-deriving context.
