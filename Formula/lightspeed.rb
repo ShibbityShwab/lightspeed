@@ -1,29 +1,29 @@
 class Lightspeed < Formula
   desc "Zero-cost global network optimizer for multiplayer games"
   homepage "https://github.com/ShibbityShwab/lightspeed"
-  version "1.6.14"
+  version "1.7.0"
   # Custom noncommercial license (LightSpeed-NC-1.0), not an SPDX identifier.
   license :cannot_represent
 
   on_macos do
     on_intel do
-      url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.14/lightspeed-client-x86_64-apple-darwin.tar.xz"
-      sha256 "bc3ce7d4e207d76fa926458058b1248719fa29c7b985d4e26b7bc025ae752b91"
+      url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.7.0/lightspeed-client-x86_64-apple-darwin.tar.xz"
+      sha256 "647bb4f50a28ec73f74152a8bac4e5a7fb86a44d1a3ef5165cbd5d6ee6a08f7e"
     end
     on_arm do
-      url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.14/lightspeed-client-aarch64-apple-darwin.tar.xz"
-      sha256 "db93b719c78924013daf829d8f9d2cee6f50020863e5e8db83c653d047464c43"
+      url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.7.0/lightspeed-client-aarch64-apple-darwin.tar.xz"
+      sha256 "6d21d211bc0c27d10b0a1a4258a7a582a8a9b7072a5fb2650bbf8330127aecc6"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.14/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz"
-      sha256 "0f6b094517b2931ab3609dddfeead68f557abd4097c5a4bb303103548eb56c65"
+      url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.7.0/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz"
+      sha256 "785a2b8ee5110af3cee0d5b0fdf5ec5a8aa22e850577f0603544ff29ab11dabf"
     end
     on_arm do
-      url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.6.14/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz"
-      sha256 "ce208dbcd81ee3b624eb8cdd319b8995248f21782d1eca116c45edd76b70cefd"
+      url "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.7.0/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz"
+      sha256 "b506d67ec3b8221b0aff4e42d53d217d247842ee3046c2133e4a1d348bbea14c"
     end
   end
 
