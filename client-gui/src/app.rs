@@ -189,7 +189,6 @@ pub struct LightSpeedApp<P: Platform> {
 
     // ── Sheets and pickers ────────────────────────────────────────────────
     show_settings: bool,
-    show_game_picker: bool,
 
     // ── Boost diagnostics ─────────────────────────────────────────────────
     boost_start: Option<std::time::Instant>,
@@ -308,7 +307,6 @@ impl<P: Platform> LightSpeedApp<P> {
             fonts_setup: false,
             header_icon: None,
             show_settings: false,
-            show_game_picker: false,
             boost_start: None,
             custom_port_input: String::new(),
             update_check: UpdateCheckState::Idle,
@@ -696,11 +694,11 @@ impl<P: Platform> LightSpeedApp<P> {
     /// one-line description of what is happening.
     fn state_rail(&self, ui: &mut egui::Ui, boosting: bool, narrow: bool) {
         let (word, word_color) = if boosting {
-            ("ROUTING", signal)
+            ("OPTIMIZING", signal)
         } else if self.status.connected {
             ("CONNECTED", text_1)
         } else {
-            ("NOT ROUTING", text_1)
+            ("NOT OPTIMIZING", text_1)
         };
 
         let sub_line = if boosting {
@@ -872,7 +870,7 @@ impl<P: Platform> LightSpeedApp<P> {
             self.ledger_row(ui, narrow, "Game server", &game_server);
         }
         let routed = self.routed_value();
-        self.ledger_row(ui, narrow, "Routed", &routed);
+        self.ledger_row(ui, narrow, "Relayed", &routed);
     }
 
     fn ledger_row(&self, ui: &mut egui::Ui, narrow: bool, label: &str, value: &LedgerValue) {
@@ -931,7 +929,7 @@ impl<P: Platform> LightSpeedApp<P> {
         .find(|s| !s.is_empty());
         match server {
             Some(s) => LedgerValue::Data(s.to_string()),
-            None => LedgerValue::Hint("-- start a route to place it"),
+            None => LedgerValue::Hint("-- start optimizing to place it"),
         }
     }
 
@@ -945,7 +943,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 group_digits(self.status.redirect_pkts_out)
             ))
         } else {
-            LedgerValue::Hint("-- start a route to count")
+            LedgerValue::Hint("-- start optimizing to count")
         }
     }
 
@@ -963,15 +961,22 @@ impl<P: Platform> LightSpeedApp<P> {
 
         // Boost server: which relay carries the game traffic.
         field_row(ui, narrow, "Relay", |ui| {
-            self.boost_server_combo(ui);
+            ui.horizontal(|ui| {
+                let manage_w = 64.0;
+                let combo_w = (ui.available_width() - manage_w - S2).max(120.0);
+                ui.scope(|ui| {
+                    ui.set_max_width(combo_w);
+                    self.boost_server_combo(ui);
+                });
+                if ui
+                    .link("Manage")
+                    .on_hover_text("Add, remove, or refresh the relay list.")
+                    .clicked()
+                {
+                    self.show_proxy_manager = true;
+                }
+            });
         });
-        if ui
-            .link("Manage")
-            .on_hover_text("Add, remove, or refresh the relay list.")
-            .clicked()
-        {
-            self.show_proxy_manager = true;
-        }
 
         if !self.proxies.is_empty() {
             if let Some(err) = self.discovery_error.clone() {
@@ -1004,20 +1009,12 @@ impl<P: Platform> LightSpeedApp<P> {
                 );
             });
         } else {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new("No game detected")
-                        .size(BODY)
-                        .color(text_2),
-                );
-                if ui.link("Choose game").clicked() {
-                    self.show_game_picker = true;
-                }
-            });
-        }
-
-        if self.show_game_picker {
-            self.game_picker(ui, narrow);
+            let caption = if self.game_auto {
+                "No game detected - Auto will follow one when you start it"
+            } else {
+                "No game detected"
+            };
+            ui.label(egui::RichText::new(caption).size(BODY).color(text_2));
         }
     }
 
@@ -1137,53 +1134,6 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// The deliberate tile grid the "Choose game" link opens: two-up at full
-    /// width, one-up when narrow, with the current selection scrolled into view
-    /// and a `Done`/`Esc` close.
-    fn game_picker(&mut self, ui: &mut egui::Ui, narrow: bool) {
-        ui.add_space(S2);
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Choose game")
-                    .size(LABEL)
-                    .family(semibold())
-                    .color(text_1),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Done").clicked() {
-                    self.show_game_picker = false;
-                }
-            });
-        });
-
-        let cols = if narrow { 1 } else { 2 };
-        let spacing = S2;
-        let selected_row = self.selected_game_idx / cols;
-        let offset = selected_row as f32 * (CONTROL_H + spacing);
-        egui::ScrollArea::vertical()
-            .max_height(CONTROL_H * 4.0 + spacing * 4.0)
-            .vertical_scroll_offset(offset)
-            .show(ui, |ui| {
-                egui::Grid::new("game_picker_grid")
-                    .num_columns(cols)
-                    .spacing(egui::vec2(spacing, spacing))
-                    .show(ui, |ui| {
-                        let tile_w =
-                            (ui.available_width() - spacing * (cols as f32 - 1.0)) / cols as f32;
-                        for (i, game) in games().iter().enumerate() {
-                            let selected = i == self.selected_game_idx;
-                            if game_tile(ui, game.display, selected, tile_w).clicked() {
-                                self.selected_game_idx = i;
-                                self.game_auto = false;
-                                self.show_game_picker = false;
-                                self.persist_config();
-                            }
-                        }
-                    });
-            });
-        ui.add_space(S2);
-    }
-
     // ── In-window sheets ────────────────────────────────────────────────────
 
     /// `Settings`: Privacy, Maintenance, Advanced, and About, in the same sheet
@@ -1238,6 +1188,8 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S3);
 
         // Maintenance: self-update, the trace log, and the relay link.
+        hairline(ui);
+        ui.add_space(S2);
         section_label(ui, "Maintenance");
         if ui
             .button("Check for updates")
@@ -1268,10 +1220,12 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S3);
 
         // Advanced: manual server override and custom port range.
+        hairline(ui);
+        ui.add_space(S2);
         section_label(ui, "Advanced");
         ui.label(
             egui::RichText::new(
-                "Enter your game server's IP and port to start routing without \
+                "Enter your game server's IP and port to start optimizing without \
                  waiting for auto-detect.",
             )
             .size(BODY)
@@ -1316,7 +1270,7 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
 
         let server_valid = parse_server_addr(&self.server_input).is_some();
-        let manual_button = egui::Button::new("Start routing (manual)").fill(if server_valid {
+        let manual_button = egui::Button::new("Start optimizing (manual)").fill(if server_valid {
             signal_soft
         } else {
             bg_3
@@ -1367,6 +1321,8 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S3);
 
         // About: the brand mark and the project links.
+        hairline(ui);
+        ui.add_space(S2);
         section_label(ui, "About");
         ui.horizontal(|ui| {
             if let Some(mark) = self.header_icon.as_ref() {
@@ -1861,16 +1817,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     });
             });
 
-        // Esc closes the open game picker only when no sheet is in front.
-        if self.show_game_picker
-            && !self.show_settings
-            && !self.show_proxy_manager
-            && !self.show_update_dialog
-            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        {
-            self.show_game_picker = false;
-        }
-
         // ── In-window sheets ─────────────────────────────────────────────
         if self.show_settings {
             self.settings_sheet(&ctx);
@@ -2214,13 +2160,13 @@ fn primary_action(
     has_relay: bool,
 ) -> (&'static str, bool) {
     if boosting {
-        ("STOP ROUTING", true)
+        ("STOP OPTIMIZING", true)
     } else if !is_admin {
-        ("RESTART AS ADMINISTRATOR TO ROUTE", true)
+        ("RESTART AS ADMINISTRATOR TO OPTIMIZE", true)
     } else if connected && has_relay {
-        ("ROUTE MY GAME", true)
+        ("OPTIMIZE MY ROUTE", true)
     } else {
-        ("ROUTE MY GAME", false)
+        ("OPTIMIZE MY ROUTE", false)
     }
 }
 
@@ -2291,36 +2237,6 @@ fn action_button(ui: &mut egui::Ui, text: &str, kind: ActionKind, ready: bool) -
     response
 }
 
-/// A game-picker tile: a fixed-height selectable with the token-tinted
-/// selection state, so the 2-up grid stays rectangular and scrolls exactly.
-fn game_tile(ui: &mut egui::Ui, text: &str, selected: bool, width: f32) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(width, CONTROL_H), egui::Sense::click());
-    let hovered = response.hovered();
-    let (fill, stroke, ink) = if selected {
-        (accent_soft, accent_line, text_1)
-    } else if hovered {
-        (bg_3, border_2, text_1)
-    } else {
-        (bg_2, border_1, text_2)
-    };
-    ui.painter().rect(
-        rect,
-        egui::CornerRadius::same(R_CONTROL),
-        fill,
-        egui::Stroke::new(1.0, stroke),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + S3, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        text,
-        egui::FontId::new(BODY, semibold()),
-        ink,
-    );
-    response
-}
-
 /// One value in the label/value ledger.
 enum LedgerValue {
     /// Genuine data (addresses, ports, counters): JetBrains Mono.
@@ -2379,6 +2295,13 @@ fn field_row(ui: &mut egui::Ui, narrow: bool, label: &str, add_field: impl FnOnc
 }
 
 /// A section heading in the config region or a sheet body.
+/// A 1px `border-1` hairline: the design's only divider between sections.
+fn hairline(ui: &mut egui::Ui) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, border_1);
+}
+
 fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.label(
         egui::RichText::new(text)
@@ -2618,25 +2541,25 @@ mod tests {
         // Boosting: the only destructive control.
         assert_eq!(
             primary_action(true, true, true, true),
-            ("STOP ROUTING", true)
+            ("STOP OPTIMIZING", true)
         );
         assert_eq!(
             primary_action(false, true, false, false),
-            ("STOP ROUTING", true)
+            ("STOP OPTIMIZING", true)
         );
         // Unelevated: the action is elevation.
         assert_eq!(
             primary_action(false, false, true, true),
-            ("RESTART AS ADMINISTRATOR TO ROUTE", true)
+            ("RESTART AS ADMINISTRATOR TO OPTIMIZE", true)
         );
         assert_eq!(
             primary_action(false, false, false, false),
-            ("RESTART AS ADMINISTRATOR TO ROUTE", true)
+            ("RESTART AS ADMINISTRATOR TO OPTIMIZE", true)
         );
         // Elevated and ready: the product's action.
         assert_eq!(
             primary_action(true, false, true, true),
-            ("ROUTE MY GAME", true)
+            ("OPTIMIZE MY ROUTE", true)
         );
     }
 
@@ -2645,12 +2568,12 @@ mod tests {
         // Elevated but disconnected: keep the label, but the slot cannot act.
         assert_eq!(
             primary_action(true, false, false, true),
-            ("ROUTE MY GAME", false)
+            ("OPTIMIZE MY ROUTE", false)
         );
         // Elevated and connected, but no relay is selected.
         assert_eq!(
             primary_action(true, false, true, false),
-            ("ROUTE MY GAME", false)
+            ("OPTIMIZE MY ROUTE", false)
         );
     }
 
