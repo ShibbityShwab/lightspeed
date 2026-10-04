@@ -1,3 +1,42 @@
+# Current Phase: WF-051 The GUI can now update itself in place
+
+**Workflow:** WF-051; WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Agent:** RustDev + QAEngineer
+**Status:** Pushed (`1d518cb`); installed build re-synced to master before the feature landed
+**Last updated:** 2026-10-04
+
+---
+
+## 2026-10-04 - WF-051 receipt-less installs got an in-place updater
+
+**Driving evidence:** "Check for updates" only ever checked, and for the
+Program Files install it did not even do that - axoupdater requires a
+cargo-dist install receipt, the manual copy has none, so the dialog reported
+"update check unavailable". Every merge therefore drifted the installed build
+behind master until someone did an elevated manual copy.
+
+**The fix:** the check falls back to the GitHub releases API when the receipt
+is missing (tag names the version; the GUI zip + `.sha256` pair is resolved
+from the release assets). An "Install update" button runs `self_update.rs`:
+download, verify the sha256 BEFORE anything runs elevated, then an elevated
+PowerShell swap script stops the app, extracts with the built-in `tar`
+(bsdtar reads zips - no zip crate), copies the new exe into the running exe's
+own directory (layout-independent, unlike the MSI), verifies the copy by size,
+refreshes WinDivert files when present, and relaunches. An already-elevated
+GUI updates with no UAC prompt; a medium one approves once.
+
+**Validated against the live v1.6.14 release, not assumed:** the `.sha256`
+file is a 64-hex token + filename, the downloaded archive's sha256 matches it,
+and the zip contains exactly `lightspeed-gui.exe`. Tests pin the checksum
+parser and the swap script's contract (kill, extract, copy, size check,
+relaunch).
+
+Also this phase: the installed Program Files build was re-synced to master
+before the feature (it had been pre-`22c9623`, missing the globe/geo bounds
+fixes). Open work remains the owner-gated channels (Chocolatey API key, winget
+CLA) and the optional mutex-poisoning hardening - see `wat/state/HANDOFF.md`.
+
+---
 # Current Phase: WF-050 GUI polish, admin fixes, and a bug round - handoff to an incoming agent
 
 **Workflow:** WF-050; WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
