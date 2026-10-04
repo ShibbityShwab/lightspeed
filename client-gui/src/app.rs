@@ -1023,7 +1023,7 @@ impl<P: Platform> LightSpeedApp<P> {
                         .color(text_1),
                 );
             });
-        } else {
+        } else if !self.game_manual {
             let caption = if self.game_auto {
                 "No game detected - Auto will follow one when you start it"
             } else {
