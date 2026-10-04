@@ -172,11 +172,22 @@ pub struct LightSpeedApp<P: Platform> {
     health: Option<HealthProbe>,
 }
 
+/// Lock `mutex`, recovering a poisoned lock instead of panicking.
+///
+/// The engine mutex is held across most UI callbacks; one panic while holding
+/// it would otherwise make every later frame panic, killing the whole window
+/// for a single background failure.
+fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 impl<P: Platform> LightSpeedApp<P> {
     pub fn new(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) -> Self {
         let tray = P::new_tray(Arc::clone(&quit));
         tracing::info!("system tray created: {}", tray.is_some());
-        let status = engine.lock().unwrap().snapshot();
+        let status = lock_or_recover(&engine).snapshot();
 
         let auto_detected_game = try_auto_detect_game();
         let selected_game_idx = auto_detected_game
@@ -280,7 +291,7 @@ impl<P: Platform> LightSpeedApp<P> {
         };
         let addr = entry.addr;
         let node_id = entry.node_id.clone();
-        let mut engine = self.engine.lock().unwrap();
+        let mut engine = lock_or_recover(&self.engine);
         engine.connect(addr);
         engine.set_node_id(node_id);
     }
@@ -431,7 +442,7 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     fn shutdown_engine(&mut self) {
-        let mut engine = self.engine.lock().unwrap();
+        let mut engine = lock_or_recover(&self.engine);
         engine.stop_interceptor();
         engine.stop_windivert();
         engine.stop_capture();
@@ -443,13 +454,13 @@ impl<P: Platform> LightSpeedApp<P> {
         if matches!(self.update_check, UpdateCheckState::Checking) {
             return;
         }
-        *self.update_shared.lock().unwrap() = None;
+        *lock_or_recover(&self.update_shared) = None;
         self.update_check = UpdateCheckState::Checking;
         self.show_update_dialog = true;
         let shared = Arc::clone(&self.update_shared);
         std::thread::spawn(move || {
             let result = crate::update::check_for_update_blocking();
-            *shared.lock().unwrap() = Some(result);
+            *lock_or_recover(&shared) = Some(result);
         });
     }
 
@@ -461,7 +472,7 @@ impl<P: Platform> LightSpeedApp<P> {
 
         if let Some(proxy) = self.selected_proxy_addr() {
             let game_key = self.selected_game().key;
-            let mut engine = self.engine.lock().unwrap();
+            let mut engine = lock_or_recover(&self.engine);
             engine.set_telemetry_game(game_key);
             let result = engine.start_interceptor(
                 game_key,
@@ -479,7 +490,7 @@ impl<P: Platform> LightSpeedApp<P> {
 
     /// Stop every active boost backend and clear the start timestamp.
     fn stop_boost(&mut self) {
-        let mut engine = self.engine.lock().unwrap();
+        let mut engine = lock_or_recover(&self.engine);
         engine.stop_interceptor();
         engine.stop_windivert();
         engine.stop_capture();
@@ -508,7 +519,7 @@ impl<P: Platform> LightSpeedApp<P> {
             if self.status.interceptor_active {
                 self.stop_boost();
             }
-            self.engine.lock().unwrap().disconnect();
+            lock_or_recover(&self.engine).disconnect();
         } else if self.selected_entry().is_some() {
             self.connect_selected();
         }
@@ -779,7 +790,7 @@ impl<P: Platform> LightSpeedApp<P> {
                                 let entry = self.selected_game();
                                 let local_port = server_addr.port().max(entry.default_port);
                                 if let Some(proxy) = self.selected_proxy_addr() {
-                                    self.engine.lock().unwrap().start_redirect(
+                                    lock_or_recover(&self.engine).start_redirect(
                                         server_addr,
                                         local_port,
                                         self.fec_enabled,
@@ -943,20 +954,20 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             match action {
                 TrayAction::Connect => self.connect_selected(),
                 TrayAction::Disconnect => {
-                    self.engine.lock().unwrap().disconnect();
+                    lock_or_recover(&self.engine).disconnect();
                 }
             }
         }
 
         // Refresh engine snapshot and background relay state.
-        self.status = self.engine.lock().unwrap().snapshot();
+        self.status = lock_or_recover(&self.engine).snapshot();
         self.poll_discovery();
         self.poll_relay_race();
         self.poll_health();
 
         // Collect a finished update check from the background thread.
         if matches!(self.update_check, UpdateCheckState::Checking) {
-            if let Some(result) = self.update_shared.lock().unwrap().take() {
+            if let Some(result) = lock_or_recover(&self.update_shared).take() {
                 self.update_check = UpdateCheckState::Done(result);
                 self.show_update_dialog = true;
             }
@@ -966,7 +977,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // installer has taken over and this process is about to be killed;
         // failure returns to the dialog so the user can retry.
         if matches!(self.update_check, UpdateCheckState::Installing) {
-            if let Some(Err(err)) = self.install_shared.lock().unwrap().take() {
+            if let Some(Err(err)) = lock_or_recover(&self.install_shared).take() {
                 self.update_check = UpdateCheckState::Done(Err(format!("install failed: {err}")));
             }
         }
@@ -1401,13 +1412,13 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                 {
                                     if let Ok(status) = result {
                                         if let Some(asset) = status.installer.clone() {
-                                            *self.install_shared.lock().unwrap() = None;
+                                            *lock_or_recover(&self.install_shared) = None;
                                             self.update_check = UpdateCheckState::Installing;
                                             let shared = Arc::clone(&self.install_shared);
                                             std::thread::spawn(move || {
                                                 let outcome =
                                                     crate::self_update::install_blocking(asset);
-                                                *shared.lock().unwrap() = Some(outcome);
+                                                *lock_or_recover(&shared) = Some(outcome);
                                             });
                                         }
                                     }
@@ -1901,6 +1912,18 @@ fn about(ui: &mut egui::Ui, mark: Option<&egui::TextureHandle>) {
 
 #[cfg(test)]
 mod tests {
+    use super::lock_or_recover;
+
+    #[test]
+    fn a_poisoned_mutex_is_recovered_not_panicked() {
+        let mutex = std::sync::Mutex::new(String::from("state"));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("simulated panic while holding the mutex");
+        }));
+        assert!(result.is_err(), "the panic must poison the mutex");
+        assert_eq!(*lock_or_recover(&mutex), "state");
+    }
     use super::{
         apply_discovery_result, close_decision, games, should_apply_race, should_race,
         CloseDecision,

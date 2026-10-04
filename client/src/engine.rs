@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
 use tokio::net::UdpSocket;
@@ -163,6 +163,22 @@ pub struct EngineStatus {
 
 type Shared = Arc<RwLock<EngineStatus>>;
 
+/// Lock `lock` for reading, recovering a poisoned lock instead of panicking.
+///
+/// Poisoning is permanent: one panic while a write guard is held would
+/// otherwise make every later `read` panic too - and the GUI takes
+/// [`LightSpeedEngine::snapshot`] once per frame, so a single background panic
+/// would crash the whole window rather than just the task that panicked.
+pub(crate) fn read_or_recover<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// [`read_or_recover`] for write guards.
+pub(crate) fn write_or_recover<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Control-plane port used for relay registration when no override is set.
 ///
 /// Matches the client config default (`proxy.quic_port`); self-hosted relays on
@@ -252,7 +268,7 @@ impl LightSpeedEngine {
         let (tx, rx) = oneshot::channel();
         self.shutdown_tx = Some(tx);
         let generation = {
-            let mut s = self.status.write().unwrap();
+            let mut s = write_or_recover(&self.status);
             s.keepalive_generation = s.keepalive_generation.wrapping_add(1);
             s.connected = true;
             s.proxy_addr = proxy_addr.to_string();
@@ -409,7 +425,7 @@ impl LightSpeedEngine {
         self.redirect_shutdown_tx = Some(tx);
 
         {
-            let mut s = self.status.write().unwrap();
+            let mut s = write_or_recover(&self.status);
             s.redirect_active = true;
             s.redirect_game = game_name;
             s.redirect_server = game_server.to_string();
@@ -517,7 +533,7 @@ impl LightSpeedEngine {
         self.capture_shutdown_tx = Some(tx);
 
         {
-            let mut s = self.status.write().unwrap();
+            let mut s = write_or_recover(&self.status);
             s.capture_active = true;
             s.capture_game = game_box.name().to_string();
             s.capture_interface = iface_desc;
@@ -644,7 +660,7 @@ impl LightSpeedEngine {
         self.windivert_done_rx = Some(done_rx);
 
         {
-            let mut s = self.status.write().unwrap();
+            let mut s = write_or_recover(&self.status);
             s.windivert_active = true;
             s.windivert_server = server_addr.to_string();
             s.windivert_intercepted = 0;
@@ -734,7 +750,7 @@ impl LightSpeedEngine {
         self.windivert_done_rx = Some(done_rx);
 
         {
-            let mut s = self.status.write().unwrap();
+            let mut s = write_or_recover(&self.status);
             s.windivert_active = true;
             s.windivert_server = format!("Auto-detecting (ports {}-{})…", port_lo, port_hi);
             s.windivert_intercepted = 0;
@@ -876,7 +892,7 @@ impl LightSpeedEngine {
             .map_err(|e| e.to_string())?;
 
         {
-            let mut s = self.status.write().unwrap();
+            let mut s = write_or_recover(&self.status);
             s.interceptor_active = true;
             s.interceptor_platform = platform;
             s.interceptor_server = initial_server;
@@ -934,7 +950,7 @@ impl LightSpeedEngine {
 
     /// Snapshot of current engine state, including live stats from all modes.
     pub fn snapshot(&self) -> EngineStatus {
-        let mut snap = self.status.read().unwrap().clone();
+        let mut snap = read_or_recover(&self.status).clone();
 
         // Overlay live redirect counters from atomics (avoids lock contention).
         if let Some(ref rs) = self.redirect_stats {
@@ -1167,6 +1183,20 @@ mod tests {
             .build()
             .expect("tokio runtime for engine test");
         LightSpeedEngine::new(rt.handle().clone())
+    }
+
+    #[test]
+    fn a_poisoned_status_lock_does_not_brick_snapshots() {
+        let engine = test_engine();
+
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = engine.status.write().unwrap();
+            panic!("simulated panic while holding the status write lock");
+        }));
+        assert!(poisoned.is_err(), "the panic must poison the lock");
+
+        let snapshot = engine.snapshot();
+        assert!(!snapshot.connected, "a fresh engine reports disconnected");
     }
 
     #[test]
