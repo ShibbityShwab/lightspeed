@@ -179,6 +179,8 @@ pub struct LightSpeedApp<P: Platform> {
     /// Follow the auto-detected game instead of a pinned pick - the Game
     /// field's "Auto (detect)", on by default like the relay's auto-select.
     game_auto: bool,
+    /// The Game field's "Manual / Custom…" mode: relay an explicit server.
+    game_manual: bool,
     share_latency_stats: bool,
     auto_detected_game: Option<String>,
 
@@ -247,7 +249,8 @@ impl<P: Platform> LightSpeedApp<P> {
 
         // The Game field mirrors the relay's: "Auto (detect)" is the default,
         // and a pinned key from the config wins over detection.
-        let game_auto = saved.game_auto;
+        let game_manual = saved.manual_mode;
+        let game_auto = saved.game_auto && !game_manual;
         let selected_game_idx = if game_auto {
             auto_detected_game
                 .as_deref()
@@ -298,6 +301,7 @@ impl<P: Platform> LightSpeedApp<P> {
             config_error: None,
             selected_game_idx,
             game_auto,
+            game_manual,
             server_input: String::new(),
             fec_enabled: false,
             capture_available: P::is_capture_available(),
@@ -377,7 +381,8 @@ impl<P: Platform> LightSpeedApp<P> {
             auto_select: self.auto_select,
             share_latency_stats: self.share_latency_stats,
             game_auto: self.game_auto,
-            selected_game: if self.game_auto {
+            manual_mode: self.game_manual,
+            selected_game: if self.game_auto || self.game_manual {
                 None
             } else {
                 Some(self.selected_game().key.to_string())
@@ -962,8 +967,10 @@ impl<P: Platform> LightSpeedApp<P> {
         // Boost server: which relay carries the game traffic.
         field_row(ui, narrow, "Relay", |ui| {
             ui.horizontal(|ui| {
+                let disconnect_w = if self.status.connected { 78.0 } else { 0.0 };
                 let manage_w = 64.0;
-                let combo_w = (ui.available_width() - manage_w - S2).max(120.0);
+                let combo_w =
+                    (ui.available_width() - manage_w - disconnect_w - S2 * 2.0).max(100.0);
                 ui.scope(|ui| {
                     ui.set_max_width(combo_w);
                     self.boost_server_combo(ui);
@@ -974,6 +981,14 @@ impl<P: Platform> LightSpeedApp<P> {
                     .clicked()
                 {
                     self.show_proxy_manager = true;
+                }
+                if self.status.connected
+                    && ui
+                        .link("Disconnect")
+                        .on_hover_text("Drop the control-plane link to the current relay")
+                        .clicked()
+                {
+                    self.toggle_relay_connection();
                 }
             });
         });
@@ -1015,6 +1030,9 @@ impl<P: Platform> LightSpeedApp<P> {
                 "No game detected"
             };
             ui.label(egui::RichText::new(caption).size(BODY).color(text_2));
+        }
+        if self.game_manual {
+            self.manual_section(ui);
         }
     }
 
@@ -1094,7 +1112,9 @@ impl<P: Platform> LightSpeedApp<P> {
     /// The one-step game selector.
     fn game_combo(&mut self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let label = if self.game_auto {
+        let label = if self.game_manual {
+            "Manual (custom server)".to_string()
+        } else if self.game_auto {
             match &self.auto_detected_game {
                 Some(name) => format!("Auto — {name}"),
                 None => "Auto (detect)".to_string(),
@@ -1112,117 +1132,43 @@ impl<P: Platform> LightSpeedApp<P> {
                     .clicked()
                 {
                     self.game_auto = true;
+                    self.game_manual = false;
                     changed = true;
                 }
                 ui.separator();
                 for (i, entry) in games().iter().enumerate() {
                     if ui
                         .selectable_label(
-                            !self.game_auto && i == self.selected_game_idx,
+                            !self.game_auto && !self.game_manual && i == self.selected_game_idx,
                             entry.display,
                         )
                         .clicked()
                     {
                         self.selected_game_idx = i;
                         self.game_auto = false;
+                        self.game_manual = false;
                         changed = true;
                     }
                 }
-            });
-        if changed {
-            self.persist_config();
-        }
-    }
-
-    // ── In-window sheets ────────────────────────────────────────────────────
-
-    /// `Settings`: Privacy, Maintenance, Advanced, and About, in the same sheet
-    /// pattern as the Proxy Manager.
-    fn settings_sheet(&mut self, ctx: &egui::Context) {
-        let (max_w, max_h) = sheet_bounds(ctx);
-        let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("settings_sheet"))
-            .backdrop_color(scrim)
-            .frame(sheet_frame())
-            .show(ctx, |ui| {
-                ui.set_max_width(max_w);
-                sheet_title(ui, "Settings");
-                egui::ScrollArea::vertical()
-                    .max_height(max_h)
-                    .show(ui, |ui| {
-                        self.settings_body(ui);
-                    });
-                ui.add_space(S2);
-                if ui.button("Close").clicked() {
-                    close = true;
+                ui.separator();
+                if ui
+                    .selectable_label(self.game_manual, "Manual / Custom…")
+                    .clicked()
+                {
+                    self.game_manual = true;
+                    self.game_auto = false;
+                    changed = true;
                 }
             });
-        if response.should_close() || close {
-            self.show_settings = false;
+        if changed {
+            self.persist_config();
         }
     }
 
-    fn settings_body(&mut self, ui: &mut egui::Ui) {
-        // Privacy: anonymous latency telemetry.
-        section_label(ui, "Privacy");
-        let changed = ui
-            .checkbox(
-                &mut self.share_latency_stats,
-                egui::RichText::new("Share anonymous latency stats")
-                    .size(LABEL)
-                    .family(semibold()),
-            )
-            .on_hover_text(
-                "Send anonymous aggregate RTT, jitter, and FEC stats to your \
-                 relay so the community can see real latency improvements. No \
-                 IP address, identifier, or packet content is ever sent.",
-            )
-            .changed();
-        if changed {
-            self.persist_config();
-            self.engine
-                .lock()
-                .unwrap()
-                .set_telemetry_enabled(self.share_latency_stats);
-        }
-        ui.add_space(S3);
-
-        // Maintenance: self-update, the trace log, and the relay link.
-        hairline(ui);
+    /// The "Manual / Custom…" flow: relay an explicit server straight from the
+    /// Game field, for titles the auto-detect does not know.
+    fn manual_section(&mut self, ui: &mut egui::Ui) {
         ui.add_space(S2);
-        section_label(ui, "Maintenance");
-        if ui
-            .button("Check for updates")
-            .on_hover_text("Check whether a newer version of LightSpeed is available.")
-            .clicked()
-        {
-            self.start_update_check();
-        }
-        ui.add_space(S1);
-        if ui.button("Open log file").clicked() {
-            self.reveal_log_file();
-        }
-        ui.add_space(S1);
-        let connected = self.status.connected;
-        let label = if connected {
-            "Disconnect from relay"
-        } else {
-            "Connect to relay"
-        };
-        let hint = if connected {
-            "Drop the control-plane link to the current relay"
-        } else {
-            "Reconnect to the selected relay"
-        };
-        if ui.button(label).on_hover_text(hint).clicked() {
-            self.toggle_relay_connection();
-        }
-        ui.add_space(S3);
-
-        // Advanced: manual server override and custom port range.
-        hairline(ui);
-        ui.add_space(S2);
-        section_label(ui, "Advanced");
         ui.label(
             egui::RichText::new(
                 "Enter your game server's IP and port to start optimizing without \
@@ -1304,8 +1250,78 @@ impl<P: Platform> LightSpeedApp<P> {
                 .unwrap_or(self.selected_game().default_port),
         );
         ui.label(egui::RichText::new(instruction).size(BODY).color(text_2));
-
         ui.add_space(S2);
+    }
+
+    // ── In-window sheets ────────────────────────────────────────────────────
+
+    /// `Settings`: Privacy, Maintenance, Advanced, and About, in the same sheet
+    /// pattern as the Proxy Manager.
+    fn settings_sheet(&mut self, ctx: &egui::Context) {
+        let (max_w, max_h) = sheet_bounds(ctx);
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("settings_sheet"))
+            .backdrop_color(scrim)
+            .frame(sheet_frame())
+            .show(ctx, |ui| {
+                ui.set_max_width(max_w);
+                sheet_title(ui, "Settings");
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .show(ui, |ui| {
+                        self.settings_body(ui);
+                    });
+                ui.add_space(S2);
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        if response.should_close() || close {
+            self.show_settings = false;
+        }
+    }
+
+    fn settings_body(&mut self, ui: &mut egui::Ui) {
+        // Privacy: anonymous latency telemetry.
+        section_label(ui, "Privacy");
+        let changed = ui
+            .checkbox(
+                &mut self.share_latency_stats,
+                egui::RichText::new("Share anonymous latency stats")
+                    .size(LABEL)
+                    .family(semibold()),
+            )
+            .on_hover_text(
+                "Send anonymous aggregate RTT, jitter, and FEC stats to your \
+                 relay so the community can see real latency improvements. No \
+                 IP address, identifier, or packet content is ever sent.",
+            )
+            .changed();
+        if changed {
+            self.persist_config();
+            self.engine
+                .lock()
+                .unwrap()
+                .set_telemetry_enabled(self.share_latency_stats);
+        }
+        ui.add_space(S3);
+
+        // Maintenance: self-update, the trace log, and the relay link.
+        hairline(ui);
+        ui.add_space(S2);
+        section_label(ui, "Maintenance");
+        if ui
+            .button("Check for updates")
+            .on_hover_text("Check whether a newer version of LightSpeed is available.")
+            .clicked()
+        {
+            self.start_update_check();
+        }
+        ui.add_space(S1);
+        if ui.button("Open log file").clicked() {
+            self.reveal_log_file();
+        }
+        ui.add_space(S1);
         ui.label(
             egui::RichText::new(format!(
                 "Capture backend (pcap mode): {}",
@@ -1318,6 +1334,8 @@ impl<P: Platform> LightSpeedApp<P> {
             .size(CAPTION)
             .color(text_3),
         );
+        ui.add_space(S3);
+
         ui.add_space(S3);
 
         // About: the brand mark and the project links.

@@ -66,6 +66,8 @@ pub struct GuiConfig {
     pub game_auto: bool,
     /// The pinned game registry key (used when `game_auto` is false).
     pub selected_game: Option<String>,
+    /// The Game field's "Manual / Custom…" mode: relay an explicit server.
+    pub manual_mode: bool,
 }
 
 impl Default for GuiConfig {
@@ -77,6 +79,7 @@ impl Default for GuiConfig {
             share_latency_stats: true,
             game_auto: true,
             selected_game: None,
+            manual_mode: false,
         }
     }
 }
@@ -115,6 +118,11 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         .get("share_latency_stats")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let manual_mode = table
+        .get("manual_mode")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
     let game_auto = table
         .get("game_auto")
         .and_then(Value::as_bool)
@@ -160,6 +168,7 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         share_latency_stats,
         game_auto,
         selected_game,
+        manual_mode,
     })
 }
 
@@ -171,6 +180,7 @@ pub fn render(config: &GuiConfig) -> String {
     }
     table.insert("auto_select".into(), Value::Boolean(config.auto_select));
     table.insert("game_auto".into(), Value::Boolean(config.game_auto));
+    table.insert("manual_mode".into(), Value::Boolean(config.manual_mode));
     if let Some(game) = &config.selected_game {
         table.insert("selected_game".into(), Value::String(game.clone()));
     }
@@ -249,6 +259,7 @@ mod tests {
             share_latency_stats: true,
             game_auto: true,
             selected_game: None,
+            manual_mode: false,
         }
     }
 
