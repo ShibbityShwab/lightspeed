@@ -98,6 +98,9 @@ enum UpdateCheckState {
     Checking,
     /// The check finished; the dialog shows this result.
     Done(Result<UpdateStatus, String>),
+    /// A background thread is downloading, verifying, and handing off the
+    /// install; the dialog shows a spinner until the process exits or fails.
+    Installing,
 }
 
 /// Lifecycle of the background registry discovery thread.
@@ -161,6 +164,7 @@ pub struct LightSpeedApp<P: Platform> {
     update_check: UpdateCheckState,
     show_update_dialog: bool,
     update_shared: Arc<Mutex<Option<Result<UpdateStatus, String>>>>,
+    install_shared: Arc<Mutex<Option<crate::self_update::InstallOutcome>>>,
 
     proxies: Vec<ProxyEntry>,
     discovery: DiscoveryState,
@@ -231,6 +235,7 @@ impl<P: Platform> LightSpeedApp<P> {
             update_check: UpdateCheckState::Idle,
             show_update_dialog: false,
             update_shared: Arc::new(Mutex::new(None)),
+            install_shared: Arc::new(Mutex::new(None)),
             proxies,
             discovery: DiscoveryState::InFlight(discovery::spawn_discovery()),
             discovery_error: None,
@@ -957,6 +962,15 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             }
         }
 
+        // Collect a finished install attempt. Success means the elevated
+        // installer has taken over and this process is about to be killed;
+        // failure returns to the dialog so the user can retry.
+        if matches!(self.update_check, UpdateCheckState::Installing) {
+            if let Some(Err(err)) = self.install_shared.lock().unwrap().take() {
+                self.update_check = UpdateCheckState::Done(Err(format!("install failed: {err}")));
+            }
+        }
+
         // ── Tray icon state machine ───────────────────────────────────────
         {
             let has_error = self.status.windivert_error.is_some()
@@ -1376,6 +1390,38 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             ui.label(format!("Latest version: {latest}"));
                             ui.add_space(4.0);
                             ui.label(crate::update::update_status_line(result));
+
+                            let installable = matches!(result, Ok(status) if status.update_available && status.installer.is_some());
+                            if installable {
+                                ui.add_space(4.0);
+                                if ui
+                                    .button("Install update")
+                                    .on_hover_text("Download, verify, and install the latest version")
+                                    .clicked()
+                                {
+                                    if let Ok(status) = result {
+                                        if let Some(asset) = status.installer.clone() {
+                                            *self.install_shared.lock().unwrap() = None;
+                                            self.update_check = UpdateCheckState::Installing;
+                                            let shared = Arc::clone(&self.install_shared);
+                                            std::thread::spawn(move || {
+                                                let outcome =
+                                                    crate::self_update::install_blocking(asset);
+                                                *shared.lock().unwrap() = Some(outcome);
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        UpdateCheckState::Installing => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label("Installing update…");
+                            });
+                            ui.label(
+                                "Approve the UAC prompt if one appears; LightSpeed will restart.",
+                            );
                         }
                         UpdateCheckState::Idle => {}
                     }

@@ -38,6 +38,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # the tree's single reqwest instance can actually talk TLS: schannel on Windows,
 # Security.framework on macOS, OpenSSL on Linux.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json"] }
+# sha256 verification of the downloaded update archive (self_update.rs).
+sha2 = "0.10"
 webbrowser = "1"
 
 # Build-time icon embedding: build.rs renders the brand PNG into a multi-size

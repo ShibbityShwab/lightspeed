@@ -1,8 +1,13 @@
 //! Self-update availability check.
 //!
-//! Wraps `axoupdater` (cargo-dist's updater) to consult the install receipt and
-//! the GitHub releases API. This module only CHECKS; it never invokes
+//! Wraps `axoupdater` (cargo-dist's updater) to consult the install receipt
+//! and the GitHub releases API. This module only CHECKS; it never invokes
 //! `AxoUpdater::run`, so no installer is ever downloaded or executed.
+//!
+//! When there is no install receipt - the manual Program Files copy and MSI
+//! installs have none - the check falls back to the GitHub releases API
+//! directly. The resolved zip + sha256 asset pair is handed to
+//! [`crate::self_update`], which performs the actual install.
 
 use axoupdater::{AxoUpdater, Version};
 
@@ -14,6 +19,22 @@ pub struct UpdateStatus {
     pub latest: Option<String>,
     /// Whether `latest` is newer than `current`.
     pub update_available: bool,
+    /// The zip + sha256 asset pair for the in-place installer, resolved when
+    /// the check ran through the GitHub fallback and an update is available.
+    /// `None` on the shell-installer path, on non-Windows, or when the release
+    /// has no matching assets.
+    pub installer: Option<ReleaseAsset>,
+}
+
+/// Download coordinates for the in-place (receipt-less) installer.
+#[derive(Clone)]
+pub struct ReleaseAsset {
+    /// The release tag, e.g. `v1.6.14`.
+    pub tag: String,
+    /// Browser download URL of the GUI zip.
+    pub zip_url: String,
+    /// Browser download URL of the zip's `.sha256` file.
+    pub sha256_url: String,
 }
 
 /// Returns whether `latest` is newer than `current`.
@@ -22,7 +43,6 @@ pub struct UpdateStatus {
 /// compared as unsigned integers; non-numeric or empty segments are treated as
 /// `0`, so malformed input never panics and never compares greater than a
 /// well-formed version sharing the same numeric prefix.
-#[allow(dead_code)] // Test-only: the runtime path delegates version comparison to axoupdater.
 pub fn compare_versions(current: &str, latest: &str) -> bool {
     let current_segments = numeric_segments(strip_v_prefix(current));
     let latest_segments = numeric_segments(strip_v_prefix(latest));
@@ -83,17 +103,12 @@ pub fn check_for_update_blocking() -> Result<UpdateStatus, String> {
 async fn check_for_update(current: String) -> Result<UpdateStatus, String> {
     let mut updater = AxoUpdater::new_for("lightspeed-gui");
 
-    // A missing receipt means a non-shell (e.g. Windows MSI) install, which the
-    // standalone updater cannot service. Surface a friendly message rather than
-    // letting `is_update_needed` fail later with a raw configuration error.
-    if let Err(err) = updater.load_receipt() {
-        tracing::debug!("no install receipt; update check unavailable: {err}");
-        return Err(
-            "update check unavailable: not installed via the shell installer \
-             (e.g. Windows MSI); update through a package manager or reinstall \
-             from the latest release"
-                .to_string(),
-        );
+    // A missing receipt means a non-shell install (the manual Program Files
+    // copy, or an MSI). The shell updater cannot service those, so fall back
+    // to the GitHub releases API: the tag names the version, and the zip +
+    // sha256 asset pair feeds the in-place installer.
+    if updater.load_receipt().is_err() {
+        return github_check(current).await;
     }
 
     let current_parsed =
@@ -121,7 +136,94 @@ async fn check_for_update(current: String) -> Result<UpdateStatus, String> {
         current,
         latest,
         update_available,
+        installer: None,
     })
+}
+
+/// GitHub API fallback for receipt-less installs. Pure HTTP + JSON; never
+/// touches axoupdater's install machinery.
+async fn github_check(current: String) -> Result<UpdateStatus, String> {
+    const RELEASES_LATEST: &str =
+        "https://api.github.com/repos/ShibbityShwab/lightspeed/releases/latest";
+
+    let client = http_client()?;
+    let response = client
+        .get(RELEASES_LATEST)
+        .send()
+        .await
+        .map_err(|e| format!("release lookup failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("release lookup failed: HTTP {status}"));
+    }
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("release lookup failed: {e}"))?;
+    let tag = json
+        .get("tag_name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "release lookup failed: no tag_name".to_string())?
+        .to_string();
+
+    let update_available = compare_versions(&current, &tag);
+    let installer = if update_available {
+        zip_assets(&json, &tag)
+    } else {
+        None
+    };
+
+    Ok(UpdateStatus {
+        current,
+        latest: Some(tag),
+        update_available,
+        installer,
+    })
+}
+
+/// Resolve the Windows GUI zip and its `.sha256` sibling from a release
+/// payload. Non-Windows builds never offer the in-place install.
+#[cfg(windows)]
+fn zip_assets(json: &serde_json::Value, tag: &str) -> Option<ReleaseAsset> {
+    const GUI_ZIP: &str = "lightspeed-gui-x86_64-pc-windows-msvc.zip";
+
+    let assets = json.get("assets")?.as_array()?;
+    let find = |name: &str| -> Option<String> {
+        assets.iter().find_map(|asset| {
+            if asset.get("name")?.as_str()? == name {
+                asset
+                    .get("browser_download_url")?
+                    .as_str()
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        })
+    };
+    Some(ReleaseAsset {
+        tag: tag.to_string(),
+        zip_url: find(GUI_ZIP)?,
+        sha256_url: find(&format!("{GUI_ZIP}.sha256"))?,
+    })
+}
+
+#[cfg(not(windows))]
+fn zip_assets(_json: &serde_json::Value, _tag: &str) -> Option<ReleaseAsset> {
+    None
+}
+
+/// Shared reqwest client for the check and the installer: a User-Agent (the
+/// GitHub API rejects UA-less requests) and a generous timeout for the ~11 MB
+/// asset on a slow link.
+pub(crate) fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(format!(
+            "lightspeed-gui-updater/{}",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 /// Maps the outcome of an update check to a single user-facing status line.
@@ -147,6 +249,7 @@ mod tests {
             current: "1.0.0".into(),
             latest: Some("1.1.0".into()),
             update_available: true,
+            installer: None,
         };
         assert_eq!(update_status_line(&Ok(status)), "Update available");
     }
@@ -157,6 +260,7 @@ mod tests {
             current: "1.0.0".into(),
             latest: None,
             update_available: false,
+            installer: None,
         };
         assert_eq!(update_status_line(&Ok(status)), "You're up to date");
     }
