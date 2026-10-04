@@ -1,3 +1,54 @@
+# Current Phase: WF-053 The seven-improvement wave landed
+
+**Workflow:** WF-053; WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Agent:** RustDev + NetEng + DevOps + QAEngineer (mass-ulw DAG runs, lead-verified)
+**Status:** Pushed (`3ed7332`, `12a7801`, `1df1c8b`, `6ffc0c0`); all seven items landed, every phase verified by the lead's own gate runs
+**Last updated:** 2026-10-04
+
+---
+
+## 2026-10-04 - WF-053 all seven ranked improvements, executed as four DAG phases
+
+Executed via the mass-ulw skill: one run per phase, each phase defined from
+the settled previous run's verified outputs, every completion treated as a
+claim until the lead re-ran the gates itself.
+
+1. **Continuous relay re-evaluation** - auto-select re-races every 10 minutes
+   mid-session and switches only past a 20 ms hysteresis (race_watch).
+2. **Adaptive FEC on by default** - config default flips, the GUI engine's
+   production path honors it (`enabled: fec`), breaker thresholds re-tuned
+   against the pacer.
+3. **Telemetry->ML->published loop** - network-stats.sh aggregates saved-app
+   samples from relay /metrics; the site hero renders the real median
+   (61.6 ms from 1304 paired samples at verification) with a generator
+   self-check; model-fit gauges produced end to end (client telemetry ->
+   relay gauges) for the Model fit / Trained on hero.
+4. **Fleet re-balancing** - NON_FATAL load_skew detector (window-delta share
+   + per-hour floor), firing/no-fire self-tests (115-check suite green), and
+   docs/fleet-load-rebalancing.md.
+5. **Multipath stays opt-in** - recorded in wat/state/decisions.md with
+   rationale and alternatives.
+6. **Session-token rotation** - RotateRequest/Ack wire messages, client-side
+   atomic rotation with previous-token transition slots and a bounded
+   exchange, proxy demotion reuse; pinned test fails against the old code
+   (mutation-verified).
+7. **TCP tunnel (Minecraft Java)** - protocol v5 + TcpExtHeader + capability
+   bit, client capture/terminator/TCP checksum, 5-tuple relay splice,
+   minecraft-java profile (25565) with the TCP-in-TCP ban; the 42-byte
+   byte-pinned roundtrip test mutation-fails against the old code
+   (`UnsupportedVersion { version: 5, expected: 3 }`), design in
+   docs/tcp-tunnel-design.md.
+
+Also fixed en route: proxy never_loop (12a7801), the GUI RegisterAck caps
+integration break, and the GAME_IDS registry gap for minecraft-java.
+
+**Final gates (lead-run on the final worktree):** fmt 0; check 0 on protocol,
+client (windivert), proxy, gui; clippy 0 on all four; protocol 73+6, client
+405, proxy 139 + integration, gui 79; health-anomaly self-suite 115 checks;
+network-stats self-check exits 0. Worktree clean; $0 infrastructure
+maintained.
+
+---
 # Current Phase: WF-052 Chocolatey pushed; locks no longer brick the window
 
 **Workflow:** WF-052; WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
