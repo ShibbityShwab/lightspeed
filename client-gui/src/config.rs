@@ -61,6 +61,11 @@ pub struct GuiConfig {
     /// When true, share anonymous aggregate latency statistics with the relay.
     /// On by default; no IP address, identifier, or packet content is sent.
     pub share_latency_stats: bool,
+    /// When true, the GUI follows the auto-detected game instead of a pinned
+    /// pick - the Game field's "Auto (detect)" entry, on like the relay's.
+    pub game_auto: bool,
+    /// The pinned game registry key (used when `game_auto` is false).
+    pub selected_game: Option<String>,
 }
 
 impl Default for GuiConfig {
@@ -70,6 +75,8 @@ impl Default for GuiConfig {
             proxies: Vec::new(),
             auto_select: true,
             share_latency_stats: true,
+            game_auto: true,
+            selected_game: None,
         }
     }
 }
@@ -108,6 +115,14 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         .get("share_latency_stats")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let game_auto = table
+        .get("game_auto")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let selected_game = table
+        .get("selected_game")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     let mut proxies = Vec::new();
     if let Some(items) = table.get("proxies").and_then(Value::as_array) {
@@ -143,6 +158,8 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         proxies,
         auto_select,
         share_latency_stats,
+        game_auto,
+        selected_game,
     })
 }
 
@@ -153,6 +170,10 @@ pub fn render(config: &GuiConfig) -> String {
         table.insert("selected".into(), Value::String(selected.clone()));
     }
     table.insert("auto_select".into(), Value::Boolean(config.auto_select));
+    table.insert("game_auto".into(), Value::Boolean(config.game_auto));
+    if let Some(game) = &config.selected_game {
+        table.insert("selected_game".into(), Value::String(game.clone()));
+    }
     table.insert(
         "share_latency_stats".into(),
         Value::Boolean(config.share_latency_stats),
@@ -226,6 +247,8 @@ mod tests {
             ],
             auto_select: true,
             share_latency_stats: true,
+            game_auto: true,
+            selected_game: None,
         }
     }
 

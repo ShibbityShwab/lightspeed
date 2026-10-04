@@ -171,6 +171,14 @@ pub struct LightSpeedApp<P: Platform> {
     selected_game_idx: usize,
     server_input: String,
     fec_enabled: bool,
+    /// Whether the Npcap capture driver is installed, sampled ONCE at startup.
+    /// It used to be queried per frame (`sc query npcap` - a blocking process
+    /// spawn on the UI thread, and a console-window storm before
+    /// `silent_command`), which made opening Settings hang the window.
+    capture_available: bool,
+    /// Follow the auto-detected game instead of a pinned pick - the Game
+    /// field's "Auto (detect)", on by default like the relay's auto-select.
+    game_auto: bool,
     share_latency_stats: bool,
     auto_detected_game: Option<String>,
 
@@ -233,18 +241,30 @@ impl<P: Platform> LightSpeedApp<P> {
         let status = lock_or_recover(&engine).snapshot();
 
         let auto_detected_game = try_auto_detect_game();
-        let selected_game_idx = auto_detected_game
-            .as_deref()
-            .and_then(|name| {
-                games()
-                    .iter()
-                    .position(|entry| entry.key.eq_ignore_ascii_case(name))
-            })
-            .unwrap_or(0);
 
         let is_admin = P::is_admin();
 
         let saved = config::load(&paths::config_file());
+
+        // The Game field mirrors the relay's: "Auto (detect)" is the default,
+        // and a pinned key from the config wins over detection.
+        let game_auto = saved.game_auto;
+        let selected_game_idx = if game_auto {
+            auto_detected_game
+                .as_deref()
+                .and_then(|name| {
+                    games()
+                        .iter()
+                        .position(|entry| entry.key.eq_ignore_ascii_case(name))
+                })
+                .unwrap_or(0)
+        } else {
+            saved
+                .selected_game
+                .as_deref()
+                .and_then(|key| games().iter().position(|entry| entry.key == key))
+                .unwrap_or(0)
+        };
         let mut proxies = saved.proxies.clone();
         for entry in env_proxies() {
             if !proxies.iter().any(|existing| existing.addr == entry.addr) {
@@ -278,8 +298,10 @@ impl<P: Platform> LightSpeedApp<P> {
             manager_addr_input: String::new(),
             config_error: None,
             selected_game_idx,
+            game_auto,
             server_input: String::new(),
             fec_enabled: false,
+            capture_available: P::is_capture_available(),
             share_latency_stats,
             auto_detected_game,
             is_admin,
@@ -356,6 +378,12 @@ impl<P: Platform> LightSpeedApp<P> {
             proxies: self.proxies.clone(),
             auto_select: self.auto_select,
             share_latency_stats: self.share_latency_stats,
+            game_auto: self.game_auto,
+            selected_game: if self.game_auto {
+                None
+            } else {
+                Some(self.selected_game().key.to_string())
+            },
         };
         if let Err(e) = config::save(&paths::config_file(), &config) {
             tracing::warn!("Could not persist GUI config: {e}");
@@ -668,11 +696,11 @@ impl<P: Platform> LightSpeedApp<P> {
     /// one-line description of what is happening.
     fn state_rail(&self, ui: &mut egui::Ui, boosting: bool, narrow: bool) {
         let (word, word_color) = if boosting {
-            ("BOOSTING", signal)
+            ("ROUTING", signal)
         } else if self.status.connected {
             ("CONNECTED", text_1)
         } else {
-            ("NOT BOOSTED", text_1)
+            ("NOT ROUTING", text_1)
         };
 
         let sub_line = if boosting {
@@ -688,7 +716,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 None => "Relay ready, pick your game".to_string(),
             }
         } else {
-            "No boost server".to_string()
+            "No relay yet".to_string()
         };
 
         // The live round trip. On a narrow window it moves to its own row:
@@ -843,8 +871,8 @@ impl<P: Platform> LightSpeedApp<P> {
             let game_server = self.game_server_value();
             self.ledger_row(ui, narrow, "Game server", &game_server);
         }
-        let relayed = self.relayed_value();
-        self.ledger_row(ui, narrow, "Relayed", &relayed);
+        let routed = self.routed_value();
+        self.ledger_row(ui, narrow, "Routed", &routed);
     }
 
     fn ledger_row(&self, ui: &mut egui::Ui, narrow: bool, label: &str, value: &LedgerValue) {
@@ -903,30 +931,21 @@ impl<P: Platform> LightSpeedApp<P> {
         .find(|s| !s.is_empty());
         match server {
             Some(s) => LedgerValue::Data(s.to_string()),
-            None => LedgerValue::Hint("-- start a boost to place it"),
+            None => LedgerValue::Hint("-- start a route to place it"),
         }
     }
 
-    fn relayed_value(&self) -> LedgerValue {
-        if !self.status.connected {
-            return LedgerValue::Hint("--");
-        }
-        if self
-            .selected_entry()
-            .and_then(|e| e.node_id.as_ref())
-            .is_none()
-        {
-            // A custom proxy without a registry node has no `/health` counters.
-            return LedgerValue::Hint("--");
-        }
-        match self.health.as_ref().and_then(|p| p.result.as_ref()) {
-            Some(Ok(health)) => LedgerValue::Data(format!(
-                "{} pkts  {} sessions",
-                group_digits(health.packets_relayed),
-                group_digits(health.sessions_created)
-            )),
-            Some(Err(_)) => LedgerValue::Hint("unavailable"),
-            None => LedgerValue::Hint("checking…"),
+    /// Packets THIS session has pushed through the relay. The relay's own
+    /// `/health` counters are lifetime totals for the whole fleet node, not our
+    /// session, so they must never be shown as if they were ours.
+    fn routed_value(&self) -> LedgerValue {
+        if self.status.redirect_active {
+            LedgerValue::Data(format!(
+                "{} pkts  this session",
+                group_digits(self.status.redirect_pkts_out)
+            ))
+        } else {
+            LedgerValue::Hint("-- start a route to count")
         }
     }
 
@@ -943,7 +962,7 @@ impl<P: Platform> LightSpeedApp<P> {
         }
 
         // Boost server: which relay carries the game traffic.
-        field_row(ui, narrow, "Boost server", |ui| {
+        field_row(ui, narrow, "Relay", |ui| {
             self.boost_server_combo(ui);
         });
         if ui
@@ -996,30 +1015,6 @@ impl<P: Platform> LightSpeedApp<P> {
                 }
             });
         }
-
-        ui.add_space(S1);
-        ui.checkbox(
-            &mut self.fec_enabled,
-            egui::RichText::new("Reliability Shield")
-                .size(LABEL)
-                .family(semibold()),
-        )
-        .on_hover_ui(|ui| {
-            ui.label(
-                "Reliability Shield sends extra repair data so the Boost Server \
-                 can reconstruct any packets your connection drops - no more \
-                 rubber-banding from packet loss. Uses ~25% extra upload bandwidth.",
-            );
-            ui.hyperlink_to(
-                "Learn more about Reliability Shield",
-                "https://github.com/ShibbityShwab/lightspeed/wiki/Reliability-Shield",
-            );
-        });
-        ui.label(
-            egui::RichText::new("Repairs lost packets · +25% upload")
-                .size(CAPTION)
-                .color(text_3),
-        );
 
         if self.show_game_picker {
             self.game_picker(ui, narrow);
@@ -1102,14 +1097,44 @@ impl<P: Platform> LightSpeedApp<P> {
     /// The one-step game selector.
     fn game_combo(&mut self, ui: &mut egui::Ui) {
         let width = ui.available_width();
+        let label = if self.game_auto {
+            match &self.auto_detected_game {
+                Some(name) => format!("Auto — {name}"),
+                None => "Auto (detect)".to_string(),
+            }
+        } else {
+            self.selected_game().display.to_string()
+        };
+        let mut changed = false;
         egui::ComboBox::from_id_salt("game_select")
-            .selected_text(self.selected_game().display)
+            .selected_text(label)
             .width(width)
             .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(self.game_auto, "Auto (detect)")
+                    .clicked()
+                {
+                    self.game_auto = true;
+                    changed = true;
+                }
+                ui.separator();
                 for (i, entry) in games().iter().enumerate() {
-                    ui.selectable_value(&mut self.selected_game_idx, i, entry.display);
+                    if ui
+                        .selectable_label(
+                            !self.game_auto && i == self.selected_game_idx,
+                            entry.display,
+                        )
+                        .clicked()
+                    {
+                        self.selected_game_idx = i;
+                        self.game_auto = false;
+                        changed = true;
+                    }
                 }
             });
+        if changed {
+            self.persist_config();
+        }
     }
 
     /// The deliberate tile grid the "Choose game" link opens: two-up at full
@@ -1149,7 +1174,9 @@ impl<P: Platform> LightSpeedApp<P> {
                             let selected = i == self.selected_game_idx;
                             if game_tile(ui, game.display, selected, tile_w).clicked() {
                                 self.selected_game_idx = i;
+                                self.game_auto = false;
                                 self.show_game_picker = false;
+                                self.persist_config();
                             }
                         }
                     });
@@ -1244,7 +1271,7 @@ impl<P: Platform> LightSpeedApp<P> {
         section_label(ui, "Advanced");
         ui.label(
             egui::RichText::new(
-                "Enter your game server's IP and port to start boosting without \
+                "Enter your game server's IP and port to start routing without \
                  waiting for auto-detect.",
             )
             .size(BODY)
@@ -1289,7 +1316,7 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
 
         let server_valid = parse_server_addr(&self.server_input).is_some();
-        let manual_button = egui::Button::new("Start boost (manual)").fill(if server_valid {
+        let manual_button = egui::Button::new("Start routing (manual)").fill(if server_valid {
             signal_soft
         } else {
             bg_3
@@ -1328,7 +1355,7 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.label(
             egui::RichText::new(format!(
                 "Capture backend (pcap mode): {}",
-                if P::is_capture_available() {
+                if self.capture_available {
                     "available"
                 } else {
                     "not detected"
@@ -2187,13 +2214,13 @@ fn primary_action(
     has_relay: bool,
 ) -> (&'static str, bool) {
     if boosting {
-        ("STOP BOOST", true)
+        ("STOP ROUTING", true)
     } else if !is_admin {
-        ("RESTART AS ADMINISTRATOR TO BOOST", true)
+        ("RESTART AS ADMINISTRATOR TO ROUTE", true)
     } else if connected && has_relay {
-        ("BOOST MY GAME", true)
+        ("ROUTE MY GAME", true)
     } else {
-        ("BOOST MY GAME", false)
+        ("ROUTE MY GAME", false)
     }
 }
 
@@ -2589,24 +2616,27 @@ mod tests {
     #[test]
     fn primary_action_names_the_three_states() {
         // Boosting: the only destructive control.
-        assert_eq!(primary_action(true, true, true, true), ("STOP BOOST", true));
+        assert_eq!(
+            primary_action(true, true, true, true),
+            ("STOP ROUTING", true)
+        );
         assert_eq!(
             primary_action(false, true, false, false),
-            ("STOP BOOST", true)
+            ("STOP ROUTING", true)
         );
         // Unelevated: the action is elevation.
         assert_eq!(
             primary_action(false, false, true, true),
-            ("RESTART AS ADMINISTRATOR TO BOOST", true)
+            ("RESTART AS ADMINISTRATOR TO ROUTE", true)
         );
         assert_eq!(
             primary_action(false, false, false, false),
-            ("RESTART AS ADMINISTRATOR TO BOOST", true)
+            ("RESTART AS ADMINISTRATOR TO ROUTE", true)
         );
         // Elevated and ready: the product's action.
         assert_eq!(
             primary_action(true, false, true, true),
-            ("BOOST MY GAME", true)
+            ("ROUTE MY GAME", true)
         );
     }
 
@@ -2615,12 +2645,12 @@ mod tests {
         // Elevated but disconnected: keep the label, but the slot cannot act.
         assert_eq!(
             primary_action(true, false, false, true),
-            ("BOOST MY GAME", false)
+            ("ROUTE MY GAME", false)
         );
         // Elevated and connected, but no relay is selected.
         assert_eq!(
             primary_action(true, false, true, false),
-            ("BOOST MY GAME", false)
+            ("ROUTE MY GAME", false)
         );
     }
 
