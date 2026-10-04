@@ -16,6 +16,7 @@ use crate::geo;
 use crate::globe;
 use crate::paths;
 use crate::platform::{Platform, QuitFlag, TrayAction, TrayHandle};
+use crate::race_watch::decide_switch;
 use crate::update::UpdateStatus;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
@@ -31,6 +32,14 @@ pub enum TrayState {
     Error,
 }
 use lightspeed_client::{EngineStatus, LightSpeedEngine};
+
+/// While auto-select is on and the tunnel is up, how often to re-run the relay
+/// race so a better - or newly faster - relay can take over.
+const RELAY_RECHECK_INTERVAL: Duration = Duration::from_secs(600);
+
+/// Hysteresis for a connected re-race: a winner must beat the relay in use by
+/// this many milliseconds before the GUI switches away from it.
+const RELAY_SWITCH_MARGIN_MS: u64 = 20;
 
 // ── Proxy nodes ────────────────────────────────────────────────────────────
 
@@ -120,6 +129,13 @@ struct HealthProbe {
     result: Option<Result<RelayHealth, String>>,
 }
 
+/// A re-race winner whose latency is being re-measured on a background thread
+/// before the GUI decides whether it clears the switch hysteresis.
+struct WinnerProbe {
+    addr: SocketAddrV4,
+    rtt_rx: Receiver<Option<u64>>,
+}
+
 /// Platform-generic egui application for the LightSpeed status window.
 ///
 /// Type parameter `P` selects the platform backend (Windows tray or Linux
@@ -136,6 +152,11 @@ pub struct LightSpeedApp<P: Platform> {
     selected_proxy_idx: usize,
     auto_select: bool,
     relay_race: Option<Receiver<Option<SocketAddrV4>>>,
+    /// When the periodic auto-select re-race last started; cleared while
+    /// disconnected or while auto-select is off so the clock restarts cleanly.
+    last_race: Option<std::time::Instant>,
+    /// A pending timed re-measurement of a connected re-race winner.
+    winner_probe: Option<WinnerProbe>,
     show_proxy_manager: bool,
     manager_label_input: String,
     manager_addr_input: String,
@@ -183,6 +204,22 @@ fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Time one `/health` round trip to `addr` on a background thread, matching the
+/// race's own per-relay measurement, so a connected re-race can compare the
+/// winner against the relay in use. Yields `None` when the relay does not
+/// answer.
+fn spawn_rtt_probe(addr: SocketAddrV4) -> Receiver<Option<u64>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let rtt = discovery::probe_blocking(addr)
+            .ok()
+            .map(|_| started.elapsed().as_millis() as u64);
+        let _ = tx.send(rtt);
+    });
+    rx
+}
+
 impl<P: Platform> LightSpeedApp<P> {
     pub fn new(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) -> Self {
         let tray = P::new_tray(Arc::clone(&quit));
@@ -228,6 +265,8 @@ impl<P: Platform> LightSpeedApp<P> {
             selected_proxy_idx,
             auto_select,
             relay_race: None,
+            last_race: None,
+            winner_probe: None,
             show_proxy_manager: false,
             manager_label_input: String::new(),
             manager_addr_input: String::new(),
@@ -332,6 +371,9 @@ impl<P: Platform> LightSpeedApp<P> {
 
     /// Apply a finished latency race: connect to the winner when auto-select is
     /// still on and the user has not connected or pinned a relay meanwhile.
+    ///
+    /// A race that finishes while already connected does not switch blindly;
+    /// `consider_connected_winner` applies the hysteresis margin instead.
     fn poll_relay_race(&mut self) {
         let winner = match &self.relay_race {
             Some(rx) => match rx.try_recv() {
@@ -342,6 +384,11 @@ impl<P: Platform> LightSpeedApp<P> {
             None => return,
         };
         self.relay_race = None;
+
+        if self.auto_select && self.status.connected {
+            self.consider_connected_winner(winner);
+            return;
+        }
 
         if !should_apply_race(self.auto_select, self.status.connected) {
             return;
@@ -357,6 +404,89 @@ impl<P: Platform> LightSpeedApp<P> {
             }
             self.connect_selected();
             self.persist_config();
+        }
+    }
+
+    /// A re-race finished while connected: time the winner before letting it
+    /// displace the relay in use, so a marginal win cannot flap the tunnel.
+    fn consider_connected_winner(&mut self, winner: Option<SocketAddrV4>) {
+        let Some(addr) = winner else {
+            tracing::warn!("Relay latency race found no reachable relay");
+            return;
+        };
+        if Some(addr) == self.selected_proxy_addr() {
+            return; // Already on the fastest relay.
+        }
+        self.winner_probe = Some(WinnerProbe {
+            addr,
+            rtt_rx: spawn_rtt_probe(addr),
+        });
+    }
+
+    /// Collect a finished winner re-measurement and switch only when the winner
+    /// clears the hysteresis margin over the current relay's measured RTT.
+    fn poll_winner_probe(&mut self) {
+        let rtt = match self.winner_probe.as_ref() {
+            Some(probe) => match probe.rtt_rx.try_recv() {
+                Ok(rtt) => rtt,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+            },
+            None => return,
+        };
+        let Some(WinnerProbe { addr, .. }) = self.winner_probe.take() else {
+            return;
+        };
+
+        // The user may have pinned a relay or the tunnel may have dropped while
+        // the probe ran; either way the race may no longer steer the pick.
+        if !self.auto_select || !self.status.connected {
+            return;
+        }
+        let Some(winner_rtt_ms) = rtt else {
+            tracing::warn!("Re-race winner {addr} did not answer the follow-up probe");
+            return;
+        };
+        let current_rtt_ms = if self.status.latest_rtt_ms > 0.0 {
+            self.status.latest_rtt_ms.round() as u64
+        } else {
+            0
+        };
+        let switch = current_rtt_ms == 0
+            || decide_switch(current_rtt_ms, winner_rtt_ms, RELAY_SWITCH_MARGIN_MS);
+        if !switch {
+            tracing::info!(
+                "Keeping the current relay: re-race winner {addr} at {winner_rtt_ms} ms does \
+                 not beat {current_rtt_ms} ms by {RELAY_SWITCH_MARGIN_MS} ms"
+            );
+            return;
+        }
+        if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
+            tracing::info!("Auto-switched to the faster relay {addr} ({winner_rtt_ms} ms)");
+            self.selected_proxy_idx = idx;
+            self.connect_selected();
+            self.persist_config();
+        }
+    }
+
+    /// While auto-select is on and the tunnel is up, re-run the relay race
+    /// roughly every `RELAY_RECHECK_INTERVAL`, so a better relay can take over.
+    fn maybe_rerace(&mut self) {
+        if !self.auto_select || !self.status.connected {
+            // Restart the clock the next time we are connected under auto-select.
+            self.last_race = None;
+            return;
+        }
+        if self.relay_race.is_some() || self.winner_probe.is_some() {
+            return;
+        }
+        match self.last_race {
+            Some(at) if at.elapsed() >= RELAY_RECHECK_INTERVAL => {
+                self.last_race = Some(std::time::Instant::now());
+                self.start_relay_race();
+            }
+            Some(_) => {}
+            None => self.last_race = Some(std::time::Instant::now()),
         }
     }
 
@@ -963,6 +1093,8 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         self.status = lock_or_recover(&self.engine).snapshot();
         self.poll_discovery();
         self.poll_relay_race();
+        self.poll_winner_probe();
+        self.maybe_rerace();
         self.poll_health();
 
         // Collect a finished update check from the background thread.
@@ -1453,7 +1585,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             || self.status.interceptor_active
         {
             Duration::from_millis(500) // 2 Hz for live counters
-        } else if matches!(self.discovery, DiscoveryState::InFlight(_)) || self.relay_race.is_some()
+        } else if matches!(self.discovery, DiscoveryState::InFlight(_))
+            || self.relay_race.is_some()
+            || self.winner_probe.is_some()
         {
             Duration::from_millis(200) // keep the spinner and latency race moving
         } else {

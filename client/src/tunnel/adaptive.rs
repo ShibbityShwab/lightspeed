@@ -24,8 +24,10 @@
 //! the effective block size is never smaller than `ceil(100 / max_overhead_pct)`,
 //! so the controller can never add more parity than the configured ceiling.
 //!
-//! The whole feature is opt-in. [`AdaptiveConfig::default`] has `enabled: false`
-//! and callers that never enable it keep the previous fixed behaviour.
+//! The client turns the feature on by default: the tunnel policy enables it and
+//! threads it through every data plane. [`AdaptiveConfig::default`] itself stays
+//! `enabled: false`, so callers that build a controller directly keep the
+//! previous fixed behaviour until they opt in.
 //!
 //! ## Counter observability
 //!
@@ -77,11 +79,15 @@ impl Default for AdaptiveConfig {
         Self {
             enabled: false,
             k_size: DEFAULT_K,
-            loss_on_pct: 1.0,
+            // Parity turns on at the pacer's 2.0% actionable-loss breaker; below that loss is noise.
+            loss_on_pct: 2.0,
+            // One-eighth of the on-threshold absorbs transient dips without flapping parity off.
             loss_off_pct: 0.25,
             recover_samples: 8,
-            dup_loss_on_pct: 2.0,
-            dup_jitter_on_ms: 10.0,
+            // Duplication copies the whole packet, so require 2x the pacer breaker (4.0%).
+            dup_loss_on_pct: 4.0,
+            // Parity cannot fix jitter; 15 ms is where reordering starts to hurt gameplay.
+            dup_jitter_on_ms: 15.0,
             dup_recover_samples: 8,
             max_overhead_pct: DEFAULT_MAX_OVERHEAD_PCT,
         }
@@ -502,7 +508,10 @@ mod tests {
     #[test]
     fn default_is_disabled_and_reports_no_overhead() {
         let cfg = AdaptiveConfig::default();
-        assert!(!cfg.enabled, "the adaptive mode must be opt-in");
+        assert!(
+            !cfg.enabled,
+            "the controller default stays inert for fixed-FEC callers"
+        );
         assert_eq!(cfg.k_size, DEFAULT_K);
         assert_eq!(cfg.max_overhead_pct, DEFAULT_MAX_OVERHEAD_PCT);
         assert_eq!(cfg.effective_k(), DEFAULT_K);

@@ -237,6 +237,8 @@ impl TelemetryCollector {
             .unwrap_or_else(PoisonError::into_inner)
             .snapshot_observations();
 
+        let model_fit = crate::ml::collector::latest_model_fit();
+
         Some(TelemetryReport {
             game_id,
             client_country: country.to_string(),
@@ -252,6 +254,9 @@ impl TelemetryCollector {
             direct_app_p50_ms,
             saved_app_pairs,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
+            model_r_squared: model_fit.r_squared,
+            model_mae_ms: model_fit.mae_ms,
+            model_trained_at: model_fit.trained_at,
             route_legs,
         })
     }

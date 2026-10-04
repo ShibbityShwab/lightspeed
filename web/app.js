@@ -415,6 +415,8 @@
   function renderNetworkStats(stats) {
     if (!stats || typeof stats !== 'object') return;
 
+    renderHeroMetrics(stats.saved, stats.model);
+
     var relayCount = typeof stats.relay_count === 'number' ? stats.relay_count : null;
     var healthyCount = typeof stats.healthy_count === 'number' ? stats.healthy_count : null;
 
@@ -446,6 +448,43 @@
     if (healthBar && relayCount && healthyCount !== null) {
       var pct = Math.max(0, Math.min(100, Math.round((healthyCount / relayCount) * 100)));
       healthBar.style.width = pct + '%';
+    }
+  }
+
+  // Hero headline metrics: the fleet-wide "RTT saved" figure and the trained
+  // route model's self-reported fit. Each stays "collecting" until the
+  // generated snapshot carries a real value (the relay only exports telemetry
+  // cells past its k>=3 anonymity floor, so presence means the threshold was met).
+  function renderHeroMetrics(saved, model) {
+    var heroSaved = document.getElementById('hero-ping-saved');
+    if (heroSaved) {
+      heroSaved.textContent = (saved && typeof saved.rtt_saved_ms === 'number' && isFinite(saved.rtt_saved_ms))
+        ? formatMs(saved.rtt_saved_ms)
+        : 'collecting';
+    }
+
+    var heroNegative = document.getElementById('hero-negative-share');
+    if (heroNegative) {
+      heroNegative.textContent = (saved && typeof saved.negative_share === 'number' && isFinite(saved.negative_share))
+        ? formatPercent(saved.negative_share * 100)
+        : 'collecting';
+    }
+
+    var heroModel = document.getElementById('hero-model-fit');
+    if (heroModel) {
+      var hasFit = model && typeof model.r_squared === 'number' && isFinite(model.r_squared) &&
+        typeof model.mae_ms === 'number' && isFinite(model.mae_ms);
+      heroModel.textContent = hasFit
+        ? 'R² ' + model.r_squared.toFixed(2) + ' · MAE ' + formatMs(model.mae_ms)
+        : 'collecting';
+    }
+
+    var heroTrained = document.getElementById('hero-model-trained');
+    if (heroTrained) {
+      var trainedOn = model && typeof model.trained_on === 'number' && isFinite(model.trained_on) && model.trained_on > 0;
+      heroTrained.textContent = trainedOn
+        ? new Date(model.trained_on * 1000).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+        : 'collecting';
     }
   }
 
@@ -556,10 +595,10 @@
         fecRatio = (interval.fec_recoveries / (interval.fec_recoveries + interval.fec_losses)) * 100;
       }
 
-      var directAppMs = null;
-      if (finiteNumber(interval.direct_app_ms_sum) && finiteNumber(interval.direct_app_ms_count) &&
-          interval.direct_app_ms_count > 0) {
-        directAppMs = interval.direct_app_ms_sum / interval.direct_app_ms_count;
+      var savedAppMs = null;
+      if (finiteNumber(interval.saved_app_ms_sum) && finiteNumber(interval.saved_app_ms_count) &&
+          interval.saved_app_ms_count > 0) {
+        savedAppMs = interval.saved_app_ms_sum / interval.saved_app_ms_count;
       }
 
       var icmpSavedMs = null;
@@ -568,7 +607,7 @@
         icmpSavedMs = interval.saved_ms_sum / interval.saved_ms_count;
       }
 
-      var savedMs = finiteNumber(directAppMs) ? directAppMs : icmpSavedMs;
+      var savedMs = finiteNumber(savedAppMs) ? savedAppMs : icmpSavedMs;
 
       var negativeShare = null;
       if (finiteNumber(interval.saved_app_ms_count) && interval.saved_app_ms_count > 0 &&
@@ -578,7 +617,7 @@
 
       return {
         t: snap.t, relays: deltas, latencyMs: latencyMs, fecRatio: fecRatio,
-        savedMs: savedMs, savedIsDirectApp: finiteNumber(directAppMs),
+        savedMs: savedMs, savedIsDirectApp: finiteNumber(savedAppMs),
         negativeShare: negativeShare
       };
     });
@@ -1013,18 +1052,6 @@
     renderSourceQuality(snapshots);
 
     var window = windowSummary(model);
-
-    var heroSaved = document.getElementById('hero-ping-saved');
-    if (heroSaved) {
-      var savedSeries = model.points.map(function (point) { return point.savedMs; }).filter(finiteNumber);
-      heroSaved.textContent = savedSeries.length ? formatMs(savedSeries[savedSeries.length - 1]) : 'collecting';
-    }
-
-    var heroNegative = document.getElementById('hero-negative-share');
-    if (heroNegative) {
-      var negativeSeries = model.points.map(function (point) { return point.negativeShare; }).filter(finiteNumber);
-      heroNegative.textContent = negativeSeries.length ? formatPercent(negativeSeries[negativeSeries.length - 1]) : 'collecting';
-    }
 
     if (model.relayIds.length) {
       var relayedSeries = relaySeries(model, 'relayed');

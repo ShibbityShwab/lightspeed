@@ -401,6 +401,19 @@ pub enum DropReason {
 }
 
 /// Proxy metrics collector.
+/// A client's self-reported trained route model quality, used for the
+/// website "trained on" hero. `trained_at == 0` means the client never
+/// trained a model and is therefore never recorded.
+#[derive(Debug, Clone, Copy)]
+pub struct ModelFitGauge {
+    /// R² (coefficient of determination) of the trained model on its test set.
+    pub r_squared: f64,
+    /// Mean absolute error of the trained model on its test set (ms).
+    pub mae_ms: f64,
+    /// Unix epoch seconds at which the model was trained.
+    pub trained_at: u64,
+}
+
 pub struct ProxyMetrics {
     /// Total packets relayed.
     pub packets_relayed: AtomicU64,
@@ -493,6 +506,9 @@ pub struct ProxyMetrics {
     /// Bounded aggregation of per-route-leg client telemetry, keyed by
     /// `(normalized relay, game_id, country)`.
     pub route_telemetry: std::sync::Mutex<RouteTelemetryAggregator>,
+    /// Latest self-reported trained-model fit across clients, or `None` when
+    /// no client has reported a trained model.
+    pub model_fit: std::sync::Mutex<Option<ModelFitGauge>>,
 
     // ── Proxy-observed session geo ──────────────────────────────
     /// Bounded aggregation of new-session country pairs observed by the proxy.
@@ -551,6 +567,7 @@ impl ProxyMetrics {
             busy_poll_sockets: AtomicU64::new(0),
             telemetry: std::sync::Mutex::new(TelemetryAggregator::default()),
             route_telemetry: std::sync::Mutex::new(RouteTelemetryAggregator::default()),
+            model_fit: std::sync::Mutex::new(None),
             geo: std::sync::Mutex::new(GeoAggregator::default()),
             latency_buckets: Default::default(),
             start_time: Instant::now(),
@@ -734,12 +751,40 @@ impl ProxyMetrics {
                 }
             }
         }
+        self.record_model_report(report);
         self.record_route_legs(
             report.game_id,
             &report.client_country,
             &report.route_legs,
             peer_ip,
         );
+    }
+
+    /// Track the most recently trained client route model.
+    ///
+    /// A report counts as a model report only when `model_trained_at` is
+    /// non-zero (a client that never trained reports `0`). Among model reports
+    /// the newest `trained_at` wins, so the gauges always describe the latest
+    /// trained model any client has reported.
+    fn record_model_report(&self, report: &lightspeed_protocol::TelemetryReport) {
+        if report.model_trained_at == 0 {
+            return;
+        }
+        let mut slot = self
+            .model_fit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let update = match *slot {
+            Some(existing) => report.model_trained_at > existing.trained_at,
+            None => true,
+        };
+        if update {
+            *slot = Some(ModelFitGauge {
+                r_squared: report.model_r_squared,
+                mae_ms: report.model_mae_ms,
+                trained_at: report.model_trained_at,
+            });
+        }
     }
 
     /// Fold a report's per-relay observations into the bounded per-path
@@ -1455,6 +1500,42 @@ impl ProxyMetrics {
             }
         }
 
+        // ── Model fit (latest trained route model self-report) ──────
+        // Unlike the telemetry families above, these gauges are emitted only
+        // when a client has actually reported a trained model: a missing model
+        // report must leave the family ABSENT, not 0 (network-stats.sh treats
+        // absence as "unknown").
+        if let Some(fit) = *self
+            .model_fit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            out.push_str(
+                "# HELP lightspeed_model_r_squared R² of the most recently trained client route model\n",
+            );
+            out.push_str("# TYPE lightspeed_model_r_squared gauge\n");
+            out.push_str(&format!(
+                "lightspeed_model_r_squared{{{}}} {}\n",
+                labels, fit.r_squared
+            ));
+            out.push_str(
+                "# HELP lightspeed_model_mae_ms Mean absolute error (ms) of the most recently trained client route model\n",
+            );
+            out.push_str("# TYPE lightspeed_model_mae_ms gauge\n");
+            out.push_str(&format!(
+                "lightspeed_model_mae_ms{{{}}} {}\n",
+                labels, fit.mae_ms
+            ));
+            out.push_str(
+                "# HELP lightspeed_model_trained_at Unix epoch seconds at which the most recently trained client route model was trained\n",
+            );
+            out.push_str("# TYPE lightspeed_model_trained_at gauge\n");
+            out.push_str(&format!(
+                "lightspeed_model_trained_at{{{}}} {}\n",
+                labels, fit.trained_at
+            ));
+        }
+
         // ── Per-route-leg client telemetry (aggregated, k-anonymized) ──
         // HELP/TYPE headers are emitted unconditionally so the family is
         // discoverable before the k-anonymity floor is reached.
@@ -1904,6 +1985,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "1.4.4".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![],
         }
     }
@@ -2563,5 +2647,52 @@ mod tests {
                 "missing TYPE for {family}"
             );
         }
+    }
+
+    /// Given: no model report. When: metrics are rendered. Then: the model
+    /// gauge families are absent (not zero), so network-stats.sh reports
+    /// "unknown" instead of a fake 0.
+    #[test]
+    fn model_fit_gauges_absent_without_report() {
+        let m = ProxyMetrics::new();
+        let output = m.to_prometheus("test", "test-node");
+        assert!(!output.contains("lightspeed_model_r_squared"));
+        assert!(!output.contains("lightspeed_model_mae_ms"));
+        assert!(!output.contains("lightspeed_model_trained_at"));
+    }
+
+    /// Given: reports carrying trained-model fit, plus one legacy report that
+    /// never trained. When: they are folded in. Then: the newest trained model
+    /// wins and its R², MAE, and trained-at are exported as gauges.
+    #[test]
+    fn model_fit_gauges_export_latest_trained_model() {
+        let m = ProxyMetrics::new();
+
+        let mut older = report(2, "US");
+        older.model_r_squared = 0.7;
+        older.model_mae_ms = 6.0;
+        older.model_trained_at = 1_700_000_000;
+
+        let mut newer = report(2, "US");
+        newer.model_r_squared = 0.88;
+        newer.model_mae_ms = 2.5;
+        newer.model_trained_at = 1_700_000_500;
+
+        // A legacy report (trained_at == 0) must not overwrite the model.
+        let legacy = report(2, "US");
+
+        m.record_telemetry_report(&older, ip(1));
+        m.record_telemetry_report(&newer, ip(2));
+        m.record_telemetry_report(&legacy, ip(3));
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output
+            .contains("lightspeed_model_r_squared{region=\"test\",node_id=\"test-node\"} 0.88"));
+        assert!(
+            output.contains("lightspeed_model_mae_ms{region=\"test\",node_id=\"test-node\"} 2.5")
+        );
+        assert!(output.contains(
+            "lightspeed_model_trained_at{region=\"test\",node_id=\"test-node\"} 1700000500"
+        ));
     }
 }

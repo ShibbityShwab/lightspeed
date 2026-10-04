@@ -850,14 +850,17 @@ impl LightSpeedEngine {
         let game_box = crate::games::detect_game(game_key).map_err(|e| e.to_string())?;
 
         // Build config: runs ProcessScanner synchronously on the calling thread.
-        // The GUI keeps the fixed FEC policy; the CLI paths thread the opt-in
-        // adaptive policy through explicitly.
+        // The GUI follows the client default: FEC on means the adaptive policy,
+        // and an explicit opt-out keeps the fixed codec, matching the CLI paths.
         let config = crate::interceptor::build_config_for_game(
             game_box.as_ref(),
             proxy_addr,
             fec,
             fec_k,
-            crate::tunnel::adaptive::AdaptiveConfig::default(),
+            crate::tunnel::adaptive::AdaptiveConfig {
+                enabled: fec,
+                ..Default::default()
+            },
         )
         .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?;
 
@@ -1294,7 +1297,11 @@ mod tests {
                 ),
                 fec_enabled: false,
                 fec_k: 4,
-                adaptive_fec: Default::default(),
+                // The client default is adaptive FEC on; the interceptor config mirrors it.
+                adaptive_fec: crate::tunnel::adaptive::AdaptiveConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
                 bypass: Default::default(),
             })
             .expect("mock interceptor starts");

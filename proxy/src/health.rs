@@ -377,6 +377,9 @@ mod tests {
             relayed_p50_ms: Some(28.0),
             saved_app_pairs: 1,
             client_version: "0.4.0-dev".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![],
         };
         assert!(report.validate().is_ok());

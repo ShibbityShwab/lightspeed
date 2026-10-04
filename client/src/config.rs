@@ -87,11 +87,11 @@ pub struct TunnelConfig {
 
     /// Enable adaptive FEC and loss-gated packet duplication.
     ///
-    /// **Off by default.** With this off, FEC keeps the fixed block codec and
-    /// multipath duplication behaves as before. With it on, the client sends no
-    /// parity on a clean link, returns to low overhead quickly once loss stops,
-    /// and duplicates a packet only while loss or jitter is measured.
-    #[serde(default)]
+    /// **On by default (opt-out).** With this on, the client sends no parity on
+    /// a clean link, returns to low overhead quickly once loss stops, and
+    /// duplicates a packet only while loss or jitter is measured. Set
+    /// `adaptive_fec = false` to keep the fixed block codec.
+    #[serde(default = "default_adaptive_fec")]
     pub adaptive_fec: bool,
 
     /// Hard ceiling on adaptive FEC parity overhead, in percent (default 25).
@@ -233,6 +233,11 @@ fn default_telemetry() -> bool {
     true
 }
 
+/// Adaptive FEC and loss-gated duplication are on by default; `adaptive_fec = false` opts out.
+fn default_adaptive_fec() -> bool {
+    true
+}
+
 fn default_keepalive_ms() -> u64 {
     5000
 }
@@ -323,7 +328,7 @@ impl Default for TunnelConfig {
             mtu: default_mtu(),
             transport: default_transport(),
             dscp: false,
-            adaptive_fec: false,
+            adaptive_fec: default_adaptive_fec(),
             fec_max_overhead_pct: default_fec_max_overhead_pct(),
             path_mtu_discovery: false,
         }
@@ -411,7 +416,7 @@ mod tests {
         assert_eq!(config.tunnel.timeout_ms, 10000);
         assert_eq!(config.tunnel.mtu, 1400);
         assert!(!config.tunnel.dscp);
-        assert!(!config.tunnel.adaptive_fec);
+        assert!(config.tunnel.adaptive_fec);
         assert_eq!(config.tunnel.fec_max_overhead_pct, 25);
         assert!(!config.tunnel.path_mtu_discovery);
         assert!(config.proxy.servers.is_empty());
@@ -459,7 +464,7 @@ mod tests {
         assert_eq!(tunnel.timeout_ms, 10000);
         assert_eq!(tunnel.mtu, 1400);
         assert!(!tunnel.dscp);
-        assert!(!tunnel.adaptive_fec);
+        assert!(tunnel.adaptive_fec);
         assert_eq!(tunnel.fec_max_overhead_pct, 25);
         assert!(!tunnel.path_mtu_discovery);
 
@@ -500,18 +505,31 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_fec_defaults_off_and_accepts_a_ceiling() {
+    fn adaptive_fec_defaults_on_and_accepts_a_ceiling() {
         let defaulted: Config = toml::from_str("[tunnel]\nkeepalive_ms = 5000\n").unwrap();
         assert!(
-            !defaulted.tunnel.adaptive_fec,
-            "adaptive FEC must be opt-in"
+            defaulted.tunnel.adaptive_fec,
+            "adaptive FEC is on by default"
         );
         assert_eq!(defaulted.tunnel.fec_max_overhead_pct, 25);
 
-        let opted_in: Config =
-            toml::from_str("[tunnel]\nadaptive_fec = true\nfec_max_overhead_pct = 50\n").unwrap();
-        assert!(opted_in.tunnel.adaptive_fec);
-        assert_eq!(opted_in.tunnel.fec_max_overhead_pct, 50);
+        let opted_out: Config = toml::from_str("[tunnel]\nadaptive_fec = false\n").unwrap();
+        assert!(
+            !opted_out.tunnel.adaptive_fec,
+            "an explicit false must restore the fixed codec"
+        );
+
+        let tuned: Config = toml::from_str("[tunnel]\nfec_max_overhead_pct = 50\n").unwrap();
+        assert_eq!(tuned.tunnel.fec_max_overhead_pct, 50);
+    }
+
+    #[test]
+    fn adaptive_fec_default_is_on() {
+        // Pins the opt-out default across the programmatic and serde paths.
+        assert!(TunnelConfig::default().adaptive_fec);
+        assert!(Config::default().tunnel.adaptive_fec);
+        let from_toml: Config = toml::from_str("[tunnel]\nkeepalive_ms = 5000\n").unwrap();
+        assert!(from_toml.tunnel.adaptive_fec);
     }
 
     #[test]

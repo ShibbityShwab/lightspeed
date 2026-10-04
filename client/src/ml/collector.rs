@@ -296,6 +296,56 @@ impl RouteCollector {
     }
 }
 
+/// Fit metrics of the most recently trained route model, as reported in
+/// telemetry. `trained_at` is Unix epoch seconds and is `0` when the client
+/// has never trained a model.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ModelFit {
+    /// R² (coefficient of determination) of the trained model on its test set.
+    pub r_squared: f64,
+    /// Mean absolute error of the trained model on its test set (ms).
+    pub mae_ms: f64,
+    /// Unix epoch seconds at which the model was trained; `0` when never.
+    pub trained_at: u64,
+}
+
+/// Process-wide snapshot of the most recently trained model's fit.
+///
+/// Written by the trainer immediately after a successful (re)train and read by
+/// the telemetry reporter so every flushed report carries the current model
+/// quality. A client that never trained reports all zeros, which the relay
+/// maps to "absent / unknown".
+static LATEST_MODEL_FIT: std::sync::OnceLock<std::sync::RwLock<ModelFit>> =
+    std::sync::OnceLock::new();
+
+fn model_fit_slot() -> &'static std::sync::RwLock<ModelFit> {
+    LATEST_MODEL_FIT.get_or_init(|| std::sync::RwLock::new(ModelFit::default()))
+}
+
+/// Record the fit of the most recently trained route model.
+pub(crate) fn record_model_fit(r_squared: f64, mae_ms: f64) {
+    let trained_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut slot = model_fit_slot()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *slot = ModelFit {
+        r_squared,
+        mae_ms,
+        trained_at,
+    };
+}
+
+/// Snapshot of the most recently trained route model's fit (all zeros when the
+/// client has never trained a model).
+pub(crate) fn latest_model_fit() -> ModelFit {
+    *model_fit_slot()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +430,17 @@ mod tests {
         let mut collector = RouteCollector::new(100);
         collector.record_probe("proxy-lax", "us-west-lax", 204_800); // 204.8ms in microseconds
         assert_eq!(collector.total_recorded(), 1);
+    }
+
+    #[test]
+    fn test_record_and_read_model_fit() {
+        record_model_fit(0.88, 3.5);
+        let fit = latest_model_fit();
+        assert_eq!(fit.r_squared, 0.88);
+        assert_eq!(fit.mae_ms, 3.5);
+        assert!(
+            fit.trained_at > 0,
+            "trained_at must be the training timestamp"
+        );
     }
 }

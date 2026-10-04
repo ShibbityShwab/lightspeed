@@ -273,3 +273,24 @@ async fn path_count_bounded() {
     let third = collector.build_report(1, "US").await;
     assert!(third.is_none(), "committing drains the legs and samples");
 }
+
+/// Given: a model fit recorded by the trainer. When: a report is built. Then:
+/// the report carries the model's R², MAE, and a non-zero trained-at timestamp
+/// so the relay can expose the "trained on" hero.
+#[tokio::test]
+async fn build_report_carries_model_fit() {
+    crate::ml::collector::record_model_fit(0.873, 3.4);
+
+    let collector = TelemetryCollector::new();
+    collector.record_rtt(30.0).await;
+
+    let report = collector
+        .build_report_with_latency(1, "TH", None, Some(31.0), None, 0)
+        .await
+        .expect("report");
+
+    assert_eq!(report.model_r_squared, 0.873);
+    assert_eq!(report.model_mae_ms, 3.4);
+    assert!(report.model_trained_at > 0);
+    assert!(report.validate().is_ok());
+}

@@ -132,6 +132,21 @@ pub struct TelemetryReport {
     /// SemVer string of the `lightspeed` client binary.
     pub client_version: String,
 
+    // ── Trained route model fit (the website "trained on" hero) ─────────────
+    /// R² (coefficient of determination) of the client's trained route model
+    /// on its test set. `0.0` when the client has never trained a model, or
+    /// when the report predates this field.
+    #[serde(default)]
+    pub model_r_squared: f64,
+    /// Mean absolute error of the client's trained route model on its test set
+    /// (ms). `0.0` when never trained.
+    #[serde(default)]
+    pub model_mae_ms: f64,
+    /// Unix epoch seconds at which the client's route model was trained.
+    /// `0` when never trained.
+    #[serde(default)]
+    pub model_trained_at: u64,
+
     // ── Per-path observations (opt-in multipath quality reporting) ───────────
     /// Bounded per-relay observations.  An empty vector is valid (single-path
     /// clients omit this entirely).
@@ -186,6 +201,12 @@ impl TelemetryReport {
         }
         if self.client_version.len() > 32 {
             return Err("client_version too long");
+        }
+        if !self.model_r_squared.is_finite() {
+            return Err("model_r_squared must be finite");
+        }
+        if !self.model_mae_ms.is_finite() || self.model_mae_ms < 0.0 {
+            return Err("model_mae_ms out of range");
         }
         if self.route_legs.len() > MAX_ROUTE_LEGS {
             return Err("too many route_legs");
@@ -248,6 +269,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "0.4.0-dev".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![],
         };
 
@@ -278,6 +302,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![],
         };
         assert!(report.validate().is_ok());
@@ -300,6 +327,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![],
         };
         assert!(report.validate().is_err());
@@ -322,6 +352,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![],
         };
         assert!(report.validate().is_err());
@@ -345,6 +378,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![PathObservation {
                 relay: "relay-fra".to_string(),
                 rtt_p50_ms: 18.0,
@@ -397,6 +433,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "0.5.0".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![
                 PathObservation {
                     relay: "relay-fra".to_string(),
@@ -458,6 +497,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "0.5.0".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: legs,
         };
 
@@ -498,6 +540,9 @@ mod tests {
             relayed_p50_ms: None,
             saved_app_pairs: 1,
             client_version: "0.4.0".to_string(),
+            model_r_squared: 0.0,
+            model_mae_ms: 0.0,
+            model_trained_at: 0,
             route_legs: vec![],
         }
     }
@@ -630,5 +675,34 @@ mod tests {
         let mut ok = minimal_report();
         ok.saved_app_pairs = 100_000;
         assert!(ok.validate().is_ok());
+    }
+
+    /// Given: a report carrying a trained model's fit. When: it round-trips
+    /// through JSON and validation. Then: the values survive.
+    #[test]
+    fn model_fit_roundtrip() {
+        let mut report = minimal_report();
+        report.model_r_squared = 0.871;
+        report.model_mae_ms = 3.4;
+        report.model_trained_at = 1_700_000_000;
+
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: TelemetryReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.model_r_squared, 0.871);
+        assert_eq!(decoded.model_mae_ms, 3.4);
+        assert_eq!(decoded.model_trained_at, 1_700_000_000);
+        assert!(decoded.validate().is_ok());
+    }
+
+    /// Given: a legacy report body predating the model-fit fields. When: it is
+    /// decoded. Then: the fields default to "never trained" (all zero).
+    #[test]
+    fn model_fit_defaults_for_legacy_reports() {
+        let json = r#"{"game_id":2,"client_country":"TH","p50_ms":30.0,"p95_ms":50.0,"p99_ms":80.0,"jitter_ms":2.0,"sample_count":10,"client_version":"0.4.0"}"#;
+        let decoded: TelemetryReport = serde_json::from_str(json).unwrap();
+        assert_eq!(decoded.model_r_squared, 0.0);
+        assert_eq!(decoded.model_mae_ms, 0.0);
+        assert_eq!(decoded.model_trained_at, 0);
+        assert!(decoded.validate().is_ok());
     }
 }

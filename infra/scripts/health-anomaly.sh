@@ -50,6 +50,13 @@
 #                                 on 2026-10-01: all eight relays up,
 #                                 counters byte-identical for hours)
 #   (h) relay_missing_from_registry / relay_health_failed
+#   (i) load_skew                 one relay carries a dominant share of the
+#                                 whole fleet's relayed traffic over the
+#                                 window (live 2026-10-02: relay-fra ~20.9M
+#                                 lifetime packets against relay-nrt ~4.2M
+#                                 and relay-bom-1 ~1.6M). Traffic
+#                                 distribution, not a failure: reported and
+#                                 posted, but never fails the run.
 #
 # The window is sustained (default 3 snapshots), never a single
 # snapshot, so a legitimately idle relay is not mistaken for an outage.
@@ -110,6 +117,21 @@ MIN_VERSION_AHEAD=2
 ABUSE_MIN=5000   # window drops_abuse_blocked floor, per HOUR of window
 ABUSE_SHARE=0.9  # abuse_blocked / packets_dropped floor
 
+# load_skew: one relay carrying a dominant share of the fleet's relayed
+# traffic - live on 2026-10-02 relay-fra had ~20.9M lifetime packets against
+# relay-nrt ~4.2M and relay-bom-1 ~1.6M, so a single node's saturation or
+# outage is a fleet-wide capacity event rather than a single-relay one. The
+# share test is dimensionless, which is why it is measured on the window
+# DELTA and not the lifetime counter: a relay that dominated long ago but is
+# quiet now must not be reported as dominating today. The absolute floor
+# keeps a near-idle fleet from tripping the share test on a rounding
+# artifact, and - like abuse_flood's - is expressed PER HOUR and scaled by
+# the window's real duration, because GitHub throttles the collector cron to
+# ~3.5-6h and a fixed floor would drift with the window length. Both gates
+# must hold, and the window must be sustained (W >= 2).
+SKEW_MIN=1000   # top relay's window packets_relayed floor, per HOUR of window
+SKEW_SHARE=0.5  # top relay's share of the fleet's window relayed packets
+
 # Traffic-distribution detectors: reported and alerted, but not build-failing.
 # idle_relay names a relay that was UP but had a quiet window - its own
 # message says "traffic distribution, not a failure", and live data confirms
@@ -117,10 +139,13 @@ ABUSE_SHARE=0.9  # abuse_blocked / packets_dropped floor
 # relay-nrt 4.2M packets, relay-bom-1 1.6M - and merely had a quiet window).
 # abuse_flood is background scanner traffic. Failing CI on these made every
 # scheduled run red on a healthy fleet, which is how a monitor stops being
-# read. Everything else still fails the run, including the warning-severity
+# read. load_skew joins them for the same reason: a relay carrying most of
+# the fleet's traffic is an imbalance to act on, not an outage - and the
+# fleet has been running that way (relay-fra) while everything else is green.
+# Everything else still fails the run, including the warning-severity
 # detectors that describe real degradation. LIGHTSPEED_ANOMALY_STRICT=1
 # restores fail-on-anything.
-NON_FATAL_TYPES='"idle_relay","abuse_flood"'
+NON_FATAL_TYPES='"idle_relay","abuse_flood","load_skew"'
 
 # abuse_flood's absolute floor is expressed PER HOUR and scaled by the
 # window's real duration (the detector's original hourly-window calibration
@@ -344,6 +369,7 @@ def vcmp($a; $b):
    then ((($wtimes[-1] - $wtimes[0]) / 3600) | if . < 1 then 1 else . end)
    else 1 end) as $win_hours
 | (($abuse_min * $win_hours) | floor) as $abuse_floor
+| (($skew_min * $win_hours) | floor) as $skew_floor
 | ([ $winids[] as $id
      | ($win[-1] | rel_life(.; $id; "packets_relayed"))
        - ($wstart | rel_life(.; $id; "packets_relayed")) ] | add // 0) as $fleet_pkts
@@ -522,6 +548,40 @@ def vcmp($a; $b):
                    + " (~" + ($win_hours | tostring) + "h, floor "
                    + ($abuse_floor | tostring) + ")") }
    ]) as $abuseFlags
+| ([ $winids[] as $id
+     | (($win[-1] | rel_life(.; $id; "packets_relayed"))
+        - ($wstart | rel_life(.; $id; "packets_relayed"))) as $raw
+     | ($raw | if . < 0 then 0 else . end) as $pk
+     | { id: $id, pk: $pk } ] | sort_by(-.pk)) as $pkrank
+| (if ($pkrank | length) > 0 then $pkrank[0] else null end) as $top
+| (if ($pkrank | length) > 1 then $pkrank[1] else null end) as $nextpk
+| (if ($top != null and $fleet_pkts > 0) then ($top.pk / $fleet_pkts) else 0 end) as $topshare
+| (if ($nextpk != null and $nextpk.pk > 0 and $topshare >= $skew_share)
+   then ($top.pk / $nextpk.pk) else null end) as $skew_ratio
+| ([ (if ($WL >= $W and $W >= 2 and $top != null and $fleet_pkts > 0
+            and $top.pk >= $skew_floor and $topshare >= $skew_share)
+        then { type: "load_skew", severity: "warning", relay: $top.id,
+               window: $WL, packets_relayed: $top.pk, fleet_packets: $fleet_pkts,
+               share: $topshare,
+               second_relay: (if $nextpk != null then $nextpk.id else null end),
+               second_packets: (if $nextpk != null then $nextpk.pk else 0 end),
+               window_hours: $win_hours, min_packets: $skew_floor,
+               message: ($top.id + ": relayed " + ($top.pk | tostring)
+                         + " of the " + ($fleet_pkts | tostring)
+                         + " packets the fleet relayed over " + ($WL | tostring)
+                         + " snapshot(s) (~" + ($win_hours | tostring) + "h) = "
+                         + pct($topshare)
+                         + (if $skew_ratio != null
+                            then " (" + ((($skew_ratio * 10) | round) / 10 | tostring)
+                                 + "x the next busiest, " + $nextpk.id + " "
+                                 + ($nextpk.pk | tostring) + ")"
+                            else "" end)
+                         + ": one relay is carrying the dominant share of fleet "
+                         + "traffic, so its saturation or outage would stall most "
+                         + "of the fleet. Re-balance by spreading clients in this "
+                         + "region across relays and by recruiting a second node "
+                         + "here (see docs/fleet-load-rebalancing.md)") }
+        else empty end) ]) as $skewFlags
 | ([ (if $max_stale > 0
         then (($snaps[-1].t // 0) | n) as $newest
         | (($now - $newest)) as $age
@@ -546,7 +606,7 @@ def vcmp($a; $b):
          message: ($id + ": /health probe failed") }
    ]) as $healthFlags
 | ($zeroFlags + $idleFlags + $authFlags + $verFlags + $relFlags + $savedFlags + $abuseFlags
-   + $staleFlags + $missingFlags + $healthFlags) as $flags
+   + $skewFlags + $staleFlags + $missingFlags + $healthFlags) as $flags
 | {
     window: $W,
     baseline: $B,
@@ -573,6 +633,8 @@ result="$(jq -c \
 	--argjson min_ahead "$MIN_VERSION_AHEAD" \
 	--argjson abuse_min "$ABUSE_MIN" \
 	--argjson abuse_share "$ABUSE_SHARE" \
+	--argjson skew_min "$SKEW_MIN" \
+	--argjson skew_share "$SKEW_SHARE" \
 	--argjson max_stale "$MAX_STALENESS" \
 	--arg expect "$EXPECT_VERSION" \
 	--argjson now "$NOW_EPOCH" \

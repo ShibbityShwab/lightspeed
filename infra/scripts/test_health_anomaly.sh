@@ -15,11 +15,13 @@
 #   (d) negative_saving_spike       negative saving share spikes
 #   (e) relay_missing_from_registry
 #   (e) relay_health_failed
+#   (i) load_skew                  one relay dominates fleet traffic
 #
 # False-positive guards:
 #   * a single zero snapshot is not enough (sustained window required)
 #   * an all-idle fleet raises nothing
 #   * a newer canary is not "behind"
+#   * an evenly spread fleet raises no load_skew
 #   * --no-probe uses history reachability and never flags an unscraped relay
 #
 # No network: no probe unless --probe is passed; DISCORD_WEBHOOK is
@@ -219,6 +221,13 @@ a_negshare() {
 	}
 	mkrelay relay-a true "$STD_VER" "$(($1 * 100))" "$(($1))" "$(($1 * 2))" "$(($1 * 20))" "$(($1 * 4))" "$an" "$ac"
 }
+# Relay-a carries the dominant share of the fleet traffic: the load-skew
+# signature (live 2026-10-02: relay-fra ~20.9M lifetime packets against
+# relay-nrt ~4.2M and relay-bom-1 ~1.6M). Peers b/c/d stay at their usual
+# small counts, so relay-a takes almost all of the window. Nothing else
+# about the relay is abnormal - no auth storm, no saved regression - so
+# load_skew must be the only thing that fires.
+a_skew() { mkrelay relay-a true "$STD_VER" "$(($1 * 500000))" "$(($1))" "$(($1 * 2))" "$(($1 * 20))" "$(($1 * 4))" 0 "$(($1 * 3))"; }
 
 # mkrelay_abuse <id> <reach> <ver> <relayed> <dropped> <abuse> <sessions>
 # The abuse counter lives in `lifetime.drops_abuse_blocked` in the real
@@ -587,6 +596,44 @@ mkreg "$REG1" relay-a
 run_anomaly "$H_NOHIST" "$REG1"
 assert_rc 0 "(e guard) unscraped registry relay is not a failure"
 assert_not_out "relay_health_failed" "(e guard) no health failure without evidence"
+
+# ══════════════════════════════════════════════════════════
+# (i) load skew: one relay carrying the fleet traffic
+# ══════════════════════════════════════════════════════════
+# Live signature (2026-10-02): relay-fra ~20.9M lifetime packets against
+# relay-nrt ~4.2M and relay-bom-1 ~1.6M - one relay takes the dominant
+# share of the fleet traffic, so its saturation or outage is a fleet-wide
+# capacity event. That is traffic distribution, not a failure: it is
+# reported and posted but must not fail the run.
+H_SKEW="$TMP/skew.json"
+emit8 "$H_SKEW" a_skew
+run_anomaly "$H_SKEW" "$REG4"
+assert_rc 0 "(i) load skew warns without failing the run"
+assert_out "load_skew" "(i) fires load_skew on a dominant relay"
+assert_out "relay-a" "(i) names the dominant relay"
+assert_out "[warning]" "(i) is a warning, not critical"
+assert_out "dominant share of fleet traffic" "(i) says what it means"
+assert_out "docs/fleet-load-rebalancing.md" "(i) points at the re-balancing runbook"
+assert_not_out "zero_relay" "(i) packets still flow, so no zero_relay"
+assert_not_out "auth_spike" "(i) load skew is not an auth spike"
+
+LIGHTSPEED_ANOMALY_STRICT=1 run_anomaly "$H_SKEW" "$REG4"
+assert_rc 1 "(i strict) an operator opt-in still fails on a warning"
+
+# Guard: an evenly spread fleet must stay silent - no relay dominates, so
+# the detector must not fire and a balanced fleet reports nothing at all.
+H_BALANCED="$TMP/skew-balanced.json"
+build_history "$H_BALANCED" \
+	"$(mksnap 1000 "$(mkrelay relay-a true "$STD_VER" 100000 4 0 20 4 0 3)" "$(mkrelay relay-b true "$STD_VER" 100000 4 0 20 4 0 3)" "$(mkrelay relay-c true "$STD_VER" 100000 4 0 20 4 0 3)" "$(mkrelay relay-d true "$STD_VER" 100000 4 0 20 4 0 3)")" \
+	"$(mksnap 1100 "$(mkrelay relay-a true "$STD_VER" 200000 8 0 40 8 0 6)" "$(mkrelay relay-b true "$STD_VER" 200000 8 0 40 8 0 6)" "$(mkrelay relay-c true "$STD_VER" 200000 8 0 40 8 0 6)" "$(mkrelay relay-d true "$STD_VER" 200000 8 0 40 8 0 6)")" \
+	"$(mksnap 1200 "$(mkrelay relay-a true "$STD_VER" 300000 12 0 60 12 0 9)" "$(mkrelay relay-b true "$STD_VER" 300000 12 0 60 12 0 9)" "$(mkrelay relay-c true "$STD_VER" 300000 12 0 60 12 0 9)" "$(mkrelay relay-d true "$STD_VER" 300000 12 0 60 12 0 9)")" \
+	"$(mksnap 1300 "$(mkrelay relay-a true "$STD_VER" 400000 16 0 80 16 0 12)" "$(mkrelay relay-b true "$STD_VER" 400000 16 0 80 16 0 12)" "$(mkrelay relay-c true "$STD_VER" 400000 16 0 80 16 0 12)" "$(mkrelay relay-d true "$STD_VER" 400000 16 0 80 16 0 12)")" \
+	"$(mksnap 1400 "$(mkrelay relay-a true "$STD_VER" 500000 20 0 100 20 0 15)" "$(mkrelay relay-b true "$STD_VER" 500000 20 0 100 20 0 15)" "$(mkrelay relay-c true "$STD_VER" 500000 20 0 100 20 0 15)" "$(mkrelay relay-d true "$STD_VER" 500000 20 0 100 20 0 15)")" \
+	"$(mksnap 1500 "$(mkrelay relay-a true "$STD_VER" 600000 24 0 120 24 0 18)" "$(mkrelay relay-b true "$STD_VER" 600000 24 0 120 24 0 18)" "$(mkrelay relay-c true "$STD_VER" 600000 24 0 120 24 0 18)" "$(mkrelay relay-d true "$STD_VER" 600000 24 0 120 24 0 18)")"
+run_anomaly "$H_BALANCED" "$REG4"
+assert_rc 0 "(i guard) a balanced fleet exits 0"
+assert_not_out "load_skew" "(i guard) no load_skew when traffic is evenly spread"
+assert_out "no anomalies" "(i guard) the balanced fleet reports no anomalies"
 
 # ══════════════════════════════════════════════════════════════
 # --json output contract

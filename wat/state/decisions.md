@@ -2,7 +2,7 @@
 
 > **Canonical log of significant technical decisions for the LightSpeed project.**
 > Each entry includes the date, deciding agent, rationale, and impact.
-> Last entry: 2026-10-02
+> Last entry: 2026-10-04
 
 ---
 
@@ -1087,3 +1087,25 @@ big history in production - `collect-metrics.sh` and `health-anomaly.sh` - alrea
 
 **Withdrawn recommendation:** I had listed `.gitattributes` as a small win. It is not -
 setting `eol=lf` repo-wide would renormalise every tracked file on the next checkout.
+
+---
+
+### 2026-10-04: Multipath stays opt-in by default
+
+**Agent:** NetEng + Architect
+**Status:** Accepted (standing decision)
+**Rationale:** multipath remains default-off. Game traffic is a low-rate single UDP flow
+per game server, so doubling the paths buys little on the traffic this product actually
+carries while adding bandwidth overhead on every packet and extra load on relays that run
+on always-free capacity - a trade that pays off for bulk-transfer VPNs, not for game
+sessions. It stays a deliberate opt-in rather than a default.
+**Impact:** no default changes. The protocol and the token store already support up to
+three simultaneous paths, so users who want the redundancy opt in via `route.multipath`
+(a bool, `#[serde(default)]` -> false) and `route.multipath_max_paths` in `RouteConfig`
+(`client/src/config.rs`). Clients that never set these keep exactly today's single-path
+behaviour.
+**Alternatives Considered:** turning multipath on by default was rejected for the bandwidth
+and relay-load cost above; removing the capability outright was rejected because the paths
+are already implemented and are useful to the operators who explicitly ask for them.
+**Verification:** grep of this entry (date plus rationale) in `wat/state/decisions.md`.
+

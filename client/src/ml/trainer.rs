@@ -194,6 +194,11 @@ pub fn train_random_forest(
         training_time_ms: training_time.as_millis() as u64,
     };
 
+    // Publish the fit for the telemetry reporter: every training entry point
+    // funnels through here, so this is the single place the latest model's
+    // quality is recorded.
+    super::collector::record_model_fit(r_squared, mae);
+
     Ok((model_bytes, report))
 }
 

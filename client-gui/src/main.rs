@@ -14,6 +14,7 @@ mod geo_countries;
 mod globe;
 mod paths;
 mod platform;
+mod race_watch;
 mod self_update;
 mod single_instance;
 mod update;
