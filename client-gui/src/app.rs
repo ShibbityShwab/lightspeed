@@ -1136,6 +1136,15 @@ impl<P: Platform> LightSpeedApp<P> {
                     changed = true;
                 }
                 ui.separator();
+                if ui
+                    .selectable_label(self.game_manual, "Manual / Custom…")
+                    .clicked()
+                {
+                    self.game_manual = true;
+                    self.game_auto = false;
+                    changed = true;
+                }
+                ui.separator();
                 for (i, entry) in games().iter().enumerate() {
                     if ui
                         .selectable_label(
@@ -1149,15 +1158,6 @@ impl<P: Platform> LightSpeedApp<P> {
                         self.game_manual = false;
                         changed = true;
                     }
-                }
-                ui.separator();
-                if ui
-                    .selectable_label(self.game_manual, "Manual / Custom…")
-                    .clicked()
-                {
-                    self.game_manual = true;
-                    self.game_auto = false;
-                    changed = true;
                 }
             });
         if changed {
