@@ -72,7 +72,7 @@ Connect to any server normally. LightSpeed auto-detects the game server from out
 
 The CLI displays live stats:
 ```
-⚡ BOOST ENGAGED - 123.45.67.89:28015
+⚡ OPTIMIZING - 123.45.67.89:28015
 Packets Sent: 142 | Packets Returned: 139 | Packets Delivered: 139
 ```
 
@@ -92,7 +92,7 @@ Right-click `lightspeed-gui.exe` → **Run as administrator**. The interceptor n
 
 The GUI discovers the community relays and auto-selects the fastest on first run. You can override the relay from the dropdown, then choose your game.
 
-### 4. Click **⚡ BOOST MY GAME**
+### 4. Click **⚡ OPTIMIZE MY ROUTE**
 
 Status changes to "🎯 Finding your game server…"
 

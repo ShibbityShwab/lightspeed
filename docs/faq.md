@@ -71,15 +71,21 @@ The proxy derives the **country** of an IP address from a locally stored DB-IP L
 
 ---
 
-## FEC (Reliability Shield)
+## FEC (packet repair)
 
 ### What is FEC?
 
-Forward Error Correction. The proxy sends a small amount of redundant data (~25% at the default block size) alongside your packets. If a packet is lost, it can be reconstructed from the parity without retransmission, so recovery does not need a round trip to the game server.
+Forward Error Correction. The relay sends a small amount of redundant data
+(up to ~25% at the default block size) alongside your packets. If one is
+lost, it can be reconstructed from the parity without retransmission, so
+recovery does not need a round trip to the game server.
 
-### When should I enable it?
+### Do I need to enable it?
 
-Enable if you have packet loss (micro-stutters, rubber-banding). Disable if your connection is already saturated, metered, or has negligible loss (< 0.1%).
+No. Packet repair is on by default and adapts to measured loss: a clean line
+carries effectively no overhead, and parity rises only while packets are
+actually dropping. (Earlier builds exposed a manual toggle, the "Reliability
+Shield"; since 1.7 the adaptive policy is always in charge.)
 
 ---
 

@@ -282,15 +282,27 @@ impl Platform for WindowsPlatform {
 
 fn lightning_icon(r: u8, g: u8, b: u8) -> Option<tray_icon::Icon> {
     const SIZE: usize = 32;
-    let mut rgba = vec![0u8; SIZE * SIZE * 4];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            if !in_brand_mark(
-                (x as f32 + 0.5) / SIZE as f32,
-                (y as f32 + 0.5) / SIZE as f32,
-            ) {
-                continue;
-            }
+    const LOGO_PNG: &[u8] = include_bytes!("../../../web/assets/brand/icon-256.png");
+    let decoded = match image::load_from_memory(LOGO_PNG) {
+        Ok(decoded) => decoded
+            .resize_exact(
+                SIZE as u32,
+                SIZE as u32,
+                image::imageops::FilterType::Lanczos3,
+            )
+            .to_rgba8(),
+        Err(e) => {
+            tracing::warn!("could not decode tray logo: {e}");
+            return None;
+        }
+    };
+    let mut rgba = decoded.into_raw();
+    // Per-state signal: an 8px corner square in the state colour
+    // (grey / amber / green / red). The mark itself is the same artwork the
+    // window, taskbar and About surfaces use.
+    const DOT: usize = 8;
+    for y in (SIZE - DOT)..SIZE {
+        for x in (SIZE - DOT)..SIZE {
             let idx = (y * SIZE + x) * 4;
             rgba[idx] = r;
             rgba[idx + 1] = g;
@@ -305,18 +317,6 @@ fn lightning_icon(r: u8, g: u8, b: u8) -> Option<tray_icon::Icon> {
             None
         }
     }
-}
-
-/// Whether a normalised point falls inside the tray's LightSpeed mark.
-///
-/// The tray used to draw a lightning bolt, which appears nowhere else in the
-/// product, so it looked unrelated to the window and taskbar icons beside it.
-/// It now draws the same "L" letterform every other surface uses, while
-/// keeping the per-state colour (grey / amber / green / red).
-fn in_brand_mark(px: f32, py: f32) -> bool {
-    let stem = (0.30..0.58).contains(&px) && (0.16..0.84).contains(&py);
-    let foot = (0.30..0.84).contains(&px) && (0.62..0.84).contains(&py);
-    stem || foot
 }
 
 // ── Port detection ───────────────────────────────────────────────────────────
@@ -390,37 +390,4 @@ fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
     );
 
     platform::ports_to_range(&ports)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::in_brand_mark;
-
-    #[test]
-    fn tray_mark_covers_the_letterform() {
-        // The upright stem and the foot that extends to the right.
-        assert!(in_brand_mark(0.44, 0.30), "stem should be filled");
-        assert!(in_brand_mark(0.70, 0.73), "foot should be filled");
-    }
-
-    #[test]
-    fn tray_mark_leaves_the_negative_space_empty() {
-        // Top-right and bottom-left corners sit outside an "L".
-        assert!(!in_brand_mark(0.75, 0.30), "top-right must stay clear");
-        assert!(!in_brand_mark(0.15, 0.75), "bottom-left must stay clear");
-    }
-
-    #[test]
-    fn tray_mark_is_not_the_old_bolt() {
-        // Regression guard. The tray previously drew a lightning bolt, which
-        // put ink where an "L" has none: high in the top-right quadrant and
-        // low in the bottom-left. Either sample being filled means the bolt
-        // shape has come back.
-        let top_right = in_brand_mark(0.72, 0.24);
-        let bottom_left = in_brand_mark(0.18, 0.78);
-        assert!(
-            !top_right && !bottom_left,
-            "shape matches the old bolt (top_right={top_right}, bottom_left={bottom_left})"
-        );
-    }
 }

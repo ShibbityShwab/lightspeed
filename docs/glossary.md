@@ -4,7 +4,7 @@
 
 ## Core Concepts
 
-**Proxy Node (Boost Server):** A lightweight UDP relay server (~500KB RAM) that forwards game traffic between your PC and game servers through a faster backbone path. The client uses the community relay network by default; you can also run your own proxy on any Linux VPS.
+**Proxy Node (Relay):** A lightweight UDP relay server (~500KB RAM) that forwards game traffic between your PC and game servers through a faster backbone path. The client uses the community relay network by default; you can also run your own proxy on any Linux VPS.
 
 **Interceptor:** The OS-level component that captures outbound game UDP packets before they leave your network interface and redirects them through the proxy. Uses nftables/iptables (Linux), pfctl (macOS), or WinDivert (Windows).
 

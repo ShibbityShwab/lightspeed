@@ -327,7 +327,7 @@ impl<P: Platform> LightSpeedApp<P> {
         // the list a moment later without dropping the connection.
         app.engine
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .set_telemetry_enabled(share_latency_stats);
         app.connect_selected();
         app
@@ -1301,7 +1301,7 @@ impl<P: Platform> LightSpeedApp<P> {
             self.persist_config();
             self.engine
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .set_telemetry_enabled(self.share_latency_stats);
         }
         ui.add_space(S3);

@@ -240,7 +240,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>Launch LightSpeed</h3>
-            <p>Run the lightweight client before your game. It auto-detects 21 built-in profiles: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft, and Hunt: Showdown.</p>
+            <p>Run the lightweight client before your game. It auto-detects 22 built-in profiles: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft (Bedrock and Java), and Hunt: Showdown.</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -645,7 +645,7 @@
               <span class="game-tag">UDP 19132-19133</span>
               <span class="game-tag">None</span>
             </div>
-            <p>Bedrock Edition multiplayer over UDP 19132/19133, on desktop and console servers alike. Java Edition is not supported: its gameplay runs on TCP, and LightSpeed tunnels UDP only.</p>
+            <p>Bedrock Edition multiplayer over UDP 19132/19133, on desktop and console servers alike, and Java Edition over TCP 25565 - supported since 1.7 through the TCP tunnel: pick "Manual / Custom…" in the app and enter your server.</p>
             <div class="game-status game-status-ready"><svg class="icon icon-xs" aria-hidden="true" focusable="false"><use href="#i-check"></use></svg> Ready</div>
           </article>
           <article class="game-card">
@@ -703,11 +703,11 @@
           <article class="bench-card">
             <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-life-buoy"></use></svg> FEC Recovery</h3>
             <div class="bench-value">25<span class="bench-unit">%</span> overhead</div>
-            <p>XOR-based Forward Error Correction recovers a lost packet from parity with just 25% bandwidth overhead at the default block size.</p>
+            <p>XOR-based Forward Error Correction recovers a lost packet from parity without a retransmit round trip. It adapts to measured loss: near-zero overhead on a clean line, up to 25% at the default block size while packets are actually dropping.</p>
             <div class="bench-bar">
               <div class="bench-bar-fill" style="width: 25%"></div>
             </div>
-            <p class="bench-bar-label">25% overhead at the default block size</p>
+            <p class="bench-bar-label">up to 25% overhead, only under loss</p>
           </article>
           <article class="bench-card">
             <h3 class="bench-title"><svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-gauge"></use></svg> WARP Boost</h3>

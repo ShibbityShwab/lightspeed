@@ -38,19 +38,20 @@ An API key is created per-account at
 <https://community.chocolatey.org/account> and is the only missing piece here;
 set it as a `CHOCO_API_KEY` repository secret to let a workflow push.
 
-**Status: version 1.6.14 is BUILT and READY TO PUSH; the only blocker is the
-missing API key.** The package source in this directory is already correct
-(`nuspec` version 1.6.14, install script pinned to the v1.6.14 asset with its
-verified sha256), and `target/lightspeed.1.6.14.nupkg` builds clean, but no
-Chocolatey API key exists on this machine or in the repo's secrets, so the
-push cannot be automated from here.
+**Status: 1.6.14 is PUSHED to the community feed** (via the `choco-push`
+workflow, run 37176160239, 2026-10-04) and awaiting a moderator's listing -
+pushes to the community feed are moderated, so the package stays unlisted
+until it is approved. Web upload of `.nupkg` files is disabled; the workflow
+pushes with `CHOCO_API_KEY`, which lives in the repository secrets. New
+releases bump and push this package automatically from `release.yml` (the
+`bump-chocolatey` job), so no manual step remains.
 
-The community feed's newest published version is **1.6.3** - eleven releases
-behind - because the 1.6.5 submission has been pending moderation since
-2026-10-01 and no later version was ever pushed. Note the feed only ever
-listed `1.6.3`; a `1.6.14` package does not exist there.
+Community-feed listings lag pushes by moderation: the 1.6.5 submission has
+been pending since 2026-10-01, and 1.6.14 was pushed on 2026-10-04 - both
+wait on a moderator. The `bump-chocolatey` job in `release.yml` keeps the
+package source current at every tag.
 
-With Chocolatey installed (Windows):
+To push by hand (Chocolatey installed on Windows):
 
 ```sh
 choco push lightspeed.1.6.14.nupkg --source https://push.chocolatey.org/ --api-key <API_KEY>
