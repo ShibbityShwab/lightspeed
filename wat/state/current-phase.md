@@ -1,3 +1,40 @@
+# Current Phase: WF-050 GUI polish, admin fixes, and a bug round - handoff to an incoming agent
+
+**Workflow:** WF-050; WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Agent:** RustDev + QAEngineer (this week's GUI work); handoff brief in `wat/state/HANDOFF.md`
+**Status:** Pushed `b32975d..22c9623`, every commit CI-green; installed Program Files build is one round behind (pre-`22c9623`)
+**Last updated:** 2026-10-04
+
+---
+
+## 2026-10-03..04 - WF-050 the GUI got its polish and a bug round
+
+This week's workstream was the Windows GUI, driven by the owner's feedback:
+boost servers became a dropdown with "Auto (fastest)" as the visible default
+(it was already the default on first install - the pill UI hid it); Inter +
+JetBrains Mono bundled under SIL OFL; the duplicated brand row moved into an
+About card with GitHub/Website/Releases/star links; a route globe with offline
+IP geolocation; 320px window support. Admin handling was wrong twice and fixed:
+`is_admin` used `net session` (fails when the Server service is stopped, a
+false "not admin") and `relaunch_as_admin` always exited the process even when
+already elevated. `scripts/dev-gui.ps1` (run the debug build, refuse duplicate
+instances) and `scripts/install-gui.ps1` (install verified by file size, not by
+`Copy-Item`'s misleading exit code) removed the install-friction loop.
+
+The bug round (`22c9623`) fixed three reachable panics, each mutation-tested:
+the WinDivert packet parser accepted an IHL below the RFC 791 minimum and
+parsed ports out of the IP header on malformed network input; the globe's land
+blob and the geo country table both indexed generated data unchecked.
+
+**Open work, ranked, is in `wat/state/HANDOFF.md`:** rebuild + reinstall the
+GUI to Program Files (installed copy predates the bug fixes), the owner-gated
+package channels (Chocolatey API key, winget CLA), a GUI auto-update path to
+end the install drift, optional mutex-poisoning hardening, and the owner's
+product calls (#137 Minecraft, #59 Fortnite). CI is green for every pushed
+commit; scheduled health/page workflows are green; fleet 8/8 on v1.6.14.
+
+---
+
 # Current Phase: WF-049 The monitor's red runs were its own throttled cron
 
 **Workflow:** WF-049; WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
