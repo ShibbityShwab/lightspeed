@@ -48,15 +48,16 @@ jobs:
             git push -q origin HEAD:master
           }
 
-          # The default GITHUB_TOKEN has historically not been able to push to a
-          # `.wiki.git`, and a fine-grained PAT cannot reach a wiki at all - the
-          # cause of the 403s from 2026-08-03. Only a classic PAT with `repo`
-          # scope is guaranteed to work.
-          if push_with "${WIKI_TOKEN:-}"; then
-            echo "Pushed with WIKI_TOKEN."
-          elif push_with "${GITHUB_TOKEN:-}"; then
-            echo "::warning::Pushed with GITHUB_TOKEN; WIKI_TOKEN cannot write to the wiki."
+          # GITHUB_TOKEN, with `contents: write`, does push to a public repo's
+          # wiki - measured, after the dry-run probe wrongly implied otherwise.
+          # WIKI_TOKEN is kept only as an override: the secret currently in the
+          # repository is a fine-grained PAT and answers 403 here, so it must not
+          # be preferred.
+          if push_with "${GITHUB_TOKEN:-}"; then
+            echo "Pushed with GITHUB_TOKEN."
+          elif push_with "${WIKI_TOKEN:-}"; then
+            echo "::warning::Pushed with WIKI_TOKEN; GITHUB_TOKEN could not write to the wiki."
           else
-            echo "::error::No usable wiki credential. Set WIKI_TOKEN to a classic PAT with 'repo' scope (fine-grained PATs cannot access wikis)."
+            echo "::error::No usable wiki credential. Check the 'contents: write' permission, or set WIKI_TOKEN to a classic PAT with 'repo' scope."
             exit 1
           fi

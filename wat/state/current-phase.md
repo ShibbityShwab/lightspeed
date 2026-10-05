@@ -84,21 +84,26 @@ become absolute `github.com/.../blob/master/...` URLs, asset paths rebase onto
 `docs/*.md` with `Home.md` present, zero links still ending `.md`, and zero
 non-page relative links left.
 
-**Published, and the one thing that still needs the owner:** the wiki now carries
-the docs - 71 pages pushed as `460fd6e`, verified live
-(`/wiki/user-guide`, `/wiki/faq.ja`, `/wiki/install-windows.zh-Hans`, `/wiki/LANGUAGES`
-all 200). That push used the `gh` CLI's own classic token, because the first
-dispatch of the repaired workflow proved the credential probe was wrong: it
-tested the *clone*, and cloning a public wiki needs no credentials at all, so a
-read-only token passed the probe and only the push was denied (403). The probe
-now does a `git push --dry-run`, which is the real permission test.
+**Published, and the credential question answered by measurement:** the wiki now
+carries the docs - 71 pages, verified live (`/wiki/user-guide`, `/wiki/faq.ja`,
+`/wiki/install-windows.zh-Hans`, `/wiki/LANGUAGES` all 200) and verified by a
+fresh clone (`0f3bd19 Sync docs/ from 9e0b8f0`).
 
-With that fixed the job fails fast and honestly, because neither available
-token can write: `GITHUB_TOKEN` cannot push to a `.wiki.git` at all, and the
-`WIKI_TOKEN` secret answers 403 - it is a fine-grained PAT (written 2026-08-03,
-right as the failures began) and **fine-grained PATs cannot access wikis**. A
-classic PAT with `repo` scope is required, and minting one needs the owner's
-account. Until then the sync is run manually.
+Two wrong turns led there, both recorded because they are the reusable part.
+First the probe tested the clone, and cloning a *public* wiki needs no
+credentials, so a read-only token passed and only the push was denied (403);
+then the replacement probe used `git push --dry-run` on an **up-to-date** branch,
+which git short-circuits with "Everything up-to-date" without testing write
+access. The reliable test is the real push, which is idempotent and therefore
+safe to use as the probe - and it settled the question the other way round:
+**`GITHUB_TOKEN` with `contents: write` does push to a public repo's wiki**, so no
+PAT is needed and the workflow now prefers it. `WIKI_TOKEN` stays only as an
+override, because the secret in the repository (written 2026-08-03, right as the
+failures began) is a fine-grained PAT and answers 403 - it can be deleted.
+
+End-to-end proof rather than a green tick: a marker line was pushed directly
+into the wiki's `Home.md`, the workflow was dispatched, and a fresh clone came
+back with 71 pages and the marker gone.
 
 ---
 
