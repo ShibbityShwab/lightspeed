@@ -1,9 +1,61 @@
-# Current Phase: WF-054 Internationalization complete - GUI, website, docs, and the English landing page's locale links
+# Current Phase: WF-054 Internationalization - shipped, then repaired after the live site exposed two real defects
 
 **Workflow:** WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
 **Agent:** RustDev + QAEngineer (lead-verified with the repo's own gates)
-**Status:** Waves 1, 2 (GUI), 3 (website) and 4 (docs) implemented locally and verified; **English-page locale discovery closed 2026-10-05**; not committed. CLI wave excluded by design (see below)
+**Status:** Waves 1-4 committed and deployed (`cffad91`); the two defects the deploy exposed are fixed and re-deployed. Wave 2 (CLI) excluded by design.
 **Last updated:** 2026-10-05
+
+---
+
+## 2026-10-05 (third pass) - the deploy exposed what the structural checks could not
+
+`cffad91` was pushed and `Deploy GitHub Pages` succeeded. Opening the live site in
+a real browser then showed two defects that every structural check had passed
+over. Both are now fixed; both were caught by looking at the page, not by
+asserting on its markup.
+
+**1. Every localized page was served with no stylesheet (the severe one).**
+The generated pages live at `web/<tag>/index.html` but referenced their assets
+relatively - `href="styles.css"`, `assets/favicon.svg`, `src="app.js"`. From
+`/lightspeed/de/` those resolve to `/lightspeed/de/styles.css`, which does not
+exist: live proof, `/de/styles.css` -> 404 against `/styles.css` -> 200. So all
+eight "translated pages" were unstyled HTML with no icon and no script, while the
+English page at the root looked perfect. The same relative resolution broke
+`app.js`'s own `fetch('network-stats.json')`. Fixed in two places:
+`localize_urls()` in the generator prefixes every relative URL with `../`, and
+`app.js` now resolves its data files against the script's own URL
+(`dataUrl()`/`DATA_BASE`) so it works from any page depth.
+
+**2. Nested units corrupted the markup and stranded English.** 96 unit pairs nest
+(`<td><strong>$0/forever</strong></td>` yields a unit for the cell *and* one for
+the strong). `render()` applied both, and the outer span's offsets were stale once
+the inner replacement changed the length inside it, so the outer replacement ate
+into a closing tag - the published Spanish page read
+`<td class="compare-us">$0/para siemprerong></td>`. Fixed by resolving overlaps:
+an enclosing unit whose text is identical to the unit inside it stands down (the
+inner one renders the same words and keeps the markup), and otherwise the
+enclosing one wins because it carries the whole phrase. Stray tag fragments went
+16/15/10/26/21/16/13/22 -> 0 across the eight locales.
+
+**The guards added, and why they are the point:** `stray_text_gt()` fails the
+build if a rendered page leaves a tag fragment in its text (it fires on the old
+output: 10-26 per page, and passes on the new), and `unrooted_urls()` fails the
+build if any relative URL would resolve under `/<tag>/`. Both run on every page
+every time the generator runs, including `--check`.
+
+**Verified by looking, in a real engine (Bun.WebView), against a local server:**
+the German page now applies the stylesheet (`ready: true`), renders the nav with
+the `Deutsch` switcher, the German hero and buttons, and `$0/fÃ¼r immer` in the
+price cell; Russian renders in Cyrillic with `Ð¡ÐºÐ°Ñ‡Ð°Ñ‚ÑŒ`; both load `app.js` (the live
+stats read 62 ms / 0.0% rather than "collecting"), proving the data path works
+from a subdirectory. At the mobile breakpoint the switcher is hidden behind the
+hamburger and becomes visible when the menu opens - checked, not assumed.
+
+**Still true and unfixed:** a block containing an inline link or `<code>` is
+skipped as a unit, so ~27 of 174 Spanish text blocks (FAQ answers, the privacy
+notice, the network description) remain in English while their bold fragments
+are translated. That needs placeholder-based extraction to fix properly - a
+rework of the extractor and a retranslation of all eight catalogs.
 
 ---
 

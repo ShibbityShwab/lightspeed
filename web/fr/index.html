@@ -20,9 +20,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
   <!-- Open Graph -->
   <meta property="og:title" content="LightSpeed - Free Game Network Optimizer">
   <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
@@ -117,7 +117,7 @@
         <a href="#network">Réseau</a>
         <a href="#games">Jeux</a>
         <a href="#benchmarks">Benchmarks</a>
-        <a href="route-visualizer/">Visualiseur de routes</a>
+        <a href="../route-visualizer/">Visualiseur de routes</a>
         <a href="#faq">FAQ</a>
         <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">
           <svg class="icon icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg> GitHub
@@ -140,7 +140,7 @@
           <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
           <h1 class="hero-title">
             Réduisez votre ping. Gratuit. Pour toujours.
-                   </h1>
+          </h1>
           <p class="hero-subtitle">
             LightSpeed est un optimiseur réseau open source qui fait passer le trafic de votre jeu par le chemin le plus rapide grâce à une sélection de proxy basée sur le ML. Sans abonnement. La télémétrie agrégée anonyme est active par défaut et peut être désactivée à tout moment. Juste moins de latence.
           </p>
@@ -163,19 +163,19 @@
             </div>
             <div class="stat">
               <dt class="stat-label">RTT médian économisé</dt>
-              <dd class="stat-value">collectedd>
+              <dd class="stat-value"><span id="hero-ping-saved">collecte</span></dd>
             </div>
             <div class="stat">
               <dt class="stat-label">Signale quand le relais était pire</dt>
-              <dd class="stat-value">collectedd>
+              <dd class="stat-value"><span id="hero-negative-share">collecte</span></dd>
             </div>
             <div class="stat">
               <dt class="stat-label">Ajustement du modèle</dt>
-              <dd class="stat-value">collectedd>
+              <dd class="stat-value"><span id="hero-model-fit">collecte</span></dd>
             </div>
             <div class="stat">
               <dt class="stat-label">Entraîné sur</dt>
-              <dd class="stat-value">collectedd>
+              <dd class="stat-value"><span id="hero-model-trained">collecte</span></dd>
             </div>
           </dl>
         </div>
@@ -201,7 +201,7 @@
             </svg>
             <div class="route-card-stops">
               Votre PC Relais LAX Serveur de jeu
-                 </div>
+            </div>
             <div class="route-card-foot">
               Encapsulation +0.162 ms Exemple
             </div>
@@ -272,17 +272,19 @@
               <span class="arch-node-detail">Client + intercepteur</span>
             </div>
             <div class="arch-link" aria-hidden="true">
-              Tunnel UDP / TCP
+              <span class="arch-link-label">Tunnel UDP / TCP</span>
+              <span class="arch-link-line"></span>
             </div>
             <div class="arch-node arch-proxy">
               Nœud proxy Relais sur une route de backbone
-                   </div>
+            </div>
             <div class="arch-link" aria-hidden="true">
-              UDP natif
-            /div>
+              <span class="arch-link-label">UDP natif</span>
+              <span class="arch-link-line"></span>
+            </div>
             <div class="arch-node arch-server">
               Serveur de jeu Fortnite / CS2 / Dota
-               </div>
+            </div>
           </div>
           <p class="arch-note">L&#x27;encapsulation ajoute +0.162 ms. Mesuré en localhost dans le benchmark MVP archivé avec l&#x27;ancien en-tête ; ce n&#x27;est pas une garantie générale de latence.</p>
         </div>
@@ -302,8 +304,8 @@
         </div>
         <noscript>
           <p class="relay-grid-note">Relay health is rendered from the signed registry and the latest snapshot, which need JavaScript. The raw snapshot is published as
-          <a href="network-stats.json">network-stats.json</a> and the node list as
-          <a href="registry.json">registry.json</a>.</p>
+          <a href="../network-stats.json">network-stats.json</a> and the node list as
+          <a href="../registry.json">registry.json</a>.</p>
         </noscript>
 
         <div class="stats-panel" aria-live="polite">
@@ -314,13 +316,13 @@
             </div>
             <div class="stat">
               -- Relais en ligne
-              </div>
+            </div>
             <div class="stat">
               -- Régions
             </div>
             <div class="stat">
               19 profils de jeu
-             </div>
+            </div>
           </div>
           <div class="stats-row">
             <div class="stat">
@@ -329,10 +331,10 @@
             </div>
             <div class="stat">
               -- Paquets filtrés
-            /div>
+            </div>
             <div class="stat">
               -- Perte en amont
-             </div>
+            </div>
             <div class="stat">
               <span class="stat-value" data-stat="sessions_created">--</span>
               <span class="stat-label">Sessions</span>
@@ -520,7 +522,7 @@
             </div>
             <div class="game-details">
               UDP 22101-42472 Aucun
-             </div>
+            </div>
             <p>Trafic UDP vers les serveurs régionaux de HoYoverse. Pas d&#x27;anti-triche au niveau noyau, juste un routage propre et à faible latence pour le combat d&#x27;action.</p>
             <div class="game-status game-status-ready">Prêt</div>
           </article>
@@ -543,7 +545,7 @@
             </div>
             <div class="game-details">
               UDP 12000-29999 Aucun
-             </div>
+            </div>
             <p>Trafic UDP vers les serveurs régionaux de Wargaming. Pas d&#x27;anti-triche au niveau noyau, donc l&#x27;optimisation de route est simple pour le combat de chars.</p>
             <div class="game-status game-status-ready">Prêt</div>
           </article>
@@ -578,7 +580,7 @@
             </div>
             <div class="game-details">
               UDP 27000-27050 Aucun
-             </div>
+            </div>
             <p>Pair à pair via Steam, sans anti-triche au niveau noyau. LightSpeed redirige le trafic datagramme Steam vers un chemin plus propre jusqu&#x27;à vos pairs.</p>
             <div class="game-status game-status-ready">Prêt</div>
           </article>
@@ -601,7 +603,7 @@
             </div>
             <div class="game-details">
               UDP 16261-16262 Aucun
-             </div>
+            </div>
             <p>UDP direct vers les serveurs communautaires et dédiés. Pas d&#x27;anti-triche côté client, donc la redirection transparente est simple pour la survie en coop.</p>
             <div class="game-status game-status-ready">Prêt</div>
           </article>
@@ -624,7 +626,7 @@
             </div>
             <div class="game-details">
               UDP 19132-19133 Aucun
-             </div>
+            </div>
             <p>Multijoueur Bedrock Edition en UDP 19132/19133, sur serveurs desktop comme console, et Java Edition en TCP 25565 - pris en charge depuis la 1.7 via le tunnel TCP : choisissez &quot;Manual / Custom...&quot; dans l&#x27;appli et saisissez votre serveur.</p>
             <div class="game-status game-status-ready">Prêt</div>
           </article>
@@ -730,7 +732,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-badge-dollar"></use></svg></div>
             <h3>Vraiment gratuit</h3>
-            <p>Pas gratuit comme un &quot;essai gratuit&quot;. Pas gratuit comme un &quot;freemium&quot;. Gratuit au sens de zéro dollar pour toujours. Le réseau de relais communautaire est hébergé par la communauté et financé par des sponsors, et vous pouvez toujours faire tourner votre propre proxy sur des crédits VPS cloud en offre gratuite. Pas d&#x27;intermédiaire, pas d&#x27;abonnement, pas de coût caché. Jamais.Ever.</p>
+            <p>Pas gratuit comme un &quot;essai gratuit&quot;. Pas gratuit comme un &quot;freemium&quot;. Gratuit au sens de zéro dollar pour toujours. Le réseau de relais communautaire est hébergé par la communauté et financé par des sponsors, et vous pouvez toujours faire tourner votre propre proxy sur des crédits VPS cloud en offre gratuite. Pas d&#x27;intermédiaire, pas d&#x27;abonnement, pas de coût caché. Jamais.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-unlock"></use></svg></div>
@@ -782,21 +784,58 @@
             <tbody>
               <tr>
                 <th scope="row">Prix</th>
-                <td class="compare-us">0$/pour toujourstrong></td>
+                <td class="compare-us"><strong>0$/pour toujours</strong></td>
               </tr>
               <tr>
                 <th scope="row">Open source</th>
-                <td class="compare-us">Pris en charge : complet class="compare-us">Pris en charge : modèle ML  <td class="compare-us">Pris en charge : aucun compte   <td class="compare-us">Pris en charge               <td class="compare-us">Pris en charge : 25% de surcoût   <td class="compare-us">Pris en charge : détection auto             <td class="compare-us">Pris en charge : par paquet class="compare-us">Pris en charge :  <!-- Download -->
+                <td class="compare-us">Pris en charge : complet</td>
+              </tr>
+              <tr>
+                <th scope="row">Routage ML</th>
+                <td class="compare-us">Pris en charge : modèle ML</td>
+              </tr>
+              <tr>
+                <th scope="row">Confidentialité</th>
+                <td class="compare-us">Pris en charge : aucun compte</td>
+              </tr>
+              <tr>
+                <th scope="row">Auto-hébergeable</th>
+                <td class="compare-us"><span class="cell-status">Pris en charge</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Récupération de paquets (FEC)</th>
+                <td class="compare-us">Pris en charge : 25% de surcoût</td>
+              </tr>
+              <tr>
+                <th scope="row">Intégration WARP</th>
+                <td class="compare-us">Pris en charge : détection auto</td>
+              </tr>
+              <tr>
+                <th scope="row">Authentification par jeton</th>
+                <td class="compare-us">Pris en charge : par paquet</td>
+              </tr>
+              <tr>
+                <th scope="row">Tunnel TCP</th>
+                <td class="compare-us"><span class="cell-status">Pris en charge : </span><code>--tcp</code></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download -->
     <section class="section section-accent" id="download">
       <div class="container">
         <p class="section-eyebrow">Installer</p>
         <h2 class="section-title">Télécharger LightSpeed</h2>
-        <p class="section-subtitle">Récupérez la dernière release. Lancez-la. C&#x27;est toute l&#x27;installation..</p>
+        <p class="section-subtitle">Récupérez la dernière release. Lancez-la. C&#x27;est toute l&#x27;installation.</p>
 
         <div class="download-primary">
           <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="btn btn-lg btn-primary" id="primary-download">
-            Télécharger LightSpeed
-             </a>
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-download"></use></svg>
+            <span id="primary-download-label">Télécharger LightSpeed</span>
+          </a>
           <p class="download-primary-note" id="primary-download-note">Détection de votre plateforme...</p>
         </div>
 
@@ -809,12 +848,12 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.msi">
                   Installateur GUI (MSI) lightspeed-gui-x86_64-pc-windows-msvc.msi
-                   </a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.zip">
                   Appli GUI (ZIP) lightspeed-gui-x86_64-pc-windows-msvc.zip
-                  </a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-pc-windows-msvc.zip">
@@ -832,7 +871,7 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-apple-darwin.tar.xz">
                   Apple Silicon (série M) lightspeed-client-aarch64-apple-darwin.tar.xz
-                /a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-apple-darwin.tar.xz">
@@ -850,7 +889,7 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz">
                   Appli GUI (x64) lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz
-                  </a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz">
@@ -983,11 +1022,11 @@
           </details>
           <details class="faq-item">
             <summary>LightSpeed rend-il mon internet plus rapide ?</summary>
-            <p>Non. LightSpeed ne peut pas accélérer votre trafic. Il ne peut pas aller plus vite que la physique. Ce qu&#x27;il fait, c&#x27;est router proactivement votre trafic sur le chemin le plus rapide disponible, en évitant la congestion et les routes inutilement longues. Si votre FAI a déjà une route propre, ou si votre proxy est mal placé, vous verrez peu ou pas d&#x27;amélioration.nt.</p>
+            <p>Non. LightSpeed ne peut pas accélérer votre trafic. Il ne peut pas aller plus vite que la physique. Ce qu&#x27;il fait, c&#x27;est router proactivement votre trafic sur le chemin le plus rapide disponible, en évitant la congestion et les routes inutilement longues. Si votre FAI a déjà une route propre, ou si votre proxy est mal placé, vous verrez peu ou pas d&#x27;amélioration.</p>
           </details>
           <details class="faq-item">
             <summary>Pourquoi mon ping est-il plus élevé quand j&#x27;utilise un proxy ?</summary>
-            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>serveur de jeu</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">Visualiseur de routes</a>.</p>
+            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>serveur de jeu</em>, not closest to you. For an interactive look at how routing works, see the <a href="../route-visualizer/">Visualiseur de routes</a>.</p>
           </details>
           <details class="faq-item">
             <summary>Quels jeux sont pris en charge ?</summary>
@@ -1054,6 +1093,6 @@
     </div>
   </footer>
 
-  <script src="app.js" defer></script>
+  <script src="../app.js" defer></script>
 </body>
 </html>

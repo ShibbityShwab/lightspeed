@@ -20,9 +20,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
   <!-- Open Graph -->
   <meta property="og:title" content="LightSpeed - Free Game Network Optimizer">
   <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
@@ -117,7 +117,7 @@
         <a href="#network">네트워크</a>
         <a href="#games">게임</a>
         <a href="#benchmarks">벤치마크</a>
-        <a href="route-visualizer/">경로 시각화</a>
+        <a href="../route-visualizer/">경로 시각화</a>
         <a href="#faq">FAQ</a>
         <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">
           <svg class="icon icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg> GitHub
@@ -140,7 +140,8 @@
           <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
           <h1 class="hero-title">
             핑을 줄이세요. 무료. 영원히.
-                    <p class="hero-subtitle">
+          </h1>
+          <p class="hero-subtitle">
             LightSpeed는 ML 기반 프록시 선택으로 게임 트래픽을 가장 빠른 경로로 라우팅하는 오픈소스 네트워크 최적화 프로그램입니다. 구독 없음. 익명 집계 텔레메트리는 기본으로 켜져 있고 언제든 끌 수 있습니다. 그냥 더 낮은 지연 시간.
           </p>
           <div class="hero-actions">
@@ -162,16 +163,20 @@
             </div>
             <div class="stat">
               <dt class="stat-label">절약된 중앙값 RTT</dt>
-              <dd class="stat-value">수집 중            </div>
+              <dd class="stat-value"><span id="hero-ping-saved">수집 중</span></dd>
+            </div>
             <div class="stat">
               <dt class="stat-label">릴레이가 더 나빴던 비율</dt>
-              <dd class="stat-value">수집 중            </div>
+              <dd class="stat-value"><span id="hero-negative-share">수집 중</span></dd>
+            </div>
             <div class="stat">
               <dt class="stat-label">모델 적합도</dt>
-              <dd class="stat-value">수집 중            </div>
+              <dd class="stat-value"><span id="hero-model-fit">수집 중</span></dd>
+            </div>
             <div class="stat">
               <dt class="stat-label">학습 데이터</dt>
-              <dd class="stat-value">수집 중            </div>
+              <dd class="stat-value"><span id="hero-model-trained">수집 중</span></dd>
+            </div>
           </dl>
         </div>
         <div class="hero-visual" aria-hidden="true">
@@ -196,9 +201,11 @@
             </svg>
             <div class="route-card-stops">
               내 PC 릴레이 LAX 게임 서버
-                    <div class="route-card-foot">
+            </div>
+            <div class="route-card-foot">
               캡슐화 +0.162 ms 예시
-              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -265,16 +272,19 @@
               <span class="arch-node-detail">클라이언트 + 인터셉터</span>
             </div>
             <div class="arch-link" aria-hidden="true">
-              UDP / TCP 터널
-            v>
+              <span class="arch-link-label">UDP / TCP 터널</span>
+              <span class="arch-link-line"></span>
+            </div>
             <div class="arch-node arch-proxy">
               프록시 노드 백본 경로상의 릴레이
-             <div class="arch-link" aria-hidden="true">
-              네이티브 UDP
-            div>
+            </div>
+            <div class="arch-link" aria-hidden="true">
+              <span class="arch-link-label">네이티브 UDP</span>
+              <span class="arch-link-line"></span>
+            </div>
             <div class="arch-node arch-server">
               게임 서버 Fortnite / CS2 / Dota
-            
+            </div>
           </div>
           <p class="arch-note">캡슐화는 +0.162 ms를 더합니다. 이전 헤더를 사용한 보관된 MVP 벤치마크에서 로컬호스트로 측정했으며, 일반적인 지연 시간 보장은 아닙니다.</p>
         </div>
@@ -294,8 +304,8 @@
         </div>
         <noscript>
           <p class="relay-grid-note">Relay health is rendered from the signed registry and the latest snapshot, which need JavaScript. The raw snapshot is published as
-          <a href="network-stats.json">network-stats.json</a> and the node list as
-          <a href="registry.json">registry.json</a>.</p>
+          <a href="../network-stats.json">network-stats.json</a> and the node list as
+          <a href="../registry.json">registry.json</a>.</p>
         </noscript>
 
         <div class="stats-panel" aria-live="polite">
@@ -306,13 +316,14 @@
             </div>
             <div class="stat">
               -- 릴레이 온라인
-            
+            </div>
             <div class="stat">
               -- 리전
-            >
+            </div>
             <div class="stat">
               게임 프로필 19개
-                      </div>
+            </div>
+          </div>
           <div class="stats-row">
             <div class="stat">
               <span class="stat-value" data-stat="packets_relayed">--</span>
@@ -320,12 +331,13 @@
             </div>
             <div class="stat">
               -- 필터링된 패킷
-                      <div class="stat">
+            </div>
+            <div class="stat">
               -- 업스트림 손실
-            
+            </div>
             <div class="stat">
               -- 세션
-            
+            </div>
           </div>
         </div>
         <p class="sr-only" role="status" id="snapshot-status"></p>
@@ -703,7 +715,7 @@
           </article>
           <article class="bench-card">
             <h3 class="bench-title">테스트 스위트</h3>
-            <div class="bench-value">테스트 200개 이상div>
+            <div class="bench-value">테스트 200개 이상</div>
             <p>프로토콜 테스트(헤더, FEC, 텔레메트리, 제로 할당 API), 4개 크레이트 전체의 통합 테스트, 그리고 CI의 로컬 프록시 + 에코 서버 E2E 테스트. 위의 네트워크 상태는 CI가 아니라 예약된 실시간 릴레이 상태 점검에서 나옵니다.</p>
             <div class="bench-bar">
               <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
@@ -724,7 +736,8 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-badge-dollar"></use></svg></div>
             <h3>진짜 무료</h3>
-            <p>&quot;무료 체험&quot;식 무료가 아닙니다. &quot;프리미엄&quot;식 무료도 아닙니다. 영원히 0원이라는 뜻의 무료. 커뮤니티 릴레이 네트워크는 커뮤니티가 호스팅하고 후원자 자금으로 운영되며, 무료 등급 클라우드 VPS 크레딧으로 직접 프록시를 돌릴 수도 있습니다. 중간상도, 구독도, 숨은 비용도 없습니다. 영원히. </div>
+            <p>&quot;무료 체험&quot;식 무료가 아닙니다. &quot;프리미엄&quot;식 무료도 아닙니다. 영원히 0원이라는 뜻의 무료. 커뮤니티 릴레이 네트워크는 커뮤니티가 호스팅하고 후원자 자금으로 운영되며, 무료 등급 클라우드 VPS 크레딧으로 직접 프록시를 돌릴 수도 있습니다. 중간상도, 구독도, 숨은 비용도 없습니다. 영원히.</p>
+          </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-unlock"></use></svg></div>
             <h3>오픈소스</h3>
@@ -738,7 +751,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-shield-check"></use></svg></div>
             <h3>안티치트 호환성을 고려한 설계</h3>
-            <p>LightSpeed는 게임 패킷이나 메모리를 절대 변조하지 않습니다. 패킷이 지나는 경로만 바꾸고 페이로드는 그대로 둡니다. EAC, VAC, Vanguard의 탐지 모델을 건드리지 않고 함께 작동하도록 만들어졌습니다.>
+            <p>LightSpeed는 게임 패킷이나 메모리를 절대 변조하지 않습니다. 패킷이 지나는 경로만 바꾸고 페이로드는 그대로 둡니다. EAC, VAC, Vanguard의 탐지 모델을 건드리지 않고 함께 작동하도록 만들어졌습니다.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
@@ -775,19 +788,58 @@
             <tbody>
               <tr>
                 <th scope="row">가격</th>
-                <td class="compare-us">$0/영원히>
+                <td class="compare-us"><strong>$0/영원히</strong></td>
               </tr>
               <tr>
                 <th scope="row">오픈소스</th>
-                <td class="compare-us">지원: 완전s">지원: ML 모델>지원: 계정 없음s">지원are-us">지원: 25% 오버헤드us">지원: 자동 감지">지원: 패킷별s">지원:ad -->
+                <td class="compare-us">지원: 완전</td>
+              </tr>
+              <tr>
+                <th scope="row">ML 라우팅</th>
+                <td class="compare-us">지원: ML 모델</td>
+              </tr>
+              <tr>
+                <th scope="row">개인정보</th>
+                <td class="compare-us">지원: 계정 없음</td>
+              </tr>
+              <tr>
+                <th scope="row">셀프 호스팅</th>
+                <td class="compare-us"><span class="cell-status">지원</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">패킷 복구 (FEC)</th>
+                <td class="compare-us">지원: 25% 오버헤드</td>
+              </tr>
+              <tr>
+                <th scope="row">WARP 연동</th>
+                <td class="compare-us">지원: 자동 감지</td>
+              </tr>
+              <tr>
+                <th scope="row">토큰 인증</th>
+                <td class="compare-us">지원: 패킷별</td>
+              </tr>
+              <tr>
+                <th scope="row">TCP 터널</th>
+                <td class="compare-us"><span class="cell-status">지원: </span><code>--tcp</code></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download -->
     <section class="section section-accent" id="download">
       <div class="container">
         <p class="section-eyebrow">설치</p>
         <h2 class="section-title">LightSpeed 다운로드</h2>
-        <p class="section-subtitle">최신 릴리스를 받아 실행하세요. 설정은 그게 전부입니다.  <div class="download-primary">
+        <p class="section-subtitle">최신 릴리스를 받아 실행하세요. 설정은 그게 전부입니다.</p>
+
+        <div class="download-primary">
           <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="btn btn-lg btn-primary" id="primary-download">
-            LightSpeed 다운로드
-          
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-download"></use></svg>
+            <span id="primary-download-label">LightSpeed 다운로드</span>
+          </a>
           <p class="download-primary-note" id="primary-download-note">플랫폼을 감지하는 중...</p>
         </div>
 
@@ -800,17 +852,17 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.msi">
                   GUI 설치 프로그램 (MSI) lightspeed-gui-x86_64-pc-windows-msvc.msi
-                a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.zip">
                   GUI 앱 (ZIP) lightspeed-gui-x86_64-pc-windows-msvc.zip
-                a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-pc-windows-msvc.zip">
                   CLI 클라이언트 (ZIP) lightspeed-client-x86_64-pc-windows-msvc.zip
-                /a>
+                </a>
               </li>
             </ul>
           </div>
@@ -823,7 +875,7 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-apple-darwin.tar.xz">
                   Apple Silicon (M 시리즈) lightspeed-client-aarch64-apple-darwin.tar.xz
-                >
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-apple-darwin.tar.xz">
@@ -842,17 +894,17 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz">
                   GUI 앱 (x64) lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz
-                a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz">
                   CLI 클라이언트 (x64) lightspeed-client-x86_64-unknown-linux-gnu.tar.xz
-                /a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz">
                   CLI 클라이언트 (ARM64) lightspeed-client-aarch64-unknown-linux-gnu.tar.xz
-                /a>
+                </a>
               </li>
             </ul>
           </div>
@@ -975,10 +1027,11 @@
           </details>
           <details class="faq-item">
             <summary>LightSpeed가 인터넷을 더 빠르게 해주나요?</summary>
-            <p>아니요. LightSpeed가 트래픽을 더 빠르게 만들 수는 없습니다. 물리 법칙을 이길 수는 없죠. 대신 트래픽을 사용 가능한 가장 빠른 경로로 선제적으로 우회시켜 혼잡과 불필요하게 긴 경로를 피합니다. ISP가 이미 깨끗한 경로를 갖고 있거나 프록시 위치가 나쁘면 개선이 거의 또는 전혀 없을 수 있습니다.      </details>
+            <p>아니요. LightSpeed가 트래픽을 더 빠르게 만들 수는 없습니다. 물리 법칙을 이길 수는 없죠. 대신 트래픽을 사용 가능한 가장 빠른 경로로 선제적으로 우회시켜 혼잡과 불필요하게 긴 경로를 피합니다. ISP가 이미 깨끗한 경로를 갖고 있거나 프록시 위치가 나쁘면 개선이 거의 또는 전혀 없을 수 있습니다.</p>
+          </details>
           <details class="faq-item">
             <summary>프록시를 쓰면 왜 핑이 더 높아지나요?</summary>
-            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>게임 서버</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">경로 시각화</a>.</p>
+            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>게임 서버</em>, not closest to you. For an interactive look at how routing works, see the <a href="../route-visualizer/">경로 시각화</a>.</p>
           </details>
           <details class="faq-item">
             <summary>어떤 게임이 지원되나요?</summary>
@@ -1045,6 +1098,6 @@
     </div>
   </footer>
 
-  <script src="app.js" defer></script>
+  <script src="../app.js" defer></script>
 </body>
 </html>

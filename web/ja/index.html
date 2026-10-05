@@ -20,9 +20,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
   <!-- Open Graph -->
   <meta property="og:title" content="LightSpeed - Free Game Network Optimizer">
   <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
@@ -117,7 +117,7 @@
         <a href="#network">ネットワーク</a>
         <a href="#games">ゲーム</a>
         <a href="#benchmarks">ベンチマーク</a>
-        <a href="route-visualizer/">ルート可視化</a>
+        <a href="../route-visualizer/">ルート可視化</a>
         <a href="#faq">FAQ</a>
         <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">
           <svg class="icon icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg> GitHub
@@ -140,7 +140,8 @@
           <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
           <h1 class="hero-title">
             pingを減らそう。無料。ずっと。
-                   <p class="hero-subtitle">
+          </h1>
+          <p class="hero-subtitle">
             LightSpeedは、MLベースのプロキシ選択でゲームの通信を最速ルートに通すオープンソースのネットワーク最適化ツールです。サブスクリプションはありません。匿名の集計テレメトリはデフォルトで有効で、いつでもオフにできます。ただ遅延が下がるだけ。
           </p>
           <div class="hero-actions">
@@ -162,16 +163,20 @@
             </div>
             <div class="stat">
               <dt class="stat-label">RTT削減量の中央値</dt>
-              <dd class="stat-value">収集中           </div>
+              <dd class="stat-value"><span id="hero-ping-saved">収集中</span></dd>
+            </div>
             <div class="stat">
               <dt class="stat-label">リレーの方が遅かった割合</dt>
-              <dd class="stat-value">収集中           </div>
+              <dd class="stat-value"><span id="hero-negative-share">収集中</span></dd>
+            </div>
             <div class="stat">
               <dt class="stat-label">モデル適合度</dt>
-              <dd class="stat-value">収集中           </div>
+              <dd class="stat-value"><span id="hero-model-fit">収集中</span></dd>
+            </div>
             <div class="stat">
               <dt class="stat-label">学習データ</dt>
-              <dd class="stat-value">収集中           </div>
+              <dd class="stat-value"><span id="hero-model-trained">収集中</span></dd>
+            </div>
           </dl>
         </div>
         <div class="hero-visual" aria-hidden="true">
@@ -196,9 +201,11 @@
             </svg>
             <div class="route-card-stops">
               あなたのPC リレー LAX ゲームサーバー
-                        <div class="route-card-foot">
+            </div>
+            <div class="route-card-foot">
               カプセル化 +0.162 ms 例
-               </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -265,16 +272,19 @@
               <span class="arch-node-detail">クライアント + インターセプター</span>
             </div>
             <div class="arch-link" aria-hidden="true">
-              UDP / TCPトンネル
-            iv>
+              <span class="arch-link-label">UDP / TCPトンネル</span>
+              <span class="arch-link-line"></span>
+            </div>
             <div class="arch-node arch-proxy">
               バックボーンルート上のプロキシノードリレー
-                 <div class="arch-link" aria-hidden="true">
-              ネイティブUDP
-            div>
+            </div>
+            <div class="arch-link" aria-hidden="true">
+              <span class="arch-link-label">ネイティブUDP</span>
+              <span class="arch-link-line"></span>
+            </div>
             <div class="arch-node arch-server">
               ゲームサーバー Fortnite / CS2 / Dota
-            v>
+            </div>
           </div>
           <p class="arch-note">カプセル化で+0.162 ms増えます。以前のヘッダーを使ったアーカイブ済みMVPベンチマークのlocalhost計測値で、一般的な遅延の保証ではありません。</p>
         </div>
@@ -294,8 +304,8 @@
         </div>
         <noscript>
           <p class="relay-grid-note">Relay health is rendered from the signed registry and the latest snapshot, which need JavaScript. The raw snapshot is published as
-          <a href="network-stats.json">network-stats.json</a> and the node list as
-          <a href="registry.json">registry.json</a>.</p>
+          <a href="../network-stats.json">network-stats.json</a> and the node list as
+          <a href="../registry.json">registry.json</a>.</p>
         </noscript>
 
         <div class="stats-panel" aria-live="polite">
@@ -306,13 +316,13 @@
             </div>
             <div class="stat">
               -- オンラインのリレー
-            v>
+            </div>
             <div class="stat">
               -- 地域
-            >
+            </div>
             <div class="stat">
               19個のゲームプロファイル
-            v>
+            </div>
           </div>
           <div class="stats-row">
             <div class="stat">
@@ -321,12 +331,13 @@
             </div>
             <div class="stat">
               -- フィルタしたパケット
-            
+            </div>
             <div class="stat">
               -- 上流のロス
-                       <div class="stat">
+            </div>
+            <div class="stat">
               -- セッション
-            iv>
+            </div>
           </div>
         </div>
         <p class="sr-only" role="status" id="snapshot-status"></p>
@@ -704,7 +715,7 @@
           </article>
           <article class="bench-card">
             <h3 class="bench-title">テストスイート</h3>
-            <div class="bench-value">200以上のテストdiv>
+            <div class="bench-value">200以上のテスト</div>
             <p>プロトコルテスト (ヘッダー、FEC、テレメトリ、ゼロアロケーションAPI)、4つのクレートすべてにまたがる統合テスト、さらにCIでのローカルプロキシ + エコーサーバーのE2Eテスト。上のネットワーク状況はCIではなく、定期的なライブのリレー健全性チェックによるものです。</p>
             <div class="bench-bar">
               <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
@@ -725,7 +736,8 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-badge-dollar"></use></svg></div>
             <h3>本当に無料</h3>
-            <p>「無料トライアル」的な無料ではありません。「フリーミアム」的な無料でもありません。ずっと0円という意味の無料です。コミュニティリレーネットワークはコミュニティがホストし、スポンサーが資金を出しています。無料枠のクラウドVPSクレジットで自分のプロキシを動かすこともできます。仲介業者なし、サブスクなし、隠れた費用なし。ずっと。</div>
+            <p>「無料トライアル」的な無料ではありません。「フリーミアム」的な無料でもありません。ずっと0円という意味の無料です。コミュニティリレーネットワークはコミュニティがホストし、スポンサーが資金を出しています。無料枠のクラウドVPSクレジットで自分のプロキシを動かすこともできます。仲介業者なし、サブスクなし、隠れた費用なし。ずっと。</p>
+          </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-unlock"></use></svg></div>
             <h3>オープンソース</h3>
@@ -739,7 +751,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-shield-check"></use></svg></div>
             <h3>アンチチート互換を重視した設計</h3>
-            <p>LightSpeedはゲームのパケットやメモリを決して改変しません。変えるのはパケットが通るルートだけで、ペイロードには触れません。EAC、VAC、Vanguardの検知モデルを作動させずに併用できるよう作られています。p>
+            <p>LightSpeedはゲームのパケットやメモリを決して改変しません。変えるのはパケットが通るルートだけで、ペイロードには触れません。EAC、VAC、Vanguardの検知モデルを作動させずに併用できるよう作られています。</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
@@ -776,19 +788,58 @@
             <tbody>
               <tr>
                 <th scope="row">価格</th>
-                <td class="compare-us">$0/ずっと>
+                <td class="compare-us"><strong>$0/ずっと</strong></td>
               </tr>
               <tr>
                 <th scope="row">オープンソース</th>
-                <td class="compare-us">対応: フル-us">対応: MLモデルs">対応: アカウント不要us">対応pare-us">対応: オーバーヘッド25%s">対応: 自動検出s">対応: パケットごとus">対応:ad -->
+                <td class="compare-us">対応: フル</td>
+              </tr>
+              <tr>
+                <th scope="row">MLルーティング</th>
+                <td class="compare-us">対応: MLモデル</td>
+              </tr>
+              <tr>
+                <th scope="row">プライバシー</th>
+                <td class="compare-us">対応: アカウント不要</td>
+              </tr>
+              <tr>
+                <th scope="row">セルフホスト可</th>
+                <td class="compare-us"><span class="cell-status">対応</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">パケット復元 (FEC)</th>
+                <td class="compare-us">対応: オーバーヘッド25%</td>
+              </tr>
+              <tr>
+                <th scope="row">WARP連携</th>
+                <td class="compare-us">対応: 自動検出</td>
+              </tr>
+              <tr>
+                <th scope="row">トークン認証</th>
+                <td class="compare-us">対応: パケットごと</td>
+              </tr>
+              <tr>
+                <th scope="row">TCPトンネル</th>
+                <td class="compare-us"><span class="cell-status">対応: </span><code>--tcp</code></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download -->
     <section class="section section-accent" id="download">
       <div class="container">
         <p class="section-eyebrow">インストール</p>
         <h2 class="section-title">LightSpeedをダウンロード</h2>
-        <p class="section-subtitle">最新リリースを入手して起動するだけ。セットアップはそれだけです。  <div class="download-primary">
+        <p class="section-subtitle">最新リリースを入手して起動するだけ。セットアップはそれだけです。</p>
+
+        <div class="download-primary">
           <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="btn btn-lg btn-primary" id="primary-download">
-            LightSpeedをダウンロード
-          a>
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-download"></use></svg>
+            <span id="primary-download-label">LightSpeedをダウンロード</span>
+          </a>
           <p class="download-primary-note" id="primary-download-note">プラットフォームを検出中...</p>
         </div>
 
@@ -801,17 +852,17 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.msi">
                   GUIインストーラー (MSI) lightspeed-gui-x86_64-pc-windows-msvc.msi
-                >
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.zip">
                   GUIアプリ (ZIP) lightspeed-gui-x86_64-pc-windows-msvc.zip
-                /a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-pc-windows-msvc.zip">
                   CLIクライアント (ZIP) lightspeed-client-x86_64-pc-windows-msvc.zip
-                /a>
+                </a>
               </li>
             </ul>
           </div>
@@ -824,7 +875,7 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-apple-darwin.tar.xz">
                   Apple Silicon (Mシリーズ) lightspeed-client-aarch64-apple-darwin.tar.xz
-                >
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-apple-darwin.tar.xz">
@@ -843,17 +894,17 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz">
                   GUIアプリ (x64) lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz
-                /a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz">
                   CLIクライアント (x64) lightspeed-client-x86_64-unknown-linux-gnu.tar.xz
-                /a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz">
                   CLIクライアント (ARM64) lightspeed-client-aarch64-unknown-linux-gnu.tar.xz
-                /a>
+                </a>
               </li>
             </ul>
           </div>
@@ -976,10 +1027,11 @@
           </details>
           <details class="faq-item">
             <summary>LightSpeedでインターネットは速くなる?</summary>
-            <p>いいえ。LightSpeedは通信そのものを速くはできません。物理法則には勝てません。できるのは、通信を利用可能な最速の経路に先回りして流し、混雑や不必要な遠回りを避けることです。ISPがすでにクリーンな経路を持っていたり、プロキシの位置が悪かったりすると、改善はほとんど実感できないでしょう。     </details>
+            <p>いいえ。LightSpeedは通信そのものを速くはできません。物理法則には勝てません。できるのは、通信を利用可能な最速の経路に先回りして流し、混雑や不必要な遠回りを避けることです。ISPがすでにクリーンな経路を持っていたり、プロキシの位置が悪かったりすると、改善はほとんど実感できないでしょう。</p>
+          </details>
           <details class="faq-item">
             <summary>プロキシを使うとpingが上がるのはなぜ?</summary>
-            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>ゲームサーバー</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">ルート可視化</a>.</p>
+            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>ゲームサーバー</em>, not closest to you. For an interactive look at how routing works, see the <a href="../route-visualizer/">ルート可視化</a>.</p>
           </details>
           <details class="faq-item">
             <summary>対応しているゲームは?</summary>
@@ -1046,6 +1098,6 @@
     </div>
   </footer>
 
-  <script src="app.js" defer></script>
+  <script src="../app.js" defer></script>
 </body>
 </html>

@@ -6,6 +6,23 @@
 
   var prefersReduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
+  // The localized pages are published from a subdirectory (`/de/`, `/ja/`, ...),
+  // so a bare relative URL would resolve under that subdirectory and 404. The
+  // data files live at the site root, next to app.js, so resolve them against
+  // this script's own URL - which is correct from every page.
+  var DATA_BASE = (function () {
+    var self = document.currentScript || document.querySelector('script[src$="app.js"]');
+    try {
+      return new URL('.', (self && self.src) || window.location.href);
+    } catch (e) {
+      return new URL('.', window.location.href);
+    }
+  })();
+
+  function dataUrl(name) {
+    return new URL(name, DATA_BASE).href;
+  }
+
   // --- Mobile Nav Toggle ---
   var toggle = document.getElementById('nav-toggle');
   var navLinks = document.getElementById('nav-links');
@@ -506,7 +523,7 @@
       showRelayGridUnavailable();
       return;
     }
-    fetch('network-stats.json', { cache: 'no-cache' })
+    fetch(dataUrl('network-stats.json'), { cache: 'no-cache' })
       .then(function (response) {
         if (!response.ok) throw new Error('network-stats.json: HTTP ' + response.status);
         return response.json();
@@ -1138,7 +1155,7 @@
 
   function loadNetworkHistory() {
     if (!window.fetch) return;
-    fetch('network-history.json', { cache: 'no-cache' })
+    fetch(dataUrl('network-history.json'), { cache: 'no-cache' })
       .then(function (response) {
         if (!response.ok) throw new Error('network-history.json: HTTP ' + response.status);
         return response.json();

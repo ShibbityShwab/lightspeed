@@ -6,6 +6,54 @@
 
 ---
 
+### 2026-10-05: A structural check is not a look; the localized pages shipped unstyled and malformed
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (implemented in `scripts/generate-web-locales.sh` and `web/app.js`)
+**Rationale:** Two defects reached production in `cffad91` that every automated
+check had passed. (1) The generated pages sit at `web/<tag>/` but referenced
+`styles.css`, `assets/...` and `app.js` relatively, so from `/lightspeed/de/` they
+resolved under `/de/` and 404'd - `/de/styles.css` returned 404 while
+`/styles.css` returned 200 - leaving all eight translated pages unstyled with no
+icon and no script, while the English root page looked correct. The same relative
+resolution broke the script's own `fetch('network-stats.json')`. (2) Element units
+nest (`<td><strong>$0/forever</strong></td>` is a unit for the cell and one for the
+strong), and `render()` applied both; the outer span's offsets are stale once the
+inner replacement changes the length inside it, so the outer replacement consumed
+part of the inner closing tag - the shipped Spanish page read
+`$0/para siemprerong>`. Both were invisible to assertions on `lang`, `hreflang`,
+heading counts and byte-diffs, and both were obvious within seconds of rendering
+the page.
+**Impact:** (a) `localize_urls()` prefixes every relative URL with `../` on a
+locale page, and `app.js` resolves its data files against the script's own URL so
+it is correct at any page depth. (b) Overlapping units are resolved before
+rendering: an enclosing unit whose text is identical to the unit inside it stands
+down (the inner one renders the same words and keeps the markup), otherwise the
+enclosing one wins because it carries the whole phrase. (c) Two guards now fail
+the build on the artifact itself - `stray_text_gt()` for a tag fragment left in
+text, `unrooted_urls()` for a relative URL that would resolve under `/<tag>/` -
+and they were confirmed to fire on the old output before the fix.
+**Alternatives Considered:** a `<base href="../">` element would have fixed the
+HTML and the script's fetches in one line, but it changes resolution for every
+relative URL and fragment on the page, and these pages already carry absolute
+canonical and `hreflang` URLs; explicit prefixing keeps the generated markup
+readable and independently checkable. Dropping the enclosing unit in every nested
+pair was rejected because a paragraph whose inner text is only a fragment would
+keep its English remainder (which is the mixed-language state the old output was
+actually in).
+**Verification:** rendered in a real engine (Bun.WebView) against a local static
+server: `de`, `ru` and the mobile breakpoint all load with the stylesheet applied,
+the switcher present, translations in place and live stats populated (62 ms), and
+the mobile switcher reachable after opening the hamburger menu. Guards fire on
+the previous output (10-26 strays per page) and pass on the new one; the extractor
+and generator `--check` runs both exit 0.
+**Left unfixed, deliberately:** a block containing an inline link or `<code>` is
+skipped as a unit, so ~27 of 174 Spanish text blocks remain English while their
+bold fragments are translated. A correct fix needs placeholder-based extraction
+and a retranslation of all eight catalogs - a separate wave, not a patch.
+
+---
+
 ### 2026-10-05: The English page gets its locale links at deploy time, never in the source
 
 **Agent:** RustDev + QAEngineer

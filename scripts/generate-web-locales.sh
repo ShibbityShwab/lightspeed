@@ -148,23 +148,63 @@ def render(tag, catalog):
     # Replace from the end so earlier offsets stay valid.
     replacements = []
 
-    for key, match, english_text in list(units) + list(attr_units):
+    # Element units NEST: `<td><strong>$0/forever</strong></td>` yields a unit for
+    # the cell AND one for the strong, 96 such pairs on this page. Applying both
+    # corrupts the markup, because the outer span's offsets were measured against
+    # the source and the inner replacement has since changed the length inside
+    # it - so the outer replacement eats into a closing tag ("$0/para siemprerong>").
+    # Only one unit per overlapping region may be applied:
+    #   - an enclosing unit whose text is identical to the unit inside it adds
+    #     nothing (the inner one renders the same words and KEEPS the markup,
+    #     so bold stays bold), so the enclosing one stands down;
+    #   - otherwise the enclosing one wins, because it carries the whole phrase
+    #     and the inner text is only a fragment - keeping the inner one would
+    #     leave the rest of the sentence in English.
+    elements = []
+    for key, match, english_text in units:
         translated = catalog.get(key)
         if translated is None or translated == english_text:
             continue
-        if key.startswith("attr."):
-            start, end = match.span("value")
-            replacements.append((start, end, html.escape(translated, quote=True)))
-            continue
-        # Rewrite the element's inner span in place: the swap cannot "fail to
-        # find" the English text, because the span boundaries come from the
-        # match itself rather than from a search over rebuilt markup.
         body = match.group("body")
         leading = re.match(r"\s*", body).group(0)
         trailing = re.search(r"\s*$", body).group(0)
-        inner_start, inner_end = match.span("body")
-        rewritten = leading + html.escape(translated) + trailing
-        replacements.append((inner_start, inner_end, rewritten))
+        elements.append(
+            {
+                "key": key,
+                "whole": match.span(),
+                "span": match.span("body"),
+                "text": english_text,
+                "rewritten": leading + html.escape(translated) + trailing,
+            }
+        )
+
+    superseded = set()
+    for inner in elements:
+        for outer in elements:
+            if inner is outer:
+                continue
+            if outer["whole"][0] <= inner["whole"][0] and inner["whole"][1] <= outer["whole"][1]:
+                if inner["text"] == outer["text"]:
+                    superseded.add(outer["key"])
+
+    for element in sorted(
+        (e for e in elements if e["key"] not in superseded),
+        key=lambda e: (e["span"][0], -e["span"][1]),
+    ):
+        start, end = element["span"]
+        if any(start < other_end and other_start < end for other_start, other_end, _ in replacements):
+            continue  # overlaps a unit already accepted
+        replacements.append((start, end, element["rewritten"]))
+
+    for key, match, english_text in attr_units:
+        translated = catalog.get(key)
+        if translated is None or translated == english_text:
+            continue
+        start, end = match.span("value")
+        assert not any(
+            start < other_end and other_start < end for other_start, other_end, _ in replacements
+        ), "an attribute replacement overlaps an element replacement"
+        replacements.append((start, end, html.escape(translated, quote=True)))
 
     for start, end, text in sorted(replacements, key=lambda r: r[0], reverse=True):
         out = out[:start] + text + out[end:]
@@ -182,7 +222,68 @@ def render(tag, catalog):
     if nav_anchor in out:
         index = out.index(nav_anchor)
         out = out[:index] + language_switcher(tag) + out[index:]
-    return out
+    return localize_urls(out)
+
+
+RELATIVE_URL = re.compile(
+    r'(?P<prefix>\b(?:href|src|poster|action|data-src)\s*=\s*")(?P<url>[^"]*)"',
+    re.IGNORECASE,
+)
+
+
+def is_rootless_url(url):
+    """True for a URL that resolves against the page's own directory."""
+    if not url or url.startswith(("#", "/", "..", "?")):
+        return False
+    return not re.match(r"[a-zA-Z][a-zA-Z0-9+.-]*:", url)  # scheme://, mailto:, data:
+
+
+def localize_urls(markup):
+    """Point root-relative references at the site root from a locale subdirectory.
+
+    The site is published from `web/`, so a page written to `web/<tag>/index.html`
+    that says `href="styles.css"` asks the browser for `/lightspeed/<tag>/styles.css`,
+    which does not exist: the localized pages were served with no stylesheet, no
+    icon and no script at all, while the English page looked fine. Each relative
+    URL gains the `../` that makes it resolve to the shared file at the root.
+    """
+
+    def swap(match):
+        url = match.group("url")
+        if not is_rootless_url(url):
+            return match.group(0)
+        return match.group("prefix") + "../" + url + '"'
+
+    return RELATIVE_URL.sub(swap, markup)
+
+
+def unrooted_urls(markup):
+    """Relative URLs left unrooted - every one of them is a 404 in production."""
+    return [m.group("url") for m in RELATIVE_URL.finditer(markup) if is_rootless_url(m.group("url"))]
+
+
+def stray_text_gt(markup):
+    """Count '>' characters that are not part of a tag.
+
+    A tag fragment left behind by a bad replacement (``...siemprerong>``) shows
+    up here as text carrying a '>', which the source does not have. The check is
+    on the output rather than on the replacement plan because it is the artifact
+    that ships.
+    """
+    count = 0
+    i = 0
+    while True:
+        opening = markup.find("<", i)
+        if opening == -1:
+            return count + markup.count(">", i)
+        count += markup.count(">", i, opening)
+        closing = markup.find(">", opening)
+        if closing == -1:
+            return count
+        i = closing + 1
+
+
+SOURCE_TEXT_GT = stray_text_gt(source)
 
 
 def render_english(source):
@@ -292,6 +393,18 @@ for info in locale_registry:
         continue
     catalog = json.loads(info["path"].read_text(encoding="utf-8"))
     target_html = render(tag, catalog.get("strings", {}))
+    strays = stray_text_gt(target_html) - SOURCE_TEXT_GT
+    if strays:
+        sys.exit(
+            f"{tag}: the rendered page left {strays} tag fragment(s) in the text "
+            "(a replacement overlapped another); see the nesting note in render()"
+        )
+    unrooted = unrooted_urls(target_html)
+    if unrooted:
+        sys.exit(
+            f"{tag}: {len(unrooted)} relative URL(s) would resolve under /{tag}/ and 404: "
+            f"{sorted(set(unrooted))}"
+        )
     target = root / "web" / tag / "index.html"
     if check:
         if not target.exists():

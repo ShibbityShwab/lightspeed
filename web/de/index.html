@@ -20,9 +20,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
   <!-- Open Graph -->
   <meta property="og:title" content="LightSpeed - Free Game Network Optimizer">
   <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
@@ -117,7 +117,7 @@
         <a href="#network">Netzwerk</a>
         <a href="#games">Spiele</a>
         <a href="#benchmarks">Benchmarks</a>
-        <a href="route-visualizer/">Routen-Visualisierer</a>
+        <a href="../route-visualizer/">Routen-Visualisierer</a>
         <a href="#faq">FAQ</a>
         <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">
           <svg class="icon icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg> GitHub
@@ -140,7 +140,7 @@
           <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
           <h1 class="hero-title">
             Senk deinen Ping. Kostenlos. Für immer.
-                 </h1>
+          </h1>
           <p class="hero-subtitle">
             LightSpeed ist ein quelloffener Netzwerk-Optimierer, der deinen Spielverkehr über den schnellsten Weg leitet, mit ML-basierter Proxy-Auswahl. Keine Abos. Anonyme aggregierte Telemetrie ist standardmäßig aktiv und lässt sich jederzeit abschalten. Einfach weniger Latenz.
           </p>
@@ -163,19 +163,19 @@
             </div>
             <div class="stat">
               <dt class="stat-label">Eingesparte Median-RTT</dt>
-              <dd class="stat-value">wird erfasstn></dd>
+              <dd class="stat-value"><span id="hero-ping-saved">wird erfasst</span></dd>
             </div>
             <div class="stat">
               <dt class="stat-label">Fälle, in denen das Relay schlechter war</dt>
-              <dd class="stat-value">wird erfasstn></dd>
+              <dd class="stat-value"><span id="hero-negative-share">wird erfasst</span></dd>
             </div>
             <div class="stat">
               <dt class="stat-label">Modellgüte</dt>
-              <dd class="stat-value">wird erfasstn></dd>
+              <dd class="stat-value"><span id="hero-model-fit">wird erfasst</span></dd>
             </div>
             <div class="stat">
               <dt class="stat-label">Trainiert auf</dt>
-              <dd class="stat-value">wird erfasstn></dd>
+              <dd class="stat-value"><span id="hero-model-trained">wird erfasst</span></dd>
             </div>
           </dl>
         </div>
@@ -204,7 +204,7 @@
             </div>
             <div class="route-card-foot">
               Kapselung +0.162 ms Beispiel
-            iv>
+            </div>
           </div>
         </div>
       </div>
@@ -272,14 +272,16 @@
               <span class="arch-node-detail">Client + Interceptor</span>
             </div>
             <div class="arch-link" aria-hidden="true">
-              UDP-/TCP-Tunnel
-            /div>
+              <span class="arch-link-label">UDP-/TCP-Tunnel</span>
+              <span class="arch-link-line"></span>
+            </div>
             <div class="arch-node arch-proxy">
               Proxy-Knoten Relay auf einer Backbone-Route
-                   </div>
+            </div>
             <div class="arch-link" aria-hidden="true">
-              Natives UDP
-             </div>
+              <span class="arch-link-label">Natives UDP</span>
+              <span class="arch-link-line"></span>
+            </div>
             <div class="arch-node arch-server">
               Spielserver Fortnite / CS2 / Dota
             </div>
@@ -302,8 +304,8 @@
         </div>
         <noscript>
           <p class="relay-grid-note">Relay health is rendered from the signed registry and the latest snapshot, which need JavaScript. The raw snapshot is published as
-          <a href="network-stats.json">network-stats.json</a> and the node list as
-          <a href="registry.json">registry.json</a>.</p>
+          <a href="../network-stats.json">network-stats.json</a> and the node list as
+          <a href="../registry.json">registry.json</a>.</p>
         </noscript>
 
         <div class="stats-panel" aria-live="polite">
@@ -317,10 +319,10 @@
             </div>
             <div class="stat">
               -- Regionen
-             </div>
+            </div>
             <div class="stat">
               19 Spielprofile
-            /div>
+            </div>
           </div>
           <div class="stats-row">
             <div class="stat">
@@ -329,13 +331,13 @@
             </div>
             <div class="stat">
               -- Gefilterte Pakete
-             </div>
+            </div>
             <div class="stat">
               -- Verlust Upstream
-               </div>
+            </div>
             <div class="stat">
               -- Sitzungen
-             </div>
+            </div>
           </div>
         </div>
         <p class="sr-only" role="status" id="snapshot-status"></p>
@@ -729,7 +731,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-badge-dollar"></use></svg></div>
             <h3>Wirklich kostenlos</h3>
-            <p>Nicht &quot;kostenlose Testversion&quot;-kostenlos. Nicht &quot;Freemium&quot;-kostenlos. Kostenlos im Sinne von null Dollar, für immer. Das Community-Relay-Netzwerk wird von der Community gehostet und von Sponsoren finanziert, und du kannst deinen eigenen Proxy weiterhin auf Cloud-VPS-Guthaben im Free-Tier betreiben. Kein Mittelsmann, kein Abo, keine versteckten Kosten. Nie.r.</p>
+            <p>Nicht &quot;kostenlose Testversion&quot;-kostenlos. Nicht &quot;Freemium&quot;-kostenlos. Kostenlos im Sinne von null Dollar, für immer. Das Community-Relay-Netzwerk wird von der Community gehostet und von Sponsoren finanziert, und du kannst deinen eigenen Proxy weiterhin auf Cloud-VPS-Guthaben im Free-Tier betreiben. Kein Mittelsmann, kein Abo, keine versteckten Kosten. Nie.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-unlock"></use></svg></div>
@@ -781,21 +783,58 @@
             <tbody>
               <tr>
                 <th scope="row">Preis</th>
-                <td class="compare-us">$0/für immerg></td>
+                <td class="compare-us"><strong>$0/für immer</strong></td>
               </tr>
               <tr>
                 <th scope="row">Open Source</th>
-                <td class="compare-us">Unterstützt: Vollss="compare-us">Unterstützt: ML-Modellass="compare-us">Unterstützt: Keine Accounts class="compare-us">Unterstützt           <td class="compare-us">Unterstützt: 25% Overheadtd class="compare-us">Unterstützt: Auto-Erkennung      <td class="compare-us">Unterstützt: Pro Paketss="compare-us">Unterstützt:-- Download -->
+                <td class="compare-us">Unterstützt: Voll</td>
+              </tr>
+              <tr>
+                <th scope="row">ML-Routing</th>
+                <td class="compare-us">Unterstützt: ML-Modell</td>
+              </tr>
+              <tr>
+                <th scope="row">Datenschutz</th>
+                <td class="compare-us">Unterstützt: Keine Accounts</td>
+              </tr>
+              <tr>
+                <th scope="row">Selbst hostbar</th>
+                <td class="compare-us"><span class="cell-status">Unterstützt</span></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Paketwiederherstellung (FEC)</th>
+                <td class="compare-us">Unterstützt: 25% Overhead</td>
+              </tr>
+              <tr>
+                <th scope="row">WARP-Integration</th>
+                <td class="compare-us">Unterstützt: Auto-Erkennung</td>
+              </tr>
+              <tr>
+                <th scope="row">Token-Authentifizierung</th>
+                <td class="compare-us">Unterstützt: Pro Paket</td>
+              </tr>
+              <tr>
+                <th scope="row">TCP-Tunnel</th>
+                <td class="compare-us"><span class="cell-status">Unterstützt: </span><code>--tcp</code></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download -->
     <section class="section section-accent" id="download">
       <div class="container">
         <p class="section-eyebrow">Installieren</p>
         <h2 class="section-title">LightSpeed herunterladen</h2>
-        <p class="section-subtitle">Hol dir das neueste Release. Starte es. Das ist die ganze Einrichtung..</p>
+        <p class="section-subtitle">Hol dir das neueste Release. Starte es. Das ist die ganze Einrichtung.</p>
 
         <div class="download-primary">
           <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="btn btn-lg btn-primary" id="primary-download">
-            LightSpeed herunterladen
-               </a>
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-download"></use></svg>
+            <span id="primary-download-label">LightSpeed herunterladen</span>
+          </a>
           <p class="download-primary-note" id="primary-download-note">Plattform wird erkannt...</p>
         </div>
 
@@ -831,7 +870,7 @@
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-apple-darwin.tar.xz">
                   Apple Silicon (M-Serie) lightspeed-client-aarch64-apple-darwin.tar.xz
-                /a>
+                </a>
               </li>
               <li>
                 <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-apple-darwin.tar.xz">
@@ -983,11 +1022,11 @@
           </details>
           <details class="faq-item">
             <summary>Macht LightSpeed mein Internet schneller?</summary>
-            <p>Nein. LightSpeed kann deinen Verkehr nicht schneller machen. Es kann die Physik nicht überholen. Was es tut: es leitet deinen Verkehr proaktiv auf den schnellsten verfügbaren Weg, vermeidet Stau und unnötig lange Routen. Hat dein ISP schon eine saubere Route, oder steht dein Proxy schlecht, wirst du kaum bis keine Verbesserung sehen.p>
+            <p>Nein. LightSpeed kann deinen Verkehr nicht schneller machen. Es kann die Physik nicht überholen. Was es tut: es leitet deinen Verkehr proaktiv auf den schnellsten verfügbaren Weg, vermeidet Stau und unnötig lange Routen. Hat dein ISP schon eine saubere Route, oder steht dein Proxy schlecht, wirst du kaum bis keine Verbesserung sehen.</p>
           </details>
           <details class="faq-item">
             <summary>Warum ist mein Ping höher, wenn ich einen Proxy nutze?</summary>
-            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>Spielserver</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">Routen-Visualisierer</a>.</p>
+            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>Spielserver</em>, not closest to you. For an interactive look at how routing works, see the <a href="../route-visualizer/">Routen-Visualisierer</a>.</p>
           </details>
           <details class="faq-item">
             <summary>Welche Spiele werden unterstützt?</summary>
@@ -1054,6 +1093,6 @@
     </div>
   </footer>
 
-  <script src="app.js" defer></script>
+  <script src="../app.js" defer></script>
 </body>
 </html>
