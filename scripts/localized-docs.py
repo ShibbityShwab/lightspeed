@@ -63,7 +63,8 @@ def insert(text: str, banner: str) -> str:
 
 def main() -> int:
     check = "--check" in sys.argv
-    docs = Path("docs")
+    root = Path(__file__).resolve().parent.parent
+    docs = root / "docs"
     localized = []
     for path in sorted(docs.glob("*.md")):
         name = split_name(path)
