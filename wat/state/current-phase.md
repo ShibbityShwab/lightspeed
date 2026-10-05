@@ -99,6 +99,27 @@ translations): the About paragraph, `Check for updates`, `Install update`,
 `Port not detected - fix guide`, `Update available`, `You're up to date`, the
 capture-backend note, and the `update.rs` status sentences.
 
+### 2026-10-05 (seventh pass) - the settings panel, update flow and About block
+
+The list above is now empty. Wired: the About paragraph and `Version {n}`,
+`Check for updates` (which reuses the existing `update.sheet_title`, so no new
+translation was needed), `Install update` and its hover hint, the port
+fix-guide link, `Start optimizing (manual)`, the capture-backend line, and
+`update.rs`'s two status sentences. Eleven more keys across all nine catalogs;
+the capture line uses `t_with` so its state word is translated rather than
+concatenated from English.
+
+`update.rs`'s two status tests now take the shared i18n lock and pin English,
+because the language is process-global and app.rs's localization test pins
+German.
+
+**The glyph gate failed twice more on this work** - naming the exact Japanese,
+Korean and Chinese characters the new keys introduced that the subsets did not
+carry. Rebuilt: assets now 0.25 MB against the 5 MB budget. Verified by looking:
+the Japanese settings panel reads `更新を確認`,
+`キャプチャバックエンド（pcap モード）: 検出されません`, `バージョン 1.7.0`, the
+translated About paragraph and `閉じる`.
+
 **Also wired:** `.github/workflows/ci.yml` gained a `Web Localization Checks` job
 running both `--check` modes, which no workflow had ever invoked - the drift that
 let a page ship with relative asset URLs and tag fragments in its text.
