@@ -37,6 +37,50 @@ retranslation of the new keys.
 
 ---
 
+## 2026-10-05 (ninth pass) - the website's English paragraphs, translated in place
+
+The last user-visible i18n gap: any paragraph containing a link or inline
+`<code>` was skipped as a container, so its prose stayed English while its bold
+fragments were translated - producing sentences that changed language halfway
+through.
+
+**The change.** A container that is skipped *only* because of an inline link or
+inline `<code>` is now captured as a **block unit**: its value is the prose with
+each inline element replaced by `{N}`, and the renderer rebuilds the body from
+the translated sentence, restoring each element's markup around it - an anchor's
+label from that anchor's own unit translation, and `<code>` verbatim, because a
+command must stay byte-identical. Both parsers changed identically; the 442
+existing keys are untouched because unit numbering comes from the enumeration
+index, not a running counter, so nothing renumbered. 21 block keys were added
+(459 total).
+
+**One real bug fixed on the way:** a container whose body held inline `<code>`
+previously produced a unit with the code *stripped*, so the render replaced the
+body and destroyed the command. Those are block units now.
+
+**Guard:** the placeholder set must survive translation exactly - losing or
+renumbering one silently drops a link out of the page - so the generator fails
+per locale on any mismatch, alongside the existing stray-tag and asset-URL
+guards.
+
+**Measured, HEAD vs now** (English text nodes remaining per locale): de 38->20,
+es 36->18, fr 36->18, ja 37->19, ko 37->19, pt-BR 34->16, ru 35->17,
+zh-Hans 35->17 - roughly half the English gone, and **0 stray tag fragments on
+every page**. I checked the intermediate state too: after the code change but
+before the translations, every locale was 5 *worse*, because the containers that
+had switched from a lossy `idx` unit to a block unit had no translation yet -
+which is how I knew the translations were the remaining half of the work rather
+than an optional extra.
+
+**Still open:** nothing on the website's localization path. The remaining known
+gaps are the ones the review listed and I have not touched - the locale set has
+no recorded rationale (Polish outranks Korean on Steam share and is absent), the
+`es` catalog serves both es-ES and Latin American Spanish without saying so, and
+no catalog stores a source hash, so an English edit leaves a locale rendering a
+stale translation while every check still passes.
+
+---
+
 ## 2026-10-05 (fifth pass) - four of the eight locales shipped a GUI made of boxes
 
 Measured rather than taken from the prior review's summary, and the numbers moved:

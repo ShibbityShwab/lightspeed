@@ -104,9 +104,29 @@ ATTR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A container whose body holds an inline element the skip rules would otherwise
+# make it stand down for is captured as a *block* unit instead: its prose becomes
+# the translatable value with each inline element replaced by {N}, and the
+# element's own markup is restored around the translation at render time. Without
+# this, any paragraph containing a link or inline <code> stayed English.
+INLINE_ELEMENT = re.compile(
+    r"<(?P<tag>a|code|strong|em|b|i|span|small)\b[^>]*>(?P<inner>.*?)</(?P=tag)>"
+    r"|<(?P<void>br|wbr)\b[^>]*/?>",
+    re.DOTALL | re.IGNORECASE,
+)
+# The block-children list minus `a`: a container with a real block child is still
+# not a leaf, but one whose only "block" child is a link is.
+BLOCK_WITHOUT_LINK = (
+    r"<(div|section|article|ul|ol|table|thead|tbody|tr|nav|header|footer|form"
+    r"|select|figure|details|dl|h1|h2|h3|h4|p|li|dt|dd)\b"
+)
+LINK_OR_CODE = re.compile(r"<(?:a|code)\b", re.IGNORECASE)
+
+
 catalog = {}
 order = []
 markup = {}
+blocks = {}
 
 
 def clean(body: str) -> str:
@@ -114,6 +134,24 @@ def clean(body: str) -> str:
     no_tags = re.sub(r"<[^>]+>", "", body)
     collapsed = re.sub(r"\s+", " ", no_tags).strip()
     return html.unescape(collapsed)
+
+
+def block_value(body: str):
+    """A container's prose with every inline element replaced by {N}.
+
+    Returns the value and the ordered elements, so the renderer can restore each
+    one's markup around the translated sentence instead of flattening it.
+    """
+    elements = list(INLINE_ELEMENT.finditer(body))
+    pieces = []
+    cursor = 0
+    for index, element in enumerate(elements):
+        pieces.append(body[cursor : element.start()])
+        pieces.append("{%d}" % index)
+        cursor = element.end()
+    pieces.append(body[cursor:])
+    value = clean("".join(pieces))
+    return value, elements
 
 
 matches = []
@@ -133,14 +171,28 @@ for index, (_pos, _tag, match) in enumerate(matches):
     own_code = re.match(r"\s*<(code|pre|kbd|samp)\b", body, re.IGNORECASE)
     if own_code:
         continue
-    if child_code:
-        body = re.sub(r"<(code|pre|kbd|samp)\b[^>]*>.*?</\1>", "", body, flags=re.DOTALL | re.IGNORECASE)
-        if len(re.sub(r"<[^>]+>", "", body).strip()) < 3:
-            continue
     # A container holding block children is not a leaf string; its text is
     # captured from those children instead, and copying it here would both
     # duplicate the copy and flatten the markup the page depends on.
-    if re.search(r"<(div|section|article|ul|ol|table|thead|tbody|tr|nav|header|footer|form|select|figure|details|dl|h1|h2|h3|h4|p|li|dt|dd|a)\b", body, re.IGNORECASE):
+    has_block = re.search(
+        r"<(div|section|article|ul|ol|table|thead|tbody|tr|nav|header|footer|form"
+        r"|select|figure|details|dl|h1|h2|h3|h4|p|li|dt|dd|a)\b",
+        body,
+        re.IGNORECASE,
+    )
+    if has_block and (re.search(BLOCK_WITHOUT_LINK, body, re.IGNORECASE) or not LINK_OR_CODE.search(body)):
+        continue
+    if child_code or LINK_OR_CODE.search(body):
+        # Prose that merely carries inline markup: the value keeps {N} where each
+        # element was, so the translation is a whole sentence and the element's
+        # markup (a link, an inline command) is restored around it at render.
+        value, _elements = block_value(body)
+        if len(value) < 3 or not re.search(r"\{\d+\}", value):
+            continue
+        key = f"blk.{len(blocks):03d}"
+        blocks[key] = value
+        markup[key] = re.sub(r"\s+", " ", body).strip()
+        order.append(key)
         continue
     value = clean(body)
     if len(value) < 3:
@@ -161,12 +213,14 @@ for index, match in enumerate(ATTR_RE.finditer(stripped)):
     attr_catalog[key] = value
 
 catalog.update(attr_catalog)
+catalog.update(blocks)
 
 payload = {
     "generated_from": "web/index.html",
     "note": "Source locale. Keys are positional; regenerate with scripts/extract-web-strings.sh",
     "strings": catalog,
     "markup": markup,
+    "block_placeholders": True,
     "skipped_elements": ["code", "pre", "kbd", "samp", "svg", "script", "style"],
 }
 

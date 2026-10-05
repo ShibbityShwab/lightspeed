@@ -303,9 +303,7 @@
           <p class="relay-grid-note">正在从最新快照加载中继健康数据...</p>
         </div>
         <noscript>
-          <p class="relay-grid-note">Relay health is rendered from the signed registry and the latest snapshot, which need JavaScript. The raw snapshot is published as
-          <a href="../network-stats.json">network-stats.json</a> and the node list as
-          <a href="../registry.json">registry.json</a>.</p>
+          <p class="relay-grid-note">中继健康状态由已签名的注册表和最新快照渲染，因此需要 JavaScript。原始快照发布于 <a href="../network-stats.json">network-stats.json</a>，节点列表发布于 <a href="../registry.json">registry.json</a>。</p>
         </noscript>
 
         <div class="stats-panel" aria-live="polite">
@@ -342,13 +340,7 @@
         </div>
         <p class="sr-only" role="status" id="snapshot-status"></p>
 
-        <p class="network-note">
-          The network is community-hosted and sponsor-funded. Every relay is published in a
-          <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">签名注册表</a>,
-          so your client verifies each node and picks the fastest path automatically. No manual proxy setup needed.
-          We publish live relay health (whether each node is up, not latency) from a periodically regenerated
-          snapshot. Last checked <time data-last-checked datetime="">--</time>.
-        </p>
+        <p class="network-note">该网络由社区托管、赞助商资助。每个中继都发布在 <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">签名注册表</a> 中，因此客户端会验证每个节点并自动选择最快的路径。无需手动配置代理。我们会从定期重新生成的快照中发布中继实时状态（表示各节点是否在线，而非延迟）。最后检查 --。</p>
 
         <!-- Network Trends (bounded snapshot history) -->
         <div class="trends" id="network-trends">
@@ -642,10 +634,7 @@
             <div class="game-status game-status-ready">就绪</div>
           </article>
         </div>
-        <p class="games-more">
-          Don't see your game?
-          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a>
-        </p>
+        <p class="games-more">没有找到你的游戏？<a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
       </div>
     </section>
 
@@ -751,7 +740,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>隐私优先</h3>
-            <p>No account required. Anonymous aggregate telemetry is on by default and can be turned off any time with <code>--no-telemetry</code> or the GUI checkbox. It sends only aggregate latency metrics over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+            <p>无需账户。匿名聚合遥测默认开启，可随时用 <code>--no-telemetry</code> 或界面中的复选框关闭。它只通过明文 HTTP 向中继的未认证 <code>/telemetry</code> 端点发送聚合延迟指标：不含 IP 地址、不含标识符、不含数据包内容。单元格至少累计 3 份上报后才会公开（统计的是上报数量，而非人数）。隧道有意不加密，以便反作弊系统检查流量，游戏服务器也始终能看到你的真实 IP。中继运营者在技术上可以观察或修改传输中的流量，因此 LightSpeed 不是隐私或匿名工具。如果你需要保密性，请自行搭建中继。参见 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>。</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -761,12 +750,12 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-key"></use></svg></div>
             <h3>令牌认证</h3>
-            <p>客户端通过 QUIC 控制面注册，并在每个数据面数据包里盖上会话令牌。代理会逐包校验。未注册的发送方直接丢弃。默认开启。</p>
+            <p>客户端通过 QUIC 控制平面注册，并在每个数据平面数据包中写入会话令牌。代理会逐包校验 <code>(IP, token)</code>。未注册的发送方会被丢弃。<code>require_auth</code> 默认开启。</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-plug"></use></svg></div>
             <h3>TCP 回退</h3>
-            <p>客户端到代理的隧道默认走 UDP，但在封禁 UDP 的网络上会切到 TCP（）：酒店、咖啡馆、限制严格的 ISP。同样低开销的优化，兼容面更广。</p>
+            <p>客户端与代理之间的隧道默认使用 UDP，但在阻止 UDP 的网络（酒店、咖啡馆、限制严格的运营商）中会切换到 TCP（<code>--tcp</code>）。同样的低开销优化，兼容性更广。</p>
           </div>
         </div>
 
@@ -993,12 +982,7 @@
 
         <p class="sr-only" role="status" id="copy-status"></p>
 
-        <p class="download-relay">
-          Running a relay node? Grab the proxy build for
-          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> or
-          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>.
-          Everything else lives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">GitHub Releases</a>.
-        </p>
+        <p class="download-relay">要运行中继节点？获取适用于 <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> 或 <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a> 的代理构建。其余内容都在 <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">GitHub Releases</a> 上。</p>
       </div>
     </section>
 
@@ -1010,7 +994,7 @@
         <div class="faq-grid">
           <details class="faq-item">
             <summary>这怎么可能是免费的？套路在哪？</summary>
-            <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data. Anonymous aggregate telemetry is on by default and can be turned off any time; see the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">隐私政策</a>.</p>
+            <p>没有套路。社区中继网络由社区托管、赞助商资助，因此你无需自己运行任何东西，安装客户端即可游玩。软件完全开源，如果你愿意也可以自行搭建代理：Vultr 为新账户提供 300 美元免费额度，Oracle Cloud 则提供永久免费套餐。我们不会出售你的数据。匿名聚合遥测默认开启，可随时关闭；参见 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">隐私政策</a>。</p>
           </details>
           <details class="faq-item">
             <summary>这会不会让我被封号？</summary>
@@ -1026,19 +1010,19 @@
           </details>
           <details class="faq-item">
             <summary>为什么用了代理延迟反而更高？</summary>
-            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>游戏服务器</em>, not closest to you. For an interactive look at how routing works, see the <a href="../route-visualizer/">路由可视化</a>.</p>
+            <p>通常是两种情况之一：(1) 中继比你的直连路径离游戏服务器更远，额外的跳数增加了延迟；或 (2) 中继所在的数据中心与互联网骨干网的连接不佳。代理的位置非常关键：数据中心距离主要骨干网／对等互联点有多近。实际路由还受 BGP 对等互联合同和运营商优先级影响，这既不由你控制，也不由 LightSpeed 控制。请选择离 <em>游戏服务器</em> 最近的中继，而不是离你最近的。想交互式了解路由如何工作，参见 <a href="../route-visualizer/">路由可视化</a>。</p>
           </details>
           <details class="faq-item">
             <summary>支持哪些游戏？</summary>
-            <p>目前有 21 款：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft 和 Hunt: Showdown 都有内置配置。直接运行让自动检测识别即可。其他任何走 UDP 的游戏都能通过手动配置端口来用。</p>
+            <p>目前有 21 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft 和 Hunt: Showdown 都内置了配置。用 <code>--game &lt;name&gt;</code> 启动，或交给自动检测即可。其他任何基于 UDP 的游戏都可以通过手动端口配置使用。</p>
           </details>
           <details class="faq-item">
             <summary>我的数据安全吗？</summary>
-            <p>Anonymous aggregate telemetry is on by default. No accounts, no registration, and no personal data. It sends only aggregate network metrics (latency percentiles, jitter, FEC counters) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, and no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). Turn it off any time with <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the GUI checkbox. All traffic passes through unencrypted to avoid adding overhead. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">隐私政策</a> and <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">数据字典</a>.</p>
+            <p>匿名聚合遥测默认开启。无需账户、无需注册，也不涉及个人数据。它只通过明文 HTTP 向中继的未认证 <code>/telemetry</code> 端点发送聚合网络指标（延迟百分位、抖动、FEC 计数）：不含 IP 地址、不含标识符、不含数据包内容。单元格至少累计 3 份上报后才会公开（统计的是上报数量，而非人数）。可随时用 <code>--no-telemetry</code>、<code>lightspeed.toml</code> 中的 <code>telemetry = false</code> 或界面中的复选框关闭。所有流量均以未加密方式通过，以避免增加开销。参见 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">隐私政策</a> 和 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">数据字典</a>。</p>
           </details>
           <details class="faq-item">
             <summary>怎么获得代理节点？</summary>
-            <p>The easiest path is to do nothing: the default client experience uses the community relay network, and your client auto-discovers the fastest relay from the <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">签名注册表</a>. If you want to run your own node instead, spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
+            <p>最省事的方式是什么都不做：默认客户端会使用社区中继网络，并从 <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">签名注册表</a> 自动发现最快的中继。如果你想运行自己的节点，可在 Vultr 开一台每月 5–6 美元的 VPS（或使用 Oracle Cloud 免费套餐），运行仓库中的 <code>setup-new-node.sh</code> 脚本，然后把客户端指向你自己的 IP。大约需要 5 分钟。数据、控制和健康端口可在代理配置的 <code>[network]</code> 部分中设置。完整指南参见 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a>。</p>
           </details>
           <details class="faq-item">
             <summary>为什么用 Rust？</summary>

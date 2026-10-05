@@ -303,9 +303,7 @@
           <p class="relay-grid-note">Загрузка состояния релеев из последнего снимка...</p>
         </div>
         <noscript>
-          <p class="relay-grid-note">Relay health is rendered from the signed registry and the latest snapshot, which need JavaScript. The raw snapshot is published as
-          <a href="../network-stats.json">network-stats.json</a> and the node list as
-          <a href="../registry.json">registry.json</a>.</p>
+          <p class="relay-grid-note">Состояние ретрансляторов отрисовывается из подписанного реестра и последнего снимка, для чего нужен JavaScript. Необработанный снимок публикуется как <a href="../network-stats.json">network-stats.json</a>, а список узлов — как <a href="../registry.json">registry.json</a>.</p>
         </noscript>
 
         <div class="stats-panel" aria-live="polite">
@@ -342,13 +340,7 @@
         </div>
         <p class="sr-only" role="status" id="snapshot-status"></p>
 
-        <p class="network-note">
-          The network is community-hosted and sponsor-funded. Every relay is published in a
-          <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">подписанный реестр</a>,
-          so your client verifies each node and picks the fastest path automatically. No manual proxy setup needed.
-          We publish live relay health (whether each node is up, not latency) from a periodically regenerated
-          snapshot. Last checked <time data-last-checked datetime="">--</time>.
-        </p>
+        <p class="network-note">Сеть размещается сообществом и финансируется спонсорами. Каждый ретранслятор публикуется в <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">подписанный реестр</a>, поэтому клиент проверяет каждый узел и автоматически выбирает самый быстрый путь. Ручная настройка прокси не нужна. Мы публикуем состояние ретрансляторов в реальном времени (доступен ли узел, а не задержку) из периодически обновляемого снимка. Последняя проверка --.</p>
 
         <!-- Network Trends (bounded snapshot history) -->
         <div class="trends" id="network-trends">
@@ -647,10 +639,7 @@
             <div class="game-status game-status-ready">Готово</div>
           </article>
         </div>
-        <p class="games-more">
-          Don't see your game?
-          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a>
-        </p>
+        <p class="games-more">Не нашли свою игру? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
       </div>
     </section>
 
@@ -756,7 +745,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>Конфиденциальность прежде всего</h3>
-            <p>No account required. Anonymous aggregate telemetry is on by default and can be turned off any time with <code>--no-telemetry</code> or the GUI checkbox. It sends only aggregate latency metrics over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+            <p>Учётная запись не нужна. Анонимная агрегированная телеметрия включена по умолчанию и отключается в любой момент с помощью <code>--no-telemetry</code> или флажка в интерфейсе. Она отправляет только агрегированные метрики задержки по незашифрованному HTTP на неаутентифицированный эндпоинт ретранслятора <code>/telemetry</code>: ни IP-адресов, ни идентификаторов, ни содержимого пакетов. Ячейка не публикуется, пока не наберётся хотя бы 3 отчёта (считаются отчёты, а не разные люди). Туннель намеренно не шифруется, чтобы античит-системы могли проверять трафик, а игровые серверы всегда видят ваш настоящий IP. Оператор ретранслятора технически может наблюдать за трафиком в пути или изменять его, поэтому LightSpeed — не инструмент приватности или анонимности. Если нужна конфиденциальность, поднимите свой ретранслятор. См. <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -766,12 +755,12 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-key"></use></svg></div>
             <h3>Аутентификация по токену</h3>
-            <p>Клиенты регистрируются через управляющий канал QUIC и вставляют токен сессии в каждый пакет плоскости данных. Прокси проверяет его для каждого пакета. Незарегистрированные отправители отбрасываются. включена по умолчанию.</p>
+            <p>Клиенты регистрируются через управляющую плоскость QUIC и вставляют сессионный токен в каждый пакет плоскости данных. Прокси проверяет <code>(IP, token)</code> для каждого пакета. Незарегистрированные отправители отбрасываются. <code>require_auth</code> включено по умолчанию.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-plug"></use></svg></div>
             <h3>Резервный TCP</h3>
-            <p>Туннель от клиента к прокси по умолчанию использует UDP, но переключается на TCP () в сетях, блокирующих UDP: отели, кафе, строгие провайдеры. Та же оптимизация с низкими накладными расходами, но шире совместимость.</p>
+            <p>Туннель между клиентом и прокси по умолчанию использует UDP, но переключается на TCP (<code>--tcp</code>) в сетях, блокирующих UDP: отели, кафе, ограничивающие провайдеры. Та же оптимизация с низкими накладными расходами, но шире совместимость.</p>
           </div>
         </div>
 
@@ -998,12 +987,7 @@
 
         <p class="sr-only" role="status" id="copy-status"></p>
 
-        <p class="download-relay">
-          Running a relay node? Grab the proxy build for
-          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> or
-          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>.
-          Everything else lives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">Релизы GitHub</a>.
-        </p>
+        <p class="download-relay">Запускаете узел-ретранслятор? Возьмите сборку прокси для <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> или <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>. Всё остальное — на <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">Релизы GitHub</a>.</p>
       </div>
     </section>
 
@@ -1015,7 +999,7 @@
         <div class="faq-grid">
           <details class="faq-item">
             <summary>Как это бесплатно? В чём подвох?</summary>
-            <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data. Anonymous aggregate telemetry is on by default and can be turned off any time; see the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Политика конфиденциальности</a>.</p>
+            <p>Никакого подвоха. Сеть ретрансляторов размещается сообществом и финансируется спонсорами, поэтому можно просто установить клиент и играть, ничего не запуская самостоятельно. Программа полностью открыта, и при желании вы можете поднять собственный прокси: Vultr даёт новым аккаунтам 300 $ кредита, а у Oracle Cloud есть бессрочный бесплатный уровень. Мы не продаём ваши данные. Анонимная агрегированная телеметрия включена по умолчанию и отключается в любой момент; см. <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Политика конфиденциальности</a>.</p>
           </details>
           <details class="faq-item">
             <summary>Меня за это не забанят?</summary>
@@ -1031,19 +1015,19 @@
           </details>
           <details class="faq-item">
             <summary>Почему с прокси мой пинг выше?</summary>
-            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>игровой сервер</em>, not closest to you. For an interactive look at how routing works, see the <a href="../route-visualizer/">Визуализатор маршрута</a>.</p>
+            <p>Обычно одно из двух: (1) ретранслятор находится дальше от игрового сервера, чем прямой маршрут, поэтому лишний хоп добавляет задержку, или (2) дата-центр ретранслятора плохо подключён к интернет-магистрали. Расположение прокси очень важно: насколько дата-центр близок к крупным точкам магистрали и пиринга. На реальную маршрутизацию также влияют договоры BGP-пиринга и приоритизация провайдеров, которыми не управляете ни вы, ни LightSpeed. Выбирайте прокси ближайший к <em>игровой сервер</em>, а не к вам. Интерактивно посмотреть, как работает маршрутизация, можно в <a href="../route-visualizer/">Визуализатор маршрута</a>.</p>
           </details>
           <details class="faq-item">
             <summary>Какие игры поддерживаются?</summary>
-            <p>Сейчас 21 игра: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft и Hunt: Showdown - все со встроенными профилями. Просто запустите нужную или дайте автоопределению её найти. Любая другая игра на UDP может работать с ручной настройкой портов.</p>
+            <p>Сейчас 21 игра: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft и Hunt: Showdown имеют встроенные профили. Просто запустите с <code>--game &lt;name&gt;</code> или дайте автоопределению найти её. Любая другая игра на UDP работает с ручной настройкой портов.</p>
           </details>
           <details class="faq-item">
             <summary>Мои данные в безопасности?</summary>
-            <p>Anonymous aggregate telemetry is on by default. No accounts, no registration, and no personal data. It sends only aggregate network metrics (latency percentiles, jitter, FEC counters) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, and no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). Turn it off any time with <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the GUI checkbox. All traffic passes through unencrypted to avoid adding overhead. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Политика конфиденциальности</a> and <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Словарь данных</a>.</p>
+            <p>Анонимная агрегированная телеметрия включена по умолчанию. Ни учётных записей, ни регистрации, ни персональных данных. Она отправляет только агрегированные сетевые метрики (перцентили задержки, джиттер, счётчики FEC) по незашифрованному HTTP на неаутентифицированный эндпоинт ретранслятора <code>/telemetry</code>: ни IP-адресов, ни идентификаторов, ни содержимого пакетов. Ячейка не публикуется, пока не наберётся хотя бы 3 отчёта (считаются отчёты, а не разные люди). Отключить можно в любой момент с помощью <code>--no-telemetry</code>, <code>telemetry = false</code> в <code>lightspeed.toml</code> или флажка в интерфейсе. Весь трафик идёт без шифрования, чтобы не добавлять накладных расходов. См. <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Политика конфиденциальности</a> и <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Словарь данных</a>.</p>
           </details>
           <details class="faq-item">
             <summary>Как получить прокси-узел?</summary>
-            <p>The easiest path is to do nothing: the default client experience uses the community relay network, and your client auto-discovers the fastest relay from the <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">подписанный реестр</a>. If you want to run your own node instead, spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
+            <p>Проще всего ничего не делать: клиент по умолчанию использует сеть ретрансляторов сообщества и автоматически находит самый быстрый ретранслятор из <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">подписанный реестр</a>. Если хотите запустить собственный узел, поднимите VPS за 5–6 $/мес у Vultr (или используйте бесплатный уровень Oracle Cloud), выполните скрипт <code>setup-new-node.sh</code> из репозитория и направьте клиент на свой IP. Это занимает около 5 минут. Порты данных, управления и проверки состояния настраиваются в разделе <code>[network]</code> конфигурации прокси. Полное руководство — в <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a>.</p>
           </details>
           <details class="faq-item">
             <summary>Почему Rust?</summary>

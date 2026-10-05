@@ -94,22 +94,58 @@ for tag in TAGS:
         matches.append((m.start(), tag, m))
 matches.sort(key=lambda item: item[0])
 
+INLINE_ELEMENT = re.compile(
+    r"<(?P<tag>a|code|strong|em|b|i|span|small)\b[^>]*>(?P<inner>.*?)</(?P=tag)>"
+    r"|<(?P<void>br|wbr)\b[^>]*/?>",
+    re.DOTALL | re.IGNORECASE,
+)
+BLOCK_WITHOUT_LINK = (
+    r"<(div|section|article|ul|ol|table|thead|tbody|tr|nav|header|footer|form"
+    r"|select|figure|details|dl|h1|h2|h3|h4|p|li|dt|dd)\b"
+)
+BLOCK_OR_LINK = (
+    r"<(div|section|article|ul|ol|table|thead|tbody|tr|nav|header|footer|form"
+    r"|select|figure|details|dl|h1|h2|h3|h4|p|li|dt|dd|a)\b"
+)
+LINK_OR_CODE = re.compile(r"<(?:a|code)\b", re.IGNORECASE)
+
+
+PLACEHOLDER = re.compile(r"\{(\d+)\}")
+
+
+def block_value(body):
+    """A container's prose with each inline element replaced by {N}."""
+    elements = list(INLINE_ELEMENT.finditer(body))
+    pieces = []
+    cursor = 0
+    for index, element in enumerate(elements):
+        pieces.append(body[cursor : element.start()])
+        pieces.append("{%d}" % index)
+        cursor = element.end()
+    pieces.append(body[cursor:])
+    text = html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", "".join(pieces))).strip())
+    return text, elements
+
+
 units = []
+blocks = []
 for index, (_pos, _tag, match) in enumerate(matches):
     if inside_skip(match.start()):
         continue
     body = match.group("body")
     if re.match(r"\s*<(code|pre|kbd|samp)\b", body, re.IGNORECASE):
         continue
-    if re.search(r"<(code|pre|kbd|samp)\b", body, re.IGNORECASE):
-        body = re.sub(r"<(code|pre|kbd|samp)\b[^>]*>.*?</\1>", "", body, flags=re.DOTALL | re.IGNORECASE)
-        if len(re.sub(r"<[^>]+>", "", body).strip()) < 3:
-            continue
-    if re.search(
-        r"<(div|section|article|ul|ol|table|thead|tbody|tr|nav|header|footer|form|select|figure|details|dl|h1|h2|h3|h4|p|li|dt|dd|a)\b",
-        body,
-        re.IGNORECASE,
+    child_code = re.search(r"<(code|pre|kbd|samp)\b", body, re.IGNORECASE)
+    has_block = re.search(BLOCK_OR_LINK, body, re.IGNORECASE)
+    if has_block and (
+        re.search(BLOCK_WITHOUT_LINK, body, re.IGNORECASE) or not LINK_OR_CODE.search(body)
     ):
+        continue
+    if child_code or LINK_OR_CODE.search(body):
+        value, _elements = block_value(body)
+        if len(value) < 3 or not re.search(r"\{\d+\}", value):
+            continue
+        blocks.append((f"blk.{len(blocks):03d}", match, value))
         continue
     value = html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", body)).strip())
     if len(value) < 3:
@@ -117,6 +153,14 @@ for index, (_pos, _tag, match) in enumerate(matches):
     units.append((f"idx.{index:03d}", match, value))
 
 known = {key for key, _m, _v in units}
+block_known = {key for key, _m, _v in blocks}
+blocks_documented = {k for k in english["strings"] if k.startswith("blk.")}
+if block_known != blocks_documented:
+    sys.exit(
+        "the English catalog's block keys do not match web/index.html; re-run "
+        f"scripts/extract-web-strings.sh (missing={sorted(blocks_documented - block_known)[:5]} "
+        f"extra={sorted(block_known - blocks_documented)[:5]})"
+    )
 documented = {k for k in english["strings"] if k.startswith("idx.")}
 if known != documented:
     missing = sorted(documented - known)
@@ -142,6 +186,41 @@ if attr_known != attr_documented:
         f"scripts/extract-web-strings.sh (missing={sorted(attr_documented - attr_known)[:5]})"
     )
 
+def render_block(match, translated, inner_translation):
+    """Rebuild a block unit's inner HTML from its translated sentence.
+
+    The value holds `{N}` where each inline element stood, so the prose translates
+    as one sentence; here the element's own markup is restored around it, with an
+    anchor's label taken from its own unit's translation. `<code>` has no unit by
+    design (a command must stay byte-identical), so it is restored verbatim.
+    """
+    body_start, body_end = match.span("body")
+    elements = list(INLINE_ELEMENT.finditer(stripped[body_start:body_end]))
+    restored = {}
+    for index, element in enumerate(elements):
+        start = body_start + element.start()
+        end = body_start + element.end()
+        if element.group("void"):
+            restored[index] = source[start:end]
+            continue
+        inner_start = body_start + element.start("inner")
+        inner_end = body_start + element.end("inner")
+        inner_html = source[inner_start:inner_end]
+        nested = inner_translation.get((inner_start, inner_end))
+        if nested is not None:
+            inner_html = html.escape(nested)
+        restored[index] = source[start:inner_start] + inner_html + source[inner_end:end]
+
+    pieces = re.split(r"\{(\d+)\}", translated)
+    out = []
+    for index, piece in enumerate(pieces):
+        if index % 2 == 0:
+            out.append(html.escape(piece))
+        else:
+            out.append(restored.get(int(piece), ""))
+    return "".join(out)
+
+
 def render(tag, catalog):
     """Return the source with each recorded unit replaced by its translation."""
     out = source
@@ -161,20 +240,29 @@ def render(tag, catalog):
     #     and the inner text is only a fragment - keeping the inner one would
     #     leave the rest of the sentence in English.
     elements = []
-    for key, match, english_text in units:
+    inner_translation = {
+        match.span("body"): catalog[key]
+        for key, match, english_text in units
+        if catalog.get(key) is not None and catalog.get(key) != english_text
+    }
+    for key, match, english_text in units + blocks:
         translated = catalog.get(key)
         if translated is None or translated == english_text:
             continue
-        body = match.group("body")
-        leading = re.match(r"\s*", body).group(0)
-        trailing = re.search(r"\s*$", body).group(0)
+        if key.startswith("blk."):
+            rewritten = render_block(match, translated, inner_translation)
+        else:
+            body = match.group("body")
+            leading = re.match(r"\s*", body).group(0)
+            trailing = re.search(r"\s*$", body).group(0)
+            rewritten = leading + html.escape(translated) + trailing
         elements.append(
             {
                 "key": key,
                 "whole": match.span(),
                 "span": match.span("body"),
                 "text": english_text,
-                "rewritten": leading + html.escape(translated) + trailing,
+                "rewritten": rewritten,
             }
         )
 
@@ -422,6 +510,18 @@ for info in locale_registry:
         continue
     catalog = json.loads(info["path"].read_text(encoding="utf-8"))
     target_html = render(tag, catalog.get("strings", {}))
+    # A block value is a sentence with {N} where its links and inline commands
+    # were. Losing or renumbering one silently drops a link or a command out of
+    # the rendered page, so the placeholder set must survive translation exactly.
+    for key, _match, english_value in blocks:
+        translated = catalog.get(key)
+        if translated is None or translated == english_value:
+            continue
+        if PLACEHOLDER.findall(translated) != PLACEHOLDER.findall(english_value):
+            sys.exit(
+                f"{tag}: {key} changed its placeholders. It must keep "
+                f"{PLACEHOLDER.findall(english_value)} exactly: {translated[:90]!r}"
+            )
     strays = stray_text_gt(target_html) - SOURCE_TEXT_GT
     if strays:
         sys.exit(

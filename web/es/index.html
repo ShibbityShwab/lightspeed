@@ -303,9 +303,7 @@
           <p class="relay-grid-note">Cargando el estado de los relays desde la última instantánea...</p>
         </div>
         <noscript>
-          <p class="relay-grid-note">Relay health is rendered from the signed registry and the latest snapshot, which need JavaScript. The raw snapshot is published as
-          <a href="../network-stats.json">network-stats.json</a> and the node list as
-          <a href="../registry.json">registry.json</a>.</p>
+          <p class="relay-grid-note">El estado de los relés se genera a partir del registro firmado y de la última instantánea, que requieren JavaScript. La instantánea sin procesar se publica como <a href="../network-stats.json">network-stats.json</a> y la lista de nodos como <a href="../registry.json">registry.json</a>.</p>
         </noscript>
 
         <div class="stats-panel" aria-live="polite">
@@ -342,13 +340,7 @@
         </div>
         <p class="sr-only" role="status" id="snapshot-status"></p>
 
-        <p class="network-note">
-          The network is community-hosted and sponsor-funded. Every relay is published in a
-          <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">registro firmado</a>,
-          so your client verifies each node and picks the fastest path automatically. No manual proxy setup needed.
-          We publish live relay health (whether each node is up, not latency) from a periodically regenerated
-          snapshot. Last checked <time data-last-checked datetime="">--</time>.
-        </p>
+        <p class="network-note">La red está alojada por la comunidad y financiada por patrocinadores. Cada relé se publica en un <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">registro firmado</a>, de modo que tu cliente verifica cada nodo y elige la ruta más rápida automáticamente. No hace falta configurar ningún proxy a mano. Publicamos el estado de los relés en vivo (si cada nodo está activo, no la latencia) a partir de una instantánea regenerada periódicamente. Última comprobación --.</p>
 
         <!-- Network Trends (bounded snapshot history) -->
         <div class="trends" id="network-trends">
@@ -642,10 +634,7 @@
             <div class="game-status game-status-ready">Listo</div>
           </article>
         </div>
-        <p class="games-more">
-          Don't see your game?
-          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a>
-        </p>
+        <p class="games-more">¿No ves tu juego? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
       </div>
     </section>
 
@@ -751,7 +740,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>Privacidad ante todo</h3>
-            <p>No account required. Anonymous aggregate telemetry is on by default and can be turned off any time with <code>--no-telemetry</code> or the GUI checkbox. It sends only aggregate latency metrics over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+            <p>No hace falta cuenta. La telemetría agregada anónima está activada por defecto y puede desactivarse en cualquier momento con <code>--no-telemetry</code> o la casilla de la interfaz. Solo envía métricas de latencia agregadas por HTTP sin cifrar al endpoint <code>/telemetry</code> sin autenticación del relé: ni direcciones IP, ni identificadores, ni contenido de paquetes. Una celda se suprime hasta que tiene al menos 3 informes (se cuentan informes, no personas distintas). El túnel es deliberadamente sin cifrar para que los sistemas antitrampas puedan inspeccionar el tráfico, y los servidores de juego siempre ven tu IP real. Un operador de relé puede técnicamente observar o modificar el tráfico en tránsito, así que LightSpeed no es una herramienta de privacidad ni de anonimato. Si necesitas confidencialidad, aloja tu propio relé. Consulta <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -761,12 +750,12 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-key"></use></svg></div>
             <h3>Autenticación por token</h3>
-            <p>Los clientes se registran a través de un plano de control QUIC y estampan un token de sesión en cada paquete del plano de datos. El proxy valida paquete por paquete. Los emisores no registrados se descartan. está activado por defecto.</p>
+            <p>Los clientes se registran mediante un plano de control QUIC y estampan un token de sesión en cada paquete del plano de datos. El proxy valida <code>(IP, token)</code> por paquete. Los emisores no registrados se descartan. <code>require_auth</code> está activado por defecto.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-plug"></use></svg></div>
             <h3>Fallback por TCP</h3>
-            <p>El túnel de cliente a proxy usa UDP por defecto, pero cambia a TCP () en redes que bloquean UDP: hoteles, cafeterías, ISP restrictivos. La misma optimización de baja sobrecarga, con más compatibilidad.</p>
+            <p>El túnel entre cliente y proxy usa UDP por defecto, pero cambia a TCP (<code>--tcp</code>) en redes que bloquean UDP: hoteles, cafeterías, ISP restrictivos. La misma optimización de baja sobrecarga, con más compatibilidad.</p>
           </div>
         </div>
 
@@ -992,12 +981,7 @@
 
         <p class="sr-only" role="status" id="copy-status"></p>
 
-        <p class="download-relay">
-          Running a relay node? Grab the proxy build for
-          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> or
-          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>.
-          Everything else lives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">Releases de GitHub</a>.
-        </p>
+        <p class="download-relay">¿Vas a ejecutar un nodo de relé? Consigue la compilación del proxy para <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> o <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>. Todo lo demás está en <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">Releases de GitHub</a>.</p>
       </div>
     </section>
 
@@ -1009,7 +993,7 @@
         <div class="faq-grid">
           <details class="faq-item">
             <summary>¿Cómo es gratis? ¿Dónde está la trampa?</summary>
-            <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data. Anonymous aggregate telemetry is on by default and can be turned off any time; see the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Política de Privacidad</a>.</p>
+            <p>No hay truco. La red de relés comunitaria está alojada por la comunidad y financiada por patrocinadores, así que puedes instalar el cliente y jugar sin ejecutar nada por tu cuenta. El software es totalmente de código abierto, y además puedes alojar tu propio proxy si lo prefieres: Vultr da 300 $ de crédito gratis a las cuentas nuevas y Oracle Cloud tiene una capa gratuita para siempre. No vendemos tus datos. La telemetría agregada anónima está activada por defecto y puede desactivarse en cualquier momento; consulta <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Política de Privacidad</a>.</p>
           </details>
           <details class="faq-item">
             <summary>¿Me van a banear por esto?</summary>
@@ -1025,19 +1009,19 @@
           </details>
           <details class="faq-item">
             <summary>¿Por qué mi ping es más alto cuando uso un proxy?</summary>
-            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>servidor de juego</em>, not closest to you. For an interactive look at how routing works, see the <a href="../route-visualizer/">Visualizador de rutas</a>.</p>
+            <p>Normalmente es una de dos cosas: (1) el relé está más lejos del servidor de juego que tu ruta directa, así que el salto extra añade latencia, o (2) el centro de datos del relé no está bien conectado a la columna vertebral de internet. La ubicación del proxy importa mucho: lo cerca que esté el centro de datos de los principales puntos de backbone y peering. El enrutamiento real también depende de contratos de peering BGP y de la priorización de los ISP, que ni tú ni LightSpeed controlan. Elige el proxy más cercano al <em>servidor de juego</em>, no el más cercano a ti. Para ver de forma interactiva cómo funciona el enrutamiento, consulta <a href="../route-visualizer/">Visualizador de rutas</a>.</p>
           </details>
           <details class="faq-item">
             <summary>¿Qué juegos son compatibles?</summary>
-            <p>Ahora mismo 21 juegos: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft y Hunt: Showdown tienen perfiles integrados. Solo tienes que ejecutar con o dejar que la autodetección lo detecte. Cualquier otro juego basado en UDP puede funcionar con configuración manual de puertos.</p>
+            <p>Actualmente 21 juegos: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft y Hunt: Showdown incluyen perfil integrado. Solo tienes que ejecutar con <code>--game &lt;name&gt;</code> o dejar que la detección automática lo encuentre. Cualquier otro juego basado en UDP funciona con configuración manual de puertos.</p>
           </details>
           <details class="faq-item">
             <summary>¿Están seguros mis datos?</summary>
-            <p>Anonymous aggregate telemetry is on by default. No accounts, no registration, and no personal data. It sends only aggregate network metrics (latency percentiles, jitter, FEC counters) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, and no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). Turn it off any time with <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the GUI checkbox. All traffic passes through unencrypted to avoid adding overhead. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Política de Privacidad</a> and <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Diccionario de Datos</a>.</p>
+            <p>La telemetría agregada anónima está activada por defecto. Sin cuentas, sin registro y sin datos personales. Solo envía métricas de red agregadas (percentiles de latencia, jitter, contadores FEC) por HTTP sin cifrar al endpoint <code>/telemetry</code> sin autenticación del relé: ni direcciones IP, ni identificadores, ni contenido de paquetes. Una celda se suprime hasta que tiene al menos 3 informes (se cuentan informes, no personas distintas). Desactívala en cualquier momento con <code>--no-telemetry</code>, <code>telemetry = false</code> en <code>lightspeed.toml</code>, o la casilla de la interfaz. Todo el tráfico pasa sin cifrar para no añadir sobrecarga. Consulta <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Política de Privacidad</a> y <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Diccionario de Datos</a>.</p>
           </details>
           <details class="faq-item">
             <summary>¿Cómo consigo un nodo proxy?</summary>
-            <p>The easiest path is to do nothing: the default client experience uses the community relay network, and your client auto-discovers the fastest relay from the <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">registro firmado</a>. If you want to run your own node instead, spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
+            <p>El camino más fácil es no hacer nada: la experiencia predeterminada del cliente usa la red de relés comunitaria, y tu cliente descubre automáticamente el relé más rápido a partir del <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">registro firmado</a>. Si prefieres ejecutar tu propio nodo, levanta un VPS de 5-6 $/mes en Vultr (o usa la capa gratuita de Oracle Cloud), ejecuta el script <code>setup-new-node.sh</code> del repositorio y apunta tu cliente a tu propia IP. Tarda unos 5 minutos. Los puertos de datos, control y salud se configuran en la sección <code>[network]</code> de la configuración del proxy. Consulta <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> para la guía completa.</p>
           </details>
           <details class="faq-item">
             <summary>¿Por qué Rust?</summary>
