@@ -68,6 +68,9 @@ pub struct GuiConfig {
     pub selected_game: Option<String>,
     /// The Game field's "Manual / Custom…" mode: relay an explicit server.
     pub manual_mode: bool,
+    /// UI language: a BCP-47 tag (`"en"`, `"de"`, `"pt-BR"`), or `None` to
+    /// follow the operating system locale on every start.
+    pub language: Option<String>,
 }
 
 impl Default for GuiConfig {
@@ -80,6 +83,7 @@ impl Default for GuiConfig {
             game_auto: true,
             selected_game: None,
             manual_mode: false,
+            language: None,
         }
     }
 }
@@ -122,6 +126,14 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         .get("manual_mode")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // Absent means "follow the OS locale", so an empty or malformed value is
+    // treated as absent rather than as a broken tag.
+    let language = table
+        .get("language")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string);
 
     let game_auto = table
         .get("game_auto")
@@ -169,6 +181,7 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         game_auto,
         selected_game,
         manual_mode,
+        language,
     })
 }
 
@@ -188,6 +201,9 @@ pub fn render(config: &GuiConfig) -> String {
         "share_latency_stats".into(),
         Value::Boolean(config.share_latency_stats),
     );
+    if let Some(language) = &config.language {
+        table.insert("language".into(), Value::String(language.clone()));
+    }
     let entries: Vec<Value> = config
         .proxies
         .iter()
@@ -260,6 +276,7 @@ mod tests {
             game_auto: true,
             selected_game: None,
             manual_mode: false,
+            language: Some("de".into()),
         }
     }
 
@@ -267,6 +284,14 @@ mod tests {
     fn config_round_trips_through_toml() {
         let parsed = parse(&render(&sample())).expect("rendered config parses");
         assert_eq!(parsed, sample());
+    }
+
+    #[test]
+    fn config_round_trips_without_a_pinned_language() {
+        let mut config = sample();
+        config.language = None;
+        let parsed = parse(&render(&config)).expect("rendered config parses");
+        assert_eq!(parsed.language, None);
     }
 
     #[test]
@@ -291,6 +316,20 @@ mod tests {
     #[test]
     fn config_parse_rejects_malformed_toml() {
         assert!(parse("this is not = toml [").is_err());
+    }
+
+    #[test]
+    fn config_language_absent_means_follow_the_system_locale() {
+        let parsed = parse("auto_select = true\n").expect("parse");
+        assert_eq!(parsed.language, None);
+    }
+
+    #[test]
+    fn config_language_blank_is_treated_as_absent() {
+        for body in ["language = \"\"\n", "language = \"   \"\n"] {
+            let parsed = parse(body).expect("parse");
+            assert_eq!(parsed.language, None, "{body:?} should not pin a language");
+        }
     }
 
     #[test]

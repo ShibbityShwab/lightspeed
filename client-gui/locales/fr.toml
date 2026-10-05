@@ -1,0 +1,95 @@
+[app]
+title = "LightSpeed"
+
+[action]
+boost = "AMÉLIORER MON JEU"
+stop = "ARRÊTER L'AMÉLIORATION"
+connect = "Se connecter"
+disconnect = "Se déconnecter"
+connecting = "Connexion..."
+restart_elevated = "Redémarrer en tant qu'administrateur"
+quit = "Quitter"
+cancel = "Annuler"
+close = "Fermer"
+
+[route]
+title = "Itinéraire"
+server = "Serveur"
+server_label = "Serveur :"
+custom_port_range = "Plage de ports personnalisée :"
+port_hint = "p. ex. 28015-28999 (laisser vide pour automatique)"
+relay = "Relais"
+game = "Jeu"
+status = "État"
+routed = "Routé"
+no_relay = "Pas encore de relais"
+relay_ready_pick = "Relais prêt, choisissez votre jeu"
+relay_ready_named = "Relais prêt, {name} sélectionné"
+
+[state]
+disconnected = "Déconnecté"
+connected = "Connecté"
+optimizing = "Optimisation"
+error = "Erreur"
+
+[settings]
+language = "Langue"
+follow_system = "Valeur par défaut du système"
+title = "Paramètres"
+privacy = "Confidentialité"
+maintenance = "Maintenance"
+about = "À propos"
+open_log = "Ouvrir le fichier journal"
+check_updates_hint = "Vérifier si une version plus récente de LightSpeed est disponible."
+share_stats = "Partager des statistiques de latence anonymes"
+
+[proxies]
+title = "Gestionnaire de relais"
+manage_hint = "Ajouter, supprimer ou actualiser la liste des relais."
+disconnect_hint = "Couper la liaison de contrôle avec le relais actuel"
+label_field = "Libellé :"
+addr_field = "Adresse :"
+invalid = "invalide"
+addr_invalid_hint = "Saisissez une IP:port valide (p. ex. 1.2.3.4:28015)"
+add = "Ajouter un relais"
+refresh = "Actualiser les relais"
+open_config = "Ouvrir le dossier de configuration"
+reset_defaults = "Rétablir les valeurs par défaut"
+
+[relay]
+auto_fastest = "Automatique (le plus rapide)"
+retry = "Réessayer"
+refresh_failed = "Échec de l'actualisation des relais - liste enregistrée utilisée"
+registry_empty = "Le registre des relais n'a renvoyé aucun relais utilisable."
+discovering = "Recherche des relais…"
+none_discovered = "Aucun relais détecté"
+
+[game]
+auto_detect = "Automatique (détection)"
+manual_custom = "Manuel / Personnalisé…"
+manual_server = "Manuel (serveur dédié)"
+auto_named = "Automatique — {name}"
+found = "Jeu détecté :"
+
+[connect]
+rust = "Dans la console F1 de Rust :  client.connect 127.0.0.1:{port}"
+cs2 = "Dans la console CS2 :  connect 127.0.0.1:{port}"
+dota2 = "Dans la console Dota 2 :  connect 127.0.0.1:{port}"
+generic = "Connectez votre jeu à :  127.0.0.1:{port}"
+
+[update]
+sheet_title = "Rechercher des mises à jour"
+checking = "Recherche de mises à jour…"
+installing = "Installation de la mise à jour…"
+current = "Version actuelle : {version}"
+latest = "Dernière version : {version}"
+
+[window]
+hide_to_tray = "Masquer dans la zone de notification"
+
+[about]
+source_hint = "Code source, tickets et versions"
+website_hint = "État des relais en direct, benchmarks et documentation"
+star_hint = "Les étoiles aident les autres joueurs à trouver LightSpeed"
+enjoying = "Ça vous plaît ?"
+star_github = "Ajouter une étoile sur GitHub"

@@ -2,7 +2,86 @@
 
 > **Canonical log of significant technical decisions for the LightSpeed project.**
 > Each entry includes the date, deciding agent, rationale, and impact.
-> Last entry: 2026-10-04
+> Last entry: 2026-10-05
+
+---
+
+### 2026-10-05: The English page gets its locale links at deploy time, never in the source
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (implemented in `scripts/generate-web-locales.sh` and `.github/workflows/pages.yml`)
+**Rationale:** The i18n wave shipped eight translated pages, each with an
+`hreflang` alternate set and a language switcher, while `web/index.html` - the
+page every visitor and crawler actually lands on - had neither (0 `hreflang`, 0
+`lang-switch`), and the generator's `web/locales/alternates.en.html` was written
+with no consumer. A reader arriving at the front door therefore could not reach
+any translation, and a crawler saw a single-language site. The blocker was that
+`web/index.html` is the extractor's source of truth: its element text is what
+`en.json`'s 442 positional keys index, so injecting markup into it (the bug wave
+3 already hit once) shifts every key on the next extraction.
+**Impact:** the English build is generated as a separate artifact,
+`web/index.en.html`, from the untouched source; `--check` fails when it is
+missing or stale, alongside the eight locale pages; and the Pages workflow
+promotes it over `web/index.html` inside the deploy artifact just before upload,
+failing closed with an explicit error if it is absent. The tracked source page
+keeps the exact text the keys point at, and the published page gains 9
+`hreflang` links plus the same no-JavaScript switcher the other locales carry.
+**Alternatives Considered:** editing `web/index.html` in place was rejected as
+the known key-shifting bug; having the workflow run the generator over the
+checked-out source at deploy time was rejected because the site is deliberately
+build-less (`web/**` is published verbatim) and the deployed bytes should be the
+reviewed bytes; a client-side JS redirect or `Accept-Language` sniff was rejected
+because it breaks bookmarking and static caching and cannot serve a crawler.
+**Verification:** the output has zero missing element texts and exactly the ten
+added switcher strings versus the source; `generate-web-locales.sh --check` and
+`extract-web-strings.sh --check` both rc=0; the deploy step was simulated in a
+scratch copy of `web/` and the promoted page carries 9 `hreflang` and the
+switcher; `cargo fmt --all --check` rc=0 and `cargo test -p lightspeed-gui` 99
+passed the same session. **Not** verified: no browser render of the served page,
+and nothing has been pushed, so the live site is unchanged.
+
+---
+
+### 2026-10-04: i18n is one catalog format with a fallback, not a translated string literal
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (wave 1 of 4 implemented: `client-gui`)
+**Rationale:** The GUI carried roughly 170 string literals in `app.rs` alone,
+but they are not one population: most are egui widget id salts (`"game_select"`),
+`tracing::warn!` log lines, font family names (`"semibold"`), test fixtures and
+colour/family names. Translating a widget id silently breaks `ComboBox` state
+and translating a log line breaks log-grepping, so a whole-file find-and-replace
+would have *looked* complete while corrupting both. The extraction was therefore
+driven from the call sites - literals passed to `ui.label`, `ui.button`,
+`section_label`, `sheet_title`, `hint_text`, `on_hover_text`, `selectable_label`
+and `format!` copy - which is 31 direct call sites plus 9 interpolated strings.
+**Impact:**
+1. Catalogs are TOML under `client-gui/locales/<tag>.toml`, compiled in with
+   `include_str!`, so an installer carries every language it supports and the
+   app never reads a catalog from disk at startup. `en.toml` is the source of
+   truth and CI-enforced equal to every other catalog by key set and by
+   `{placeholder}` set.
+2. Lookup degrades to English rather than to a raw key, and `resolve_requested`
+   folds platform spellings (`de_DE.UTF-8`, `zh_hans`, `pt_br`) onto a shipped
+   tag and treats `C`/`POSIX` as "no localization".
+3. The language is a `config.toml` field (`language = "de"`; absent means
+   "follow the OS locale"), pinned in `LightSpeedApp::new` **before the first
+   frame** - resolving later painted one frame of English and then swapped the
+   whole window.
+4. Nine locales ship: en (source), de, es, fr, ja, ko, pt-BR, ru, zh-Hans. The
+   non-English catalogs are machine-translated seeds and are **unreviewed** - a
+   native-speaker pass is required before any of them is advertised as supported.
+**Alternatives Considered:** a `fluent`/`gettext` runtime with `.po` files was
+rejected because it adds a dependency and a build step to a crate that already
+gates its dependencies; one flat merged catalog was chosen over per-key
+fallback chains so `t()` stays a single hash lookup on the per-frame path.
+**Verification:** `cargo fmt --all --check`, `cargo clippy --workspace
+--all-targets -- -D warnings`, and `cargo test -p lightspeed-gui` (99 passed, 1
+ignored). The render claim is held by `a_localized_frame_draws_the_translated_string`,
+which runs the real widget through `ctx.run_ui` and asserts the drawn shapes
+contain `Datenschutz` under `de` and `Privacy` under `en`; mutating that
+assertion was confirmed to fail the test with the drawn text in the output, so
+the guard is not theatre.
 
 ---
 

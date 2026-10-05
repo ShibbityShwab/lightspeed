@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <link rel="alternate" hreflang="de" href="https://shibbityshwab.github.io/lightspeed/de/">
+  <link rel="alternate" hreflang="en" href="https://shibbityshwab.github.io/lightspeed/">
+  <link rel="alternate" hreflang="es" href="https://shibbityshwab.github.io/lightspeed/es/">
+  <link rel="alternate" hreflang="fr" href="https://shibbityshwab.github.io/lightspeed/fr/">
+  <link rel="alternate" hreflang="ko" href="https://shibbityshwab.github.io/lightspeed/ko/">
+  <link rel="alternate" hreflang="pt-BR" href="https://shibbityshwab.github.io/lightspeed/pt-BR/">
+  <link rel="alternate" hreflang="ru" href="https://shibbityshwab.github.io/lightspeed/ru/">
+  <link rel="alternate" hreflang="zh-Hans" href="https://shibbityshwab.github.io/lightspeed/zh-Hans/">
+  <link rel="alternate" hreflang="x-default" href="https://shibbityshwab.github.io/lightspeed/">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>LightSpeed - 無料のゲームネットワーク最適化ツール</title>
+  <meta name="description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with automatic relay discovery and ML-based route selection.">
+  <meta name="theme-color" content="#0a0a1a">
+  <link rel="canonical" href="https://shibbityshwab.github.io/lightspeed/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <!-- Open Graph -->
+  <meta property="og:title" content="LightSpeed - Free Game Network Optimizer">
+  <meta property="og:description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://shibbityshwab.github.io/lightspeed/">
+  <meta property="og:site_name" content="LightSpeed">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://shibbityshwab.github.io/lightspeed/assets/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="LightSpeed: Reduce your ping. Free. Forever.">
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LightSpeed - Free Game Network Optimizer">
+  <meta name="twitter:description" content="Reduce your ping. Free. Forever. Open-source game network optimizer with AI-powered routing.">
+  <meta name="twitter:image" content="https://shibbityshwab.github.io/lightspeed/assets/og-image.png">
+  <!-- Structured data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "LightSpeed",
+    "description": "Open-source game network optimizer that routes game traffic through the fastest path to reduce and stabilize ping.",
+    "url": "https://shibbityshwab.github.io/lightspeed/",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "Windows, macOS, Linux",
+    "license": "https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "sameAs": "https://github.com/ShibbityShwab/lightspeed"
+  }
+  </script>
+</head>
+<body id="top">
+  <a class="skip-link" href="#main">コンテンツへスキップ</a>
+
+  <!-- Inline icon sprite: 24x24 stroke icons, currentColor. The bolt logo is an original LightSpeed mark. -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="ls-tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a1a38"/><stop offset="1" stop-color="#0a0a1a"/></linearGradient>
+      <linearGradient id="ls-mark" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#a29bfe"/><stop offset="1" stop-color="#00cec9"/></linearGradient>
+      <radialGradient id="ls-glow" cx="0.5" cy="0.46" r="0.62"><stop offset="0" stop-color="#6c5ce7" stop-opacity="0.45"/><stop offset="1" stop-color="#6c5ce7" stop-opacity="0"/></radialGradient>
+    </defs>
+    <symbol id="i-logo" viewBox="0 0 32 32">
+      <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7" fill="url(#ls-tile)" stroke="#2f2f52" stroke-width="1.5"/>
+      <circle cx="16" cy="15" r="13.5" fill="url(#ls-glow)"/>
+      <path d="M6.55 4.75 H14.65 V20.05 H20.05 L25.45 25 L22.75 27.25 H6.55 Z" fill="url(#ls-mark)"/>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 3 20 12 6 21z"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></symbol>
+    <symbol id="i-gamepad" viewBox="0 0 24 24"><path d="M6 11h4"/><path d="M8 9v4"/><path d="M15 12h.01"/><path d="M18 10h.01"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+    <symbol id="i-map-pin" viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></symbol>
+    <symbol id="i-life-buoy" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/><circle cx="12" cy="12" r="4"/></symbol>
+    <symbol id="i-timer" viewBox="0 0 24 24"><path d="M10 2h4"/><path d="m12 14 3-3"/><circle cx="12" cy="14" r="8"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/><path d="M6.453 15h11.094"/><path d="M8.5 2h7"/></symbol>
+    <symbol id="i-badge-dollar" viewBox="0 0 24 24"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></symbol>
+  </svg>
+
+  <!-- Navigation -->
+  <nav class="nav" id="nav" aria-label="メイン">
+    <div class="nav-inner">
+      <a href="#top" class="nav-logo">
+        <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><use href="#i-logo"></use></svg>
+        <span class="logo-text">LightSpeed</span>
+      </a>
+      <div class="nav-links" id="nav-links">
+        <a href="#how-it-works">仕組み</a>
+        <a href="#network">ネットワーク</a>
+        <a href="#games">ゲーム</a>
+        <a href="#benchmarks">ベンチマーク</a>
+        <a href="route-visualizer/">ルート可視化</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener">
+          <svg class="icon icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg> GitHub
+        </a>
+        <label class="lang-switch"><span class="lang-switch-label">日本語</span><select aria-label="Change language" onchange="if(this.value)location.href=this.value"><option value="https://shibbityshwab.github.io/lightspeed/de/">Deutsch</option><option value="https://shibbityshwab.github.io/lightspeed/">English</option><option value="https://shibbityshwab.github.io/lightspeed/es/">Español</option><option value="https://shibbityshwab.github.io/lightspeed/fr/">Français</option><option value="https://shibbityshwab.github.io/lightspeed/ja/" selected>日本語</option><option value="https://shibbityshwab.github.io/lightspeed/ko/">한국어</option><option value="https://shibbityshwab.github.io/lightspeed/pt-BR/">Português (Brasil)</option><option value="https://shibbityshwab.github.io/lightspeed/ru/">Русский</option><option value="https://shibbityshwab.github.io/lightspeed/zh-Hans/">简体中文</option></select></label><a href="#download" class="btn btn-sm btn-primary">ダウンロード</a>
+      </div>
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-label="メニューを開く" aria-controls="nav-links" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <main id="main">
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero-bg" aria-hidden="true"></div>
+      <div class="container hero-content">
+        <div class="hero-copy">
+          <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
+          <h1 class="hero-title">
+            pingを減らそう。無料。ずっと。
+                   <p class="hero-subtitle">
+            LightSpeedは、MLベースのプロキシ選択でゲームの通信を最速ルートに通すオープンソースのネットワーク最適化ツールです。サブスクリプションはありません。匿名の集計テレメトリはデフォルトで有効で、いつでもオフにできます。ただ遅延が下がるだけ。
+          </p>
+          <div class="hero-actions">
+            <a href="#download" class="btn btn-lg btn-primary">
+              無料でダウンロード
+            </a>
+            <a href="https://github.com/ShibbityShwab/lightspeed" class="btn btn-lg btn-outline" target="_blank" rel="noopener">
+              GitHubでスターを付ける
+            </a>
+          </div>
+          <dl class="hero-stats">
+            <div class="stat">
+              <dt class="stat-label">ずっと無料</dt>
+              <dd class="stat-value">$0</dd>
+            </div>
+            <div class="stat">
+              <dt class="stat-label">ゲームプロファイル</dt>
+              <dd class="stat-value">19</dd>
+            </div>
+            <div class="stat">
+              <dt class="stat-label">RTT削減量の中央値</dt>
+              <dd class="stat-value">収集中           </div>
+            <div class="stat">
+              <dt class="stat-label">リレーの方が遅かった割合</dt>
+              <dd class="stat-value">収集中           </div>
+            <div class="stat">
+              <dt class="stat-label">モデル適合度</dt>
+              <dd class="stat-value">収集中           </div>
+            <div class="stat">
+              <dt class="stat-label">学習データ</dt>
+              <dd class="stat-value">収集中           </div>
+          </dl>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="route-card">
+            <div class="route-card-top">
+              <span class="route-card-label">ライブルート</span>
+              <span class="route-card-ping"><span class="ping-dot"></span>12 ms</span>
+            </div>
+            <svg class="route-map" viewBox="0 0 360 190" focusable="false">
+              <defs>
+                <linearGradient id="route-line" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#6c5ce7"/>
+                  <stop offset="0.55" stop-color="#00cec9"/>
+                  <stop offset="1" stop-color="#00d68f"/>
+                </linearGradient>
+              </defs>
+              <path class="route-direct" d="M38 152 C 120 150, 250 60, 322 38"/>
+              <path class="route-path" d="M38 152 C 92 62, 250 58, 322 38"/>
+              <circle class="route-node" cx="38" cy="152" r="7"/>
+              <circle class="route-node route-node-mid" cx="182" cy="76" r="5"/>
+              <circle class="route-node" cx="322" cy="38" r="7"/>
+            </svg>
+            <div class="route-card-stops">
+              あなたのPC リレー LAX ゲームサーバー
+                        <div class="route-card-foot">
+              カプセル化 +0.162 ms 例
+               </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Privacy notice (on-by-default telemetry disclosure) -->
+    <section class="section" id="privacy-notice" aria-label="プライバシー通知">
+      <div class="container">
+        <p class="section-subtitle">
+          <strong>プライバシー通知:</strong> Anonymous aggregate telemetry is <strong>デフォルトで有効</strong>.
+          It sends aggregate latency metrics (percentiles, jitter, FEC counters, and the direct-vs-relayed
+          difference) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint.
+          A cell is suppressed until it has at least 3 reports. Turn it off any time with
+          <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the
+          GUI checkbox. Read the
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">プライバシーポリシー</a>
+          and
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">データ辞書</a>.
+        </p>
+      </div>
+    </section>
+
+    <!-- How It Works -->
+    <section class="section" id="how-it-works">
+      <div class="container">
+        <p class="section-eyebrow">セットアップ</p>
+        <h2 class="section-title">仕組み</h2>
+        <p class="section-subtitle">3ステップだけ。アカウントも設定ファイルも、余計なものも一切なし。</p>
+        <div class="steps">
+          <div class="step">
+            <div class="step-badge">
+              <svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-play"></use></svg>
+              <span class="step-number" aria-hidden="true">1</span>
+            </div>
+            <h3>LightSpeedを起動</h3>
+            <p>ゲームの前に軽量クライアントを起動します。22個の内蔵プロファイルを自動検出します: Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft (BedrockとJava)、そしてHunt: Showdown。</p>
+          </div>
+          <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
+          <div class="step">
+            <div class="step-badge">
+              <svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-route"></use></svg>
+              <span class="step-number" aria-hidden="true">2</span>
+            </div>
+            <h3>MLがルートを選ぶ</h3>
+            <p>MLモデルはプロキシノード間の遅延、ジッター、パケットロスを分析し、1回の推論パスで最速ルートを選びます。実行時の計測はマイクロ秒単位です。</p>
+          </div>
+          <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
+          <div class="step">
+            <div class="step-badge">
+              <svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-gauge"></use></svg>
+              <span class="step-number" aria-hidden="true">3</span>
+            </div>
+            <h3>低いpingでプレイ</h3>
+            <p>ゲームの通信はパケットを改変せず透過的に再ルーティングされ、アンチチート互換を意識した設計です。パケットが速くなるだけ。</p>
+          </div>
+        </div>
+
+        <!-- Architecture diagram -->
+        <div class="arch-diagram">
+          <h3 class="arch-title">内部の仕組み</h3>
+          <div class="arch-flow">
+            <div class="arch-node arch-client">
+              <span class="arch-node-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-monitor"></use></svg></span>
+              <span class="arch-node-label">あなたのPC</span>
+              <span class="arch-node-detail">クライアント + インターセプター</span>
+            </div>
+            <div class="arch-link" aria-hidden="true">
+              UDP / TCPトンネル
+            iv>
+            <div class="arch-node arch-proxy">
+              バックボーンルート上のプロキシノードリレー
+                 <div class="arch-link" aria-hidden="true">
+              ネイティブUDP
+            div>
+            <div class="arch-node arch-server">
+              ゲームサーバー Fortnite / CS2 / Dota
+            v>
+          </div>
+          <p class="arch-note">カプセル化で+0.162 ms増えます。以前のヘッダーを使ったアーカイブ済みMVPベンチマークのlocalhost計測値で、一般的な遅延の保証ではありません。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Global Network -->
+    <section class="section section-dark" id="network">
+      <div class="container">
+        <p class="section-eyebrow">インフラ</p>
+        <h2 class="section-title">グローバルネットワーク</h2>
+        <p class="section-subtitle">北米、欧州、AP-Southeast、AP-Northeast、AP-South、オセアニアにまたがるコミュニティホスト型リレー。クライアントは署名済みレジストリを検証し、最速ルートを自動検出します。</p>
+        <!-- Rendered from network-stats.json relays[]. No hardcoded node cards:
+             the grid can never drift from the published snapshot. -->
+        <div class="relay-grid" id="relay-grid" data-relay-grid aria-busy="true">
+          <p class="relay-grid-note">最新スナップショットからリレーの状態を読み込み中...</p>
+        </div>
+        <noscript>
+          <p class="relay-grid-note">Relay health is rendered from the signed registry and the latest snapshot, which need JavaScript. The raw snapshot is published as
+          <a href="network-stats.json">network-stats.json</a> and the node list as
+          <a href="registry.json">registry.json</a>.</p>
+        </noscript>
+
+        <div class="stats-panel" aria-live="polite">
+          <div class="stats-row">
+            <div class="stat">
+              <span class="stat-value" data-stat="relay_count">--</span>
+              <span class="stat-label">リレーノード</span>
+            </div>
+            <div class="stat">
+              -- オンラインのリレー
+            v>
+            <div class="stat">
+              -- 地域
+            >
+            <div class="stat">
+              19個のゲームプロファイル
+            v>
+          </div>
+          <div class="stats-row">
+            <div class="stat">
+              <span class="stat-value" data-stat="packets_relayed">--</span>
+              <span class="stat-label">中継したパケット</span>
+            </div>
+            <div class="stat">
+              -- フィルタしたパケット
+            
+            <div class="stat">
+              -- 上流のロス
+                       <div class="stat">
+              -- セッション
+            iv>
+          </div>
+        </div>
+        <p class="sr-only" role="status" id="snapshot-status"></p>
+
+        <p class="network-note">
+          The network is community-hosted and sponsor-funded. Every relay is published in a
+          <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">署名済みレジストリ</a>,
+          so your client verifies each node and picks the fastest path automatically. No manual proxy setup needed.
+          We publish live relay health (whether each node is up, not latency) from a periodically regenerated
+          snapshot. Last checked <time data-last-checked datetime="">--</time>.
+        </p>
+
+        <!-- Network Trends (bounded snapshot history) -->
+        <div class="trends" id="network-trends">
+          <h3 class="trends-title">ネットワークの推移</h3>
+          <p class="trends-subtitle">
+            推移は、コレクターが公開する上限付きスナップショット履歴 (最大360点) から描画されます。履歴に含まれない指標は空欄のままで、推定値は入れません。
+          </p>
+          <div class="trends-grid" id="trends-grid" data-trends-grid></div>
+          <div class="trends-empty" id="trends-empty" data-trends-empty hidden>
+            <p data-trends-empty-message>ネットワーク履歴はまだ公開されていません。</p>
+          </div>
+          <div class="source-quality" id="source-quality" hidden>
+            <h4 class="trend-card-title">リレーが効く範囲、クライアント地域別</h4>
+            <p class="trend-card-subtitle">
+              最新の計測区間、リレーとクライアント地域ごと。削減量が正なら、その地域ではリレーが直接経路より速かったことを意味します。3件以上のペアになったクライアント報告があるセルのみ表示します。クライアントの国は世界の地域単位に粗くまとめられ、IPアドレス、識別子、正確な位置は一切収集しません。
+            </p>
+            <div class="source-quality-table-wrap" id="source-quality-table-wrap" tabindex="0" role="region" aria-label="リレーとクライアント地域ごとの実測RTT削減量、スクロール可能な表">
+              <table class="source-quality-table">
+                <caption class="sr-only">リレーとクライアント地域ごとの実測RTT削減量</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Relay</th>
+                    <th scope="col">クライアント地域</th>
+                    <th scope="col">報告数</th>
+                    <th scope="col">削減量 (平均)</th>
+                    <th scope="col">悪化した割合</th>
+                  </tr>
+                </thead>
+                <tbody data-source-quality-body></tbody>
+              </table>
+            </div>
+            <p class="table-scroll-hint" data-table-scroll-hint hidden>表を横にスクロールするとすべての列が見えます。</p>
+            <p class="trend-note" data-source-quality-note></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Supported Games -->
+    <section class="section" id="games">
+      <div class="container">
+        <p class="section-eyebrow">対応状況</p>
+        <h2 class="section-title">対応ゲーム</h2>
+        <p class="section-subtitle">21タイトルの内蔵プロファイル。すぐに起動して遊べます。</p>
+        <div class="games-grid">
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">FN</span>
+              <h3>Fortnite</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 1024-65535</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>Fortniteの全サーバー地域を完全サポート。ゲームのパケットを一切改変せず、EasyAntiCheatと互換です。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">CS2</span>
+              <h3>Counter-Strike 2</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27015-27050</span>
+              <span class="game-tag">VAC</span>
+            </div>
+            <p>CS2のtickに敏感なネットワーク向けに最適化。VACセーフ: 再ルーティングのみでパケットは改変しません。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">D2</span>
+              <h3>Dota 2</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27015-27050</span>
+              <span class="game-tag">VAC</span>
+            </div>
+            <p>SEA、インド、南米を含むDota 2の全地域で動作します。Valveのネットワークと互換です。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">RS</span>
+              <h3>Rust</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 28015-28017</span>
+              <span class="game-tag">EAC + Facepunch</span>
+            </div>
+            <p>コミュニティサーバーと公式サーバーへ直接UDP接続。Steam Datagram Relayを介さないためLightSpeedのプロキシに最適。EACとFacepunch Anti-Hackに対応します。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-danger" aria-hidden="true">VAL</span>
+              <h3>Valorant</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7000-7500</span>
+              <span class="game-tag">Riot Vanguard</span>
+            </div>
+            <p>世界中のRiot地域サーバーへ直接UDP接続。LightSpeedはパケットを透過的に再ルーティングするだけで、Riot Vanguardのカーネルレベルのアンチチートと完全に互換です。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">APX</span>
+              <h3>Apex Legends</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 37000-37050</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>NA、EU、アジア、OCEにまたがるEAのデータセンターサーバーへ直接UDP接続。Steamリレー層がないためプロキシが簡単です。EACセーフの透過ルーティング。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">OW2</span>
+              <h3>Overwatch 2</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 3478-6250</span>
+              <span class="game-tag">Warden</span>
+            </div>
+            <p>Blizzardの全地域サーバーをサポート。Blizzardのゲーム通信は直接UDPを使うため、透過的な再ルーティングがWardenアンチチートと問題なく併用できます。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">LoL</span>
+              <h3>League of Legends</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 5000-5500</span>
+              <span class="game-tag">Riot Vanguard</span>
+            </div>
+            <p>Riotの全地域サーバー (NA、EUW、EUNE、KRなど) で動作します。Riot Vanguardと完全に互換: 変えるのはルートだけで、ペイロードには触れません。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">PUBG</span>
+              <h3>PUBG</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7000-17999</span>
+              <span class="game-tag">BattlEye</span>
+            </div>
+            <p>PUBGの全サーバー地域をサポート。Kraftonのサーバーへリレー層なしで直接UDP接続。透過トンネリングはBattlEyeと完全に互換です。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">MS</span>
+              <h3>MapleStory</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7575-8484</span>
+              <span class="game-tag">BlackCipher NGS</span>
+            </div>
+            <p>世界中のNexon地域サーバーへ直接UDP接続。透過ルーティングはBlackCipherのユーザーモード改ざん対策と互換です。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">GI</span>
+              <h3>Genshin Impact</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 22101-42472</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>HoYoverseの地域サーバーへのUDP通信。カーネルアンチチートはなく、アクション戦闘向けのクリーンで低遅延なルーティングだけを提供します。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-danger" aria-hidden="true">RL</span>
+              <h3>Rocket League</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7000-9000</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>全地域のPsyonixサーバーへ直接UDP接続。パケット改変もリレー層もないEAC互換の透過ルーティング。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">WoT</span>
+              <h3>World of Tanks</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 12000-29999</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>Wargamingの地域サーバーへのUDP通信。カーネルアンチチートがないため、戦車戦のルート最適化は簡単です。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">CSGO</span>
+              <h3>CS:GO Legacy</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27000-27050</span>
+              <span class="game-tag">VAC</span>
+            </div>
+            <p>LegacyのCS:GOサーバーは今も直接UDPを受け付けます。CS2と同じVACセーフの透過ルーティング。一部のサーバーはSteam Datagram Relayを使うため、自動検出は直接経路があるときにそちらを選びます。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-danger" aria-hidden="true">DBD</span>
+              <h3>Dead by Daylight</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27000-27050</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>全地域のBehaviour Interactiveの専用サーバーへ直接UDP接続。パケット改変なしのEAC互換な透過ルーティング。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">BC</span>
+              <h3>Bodycam</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 27000-27050</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>カーネルアンチチートのないSteam経由のピアツーピア。LightSpeedはSteamのデータグラム通信をよりクリーンな経路でピアへ再ルーティングします。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">RBX</span>
+              <h3>Roblox</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 49152-65535</span>
+              <span class="game-tag">Byfron (Hyperion)</span>
+            </div>
+            <p>高いエフェメラル送信元ポートを使いRobloxの地域ゲームサーバーへ直接UDP接続。パケットを一切改変しないため、透過転送はByfron (Hyperion)と互換のままです。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">PZ</span>
+              <h3>Project Zomboid</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 16261-16262</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>コミュニティサーバーと専用サーバーへ直接UDP接続。クライアント側アンチチートがないため、協力サバイバルの透過的な再ルーティングは簡単です。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">WD</span>
+              <h3>WARDOGS</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 7777-7788</span>
+              <span class="game-tag">Elytra</span>
+            </div>
+            <p>サーバーブラウザーの背後にある専用サーバー。パケットを一切改変しないため、透過UDP転送はElytraと互換のままです。WindowsのキャプチャはProtonがブロックされている間のみです。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">MC</span>
+              <h3>Minecraft</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 19132-19133</span>
+              <span class="game-tag">None</span>
+            </div>
+            <p>Bedrock EditionのマルチプレイはUDP 19132/19133で、デスクトップもコンソールのサーバーも同様です。Java EditionはTCP 25565で、1.7以降TCPトンネル経由で対応しています: アプリで「Manual / Custom…」を選び、サーバーを入力してください。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">HS</span>
+              <h3>Hunt: Showdown</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 20000-20099</span>
+              <span class="game-tag">EasyAntiCheat</span>
+            </div>
+            <p>Crytekの脱出シューター向けにマッチメーカーが割り当てる専用サーバー。Easy Anti-Cheatセーフ: UDPは透過的に転送され、決して改変されません。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+        </div>
+        <p class="games-more">
+          Don't see your game?
+          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a>
+        </p>
+      </div>
+    </section>
+
+    <!-- Benchmarks -->
+    <section class="section section-dark" id="benchmarks">
+      <div class="container">
+        <p class="section-eyebrow">パフォーマンス</p>
+        <h2 class="section-title">ベンチマーク</h2>
+        <p class="section-subtitle">テストスイートとライブのリレー健全性チェックから得た実際の数値。都合のいい結果だけを載せることはしません。</p>
+        <div class="bench-grid">
+          <article class="bench-card">
+            <h3 class="bench-title">ネットワーク状況</h3>
+            <div class="bench-value"><span data-stat="relays_online">--</span> <span class="bench-unit">オンライン</span></div>
+            <p>定期的な健全性チェックが各コミュニティリレーの稼働状況を報告します。公開するのは稼働率とバージョンで、接続ごとの遅延は公開しません。遅延はISPとルートに依存するため、自分の回線で測ってください。</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill bench-bar-green bench-bar-live" id="network-health-bar" style="width: 0%"></div>
+            </div>
+            <p class="bench-bar-label">最終確認 --</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title">リレーソフトウェア</h3>
+            <div class="bench-value" data-stat="software_versions">--</div>
+            <p>最新の健全性スナップショットでリレーが報告したバージョン。すべてのノードはコミュニティネットワークリリースの同じ署名済みビルドを実行しています。</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 100%"></div>
+            </div>
+            <p class="bench-bar-label">リレーの健全性チェックによる報告</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title">リレーの健全性</h3>
+            <ul class="relay-health-list" id="relay-health-list">
+              <li class="relay-health-row"><span class="relay-health-name">スナップショットを待機中</span></li>
+            </ul>
+            <p>最新スナップショットの場所、状態、稼働時間。</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title">FEC復元</h3>
+            <div class="bench-value">オーバーヘッド25%</div>
+            <p>XORベースの前方誤り訂正は、再送の往復なしにパリティから失われたパケットを復元します。実測のロスに適応し、クリーンな回線ではほぼゼロ、パケットが実際に落ちている間は既定のブロックサイズで最大25%までになります。</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 25%"></div>
+            </div>
+            <p class="bench-bar-label">最大25%のオーバーヘッド、ロス時のみ</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title">WARPブースト</h3>
+            <div class="bench-value">5-10 <span class="bench-unit">ms</span></div>
+            <p>任意のCloudflare WARP連携がNTTバックボーン経由でルーティングし、ISP側の非効率な経路を回避します。無料。</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill bench-bar-green" style="width: 90%"></div>
+            </div>
+            <p class="bench-bar-label">自動検出 · MASQUEプロトコル</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title">トンネルのオーバーヘッド</h3>
+            <div class="bench-value">162 <span class="bench-unit">μs</span></div>
+            <p>プロトコルのカプセル化による追加はわずか0.162ms。24バイトのヘッダーと任意の4バイトFEC拡張です。アーカイブ済みMVPベンチマークのlocalhost計測値で、一般的な保証ではありません。</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill" style="width: 3%"></div>
+            </div>
+            <p class="bench-bar-label">0.162ms (体感できない)</p>
+          </article>
+          <article class="bench-card">
+            <h3 class="bench-title">テストスイート</h3>
+            <div class="bench-value">200以上のテストdiv>
+            <p>プロトコルテスト (ヘッダー、FEC、テレメトリ、ゼロアロケーションAPI)、4つのクレートすべてにまたがる統合テスト、さらにCIでのローカルプロキシ + エコーサーバーのE2Eテスト。上のネットワーク状況はCIではなく、定期的なライブのリレー健全性チェックによるものです。</p>
+            <div class="bench-bar">
+              <div class="bench-bar-fill bench-bar-green" style="width: 100%"></div>
+            </div>
+            <p class="bench-bar-label">合格率100% · ローカルプロキシ + エコーE2E</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Why LightSpeed -->
+    <section class="section" id="why">
+      <div class="container">
+        <p class="section-eyebrow">LightSpeedを選ぶ理由</p>
+        <h2 class="section-title">なぜLightSpeedなのか?</h2>
+        <p class="section-subtitle">LightSpeedが他と違う点はこちら。</p>
+        <div class="compare-grid">
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-badge-dollar"></use></svg></div>
+            <h3>本当に無料</h3>
+            <p>「無料トライアル」的な無料ではありません。「フリーミアム」的な無料でもありません。ずっと0円という意味の無料です。コミュニティリレーネットワークはコミュニティがホストし、スポンサーが資金を出しています。無料枠のクラウドVPSクレジットで自分のプロキシを動かすこともできます。仲介業者なし、サブスクなし、隠れた費用なし。ずっと。</div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-unlock"></use></svg></div>
+            <h3>オープンソース</h3>
+            <p>コードはすべてGitHubにあります。監査し、フォークし、改良してください。ブラックボックスも、正体不明のバイナリも、「信じてくれ」なセキュリティもありません。</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-sparkles"></use></svg></div>
+            <h3>ML搭載</h3>
+            <p>モデルは実際の遅延データ、時間帯、ネットワーク状況から最速のルートを学習します。「一番近いサーバーを選ぶ」だけではありません。</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-shield-check"></use></svg></div>
+            <h3>アンチチート互換を重視した設計</h3>
+            <p>LightSpeedはゲームのパケットやメモリを決して改変しません。変えるのはパケットが通るルートだけで、ペイロードには触れません。EAC、VAC、Vanguardの検知モデルを作動させずに併用できるよう作られています。p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
+            <h3>プライバシー優先</h3>
+            <p>No account required. Anonymous aggregate telemetry is on by default and can be turned off any time with <code>--no-telemetry</code> or the GUI checkbox. It sends only aggregate latency metrics over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). The tunnel is intentionally unencrypted so anti-cheat systems can inspect the traffic, and game servers always see your real IP. A relay operator can technically observe or modify traffic in transit, so LightSpeed is not a privacy or anonymity tool. If you need confidentiality, self-host your own relay. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
+            <h3>Rustで開発</h3>
+            <p>高速、メモリ安全、ゼロコスト抽象化。スタック全体 (クライアント、プロキシ、プロトコル) がasync TokioとQUICを使った純粋なRustです。</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-key"></use></svg></div>
+            <h3>トークン認証</h3>
+            <p>クライアントはQUIC制御プレーンで登録し、データプレーンの全パケットにセッショントークンを付けます。プロキシはパケットごとに検証します。未登録の送信元は破棄されます。はデフォルトで有効です。</p>
+          </div>
+          <div class="compare-card">
+            <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-plug"></use></svg></div>
+            <h3>TCPフォールバック</h3>
+            <p>クライアントとプロキシ間のトンネルは既定でUDPですが、UDPを遮断するネットワーク (ホテル、カフェ、制限の厳しいISP) ではTCP () に切り替わります。同じ低オーバーヘッドの最適化を、より広い互換性で。</p>
+          </div>
+        </div>
+
+        <!-- Capabilities -->
+        <div class="compare-table-wrapper" tabindex="0" role="region" aria-label="LightSpeedの機能、スクロール可能な表">
+          <table class="compare-table">
+            <caption class="sr-only">LightSpeedの機能</caption>
+            <thead>
+              <tr>
+                <th scope="col">Capability</th>
+                <th scope="col" class="compare-us">LightSpeed</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">価格</th>
+                <td class="compare-us">$0/ずっと>
+              </tr>
+              <tr>
+                <th scope="row">オープンソース</th>
+                <td class="compare-us">対応: フル-us">対応: MLモデルs">対応: アカウント不要us">対応pare-us">対応: オーバーヘッド25%s">対応: 自動検出s">対応: パケットごとus">対応:ad -->
+    <section class="section section-accent" id="download">
+      <div class="container">
+        <p class="section-eyebrow">インストール</p>
+        <h2 class="section-title">LightSpeedをダウンロード</h2>
+        <p class="section-subtitle">最新リリースを入手して起動するだけ。セットアップはそれだけです。  <div class="download-primary">
+          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest" class="btn btn-lg btn-primary" id="primary-download">
+            LightSpeedをダウンロード
+          a>
+          <p class="download-primary-note" id="primary-download-note">プラットフォームを検出中...</p>
+        </div>
+
+        <div class="download-grid">
+          <div class="download-card">
+            <div class="download-icon"><svg class="icon icon-xl" aria-hidden="true" focusable="false"><use href="#i-monitor"></use></svg></div>
+            <h3>Windows</h3>
+            <p>Windows 10/11 &middot; x64</p>
+            <ul class="download-links">
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.msi">
+                  GUIインストーラー (MSI) lightspeed-gui-x86_64-pc-windows-msvc.msi
+                >
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-pc-windows-msvc.zip">
+                  GUIアプリ (ZIP) lightspeed-gui-x86_64-pc-windows-msvc.zip
+                /a>
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-pc-windows-msvc.zip">
+                  CLIクライアント (ZIP) lightspeed-client-x86_64-pc-windows-msvc.zip
+                /a>
+              </li>
+            </ul>
+          </div>
+
+          <div class="download-card">
+            <div class="download-icon"><svg class="icon icon-xl" aria-hidden="true" focusable="false"><use href="#i-laptop"></use></svg></div>
+            <h3>macOS</h3>
+            <p>macOS 12+ · CLIクライアント</p>
+            <ul class="download-links">
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-apple-darwin.tar.xz">
+                  Apple Silicon (Mシリーズ) lightspeed-client-aarch64-apple-darwin.tar.xz
+                >
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-apple-darwin.tar.xz">
+                  <span class="download-link-label">Intel Mac</span>
+                  <span class="download-filename" aria-hidden="true">lightspeed-client-x86_64-apple-darwin.tar.xz</span>
+                </a>
+              </li>
+            </ul>
+          </div>
+
+          <div class="download-card">
+            <div class="download-icon"><svg class="icon icon-xl" aria-hidden="true" focusable="false"><use href="#i-terminal"></use></svg></div>
+            <h3>Linux</h3>
+            <p>x64 &amp; ARM64 &middot; GUI + CLI</p>
+            <ul class="download-links">
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz">
+                  GUIアプリ (x64) lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz
+                /a>
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-x86_64-unknown-linux-gnu.tar.xz">
+                  CLIクライアント (x64) lightspeed-client-x86_64-unknown-linux-gnu.tar.xz
+                /a>
+              </li>
+              <li>
+                <a class="download-link" href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-aarch64-unknown-linux-gnu.tar.xz">
+                  CLIクライアント (ARM64) lightspeed-client-aarch64-unknown-linux-gnu.tar.xz
+                /a>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="download-methods">
+          <h3 class="download-methods-title">標準のインストール方法</h3>
+          <div class="method-grid">
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Windowsパッケージマネージャー</h4>
+                <span class="method-badge">未公開</span>
+              </div>
+              <p>wingetパッケージは公開されていません。上のMSIは同じビルドなので、今はそちらを使ってください。</p>
+              <div class="code-copy">
+                <code class="code-block">winget install ShibbityShwab.LightSpeed</code>
+                <button class="copy-btn" type="button" aria-label="wingetコマンドをコピー">コピー</button>
+              </div>
+            </div>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Homebrew (macOS &amp; Linux)</h4>
+              </div>
+              <p>formulaを一度tapしたら、あとはbrewでインストールとアップグレード。</p>
+              <div class="code-copy">
+                <code class="code-block">brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed</code>
+                <button class="copy-btn" type="button" aria-label="brew tapコマンドをコピー">コピー</button>
+              </div>
+              <div class="code-copy">
+                <code class="code-block">brew install ShibbityShwab/lightspeed/lightspeed</code>
+                <button class="copy-btn" type="button" aria-label="brew installコマンドをコピー">コピー</button>
+              </div>
+            </div>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Scoop (Windows)</h4>
+              </div>
+              <p>bucketを一度追加したら、あとはscoopでインストールとアップグレード。</p>
+              <div class="code-copy">
+                <code class="code-block">scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket</code>
+                <button class="copy-btn" type="button" aria-label="scoop bucketコマンドをコピー">コピー</button>
+              </div>
+              <div class="code-copy">
+                <code class="code-block">scoop install lightspeed</code>
+                <button class="copy-btn" type="button" aria-label="scoop installコマンドをコピー">コピー</button>
+              </div>
+            </div>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Chocolatey (Windows)</h4>
+                <span class="method-badge">モデレーション待ち</span>
+              </div>
+              <p>パッケージはChocolatey Communityフィードに申請済みで、モデレーション待ちです。上のMSIは同じビルドなので、承認されるまではそちらを使ってください。</p>
+              <div class="code-copy">
+                <code class="code-block">choco install lightspeed</code>
+                <button class="copy-btn" type="button" aria-label="Chocolateyコマンドをコピー">コピー</button>
+              </div>
+            </div>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Arch Linux (AUR)</h4>
+                <span class="method-badge">未公開</span>
+              </div>
+              <p>AURパッケージは公開されていません。上のLinux tarballか、下のシェルインストーラーを使ってください。</p>
+              <div class="code-copy">
+                <code class="code-block">yay -S lightspeed-bin</code>
+                <button class="copy-btn" type="button" aria-label="AURコマンドをコピー">コピー</button>
+              </div>
+            </div>
+
+            <div class="method-card">
+              <div class="method-head">
+                <h4>Linuxシェルインストーラー</h4>
+              </div>
+              <p>CLIクライアント用の1行、GUIアプリなら同じ行をそのまま。</p>
+              <div class="code-copy">
+                <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-client-installer.sh | sh</code>
+                <button class="copy-btn" type="button" aria-label="CLIインストーラーのコマンドをコピー">コピー</button>
+              </div>
+              <div class="code-copy">
+                <code class="code-block">curl --proto '=https' --tlsv1.2 -sSf https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-gui-installer.sh | sh</code>
+                <button class="copy-btn" type="button" aria-label="GUIインストーラーのコマンドをコピー">コピー</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p class="sr-only" role="status" id="copy-status"></p>
+
+        <p class="download-relay">
+          Running a relay node? Grab the proxy build for
+          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz">x86_64</a> or
+          <a href="https://github.com/ShibbityShwab/lightspeed/releases/latest/download/lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz">ARM64</a>.
+          Everything else lives on <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">GitHub Releases</a>.
+        </p>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section" id="faq">
+      <div class="container">
+        <p class="section-eyebrow">質問</p>
+        <h2 class="section-title">FAQ</h2>
+        <div class="faq-grid">
+          <details class="faq-item">
+            <summary>なぜ無料なの? 裏はある?</summary>
+            <p>There is no catch. The community relay network is community-hosted and sponsor-funded, so you can install the client and play without running anything yourself. The software is fully open source, and you can still self-host your own proxy if you prefer: Vultr gives new accounts $300 free credit and Oracle Cloud has a free tier forever. We don't sell your data. Anonymous aggregate telemetry is on by default and can be turned off any time; see the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">プライバシーポリシー</a>.</p>
+          </details>
+          <details class="faq-item">
+            <summary>これでBANされない?</summary>
+            <p>LightSpeedは主要なアンチチートシステムとの互換を前提に設計されています。ゲームファイルやメモリを改変せず、ゲームプロセスにフックせず、IPも隠しません。この種のルート最適化ツールは何年も使われてきました。とはいえアンチチートの方針と利用規約は各パブリッシャーが定めるもので、いつでも変わり得ます。BANが絶対に起きないと保証できるツールはありません。プレイ前に該当ゲームの規約を確認してください。</p>
+          </details>
+          <details class="faq-item">
+            <summary>実際どれくらいpingが下がる?</summary>
+            <p>場所とISPによります。ISPが通信を非効率な経路に通している場合 (非常によくあります) は、LightSpeedがpingをそれなりに削れます。すでに最適な経路なら改善はわずかかもしれません。モデルは最良のルートを選び、直接経路が最速ならそれを選びます。上のヒーロー指標は実際のクライアント計測に基づく推定値で、クライアントからゲームサーバーへのICMP往復とトンネル経由のゲーム通信往復の差です。ICMPとゲーム通信は別の物差しなので、約束ではなく目安として読んでください。</p>
+          </details>
+          <details class="faq-item">
+            <summary>LightSpeedでインターネットは速くなる?</summary>
+            <p>いいえ。LightSpeedは通信そのものを速くはできません。物理法則には勝てません。できるのは、通信を利用可能な最速の経路に先回りして流し、混雑や不必要な遠回りを避けることです。ISPがすでにクリーンな経路を持っていたり、プロキシの位置が悪かったりすると、改善はほとんど実感できないでしょう。     </details>
+          <details class="faq-item">
+            <summary>プロキシを使うとpingが上がるのはなぜ?</summary>
+            <p>Usually one of two things: (1) the proxy is farther from the game server than your direct path, so the extra hop adds latency, or (2) the proxy's data center isn't well-connected to the internet backbone. Proxy placement matters a lot: how close the datacenter sits to major backbone/peering points. Real-world routing is also governed by BGP peering contracts and ISP prioritization, which neither you nor LightSpeed control. Pick the proxy closest to the <em>ゲームサーバー</em>, not closest to you. For an interactive look at how routing works, see the <a href="route-visualizer/">ルート可視化</a>.</p>
+          </details>
+          <details class="faq-item">
+            <summary>対応しているゲームは?</summary>
+            <p>現在21タイトル: Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft、Hunt: Showdownに内蔵プロファイルがあります。起動するか、自動検出に任せるだけ。その他のUDPベースのゲームも手動のポート設定で動作します。</p>
+          </details>
+          <details class="faq-item">
+            <summary>データは安全?</summary>
+            <p>Anonymous aggregate telemetry is on by default. No accounts, no registration, and no personal data. It sends only aggregate network metrics (latency percentiles, jitter, FEC counters) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint: no IP addresses, no identifiers, and no packet contents. A cell is suppressed until it has at least 3 reports (this counts reports, not distinct people). Turn it off any time with <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the GUI checkbox. All traffic passes through unencrypted to avoid adding overhead. See the <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">プライバシーポリシー</a> and <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">データ辞書</a>.</p>
+          </details>
+          <details class="faq-item">
+            <summary>プロキシノードはどう入手する?</summary>
+            <p>The easiest path is to do nothing: the default client experience uses the community relay network, and your client auto-discovers the fastest relay from the <a href="https://shibbityshwab.github.io/lightspeed/registry.json" target="_blank" rel="noopener">署名済みレジストリ</a>. If you want to run your own node instead, spin up a $5-6/mo VPS on Vultr (or use Oracle Cloud free tier), run the <code>setup-new-node.sh</code> script in the repo, and point your client at your own IP. It takes about 5 minutes. Data, control, and health ports are configurable via the <code>[network]</code> section of the proxy config. See <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/infra/README.md" target="_blank" rel="noopener">infra/README.md</a> for the full guide.</p>
+          </details>
+          <details class="faq-item">
+            <summary>なぜRustなのか?</summary>
+            <p>RustはC/C++の性能とメモリ安全の保証を両立させます。毎秒数千パケットを扱う遅延重視のネットワークツールには、ゼロオーバーヘッドの抽象化が必要です。Rustのasyncエコシステム (Tokio) とQUICライブラリ (quinn) は世界最高水準です。</p>
+          </details>
+          <details class="faq-item">
+            <summary>MLルーティングの仕組みは?</summary>
+            <p>11個の特徴量を使いネットワーク遅延データでRandom Forestモデルを学習します: 現在の遅延、過去のp50/p95、ジッター、パケットロス、ホップ数、時間帯、プロキシ負荷、地理的距離。モデルは1回の推論パスで最速のプロキシルートを予測し、実行時の計測はマイクロ秒単位です。学習のたびに、モデルはホールドアウトしたテスト分割に対して自身のR²、MAE、RMSEを報告します。この数値は学習データによって変わるため、固定の値は公開していません。</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Community / Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="footer-logo">
+            <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><use href="#i-logo"></use></svg>
+            <span class="logo-text">LightSpeed</span>
+          </div>
+          <p>オープンソースのゲームネットワーク最適化ツール。pingを減らそう。無料。ずっと。</p>
+        </div>
+        <nav class="footer-links" aria-label="プロジェクト">
+          <h3>プロジェクト</h3>
+          <a href="https://github.com/ShibbityShwab/lightspeed" target="_blank" rel="noopener"><svg class="icon icon-xs icon-github" aria-hidden="true" focusable="false"><use href="#i-github"></use></svg> GitHub</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/releases" target="_blank" rel="noopener">リリース</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/architecture.md" target="_blank" rel="noopener">アーキテクチャ</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/protocol.md" target="_blank" rel="noopener">プロトコル仕様</a>
+        </nav>
+        <nav class="footer-links" aria-label="コミュニティ">
+          <h3>コミュニティ</h3>
+          <a href="https://github.com/ShibbityShwab/lightspeed/discussions" target="_blank" rel="noopener">ディスカッション</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">バグを報告</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">ゲームのリクエスト</a>
+        </nav>
+        <nav class="footer-links" aria-label="法的事項">
+          <h3>法的事項</h3>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE" target="_blank" rel="noopener">ライセンス</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">プライバシーポリシー</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">データ辞書</a>
+          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/security-audit-mvp.md" target="_blank" rel="noopener">セキュリティ監査</a>
+        </nav>
+      </div>
+      <p class="footer-legal">LightSpeedは独立したオープンソースプロジェクトです。いかなるゲームパブリッシャー、プラットフォーム、ストア、アンチチートベンダーとも提携、承認、スポンサー関係にありません。すべてのゲームタイトル、会社名、ロゴ、関連する商標は各権利者の商標または登録商標であり、本ソフトウェアが対応するゲームを識別する目的でのみ使用しています。LightSpeedは第三者のゲームアートやロゴを同梱していません。</p>
+      <div class="footer-bottom">
+        <p>© 2026 LightSpeed Contributors. 個人利用は無料。Rustで開発。</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

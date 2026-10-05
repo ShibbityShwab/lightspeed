@@ -1,0 +1,95 @@
+[app]
+title = "LightSpeed"
+
+[action]
+boost = "优化我的游戏"
+stop = "停止优化"
+connect = "连接"
+disconnect = "断开连接"
+connecting = "正在连接..."
+restart_elevated = "以管理员身份重启"
+quit = "退出"
+cancel = "取消"
+close = "关闭"
+
+[route]
+title = "路由"
+server = "服务器"
+server_label = "服务器："
+custom_port_range = "自定义端口范围："
+port_hint = "例如 28015-28999（留空则自动）"
+relay = "中继"
+game = "游戏"
+status = "状态"
+routed = "已路由"
+no_relay = "尚未选择中继"
+relay_ready_pick = "中继已就绪，请选择游戏"
+relay_ready_named = "中继已就绪，已选择 {name}"
+
+[state]
+disconnected = "未连接"
+connected = "已连接"
+optimizing = "优化中"
+error = "错误"
+
+[settings]
+language = "语言"
+follow_system = "系统默认"
+title = "设置"
+privacy = "隐私"
+maintenance = "维护"
+about = "关于"
+open_log = "打开日志文件"
+check_updates_hint = "检查是否有更新版本的 LightSpeed。"
+share_stats = "分享匿名延迟统计"
+
+[proxies]
+title = "中继管理"
+manage_hint = "添加、删除或刷新中继列表。"
+disconnect_hint = "断开与当前中继的控制连接"
+label_field = "名称："
+addr_field = "地址："
+invalid = "无效"
+addr_invalid_hint = "请输入有效的 IP:端口（例如 1.2.3.4:28015）"
+add = "添加中继"
+refresh = "刷新中继"
+open_config = "打开配置文件夹"
+reset_defaults = "恢复默认设置"
+
+[relay]
+auto_fastest = "自动（最快）"
+retry = "重试"
+refresh_failed = "中继刷新失败——正在使用已保存的列表"
+registry_empty = "中继注册表未返回任何可用的中继。"
+discovering = "正在查找中继…"
+none_discovered = "未发现中继"
+
+[game]
+auto_detect = "自动（检测）"
+manual_custom = "手动 / 自定义…"
+manual_server = "手动（自定义服务器）"
+auto_named = "自动 — {name}"
+found = "发现游戏："
+
+[connect]
+rust = "在 Rust F1 控制台中：  client.connect 127.0.0.1:{port}"
+cs2 = "在 CS2 控制台中：  connect 127.0.0.1:{port}"
+dota2 = "在 Dota 2 控制台中：  connect 127.0.0.1:{port}"
+generic = "将游戏连接到：  127.0.0.1:{port}"
+
+[update]
+sheet_title = "检查更新"
+checking = "正在检查更新…"
+installing = "正在安装更新…"
+current = "当前版本：{version}"
+latest = "最新版本：{version}"
+
+[window]
+hide_to_tray = "隐藏到托盘"
+
+[about]
+source_hint = "源代码、问题和发布"
+website_hint = "实时中继状态、基准测试和文档"
+star_hint = "星标能帮助其他玩家找到 LightSpeed"
+enjoying = "喜欢吗？"
+star_github = "在 GitHub 上加星"

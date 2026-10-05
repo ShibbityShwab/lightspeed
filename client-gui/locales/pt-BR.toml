@@ -1,0 +1,95 @@
+[app]
+title = "LightSpeed"
+
+[action]
+boost = "MELHORAR MEU JOGO"
+stop = "PARAR MELHORIA"
+connect = "Conectar"
+disconnect = "Desconectar"
+connecting = "Conectando..."
+restart_elevated = "Reiniciar como administrador"
+quit = "Sair"
+cancel = "Cancelar"
+close = "Fechar"
+
+[route]
+title = "Rota"
+server = "Servidor"
+server_label = "Servidor:"
+custom_port_range = "Faixa de portas personalizada:"
+port_hint = "ex.: 28015-28999 (deixe em branco para automático)"
+relay = "Relé"
+game = "Jogo"
+status = "Status"
+routed = "Roteado"
+no_relay = "Ainda sem relé"
+relay_ready_pick = "Relé pronto, escolha seu jogo"
+relay_ready_named = "Relé pronto, {name} selecionado"
+
+[state]
+disconnected = "Desconectado"
+connected = "Conectado"
+optimizing = "Otimizando"
+error = "Erro"
+
+[settings]
+language = "Idioma"
+follow_system = "Padrão do sistema"
+title = "Configurações"
+privacy = "Privacidade"
+maintenance = "Manutenção"
+about = "Sobre"
+open_log = "Abrir arquivo de log"
+check_updates_hint = "Verifica se há uma versão mais recente do LightSpeed."
+share_stats = "Compartilhar estatísticas de latência anônimas"
+
+[proxies]
+title = "Gerenciador de relés"
+manage_hint = "Adicione, remova ou atualize a lista de relés."
+disconnect_hint = "Encerra o link de controle com o relé atual"
+label_field = "Rótulo:"
+addr_field = "Endereço:"
+invalid = "inválido"
+addr_invalid_hint = "Digite um IP:porta válido (ex.: 1.2.3.4:28015)"
+add = "Adicionar relé"
+refresh = "Atualizar relés"
+open_config = "Abrir pasta de configuração"
+reset_defaults = "Restaurar padrões"
+
+[relay]
+auto_fastest = "Automático (mais rápido)"
+retry = "Tentar novamente"
+refresh_failed = "Falha ao atualizar os relés - usando a lista salva"
+registry_empty = "O registro de relés não retornou nenhum relé utilizável."
+discovering = "Procurando relés…"
+none_discovered = "Nenhum relé encontrado"
+
+[game]
+auto_detect = "Automático (detectar)"
+manual_custom = "Manual / Personalizado…"
+manual_server = "Manual (servidor próprio)"
+auto_named = "Automático — {name}"
+found = "Jogo encontrado:"
+
+[connect]
+rust = "No console F1 do Rust:  client.connect 127.0.0.1:{port}"
+cs2 = "No console do CS2:  connect 127.0.0.1:{port}"
+dota2 = "No console do Dota 2:  connect 127.0.0.1:{port}"
+generic = "Conecte seu jogo a:  127.0.0.1:{port}"
+
+[update]
+sheet_title = "Verificar atualizações"
+checking = "Verificando atualizações…"
+installing = "Instalando atualização…"
+current = "Versão atual: {version}"
+latest = "Versão mais recente: {version}"
+
+[window]
+hide_to_tray = "Ocultar na bandeja"
+
+[about]
+source_hint = "Código-fonte, problemas e versões"
+website_hint = "Status dos relés ao vivo, benchmarks e documentação"
+star_hint = "Estrelas ajudam outros jogadores a encontrar o LightSpeed"
+enjoying = "Curtindo?"
+star_github = "Dar estrela no GitHub"

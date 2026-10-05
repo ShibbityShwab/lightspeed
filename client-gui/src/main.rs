@@ -13,6 +13,7 @@ mod discovery;
 mod geo;
 mod geo_countries;
 mod globe;
+mod i18n;
 mod paths;
 mod platform;
 mod race_watch;

@@ -20,6 +20,7 @@ use crate::design::*;
 use crate::discovery::{self, DiscoveryOutcome, RelayHealth};
 use crate::geo;
 use crate::globe;
+use crate::i18n;
 use crate::paths;
 use crate::platform::{Platform, QuitFlag, TrayAction, TrayHandle};
 use crate::race_watch::decide_switch;
@@ -192,6 +193,9 @@ pub struct LightSpeedApp<P: Platform> {
     // ── Sheets and pickers ────────────────────────────────────────────────
     show_settings: bool,
 
+    /// Language pinned in `config.toml`, or `None` to follow the OS locale.
+    language: Option<String>,
+
     // ── Boost diagnostics ─────────────────────────────────────────────────
     boost_start: Option<std::time::Instant>,
     custom_port_input: String,
@@ -284,6 +288,10 @@ impl<P: Platform> LightSpeedApp<P> {
             .unwrap_or(0);
         let auto_select = saved.auto_select;
         let share_latency_stats = saved.share_latency_stats;
+        // Pin the language before the first frame; resolving it later would
+        // paint one frame of English and then swap the whole window.
+        let language = saved.language.clone();
+        i18n::set_language(language.as_deref());
 
         let mut app = Self {
             engine,
@@ -311,6 +319,7 @@ impl<P: Platform> LightSpeedApp<P> {
             fonts_setup: false,
             header_icon: None,
             show_settings: false,
+            language,
             boost_start: None,
             custom_port_input: String::new(),
             update_check: UpdateCheckState::Idle,
@@ -382,6 +391,7 @@ impl<P: Platform> LightSpeedApp<P> {
             share_latency_stats: self.share_latency_stats,
             game_auto: self.game_auto,
             manual_mode: self.game_manual,
+            language: self.language.clone(),
             selected_game: if self.game_auto || self.game_manual {
                 None
             } else {
@@ -715,11 +725,11 @@ impl<P: Platform> LightSpeedApp<P> {
             format!("{}  \u{2192}  {}", self.selected_game().display, relay)
         } else if self.status.connected {
             match &self.auto_detected_game {
-                Some(name) => format!("Relay ready, {name} selected"),
-                None => "Relay ready, pick your game".to_string(),
+                Some(name) => i18n::t_with("route.relay_ready_named", &[("name", name)]),
+                None => i18n::t("route.relay_ready_pick").into_owned(),
             }
         } else {
-            "No relay yet".to_string()
+            i18n::t("route.no_relay").into_owned()
         };
 
         // The live round trip. On a narrow window it moves to its own row:
@@ -959,7 +969,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// in at the top.
     fn config_body(&mut self, ui: &mut egui::Ui, narrow: bool, short: bool) {
         if short {
-            section_label(ui, "Route");
+            section_label(ui, &i18n::t("route.title"));
             self.ledger_rows(ui, narrow, true);
             ui.add_space(S3);
         }
@@ -977,7 +987,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 });
                 if ui
                     .link("Manage")
-                    .on_hover_text("Add, remove, or refresh the relay list.")
+                    .on_hover_text(i18n::t("proxies.manage_hint"))
                     .clicked()
                 {
                     self.show_proxy_manager = true;
@@ -985,7 +995,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 if self.status.connected
                     && ui
                         .link("Disconnect")
-                        .on_hover_text("Drop the control-plane link to the current relay")
+                        .on_hover_text(i18n::t("proxies.disconnect_hint"))
                         .clicked()
                 {
                     self.toggle_relay_connection();
@@ -997,12 +1007,12 @@ impl<P: Platform> LightSpeedApp<P> {
             if let Some(err) = self.discovery_error.clone() {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
-                        egui::RichText::new("Relay refresh failed - using the saved list")
+                        egui::RichText::new(i18n::t("relay.refresh_failed"))
                             .size(CAPTION)
                             .color(warn),
                     )
                     .on_hover_text(err);
-                    if ui.link("Retry").clicked() {
+                    if ui.link(i18n::t("relay.retry")).clicked() {
                         self.start_discovery();
                     }
                 });
@@ -1016,7 +1026,11 @@ impl<P: Platform> LightSpeedApp<P> {
         });
         if let Some(ref detected) = self.auto_detected_game {
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("Game found:").size(BODY).color(signal));
+                ui.label(
+                    egui::RichText::new(i18n::t("game.found"))
+                        .size(BODY)
+                        .color(signal),
+                );
                 ui.label(
                     egui::RichText::new(detected.clone())
                         .size(BODY)
@@ -1044,16 +1058,16 @@ impl<P: Platform> LightSpeedApp<P> {
                 DiscoveryState::InFlight(_) => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(egui::RichText::new("Discovering relays…").color(text_2));
+                        ui.label(egui::RichText::new(i18n::t("relay.discovering")).color(text_2));
                     });
                 }
                 DiscoveryState::Done => {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new("No relays discovered").color(warn))
+                        ui.label(egui::RichText::new(i18n::t("relay.none_discovered")).color(warn))
                             .on_hover_text(self.discovery_error.clone().unwrap_or_else(|| {
                                 "The relay registry returned no usable relays.".to_string()
                             }));
-                        if ui.link("Retry").clicked() {
+                        if ui.link(i18n::t("relay.retry")).clicked() {
                             self.start_discovery();
                         }
                     });
@@ -1076,7 +1090,10 @@ impl<P: Platform> LightSpeedApp<P> {
             .selected_text(current)
             .width(width)
             .show_ui(ui, |ui| {
-                if ui.selectable_label(auto, "Auto (fastest)").clicked() {
+                if ui
+                    .selectable_label(auto, i18n::t("relay.auto_fastest"))
+                    .clicked()
+                {
                     auto = true;
                 }
                 ui.separator();
@@ -1113,11 +1130,11 @@ impl<P: Platform> LightSpeedApp<P> {
     fn game_combo(&mut self, ui: &mut egui::Ui) {
         let width = ui.available_width();
         let label = if self.game_manual {
-            "Manual (custom server)".to_string()
+            i18n::t("game.manual_server").into_owned()
         } else if self.game_auto {
             match &self.auto_detected_game {
-                Some(name) => format!("Auto — {name}"),
-                None => "Auto (detect)".to_string(),
+                Some(name) => i18n::t_with("game.auto_named", &[("name", name)]),
+                None => i18n::t("game.auto_detect").into_owned(),
             }
         } else {
             self.selected_game().display.to_string()
@@ -1128,7 +1145,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .width(width)
             .show_ui(ui, |ui| {
                 if ui
-                    .selectable_label(self.game_auto, "Auto (detect)")
+                    .selectable_label(self.game_auto, i18n::t("game.auto_detect"))
                     .clicked()
                 {
                     self.game_auto = true;
@@ -1137,7 +1154,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 }
                 ui.separator();
                 if ui
-                    .selectable_label(self.game_manual, "Manual / Custom…")
+                    .selectable_label(self.game_manual, i18n::t("game.manual_custom"))
                     .clicked()
                 {
                     self.game_manual = true;
@@ -1179,7 +1196,7 @@ impl<P: Platform> LightSpeedApp<P> {
         );
         ui.add_space(S2);
         ui.horizontal(|ui| {
-            ui.label("Server:");
+            ui.label(i18n::t("route.server_label"));
             let default_port = self.selected_game().default_port;
             ui.add(
                 egui::TextEdit::singleline(&mut self.server_input)
@@ -1189,7 +1206,7 @@ impl<P: Platform> LightSpeedApp<P> {
         });
         ui.add_space(S2);
         ui.horizontal(|ui| {
-            ui.label("Custom Port Range:").on_hover_ui(|ui| {
+            ui.label(i18n::t("route.custom_port_range")).on_hover_ui(|ui| {
                 ui.label(
                     "Override the default port scan range for auto-detect. \
                      Use this if Packets Sent stays at 0 after 15 s.\n\
@@ -1205,12 +1222,12 @@ impl<P: Platform> LightSpeedApp<P> {
             let valid_color = if port_valid { text_1 } else { danger };
             ui.add(
                 egui::TextEdit::singleline(&mut self.custom_port_input)
-                    .hint_text("e.g. 28015-28999 (leave blank for auto)")
+                    .hint_text(i18n::t("route.port_hint"))
                     .desired_width(200.0)
                     .text_color(valid_color),
             );
             if !port_valid {
-                ui.label(egui::RichText::new("invalid").color(danger));
+                ui.label(egui::RichText::new(i18n::t("proxies.invalid")).color(danger));
             }
         });
         ui.add_space(S2);
@@ -1238,7 +1255,7 @@ impl<P: Platform> LightSpeedApp<P> {
             }
         }
         if !server_valid && !self.server_input.is_empty() {
-            ui.label(egui::RichText::new("Enter a valid IP:port (e.g. 1.2.3.4:28015)").color(warn));
+            ui.label(egui::RichText::new(i18n::t("proxies.addr_invalid_hint")).color(warn));
         }
 
         ui.add_space(S2);
@@ -1265,7 +1282,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .frame(sheet_frame())
             .show(ctx, |ui| {
                 ui.set_max_width(max_w);
-                sheet_title(ui, "Settings");
+                sheet_title(ui, &i18n::t("settings.title"));
                 egui::ScrollArea::vertical()
                     .max_height(max_h)
                     .show(ui, |ui| {
@@ -1282,12 +1299,42 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     fn settings_body(&mut self, ui: &mut egui::Ui) {
+        // Language first: it changes the labels of everything below it.
+        section_label(ui, &i18n::t("settings.language"));
+        let selected = i18n::current();
+        let label: String = i18n::LOCALES
+            .iter()
+            .find(|locale| locale.tag == selected)
+            .map(|locale| locale.native_name.to_string())
+            .unwrap_or_else(|| i18n::t("settings.follow_system").into_owned());
+        egui::ComboBox::from_id_salt("language_select")
+            .selected_text(egui::RichText::new(label).size(LABEL))
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(self.language.is_none(), i18n::t("settings.follow_system"))
+                    .clicked()
+                {
+                    self.language = None;
+                    i18n::set_language(None);
+                    self.persist_config();
+                }
+                for locale in i18n::LOCALES {
+                    let picked = self.language.as_deref() == Some(locale.tag);
+                    if ui.selectable_label(picked, locale.native_name).clicked() {
+                        self.language = Some(locale.tag.to_string());
+                        i18n::set_language(Some(locale.tag));
+                        self.persist_config();
+                    }
+                }
+            });
+        ui.add_space(S3);
+
         // Privacy: anonymous latency telemetry.
-        section_label(ui, "Privacy");
+        section_label(ui, &i18n::t("settings.privacy"));
         let changed = ui
             .checkbox(
                 &mut self.share_latency_stats,
-                egui::RichText::new("Share anonymous latency stats")
+                egui::RichText::new(i18n::t("settings.share_stats"))
                     .size(LABEL)
                     .family(semibold()),
             )
@@ -1309,16 +1356,16 @@ impl<P: Platform> LightSpeedApp<P> {
         // Maintenance: self-update, the trace log, and the relay link.
         hairline(ui);
         ui.add_space(S2);
-        section_label(ui, "Maintenance");
+        section_label(ui, &i18n::t("settings.maintenance"));
         if ui
             .button("Check for updates")
-            .on_hover_text("Check whether a newer version of LightSpeed is available.")
+            .on_hover_text(i18n::t("settings.check_updates_hint"))
             .clicked()
         {
             self.start_update_check();
         }
         ui.add_space(S1);
-        if ui.button("Open log file").clicked() {
+        if ui.button(i18n::t("settings.open_log")).clicked() {
             self.reveal_log_file();
         }
         ui.add_space(S1);
@@ -1341,7 +1388,7 @@ impl<P: Platform> LightSpeedApp<P> {
         // About: the brand mark and the project links.
         hairline(ui);
         ui.add_space(S2);
-        section_label(ui, "About");
+        section_label(ui, &i18n::t("settings.about"));
         ui.horizontal(|ui| {
             if let Some(mark) = self.header_icon.as_ref() {
                 ui.add(egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(28.0, 28.0)));
@@ -1370,9 +1417,9 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
         ui.horizontal_wrapped(|ui| {
             ui.hyperlink_to("GitHub", "https://github.com/ShibbityShwab/lightspeed")
-                .on_hover_text("Source code, issues and releases");
+                .on_hover_text(i18n::t("about.source_hint"));
             ui.hyperlink_to("Website", "https://shibbityshwab.github.io/lightspeed/")
-                .on_hover_text("Live relay status, benchmarks and docs");
+                .on_hover_text(i18n::t("about.website_hint"));
             ui.hyperlink_to(
                 "Releases",
                 "https://github.com/ShibbityShwab/lightspeed/releases",
@@ -1381,15 +1428,15 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
         ui.horizontal_wrapped(|ui| {
             ui.label(
-                egui::RichText::new("Enjoying it?")
+                egui::RichText::new(i18n::t("about.enjoying"))
                     .size(LABEL)
                     .color(text_2),
             );
             ui.hyperlink_to(
-                egui::RichText::new("Star it on GitHub").family(semibold()),
+                egui::RichText::new(i18n::t("about.star_github")).family(semibold()),
                 "https://github.com/ShibbityShwab/lightspeed/stargazers",
             )
-            .on_hover_text("Stars help other players find LightSpeed");
+            .on_hover_text(i18n::t("about.star_hint"));
         });
     }
 
@@ -1405,7 +1452,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .frame(sheet_frame())
             .show(ctx, |ui| {
                 ui.set_max_width(max_w);
-                sheet_title(ui, "Proxy Manager");
+                sheet_title(ui, &i18n::t("proxies.title"));
                 egui::ScrollArea::vertical()
                     .max_height(max_h)
                     .show(ui, |ui| {
@@ -1438,31 +1485,31 @@ impl<P: Platform> LightSpeedApp<P> {
 
                         ui.add_space(S2);
                         ui.horizontal(|ui| {
-                            ui.label("Label:");
+                            ui.label(i18n::t("proxies.label_field"));
                             ui.text_edit_singleline(&mut self.manager_label_input);
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Addr:");
+                            ui.label(i18n::t("proxies.addr_field"));
                             ui.text_edit_singleline(&mut self.manager_addr_input);
                         });
 
                         ui.horizontal_wrapped(|ui| {
-                            if ui.button("Add Proxy").clicked()
+                            if ui.button(i18n::t("proxies.add")).clicked()
                                 && self.manager_addr_input.parse::<SocketAddrV4>().is_ok()
                             {
                                 add_addr = Some(self.manager_addr_input.parse().unwrap());
                             }
-                            if ui.button("Refresh relays").clicked() {
+                            if ui.button(i18n::t("proxies.refresh")).clicked() {
                                 self.start_discovery();
                             }
                         });
 
                         ui.add_space(S2);
                         ui.horizontal_wrapped(|ui| {
-                            if ui.button("Open config folder").clicked() {
+                            if ui.button(i18n::t("proxies.open_config")).clicked() {
                                 paths::open_in_os(&paths::config_dir());
                             }
-                            if ui.button("Reset to defaults").clicked() {
+                            if ui.button(i18n::t("proxies.reset_defaults")).clicked() {
                                 reset = true;
                             }
                         });
@@ -1520,7 +1567,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .frame(sheet_frame())
             .show(ctx, |ui| {
                 ui.set_max_width(max_w);
-                sheet_title(ui, "Check for updates");
+                sheet_title(ui, &i18n::t("update.sheet_title"));
                 egui::ScrollArea::vertical()
                     .max_height(max_h)
                     .show(ui, |ui| {
@@ -1528,7 +1575,7 @@ impl<P: Platform> LightSpeedApp<P> {
                             UpdateCheckState::Checking => {
                                 ui.horizontal(|ui| {
                                     ui.spinner();
-                                    ui.label("Checking for updates…");
+                                    ui.label(i18n::t("update.checking"));
                                 });
                             }
                             UpdateCheckState::Done(result) => {
@@ -1543,8 +1590,8 @@ impl<P: Platform> LightSpeedApp<P> {
                                         .unwrap_or_else(|| "unknown".to_string()),
                                     Err(_) => "unknown".to_string(),
                                 };
-                                ui.label(format!("Current version: {current}"));
-                                ui.label(format!("Latest version: {latest}"));
+                                ui.label(i18n::t_with("update.current", &[("version", current.as_str())]));
+                                ui.label(i18n::t_with("update.latest", &[("version", latest.as_str())]));
                                 ui.add_space(S1);
                                 ui.label(crate::update::update_status_line(result));
 
@@ -1577,7 +1624,7 @@ impl<P: Platform> LightSpeedApp<P> {
                             UpdateCheckState::Installing => {
                                 ui.horizontal(|ui| {
                                     ui.spinner();
-                                    ui.label("Installing update…");
+                                    ui.label(i18n::t("update.installing"));
                                 });
                                 ui.label(
                                     "Approve the UAC prompt if one appears; LightSpeed will restart.",
@@ -1806,13 +1853,14 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 );
                 ui.add_space(S2);
                 ui.horizontal_wrapped(|ui| {
-                    if self.tray_available() && ui.button("Hide to tray").clicked() {
+                    if self.tray_available() && ui.button(i18n::t("window.hide_to_tray")).clicked()
+                    {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     }
-                    if ui.button("Settings").clicked() {
+                    if ui.button(i18n::t("settings.title")).clicked() {
                         self.show_settings = true;
                     }
-                    if ui.button("Quit").clicked() {
+                    if ui.button(i18n::t("action.quit")).clicked() {
                         self.quit.store(true, Ordering::SeqCst);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -2020,11 +2068,12 @@ fn parse_server_addr(s: &str) -> Option<SocketAddrV4> {
 }
 
 fn connect_instruction(game: &GameEntry, local_port: u16) -> String {
+    let port = local_port.to_string();
     match game.key {
-        "rust" => format!("In Rust  F1 console:  client.connect 127.0.0.1:{local_port}"),
-        "cs2" => format!("In CS2 console:  connect 127.0.0.1:{local_port}"),
-        "dota2" => format!("In Dota 2 console:  connect 127.0.0.1:{local_port}"),
-        _ => format!("Connect your game to:  127.0.0.1:{local_port}"),
+        "rust" => i18n::t_with("connect.rust", &[("port", port.as_str())]),
+        "cs2" => i18n::t_with("connect.cs2", &[("port", port.as_str())]),
+        "dota2" => i18n::t_with("connect.dota2", &[("port", port.as_str())]),
+        _ => i18n::t_with("connect.generic", &[("port", port.as_str())]),
     }
 }
 
@@ -2463,6 +2512,45 @@ mod tests {
         });
         out.textures_delta.clear();
         assert!(!out.shapes.is_empty(), "a frame with text drew nothing");
+    }
+
+    /// The localized render, proven end to end rather than by proxy: the same
+    /// widget code must draw different text under two languages, and the
+    /// German frame must contain the German string and not the English one.
+    #[test]
+    fn a_localized_frame_draws_the_translated_string() {
+        let drawn = |key: &str| {
+            let ctx = eframe::egui::Context::default();
+            super::install_fonts(&ctx);
+            super::apply_theme(&ctx);
+            let raw = eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(
+                    eframe::egui::pos2(0.0, 0.0),
+                    eframe::egui::vec2(420.0, 800.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                super::section_label(ui, &crate::i18n::t(key));
+            });
+            out.textures_delta.clear();
+            format!("{:?}", out.shapes)
+        };
+
+        crate::i18n::set_language(Some("de"));
+        let german = format!("{:?}", drawn("settings.privacy"));
+        crate::i18n::set_language(None);
+        let english = format!("{:?}", drawn("settings.privacy"));
+
+        assert!(
+            german.contains("Datenschutz"),
+            "the German frame did not draw the German string: {german}"
+        );
+        assert!(
+            english.contains("Privacy"),
+            "the English frame did not draw the English string: {english}"
+        );
+        assert_ne!(german, english, "both languages drew identical frames");
     }
 
     #[test]

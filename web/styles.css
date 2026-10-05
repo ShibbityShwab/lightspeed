@@ -1011,6 +1011,43 @@ img, svg { max-width: 100%; }
 }
 
 /* --- Reduced motion --- */
+
+    /* Language switcher: the same tokens as every other control, so a
+       single-language reader never sees it as bolted on. */
+    .lang-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-2);
+      margin-left: var(--sp-2);
+    }
+    .lang-switch-label { display: none; }
+    .lang-switch select {
+      appearance: none;
+      background: var(--bg-2);
+      color: var(--text-1);
+      border: 1px solid var(--border-1);
+      border-radius: var(--r-sm);
+      padding: var(--sp-2) var(--sp-6) var(--sp-2) var(--sp-3);
+      font-family: var(--font-sans);
+      font-size: var(--fs-xs);
+      font-weight: 500;
+      line-height: 1.2;
+      cursor: pointer;
+      transition: border-color var(--dur-fast, 0.15s) ease, color var(--dur-fast, 0.15s) ease;
+      background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+                        linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+      background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
+    .lang-switch select:hover,
+    .lang-switch select:focus-visible {
+      border-color: var(--accent-line);
+      color: var(--text-1);
+      outline: none;
+    }
+    .lang-switch option { background: var(--bg-2); color: var(--text-1); }
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .status-dot, .route-path, .ping-dot { animation: none; }

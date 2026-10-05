@@ -1,0 +1,95 @@
+[app]
+title = "LightSpeed"
+
+[action]
+boost = "ゲームを最適化"
+stop = "最適化を停止"
+connect = "接続"
+disconnect = "切断"
+connecting = "接続中..."
+restart_elevated = "管理者として再起動"
+quit = "終了"
+cancel = "キャンセル"
+close = "閉じる"
+
+[route]
+title = "ルート"
+server = "サーバー"
+server_label = "サーバー:"
+custom_port_range = "カスタムポート範囲:"
+port_hint = "例: 28015-28999（空欄で自動）"
+relay = "リレー"
+game = "ゲーム"
+status = "状態"
+routed = "経由中"
+no_relay = "リレー未選択"
+relay_ready_pick = "リレーの準備完了。ゲームを選択してください"
+relay_ready_named = "リレーの準備完了: {name} を選択中"
+
+[state]
+disconnected = "未接続"
+connected = "接続済み"
+optimizing = "最適化中"
+error = "エラー"
+
+[settings]
+language = "言語"
+follow_system = "システムの既定"
+title = "設定"
+privacy = "プライバシー"
+maintenance = "メンテナンス"
+about = "このアプリについて"
+open_log = "ログファイルを開く"
+check_updates_hint = "LightSpeed の新しいバージョンがあるか確認します。"
+share_stats = "匿名のレイテンシ統計を共有"
+
+[proxies]
+title = "リレー管理"
+manage_hint = "リレー一覧の追加・削除・更新を行います。"
+disconnect_hint = "現在のリレーとの制御接続を切断します"
+label_field = "ラベル:"
+addr_field = "アドレス:"
+invalid = "無効"
+addr_invalid_hint = "有効な IP:ポートを入力してください（例: 1.2.3.4:28015）"
+add = "リレーを追加"
+refresh = "リレーを更新"
+open_config = "設定フォルダーを開く"
+reset_defaults = "既定値に戻す"
+
+[relay]
+auto_fastest = "自動（最速）"
+retry = "再試行"
+refresh_failed = "リレーの更新に失敗しました - 保存済みのリストを使用します"
+registry_empty = "リレーレジストリから使用可能なリレーが返されませんでした。"
+discovering = "リレーを検索中…"
+none_discovered = "リレーが見つかりません"
+
+[game]
+auto_detect = "自動（検出）"
+manual_custom = "手動 / カスタム…"
+manual_server = "手動（カスタムサーバー）"
+auto_named = "自動 — {name}"
+found = "ゲームを検出:"
+
+[connect]
+rust = "Rust の F1 コンソールで:  client.connect 127.0.0.1:{port}"
+cs2 = "CS2 コンソールで:  connect 127.0.0.1:{port}"
+dota2 = "Dota 2 コンソールで:  connect 127.0.0.1:{port}"
+generic = "ゲームを次に接続してください:  127.0.0.1:{port}"
+
+[update]
+sheet_title = "更新を確認"
+checking = "更新を確認中…"
+installing = "更新をインストール中…"
+current = "現在のバージョン: {version}"
+latest = "最新バージョン: {version}"
+
+[window]
+hide_to_tray = "トレイに隠す"
+
+[about]
+source_hint = "ソースコード、不具合報告、リリース"
+website_hint = "リアルタイムのリレー状況、ベンチマーク、ドキュメント"
+star_hint = "スターは他のプレイヤーが LightSpeed を見つける助けになります"
+enjoying = "気に入りましたか？"
+star_github = "GitHub でスターを付ける"

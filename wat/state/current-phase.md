@@ -1,9 +1,189 @@
-# Current Phase: WF-053 The seven-improvement wave landed
+# Current Phase: WF-054 Internationalization complete - GUI, website, docs, and the English landing page's locale links
 
-**Workflow:** WF-053; WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
-**Agent:** RustDev + NetEng + DevOps + QAEngineer (mass-ulw DAG runs, lead-verified)
-**Status:** Pushed (`3ed7332`, `12a7801`, `1df1c8b`, `6ffc0c0`); all seven items landed, every phase verified by the lead's own gate runs
-**Last updated:** 2026-10-04
+**Workflow:** WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Agent:** RustDev + QAEngineer (lead-verified with the repo's own gates)
+**Status:** Waves 1, 2 (GUI), 3 (website) and 4 (docs) implemented locally and verified; **English-page locale discovery closed 2026-10-05**; not committed. CLI wave excluded by design (see below)
+**Last updated:** 2026-10-05
+
+---
+
+## 2026-10-05 (later) - WF-054: the English landing page could not reach any translation
+
+Re-verified the whole wave on a fresh session (fmt 0, clippy 0, `cargo test -p
+lightspeed-gui` 99/0, `generate-web-locales.sh --check` 0, `extract-web-strings.sh
+--check` 442 keys 0) and found one real, user-visible hole nobody had closed.
+
+The eight generated pages carried an `hreflang` alternate set and a no-JavaScript
+language switcher, but **`web/index.html` - the page every visitor and crawler
+lands on - had neither** (`grep -c hreflang web/index.html` was 0, `lang-switch`
+0). The generator also wrote `web/locales/alternates.en.html` and **nothing
+consumed it**. So the site advertised "we speak your language" in eight
+languages while its front door offered no way in, and the eight pages were
+unreachable except by typing the path.
+
+**Why it was open, and the constraint that shaped the fix:** `web/index.html` is
+the extractor's source of truth - its text is what `en.json`'s 442 keys index -
+so rewriting it is exactly the bug wave 3 hit earlier ("the generator rewrote
+`web/index.html` as its own English output, which injected the hreflang block
+into the source and shifted every positional key"). The English build therefore
+cannot be the source file, and the site has no build step: `web/**` is published
+verbatim.
+
+**Fix (three files, no key churn):**
+
+| File | Change |
+| --- | --- |
+| `scripts/generate-web-locales.sh` | New `render_english()`: English source + the same `alternates_block` and `language_switcher` the other pages get, written to `web/index.en.html`. `--check` now fails when that file is missing or stale. The now-unconsumed `web/locales/alternates.en.html` is gone. |
+| `.github/workflows/pages.yml` | New step before the upload: copy `web/index.en.html` over `web/index.html` in the artifact, failing the deploy with an explicit error if it is missing. The tracked source page is untouched, so key positions cannot shift. |
+| `web/index.en.html` | New generated artifact (78721 bytes, LF). |
+
+**Verified:**
+- Content diff against the source: the output has **zero** missing element texts
+  and exactly ten added ones - the nine language names in the switcher and the
+  `lang-switch-label` - so no English string was altered while injecting.
+- `web/index.en.html` carries 9 `hreflang` links (8 locales + `x-default`), all
+  absolute on the published origin, and a switcher whose options are exactly the
+  9 locale pages (no 404 can be offered).
+- Simulated the deploy step in a scratch copy of `web/`: the promoted
+  `index.html` has 9 `hreflang` and the switcher, `lang="en"` intact.
+- `bash -n` on the generator; `generate-web-locales.sh --check` and
+  `extract-web-strings.sh --check` both rc=0; re-ran the generator to prove it is
+  idempotent; `cargo fmt --all --check` rc=0 and `cargo test -p lightspeed-gui`
+  99 passed / 0 failed / 1 ignored on the current tree.
+
+**Still not verified, same as before:** no pixel-level look at the served page -
+wave 3's evidence remains structural. Language switching is still only reachable
+from the selector in the artifact; nothing has been deployed (the workflow runs
+on push to the paths in its trigger).
+
+---
+
+## 2026-10-04 - WF-054 i18n: engine plus the whole GUI extracted
+
+The request was full internationalization/localization across the project. Scope
+was set by the owner as **everything, phased**, with **machine-translated seed**
+catalogs. Wave 1 (the i18n engine and `client-gui`) is complete; the other three
+surfaces are not started.
+
+**Landed (local, uncommitted):**
+
+| File | Change |
+| --- | --- |
+| `client-gui/src/i18n.rs` | New. Catalog loader, tag resolution, English fallback, `t`/`t_with`, `LOCALES`, merged-catalog cache, 11 tests |
+| `client-gui/locales/*.toml` | New. 9 catalogs (en source + de, es, fr, ja, ko, pt-BR, ru, zh-Hans) |
+| `client-gui/src/app.rs` | 31 static call sites + 9 interpolated strings now catalog-driven; language state; Settings picker |
+| `client-gui/src/config.rs` | `language` field parsed/rendered with tests |
+| `client-gui/src/main.rs` | `mod i18n;` |
+
+**Verified by re-running the gates myself:** `cargo fmt --all --check` (rc=0),
+`cargo clippy --workspace --all-targets -- -D warnings` (clean),
+`cargo test -p lightspeed-gui` (99 passed, 1 ignored, 0 failed). The i18n module
+alone is 11 tests green on 5 consecutive parallel runs.
+
+**Not done, and the honest reason:** the GUI's other ~130 literals are egui id
+salts, tracing log lines, font names and test fixtures that must **not** be
+translated; what remains user-visible in this crate is its interpolated and
+status copy (partially covered) and `design.rs`/`update.rs`/`discovery.rs`
+strings. Waves 2-4 - the `client` and `proxy` clap CLIs, the static website
+(incl. per-locale routes and hreflang), and the 30 docs - are untouched.
+
+## 2026-10-05 - WF-054 completion: 8 website locales, 48 doc translations, GUI finished, all verified
+
+Executed as three mass-ulw DAG runs plus local repair. The goal: a non-English
+speaker can read the site, read the docs, and use the app in their language.
+
+**Website (run `wf054-web-locales-v2`, 8 nodes):** full 442-key catalogs for
+de, es, fr, ja, ko, pt-BR, ru, zh-Hans and eight generated pages. `de.json` was
+completed from 44 to 442 keys by a follow-up lane.
+
+**Docs (run `wf054-docs-v1`, 9 nodes):** 48 files - six user-facing pages
+(`user-guide`, `install-windows/macos/linux`, `faq`, `troubleshooting`) in eight
+languages, as FLAT siblings (`docs/faq.ja.md`) rather than `docs/ja/`, because
+`.github/workflows/wiki.yml` globs `docs/*.md` at one level only and strips
+`.md` from links; a subdirectory would never publish. `docs/LANGUAGES.md` is the
+index and carries an explicit "not reviewed by native speakers" warning.
+
+**GUI:** the remaining 13 literals in `app.rs` (relay refresh/retry, "Discovering
+relays…", "No relays discovered", proxy validation, the About block) moved into
+the catalogs; nine new keys added across all nine locales.
+
+**Verification, all run by the lead rather than trusted from node summaries:**
+- `cargo fmt --all --check` rc 0; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo test -p lightspeed-gui` -> **99 passed, 1 ignored, 0 failed**; the 11 i18n parity tests green.
+- All 8 generated pages pass an independently written validator: `lang` attribute correct, >=3 headings translated, no `idx.`/`attr.` key leaked, the three install commands byte-identical to English, and `<h1>/<h2>/<section>/<a>/<button>` counts equal to `web/index.html`.
+- All 48 localized docs pass an independently written checker: `##` heading count, code-fence count, table-row count and the ordered markdown link-target list all equal the English source, and no file is a copy of English. One real defect was found this way and fixed: `faq.pt-BR.md` had translated the in-page anchor `#what-does-the-proxy-log`, which cannot resolve because GitHub derives anchors from the English heading text.
+- No tracked English doc or `web/index.html` was modified (`git status --porcelain docs` shows only untracked additions).
+
+**The run-killing bug this wave found:** the first run's children executed in
+isolated checkouts (this session's default), so all seven catalogs were written
+into sandboxes and discarded - every node reported `completed` with pasted
+"passing" evidence while `web/locales/` held nothing. The session's isolation
+default is not configured in `.omo/config.json`; the fix was `isolated: false`,
+proven first with a one-file probe that I verified on disk myself. Cancelled the
+first run rather than let it finish uncollectable work. Five locales' output was
+lost and regenerated. The lesson matches the skill's own warning: a node counts
+as completed when its child returns *any* response, so completion claims must be
+checked against artifacts, never the transcript.
+
+**Caveats that must not be lost:** every non-English string is machine-assisted
+and UNREVIEWED; the new site pages advertise translations that no native speaker
+has read. The CLI wave remains excluded by design (operator/log output).
+
+
+The website is published verbatim from `web/**`, so there is no request-time
+place to resolve strings; localization generates real files instead.
+
+**Landed:**
+
+| File | Change |
+| --- | --- |
+| `scripts/extract-web-strings.sh` | New. Extracts every visible string from `web/index.html` into `web/locales/en.json` (442 keys); `--check` fails on drift |
+| `scripts/generate-web-locales.sh` | New. Renders `web/<tag>/index.html` per catalog, injects absolute `hreflang` alternates and a no-JavaScript language picker; `--check` fails on stale pages |
+| `web/locales/{en,de}.json` | New. Source catalog plus a hand-authored German seed |
+| `web/de/index.html` | New. Generated German page |
+| `web/styles.css` | `.lang-switch` control built from the site's own tokens |
+
+**Deliberately excluded from translation:** `<code>`/`<pre>` content, package
+commands (`choco install lightspeed`), port ranges, anti-cheat names and game
+names. A translated install command breaks copy-paste, so the extractor skips
+those elements and a test asserts none leaked in.
+
+**Bugs this wave found in itself, each caught before shipping:**
+
+1. The first extractor captured 144 keys while missing 199 real strings -
+   including four of seven section headings - because one combined tag
+   alternation let an outer element swallow inner ones. Fixed by scanning per
+   tag; key count went 144 -> 343 -> 442.
+2. The generator rewrote `web/index.html` as its own "English output", which
+   injected the hreflang block into the source and shifted every positional key
+   on the next run (`idx.000` -> `idx.001`). The source page is now read-only.
+3. Replacement offsets came from a *stripped* copy and were applied to the
+   *original*, a 723-character error, so most strings silently kept their
+   English text while the page still claimed `lang="de"`. Replacement now uses
+   the match's own span, so a miss is impossible by construction.
+4. `hreflang="en"` and `x-default` emitted `href=""`; both are now absolute
+   URLs built from the published origin.
+
+**Verification:** `generate-web-locales.sh --check` passes; the German page was
+validated by a separate script asserting 3/7 sampled headings are German, no
+`idx.`/`attr.` key leaked into the HTML, the three sampled install commands are
+byte-identical to English, and `<h1>/<h2>/<section>/<a>/<button>` counts match
+the English page.
+
+**NOT verified:** no pixel-level look at the served page. A headless browser
+screenshot hung and restarted the JS kernel, so wave 3's evidence is structural,
+not visual. Only German has a page; the other seven locales have no website
+catalog, so "renders each locale" is true for one locale, not eight.
+
+**Next Action:** the wave is feature-complete and locally verified, and the
+English landing page now exposes its translations. What remains is the owner's:
+commit and push (the whole wave, including tonight's three files), which triggers
+`pages.yml` and puts the switcher and the eight locale pages on the live site.
+Then the standing caveats: every non-English string is machine-assisted and
+**UNREVIEWED**, so do not advertise any locale as supported until a native
+speaker has read it; and wave 2 (the `client`/`proxy` CLIs) stays excluded by
+design - operator diagnostics and `tracing` logs, where translating breaks
+greppability for the sysadmins who are its audience. The one genuine end-user
+string there (the telemetry privacy notice) is still noted but not wired.
 
 ---
 

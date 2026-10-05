@@ -1,0 +1,95 @@
+[app]
+title = "LightSpeed"
+
+[action]
+boost = "УЛУЧШИТЬ ИГРУ"
+stop = "ОСТАНОВИТЬ УЛУЧШЕНИЕ"
+connect = "Подключиться"
+disconnect = "Отключиться"
+connecting = "Подключение..."
+restart_elevated = "Перезапустить от имени администратора"
+quit = "Выйти"
+cancel = "Отмена"
+close = "Закрыть"
+
+[route]
+title = "Маршрут"
+server = "Сервер"
+server_label = "Сервер:"
+custom_port_range = "Свой диапазон портов:"
+port_hint = "напр. 28015-28999 (оставьте пустым для авто)"
+relay = "Ретранслятор"
+game = "Игра"
+status = "Состояние"
+routed = "Маршрутизируется"
+no_relay = "Ретранслятор ещё не выбран"
+relay_ready_pick = "Ретранслятор готов, выберите игру"
+relay_ready_named = "Ретранслятор готов, выбрано: {name}"
+
+[state]
+disconnected = "Отключено"
+connected = "Подключено"
+optimizing = "Оптимизация"
+error = "Ошибка"
+
+[settings]
+language = "Язык"
+follow_system = "Системный по умолчанию"
+title = "Настройки"
+privacy = "Конфиденциальность"
+maintenance = "Обслуживание"
+about = "О программе"
+open_log = "Открыть файл журнала"
+check_updates_hint = "Проверить, доступна ли более новая версия LightSpeed."
+share_stats = "Делиться анонимной статистикой задержек"
+
+[proxies]
+title = "Управление ретрансляторами"
+manage_hint = "Добавить, удалить или обновить список ретрансляторов."
+disconnect_hint = "Разорвать управляющее соединение с текущим ретранслятором"
+label_field = "Название:"
+addr_field = "Адрес:"
+invalid = "неверно"
+addr_invalid_hint = "Введите корректный IP:порт (напр. 1.2.3.4:28015)"
+add = "Добавить ретранслятор"
+refresh = "Обновить ретрансляторы"
+open_config = "Открыть папку настроек"
+reset_defaults = "Сбросить к значениям по умолчанию"
+
+[relay]
+auto_fastest = "Автоматически (самый быстрый)"
+retry = "Повторить"
+refresh_failed = "Не удалось обновить список ретрансляторов — используется сохранённый"
+registry_empty = "Реестр ретрансляторов не вернул ни одного пригодного узла."
+discovering = "Поиск ретрансляторов…"
+none_discovered = "Ретрансляторы не найдены"
+
+[game]
+auto_detect = "Автоматически (определение)"
+manual_custom = "Вручную / Свой…"
+manual_server = "Вручную (свой сервер)"
+auto_named = "Автоматически — {name}"
+found = "Игра найдена:"
+
+[connect]
+rust = "В консоли Rust (F1):  client.connect 127.0.0.1:{port}"
+cs2 = "В консоли CS2:  connect 127.0.0.1:{port}"
+dota2 = "В консоли Dota 2:  connect 127.0.0.1:{port}"
+generic = "Подключите игру к:  127.0.0.1:{port}"
+
+[update]
+sheet_title = "Проверить обновления"
+checking = "Проверка обновлений…"
+installing = "Установка обновления…"
+current = "Текущая версия: {version}"
+latest = "Последняя версия: {version}"
+
+[window]
+hide_to_tray = "Скрыть в трей"
+
+[about]
+source_hint = "Исходный код, задачи и релизы"
+website_hint = "Статус ретрансляторов в реальном времени, тесты и документация"
+star_hint = "Звёзды помогают другим игрокам найти LightSpeed"
+enjoying = "Нравится?"
+star_github = "Поставить звезду на GitHub"

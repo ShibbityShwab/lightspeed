@@ -1,0 +1,111 @@
+# LightSpeed GUI - source locale (English).
+#
+# This file is the source of truth: every user-visible string in the GUI lives
+# here, and every other locale is a translation of this key set. Keys are
+# dotted and grouped by the screen that renders them.
+#
+# The key set must be identical across catalogs, which
+# `every_shipped_locale_matches_the_source_key_set` enforces - the source locale
+# (`en.toml`) is the authority on which keys exist.
+#
+# Rules for translators (and for the tests in src/i18n.rs):
+#   - Keep keys identical across files; translate values only.
+#   - `{name}` placeholders must survive; they are substituted at render time.
+#   - Use "..." (three ASCII dots) where the source does; the GUI renders the
+#     ellipsis itself.
+
+[app]
+title = "LightSpeed"
+
+[settings]
+language = "Language"
+follow_system = "System default"
+title = "Settings"
+privacy = "Privacy"
+maintenance = "Maintenance"
+about = "About"
+open_log = "Open log file"
+check_updates_hint = "Check whether a newer version of LightSpeed is available."
+share_stats = "Share anonymous latency stats"
+
+[proxies]
+title = "Proxy Manager"
+manage_hint = "Add, remove, or refresh the relay list."
+disconnect_hint = "Drop the control-plane link to the current relay"
+label_field = "Label:"
+addr_field = "Addr:"
+invalid = "invalid"
+addr_invalid_hint = "Enter a valid IP:port (e.g. 1.2.3.4:28015)"
+add = "Add Proxy"
+refresh = "Refresh relays"
+open_config = "Open config folder"
+reset_defaults = "Reset to defaults"
+
+[relay]
+auto_fastest = "Auto (fastest)"
+retry = "Retry"
+refresh_failed = "Relay refresh failed - using the saved list"
+registry_empty = "The relay registry returned no usable relays."
+discovering = "Discovering relays…"
+none_discovered = "No relays discovered"
+
+[game]
+auto_detect = "Auto (detect)"
+manual_custom = "Manual / Custom…"
+manual_server = "Manual (custom server)"
+auto_named = "Auto — {name}"
+found = "Game found:"
+
+[connect]
+rust = "In Rust  F1 console:  client.connect 127.0.0.1:{port}"
+cs2 = "In CS2 console:  connect 127.0.0.1:{port}"
+dota2 = "In Dota 2 console:  connect 127.0.0.1:{port}"
+generic = "Connect your game to:  127.0.0.1:{port}"
+
+[update]
+sheet_title = "Check for updates"
+checking = "Checking for updates…"
+installing = "Installing update…"
+current = "Current version: {version}"
+latest = "Latest version: {version}"
+
+[window]
+hide_to_tray = "Hide to tray"
+
+[about]
+source_hint = "Source code, issues and releases"
+website_hint = "Live relay status, benchmarks and docs"
+star_hint = "Stars help other players find LightSpeed"
+enjoying = "Enjoying it?"
+star_github = "Star it on GitHub"
+
+[state]
+disconnected = "Disconnected"
+connected = "Connected"
+optimizing = "Optimizing"
+error = "Error"
+
+[action]
+boost = "BOOST MY GAME"
+stop = "STOP BOOST"
+connect = "Connect"
+disconnect = "Disconnect"
+connecting = "Connecting..."
+restart_elevated = "Restart as Administrator"
+quit = "Quit"
+cancel = "Cancel"
+close = "Close"
+
+[route]
+title = "Route"
+server = "Server"
+server_label = "Server:"
+custom_port_range = "Custom Port Range:"
+port_hint = "e.g. 28015-28999 (leave blank for auto)"
+relay = "Relay"
+game = "Game"
+status = "Status"
+routed = "Routed"
+no_relay = "No relay yet"
+relay_ready_pick = "Relay ready, pick your game"
+relay_ready_named = "Relay ready, {name} selected"

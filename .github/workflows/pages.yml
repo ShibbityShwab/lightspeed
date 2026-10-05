@@ -157,6 +157,19 @@ jobs:
             exit 1
           fi
 
+      - name: Promote the English page build
+        # scripts/generate-web-locales.sh emits web/index.en.html, the English
+        # source plus its hreflang alternate set and language switcher. English
+        # is the extractor's source of truth, so that build cannot be the file
+        # the keys point at; it is promoted here instead, at deploy time.
+        run: |
+          if [ -f web/index.en.html ]; then
+            cp web/index.en.html web/index.html
+          else
+            echo "::error::web/index.en.html is missing; run scripts/generate-web-locales.sh"
+            exit 1
+          fi
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
