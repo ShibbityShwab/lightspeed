@@ -39,6 +39,33 @@ BANNER = {
 }
 TAGS = sorted(BANNER, key=len, reverse=True)
 
+FENCE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
+# A fenced-block line is a command - something the reader copies and runs - when
+# its first token looks like an executable and the line is pure ASCII. That keeps
+# the ASCII-art diagrams and prose labels out, which the translations legitimately
+# rewrite.
+EXECUTABLE = re.compile(r"^[./]?[a-z][a-z0-9_.+-]*$")
+
+
+def code_commands(path: Path) -> list[str]:
+    """The runnable command lines inside a page's fenced code blocks."""
+    out = []
+    for block in FENCE.findall(path.read_text(encoding="utf-8")):
+        for line in block.splitlines():
+            stripped = line.split("#")[0].strip()
+            if not stripped or not stripped.isascii():
+                continue
+            if EXECUTABLE.match(stripped.split()[0]):
+                out.append(stripped)
+    return out
+
+
+def commands_differ(english: Path, translated: Path) -> list[tuple[str, str]]:
+    """Commands the translation lost or altered, as (english, translated) pairs."""
+    want = code_commands(english)
+    got = set(code_commands(translated))
+    return [(c, c) for c in want if c not in got]
+
 
 def split_name(path: Path) -> tuple[str, str] | None:
     """``docs/faq.ja.md`` -> ("faq", "ja"); ``docs/faq.md`` -> None."""
@@ -71,7 +98,14 @@ def main() -> int:
         if name is not None:
             localized.append((path, *name))
     missing = []
+    broken_commands = []
     for path, base, tag in localized:
+        # A command a reader copies and runs must survive translation byte for
+        # byte: a mangled install line is silently destructive in a way a clumsy
+        # sentence is not, and nothing validated these before.
+        altered = commands_differ(docs / f"{base}.md", path)
+        if altered:
+            broken_commands.append(f"{path}: {'; '.join(a for a, _ in altered[:3])}")
         text = path.read_text(encoding="utf-8")
         if WARNING in text:
             continue
@@ -80,6 +114,12 @@ def main() -> int:
             continue
         path.write_text(insert(text, banner_for(tag, base)), encoding="utf-8")
         print("banner added:", path)
+
+    if broken_commands:
+        sys.exit(
+            "translated pages altered a command the reader is meant to run:\n  "
+            + "\n  ".join(broken_commands[:8])
+        )
 
     if check and missing:
         sys.exit(

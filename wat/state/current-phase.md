@@ -157,6 +157,27 @@ with **0 dropped and 0 missing**, mapping by English value and preferring the
 matching kind; 13 values are shared by more than one new key and got the same
 translation, which is correct for repeated strings like `FAQ` and `LightSpeed`.
 
+### 2026-10-05 (eleventh pass, continued) - the translated install commands, checked
+
+The review had flagged that nothing validates the commands inside the 48
+translated docs - a mangled install line is silently destructive in a way a
+clumsy sentence is not. Measured first: **no command was corrupted.** 59 command
+lines across 48 translated pages all survive byte for byte. The five files that
+looked different were a translated trailing `#` comment and the ASCII-art
+diagram labels in `user-guide.*`, both of which are prose.
+
+`localized-docs.py --check` now enforces it rather than leaving it to luck: for
+each localized page it extracts the runnable lines from fenced code blocks (a
+line whose first token is executable-like and whose body is pure ASCII, which
+excludes the diagrams and translated labels) and fails listing any the
+translation lost or altered. Mutation-checked by changing `tar -xf` to `tar -xzf`
+in `install-linux.ja.md` and watching it fail, then restoring.
+
+**Known cosmetic issue, not fixed:** the ASCII-art diagram in `user-guide.*` is
+rebuilt from translated labels, so its box alignment is off in fr, pt-BR and ru.
+Legible, and a translated diagram beats an English one for those readers, but it
+is not aligned.
+
 ---
 
 ## 2026-10-05 (fifth pass) - four of the eight locales shipped a GUI made of boxes
