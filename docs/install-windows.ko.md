@@ -1,5 +1,8 @@
 # Windows에 LightSpeed 설치하기
 
+> [!WARNING]
+> 기계 번역이며 원어민의 검수를 받지 않았습니다. [영어 원문](install-windows.md)이 기준입니다.
+
 Windows는 GUI 우선 플랫폼입니다. `lightspeed-gui` 패키지는 클라이언트 엔진과 WinDivert 드라이버를 이미 담고 있는 독립 실행 앱이므로 별도로 클라이언트를 받을 필요가 없습니다.
 
 ---

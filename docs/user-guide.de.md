@@ -1,5 +1,8 @@
 # LightSpeed Benutzerhandbuch
 
+> [!WARNING]
+> Maschinell unterstützte Übersetzung, nicht von Muttersprachlern geprüft. Maßgeblich ist die [deutsche Fassung](user-guide.md).
+
 > Schritt-für-Schritt-Anleitung, um deinen Ping mit LightSpeed zu senken.
 
 ---

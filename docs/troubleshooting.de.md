@@ -1,5 +1,8 @@
 # Fehlerbehebung
 
+> [!WARNING]
+> Maschinell unterstützte Übersetzung, nicht von Muttersprachlern geprüft. Maßgeblich ist die [deutsche Fassung](troubleshooting.md).
+
 ---
 
 ## Schnelldiagnose

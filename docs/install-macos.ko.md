@@ -1,5 +1,8 @@
 # macOS에 LightSpeed 설치하기
 
+> [!WARNING]
+> 기계 번역이며 원어민의 검수를 받지 않았습니다. [영어 원문](install-macos.md)이 기준입니다.
+
 macOS는 CLI 우선 플랫폼입니다. GUI는 macOS용으로 컴파일되지만 실제 하드웨어에서는 테스트되지 않았으므로, 명령줄 클라이언트(`lightspeed-client`)가 지원 대상 경로입니다.
 
 ---

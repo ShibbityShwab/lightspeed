@@ -1,5 +1,8 @@
 # 在 macOS 上安装 LightSpeed
 
+> [!WARNING]
+> 机器翻译，未经母语者审核。以[英文版](install-macos.md)为准。
+
 macOS 是命令行优先的平台。图形界面能为 macOS 编译，但未在真实硬件上测试过，所以受支持的路径是命令行客户端（`lightspeed-client`）。
 
 ---

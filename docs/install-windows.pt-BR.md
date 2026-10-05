@@ -1,5 +1,8 @@
 # Instalar o LightSpeed no Windows
 
+> [!WARNING]
+> Tradução assistida por máquina, não revisada por um falante nativo. A [versão em inglês](install-windows.md) é a autoritativa.
+
 O Windows é a plataforma com foco na GUI. O pacote `lightspeed-gui` é um app independente que já contém o motor do cliente e o driver WinDivert, então você nunca precisa baixar o cliente separadamente.
 
 ---

@@ -1,5 +1,8 @@
 # Resolución de problemas
 
+> [!WARNING]
+> Traducción asistida por máquina, no revisada por un hablante nativo. La [versión en inglés](troubleshooting.md) es la autoritativa.
+
 ---
 
 ## Diagnóstico rápido

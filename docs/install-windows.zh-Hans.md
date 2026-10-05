@@ -1,5 +1,8 @@
 # 在 Windows 上安装 LightSpeed
 
+> [!WARNING]
+> 机器翻译，未经母语者审核。以[英文版](install-windows.md)为准。
+
 Windows 是图形界面优先的平台。`lightspeed-gui` 包是一个独立应用，已经包含客户端引擎和 WinDivert 驱动，所以你永远不需要另外下载客户端。
 
 ---

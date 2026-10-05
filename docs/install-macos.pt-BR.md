@@ -1,5 +1,8 @@
 # Instalar o LightSpeed no macOS
 
+> [!WARNING]
+> Tradução assistida por máquina, não revisada por um falante nativo. A [versão em inglês](install-macos.md) é a autoritativa.
+
 O macOS é uma plataforma que prioriza a CLI. A GUI compila para macOS, mas não foi testada em hardware real, então o cliente de linha de comando (`lightspeed-client`) é o caminho suportado.
 
 ---

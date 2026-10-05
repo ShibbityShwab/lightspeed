@@ -118,13 +118,13 @@ jobs:
       - name: Geo catalog self-test
         run: bash infra/scripts/test_geo_catalogs.sh
 
-  web-locale-checks:
-    name: Web Localization Checks
+  localization-checks:
+    name: Localization Checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      # Both modes existed with no workflow invoking them, so the catalog and
+      # Both web modes existed with no workflow invoking them, so the catalog and
       # the eight generated pages could drift from web/index.html unnoticed -
       # which is how a page shipped with relative asset URLs that 404 from
       # /<tag>/ and with tag fragments left in its text.
@@ -133,6 +133,13 @@ jobs:
 
       - name: Generated locale pages are current
         run: bash scripts/generate-web-locales.sh --check
+
+      # Every translated doc must carry the unreviewed-translation warning: a
+      # reader landing straight on docs/faq.ja.md from a search result otherwise
+      # saw an assertion about anti-cheat behaviour with no hint that no native
+      # speaker had read it.
+      - name: Translated docs carry the unreviewed banner
+        run: python scripts/localized-docs.py --check
 
   macos-smoke:
     name: macOS Smoke Test

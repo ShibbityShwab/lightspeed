@@ -1,5 +1,8 @@
 # Preguntas frecuentes
 
+> [!WARNING]
+> Traducción asistida por máquina, no revisada por un hablante nativo. La [versión en inglés](faq.md) es la autoritativa.
+
 ---
 
 ## Conceptos básicos

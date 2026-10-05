@@ -1,5 +1,8 @@
 # LightSpeed unter Linux installieren
 
+> [!WARNING]
+> Maschinell unterstützte Übersetzung, nicht von Muttersprachlern geprüft. Maßgeblich ist die [deutsche Fassung](install-linux.md).
+
 Linux ist eine CLI-first-Plattform. Die GUI lässt sich für Linux bauen, aber der Kommandozeilen-Client (`lightspeed-client`) ist der unterstützte Weg für Headless- und Power-User-Setups.
 
 ---

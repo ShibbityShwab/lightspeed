@@ -1,5 +1,8 @@
 # LightSpeed 用户指南
 
+> [!WARNING]
+> 机器翻译，未经母语者审核。以[英文版](user-guide.md)为准。
+
 > 一步一步教你用 LightSpeed 降低延迟。
 
 ---

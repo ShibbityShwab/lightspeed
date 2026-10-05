@@ -1,5 +1,8 @@
 # 在 Linux 上安装 LightSpeed
 
+> [!WARNING]
+> 机器翻译，未经母语者审核。以[英文版](install-linux.md)为准。
+
 Linux 是命令行优先的平台。图形界面能为 Linux 构建，但在无人值守和进阶用户的场景中，受支持的路径是命令行客户端（`lightspeed-client`）。
 
 ---

@@ -1,5 +1,8 @@
 # Questions fréquentes
 
+> [!WARNING]
+> Traduction assistée par machine, non relue par un locuteur natif. La [version anglaise](faq.md) fait foi.
+
 ---
 
 ## Bases

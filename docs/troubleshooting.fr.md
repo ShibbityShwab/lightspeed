@@ -1,5 +1,8 @@
 # Dépannage
 
+> [!WARNING]
+> Traduction assistée par machine, non relue par un locuteur natif. La [version anglaise](troubleshooting.md) fait foi.
+
 ---
 
 ## Diagnostic rapide

@@ -1,9 +1,39 @@
-# Current Phase: WF-054 Internationalization - shipped, repaired, and the GUI's font gap closed
+# Current Phase: WF-054 Internationalization - shipped, repaired, GUI localized, and the docs now carry their warning
 
 **Workflow:** WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
-**Agent:** RustDev + QAEngineer (lead-verified with the repo's own gates and a real render)
-**Status:** Waves 1-4 deployed and repaired; GUI glyph coverage fixed and gated. Wave 2 (CLI) excluded by design.
+**Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and a real render)
+**Status:** Waves 1-4 deployed and repaired; GUI glyph coverage and every user-visible string fixed; translated docs now carry the unreviewed warning, enforced in CI. Wave 2 (CLI) excluded by design.
 **Last updated:** 2026-10-05
+
+---
+
+## 2026-10-05 (eighth pass) - an unreviewed safety claim with no warning on the page
+
+The review had flagged this and it checked out exactly: only `docs/LANGUAGES.md`
+said the translations are machine-assisted, so a reader landing straight on
+`docs/faq.ja.md` from a search result saw a confident Japanese sentence -
+「主要なアンチチート（EAC、VAC、BattlEye、Riot Vanguard）はいずれもこれを認めています」
+- asserting that every major anti-cheat permits LightSpeed, with nothing on the
+page to say no native speaker had read it. The English claim is the owner's copy
+and stays as it is; what was missing was the label.
+
+**Fixed:** `scripts/localized-docs.py` puts a `> [!WARNING]` banner under each
+translated page's own title, in that page's language, linking back to the
+English page that remains authoritative. 48 pages, English untouched (verified:
+`docs/faq.md`, `docs/user-guide.md` and `docs/LANGUAGES.md` have no diff).
+`--check` fails listing any page missing it, and is wired into the renamed
+`Localization Checks` CI job - mutation-checked by stripping one banner and
+watching it fail, then restoring it.
+
+The banner survives the wiki publish: the sync rewrites `.md)` to `)`, so the
+back-link lands as `[英語版](faq)`, verified in a local render.
+
+**Still open, unchanged:** the website's untranslated prose (~12 paragraphs
+whose container holds an inline link, e.g. the FAQ answers and the privacy
+notice). Fixing it needs placeholder-based extraction in BOTH
+`extract-web-strings.sh` and `generate-web-locales.sh` - they each implement the
+extraction independently, so the change has to land in lockstep - plus a
+retranslation of the new keys.
 
 ---
 

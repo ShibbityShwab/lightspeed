@@ -1,5 +1,8 @@
 # Instalar LightSpeed en Linux
 
+> [!WARNING]
+> Traducción asistida por máquina, no revisada por un hablante nativo. La [versión en inglés](install-linux.md) es la autoritativa.
+
 Linux es una plataforma donde la CLI manda. La GUI compila para Linux, pero el cliente de línea de comandos (`lightspeed-client`) es la vía con soporte para entornos sin interfaz y para usuarios avanzados.
 
 ---

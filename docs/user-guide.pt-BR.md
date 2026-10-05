@@ -1,5 +1,8 @@
 # Guia do usuário do LightSpeed
 
+> [!WARNING]
+> Tradução assistida por máquina, não revisada por um falante nativo. A [versão em inglês](user-guide.md) é a autoritativa.
+
 > Instruções passo a passo para reduzir seu ping com o LightSpeed.
 
 ---

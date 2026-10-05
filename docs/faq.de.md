@@ -1,5 +1,8 @@
 # Häufig gestellte Fragen
 
+> [!WARNING]
+> Maschinell unterstützte Übersetzung, nicht von Muttersprachlern geprüft. Maßgeblich ist die [deutsche Fassung](faq.md).
+
 ---
 
 ## Grundlagen
