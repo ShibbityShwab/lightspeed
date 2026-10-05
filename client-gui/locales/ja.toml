@@ -11,6 +11,10 @@ restart_elevated = "管理者として再起動"
 quit = "終了"
 cancel = "キャンセル"
 close = "閉じる"
+stop_optimizing = "最適化を停止"
+optimize_route = "ルートを最適化"
+restart_admin_optimize = "最適化するには管理者として再起動"
+manage = "管理"
 
 [route]
 title = "ルート"
@@ -25,12 +29,17 @@ routed = "経由中"
 no_relay = "リレー未選択"
 relay_ready_pick = "リレーの準備完了。ゲームを選択してください"
 relay_ready_named = "リレーの準備完了: {name} を選択中"
+game_server = "ゲームサーバー"
+relayed = "経由済み"
+place_hint = "-- 最適化を開始すると表示されます"
+count_hint = "-- 最適化を開始すると計測されます"
 
 [state]
 disconnected = "未接続"
 connected = "接続済み"
 optimizing = "最適化中"
 error = "エラー"
+idle = "最適化していません"
 
 [settings]
 language = "言語"
@@ -63,6 +72,7 @@ refresh_failed = "リレーの更新に失敗しました - 保存済みのリ�
 registry_empty = "リレーレジストリから使用可能なリレーが返されませんでした。"
 discovering = "リレーを検索中…"
 none_discovered = "リレーが見つかりません"
+select_a_relay = "リレーを選択"
 
 [game]
 auto_detect = "自動（検出）"
@@ -70,6 +80,8 @@ manual_custom = "手動 / カスタム…"
 manual_server = "手動（カスタムサーバー）"
 auto_named = "自動 — {name}"
 found = "ゲームを検出:"
+none_detected = "ゲームが検出されません"
+none_detected_hint = "ゲームが検出されません - 起動すると自動で追従します"
 
 [connect]
 rust = "Rust の F1 コンソールで:  client.connect 127.0.0.1:{port}"

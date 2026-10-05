@@ -11,6 +11,10 @@ restart_elevated = "Перезапустить от имени админист�
 quit = "Выйти"
 cancel = "Отмена"
 close = "Закрыть"
+stop_optimizing = "Остановить оптимизацию"
+optimize_route = "Оптимизировать маршрут"
+restart_admin_optimize = "Перезапустите от имени администратора для оптимизации"
+manage = "Управление"
 
 [route]
 title = "Маршрут"
@@ -25,12 +29,17 @@ routed = "Маршрутизируется"
 no_relay = "Ретранслятор ещё не выбран"
 relay_ready_pick = "Ретранслятор готов, выберите игру"
 relay_ready_named = "Ретранслятор готов, выбрано: {name}"
+game_server = "Игровой сервер"
+relayed = "Передано"
+place_hint = "-- запустите оптимизацию, чтобы определить"
+count_hint = "-- запустите оптимизацию, чтобы посчитать"
 
 [state]
 disconnected = "Отключено"
 connected = "Подключено"
 optimizing = "Оптимизация"
 error = "Ошибка"
+idle = "Не оптимизируется"
 
 [settings]
 language = "Язык"
@@ -63,6 +72,7 @@ refresh_failed = "Не удалось обновить список ретран
 registry_empty = "Реестр ретрансляторов не вернул ни одного пригодного узла."
 discovering = "Поиск ретрансляторов…"
 none_discovered = "Ретрансляторы не найдены"
+select_a_relay = "Выберите ретранслятор"
 
 [game]
 auto_detect = "Автоматически (определение)"
@@ -70,6 +80,8 @@ manual_custom = "Вручную / Свой…"
 manual_server = "Вручную (свой сервер)"
 auto_named = "Автоматически — {name}"
 found = "Игра найдена:"
+none_detected = "Игра не обнаружена"
+none_detected_hint = "Игра не обнаружена - автоматический режим подхватит её при запуске"
 
 [connect]
 rust = "В консоли Rust (F1):  client.connect 127.0.0.1:{port}"

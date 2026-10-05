@@ -9,6 +9,7 @@
 //! region, and a pinned footer - the `scroll-body-shell`. Every colour comes
 //! from [`crate::design`]; there are no inline colour literals here.
 
+use std::borrow::Cow;
 use std::net::SocketAddrV4;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
@@ -709,11 +710,11 @@ impl<P: Platform> LightSpeedApp<P> {
     /// one-line description of what is happening.
     fn state_rail(&self, ui: &mut egui::Ui, boosting: bool, narrow: bool) {
         let (word, word_color) = if boosting {
-            ("OPTIMIZING", signal)
+            (i18n::t("state.optimizing").to_uppercase(), signal)
         } else if self.status.connected {
-            ("CONNECTED", text_1)
+            (i18n::t("state.connected").to_uppercase(), text_1)
         } else {
-            ("NOT OPTIMIZING", text_1)
+            (i18n::t("state.idle").to_uppercase(), text_1)
         };
 
         let sub_line = if boosting {
@@ -879,13 +880,13 @@ impl<P: Platform> LightSpeedApp<P> {
     /// row is dropped and the values move into the scrolling region.
     fn ledger_rows(&self, ui: &mut egui::Ui, narrow: bool, short_mode: bool) {
         let relay = self.relay_value();
-        self.ledger_row(ui, narrow, "Relay", &relay);
+        self.ledger_row(ui, narrow, &i18n::t("route.relay"), &relay);
         if !short_mode {
             let game_server = self.game_server_value();
-            self.ledger_row(ui, narrow, "Game server", &game_server);
+            self.ledger_row(ui, narrow, &i18n::t("route.game_server"), &game_server);
         }
         let routed = self.routed_value();
-        self.ledger_row(ui, narrow, "Relayed", &routed);
+        self.ledger_row(ui, narrow, &i18n::t("route.relayed"), &routed);
     }
 
     fn ledger_row(&self, ui: &mut egui::Ui, narrow: bool, label: &str, value: &LedgerValue) {
@@ -910,7 +911,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.monospace(text.as_str());
             }
             LedgerValue::Hint(text) => {
-                ui.label(egui::RichText::new(*text).size(BODY).color(text_3));
+                ui.label(egui::RichText::new(text.as_ref()).size(BODY).color(text_3));
             }
         }
     }
@@ -919,7 +920,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// proxy address as a last resort. Never a fabricated city.
     fn relay_value(&self) -> LedgerValue {
         if !self.status.connected {
-            return LedgerValue::Hint("--");
+            return LedgerValue::Hint("--".into());
         }
         let node_id = self
             .selected_entry()
@@ -928,7 +929,7 @@ impl<P: Platform> LightSpeedApp<P> {
         if let Some(id) = node_id {
             LedgerValue::Data(discovery::friendly_label(id))
         } else if self.status.proxy_addr.is_empty() {
-            LedgerValue::Hint("--")
+            LedgerValue::Hint("--".into())
         } else {
             LedgerValue::Data(self.status.proxy_addr.clone())
         }
@@ -944,7 +945,7 @@ impl<P: Platform> LightSpeedApp<P> {
         .find(|s| !s.is_empty());
         match server {
             Some(s) => LedgerValue::Data(s.to_string()),
-            None => LedgerValue::Hint("-- start optimizing to place it"),
+            None => LedgerValue::Hint(i18n::t("route.place_hint")),
         }
     }
 
@@ -958,7 +959,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 group_digits(self.status.redirect_pkts_out)
             ))
         } else {
-            LedgerValue::Hint("-- start optimizing to count")
+            LedgerValue::Hint(i18n::t("route.count_hint"))
         }
     }
 
@@ -975,7 +976,7 @@ impl<P: Platform> LightSpeedApp<P> {
         }
 
         // Boost server: which relay carries the game traffic.
-        field_row(ui, narrow, "Relay", |ui| {
+        field_row(ui, narrow, &i18n::t("route.relay"), |ui| {
             ui.horizontal(|ui| {
                 let disconnect_w = if self.status.connected { 78.0 } else { 0.0 };
                 let manage_w = 64.0;
@@ -986,7 +987,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     self.boost_server_combo(ui);
                 });
                 if ui
-                    .link("Manage")
+                    .link(i18n::t("action.manage").as_ref())
                     .on_hover_text(i18n::t("proxies.manage_hint"))
                     .clicked()
                 {
@@ -994,7 +995,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 }
                 if self.status.connected
                     && ui
-                        .link("Disconnect")
+                        .link(i18n::t("action.disconnect").as_ref())
                         .on_hover_text(i18n::t("proxies.disconnect_hint"))
                         .clicked()
                 {
@@ -1021,7 +1022,7 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S3);
 
         // Game: what is being boosted, plus the reliability shield.
-        field_row(ui, narrow, "Game", |ui| {
+        field_row(ui, narrow, &i18n::t("route.game"), |ui| {
             self.game_combo(ui);
         });
         if let Some(ref detected) = self.auto_detected_game {
@@ -1039,9 +1040,9 @@ impl<P: Platform> LightSpeedApp<P> {
             });
         } else if !self.game_manual {
             let caption = if self.game_auto {
-                "No game detected - Auto will follow one when you start it"
+                i18n::t("game.none_detected_hint")
             } else {
-                "No game detected"
+                i18n::t("game.none_detected")
             };
             ui.label(egui::RichText::new(caption).size(BODY).color(text_2));
         }
@@ -1077,11 +1078,11 @@ impl<P: Platform> LightSpeedApp<P> {
         }
 
         let current = if self.auto_select {
-            "Auto (fastest)".to_string()
+            i18n::t("relay.auto_fastest").into_owned()
         } else {
             self.selected_entry()
                 .map(|e| e.label.clone())
-                .unwrap_or_else(|| "Select a relay".to_string())
+                .unwrap_or_else(|| i18n::t("relay.select_a_relay").into_owned())
         };
         let mut auto = self.auto_select;
         let mut chosen: Option<usize> = None;
@@ -1289,7 +1290,7 @@ impl<P: Platform> LightSpeedApp<P> {
                         self.settings_body(ui);
                     });
                 ui.add_space(S2);
-                if ui.button("Close").clicked() {
+                if ui.button(i18n::t("action.close").as_ref()).clicked() {
                     close = true;
                 }
             });
@@ -1520,7 +1521,7 @@ impl<P: Platform> LightSpeedApp<P> {
                         }
                     });
                 ui.add_space(S2);
-                if ui.button("Close").clicked() {
+                if ui.button(i18n::t("action.close").as_ref()).clicked() {
                     self.show_proxy_manager = false;
                 }
             });
@@ -1636,7 +1637,7 @@ impl<P: Platform> LightSpeedApp<P> {
                         }
                     });
                 ui.add_space(S2);
-                if ui.button("Close").clicked() {
+                if ui.button(i18n::t("action.close").as_ref()).clicked() {
                     self.show_update_dialog = false;
                     self.update_check = UpdateCheckState::Idle;
                 }
@@ -1813,7 +1814,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             }))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                action_button(ui, action_label, action_kind, action_ready)
+                action_button(ui, &action_label, action_kind, action_ready)
             });
         if action.inner.clicked() && action_ready {
             if boosting {
@@ -2293,24 +2294,30 @@ fn parse_custom_port_range(s: &str) -> Option<(u16, u16)> {
 ///
 /// The returned flag is "enabled": whether the slot can act right now. The
 /// three labels plus the disabled case are the whole state machine:
-/// - `STOP BOOST` when boosting.
-/// - `RESTART AS ADMINISTRATOR TO BOOST` when unelevated (and not boosting).
-/// - `BOOST MY GAME` when elevated, connected, and a relay is selected.
-/// - `BOOST MY GAME`, disabled, otherwise (elevated but not ready).
+/// - `Stop optimizing` when boosting.
+/// - `Restart as Administrator to optimize` when unelevated (and not boosting).
+/// - `Optimize my route` when elevated, connected, and a relay is selected.
+/// - `Optimize my route`, disabled, otherwise (elevated but not ready).
+///
+/// Returned upper-case because the action slot draws in caps; `to_uppercase`
+/// leaves a locale without letter case (ja, ko, zh-Hans) untouched.
 fn primary_action(
     is_admin: bool,
     boosting: bool,
     connected: bool,
     has_relay: bool,
-) -> (&'static str, bool) {
+) -> (String, bool) {
     if boosting {
-        ("STOP OPTIMIZING", true)
+        (i18n::t("action.stop_optimizing").to_uppercase(), true)
     } else if !is_admin {
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE", true)
+        (
+            i18n::t("action.restart_admin_optimize").to_uppercase(),
+            true,
+        )
     } else if connected && has_relay {
-        ("OPTIMIZE MY ROUTE", true)
+        (i18n::t("action.optimize_route").to_uppercase(), true)
     } else {
-        ("OPTIMIZE MY ROUTE", false)
+        (i18n::t("action.optimize_route").to_uppercase(), false)
     }
 }
 
@@ -2386,7 +2393,7 @@ enum LedgerValue {
     /// Genuine data (addresses, ports, counters): JetBrains Mono.
     Data(String),
     /// A dim prose hint where there is no value to show.
-    Hint(&'static str),
+    Hint(Cow<'static, str>),
 }
 
 /// The ledger's label cell: caption ink, fixed width, left-aligned.
@@ -2596,6 +2603,7 @@ mod tests {
     /// German frame must contain the German string and not the English one.
     #[test]
     fn a_localized_frame_draws_the_translated_string() {
+        let _guard = crate::i18n::test_lock();
         let drawn = |key: &str| {
             let ctx = eframe::egui::Context::default();
             super::install_fonts(&ctx, Some("de"));
@@ -2780,42 +2788,46 @@ mod tests {
 
     #[test]
     fn primary_action_names_the_three_states() {
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(None);
         // Boosting: the only destructive control.
         assert_eq!(
             primary_action(true, true, true, true),
-            ("STOP OPTIMIZING", true)
+            ("STOP OPTIMIZING".to_string(), true)
         );
         assert_eq!(
             primary_action(false, true, false, false),
-            ("STOP OPTIMIZING", true)
+            ("STOP OPTIMIZING".to_string(), true)
         );
         // Unelevated: the action is elevation.
         assert_eq!(
             primary_action(false, false, true, true),
-            ("RESTART AS ADMINISTRATOR TO OPTIMIZE", true)
+            ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
         );
         assert_eq!(
             primary_action(false, false, false, false),
-            ("RESTART AS ADMINISTRATOR TO OPTIMIZE", true)
+            ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
         );
         // Elevated and ready: the product's action.
         assert_eq!(
             primary_action(true, false, true, true),
-            ("OPTIMIZE MY ROUTE", true)
+            ("OPTIMIZE MY ROUTE".to_string(), true)
         );
     }
 
     #[test]
-    fn primary_action_disables_boost_until_connected_and_relayed() {
+    fn primary_action_disables_the_action_until_connected_and_relayed() {
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(None);
         // Elevated but disconnected: keep the label, but the slot cannot act.
         assert_eq!(
             primary_action(true, false, false, true),
-            ("OPTIMIZE MY ROUTE", false)
+            ("OPTIMIZE MY ROUTE".to_string(), false)
         );
         // Elevated and connected, but no relay is selected.
         assert_eq!(
             primary_action(true, false, true, false),
-            ("OPTIMIZE MY ROUTE", false)
+            ("OPTIMIZE MY ROUTE".to_string(), false)
         );
     }
 

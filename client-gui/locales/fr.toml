@@ -11,6 +11,10 @@ restart_elevated = "Redémarrer en tant qu'administrateur"
 quit = "Quitter"
 cancel = "Annuler"
 close = "Fermer"
+stop_optimizing = "Arreter l'optimisation"
+optimize_route = "Optimiser mon itineraire"
+restart_admin_optimize = "Redemarrer en administrateur pour optimiser"
+manage = "Gerer"
 
 [route]
 title = "Itinéraire"
@@ -25,12 +29,17 @@ routed = "Routé"
 no_relay = "Pas encore de relais"
 relay_ready_pick = "Relais prêt, choisissez votre jeu"
 relay_ready_named = "Relais prêt, {name} sélectionné"
+game_server = "Serveur de jeu"
+relayed = "Relaye"
+place_hint = "-- lancer l'optimisation pour le placer"
+count_hint = "-- lancer l'optimisation pour compter"
 
 [state]
 disconnected = "Déconnecté"
 connected = "Connecté"
 optimizing = "Optimisation"
 error = "Erreur"
+idle = "Non optimise"
 
 [settings]
 language = "Langue"
@@ -63,6 +72,7 @@ refresh_failed = "Échec de l'actualisation des relais - liste enregistrée util
 registry_empty = "Le registre des relais n'a renvoyé aucun relais utilisable."
 discovering = "Recherche des relais…"
 none_discovered = "Aucun relais détecté"
+select_a_relay = "Sélectionner un relais"
 
 [game]
 auto_detect = "Automatique (détection)"
@@ -70,6 +80,8 @@ manual_custom = "Manuel / Personnalisé…"
 manual_server = "Manuel (serveur dédié)"
 auto_named = "Automatique — {name}"
 found = "Jeu détecté :"
+none_detected = "Aucun jeu détecté"
+none_detected_hint = "Aucun jeu détecté - Automatique en suivra un dès que vous le lancerez"
 
 [connect]
 rust = "Dans la console F1 de Rust :  client.connect 127.0.0.1:{port}"

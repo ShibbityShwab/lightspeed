@@ -11,6 +11,10 @@ restart_elevated = "관리자 권한으로 다시 시작"
 quit = "종료"
 cancel = "취소"
 close = "닫기"
+stop_optimizing = "최적화 중지"
+optimize_route = "내 경로 최적화"
+restart_admin_optimize = "최적화하려면 관리자 권한으로 다시 시작"
+manage = "관리"
 
 [route]
 title = "경로"
@@ -25,12 +29,17 @@ routed = "경유 중"
 no_relay = "릴레이 없음"
 relay_ready_pick = "릴레이 준비 완료, 게임을 선택하세요"
 relay_ready_named = "릴레이 준비 완료, {name} 선택됨"
+game_server = "게임 서버"
+relayed = "중계됨"
+place_hint = "-- 최적화를 시작하면 표시됩니다"
+count_hint = "-- 최적화를 시작하면 집계됩니다"
 
 [state]
 disconnected = "연결 끊김"
 connected = "연결됨"
 optimizing = "최적화 중"
 error = "오류"
+idle = "최적화되지 않음"
 
 [settings]
 language = "언어"
@@ -63,6 +72,7 @@ refresh_failed = "릴레이 새로 고침 실패 - 저장된 목록을 사용합
 registry_empty = "릴레이 레지스트리에서 사용할 수 있는 릴레이를 반환하지 않았습니다."
 discovering = "릴레이 검색 중…"
 none_discovered = "릴레이를 찾지 못했습니다"
+select_a_relay = "릴레이 선택"
 
 [game]
 auto_detect = "자동(감지)"
@@ -70,6 +80,8 @@ manual_custom = "수동 / 사용자 지정…"
 manual_server = "수동(사용자 지정 서버)"
 auto_named = "자동 — {name}"
 found = "게임 발견:"
+none_detected = "게임이 감지되지 않음"
+none_detected_hint = "게임이 감지되지 않음 - 게임을 시작하면 자동으로 따라갑니다"
 
 [connect]
 rust = "Rust F1 콘솔에서:  client.connect 127.0.0.1:{port}"

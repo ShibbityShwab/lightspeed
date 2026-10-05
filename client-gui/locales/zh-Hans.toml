@@ -11,6 +11,10 @@ restart_elevated = "以管理员身份重启"
 quit = "退出"
 cancel = "取消"
 close = "关闭"
+stop_optimizing = "停止优化"
+optimize_route = "优化我的路由"
+restart_admin_optimize = "以管理员身份重启以优化"
+manage = "管理"
 
 [route]
 title = "路由"
@@ -25,12 +29,17 @@ routed = "已路由"
 no_relay = "尚未选择中继"
 relay_ready_pick = "中继已就绪，请选择游戏"
 relay_ready_named = "中继已就绪，已选择 {name}"
+game_server = "游戏服务器"
+relayed = "已中继"
+place_hint = "-- 开始优化后显示"
+count_hint = "-- 开始优化后统计"
 
 [state]
 disconnected = "未连接"
 connected = "已连接"
 optimizing = "优化中"
 error = "错误"
+idle = "未优化"
 
 [settings]
 language = "语言"
@@ -63,6 +72,7 @@ refresh_failed = "中继刷新失败——正在使用已保存的列表"
 registry_empty = "中继注册表未返回任何可用的中继。"
 discovering = "正在查找中继…"
 none_discovered = "未发现中继"
+select_a_relay = "选择中继"
 
 [game]
 auto_detect = "自动（检测）"
@@ -70,6 +80,8 @@ manual_custom = "手动 / 自定义…"
 manual_server = "手动（自定义服务器）"
 auto_named = "自动 — {name}"
 found = "发现游戏："
+none_detected = "未检测到游戏"
+none_detected_hint = "未检测到游戏——启动后自动模式会跟随"
 
 [connect]
 rust = "在 Rust F1 控制台中：  client.connect 127.0.0.1:{port}"

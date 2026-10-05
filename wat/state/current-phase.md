@@ -58,6 +58,47 @@ prose literals (`Close`, `Check for updates`, `Install update`, `Auto (fastest)`
 `You're up to date`, and the state/CTA/ledger set), plus `update.rs` status
 sentences.
 
+### 2026-10-05 (sixth pass) - the hardcoded GUI strings, wired
+
+**The decision taken:** keep the design's caps exactly as it renders today and
+localize underneath. The catalog stays sentence case (`action.optimize_route =
+"Optimize my route"`) and the render uppercases where the slot draws caps, so
+English is byte-identical to before while a translated build finally reads. A
+locale without letter case (ja, ko, zh-Hans) is untouched by `to_uppercase`.
+The alternative - wiring the 16 orphan keys - was rejected because their values
+are stale copy from the retired "boost" concept (`action.boost = "BOOST MY
+GAME"`), so it would have silently reverted the owner's wording.
+
+**Wired** (`app.rs`): the state word (`state.optimizing` / `state.connected` /
+`state.idle`), the primary CTA through `primary_action`, the ledger rows
+(`route.relay` / `route.game_server` / `route.relayed`), the Relay and Game field
+labels, the `Manage` / `Disconnect` links, the three `Close` buttons, the relay
+selector's `relay.auto_fastest` and `relay.select_a_relay` fallback, the ledger
+hints, and the two `game.none_detected*` captions.
+
+**Eleven new keys** added across all nine catalogs, preserving the current
+English (`state.idle`, `action.stop_optimizing`, `action.optimize_route`,
+`action.restart_admin_optimize`, `action.manage`, `route.game_server`,
+`route.relayed`, `route.place_hint`, `route.count_hint`,
+`relay.select_a_relay`, `game.none_detected`, `game.none_detected_hint`).
+
+**Two things this shook out.** `LedgerValue::Hint` held `&'static str`, which
+cannot hold a runtime lookup, so it now owns a `Cow`. And the two
+`primary_action` tests started reading whichever language another test had left
+pinned - the language is process-global - so `i18n::test_lock` was made
+`pub(crate)` and shared with the app's tests instead of living privately in the
+i18n test module.
+
+**The glyph gate earned its keep twice:** it failed on the first two passes of
+this work, naming the exact Japanese, Korean and Chinese characters the new keys
+introduced that the subsets did not yet carry. Re-subsetting took the assets to
+0.24 MB. `cargo test -p lightspeed-gui` 100 passed, clippy clean, fmt clean.
+
+**Still hardcoded** (inventoried, not yet wired, all needing new keys and
+translations): the About paragraph, `Check for updates`, `Install update`,
+`Port not detected - fix guide`, `Update available`, `You're up to date`, the
+capture-backend note, and the `update.rs` status sentences.
+
 **Also wired:** `.github/workflows/ci.yml` gained a `Web Localization Checks` job
 running both `--check` modes, which no workflow had ever invoked - the drift that
 let a page ship with relative asset URLs and tag fragments in its text.

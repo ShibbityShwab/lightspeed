@@ -321,20 +321,22 @@ pub fn source_keys() -> Vec<String> {
     keys
 }
 
+/// The active language is process-global, so every test that reads or writes it
+/// takes this lock. Without it a test that pins German races one that pins
+/// Japanese and the failure is a timing accident rather than a defect.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    /// The active language is process-global, so these tests are serialized.
-    /// Without this, a test that pins German races one that pins Japanese and
-    /// the failure is a timing accident rather than a defect being reported.
-    fn test_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+    use crate::i18n::test_lock;
 
     #[test]
     fn every_shipped_locale_matches_the_source_key_set() {

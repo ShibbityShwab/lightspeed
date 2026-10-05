@@ -11,6 +11,10 @@ restart_elevated = "Reiniciar como administrador"
 quit = "Salir"
 cancel = "Cancelar"
 close = "Cerrar"
+stop_optimizing = "Detener la optimizacion"
+optimize_route = "Optimizar mi ruta"
+restart_admin_optimize = "Reiniciar como administrador para optimizar"
+manage = "Gestionar"
 
 [route]
 title = "Ruta"
@@ -25,12 +29,17 @@ routed = "Enrutado"
 no_relay = "Aún no hay relé"
 relay_ready_pick = "Relé listo, elige tu juego"
 relay_ready_named = "Relé listo, {name} seleccionado"
+game_server = "Servidor de juego"
+relayed = "Retransmitido"
+place_hint = "-- inicia la optimización para ubicarlo"
+count_hint = "-- inicia la optimización para contar"
 
 [state]
 disconnected = "Desconectado"
 connected = "Conectado"
 optimizing = "Optimizando"
 error = "Error"
+idle = "Sin optimizar"
 
 [settings]
 language = "Idioma"
@@ -63,6 +72,7 @@ refresh_failed = "Error al actualizar los relés: se usa la lista guardada"
 registry_empty = "El registro de relés no devolvió ningún relé utilizable."
 discovering = "Buscando relés…"
 none_discovered = "No se encontraron relés"
+select_a_relay = "Seleccionar un relé"
 
 [game]
 auto_detect = "Automático (detectar)"
@@ -70,6 +80,8 @@ manual_custom = "Manual / Personalizado…"
 manual_server = "Manual (servidor propio)"
 auto_named = "Automático — {name}"
 found = "Juego detectado:"
+none_detected = "No se detectó ningún juego"
+none_detected_hint = "No se detectó ningún juego: Automático seguirá uno cuando lo inicies"
 
 [connect]
 rust = "En la consola F1 de Rust:  client.connect 127.0.0.1:{port}"

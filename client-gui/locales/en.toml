@@ -48,6 +48,7 @@ refresh_failed = "Relay refresh failed - using the saved list"
 registry_empty = "The relay registry returned no usable relays."
 discovering = "Discovering relays…"
 none_discovered = "No relays discovered"
+select_a_relay = "Select a relay"
 
 [game]
 auto_detect = "Auto (detect)"
@@ -55,6 +56,8 @@ manual_custom = "Manual / Custom…"
 manual_server = "Manual (custom server)"
 auto_named = "Auto — {name}"
 found = "Game found:"
+none_detected = "No game detected"
+none_detected_hint = "No game detected - Auto will follow one when you start it"
 
 [connect]
 rust = "In Rust  F1 console:  client.connect 127.0.0.1:{port}"
@@ -84,6 +87,7 @@ disconnected = "Disconnected"
 connected = "Connected"
 optimizing = "Optimizing"
 error = "Error"
+idle = "Not optimizing"
 
 [action]
 boost = "BOOST MY GAME"
@@ -95,6 +99,10 @@ restart_elevated = "Restart as Administrator"
 quit = "Quit"
 cancel = "Cancel"
 close = "Close"
+stop_optimizing = "Stop optimizing"
+optimize_route = "Optimize my route"
+restart_admin_optimize = "Restart as Administrator to optimize"
+manage = "Manage"
 
 [route]
 title = "Route"
@@ -109,3 +117,7 @@ routed = "Routed"
 no_relay = "No relay yet"
 relay_ready_pick = "Relay ready, pick your game"
 relay_ready_named = "Relay ready, {name} selected"
+game_server = "Game server"
+relayed = "Relayed"
+place_hint = "-- start optimizing to place it"
+count_hint = "-- start optimizing to count"

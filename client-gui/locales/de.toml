@@ -11,6 +11,10 @@ restart_elevated = "Als Administrator neu starten"
 quit = "Beenden"
 cancel = "Abbrechen"
 close = "Schließen"
+stop_optimizing = "Optimierung stoppen"
+optimize_route = "Meine Route optimieren"
+restart_admin_optimize = "Als Administrator neu starten, um zu optimieren"
+manage = "Verwalten"
 
 [route]
 title = "Route"
@@ -25,12 +29,17 @@ routed = "Geroutet"
 no_relay = "Noch kein Relais"
 relay_ready_pick = "Relais bereit, wähle dein Spiel"
 relay_ready_named = "Relais bereit, {name} ausgewählt"
+game_server = "Spielserver"
+relayed = "Weitergeleitet"
+place_hint = "-- Optimierung starten, um zu platzieren"
+count_hint = "-- Optimierung starten, um zu zählen"
 
 [state]
 disconnected = "Getrennt"
 connected = "Verbunden"
 optimizing = "Optimierung läuft"
 error = "Fehler"
+idle = "Nicht optimiert"
 
 [settings]
 language = "Sprache"
@@ -63,6 +72,7 @@ refresh_failed = "Relais-Aktualisierung fehlgeschlagen - gespeicherte Liste wird
 registry_empty = "Die Relais-Registry hat keine nutzbaren Relais zurückgegeben."
 discovering = "Relais werden gesucht…"
 none_discovered = "Keine Relais gefunden"
+select_a_relay = "Relais auswählen"
 
 [game]
 auto_detect = "Automatisch (erkennen)"
@@ -70,6 +80,8 @@ manual_custom = "Manuell / Benutzerdefiniert…"
 manual_server = "Manuell (eigener Server)"
 auto_named = "Automatisch — {name}"
 found = "Spiel gefunden:"
+none_detected = "Kein Spiel erkannt"
+none_detected_hint = "Kein Spiel erkannt - Automatisch folgt einem, sobald du es startest"
 
 [connect]
 rust = "In der Rust-F1-Konsole:  client.connect 127.0.0.1:{port}"
