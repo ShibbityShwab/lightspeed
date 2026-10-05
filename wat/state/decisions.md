@@ -6,6 +6,47 @@
 
 ---
 
+### 2026-10-05: The wiki sync uses GITHUB_TOKEN - measured, after two probes lied
+
+**Agent:** DevOps + QAEngineer
+**Status:** Accepted (`scripts/sync-wiki.py`, `.github/workflows/wiki.yml`)
+**Rationale:** `Sync Wiki` failed on every run from 2026-08-03, and the revision
+before that swallowed the failure with `|| echo`, so the docs had never reached
+the wiki - it held only its auto-generated Home page. The visible cause was a 403
+on `lightspeed.wiki.git`, and the obvious diagnosis (the `WIKI_TOKEN` secret is a
+fine-grained PAT, and fine-grained PATs cannot access wikis) turned out to be
+only half the story. Two probes pointed the wrong way before a real push settled
+it: cloning a **public** wiki needs no credentials at all, so a read-only token
+passed the clone probe and only the push was denied; and `git push --dry-run` on
+an **up-to-date** branch short-circuits with "Everything up-to-date" without
+testing write access. Once the workflow attempted the real push, `GITHUB_TOKEN`
+with `contents: write` **succeeded** - it does push to a public repo's wiki,
+against the common claim that it cannot - and it is now preferred, with the
+dead `WIKI_TOKEN` reduced to an override.
+**Impact:** (a) the sync moved out of YAML into `scripts/sync-wiki.py`, where it
+can be run and checked without pushing anything: `docs/README.md` becomes
+`Home.md` (the previous job deleted Home and never recreated it, leaving the wiki
+with no front page), links between docs become extension-less wiki links, and the
+40 links that point into the repo (`infra/README.md`, `LICENSE`) become absolute
+`blob/master` URLs instead of 404s. (b) `permissions: contents: write` is
+declared, and the push is the credential probe, falling back and finally failing
+with an actionable message. (c) The job no longer treats a synced wiki as an
+error.
+**Alternatives Considered:** minting a classic PAT with `repo` scope (the job's
+own error text recommended it) was rejected as unnecessary once the built-in
+token was measured to work - a broad, rot-prone credential in exchange for
+nothing; translating the sed one-liners in place was rejected because that code
+had no way to be exercised without pushing to the real wiki.
+**Verification:** end-to-end rather than a green tick - a marker line was pushed
+directly into the wiki's `Home.md`, the workflow dispatched, and a fresh clone
+returned 71 pages with the marker gone and `Sync docs/ from <sha>` as the newest
+commit. Locally the generator renders 71 pages with `Home.md` present, zero links
+still ending `.md`, and zero non-page relative links. Live: `/wiki/user-guide`,
+`/wiki/faq.ja`, `/wiki/install-windows.zh-Hans` and `/wiki/LANGUAGES` all 200
+with real rendered headings.
+
+---
+
 ### 2026-10-05: A structural check is not a look; the localized pages shipped unstyled and malformed
 
 **Agent:** RustDev + QAEngineer
