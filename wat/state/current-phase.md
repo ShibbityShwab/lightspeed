@@ -1,9 +1,66 @@
-# Current Phase: WF-054 Internationalization - shipped, then repaired after the live site exposed two real defects
+# Current Phase: WF-054 Internationalization - shipped, repaired, and the GUI's font gap closed
 
 **Workflow:** WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
-**Agent:** RustDev + QAEngineer (lead-verified with the repo's own gates)
-**Status:** Waves 1-4 committed and deployed (`cffad91`); the two defects the deploy exposed are fixed and re-deployed. Wave 2 (CLI) excluded by design.
+**Agent:** RustDev + QAEngineer (lead-verified with the repo's own gates and a real render)
+**Status:** Waves 1-4 deployed and repaired; GUI glyph coverage fixed and gated. Wave 2 (CLI) excluded by design.
 **Last updated:** 2026-10-05
+
+---
+
+## 2026-10-05 (fifth pass) - four of the eight locales shipped a GUI made of boxes
+
+Measured rather than taken from the prior review's summary, and the numbers moved:
+the bundled Inter is a **230-codepoint subset** with no Cyrillic, no Greek and no
+CJK, so coverage depends entirely on the fallback chains.
+
+| locale | non-ASCII chars | uncovered in `proportional` | uncovered in `semibold` |
+| --- | --- | --- | --- |
+| ja | 178 | 173 | 176 |
+| ko | 162 | 160 | 160 |
+| zh-Hans | 181 | 176 | 179 |
+| ru | 54 | **0** | **52** |
+
+The review had said Cyrillic renders as `?` throughout; in fact regular Russian
+text was fine, because epaint's built-in Ubuntu-Light carries 214 Cyrillic
+codepoints - but `semibold` chained only `["inter_semibold", "inter"]`, so every
+**emphasised** Russian label was tofu while the body text beside it rendered.
+That is the entire settings panel (its section labels are semibold).
+
+**Fixed:** three Noto CJK faces (JP/KR/SC, OFL) subset with `pyftsubset` to the
+glyphs the catalogs actually use plus a Latin/punctuation safety set -
+**0.23 MB total against the plan's 5 MB gate**. `font_definitions()` now builds
+real fallback chains for all three families, and the CJK order follows the active
+locale, because the subsets overlap: 127 of the Chinese catalog's 172 Han
+characters also exist in the Japanese face, so a fixed order would draw Chinese
+text with Japanese glyphs. `main.rs` resolves the language before the first frame
+and Settings re-installs on a change.
+
+**The gate:** `every_catalog_glyph_is_drawable_in_every_family` asserts every
+non-ASCII catalog character is drawable by every family the app installs, read
+from the real `FontDefinitions` rather than a copy of the chain. Mutation-checked:
+restoring the old Inter-only `semibold` chain fails it with the exact characters
+and families listed.
+
+**Verified by looking, on the owner's desktop** (one launch, config written then
+removed, machine left as found): the Japanese build renders `リレー未選択`,
+`トレイに隠す`, `設定`, `終了`, `自動（検出）` with clean glyphs, and the Russian
+Settings panel renders `Настройки`, `Язык`, `Конфиденциальность`,
+`Обслуживание`, `О пригramме` in semibold Cyrillic.
+
+**Confirmed still broken, and visible in those same screenshots:** the state word
+(`NOT OPTIMIZING`), the primary CTA (`RESTART AS ADMINISTRATOR TO OPTIMIZE`), the
+ledger rows (`Relay` / `Game server` / `Relayed`) and the About paragraph
+(`Free and open source, ...`, a literal at `app.rs:1414`) are hardcoded English,
+so a Japanese or Russian user reads a mostly-translated window with the most
+prominent string untranslated. Inventory: 8 literal UI call sites plus ~12
+prose literals (`Close`, `Check for updates`, `Install update`, `Auto (fastest)`,
+`No game detected`, `Reset to defaults`, `Select a relay`, `Update available`,
+`You're up to date`, and the state/CTA/ledger set), plus `update.rs` status
+sentences.
+
+**Also wired:** `.github/workflows/ci.yml` gained a `Web Localization Checks` job
+running both `--check` modes, which no workflow had ever invoked - the drift that
+let a page ship with relative asset URLs and tag fragments in its text.
 
 ---
 

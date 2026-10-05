@@ -42,6 +42,11 @@ reqwest = { version = "0.13", default-features = false, features = ["native-tls"
 sha2 = "0.10"
 webbrowser = "1"
 
+# The font-coverage gate in app.rs's tests parses the bundled faces' cmaps.
+# ab_glyph is already in the tree through epaint, so this adds no new download.
+[dev-dependencies]
+ab_glyph = "0.2"
+
 # Build-time icon embedding: build.rs renders the brand PNG into a multi-size
 # ICO and compiles it into the exe, which is the only way Windows will show the
 # brand mark on the taskbar button and in Explorer. The `ico` codec lives here

@@ -118,6 +118,22 @@ jobs:
       - name: Geo catalog self-test
         run: bash infra/scripts/test_geo_catalogs.sh
 
+  web-locale-checks:
+    name: Web Localization Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Both modes existed with no workflow invoking them, so the catalog and
+      # the eight generated pages could drift from web/index.html unnoticed -
+      # which is how a page shipped with relative asset URLs that 404 from
+      # /<tag>/ and with tag fragments left in its text.
+      - name: Catalog matches the source page
+        run: bash scripts/extract-web-strings.sh --check
+
+      - name: Generated locale pages are current
+        run: bash scripts/generate-web-locales.sh --check
+
   macos-smoke:
     name: macOS Smoke Test
     runs-on: macos-latest

@@ -1316,6 +1316,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 {
                     self.language = None;
                     i18n::set_language(None);
+                    install_fonts(ui.ctx(), Some(&i18n::current()));
                     self.persist_config();
                 }
                 for locale in i18n::LOCALES {
@@ -1323,6 +1324,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     if ui.selectable_label(picked, locale.native_name).clicked() {
                         self.language = Some(locale.tag.to_string());
                         i18n::set_language(Some(locale.tag));
+                        install_fonts(ui.ctx(), Some(&i18n::current()));
                         self.persist_config();
                     }
                 }
@@ -1664,6 +1666,10 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             self.fonts_setup = true;
             apply_theme(&ctx);
             P::setup_fonts(&ctx);
+            // `main.rs` binds the families before the first frame, when the
+            // language is not resolved yet; re-bind now that it is, so the CJK
+            // faces are ordered for the active locale rather than defaulted.
+            install_fonts(&ctx, Some(&i18n::current()));
             self.header_icon = brand_mark_texture(&ctx);
         }
 
@@ -1915,14 +1921,20 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
 // ── Pure helpers (no platform dependency) ─────────────────────────────────────
 
-/// Install the bundled fonts.
+/// Build the font families the UI draws with, for `locale`.
 ///
-/// Must run BEFORE the first frame, which is why `main.rs` calls it from the
-/// eframe creation context rather than from `apply_theme`: `set_fonts` only
-/// takes effect on the next frame, and the UI reaches for the named family
-/// immediately, so binding them late panics with "FontFamily::Name(..) is not
-/// bound to any fonts".
-pub(crate) fn install_fonts(ctx: &egui::Context) {
+/// The bundled Inter is a 230-codepoint subset - no Cyrillic, no Greek, no CJK -
+/// so every family needs real fallbacks. `semibold` used to chain only
+/// `["inter_semibold", "inter"]`, which made every emphasised Russian label draw
+/// as tofu while the regular text beside it rendered fine through epaint's
+/// built-in Ubuntu-Light.
+///
+/// `locale` chooses only the ORDER of the three CJK faces. Noto's Japanese,
+/// Korean and Simplified-Chinese subsets each carry the shared Han repertoire in
+/// their own regional forms - 127 of the Chinese catalog's 172 Han characters
+/// also exist in the Japanese face - so a fixed order would draw Chinese text
+/// with Japanese glyphs.
+pub(crate) fn font_definitions(locale: Option<&str>) -> egui::FontDefinitions {
     use std::sync::Arc;
 
     let mut fonts = egui::FontDefinitions::default();
@@ -1939,6 +1951,30 @@ pub(crate) fn install_fonts(ctx: &egui::Context) {
             "jbmono",
             include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
         ),
+        (
+            "cjk_jp",
+            include_bytes!("../assets/fonts/NotoSansJP-Regular.otf"),
+        ),
+        (
+            "cjk_kr",
+            include_bytes!("../assets/fonts/NotoSansKR-Regular.otf"),
+        ),
+        (
+            "cjk_sc",
+            include_bytes!("../assets/fonts/NotoSansSC-Regular.otf"),
+        ),
+        (
+            "cjk_jp_bold",
+            include_bytes!("../assets/fonts/NotoSansJP-Bold.otf"),
+        ),
+        (
+            "cjk_kr_bold",
+            include_bytes!("../assets/fonts/NotoSansKR-Bold.otf"),
+        ),
+        (
+            "cjk_sc_bold",
+            include_bytes!("../assets/fonts/NotoSansSC-Bold.otf"),
+        ),
     ] {
         fonts.font_data.insert(
             name.to_owned(),
@@ -1946,22 +1982,63 @@ pub(crate) fn install_fonts(ctx: &egui::Context) {
         );
     }
 
-    fonts
+    let (cjk_regular, cjk_bold) = cjk_order(locale);
+    let builtin = fonts
         .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, "inter".to_owned());
-    fonts
-        .families
-        .entry(egui::FontFamily::Monospace)
-        .or_default()
-        .insert(0, "jbmono".to_owned());
-    fonts.families.insert(
-        semibold(),
-        vec!["inter_semibold".to_owned(), "inter".to_owned()],
-    );
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
 
-    ctx.set_fonts(fonts);
+    let mut proportional = vec!["inter".to_owned()];
+    proportional.extend(cjk_regular.iter().map(|name| (*name).to_owned()));
+    proportional.extend(builtin.iter().cloned());
+
+    let mut monospace = vec!["jbmono".to_owned()];
+    monospace.extend(cjk_regular.iter().map(|name| (*name).to_owned()));
+    monospace.extend(builtin.iter().cloned());
+
+    let mut emphasised = vec!["inter_semibold".to_owned(), "inter".to_owned()];
+    emphasised.extend(cjk_bold.iter().map(|name| (*name).to_owned()));
+    emphasised.extend(cjk_regular.iter().map(|name| (*name).to_owned()));
+    emphasised.extend(builtin);
+
+    fonts
+        .families
+        .insert(egui::FontFamily::Proportional, proportional);
+    fonts
+        .families
+        .insert(egui::FontFamily::Monospace, monospace);
+    fonts.families.insert(semibold(), emphasised);
+    fonts
+}
+
+/// The CJK faces for a locale, own-regional-form first, as (regular, bold).
+fn cjk_order(locale: Option<&str>) -> ([&'static str; 3], [&'static str; 3]) {
+    match locale {
+        Some("ko") => (
+            ["cjk_kr", "cjk_jp", "cjk_sc"],
+            ["cjk_kr_bold", "cjk_jp_bold", "cjk_sc_bold"],
+        ),
+        Some("zh-Hans") => (
+            ["cjk_sc", "cjk_jp", "cjk_kr"],
+            ["cjk_sc_bold", "cjk_jp_bold", "cjk_kr_bold"],
+        ),
+        _ => (
+            ["cjk_jp", "cjk_kr", "cjk_sc"],
+            ["cjk_jp_bold", "cjk_kr_bold", "cjk_sc_bold"],
+        ),
+    }
+}
+
+/// Install the bundled fonts.
+///
+/// Must run BEFORE the first frame, which is why `main.rs` calls it from the
+/// eframe creation context rather than from `apply_theme`: `set_fonts` only
+/// takes effect on the next frame, and the UI reaches for the named family
+/// immediately, so binding them late panics with "FontFamily::Name(..) is not
+/// bound to any fonts".
+pub(crate) fn install_fonts(ctx: &egui::Context, locale: Option<&str>) {
+    ctx.set_fonts(font_definitions(locale));
 }
 
 /// The font family for emphasised text, matching the website's font weights.
@@ -2495,7 +2572,7 @@ mod tests {
     #[test]
     fn the_theme_renders_a_frame_using_the_emphasis_family() {
         let ctx = eframe::egui::Context::default();
-        super::install_fonts(&ctx);
+        super::install_fonts(&ctx, None);
         super::apply_theme(&ctx);
 
         let raw = eframe::egui::RawInput {
@@ -2521,7 +2598,7 @@ mod tests {
     fn a_localized_frame_draws_the_translated_string() {
         let drawn = |key: &str| {
             let ctx = eframe::egui::Context::default();
-            super::install_fonts(&ctx);
+            super::install_fonts(&ctx, Some("de"));
             super::apply_theme(&ctx);
             let raw = eframe::egui::RawInput {
                 screen_rect: Some(eframe::egui::Rect::from_min_size(
@@ -2551,6 +2628,65 @@ mod tests {
             "the English frame did not draw the English string: {english}"
         );
         assert_ne!(german, english, "both languages drew identical frames");
+    }
+
+    /// Every character in every catalog must be drawable by the families the app
+    /// installs.
+    ///
+    /// Asserted against the real `FontDefinitions` the app builds and the face
+    /// bytes inside them, not a copy of the chain, so dropping a face from a
+    /// family or adding a catalog character nothing carries both fail here. The
+    /// bundled Inter is a 230-codepoint subset and `semibold` once chained only
+    /// Inter - every emphasised Cyrillic label in the shipped build was tofu.
+    #[test]
+    fn every_catalog_glyph_is_drawable_in_every_family() {
+        use ab_glyph::{Font as _, FontArc};
+
+        let catalogs: [(&str, &str); 9] = [
+            ("de", include_str!("../locales/de.toml")),
+            ("en", include_str!("../locales/en.toml")),
+            ("es", include_str!("../locales/es.toml")),
+            ("fr", include_str!("../locales/fr.toml")),
+            ("ja", include_str!("../locales/ja.toml")),
+            ("ko", include_str!("../locales/ko.toml")),
+            ("pt-BR", include_str!("../locales/pt-BR.toml")),
+            ("ru", include_str!("../locales/ru.toml")),
+            ("zh-Hans", include_str!("../locales/zh-Hans.toml")),
+        ];
+
+        let defs = super::font_definitions(Some("zh-Hans"));
+        let faces: Vec<(String, FontArc)> = defs
+            .font_data
+            .iter()
+            .map(|(name, data)| {
+                let face =
+                    FontArc::try_from_vec(data.font.to_vec()).expect("a bundled face must parse");
+                (name.clone(), face)
+            })
+            .collect();
+
+        let mut undrawable: Vec<String> = Vec::new();
+        for (family, chain) in &defs.families {
+            for (tag, catalog) in catalogs {
+                for ch in catalog.chars().filter(|ch| !ch.is_ascii()) {
+                    let drawable = chain.iter().any(|name| {
+                        faces
+                            .iter()
+                            .find(|(face_name, _)| face_name == name)
+                            .is_some_and(|(_, face)| face.glyph_id(ch).0 != 0)
+                    });
+                    if !drawable {
+                        undrawable.push(format!("{family:?} / {tag}: U+{:04X} {ch}", ch as u32));
+                    }
+                }
+            }
+        }
+        undrawable.sort();
+        undrawable.dedup();
+        assert!(
+            undrawable.is_empty(),
+            "catalog characters no installed face can draw: {undrawable:?}"
+        );
     }
 
     #[test]

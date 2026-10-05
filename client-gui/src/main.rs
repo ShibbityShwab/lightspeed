@@ -110,7 +110,11 @@ fn run() -> anyhow::Result<()> {
         "LightSpeed",
         native_options,
         Box::new(move |cc: &eframe::CreationContext<'_>| {
-            app::install_fonts(&cc.egui_ctx);
+            // The language is resolved here, not in the app, so the CJK faces are
+            // ordered correctly on the very first painted frame.
+            let language = config::load(&paths::config_file()).language;
+            i18n::set_language(language.as_deref());
+            app::install_fonts(&cc.egui_ctx, Some(&i18n::current()));
             let app = app::LightSpeedApp::<platform::CurrentPlatform>::new(
                 Arc::clone(&engine_for_closure),
                 Arc::clone(&quit_for_closure),

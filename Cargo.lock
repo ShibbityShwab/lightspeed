@@ -2984,6 +2984,7 @@ dependencies = [
 name = "lightspeed-gui"
 version = "1.7.0"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "axoupdater",
  "dirs",
