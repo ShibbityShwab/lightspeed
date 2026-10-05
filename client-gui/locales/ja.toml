@@ -33,6 +33,8 @@ game_server = "ゲームサーバー"
 relayed = "経由済み"
 place_hint = "-- 最適化を開始すると表示されます"
 count_hint = "-- 最適化を開始すると計測されます"
+port_fix_guide = "ポートが検出されません - 対処ガイド"
+start_manual = "最適化を開始（手動）"
 
 [state]
 disconnected = "未接続"
@@ -51,6 +53,9 @@ about = "このアプリについて"
 open_log = "ログファイルを開く"
 check_updates_hint = "LightSpeed の新しいバージョンがあるか確認します。"
 share_stats = "匿名のレイテンシ統計を共有"
+capture_status = "キャプチャバックエンド（pcap モード）: {state}"
+capture_available = "利用可能"
+capture_missing = "検出されません"
 
 [proxies]
 title = "リレー管理"
@@ -95,6 +100,10 @@ checking = "更新を確認中…"
 installing = "更新をインストール中…"
 current = "現在のバージョン: {version}"
 latest = "最新バージョン: {version}"
+install = "更新をインストール"
+install_hint = "最新版をダウンロードして検証し、インストールします"
+available = "更新があります"
+up_to_date = "最新です"
 
 [window]
 hide_to_tray = "トレイに隠す"
@@ -105,3 +114,5 @@ website_hint = "リアルタイムのリレー状況、ベンチマーク、ド�
 star_hint = "スターは他のプレイヤーが LightSpeed を見つける助けになります"
 enjoying = "気に入りましたか？"
 star_github = "GitHub でスターを付ける"
+version = "バージョン {version}"
+blurb = "無料のオープンソース。アカウント不要で、オフにできないテレメトリーもありません。"

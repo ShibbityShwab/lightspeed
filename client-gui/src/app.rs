@@ -1214,7 +1214,7 @@ impl<P: Platform> LightSpeedApp<P> {
                      Format: lo-hi  (e.g. 28015-28999)  or a single port.",
                 );
                 ui.hyperlink_to(
-                    "Port not detected - fix guide",
+                    i18n::t("route.port_fix_guide"),
                     "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
                 );
             });
@@ -1234,11 +1234,8 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
 
         let server_valid = parse_server_addr(&self.server_input).is_some();
-        let manual_button = egui::Button::new("Start optimizing (manual)").fill(if server_valid {
-            signal_soft
-        } else {
-            bg_3
-        });
+        let manual_button = egui::Button::new(i18n::t("route.start_manual"))
+            .fill(if server_valid { signal_soft } else { bg_3 });
         if ui.add_enabled(server_valid, manual_button).clicked() {
             if let Some(server_addr) = parse_server_addr(&self.server_input) {
                 let entry = self.selected_game();
@@ -1361,7 +1358,7 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
         section_label(ui, &i18n::t("settings.maintenance"));
         if ui
-            .button("Check for updates")
+            .button(i18n::t("update.sheet_title").as_ref())
             .on_hover_text(i18n::t("settings.check_updates_hint"))
             .clicked()
         {
@@ -1373,13 +1370,17 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         ui.add_space(S1);
         ui.label(
-            egui::RichText::new(format!(
-                "Capture backend (pcap mode): {}",
-                if self.capture_available {
-                    "available"
-                } else {
-                    "not detected"
-                }
+            egui::RichText::new(i18n::t_with(
+                "settings.capture_status",
+                &[(
+                    "state",
+                    if self.capture_available {
+                        i18n::t("settings.capture_available")
+                    } else {
+                        i18n::t("settings.capture_missing")
+                    }
+                    .as_ref(),
+                )],
             ))
             .size(CAPTION)
             .color(text_3),
@@ -1403,19 +1404,20 @@ impl<P: Platform> LightSpeedApp<P> {
                         .family(semibold()),
                 );
                 ui.label(
-                    egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                        .size(CAPTION)
-                        .color(text_3),
+                    egui::RichText::new(i18n::t_with(
+                        "about.version",
+                        &[("version", env!("CARGO_PKG_VERSION"))],
+                    ))
+                    .size(CAPTION)
+                    .color(text_3),
                 );
             });
         });
         ui.add_space(S2);
         ui.label(
-            egui::RichText::new(
-                "Free and open source, with no accounts and no telemetry you cannot turn off.",
-            )
-            .size(LABEL)
-            .color(text_2),
+            egui::RichText::new(i18n::t("about.blurb"))
+                .size(LABEL)
+                .color(text_2),
         );
         ui.add_space(S2);
         ui.horizontal_wrapped(|ui| {
@@ -1602,10 +1604,8 @@ impl<P: Platform> LightSpeedApp<P> {
                                 if installable {
                                     ui.add_space(S1);
                                     if ui
-                                        .button("Install update")
-                                        .on_hover_text(
-                                            "Download, verify, and install the latest version",
-                                        )
+                                        .button(i18n::t("update.install").as_ref())
+                                        .on_hover_text(i18n::t("update.install_hint"))
                                         .clicked()
                                     {
                                         if let Ok(status) = result {

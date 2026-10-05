@@ -228,13 +228,13 @@ pub(crate) fn http_client() -> Result<reqwest::Client, String> {
 
 /// Maps the outcome of an update check to a single user-facing status line.
 ///
-/// `Ok` with `update_available` true reads "Update available"; `Ok` otherwise
-/// reads "You're up to date"; `Err` surfaces the underlying failure (e.g. a
-/// missing install receipt on non-shell installs) verbatim.
+/// Translated, so the caller sees the active language; `Err` surfaces the
+/// underlying failure (e.g. a missing install receipt on non-shell installs)
+/// verbatim, since it is diagnostic text rather than copy.
 pub fn update_status_line(result: &Result<UpdateStatus, String>) -> String {
     match result {
-        Ok(status) if status.update_available => "Update available".to_string(),
-        Ok(_) => "You're up to date".to_string(),
+        Ok(status) if status.update_available => crate::i18n::t("update.available").into_owned(),
+        Ok(_) => crate::i18n::t("update.up_to_date").into_owned(),
         Err(err) => err.clone(),
     }
 }
@@ -245,6 +245,8 @@ mod tests {
 
     #[test]
     fn update_status_line_reports_available() {
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(None);
         let status = UpdateStatus {
             current: "1.0.0".into(),
             latest: Some("1.1.0".into()),
@@ -256,6 +258,8 @@ mod tests {
 
     #[test]
     fn update_status_line_reports_up_to_date() {
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(None);
         let status = UpdateStatus {
             current: "1.0.0".into(),
             latest: None,
