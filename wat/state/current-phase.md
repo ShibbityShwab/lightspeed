@@ -81,6 +81,46 @@ stale translation while every check still passes.
 
 ---
 
+## 2026-10-05 (tenth pass) - the extractor had a tag-prefix bug hiding whole paragraphs
+
+The English still on the localized pages was not a translation gap. The tag
+regexes had no name boundary, so `<p` also matched `<path`, `<a` matched
+`<article`, `<th` matched `<thead` and `<li` matched `<link` - seven matches per
+parse. A bogus match is worse than a mis-parse: scanning resumes after it, so it
+**swallows the next real match of that name**. A `<path>` in the route-map SVG
+was read as a `<p>` whose body ran to the following `</p>` - the privacy
+notice's closing tag - so that paragraph was never extracted, and its prose
+stayed English in all eight locales while the `<strong>` fragments around it were
+translated. That is the fragmented English visible on every page.
+
+**Fixed:** `\b` after the tag name in both parsers. Seven regions came back: the
+hero badge, the privacy notice, two comparison-table header rows, the
+game-request link, a relay-health row and a docs link.
+
+**The near-miss worth recording.** The fix renumbers keys, and **347 of 489
+moved**. Every locale catalog would have had its translations silently bound to
+the wrong sentence - the exact failure the review predicted for positional keys,
+arriving on schedule. I remapped by **document position** (exact, and unambiguous
+where values repeat) rather than by index, and the generator's placeholder check
+passing afterwards is what confirms each block translation landed on the right
+paragraph. The four keys that would not map were already stale - absent from the
+old `en.json`, left over from the block-unit change - and were dropped.
+
+The remap is hand-run tooling. If keys were content-addressed this would have
+been a no-op, which is the concrete argument for doing that next.
+
+**Also:** six strings that had never been reachable are translated (hero badge,
+`Relay` and `Capability` table headers, `Request a game`, `Waiting for
+snapshot`, `Privacy Policy`), and both parsers now assert zero prefix matches -
+mutation-checked by removing the boundary and watching it fail with exactly
+`<a, <li, <p, <th`.
+
+**Measured:** de 20->13, es 18->11, fr 18->11, ja 19->12, ko 19->12, pt-BR 16->9,
+ru 17->10, zh-Hans 17->10, and what remains is install commands, URLs and
+platform names - untranslated by design. 0 stray tag fragments on every page.
+
+---
+
 ## 2026-10-05 (fifth pass) - four of the eight locales shipped a GUI made of boxes
 
 Measured rather than taken from the prior review's summary, and the numbers moved:
