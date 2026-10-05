@@ -121,6 +121,44 @@ platform names - untranslated by design. 0 stray tag fragments on every page.
 
 ---
 
+## 2026-10-05 (eleventh pass) - keys are content-addressed, so an edit no longer rebinds them
+
+Keys were `idx.NNN`, the enumeration index over every regex match, so any change
+to the match set renumbered everything after it - the tag-boundary fix moved 347
+of 489 and would have silently rebound most translations to the wrong sentences.
+That is the failure the review predicted for positional keys, and it arrived.
+
+**Now** a key is derived from the string: `sha1(kind + element + value)[:10]`,
+prefixed `idx.` / `blk.` / `attr.`. The element name is in the digest so the same
+words in two elements stay separate (the nav's "How It Works" and the section
+heading's differ in German). Repeated identical strings collapse to one key -
+392 keys where there were 466 - which is why the catalogs shrank.
+
+**Proved by mutation, both directions:**
+
+- Insert an unrelated paragraph in the middle of `web/index.html`: **0 keys
+  removed, 0 values changed, 1 key added, 0 locale translations orphaned.** The
+  old scheme would have renumbered roughly three hundred.
+- Edit one English string: exactly **1 key orphaned**, and the German catalog's
+  orphan names it (`idx.dad93495b1 was 'Privacy notice:'`).
+
+**Both states are now loud**, enforced in the generator because that is what CI
+runs: a string with no translation fails naming the key; a translation whose
+English no longer exists fails naming the key. Mutation-checked by doing each
+edit and watching the check fail with the right message - a new paragraph reports
+"have no de translation, so they render English", an edit reports "belong to
+English that no longer exists". Stale is reported first, since an edit makes both
+true and naming the orphan is the more useful message.
+
+**Behaviour-preserving, as a refactor should be:** the English remaining per
+locale is identical to the commit before (13/11/11/12/12/9/10/10) and still 0
+stray tag fragments. The migration from positional keys moved 390 keys per locale
+with **0 dropped and 0 missing**, mapping by English value and preferring the
+matching kind; 13 values are shared by more than one new key and got the same
+translation, which is correct for repeated strings like `FAQ` and `LightSpeed`.
+
+---
+
 ## 2026-10-05 (fifth pass) - four of the eight locales shipped a GUI made of boxes
 
 Measured rather than taken from the prior review's summary, and the numbers moved:

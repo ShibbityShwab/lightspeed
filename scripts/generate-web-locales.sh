@@ -37,6 +37,7 @@ if [[ -z "$PY" ]]; then
 fi
 
 "$PY" - "$CHECK" "$ROOT" <<'PY'
+import hashlib
 import html
 import json
 import pathlib
@@ -135,6 +136,27 @@ LINK_OR_CODE = re.compile(r"<(?:a|code)\b", re.IGNORECASE)
 PLACEHOLDER = re.compile(r"\{(\d+)\}")
 
 
+def content_key(kind, tag, value):
+    """The key for a string, derived from the string rather than its position.
+
+    Mirrors `scripts/extract-web-strings.sh`; the two must agree exactly, which
+    the parity checks below enforce.
+    """
+    digest = hashlib.sha1(
+        (kind + chr(0) + tag + chr(0) + value).encode("utf-8")
+    ).hexdigest()
+    return kind + "." + digest[:10]
+
+
+def is_wrapper(value):
+    """True for a block whose value is only placeholders.
+
+    Such a block carries no words of its own - it exists so its inner element can
+    be restored - so it needs no translation and legitimately has none.
+    """
+    return PLACEHOLDER.sub("", value).strip() == ""
+
+
 def block_value(body):
     """A container's prose with each inline element replaced by {N}."""
     elements = list(INLINE_ELEMENT.finditer(body))
@@ -167,12 +189,12 @@ for index, (_pos, _tag, match) in enumerate(matches):
         value, _elements = block_value(body)
         if len(value) < 3 or not re.search(r"\{\d+\}", value):
             continue
-        blocks.append((f"blk.{len(blocks):03d}", match, value))
+        blocks.append((content_key("blk", _tag, value), match, value))
         continue
     value = html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", body)).strip())
     if len(value) < 3:
         continue
-    units.append((f"idx.{index:03d}", match, value))
+    units.append((content_key("idx", _tag, value), match, value))
 
 known = {key for key, _m, _v in units}
 block_known = {key for key, _m, _v in blocks}
@@ -198,7 +220,7 @@ for index, match in enumerate(attr_pattern.finditer(stripped)):
     value = html.unescape(match.group("value")).strip()
     if len(value) < 3:
         continue
-    attr_units.append((f"attr.{index:03d}", match, value))
+    attr_units.append((content_key("attr", match.group("attr").lower(), value), match, value))
 
 attr_documented = {k for k in english["strings"] if k.startswith("attr.")}
 attr_known = {key for key, _m, _v in attr_units}
@@ -544,6 +566,33 @@ for info in locale_registry:
                 f"{tag}: {key} changed its placeholders. It must keep "
                 f"{PLACEHOLDER.findall(english_value)} exactly: {translated[:90]!r}"
             )
+    # Content-addressed keys make drift detectable: a key present in the English
+    # catalog but not in this locale means a string was added and never
+    # translated, and a key here that English no longer carries means the English
+    # changed - this translation belongs to a sentence that no longer exists.
+    # Both used to be invisible, and the second is how a page silently renders
+    # the wrong translation.
+    locale_strings = catalog.get("strings", {})
+    # Reported first because an edit makes both true at once, and naming the
+    # translation that no longer matches any English is the more useful of the
+    # two messages.
+    stale = sorted(key for key in locale_strings if key not in english["strings"])
+    if stale:
+        sys.exit(
+            f"{tag}: {len(stale)} translation(s) belong to English that no longer "
+            f"exists (the source changed): {stale[:6]}"
+        )
+    untranslated = sorted(
+        key
+        for key, value in english["strings"].items()
+        if key not in locale_strings and not is_wrapper(value)
+    )
+    if untranslated:
+        sys.exit(
+            f"{tag}: {len(untranslated)} string(s) have no {tag} translation, so they "
+            f"render English: {untranslated[:6]}"
+        )
+
     strays = stray_text_gt(target_html) - SOURCE_TEXT_GT
     if strays:
         sys.exit(

@@ -39,10 +39,30 @@ fi
 
 "$PY" - "$CHECK" "$ROOT" <<'PY'
 import html
+import hashlib
 import json
 import pathlib
 import re
 import sys
+
+
+def content_key(kind: str, tag: str, value: str) -> str:
+    """A key derived from the string itself rather than from its position.
+
+    Positional keys renumber whenever the match set changes - the tag-boundary
+    fix moved 347 of 489 - and that silently rebinds every translation after the
+    first change to the wrong sentence while all the checks still pass. A
+    content key survives an unrelated edit to the page, and an English change
+    orphans exactly that one key, which is a loud, reportable state.
+
+    The element name is part of the digest so that the same words in two
+    different elements stay separate (the nav's "How It Works" and the section
+    heading's are translated differently in German).
+    """
+    digest = hashlib.sha1(
+        (kind + chr(0) + tag + chr(0) + value).encode("utf-8")
+    ).hexdigest()
+    return kind + "." + digest[:10]
 
 check = sys.argv[1] == "1"
 root = pathlib.Path(sys.argv[2])
@@ -210,7 +230,7 @@ for index, (_pos, _tag, match) in enumerate(matches):
         value, _elements = block_value(body)
         if len(value) < 3 or not re.search(r"\{\d+\}", value):
             continue
-        key = f"blk.{len(blocks):03d}"
+        key = content_key("blk", _tag, value)
         blocks[key] = value
         markup[key] = re.sub(r"\s+", " ", body).strip()
         order.append(key)
@@ -218,7 +238,7 @@ for index, (_pos, _tag, match) in enumerate(matches):
     value = clean(body)
     if len(value) < 3:
         continue
-    key = f"idx.{index:03d}"
+    key = content_key("idx", _tag, value)
     catalog[key] = value
     # Keep the markup-bearing original so the generator can reinsert a
     # translation with its inline tags (`<a>`, `<strong>`, `<code>`) intact.
@@ -230,7 +250,7 @@ for index, match in enumerate(ATTR_RE.finditer(stripped)):
     value = html.unescape(match.group("value")).strip()
     if len(value) < 3:
         continue
-    key = f"attr.{index:03d}"
+    key = content_key("attr", match.group("attr").lower(), value)
     attr_catalog[key] = value
 
 catalog.update(attr_catalog)
@@ -238,7 +258,7 @@ catalog.update(blocks)
 
 payload = {
     "generated_from": "web/index.html",
-    "note": "Source locale. Keys are positional; regenerate with scripts/extract-web-strings.sh",
+    "note": "Source locale. Keys are content-addressed; regenerate with scripts/extract-web-strings.sh",
     "strings": catalog,
     "markup": markup,
     "block_placeholders": True,
