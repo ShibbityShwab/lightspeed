@@ -6,6 +6,44 @@
 
 ---
 
+### 2026-10-05: The GUI bundles real fallbacks, and a gate keeps them honest
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (`client-gui/src/app.rs`, `client-gui/assets/fonts/`)
+**Rationale:** Measured, not assumed, and the measurement corrected the prior
+review. The bundled Inter is a 230-codepoint subset with no Cyrillic, no Greek and
+no CJK, so coverage rested entirely on the fallback chains: Japanese left 173 of
+178 non-ASCII catalog characters undrawable, Korean 160 of 162, Simplified
+Chinese 176 of 181. Russian was the surprise - 0 uncovered in regular text,
+because epaint's built-in Ubuntu-Light carries 214 Cyrillic codepoints, but 52 of
+54 uncovered in `semibold`, whose chain was `["inter_semibold", "inter"]` with no
+fallback at all. Every emphasised label in a translated settings panel was tofu
+while the body text beside it was fine.
+**Impact:** three Noto CJK faces (JP/KR/SC, OFL) are subset with `pyftsubset` to
+the glyphs the catalogs use plus a Latin/punctuation safety set - **0.23 MB
+against the 5 MB budget**, because the full faces are 4.5-8.3 MB each.
+`font_definitions()` builds real fallback chains for all three families, and the
+CJK faces are ordered by the active locale: the subsets overlap (127 of the
+Chinese catalog's 172 Han characters also exist in the Japanese face), so a fixed
+order would draw Chinese text with Japanese glyphs. `main.rs` resolves the
+language before the first frame and Settings re-installs on a change.
+**Alternatives Considered:** loading the Windows CJK fonts at runtime was rejected
+because they are optional features on a modern Windows install - the app would
+render boxes on the machines least likely to have the language pack, which is the
+exact population that needs them; shipping the unsubset faces was rejected on the
+size budget; relying on epaint's built-in fonts was rejected because they carry
+no CJK at all.
+**Verification:** `every_catalog_glyph_is_drawable_in_every_family` asserts every
+non-ASCII catalog character is drawable by every installed family, read from the
+real `FontDefinitions` rather than a copy of the chains, and it was
+**mutation-checked** - restoring the old Inter-only `semibold` chain fails it with
+the characters and families named. Then verified by looking: the Japanese build
+draws `リレー未選択` / `トレイに隠す` / `設定` / `自動（検出）`, the Russian settings
+panel draws `Настройки` / `Язык` / `Конфиденциальность` in semibold Cyrillic, and
+the machine was left as found (config written for the test, then removed).
+
+---
+
 ### 2026-10-05: The wiki sync uses GITHUB_TOKEN - measured, after two probes lied
 
 **Agent:** DevOps + QAEngineer

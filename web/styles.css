@@ -1048,6 +1048,24 @@ img, svg { max-width: 100%; }
     }
     .lang-switch option { background: var(--bg-2); color: var(--text-1); }
 
+    /* The language picker's no-JavaScript fallback: the same destinations as
+       plain links. A browser with scripting hides the whole block, so this is
+       only ever seen by a reader the select cannot serve. */
+    .lang-fallback {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--sp-3);
+      margin-left: var(--sp-2);
+      font-size: var(--fs-xs);
+    }
+    .lang-fallback a {
+      color: var(--text-2);
+      text-decoration: none;
+    }
+    .lang-fallback a:hover { color: var(--text-1); text-decoration: underline; }
+    .lang-fallback a[aria-current="page"] { color: var(--text-1); font-weight: 600; }
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .status-dot, .route-path, .ping-dot { animation: none; }

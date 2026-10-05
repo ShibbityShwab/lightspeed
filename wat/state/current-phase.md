@@ -62,6 +62,16 @@ sentences.
 running both `--check` modes, which no workflow had ever invoked - the drift that
 let a page ship with relative asset URLs and tag fragments in its text.
 
+**Two more, both measured before and after:** the sitemap listed only the root
+and the route visualizer while every locale page advertised its siblings through
+`hreflang`, so the eight translated pages were missing from the file search
+engines read - it is now generated from the same locale registry. And the
+language picker's docstring called it a no-JavaScript control while it navigated
+from an inline `onchange`; it now ships a `<noscript>` link list, and a body
+`<noscript><style>` hides the dead select, verified by rendering the page with
+scripting actually disabled (select hidden, nine links, current page marked) and
+again with it enabled (select shown, fallback absent).
+
 ---
 
 ## 2026-10-05 (third pass) - the deploy exposed what the structural checks could not

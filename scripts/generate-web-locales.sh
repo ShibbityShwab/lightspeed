@@ -327,14 +327,15 @@ class LanguageControl(str):
 
 
 def language_switcher(current):
-    """A no-JavaScript language picker, styled from the site's own tokens.
+    """The language picker: a native select plus a no-JavaScript fallback.
 
-    Each option is a link the browser follows, so the control works with
-    JavaScript disabled and needs no handler in app.js. Only locales that
-    actually have a generated page appear, so the picker can never offer a
-    404.
+    The select navigates from an inline `onchange`, so it needs JavaScript. The
+    `<noscript>` list carries the same destinations as plain links for a reader
+    whose browser blocks scripts. Only locales that actually have a generated
+    page appear in either, so neither can offer a 404.
     """
     options = []
+    links = []
     for info in locale_registry:
         tag = info["tag"]
         name = LOCALE_NAMES.get(tag, tag)
@@ -343,13 +344,19 @@ def language_switcher(current):
         options.append(
             f'<option value="{html.escape(href, quote=True)}"{selected}>{html.escape(name)}</option>'
         )
+        aria = ' aria-current="page"' if tag == current else ""
+        links.append(f'<a href="{html.escape(href, quote=True)}"{aria}>{html.escape(name)}</a>')
     label = html.escape(LOCALE_NAMES.get(current, current))
     return (
+        '<noscript><style>.lang-switch{display:none}</style></noscript>'
         '<label class="lang-switch">'
         f'<span class="lang-switch-label">{label}</span>'
         '<select aria-label="Change language" onchange="if(this.value)location.href=this.value">'
         + "".join(options)
         + "</select></label>"
+        + '<noscript><span class="lang-fallback">'
+        + "".join(links)
+        + "</span></noscript>"
     )
 
 
@@ -377,6 +384,28 @@ def page_url(tag):
     origin rather than the repository's directory layout.
     """
     return f"{SITE_ORIGIN}/" if tag == "en" else f"{SITE_ORIGIN}/{tag}/"
+
+
+def sitemap_xml():
+    """The sitemap, built from the registry that generates the pages.
+
+    Every locale page advertises its siblings through hreflang, but the sitemap
+    listed only the root and the route visualizer, so the eight translated pages
+    were absent from the file search engines actually read. Deriving it here keeps
+    the two in step when a locale is added or removed.
+    """
+    urls = [SITE_ORIGIN + "/", SITE_ORIGIN + "/route-visualizer/"]
+    urls += [
+        page_url(info["tag"]) for info in locale_registry if info["tag"] != "en"
+    ]
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+    for url in urls:
+        lines += ["  <url>", f"    <loc>{url}</loc>", "  </url>"]
+    lines.append("</urlset>")
+    return "\n".join(lines) + "\n"
 
 
 locale_registry = []
@@ -432,6 +461,15 @@ else:
     # translate \n to \r\n on Windows and fail the same check on Linux.
     english_target.write_text(english_html, encoding="utf-8", newline="")
     written.append(str(english_target.relative_to(root)))
+
+sitemap_target = root / "web" / "sitemap.xml"
+sitemap = sitemap_xml()
+if check:
+    if sitemap_target.read_text(encoding="utf-8") != sitemap:
+        sys.exit(f"{sitemap_target} is stale; re-run scripts/generate-web-locales.sh")
+else:
+    sitemap_target.write_text(sitemap, encoding="utf-8", newline="")
+    written.append(str(sitemap_target.relative_to(root)))
 
 if check:
     print(f"{len(locale_registry) - 1} locale page(s) up to date")
