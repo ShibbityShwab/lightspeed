@@ -3,6 +3,9 @@ name: Sync Wiki
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   sync:
     name: Sync docs/ → GitHub Wiki
@@ -13,45 +16,40 @@ jobs:
 
       - name: Sync to Wiki
         env:
-          TOKEN: ${{ secrets.WIKI_TOKEN }}
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "WIKI_TOKEN not set - skipping wiki sync."
-            echo "Add a PAT with repo scope to Settings > Secrets > Actions > WIKI_TOKEN"
-            echo "Or push manually: git clone https://github.com/${{ github.repository }}.wiki.git"
-            exit 0
-          fi
-
+          set -euo pipefail
           REPO="${{ github.repository }}"
-          WIKI_URL="https://x-access-token:${TOKEN}@github.com/${REPO}.wiki.git"
+          WIKI_REMOTE="github.com/${REPO}.wiki.git"
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "actions@github.com"
 
-          git clone "$WIKI_URL" wiki-repo 2>/dev/null || {
-            mkdir wiki-repo && cd wiki-repo
-            git init && git checkout -b master
-            echo "# LightSpeed Wiki" > Home.md
-            git add Home.md && git commit -m "init"
-            git remote add origin "$WIKI_URL"
-            git push -u origin master
-            cd .. && rm -rf wiki-repo
-            git clone "$WIKI_URL" wiki-repo
+          clone_wiki() {
+            rm -rf wiki-repo
+            git clone "https://x-access-token:$1@${WIKI_REMOTE}" wiki-repo
           }
 
-          cd wiki-repo
-          find . -name "*.md" ! -name "_Footer.md" ! -name "_Sidebar.md" -delete
-
-          for f in ../docs/*.md; do
-            base=$(basename "$f")
-            sed 's|\.md)|)|g' "$f" > "$base"
-            git add "$base"
-          done
-
-          if git diff --staged --quiet; then
-            echo "No changes"
-          else
-            git commit -m "Sync docs/"
-            git push origin master
-            echo "Wiki updated!"
+          # The default GITHUB_TOKEN cannot push to `<repo>.wiki.git`, and a
+          # fine-grained PAT cannot reach a wiki at all - the cause of the 403s
+          # from 2026-08-03. Only a classic PAT with `repo` scope works.
+          if [ -z "${WIKI_TOKEN:-}" ] || ! clone_wiki "$WIKI_TOKEN"; then
+            echo "::warning::WIKI_TOKEN cannot reach the wiki; trying GITHUB_TOKEN"
+            if ! clone_wiki "${GITHUB_TOKEN:-}"; then
+              echo "::error::No usable wiki credential. Set WIKI_TOKEN to a classic PAT with 'repo' scope."
+              exit 1
+            fi
           fi
+
+          python scripts/sync-wiki.py "$REPO" wiki-repo
+
+          cd wiki-repo
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git add -A
+          git commit -m "Sync docs/ from ${GITHUB_SHA::7}"
+          git push origin HEAD:master
+          echo "Wiki updated."

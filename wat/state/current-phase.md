@@ -8,7 +8,6 @@
 ---
 
 ## 2026-10-05 (third pass) - the deploy exposed what the structural checks could not
-
 `cffad91` was pushed and `Deploy GitHub Pages` succeeded. Opening the live site in
 a real browser then showed two defects that every structural check had passed
 over. Both are now fixed; both were caught by looking at the page, not by
@@ -56,6 +55,34 @@ skipped as a unit, so ~27 of 174 Spanish text blocks (FAQ answers, the privacy
 notice, the network description) remain in English while their bold fragments
 are translated. That needs placeholder-based extraction to fix properly - a
 rework of the extractor and a retranslation of all eight catalogs.
+
+## 2026-10-05 (fourth pass) - the wiki sync had never worked, not once
+
+The other open item: `Sync Wiki` had failed every run since 2026-08-03. The log
+is `remote: Permission to ShibbityShwab/lightspeed.wiki.git denied` (403) on the
+push, and the older revision of the job swallowed it with `|| echo`, which is why
+the runs before that reported success - **the docs have never been on the wiki.**
+It only carried the auto-generated `Initial Home page`.
+
+The cause is a platform constraint: the default `GITHUB_TOKEN` cannot push to
+`<repo>.wiki.git`, and a fine-grained PAT cannot reach a wiki at all, so the
+`WIKI_TOKEN` secret (written 2026-08-03, right as the failures started) is the
+wrong kind of token. A classic PAT with `repo` scope is the only thing that works
+- proved by cloning and pushing the wiki with the `gh` CLI's own token.
+
+Two further bugs alongside it: the job deleted every top-level `.md` **including
+`Home.md`** and never recreated it, so a successful run would have left the wiki
+with no front page; and 40 relative links pointed into the repo
+(`infra/README.md`, `LICENSE`), which cannot resolve in the wiki at all.
+
+Fixed as `scripts/sync-wiki.py` (the sed one-liners were not reviewable and not
+testable) plus a thin workflow: `docs/README.md` becomes `Home.md`, in-repo links
+become absolute `github.com/.../blob/master/...` URLs, asset paths rebase onto
+`raw.githubusercontent.com`, and any missing `Home` source fails the job.
+
+**Verified locally before publishing:** the script renders 71 pages from
+`docs/*.md` with `Home.md` present, zero links still ending `.md`, and zero
+non-page relative links left.
 
 ---
 
