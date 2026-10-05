@@ -3,6 +3,23 @@
 > Translations are machine-assisted and **have not been reviewed by native speakers**.
 > Use them as a readable guide; the English pages are authoritative.
 
+## Why these nine languages
+
+The set approximates the Steam top-8 by player share plus Korean: German,
+Spanish, French, Japanese, Korean, Brazilian Portuguese, Russian and Simplified
+Chinese. It is a reasonable outcome but it is **not** a documented decision -
+recorded here so it stops being an implicit one, along with two things a reader
+should know rather than discover:
+
+- **One language is provably missing.** Polish (1.49% of Steam) outranks Korean
+  (1.37%) and has no catalog, so the cut-off is not a consistent threshold.
+- **The Spanish catalog is not neutral.** One `es` file serves both es-ES (4.08%)
+  and Latin American Spanish (0.75%); it follows es-ES conventions and is not
+  labelled as such.
+
+Adding or removing a language is atomic: the picker entry, the `native_name`,
+the catalog and the generated page change together.
+
 ## English
 
 | Document |  |
