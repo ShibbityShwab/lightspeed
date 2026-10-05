@@ -28,18 +28,27 @@ jobs:
 
           clone_wiki() {
             rm -rf wiki-repo
-            git clone "https://x-access-token:$1@${WIKI_REMOTE}" wiki-repo
+            git clone -q "https://x-access-token:$1@${WIKI_REMOTE}" wiki-repo
+          }
+
+          # Cloning a public wiki needs no credentials at all, so a successful
+          # clone says nothing about write access - probe the push itself.
+          can_push() {
+            [ -n "$1" ] || return 1
+            clone_wiki "$1" 2>/dev/null || return 1
+            git -C wiki-repo push --dry-run origin HEAD:master >/dev/null 2>&1
           }
 
           # The default GITHUB_TOKEN cannot push to `<repo>.wiki.git`, and a
           # fine-grained PAT cannot reach a wiki at all - the cause of the 403s
           # from 2026-08-03. Only a classic PAT with `repo` scope works.
-          if [ -z "${WIKI_TOKEN:-}" ] || ! clone_wiki "$WIKI_TOKEN"; then
-            echo "::warning::WIKI_TOKEN cannot reach the wiki; trying GITHUB_TOKEN"
-            if ! clone_wiki "${GITHUB_TOKEN:-}"; then
-              echo "::error::No usable wiki credential. Set WIKI_TOKEN to a classic PAT with 'repo' scope."
-              exit 1
-            fi
+          if can_push "${WIKI_TOKEN:-}"; then
+            echo "Using WIKI_TOKEN."
+          elif can_push "${GITHUB_TOKEN:-}"; then
+            echo "::warning::WIKI_TOKEN cannot push to the wiki; using GITHUB_TOKEN."
+          else
+            echo "::error::No usable wiki credential. Set WIKI_TOKEN to a classic PAT with 'repo' scope (fine-grained PATs cannot access wikis)."
+            exit 1
           fi
 
           python scripts/sync-wiki.py "$REPO" wiki-repo
