@@ -89,10 +89,32 @@ def inside_skip(pos: int) -> bool:
 
 matches = []
 for tag in TAGS:
-    pattern = re.compile(r"<" + tag + r"(?P<attrs>[^>]*)>(?P<body>.*?)</" + tag + r">", re.DOTALL | re.IGNORECASE)
+    # `\b` is load-bearing: without it `<p` also matches `<path`, `<a` matches
+    # `<article`, `<th` matches `<thead` and `<li` matches `<link`, and a bogus
+    # match swallows the next real one of that name.
+    pattern = re.compile(
+        r"<" + tag + r"\b(?P<attrs>[^>]*)>(?P<body>.*?)</" + tag + r">",
+        re.DOTALL | re.IGNORECASE,
+    )
     for m in pattern.finditer(stripped):
         matches.append((m.start(), tag, m))
 matches.sort(key=lambda item: item[0])
+
+# The `\b` above is the fix for a bug that hid whole paragraphs: without it `<p`
+# matched `<path`, and a bogus match swallows the next real one of that name.
+# This asserts the invariant rather than trusting the pattern.
+prefix_hits = sorted(
+    {
+        tag
+        for _pos, tag, m in matches
+        if m.group("attrs")[:1] not in ("", " ", "/", chr(9), chr(10), chr(13))
+    }
+)
+if prefix_hits:
+    sys.exit(
+        "tag match without a name boundary, so a longer element was matched as this one: "
+        + ", ".join("<" + tag for tag in prefix_hits)
+    )
 
 INLINE_ELEMENT = re.compile(
     r"<(?P<tag>a|code|strong|em|b|i|span|small)\b[^>]*>(?P<inner>.*?)</(?P=tag)>"

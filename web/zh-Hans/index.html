@@ -137,7 +137,7 @@
       <div class="hero-bg" aria-hidden="true"></div>
       <div class="container hero-content">
         <div class="hero-copy">
-          <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
+          <p class="hero-badge">开源 · 零成本 · ML 路由选择</p>
           <h1 class="hero-title">
             降低你的延迟。免费。永久。
           </h1>
@@ -213,17 +213,7 @@
     <!-- Privacy notice (on-by-default telemetry disclosure) -->
     <section class="section" id="privacy-notice" aria-label="隐私说明">
       <div class="container">
-        <p class="section-subtitle">
-          <strong>隐私说明：</strong> Anonymous aggregate telemetry is <strong>默认开启</strong>.
-          It sends aggregate latency metrics (percentiles, jitter, FEC counters, and the direct-vs-relayed
-          difference) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint.
-          A cell is suppressed until it has at least 3 reports. Turn it off any time with
-          <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the
-          GUI checkbox. Read the
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">隐私政策</a>
-          and
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">数据字典</a>.
-        </p>
+        <p class="section-subtitle"><strong>隐私说明：</strong> 匿名聚合遥测<strong>默认开启</strong>。它通过明文 HTTP 向中继的未认证 <code>/telemetry</code> 端点发送聚合延迟指标（百分位、抖动、FEC 计数以及直连与中继的差值）。单元格至少累计 3 份上报后才会公开。可随时用 <code>--no-telemetry</code>、<code>lightspeed.toml</code> 中的 <code>telemetry = false</code> 或界面中的复选框关闭。请阅读 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">隐私政策</a> 和 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">数据字典</a>。</p>
       </div>
     </section>
 
@@ -362,7 +352,7 @@
                 <caption class="sr-only">按中继和客户端区域统计的实测 RTT 节省值</caption>
                 <thead>
                   <tr>
-                    <th scope="col">Relay</th>
+                    <th scope="col">中继</th>
                     <th scope="col">客户端区域</th>
                     <th scope="col">报告数</th>
                     <th scope="col">节省（平均）</th>
@@ -634,7 +624,7 @@
             <div class="game-status game-status-ready">就绪</div>
           </article>
         </div>
-        <p class="games-more">没有找到你的游戏？<a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
+        <p class="games-more">没有找到你的游戏？<a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">请求添加游戏</a></p>
       </div>
     </section>
 
@@ -740,7 +730,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>隐私优先</h3>
-            <p>无需账户。匿名聚合遥测默认开启，可随时用 <code>--no-telemetry</code> 或界面中的复选框关闭。它只通过明文 HTTP 向中继的未认证 <code>/telemetry</code> 端点发送聚合延迟指标：不含 IP 地址、不含标识符、不含数据包内容。单元格至少累计 3 份上报后才会公开（统计的是上报数量，而非人数）。隧道有意不加密，以便反作弊系统检查流量，游戏服务器也始终能看到你的真实 IP。中继运营者在技术上可以观察或修改传输中的流量，因此 LightSpeed 不是隐私或匿名工具。如果你需要保密性，请自行搭建中继。参见 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>。</p>
+            <p>无需账户。匿名聚合遥测默认开启，可随时用 <code>--no-telemetry</code> 或界面中的复选框关闭。它只通过明文 HTTP 向中继的未认证 <code>/telemetry</code> 端点发送聚合延迟指标：不含 IP 地址、不含标识符、不含数据包内容。单元格至少累计 3 份上报后才会公开（统计的是上报数量，而非人数）。隧道有意不加密，以便反作弊系统检查流量，游戏服务器也始终能看到你的真实 IP。中继运营者在技术上可以观察或修改传输中的流量，因此 LightSpeed 不是隐私或匿名工具。如果你需要保密性，请自行搭建中继。参见 <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">隐私政策</a>。</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -765,7 +755,7 @@
             <caption class="sr-only">LightSpeed 功能</caption>
             <thead>
               <tr>
-                <th scope="col">Capability</th>
+                <th scope="col">功能</th>
                 <th scope="col" class="compare-us">LightSpeed</th>
               </tr>
             </thead>

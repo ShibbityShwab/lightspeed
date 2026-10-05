@@ -137,7 +137,7 @@
       <div class="hero-bg" aria-hidden="true"></div>
       <div class="container hero-content">
         <div class="hero-copy">
-          <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
+          <p class="hero-badge">オープンソース · 完全無料 · ML による経路選択</p>
           <h1 class="hero-title">
             pingを減らそう。無料。ずっと。
           </h1>
@@ -213,17 +213,7 @@
     <!-- Privacy notice (on-by-default telemetry disclosure) -->
     <section class="section" id="privacy-notice" aria-label="プライバシー通知">
       <div class="container">
-        <p class="section-subtitle">
-          <strong>プライバシー通知:</strong> Anonymous aggregate telemetry is <strong>デフォルトで有効</strong>.
-          It sends aggregate latency metrics (percentiles, jitter, FEC counters, and the direct-vs-relayed
-          difference) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint.
-          A cell is suppressed until it has at least 3 reports. Turn it off any time with
-          <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the
-          GUI checkbox. Read the
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">プライバシーポリシー</a>
-          and
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">データ辞書</a>.
-        </p>
+        <p class="section-subtitle"><strong>プライバシー通知:</strong> 匿名の集計テレメトリーは <strong>デフォルトで有効</strong>。集計されたレイテンシ指標（パーセンタイル、ジッター、FEC カウンター、および直接接続と中継の差分）を、リレーの認証なし <code>/telemetry</code> エンドポイントへ平文 HTTP で送信します。セルは 3 件以上の報告が集まるまで公開されません。<code>--no-telemetry</code>、<code>lightspeed.toml</code> の <code>telemetry = false</code>、または GUI のチェックボックスでいつでもオフにできます。<a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">プライバシーポリシー</a> と <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">データ辞書</a> をご覧ください。</p>
       </div>
     </section>
 
@@ -362,7 +352,7 @@
                 <caption class="sr-only">リレーとクライアント地域ごとの実測RTT削減量</caption>
                 <thead>
                   <tr>
-                    <th scope="col">Relay</th>
+                    <th scope="col">リレー</th>
                     <th scope="col">クライアント地域</th>
                     <th scope="col">報告数</th>
                     <th scope="col">削減量 (平均)</th>
@@ -639,7 +629,7 @@
             <div class="game-status game-status-ready">対応</div>
           </article>
         </div>
-        <p class="games-more">お使いのゲームが見つかりませんか？ <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
+        <p class="games-more">お使いのゲームが見つかりませんか？ <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">ゲームのリクエスト</a></p>
       </div>
     </section>
 
@@ -745,7 +735,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>プライバシー優先</h3>
-            <p>アカウントは不要です。匿名の集計テレメトリーは既定で有効で、<code>--no-telemetry</code> または GUI のチェックボックスでいつでもオフにできます。送信するのは集計されたレイテンシ指標のみで、リレーの認証なし <code>/telemetry</code> エンドポイントへ平文 HTTP で送られます。IP アドレス、識別子、パケット内容は含みません。セルは 3 件以上の報告が集まるまで公開されません（数えるのは報告数であり、人数ではありません）。アンチチートが通信を検査できるよう、トンネルは意図的に暗号化していません。ゲームサーバーには常に実際の IP が見えます。リレー運営者は技術的には通信を傍受・改変できます。つまり LightSpeed はプライバシーや匿名化のツールではありません。機密性が必要なら、ご自身でリレーを立ててください。詳細は <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a> をご覧ください。</p>
+            <p>アカウントは不要です。匿名の集計テレメトリーは既定で有効で、<code>--no-telemetry</code> または GUI のチェックボックスでいつでもオフにできます。送信するのは集計されたレイテンシ指標のみで、リレーの認証なし <code>/telemetry</code> エンドポイントへ平文 HTTP で送られます。IP アドレス、識別子、パケット内容は含みません。セルは 3 件以上の報告が集まるまで公開されません（数えるのは報告数であり、人数ではありません）。アンチチートが通信を検査できるよう、トンネルは意図的に暗号化していません。ゲームサーバーには常に実際の IP が見えます。リレー運営者は技術的には通信を傍受・改変できます。つまり LightSpeed はプライバシーや匿名化のツールではありません。機密性が必要なら、ご自身でリレーを立ててください。詳細は <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">プライバシーポリシー</a> をご覧ください。</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -770,7 +760,7 @@
             <caption class="sr-only">LightSpeedの機能</caption>
             <thead>
               <tr>
-                <th scope="col">Capability</th>
+                <th scope="col">機能</th>
                 <th scope="col" class="compare-us">LightSpeed</th>
               </tr>
             </thead>

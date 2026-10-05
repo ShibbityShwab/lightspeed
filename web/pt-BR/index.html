@@ -137,7 +137,7 @@
       <div class="hero-bg" aria-hidden="true"></div>
       <div class="container hero-content">
         <div class="hero-copy">
-          <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
+          <p class="hero-badge">Código aberto · Custo zero · Seleção de rota por ML</p>
           <h1 class="hero-title">
             Reduza seu ping. Grátis. Para sempre.
           </h1>
@@ -213,17 +213,7 @@
     <!-- Privacy notice (on-by-default telemetry disclosure) -->
     <section class="section" id="privacy-notice" aria-label="Aviso de privacidade">
       <div class="container">
-        <p class="section-subtitle">
-          <strong>Aviso de privacidade:</strong> Anonymous aggregate telemetry is <strong>ativada por padrão</strong>.
-          It sends aggregate latency metrics (percentiles, jitter, FEC counters, and the direct-vs-relayed
-          difference) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint.
-          A cell is suppressed until it has at least 3 reports. Turn it off any time with
-          <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the
-          GUI checkbox. Read the
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Política de Privacidade</a>
-          and
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Dicionário de Dados</a>.
-        </p>
+        <p class="section-subtitle"><strong>Aviso de privacidade:</strong> A telemetria agregada anônima está <strong>ativada por padrão</strong>. Ela envia métricas de latência agregadas (percentis, jitter, contadores FEC e a diferença entre direto e retransmitido) por HTTP sem criptografia para o endpoint <code>/telemetry</code> não autenticado do relé. Uma célula fica suprimida até ter pelo menos 3 relatos. Desligue-a a qualquer momento com <code>--no-telemetry</code>, <code>telemetry = false</code> em <code>lightspeed.toml</code>, ou a caixa de seleção da interface. Leia <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Política de Privacidade</a> e <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Dicionário de Dados</a>.</p>
       </div>
     </section>
 
@@ -363,7 +353,7 @@
                 <caption class="sr-only">RTT economizada medida por relay e região do cliente</caption>
                 <thead>
                   <tr>
-                    <th scope="col">Relay</th>
+                    <th scope="col">Relé</th>
                     <th scope="col">Região do cliente</th>
                     <th scope="col">Relatos</th>
                     <th scope="col">Economia (média)</th>
@@ -635,7 +625,7 @@
             <div class="game-status game-status-ready">Pronto</div>
           </article>
         </div>
-        <p class="games-more">Não encontrou seu jogo? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
+        <p class="games-more">Não encontrou seu jogo? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Solicitar um jogo</a></p>
       </div>
     </section>
 
@@ -741,7 +731,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>Privacidade em Primeiro Lugar</h3>
-            <p>Não é preciso conta. A telemetria agregada anônima vem ativada por padrão e pode ser desligada a qualquer momento com <code>--no-telemetry</code> ou a caixa de seleção da interface. Ela envia apenas métricas de latência agregadas por HTTP sem criptografia para o endpoint <code>/telemetry</code> não autenticado do relé: nenhum endereço IP, nenhum identificador, nenhum conteúdo de pacote. Uma célula fica suprimida até ter pelo menos 3 relatos (conta-se relatos, não pessoas distintas). O túnel é intencionalmente sem criptografia para que os sistemas antitrapaça possam inspecionar o tráfego, e os servidores de jogo sempre veem seu IP real. Um operador de relé pode tecnicamente observar ou modificar o tráfego em trânsito, então o LightSpeed não é uma ferramenta de privacidade ou anonimato. Se precisar de confidencialidade, hospede seu próprio relé. Consulte <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+            <p>Não é preciso conta. A telemetria agregada anônima vem ativada por padrão e pode ser desligada a qualquer momento com <code>--no-telemetry</code> ou a caixa de seleção da interface. Ela envia apenas métricas de latência agregadas por HTTP sem criptografia para o endpoint <code>/telemetry</code> não autenticado do relé: nenhum endereço IP, nenhum identificador, nenhum conteúdo de pacote. Uma célula fica suprimida até ter pelo menos 3 relatos (conta-se relatos, não pessoas distintas). O túnel é intencionalmente sem criptografia para que os sistemas antitrapaça possam inspecionar o tráfego, e os servidores de jogo sempre veem seu IP real. Um operador de relé pode tecnicamente observar ou modificar o tráfego em trânsito, então o LightSpeed não é uma ferramenta de privacidade ou anonimato. Se precisar de confidencialidade, hospede seu próprio relé. Consulte <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Política de Privacidade</a>.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -766,7 +756,7 @@
             <caption class="sr-only">Recursos do LightSpeed</caption>
             <thead>
               <tr>
-                <th scope="col">Capability</th>
+                <th scope="col">Recurso</th>
                 <th scope="col" class="compare-us">LightSpeed</th>
               </tr>
             </thead>

@@ -137,7 +137,7 @@
       <div class="hero-bg" aria-hidden="true"></div>
       <div class="container hero-content">
         <div class="hero-copy">
-          <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
+          <p class="hero-badge">Open Source · Null Kosten · ML-Routenwahl</p>
           <h1 class="hero-title">
             Senk deinen Ping. Kostenlos. Für immer.
           </h1>
@@ -213,17 +213,7 @@
     <!-- Privacy notice (on-by-default telemetry disclosure) -->
     <section class="section" id="privacy-notice" aria-label="Datenschutzhinweis">
       <div class="container">
-        <p class="section-subtitle">
-          <strong>Datenschutzhinweis:</strong> Anonymous aggregate telemetry is <strong>standardmäßig aktiv</strong>.
-          It sends aggregate latency metrics (percentiles, jitter, FEC counters, and the direct-vs-relayed
-          difference) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint.
-          A cell is suppressed until it has at least 3 reports. Turn it off any time with
-          <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the
-          GUI checkbox. Read the
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Datenschutzerklärung</a>
-          and
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Datenwörterbuch</a>.
-        </p>
+        <p class="section-subtitle"><strong>Datenschutzhinweis:</strong> Anonyme aggregierte Telemetrie ist <strong>standardmäßig aktiv</strong>. Sie sendet aggregierte Latenzmetriken (Perzentile, Jitter, FEC-Zähler und die Differenz direkt vs. über Relay) über unverschlüsseltes HTTP an den nicht authentifizierten <code>/telemetry</code>-Endpunkt des Relays. Eine Zelle wird erst ab mindestens 3 Meldungen veröffentlicht. Schalte sie jederzeit ab mit <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code> oder dem Kontrollkästchen in der GUI. Lies <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Datenschutzerklärung</a> und <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Datenwörterbuch</a>.</p>
       </div>
     </section>
 
@@ -362,7 +352,7 @@
                 <caption class="sr-only">Gemessene, eingesparte RTT pro Relay und Client-Region</caption>
                 <thead>
                   <tr>
-                    <th scope="col">Relay</th>
+                    <th scope="col">Relais</th>
                     <th scope="col">Client-Region</th>
                     <th scope="col">Reports</th>
                     <th scope="col">Eingespart (Mittel)</th>
@@ -634,7 +624,7 @@
             <div class="game-status game-status-ready">Bereit</div>
           </article>
         </div>
-        <p class="games-more">Dein Spiel ist nicht dabei? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
+        <p class="games-more">Dein Spiel ist nicht dabei? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Spiel vorschlagen</a></p>
       </div>
     </section>
 
@@ -740,7 +730,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>Datenschutz zuerst</h3>
-            <p>Kein Konto nötig. Anonyme aggregierte Telemetrie ist standardmäßig aktiv und lässt sich jederzeit mit <code>--no-telemetry</code> oder dem Kontrollkästchen in der GUI abschalten. Sie sendet ausschließlich aggregierte Latenzmetriken über unverschlüsseltes HTTP an den nicht authentifizierten <code>/telemetry</code>-Endpunkt des Relays: keine IP-Adressen, keine Identifikatoren, keine Paketinhalte. Eine Zelle wird erst ab mindestens 3 Meldungen veröffentlicht (gezählt werden Meldungen, nicht verschiedene Personen). Der Tunnel ist bewusst unverschlüsselt, damit Anti-Cheat-Systeme den Verkehr prüfen können, und Spielserver sehen immer deine echte IP. Ein Relay-Betreiber kann Daten technisch unterwegs einsehen oder verändern, LightSpeed ist also kein Datenschutz- oder Anonymisierungswerkzeug. Wenn du Vertraulichkeit brauchst, hoste dein eigenes Relay. Siehe <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+            <p>Kein Konto nötig. Anonyme aggregierte Telemetrie ist standardmäßig aktiv und lässt sich jederzeit mit <code>--no-telemetry</code> oder dem Kontrollkästchen in der GUI abschalten. Sie sendet ausschließlich aggregierte Latenzmetriken über unverschlüsseltes HTTP an den nicht authentifizierten <code>/telemetry</code>-Endpunkt des Relays: keine IP-Adressen, keine Identifikatoren, keine Paketinhalte. Eine Zelle wird erst ab mindestens 3 Meldungen veröffentlicht (gezählt werden Meldungen, nicht verschiedene Personen). Der Tunnel ist bewusst unverschlüsselt, damit Anti-Cheat-Systeme den Verkehr prüfen können, und Spielserver sehen immer deine echte IP. Ein Relay-Betreiber kann Daten technisch unterwegs einsehen oder verändern, LightSpeed ist also kein Datenschutz- oder Anonymisierungswerkzeug. Wenn du Vertraulichkeit brauchst, hoste dein eigenes Relay. Siehe <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Datenschutzerklärung</a>.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -765,7 +755,7 @@
             <caption class="sr-only">LightSpeed-Funktionen</caption>
             <thead>
               <tr>
-                <th scope="col">Capability</th>
+                <th scope="col">Funktion</th>
                 <th scope="col" class="compare-us">LightSpeed</th>
               </tr>
             </thead>

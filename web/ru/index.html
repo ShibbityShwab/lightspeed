@@ -137,7 +137,7 @@
       <div class="hero-bg" aria-hidden="true"></div>
       <div class="container hero-content">
         <div class="hero-copy">
-          <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
+          <p class="hero-badge">Открытый код · Нулевая цена · Выбор маршрута с ML</p>
           <h1 class="hero-title">
             Снизьте свой пинг. Бесплатно. Навсегда.
           </h1>
@@ -213,17 +213,7 @@
     <!-- Privacy notice (on-by-default telemetry disclosure) -->
     <section class="section" id="privacy-notice" aria-label="Уведомление о конфиденциальности">
       <div class="container">
-        <p class="section-subtitle">
-          <strong>Уведомление о конфиденциальности:</strong> Anonymous aggregate telemetry is <strong>включена по умолчанию</strong>.
-          It sends aggregate latency metrics (percentiles, jitter, FEC counters, and the direct-vs-relayed
-          difference) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint.
-          A cell is suppressed until it has at least 3 reports. Turn it off any time with
-          <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the
-          GUI checkbox. Read the
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Политика конфиденциальности</a>
-          and
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Словарь данных</a>.
-        </p>
+        <p class="section-subtitle"><strong>Уведомление о конфиденциальности:</strong> Анонимная агрегированная телеметрия <strong>включена по умолчанию</strong>. Она отправляет агрегированные метрики задержки (перцентили, джиттер, счётчики FEC и разницу между прямым соединением и ретрансляцией) по незашифрованному HTTP на неаутентифицированный эндпоинт ретранслятора <code>/telemetry</code>. Ячейка не публикуется, пока не наберётся хотя бы 3 отчёта. Отключить можно в любой момент с помощью <code>--no-telemetry</code>, <code>telemetry = false</code> в <code>lightspeed.toml</code> или флажка в интерфейсе. См. <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Политика конфиденциальности</a> и <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Словарь данных</a>.</p>
       </div>
     </section>
 
@@ -362,7 +352,7 @@
                 <caption class="sr-only">Измеренная экономия RTT по релеям и регионам клиентов</caption>
                 <thead>
                   <tr>
-                    <th scope="col">Relay</th>
+                    <th scope="col">Ретранслятор</th>
                     <th scope="col">Регион клиента</th>
                     <th scope="col">Отчёты</th>
                     <th scope="col">Экономия (средняя)</th>
@@ -639,7 +629,7 @@
             <div class="game-status game-status-ready">Готово</div>
           </article>
         </div>
-        <p class="games-more">Не нашли свою игру? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
+        <p class="games-more">Не нашли свою игру? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Предложить игру</a></p>
       </div>
     </section>
 
@@ -745,7 +735,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>Конфиденциальность прежде всего</h3>
-            <p>Учётная запись не нужна. Анонимная агрегированная телеметрия включена по умолчанию и отключается в любой момент с помощью <code>--no-telemetry</code> или флажка в интерфейсе. Она отправляет только агрегированные метрики задержки по незашифрованному HTTP на неаутентифицированный эндпоинт ретранслятора <code>/telemetry</code>: ни IP-адресов, ни идентификаторов, ни содержимого пакетов. Ячейка не публикуется, пока не наберётся хотя бы 3 отчёта (считаются отчёты, а не разные люди). Туннель намеренно не шифруется, чтобы античит-системы могли проверять трафик, а игровые серверы всегда видят ваш настоящий IP. Оператор ретранслятора технически может наблюдать за трафиком в пути или изменять его, поэтому LightSpeed — не инструмент приватности или анонимности. Если нужна конфиденциальность, поднимите свой ретранслятор. См. <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+            <p>Учётная запись не нужна. Анонимная агрегированная телеметрия включена по умолчанию и отключается в любой момент с помощью <code>--no-telemetry</code> или флажка в интерфейсе. Она отправляет только агрегированные метрики задержки по незашифрованному HTTP на неаутентифицированный эндпоинт ретранслятора <code>/telemetry</code>: ни IP-адресов, ни идентификаторов, ни содержимого пакетов. Ячейка не публикуется, пока не наберётся хотя бы 3 отчёта (считаются отчёты, а не разные люди). Туннель намеренно не шифруется, чтобы античит-системы могли проверять трафик, а игровые серверы всегда видят ваш настоящий IP. Оператор ретранслятора технически может наблюдать за трафиком в пути или изменять его, поэтому LightSpeed — не инструмент приватности или анонимности. Если нужна конфиденциальность, поднимите свой ретранслятор. См. <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Политика конфиденциальности</a>.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -770,7 +760,7 @@
             <caption class="sr-only">Возможности LightSpeed</caption>
             <thead>
               <tr>
-                <th scope="col">Capability</th>
+                <th scope="col">Возможность</th>
                 <th scope="col" class="compare-us">LightSpeed</th>
               </tr>
             </thead>

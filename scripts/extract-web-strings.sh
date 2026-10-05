@@ -87,11 +87,16 @@ def inside_skip(start: int) -> bool:
     return any(lo <= start < hi for lo, hi in skip_ranges)
 
 
+# `\b` after the tag name is load-bearing: without it `<p` also matches `<path`,
+# `<a` matches `<article`, `<th` matches `<thead` and `<li` matches `<link`. A
+# bogus match also swallows the next real one of that name, because scanning
+# resumes after it - a `<path>` read as `<p>` ran to the following `</p>` and hid
+# the privacy-notice paragraph entirely.
 tag_res = [
     (
         tag,
         re.compile(
-            r"<" + tag + r"(?P<attrs>[^>]*)>(?P<body>.*?)</" + tag + r">",
+            r"<" + tag + r"\b(?P<attrs>[^>]*)>(?P<body>.*?)</" + tag + r">",
             re.DOTALL | re.IGNORECASE,
         ),
     )
@@ -159,6 +164,22 @@ for tag, pattern in tag_res:
     for match in pattern.finditer(stripped):
         matches.append((match.start(), tag, match))
 matches.sort(key=lambda item: item[0])
+
+# The `\b` in tag_res is load-bearing; this asserts the invariant rather than
+# trusting the pattern, because a prefix match also swallows the next real match
+# of that name and so hides whole paragraphs from extraction.
+prefix_hits = sorted(
+    {
+        tag
+        for _pos, tag, match in matches
+        if match.group("attrs")[:1] not in ("", " ", "/", chr(9), chr(10), chr(13))
+    }
+)
+if prefix_hits:
+    sys.exit(
+        "tag match without a name boundary, so a longer element was matched as this one: "
+        + ", ".join("<" + tag for tag in prefix_hits)
+    )
 
 for index, (_pos, _tag, match) in enumerate(matches):
     if inside_skip(match.start()):

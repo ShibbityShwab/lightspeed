@@ -137,7 +137,7 @@
       <div class="hero-bg" aria-hidden="true"></div>
       <div class="container hero-content">
         <div class="hero-copy">
-          <p class="hero-badge">Open Source &middot; Zero Cost &middot; ML Route Selection</p>
+          <p class="hero-badge">Open source · Coût nul · Sélection d&#x27;itinéraire par ML</p>
           <h1 class="hero-title">
             Réduisez votre ping. Gratuit. Pour toujours.
           </h1>
@@ -213,17 +213,7 @@
     <!-- Privacy notice (on-by-default telemetry disclosure) -->
     <section class="section" id="privacy-notice" aria-label="Confidentialité">
       <div class="container">
-        <p class="section-subtitle">
-          <strong>Confidentialité :</strong> Anonymous aggregate telemetry is <strong>active par défaut</strong>.
-          It sends aggregate latency metrics (percentiles, jitter, FEC counters, and the direct-vs-relayed
-          difference) over plaintext HTTP to the relay's unauthenticated <code>/telemetry</code> endpoint.
-          A cell is suppressed until it has at least 3 reports. Turn it off any time with
-          <code>--no-telemetry</code>, <code>telemetry = false</code> in <code>lightspeed.toml</code>, or the
-          GUI checkbox. Read the
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Politique de confidentialité</a>
-          and
-          <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Dictionnaire de données</a>.
-        </p>
+        <p class="section-subtitle"><strong>Confidentialité :</strong> La télémétrie agrégée anonyme est <strong>active par défaut</strong>. Elle envoie des métriques de latence agrégées (centiles, gigue, compteurs FEC et la différence directe / via relais) en HTTP non chiffré vers le point de terminaison <code>/telemetry</code> non authentifié du relais. Une cellule n&#x27;est publiée qu&#x27;à partir de 3 signalements. Désactivez-la à tout moment avec <code>--no-telemetry</code>, <code>telemetry = false</code> dans <code>lightspeed.toml</code>, ou la case de l&#x27;interface. Lisez <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Politique de confidentialité</a> et <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/data-dictionary.md" target="_blank" rel="noopener">Dictionnaire de données</a>.</p>
       </div>
     </section>
 
@@ -363,7 +353,7 @@
                 <caption class="sr-only">RTT économisé mesuré par relais et par région client</caption>
                 <thead>
                   <tr>
-                    <th scope="col">Relay</th>
+                    <th scope="col">Relais</th>
                     <th scope="col">Région client</th>
                     <th scope="col">Rapports</th>
                     <th scope="col">Gain (moyenne)</th>
@@ -635,7 +625,7 @@
             <div class="game-status game-status-ready">Prêt</div>
           </article>
         </div>
-        <p class="games-more">Votre jeu n&#x27;est pas listé ? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Request a game <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="#i-arrow-right"></use></svg></a></p>
+        <p class="games-more">Votre jeu n&#x27;est pas listé ? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Demander un jeu</a></p>
       </div>
     </section>
 
@@ -741,7 +731,7 @@
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
             <h3>Confidentialité avant tout</h3>
-            <p>Aucun compte requis. La télémétrie agrégée anonyme est activée par défaut et peut être désactivée à tout moment avec <code>--no-telemetry</code> ou la case de l&#x27;interface. Elle n&#x27;envoie que des métriques de latence agrégées en HTTP non chiffré vers le point de terminaison <code>/telemetry</code> non authentifié du relais : ni adresses IP, ni identifiants, ni contenu de paquets. Une cellule n&#x27;est publiée qu&#x27;à partir de 3 signalements (ce sont des signalements qui sont comptés, pas des personnes distinctes). Le tunnel est volontairement non chiffré pour que les systèmes anti-triche puissent inspecter le trafic, et les serveurs de jeu voient toujours votre vraie IP. Un opérateur de relais peut techniquement observer ou modifier le trafic en transit ; LightSpeed n&#x27;est donc pas un outil de confidentialité ou d&#x27;anonymat. Si vous avez besoin de confidentialité, hébergez votre propre relais. Voir <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+            <p>Aucun compte requis. La télémétrie agrégée anonyme est activée par défaut et peut être désactivée à tout moment avec <code>--no-telemetry</code> ou la case de l&#x27;interface. Elle n&#x27;envoie que des métriques de latence agrégées en HTTP non chiffré vers le point de terminaison <code>/telemetry</code> non authentifié du relais : ni adresses IP, ni identifiants, ni contenu de paquets. Une cellule n&#x27;est publiée qu&#x27;à partir de 3 signalements (ce sont des signalements qui sont comptés, pas des personnes distinctes). Le tunnel est volontairement non chiffré pour que les systèmes anti-triche puissent inspecter le trafic, et les serveurs de jeu voient toujours votre vraie IP. Un opérateur de relais peut techniquement observer ou modifier le trafic en transit ; LightSpeed n&#x27;est donc pas un outil de confidentialité ou d&#x27;anonymat. Si vous avez besoin de confidentialité, hébergez votre propre relais. Voir <a href="https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md" target="_blank" rel="noopener">Politique de confidentialité</a>.</p>
           </div>
           <div class="compare-card">
             <div class="compare-icon"><svg class="icon icon-lg" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg></div>
@@ -766,7 +756,7 @@
             <caption class="sr-only">Fonctionnalités LightSpeed</caption>
             <thead>
               <tr>
-                <th scope="col">Capability</th>
+                <th scope="col">Fonction</th>
                 <th scope="col" class="compare-us">LightSpeed</th>
               </tr>
             </thead>
