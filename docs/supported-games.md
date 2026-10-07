@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 21 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 22 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -29,6 +29,16 @@ LightSpeed includes built-in profiles for 21 popular multiplayer games. Each pro
 | 19 | **WARDOGS** | `--game wardogs` | 7777-7788 | Elytra (kernel-mode) | `WardogsClient-Win64-Shipping.exe` |
 | 20 | **Minecraft** | `--game minecraft` | 19132-19133 | None | `Minecraft.Windows.exe` |
 | 21 | **Hunt: Showdown** | `--game hunt` | 20000-20099 | Easy Anti-Cheat (EAC) | `HuntGame.exe` |
+| 22 | **Rainbow Six Siege** | `--game rainbowsix` | 10000-10099 | BattlEye + R6 Shieldguard | `RainbowSix.exe` |
+
+> **Rainbow Six Siege note:** the profile is **UNVERIFIED against R6
+> Shieldguard.** Siege ships three anti-cheat layers - BattlEye, Shieldguard and
+> Ubisoft's account-level system - and Shieldguard refuses to launch unless
+> Secure Boot, HVCI and a TPM 2.0 are present. LightSpeed forwards UDP without
+> injecting code or touching game memory, so it is outside what those systems
+> inspect, but Shieldguard's checks are launch-time *environment* checks rather
+> than network inspection, and nobody has reported a real match run through this
+> profile yet. Aliases: `r6`, `r6s`, `siege`, `rainbow-six`.
 
 > **Hunt: Showdown note:** the UDP gameplay block is 20000-20099, which is
 > what the tunnel carries. The game also opens TCP **61088** for its

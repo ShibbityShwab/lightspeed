@@ -52,6 +52,7 @@ pub mod maplestory;
 pub mod minecraft;
 pub mod ow2;
 pub mod pubg;
+pub mod rainbowsix;
 pub mod roblox;
 pub mod rocketleague;
 pub mod rust;
@@ -265,8 +266,11 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "hunt" | "huntshowdown" | "hunt-showdown" | "hunt showdown" => {
             Ok(Box::new(hunt::HuntConfig))
         }
+        "rainbowsix" | "rainbow-six" | "rainbow-six-siege" | "r6" | "r6s" | "siege" => {
+            Ok(Box::new(rainbowsix::RainbowSixConfig))
+        }
         _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, minecraft-java, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt",
+            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, minecraft-java, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt, rainbowsix",
             name
         ),
     }
@@ -300,6 +304,7 @@ pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("zomboid", "Project Zomboid"),
     ("wardogs", "WARDOGS"),
     ("hunt", "Hunt: Showdown"),
+    ("rainbowsix", "Rainbow Six Siege"),
 ];
 
 /// Return every CLI key paired with its display name.
@@ -738,6 +743,13 @@ mod tests {
         "minecraft-java",
         "minecraftjava",
         "java",
+        // Rainbow Six Siege
+        "rainbowsix",
+        "rainbow-six",
+        "rainbow-six-siege",
+        "r6",
+        "r6s",
+        "siege",
     ];
 
     #[test]
@@ -760,7 +772,7 @@ mod tests {
             GAME_REGISTRY.len(),
             "GAME_REGISTRY must stay in sync with the supported games"
         );
-        assert_eq!(GAME_REGISTRY.len(), 22, "22 supported games");
+        assert_eq!(GAME_REGISTRY.len(), 23, "23 supported games");
     }
 
     #[test]

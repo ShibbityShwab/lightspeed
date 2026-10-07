@@ -1,9 +1,50 @@
-# Current Phase: WF-054 Internationalization - complete and live; community feedback audited
+# Current Phase: WF-054 Internationalization - complete and live; Rainbow Six Siege profile shipped
 
 **Workflow:** WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
 **Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
-**Status:** Waves 1-4 deployed and repaired; GUI glyph coverage and every user-visible string fixed; docs warned and command-checked. Wave 2 (CLI) excluded by design.
+**Status:** Waves 1-4 deployed and repaired; GUI glyph coverage and every user-visible string fixed; docs warned and command-checked; game profile 22 shipped from the community backlog. Wave 2 (CLI) excluded by design.
 **Last updated:** 2026-10-07
+
+---
+
+## 2026-10-07 (continued) - Rainbow Six Siege, the one game request nobody had answered
+
+Issue #143 had sat unreplied since 2026-10-04 while carrying a complete report
+(BattlEye + R6 Shieldguard + Ubisoft anti-cheat, UDP 10000-10099 from
+portforward.com, `RainbowSix.exe`). Shipped as profile 22.
+
+**All six registration sites, plus the surfaces the skill lists:**
+`client/src/games/rainbowsix.rs`; module + `detect_game` arm (with aliases `r6`,
+`r6s`, `siege`, `rainbow-six`) + `GAME_REGISTRY` + the count guard in `mod.rs`;
+wire id `RAINBOWSIX = 23` and the `GAME_IDS` entry in `protocol/src/control.rs`;
+`docs/supported-games.md` (count + row + caveat note); the `README.md` table; and
+the website - the stat prose, the games subtitle, the "Currently N games" list
+and a new card in the grid.
+
+**The guard caught a site the skill does not list:**
+`control::tests::test_game_ids_unique_and_stable` asserts `GAME_IDS.len() == 22`
+and "every real game needs one id", so the wire-id table has its own count that
+must move with the registry. It failed the moment the id was added, which is the
+intended behaviour.
+
+**Mutation-tested, all three fired:** removing the `GAME_REGISTRY` entry breaks
+the count guard; removing the `detect_game` arm breaks the detectability guard;
+removing the `GAME_IDS` entry breaks the protocol id guard. Tree restored after
+each.
+
+**The anti-cheat claim is marked UNVERIFIED, deliberately.** Shieldguard is a
+launch-time *environment* check (Secure Boot, HVCI, TPM 2.0) rather than network
+inspection, so the risk is indirect rather than a detection, and nobody has run a
+real match through this profile. That caveat is in the module doc, the redirect
+instructions, the docs note, and the website card - not buried.
+
+**Verified:** full workspace suite green (412 + 407 + 139 + 100 + 77 + 6 + 3 ...),
+fmt and clippy clean; the German page renders 22 cards with `Integrierte Profile
+für 22 Spiele`, the R6 card carrying `UDP 10000-10099` / `BattlEye + Shieldguard`
+and a German body, and no overflow. The content-addressed keys proved themselves
+again: adding a card replaced exactly 3 keys and added 8, with **no renumbering**,
+and the three changed translations were evolved (count digit + the new game name
+in the locale's own conjunction) rather than retranslated.
 
 ---
 

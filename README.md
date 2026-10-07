@@ -71,6 +71,7 @@ LightSpeed now runs a **community relay network**: eight sponsor-funded relays i
 | WARDOGS | `--game wardogs` | Elytra (kernel) | ✅ |
 | Minecraft | `--game minecraft` | None | ✅ |
 | Hunt: Showdown | `--game hunt` | Easy Anti-Cheat | ✅ |
+| Rainbow Six Siege | `--game rainbowsix` | BattlEye + R6 Shieldguard | ✅ |
 
 📖 **[Full Game List →](docs/supported-games.md)**
 

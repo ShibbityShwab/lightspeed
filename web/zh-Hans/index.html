@@ -230,7 +230,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>启动 LightSpeed</h3>
-            <p>在游戏前运行这个轻量客户端。它会自动识别 22 个内置配置：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft（Bedrock 和 Java）以及 Hunt: Showdown。</p>
+            <p>在游戏前运行这个轻量客户端。它会自动识别 23 个内置配置：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft（Bedrock 和 Java）以及 Hunt: Showdown、Rainbow Six Siege。</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -374,7 +374,7 @@
       <div class="container">
         <p class="section-eyebrow">兼容性</p>
         <h2 class="section-title">支持的游戏</h2>
-        <p class="section-subtitle">21 款游戏的内置配置。即装即玩。</p>
+        <p class="section-subtitle">22 款游戏的内置配置。即装即玩。</p>
         <div class="games-grid">
           <article class="game-card">
             <div class="game-head">
@@ -621,6 +621,18 @@
               <span class="game-tag">EasyAntiCheat</span>
             </div>
             <p>Crytek 这款撤离射击游戏的专用服务器由匹配器分配。Easy Anti-Cheat 安全：UDP 透明转发，从不改动。</p>
+            <div class="game-status game-status-ready">就绪</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">R6</span>
+              <h3>Rainbow Six Siege</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">UDP 10000-10099</span>
+              <span class="game-tag">BattlEye + Shieldguard</span>
+            </div>
+            <p>直接通过 UDP 连接 Ubisoft 的区域比赛服务器。LightSpeed 转发数据包时不接触游戏内存，但 Shieldguard 在启动时要求 Secure Boot、HVCI 和 TPM，此配置尚未针对它验证。</p>
             <div class="game-status game-status-ready">就绪</div>
           </article>
         </div>
@@ -1004,7 +1016,7 @@
           </details>
           <details class="faq-item">
             <summary>支持哪些游戏？</summary>
-            <p>目前有 21 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft 和 Hunt: Showdown 都内置了配置。用 <code>--game &lt;name&gt;</code> 启动，或交给自动检测即可。其他任何基于 UDP 的游戏都可以通过手动端口配置使用。</p>
+            <p>目前有 22 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft 和 Hunt: Showdown、Rainbow Six Siege 都内置了配置。用 <code>--game &lt;name&gt;</code> 启动，或交给自动检测即可。其他任何基于 UDP 的游戏都可以通过手动端口配置使用。</p>
           </details>
           <details class="faq-item">
             <summary>我的数据安全吗？</summary>
