@@ -1,9 +1,50 @@
-# Current Phase: WF-054 Internationalization - shipped, repaired, GUI localized, and the docs now carry their warning
+# Current Phase: WF-054 Internationalization - complete and live; community feedback audited
 
 **Workflow:** WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
-**Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and a real render)
-**Status:** Waves 1-4 deployed and repaired; GUI glyph coverage and every user-visible string fixed; translated docs now carry the unreviewed warning, enforced in CI. Wave 2 (CLI) excluded by design.
-**Last updated:** 2026-10-05
+**Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
+**Status:** Waves 1-4 deployed and repaired; GUI glyph coverage and every user-visible string fixed; docs warned and command-checked. Wave 2 (CLI) excluded by design.
+**Last updated:** 2026-10-07
+
+---
+
+## 2026-10-07 - overnight state, relay-mad-1, and a full community-feedback audit
+
+**Overnight:** production healthy (8 relays, all relaying). One real alert at 00:49 -
+Health Anomaly Monitor failed with two **criticals on `relay-sgp-1`** (668 auth
+rejections, zero sessions, reachable but relaying nothing while the fleet moved
+1.36M). It cleared: the 07:35 and 15:13 runs report warnings only. GitHub's
+runner shortage cancelled jobs with **zero steps** across CI, CodeQL, Security
+Audit, Pages and Wiki for about an hour; recovered. The `Benchmark Regression`
+job and the CodeQL `rust`/`python`/`ruby` analyses never ran on `a366295`, and
+CodeQL default-setup runs **cannot be re-run** - a push is the only trigger.
+
+**`relay-mad-1` is being used as an attack endpoint, not serving players.**
+Latest window: `packets_relayed: 0` against `packets_dropped: 190,140`, of which
+**190,037 are `drops_abuse_blocked`**, with `active_sessions: 0`. Cumulative:
+220,235 abuse blocks against 664,781 relayed. For contrast `relay-bom-1` relayed
+785,904 in the same window with **0** abuse blocks. Fleet-wide, abuse blocking is
+3,371,170 of 6,212,175 drops.
+
+The guard (`proxy/src/abuse.rs`) blocks on amplification ratio > 2.0, more than
+10 unique destinations per 10s window, per-source-IP session flooding, and
+private/internal destinations. The **`destination_allowlist` is described in
+`docs/community-network.md` as the defense that makes a community relay safe to
+open**, and `proxy/src/main.rs:330` warns at startup when it is empty - but no
+config anywhere in this repository sets it, so whether the live relays carry one
+can only be confirmed from their startup log. That warning line is the first
+thing to check on the mad-1 host.
+
+**Community feedback, all 22 issues + 7 discussions + 118 PRs read.** The
+dominant ask by volume is **game profiles**; the highest-value engineering ask is
+**closing the 5-10ms latency gap against ExitLag/GearUp** (Yughaa, #59); the most
+concrete unbuilt feature request is **persisting custom server/port entries and
+named custom games** (iTerryTie, discussion #146, which the owner said he would
+"probably do all of"). Still unanswered: **#143 Rainbow Six Siege** (no reply),
+**#137 Minecraft Bedrock** (actionable - Bedrock is UDP 19132/19133, unlike
+Java), and **#140/#147 QUIC error 120**, where the owner suspects his own recent
+control-plane work. Two open PRs, both dependabot: `tray-icon` 0.25.1->0.26.0 and
+`rust` 1.98.1->1.99.0 - the latter is the toolchain that previously turned
+`-Dwarnings` into hard CI errors.
 
 ---
 
