@@ -461,10 +461,13 @@ class LanguageControl(str):
 def language_switcher(current):
     """The language picker: a native select plus a no-JavaScript fallback.
 
-    The select navigates from an inline `onchange`, so it needs JavaScript. The
-    `<noscript>` list carries the same destinations as plain links for a reader
-    whose browser blocks scripts. Only locales that actually have a generated
-    page appear in either, so neither can offer a 404.
+    The select is wired by `app.js` from a `data-language-switch` hook, not by an
+    inline handler: reading the destination out of the DOM and assigning it to
+    `location.href` is a taint path static analysis flags as high-severity XSS,
+    so the handler validates the origin instead. The `<noscript>` list carries the
+    same destinations as plain links for a reader whose browser blocks scripts.
+    Only locales that actually have a generated page appear in either, so neither
+    can offer a 404.
     """
     options = []
     links = []
@@ -483,7 +486,7 @@ def language_switcher(current):
         '<noscript><style>.lang-switch{display:none}</style></noscript>'
         '<label class="lang-switch">'
         f'<span class="lang-switch-label">{label}</span>'
-        '<select aria-label="Change language" onchange="if(this.value)location.href=this.value">'
+        '<select aria-label="Change language" data-language-switch>'
         + "".join(options)
         + "</select></label>"
         + '<noscript><span class="lang-fallback">'

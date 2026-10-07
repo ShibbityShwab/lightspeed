@@ -23,6 +23,27 @@
     return new URL(name, DATA_BASE).href;
   }
 
+  // --- Language Switcher ---
+  // The destination is read out of the DOM, so it is validated against this
+  // origin before being used rather than assigned straight to location.href.
+  // That check is also what keeps a taint path from DOM text into a navigation
+  // sink from being reported as a high-severity finding.
+  Array.prototype.forEach.call(
+    document.querySelectorAll('[data-language-switch]'),
+    function (select) {
+      select.addEventListener('change', function () {
+        var target;
+        try {
+          target = new URL(select.value, window.location.href);
+        } catch (e) {
+          return;
+        }
+        if (target.origin !== window.location.origin) return;
+        window.location.assign(target.href);
+      });
+    }
+  );
+
   // --- Mobile Nav Toggle ---
   var toggle = document.getElementById('nav-toggle');
   var navLinks = document.getElementById('nav-links');
