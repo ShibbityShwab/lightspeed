@@ -29,7 +29,7 @@
     "blk.7fdb47262d": "リレーノードを運用しますか？ {0} または {1} のプロキシビルドを入手してください。それ以外はすべて {2} にあります。",
     "blk.84458d8c99": "クライアントは QUIC 制御プレーンで登録し、データプレーンの各パケットにセッショントークンを付与します。プロキシはパケットごとに {0} を検証します。未登録の送信元は破棄されます。{1} は既定で有効です。",
     "blk.c102a2fb96": "お使いのゲームが見つかりませんか？ {0}",
-    "blk.da8d8a6674": "現在 22 タイトル：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft、Hunt: Showdown、Rainbow Six Siege にプロファイルが組み込まれています。{0} で起動するか、自動検出に任せるだけです。その他の UDP ベースのゲームも、手動でポートを設定すれば利用できます。",
+    "blk.d0a1873ecf": "現在 22 タイトル：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft、Hunt: Showdown、Rainbow Six Siege にプロファイルが組み込まれています。{0} で起動するか、自動検出に任せるだけです。その他の UDP ベースのゲームも、手動でポートを設定すれば利用できます。",
     "blk.e26ed5b752": "{0} 匿名の集計テレメトリーは {1}。集計されたレイテンシ指標（パーセンタイル、ジッター、FEC カウンター、および直接接続と中継の差分）を、リレーの認証なし {2} エンドポイントへ平文 HTTP で送信します。セルは 3 件以上の報告が集まるまで公開されません。{3}、{5} の {4}、または GUI のチェックボックスでいつでもオフにできます。{6} と {7} をご覧ください。",
     "blk.ff9777106d": "クライアントとプロキシ間のトンネルは既定で UDP を使用しますが、UDP を遮断するネットワーク（ホテル、カフェ、制限の厳しい ISP）では TCP（{0}）に切り替わります。低オーバーヘッドの最適化はそのままに、対応範囲が広がります。",
     "idx.00413945b1": "対応: アカウント不要",

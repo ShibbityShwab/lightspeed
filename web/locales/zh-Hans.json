@@ -29,7 +29,7 @@
     "blk.7fdb47262d": "要运行中继节点？获取适用于 {0} 或 {1} 的代理构建。其余内容都在 {2} 上。",
     "blk.84458d8c99": "客户端通过 QUIC 控制平面注册，并在每个数据平面数据包中写入会话令牌。代理会逐包校验 {0}。未注册的发送方会被丢弃。{1} 默认开启。",
     "blk.c102a2fb96": "没有找到你的游戏？{0}",
-    "blk.da8d8a6674": "目前有 22 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft 和 Hunt: Showdown、Rainbow Six Siege 都内置了配置。用 {0} 启动，或交给自动检测即可。其他任何基于 UDP 的游戏都可以通过手动端口配置使用。",
+    "blk.d0a1873ecf": "目前有 22 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft 和 Hunt: Showdown、Rainbow Six Siege 都内置了配置。用 {0} 启动，或交给自动检测即可。其他任何基于 UDP 的游戏都可以通过手动端口配置使用。",
     "blk.e26ed5b752": "{0} 匿名聚合遥测{1}。它通过明文 HTTP 向中继的未认证 {2} 端点发送聚合延迟指标（百分位、抖动、FEC 计数以及直连与中继的差值）。单元格至少累计 3 份上报后才会公开。可随时用 {3}、{5} 中的 {4} 或界面中的复选框关闭。请阅读 {6} 和 {7}。",
     "blk.ff9777106d": "客户端与代理之间的隧道默认使用 UDP，但在阻止 UDP 的网络（酒店、咖啡馆、限制严格的运营商）中会切换到 TCP（{0}）。同样的低开销优化，兼容性更广。",
     "idx.00413945b1": "支持：无需账号",
