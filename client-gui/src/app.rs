@@ -311,7 +311,7 @@ impl<P: Platform> LightSpeedApp<P> {
             selected_game_idx,
             game_auto,
             game_manual,
-            server_input: String::new(),
+            server_input: saved.manual_server.clone(),
             fec_enabled: false,
             capture_available: P::is_capture_available(),
             share_latency_stats,
@@ -322,7 +322,7 @@ impl<P: Platform> LightSpeedApp<P> {
             show_settings: false,
             language,
             boost_start: None,
-            custom_port_input: String::new(),
+            custom_port_input: saved.manual_port_range.clone(),
             update_check: UpdateCheckState::Idle,
             show_update_dialog: false,
             update_shared: Arc::new(Mutex::new(None)),
@@ -393,6 +393,8 @@ impl<P: Platform> LightSpeedApp<P> {
             game_auto: self.game_auto,
             manual_mode: self.game_manual,
             language: self.language.clone(),
+            manual_server: self.server_input.clone(),
+            manual_port_range: self.custom_port_input.clone(),
             selected_game: if self.game_auto || self.game_manual {
                 None
             } else {
@@ -1199,11 +1201,17 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.horizontal(|ui| {
             ui.label(i18n::t("route.server_label"));
             let default_port = self.selected_game().default_port;
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.server_input)
                     .hint_text(format!("e.g. 123.45.67.89:{default_port}"))
                     .desired_width(220.0),
             );
+            // Written as it is typed, so the address is still here after a
+            // restart even if the window is hidden to the tray rather than
+            // closed, which is the only way the app is normally left.
+            if edit.changed() {
+                self.persist_config();
+            }
         });
         ui.add_space(S2);
         ui.horizontal(|ui| {
@@ -1221,12 +1229,15 @@ impl<P: Platform> LightSpeedApp<P> {
             let port_valid = self.custom_port_input.is_empty()
                 || parse_custom_port_range(&self.custom_port_input).is_some();
             let valid_color = if port_valid { text_1 } else { danger };
-            ui.add(
+            let port_edit = ui.add(
                 egui::TextEdit::singleline(&mut self.custom_port_input)
                     .hint_text(i18n::t("route.port_hint"))
                     .desired_width(200.0)
                     .text_color(valid_color),
             );
+            if port_edit.changed() {
+                self.persist_config();
+            }
             if !port_valid {
                 ui.label(egui::RichText::new(i18n::t("proxies.invalid")).color(danger));
             }

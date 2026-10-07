@@ -71,6 +71,12 @@ pub struct GuiConfig {
     /// UI language: a BCP-47 tag (`"en"`, `"de"`, `"pt-BR"`), or `None` to
     /// follow the operating system locale on every start.
     pub language: Option<String>,
+    /// The Manual / Custom mode's server field, persisted so a typed address is
+    /// still there after a restart. Empty means nothing was entered.
+    pub manual_server: String,
+    /// The Manual / Custom mode's port-range field, persisted for the same
+    /// reason. Empty means the profile's default range is used.
+    pub manual_port_range: String,
 }
 
 impl Default for GuiConfig {
@@ -84,6 +90,8 @@ impl Default for GuiConfig {
             selected_game: None,
             manual_mode: false,
             language: None,
+            manual_server: String::new(),
+            manual_port_range: String::new(),
         }
     }
 }
@@ -134,6 +142,18 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         .map(str::trim)
         .filter(|tag| !tag.is_empty())
         .map(str::to_string);
+    // A blank field is the same as an absent one: the app falls back to the
+    // profile default rather than to an unusable empty string.
+    let manual_server = table
+        .get("manual_server")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let manual_port_range = table
+        .get("manual_port_range")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
 
     let game_auto = table
         .get("game_auto")
@@ -182,6 +202,8 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         selected_game,
         manual_mode,
         language,
+        manual_server,
+        manual_port_range,
     })
 }
 
@@ -203,6 +225,18 @@ pub fn render(config: &GuiConfig) -> String {
     );
     if let Some(language) = &config.language {
         table.insert("language".into(), Value::String(language.clone()));
+    }
+    if !config.manual_server.is_empty() {
+        table.insert(
+            "manual_server".into(),
+            Value::String(config.manual_server.clone()),
+        );
+    }
+    if !config.manual_port_range.is_empty() {
+        table.insert(
+            "manual_port_range".into(),
+            Value::String(config.manual_port_range.clone()),
+        );
     }
     let entries: Vec<Value> = config
         .proxies
@@ -277,6 +311,8 @@ mod tests {
             selected_game: None,
             manual_mode: false,
             language: Some("de".into()),
+            manual_server: "203.0.113.7:28015".into(),
+            manual_port_range: "27000-27050".into(),
         }
     }
 
@@ -292,6 +328,23 @@ mod tests {
         config.language = None;
         let parsed = parse(&render(&config)).expect("rendered config parses");
         assert_eq!(parsed.language, None);
+    }
+
+    /// Discussion #146: the Manual / Custom fields must still be there after a
+    /// restart. `sample()` carries both, so the round-trip test above covers the
+    /// written case; this covers the untouched case, where an empty field must
+    /// not be written out and must parse back as empty rather than as missing.
+    #[test]
+    fn an_untouched_manual_entry_is_neither_written_nor_lost() {
+        let mut config = sample();
+        config.manual_server = String::new();
+        config.manual_port_range = String::new();
+        let text = render(&config);
+        assert!(!text.contains("manual_server"), "{text}");
+        assert!(!text.contains("manual_port_range"), "{text}");
+        let parsed = parse(&text).expect("config without the fields parses");
+        assert_eq!(parsed.manual_server, "");
+        assert_eq!(parsed.manual_port_range, "");
     }
 
     #[test]
