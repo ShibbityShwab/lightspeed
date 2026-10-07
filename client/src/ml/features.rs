@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 /// Network features used as input to the ML model.
-/// 11 features total — must match FEATURE_COUNT.
+/// 11 features total, must match FEATURE_COUNT.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkFeatures {
     /// Current measured latency to proxy (ms).

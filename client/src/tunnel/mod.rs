@@ -28,7 +28,7 @@ pub struct TunnelPacket {
     pub proxy_addr: SocketAddrV4,
 }
 
-/// Tunnel engine state — tracks the lifecycle of a tunnel connection.
+/// Tunnel engine state, tracks the lifecycle of a tunnel connection.
 pub struct TunnelEngineState {
     /// Whether the tunnel is active.
     pub active: bool,

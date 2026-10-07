@@ -1,6 +1,6 @@
 //! # World of Tanks Game Configuration
 //!
-//! Game-specific settings for Wargaming's World of Tanks — the team-based
+//! Game-specific settings for Wargaming's World of Tanks, the team-based
 //! tank-combat MMO.
 //!
 //! ## Network Profile
@@ -41,7 +41,7 @@ impl GameConfig for WotConfig {
         "World of Tanks redirect mode:\n\
          1. Find your battle server IP from the in-game ping indicator\n\
          2. Start LightSpeed: --game wot --game-server <SERVER_IP>:12000\n\
-         3. Anti-cheat: none (server-side detection) — transparent UDP\n\
+         3. Anti-cheat: none (server-side detection), transparent UDP\n\
             tunneling is fully compatible"
             .to_string()
     }

@@ -2,7 +2,7 @@
 //!
 //! Length-prefixed framing for the client→proxy TCP leg of the data plane.
 //! Each frame is a 4-byte big-endian length prefix followed by a single tunnel
-//! packet — the same bytes that would otherwise travel as one UDP datagram.
+//! packet, the same bytes that would otherwise travel as one UDP datagram.
 //!
 //! The async helpers are gated behind the `tokio` feature so the protocol crate
 //! can be used without a Tokio runtime (e.g. pure encode/decode benches).

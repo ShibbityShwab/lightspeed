@@ -1,6 +1,6 @@
 //! # Rocket League Game Configuration
 //!
-//! Game-specific settings for Psyonix/Epic Games' Rocket League — the
+//! Game-specific settings for Psyonix/Epic Games' Rocket League, the
 //! vehicular-soccer multiplayer game.
 //!
 //! ## Network Profile
@@ -31,7 +31,7 @@ impl GameConfig for RocketLeagueConfig {
 
     fn ports(&self) -> (u16, u16) {
         // Game servers use 7000-9000 (UDP). Steam builds also use
-        // 27000-27030 for SDR relay — the capture range covers the
+        // 27000-27030 for SDR relay, the capture range covers the
         // primary server range.
         (7000, 9000)
     }
@@ -39,7 +39,7 @@ impl GameConfig for RocketLeagueConfig {
     fn redirect_instructions(&self) -> String {
         "Rocket League redirect mode:\n\
          1. Start LightSpeed: --game rocketleague --game-server <SERVER_IP>:7000\n\
-         2. Rocket League uses Steam Datagram Relay (SDR) — capture mode\n\
+         2. Rocket League uses Steam Datagram Relay (SDR), capture mode\n\
             is preferred; redirect only works for direct server connections\n\
          3. Anti-cheat: EAC + Epic Online Services are compatible (transparent UDP)"
             .to_string()

@@ -34,7 +34,7 @@
 //! | Windows | `windivert-redirect`     | WinDivert      | PID-level      |
 //! | Linux   | (none)                   | nftables/iptables | Port+dest   |
 //! | macOS   | (none)                   | pfctl          | Port+dest      |
-//! | Other   | —                        | Unsupported    | —              |
+//! | Other   |,                        | Unsupported    |,              |
 
 pub mod bypass;
 #[cfg(target_os = "linux")]
@@ -154,7 +154,7 @@ pub fn build_config_for_game(
         }
         None => {
             tracing::info!(
-                "🎮 ProcessScanner: {} not running — interceptor will use port-range filter",
+                "🎮 ProcessScanner: {} not running, interceptor will use port-range filter",
                 game.name()
             );
             (None, vec![])

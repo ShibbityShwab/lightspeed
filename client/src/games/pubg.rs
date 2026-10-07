@@ -1,6 +1,6 @@
 //! # PUBG: Battlegrounds Game Configuration
 //!
-//! Game-specific settings for Krafton's PUBG: Battlegrounds — the defining
+//! Game-specific settings for Krafton's PUBG: Battlegrounds, the defining
 //! battle-royale running on dedicated Unreal Engine servers worldwide.
 //!
 //! ## Network Profile
@@ -8,16 +8,16 @@
 //! PUBG uses direct UDP connections to Krafton-operated dedicated game servers,
 //! with per-match server instances assigned dynamically. Primary UDP game-traffic
 //! ports are **7000–7999** (intra-region) and **17000–17999** (cross-region play).
-//! There is no relay layer, making PUBG an excellent LightSpeed target — players
+//! There is no relay layer, making PUBG an excellent LightSpeed target, players
 //! in SEA with poor routing to US servers (e.g., PUBG global servers) see
 //! 40–80ms+ extra latency from suboptimal BGP paths.
 //!
 //! ## Anti-Cheat
 //!
-//! PUBG ships with **BattlEye** — a kernel-mode anti-cheat that monitors
+//! PUBG ships with **BattlEye**, a kernel-mode anti-cheat that monitors
 //! driver/memory modifications and injects into the game process.  LightSpeed
 //! operates purely via transparent UDP socket forwarding with no driver
-//! installation or memory access — fully compatible with BattlEye's threat model.
+//! installation or memory access, fully compatible with BattlEye's threat model.
 //!
 //! ## Server Regions
 //!
@@ -40,7 +40,7 @@ impl GameConfig for PubgConfig {
     }
 
     fn process_names(&self) -> &[&str] {
-        // PUBG's Unreal Engine 4 executable — the game process name has
+        // PUBG's Unreal Engine 4 executable, the game process name has
         // remained `TslGame.exe` since early access (TSL = The Squad-based
         // Last-player-standing game, Unreal's UE4 project codename).
         &["TslGame.exe", "PUBG.exe"]
@@ -65,7 +65,7 @@ impl GameConfig for PubgConfig {
          2. Your match server IP appears in:\n\
             %APPDATA%\\..\\Local\\TslGame\\Saved\\Logs\\TslGame.log\n\
             (search for 'BeaconNetDriver' or 'LogNet' entries)\n\
-         3. BattlEye is fully compatible — LightSpeed uses no drivers or\n\
+         3. BattlEye is fully compatible, LightSpeed uses no drivers or\n\
             memory access, only transparent UDP socket forwarding"
             .to_string()
     }
@@ -75,7 +75,7 @@ impl GameConfig for PubgConfig {
     }
 
     fn uses_sdr(&self) -> bool {
-        // No Valve SDR — Krafton operates its own AWS-based game servers.
+        // No Valve SDR, Krafton operates its own AWS-based game servers.
         false
     }
 

@@ -1,6 +1,6 @@
 //! # Valorant Game Configuration
 //!
-//! Game-specific settings for Riot Games' Valorant — the 5v5 tactical
+//! Game-specific settings for Riot Games' Valorant, the 5v5 tactical
 //! first-person shooter built on Riot's Vanguard infrastructure.
 //!
 //! ## Network Profile
@@ -13,7 +13,7 @@
 //!
 //! ## Anti-Cheat
 //!
-//! Valorant ships with **Riot Vanguard** — a kernel-mode anti-cheat driver
+//! Valorant ships with **Riot Vanguard**, a kernel-mode anti-cheat driver
 //! that loads at boot. LightSpeed operates as a transparent UDP forwarder
 //! with zero code injection or memory modification, which is compatible
 //! with Vanguard's threat model (it targets driver/memory tampering, not
@@ -30,7 +30,7 @@
 //! | KR     | `kr.` (AWS AP-Northeast) |
 //! | LATAM  | `latam.` |
 //!
-//! Servers are AWS-hosted at dynamic IPs — LightSpeed captures by port
+//! Servers are AWS-hosted at dynamic IPs, LightSpeed captures by port
 //! range rather than destination IP.
 
 use super::GameConfig;
@@ -44,7 +44,7 @@ impl GameConfig for ValorantConfig {
     }
 
     fn process_names(&self) -> &[&str] {
-        // Main game process — Riot client (VALORANT.exe) launches the
+        // Main game process, Riot client (VALORANT.exe) launches the
         // shipping binary; both names appear in tasklist.
         &["VALORANT-Win64-Shipping.exe", "VALORANT.exe"]
     }
@@ -65,7 +65,7 @@ impl GameConfig for ValorantConfig {
          1. Find your match server IP from the Windows Event Viewer or\n\
             a tool like Rivatuner Statistics Server while in a match\n\
          2. Start LightSpeed: --game valorant --game-server <SERVER_IP>:7000\n\
-         3. Riot Vanguard is compatible — LightSpeed does not modify game\n\
+         3. Riot Vanguard is compatible, LightSpeed does not modify game\n\
             memory or inject drivers; it only reroutes UDP packets\n\
          4. Note: Valorant uses direct UDP (no SDR), ideal for proxying"
             .to_string()
@@ -76,7 +76,7 @@ impl GameConfig for ValorantConfig {
     }
 
     fn uses_sdr(&self) -> bool {
-        // No Steam Datagram Relay — Valorant connects directly to Riot servers.
+        // No Steam Datagram Relay, Valorant connects directly to Riot servers.
         false
     }
 

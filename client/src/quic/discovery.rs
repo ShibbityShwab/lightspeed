@@ -2,8 +2,8 @@
 //!
 //! Discovers available proxy nodes via:
 //! - Static configuration (config file)
-//! - DNS-based discovery (SRV records) — future
-//! - QUIC-based peer exchange (proxy shares known peers) — future
+//! - DNS-based discovery (SRV records), future
+//! - QUIC-based peer exchange (proxy shares known peers), future
 //!
 //! For MVP, only static discovery is implemented.
 
@@ -110,7 +110,7 @@ impl ProxyDiscovery {
             let ip: Ipv4Addr = match host.parse() {
                 Ok(ip) => ip,
                 Err(_) => {
-                    warn!("Cannot parse proxy address '{}' — skipping", addr_str);
+                    warn!("Cannot parse proxy address '{}', skipping", addr_str);
                     continue;
                 }
             };

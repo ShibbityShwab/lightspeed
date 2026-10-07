@@ -1,6 +1,6 @@
 //! # Apex Legends Game Configuration
 //!
-//! Game-specific settings for Respawn Entertainment's Apex Legends — the
+//! Game-specific settings for Respawn Entertainment's Apex Legends, the
 //! free-to-play battle-royale built on a modified Source-engine networking
 //! stack hosted on EA's infrastructure.
 //!
@@ -17,7 +17,7 @@
 //!
 //! ## Anti-Cheat
 //!
-//! Apex Legends uses **Easy Anti-Cheat (EAC)** — the same kernel-level
+//! Apex Legends uses **Easy Anti-Cheat (EAC)**, the same kernel-level
 //! driver used by Rust (Facepunch) and Fortnite. LightSpeed operates as a
 //! transparent UDP forwarder with no code injection or memory modification,
 //! which is fully compatible with EAC's detection model.
@@ -61,9 +61,9 @@ impl GameConfig for ApexConfig {
          1. Find your match server IP from the in-game network stats\n\
             (Settings → Gameplay → display network info)\n\
          2. Start LightSpeed: --game apex --game-server <SERVER_IP>:37015\n\
-         3. Easy Anti-Cheat is compatible — LightSpeed only reroutes UDP,\n\
+         3. Easy Anti-Cheat is compatible, LightSpeed only reroutes UDP,\n\
             it does not touch game memory or inject code\n\
-         4. Note: Apex uses direct UDP to EA servers — no relay layer,\n\
+         4. Note: Apex uses direct UDP to EA servers, no relay layer,\n\
             ideal for LightSpeed proxying"
             .to_string()
     }
@@ -73,7 +73,7 @@ impl GameConfig for ApexConfig {
     }
 
     fn uses_sdr(&self) -> bool {
-        // No Steam Datagram Relay — Apex is on EA's own infrastructure.
+        // No Steam Datagram Relay, Apex is on EA's own infrastructure.
         false
     }
 

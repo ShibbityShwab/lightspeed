@@ -251,7 +251,7 @@ fn list_pids_macos(names: &[&str]) -> Vec<(u32, String)> {
             let mut parts = line.splitn(2, ' ');
             let pid: u32 = parts.next()?.trim().parse().ok()?;
             let comm = parts.next()?.trim();
-            // comm may be a full path — take just the basename
+            // comm may be a full path, take just the basename
             let basename = comm.rsplit('/').next().unwrap_or(comm);
             if names.iter().any(|n| n.eq_ignore_ascii_case(basename)) {
                 Some((pid, basename.to_string()))
@@ -299,7 +299,7 @@ fn list_udp_sockets() -> Vec<(Ipv4Addr, u16, u16, u32)> {
 /// shows the actual remote IP.  We want connected entries only.
 #[cfg(target_os = "windows")]
 fn list_udp_windows() -> Vec<(Ipv4Addr, u16, u16, u32)> {
-    // Use `netstat -ano -p UDP` — includes PID in the last column.
+    // Use `netstat -ano -p UDP`, includes PID in the last column.
     let output = match crate::process::silent_command("netstat")
         .args(["-ano", "-p", "UDP"])
         .output()
@@ -327,7 +327,7 @@ fn list_udp_windows() -> Vec<(Ipv4Addr, u16, u16, u32)> {
             None => continue,
         };
 
-        // Skip listening sockets — remote is "*:*" or "0.0.0.0:*"
+        // Skip listening sockets, remote is "*:*" or "0.0.0.0:*"
         if remote_str.contains('*') || remote_str.starts_with("0.0.0.0:0") {
             continue;
         }
@@ -447,7 +447,7 @@ fn extract_pid_from_ss_users(s: &str) -> Option<u32> {
 
 #[cfg(target_os = "linux")]
 fn parse_addr_port_linux(local: &str, remote: &str) -> Option<(u16, Ipv4Addr, u16)> {
-    // Format: "ip:port", "ip%iface:port", or "[::1]:port" — IPv4 only.
+    // Format: "ip:port", "ip%iface:port", or "[::1]:port", IPv4 only.
     let local_port = local.rsplit(':').next()?.parse::<u16>().ok()?;
 
     let colon = remote.rfind(':')?;
@@ -574,7 +574,7 @@ fn parse_hex_addr(_s: &str) -> Option<(Ipv4Addr, u16)> {
 /// Port separator is `.` (dot), not `:`.
 #[cfg(target_os = "macos")]
 fn list_udp_macos() -> Vec<(Ipv4Addr, u16, u16, u32)> {
-    // Try lsof first — gives PID directly and is more reliable.
+    // Try lsof first, gives PID directly and is more reliable.
     if let Some(r) = list_udp_macos_lsof() {
         return r;
     }
@@ -608,7 +608,7 @@ fn list_udp_macos_lsof() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
         };
         let name_field = parts[8]; // e.g. "192.168.1.5:54321->1.2.3.4:28015"
         if !name_field.contains("->") {
-            continue; // Listening socket — skip
+            continue; // Listening socket, skip
         }
         let mut halves = name_field.splitn(2, "->");
         let local_str = halves.next()?;
@@ -753,7 +753,7 @@ fn list_tcp_macos_lsof() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
         };
         let name_field = parts[8]; // e.g. "192.168.1.5:54321->104.26.1.50:25565"
         if !name_field.contains("->") {
-            continue; // Listening socket — skip
+            continue; // Listening socket, skip
         }
         let mut halves = name_field.splitn(2, "->");
         let local_str = halves.next()?;
@@ -842,7 +842,7 @@ mod tests {
 
     #[test]
     fn test_scan_doesnt_panic() {
-        // On CI there are no game processes — that's fine.
+        // On CI there are no game processes, that's fine.
         let _ = scan_for_games(&["RustClient.exe", "cs2.exe"]);
     }
 

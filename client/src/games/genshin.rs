@@ -1,6 +1,6 @@
 //! # Genshin Impact Game Configuration
 //!
-//! Game-specific settings for HoYoverse's Genshin Impact — the open-world
+//! Game-specific settings for HoYoverse's Genshin Impact, the open-world
 //! action RPG.
 //!
 //! ## Network Profile
@@ -39,7 +39,7 @@ impl GameConfig for GenshinConfig {
          1. Select your region in the launcher, then find the server IP\n\
             from your firewall/log while connected\n\
          2. Start LightSpeed: --game genshin --game-server <SERVER_IP>:22101\n\
-         3. Anti-cheat: none — LightSpeed's transparent tunnel is safe"
+         3. Anti-cheat: none, LightSpeed's transparent tunnel is safe"
             .to_string()
     }
 

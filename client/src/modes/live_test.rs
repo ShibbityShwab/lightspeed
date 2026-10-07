@@ -89,31 +89,28 @@ pub async fn run_live_test(
         match node.health {
             ProxyHealth::Healthy => {
                 let ms = node.latency_us.unwrap_or(0) as f64 / 1000.0;
-                info!(
-                    "  ✅ {} ({}) — {:.1}ms [Healthy]",
-                    label, node.data_addr, ms
-                );
+                info!("  ✅ {} ({}), {:.1}ms [Healthy]", label, node.data_addr, ms);
                 healthy_nodes.push(node);
                 total_pass += 1;
             }
             ProxyHealth::Degraded => {
                 let ms = node.latency_us.unwrap_or(0) as f64 / 1000.0;
                 warn!(
-                    "  ⚠️  {} ({}) — {:.1}ms [Degraded]",
+                    "  ⚠️  {} ({}), {:.1}ms [Degraded]",
                     label, node.data_addr, ms
                 );
                 healthy_nodes.push(node);
                 total_pass += 1;
             }
             _ => {
-                warn!("  ❌ {} ({}) — TIMEOUT [Unhealthy]", label, node.data_addr);
+                warn!("  ❌ {} ({}), TIMEOUT [Unhealthy]", label, node.data_addr);
                 total_fail += 1;
             }
         }
     }
 
     if healthy_nodes.is_empty() {
-        info!("\n❌ All proxies unreachable — cannot continue");
+        info!("\n❌ All proxies unreachable, cannot continue");
         info!("══════════════════════════════════════════════════════");
         return Ok(());
     }
@@ -153,7 +150,7 @@ pub async fn run_live_test(
             }
         }
     } else {
-        info!("  ⏭️  Only 1 proxy — route selection not applicable");
+        info!("  ⏭️  Only 1 proxy, route selection not applicable");
         total_skip += 1;
     }
 
@@ -165,7 +162,7 @@ pub async fn run_live_test(
         let socket = match UdpSocket::bind("0.0.0.0:0").await {
             Ok(s) => s,
             Err(e) => {
-                warn!("  ❌ {} — socket bind failed: {}", label, e);
+                warn!("  ❌ {}, socket bind failed: {}", label, e);
                 total_fail += 1;
                 continue;
             }
@@ -202,7 +199,7 @@ pub async fn run_live_test(
         }
 
         if rtts.is_empty() {
-            warn!("  ❌ {} — 0/{} keepalives echoed", label, num_pings);
+            warn!("  ❌ {}, 0/{} keepalives echoed", label, num_pings);
             total_fail += 1;
         } else {
             rtts.sort();
@@ -241,7 +238,7 @@ pub async fn run_live_test(
             let socket = match UdpSocket::bind("0.0.0.0:0").await {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!("  ❌ {} — socket bind failed: {}", label, e);
+                    warn!("  ❌ {}, socket bind failed: {}", label, e);
                     total_fail += 1;
                     continue;
                 }
@@ -317,7 +314,7 @@ pub async fn run_live_test(
             }
         }
     } else {
-        info!("  ⏭️  Skipped — no echo server configured");
+        info!("  ⏭️  Skipped, no echo server configured");
         info!("     Use --echo-server <ip:port> to test data relay");
         info!("     (Run tools/echo_server.py on a Vultr node first)");
         total_skip += 1;
@@ -337,7 +334,7 @@ pub async fn run_live_test(
                 let socket = match UdpSocket::bind("0.0.0.0:0").await {
                     Ok(s) => s,
                     Err(e) => {
-                        warn!("  ❌ {} — socket bind failed: {}", label, e);
+                        warn!("  ❌ {}, socket bind failed: {}", label, e);
                         total_fail += 1;
                         continue;
                     }
@@ -415,11 +412,11 @@ pub async fn run_live_test(
                 }
             }
         } else {
-            info!("  ⏭️  Skipped — FEC not enabled (use --fec to test)");
+            info!("  ⏭️  Skipped, FEC not enabled (use --fec to test)");
             total_skip += 1;
         }
     } else {
-        info!("  ⏭️  Skipped — no echo server configured");
+        info!("  ⏭️  Skipped, no echo server configured");
         total_skip += 1;
     }
 
@@ -453,7 +450,7 @@ pub async fn run_live_test(
     if total_fail == 0 {
         info!("  🎉 All tests passed! Live infrastructure verified.");
     } else {
-        warn!("  ⚠️  {} test(s) failed — check proxy status", total_fail);
+        warn!("  ⚠️  {} test(s) failed, check proxy status", total_fail);
     }
 
     info!("══════════════════════════════════════════════════════");

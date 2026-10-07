@@ -6,7 +6,7 @@
 /// periodic flush task and the shutdown flush so every report carries the real
 /// active game and a locale-derived country instead of placeholders.
 ///
-/// This struct is never serialised — only its fields are copied into the
+/// This struct is never serialised, only its fields are copied into the
 /// [`TelemetryReport`](lightspeed_protocol::TelemetryReport) at flush time, so
 /// it adds no PII to the wire format.
 #[derive(Clone, Debug)]
@@ -58,7 +58,7 @@ pub fn normalize_locale_territory(locale: &str) -> String {
 /// Reads [`sys_locale::get_locale`] and normalises it with
 /// [`normalize_locale_territory`]. Returns an empty string when the OS reports
 /// no locale or the locale exposes no two-letter territory. Only the OS locale
-/// is consulted — no IP address or other identifying signal is used.
+/// is consulted, no IP address or other identifying signal is used.
 pub fn detect_country() -> String {
     sys_locale::get_locale()
         .map(|locale| normalize_locale_territory(&locale))

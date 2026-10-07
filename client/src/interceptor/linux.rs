@@ -340,7 +340,7 @@ impl TrafficInterceptor for NftablesInterceptor {
                         rotation.note_intercepted_packet(Instant::now());
 
                         let Some(actual_dst) = installer.current() else {
-                            tracing::debug!("redirected packet with no installed rule — dropping");
+                            tracing::debug!("redirected packet with no installed rule, dropping");
                             continue;
                         };
 

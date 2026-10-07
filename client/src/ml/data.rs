@@ -18,7 +18,7 @@ pub struct TrainingSample {
     pub features: NetworkFeatures,
     /// The proxy region this sample is for.
     pub proxy_region: String,
-    /// Actual observed latency through this proxy (ms) — the label.
+    /// Actual observed latency through this proxy (ms), the label.
     pub observed_latency_ms: f64,
 }
 
@@ -60,7 +60,7 @@ impl Default for SyntheticConfig {
             num_samples: 10_000,
             seed: 42,
             regions: vec![
-                // US-East (Ashburn) — good for NA players
+                // US-East (Ashburn), good for NA players
                 RegionProfile {
                     region: "us-east".into(),
                     base_latency_ms: 25.0,
@@ -71,7 +71,7 @@ impl Default for SyntheticConfig {
                     peak_multiplier: 1.3,
                     base_loss_pct: 0.02,
                 },
-                // EU-West (Frankfurt) — good for EU players
+                // EU-West (Frankfurt), good for EU players
                 RegionProfile {
                     region: "eu-west".into(),
                     base_latency_ms: 30.0,
@@ -82,7 +82,7 @@ impl Default for SyntheticConfig {
                     peak_multiplier: 1.4,
                     base_loss_pct: 0.03,
                 },
-                // Asia-SE (Singapore) — good for SEA players
+                // Asia-SE (Singapore), good for SEA players
                 RegionProfile {
                     region: "asia-se".into(),
                     base_latency_ms: 45.0,
@@ -202,7 +202,7 @@ fn generate_sample(rng: &mut impl Rng, profile: &RegionProfile) -> TrainingSampl
         geographic_distance_km,
     };
 
-    // The "true" latency through this proxy — what we're trying to predict.
+    // The "true" latency through this proxy, what we're trying to predict.
     // It's the current latency plus some additional real-world noise.
     let observed_latency_ms =
         current_latency_ms + rng.random_range(-2.0..3.0) + jitter_ms * rng.random_range(0.0..0.5);

@@ -15,7 +15,7 @@ impl GameConfig for ZomboidConfig {
     fn process_names(&self) -> &[&str] {
         // Windows: ProjectZomboid64.exe (32-bit build: ProjectZomboid32.exe).
         // macOS/Linux (Steam Java/native wrapper): the exact `ps comm` name is
-        // TBD — may surface as `ProjectZomboid`, `ProjectZomboid64`, or `java`.
+        // TBD, may surface as `ProjectZomboid`, `ProjectZomboid64`, or `java`.
         // "java" is intentionally omitted to avoid false positives; verify the
         // real process name at runtime on a Mac.
         &[

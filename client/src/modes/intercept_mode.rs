@@ -29,7 +29,7 @@ use crate::tunnel::adaptive::AdaptiveConfig;
 
 /// Start the OOP TrafficInterceptor for a game and run until interrupted.
 ///
-/// This is the live MITM path — it installs real kernel redirect rules
+/// This is the live MITM path, it installs real kernel redirect rules
 /// and forwards intercepted traffic to the proxy. Press Ctrl+C to stop
 /// and clean up.
 pub async fn run_intercept_mode(
@@ -73,7 +73,7 @@ pub async fn run_intercept_mode(
             info!("   {} → {}", r.local, r.remote);
         }
     } else {
-        info!("📍 No server routes — interceptor will use port-range auto-detection");
+        info!("📍 No server routes, interceptor will use port-range auto-detection");
         info!(
             "   Port range: {}-{}",
             config.port_range.0, config.port_range.1
@@ -95,7 +95,7 @@ pub async fn run_intercept_mode(
         .map_err(|e| anyhow::anyhow!("Failed to start {} interceptor: {}", platform, e))?;
 
     info!(
-        "✅ Interceptor active — MITM-ing {} traffic via {}",
+        "✅ Interceptor active, MITM-ing {} traffic via {}",
         game_name, platform
     );
     info!("   Proxy: {}", proxy_addr);

@@ -5,7 +5,7 @@
 //! 2. Proxy probing and route selection
 //! 3. Projected latency comparison (direct vs optimized)
 //!
-//! No root required — purely diagnostic.
+//! No root required, purely diagnostic.
 
 use std::net::SocketAddrV4;
 use std::time::Duration;
@@ -14,7 +14,7 @@ use tracing::info;
 
 use crate::config;
 
-/// Run the demo — shows what LightSpeed would do for a given game and proxy list.
+/// Run the demo, shows what LightSpeed would do for a given game and proxy list.
 pub async fn run_demo(
     _config: &config::Config,
     game_key: &str,
@@ -35,8 +35,8 @@ pub async fn run_demo(
     let interceptor = crate::interceptor::create_interceptor();
     let platform = interceptor.platform_name();
     match interceptor.check_availability() {
-        Ok(()) => info!("   ✅ Interceptor: {} — ready", platform),
-        Err(e) => info!("   ⚠️  Interceptor: {} — {}", platform, e),
+        Ok(()) => info!("   ✅ Interceptor: {}, ready", platform),
+        Err(e) => info!("   ⚠️  Interceptor: {}, {}", platform, e),
     }
     info!("");
 
@@ -84,7 +84,7 @@ pub async fn run_demo(
             return Ok(());
         }
     };
-    // connect on UDP just sets default destination — ignore errors
+    // connect on UDP just sets default destination, ignore errors
 
     let hdr = TunnelHeader::keepalive(0, 0).with_session_token(crate::session::session_token());
     let mut latencies: Vec<u64> = Vec::new();
@@ -99,7 +99,7 @@ pub async fn run_demo(
                 latencies.push(start.elapsed().as_millis() as u64);
             }
             _ => {
-                // No response — proxy may not echo keepalives
+                // No response, proxy may not echo keepalives
             }
         }
     }

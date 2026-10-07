@@ -15,7 +15,7 @@ use super::traits::{
 
 /// A mock interceptor that records calls for test assertions.
 ///
-/// Does NOT install any real kernel rules — purely for testing the
+/// Does NOT install any real kernel rules, purely for testing the
 /// interceptor pipeline (create → check → start → counter increment → stop).
 pub struct MockInterceptor {
     /// Whether `check_availability()` should succeed.
@@ -95,9 +95,9 @@ impl TrafficInterceptor for MockInterceptor {
         let stop_count = Arc::clone(&self.stop_count);
         let counters = Arc::new(InterceptorCounters::default());
 
-        // Use std::thread to wait for shutdown — avoids requiring a Tokio runtime
+        // Use std::thread to wait for shutdown, avoids requiring a Tokio runtime
         std::thread::spawn(move || {
-            // Block on the oneshot — this is fine in a dedicated OS thread
+            // Block on the oneshot, this is fine in a dedicated OS thread
             let _ = shutdown_rx.blocking_recv();
             active.store(false, Ordering::Relaxed);
             stop_count.fetch_add(1, Ordering::Relaxed);
@@ -168,7 +168,7 @@ mod tests {
         let m = MockInterceptor::new();
         let mut handle = m.start(test_config()).unwrap();
         handle.stop();
-        // The stop increments asynchronously — give it a moment
+        // The stop increments asynchronously, give it a moment
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(m.stop_count(), 1);
     }

@@ -88,7 +88,7 @@ impl RelayStats {
     }
 }
 
-/// UDP relay — sends tunnel packets to proxy and receives responses.
+/// UDP relay, sends tunnel packets to proxy and receives responses.
 ///
 /// Supports optional FEC for packet loss recovery. When FEC is enabled:
 /// - Outbound: packets are grouped into blocks, XOR parity generated

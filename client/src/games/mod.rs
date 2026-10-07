@@ -403,7 +403,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
     let processes = list_running_processes_with_cmdline();
 
     if processes.is_empty() {
-        tracing::debug!("Process list empty — may need elevated privileges");
+        tracing::debug!("Process list empty, may need elevated privileges");
     } else {
         tracing::debug!(
             "Scanning {} running processes for known games",
@@ -436,7 +436,7 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
         }
     }
 
-    // No game found — provide helpful diagnostic
+    // No game found, provide helpful diagnostic
     let known_procs: Vec<&str> = vec![
         "FortniteClient-Win64-Shipping.exe",
         "cs2.exe",
@@ -654,7 +654,7 @@ fn list_processes_unix() -> Vec<RunningProcess> {
             String::from_utf8_lossy(&output.stdout)
                 .lines()
                 .map(|s| {
-                    // ps may show full path on some systems — extract basename
+                    // ps may show full path on some systems, extract basename
                     let trimmed = s.trim();
                     if let Some(pos) = trimmed.rfind('/') {
                         trimmed[pos + 1..].to_string()
@@ -682,7 +682,7 @@ mod tests {
 
     /// Canonical names and aliases for every supported game.
     /// Adding a new game without updating this list will cause
-    /// `test_all_registered_games_are_detectable` to fail — this is
+    /// `test_all_registered_games_are_detectable` to fail, this is
     /// intentional drift-prevention.
     const ALL_GAME_KEYS: &[&str] = &[
         // Original 6 games
@@ -760,7 +760,7 @@ mod tests {
         for key in ALL_GAME_KEYS {
             assert!(
                 detect_game(key).is_ok(),
-                "detect_game(\"{key}\") returned Err — did you forget to add it to detect_game()?"
+                "detect_game(\"{key}\") returned Err, did you forget to add it to detect_game()?"
             );
         }
     }
@@ -1240,10 +1240,10 @@ mod tests {
 
     #[test]
     fn test_list_processes_doesnt_panic() {
-        // Just verify it doesn't crash — may return empty on CI
+        // Just verify it doesn't crash, may return empty on CI
         let procs = list_running_processes();
         // On a real system there should be some processes, but CI containers
-        // may return empty — that's fine.
+        // may return empty, that's fine.
         let _ = procs;
     }
 }

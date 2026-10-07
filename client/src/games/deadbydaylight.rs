@@ -1,6 +1,6 @@
 //! # Dead by Daylight Game Configuration
 //!
-//! Game-specific settings for Behaviour Interactive's Dead by Daylight — the
+//! Game-specific settings for Behaviour Interactive's Dead by Daylight, the
 //! asymmetric 4v1 survival horror multiplayer game.
 //!
 //! ## Network Profile
@@ -8,7 +8,7 @@
 //! Dead by Daylight dedicated servers use direct UDP in the Steam
 //! **27000–27050** range (no Steam Datagram Relay layer). The backend/party
 //! services use UDP **4380**, and the Steam client's STUN/TURN uses
-//! **3478** — neither of which is the game-server traffic LightSpeed routes.
+//! **3478**, neither of which is the game-server traffic LightSpeed routes.
 //!
 //! ## Anti-Cheat
 //!
@@ -37,7 +37,7 @@ impl GameConfig for DeadByDaylightConfig {
     fn redirect_instructions(&self) -> String {
         "Dead by Daylight redirect mode:\n\
          1. Start LightSpeed: --game deadbydaylight --game-server <SERVER_IP>:27000\n\
-         2. Dedicated servers use direct UDP 27000-27050 — auto-detect works\n\
+         2. Dedicated servers use direct UDP 27000-27050, auto-detect works\n\
          3. Anti-cheat: EAC is compatible (transparent UDP)"
             .to_string()
     }

@@ -406,7 +406,7 @@ pub struct ClientSession {
     pub outbound_socket: Arc<UdpSocket>,
     /// How responses are sent back to the client (UDP or TCP).
     pub sender: ClientSender,
-    /// Cancellation token — fired when the session is torn down so the
+    /// Cancellation token, fired when the session is torn down so the
     /// response listener can observe the close and stop reading.
     pub cancel: CancellationToken,
     /// Packets relayed in this session.
@@ -606,7 +606,7 @@ pub struct GeoState {
     pub data_port: u16,
 }
 
-/// The relay engine — manages all active tunnel sessions.
+/// The relay engine, manages all active tunnel sessions.
 pub struct RelayEngine {
     /// Active client sessions indexed by client address.
     sessions: Arc<RwLock<HashMap<SocketAddrV4, Arc<ClientSession>>>>,
@@ -1201,9 +1201,9 @@ const BUF_SIZE: usize = 2048;
 
 /// Heap-allocated kernel-facing state for one `recvmmsg` call.
 ///
-/// `bufs` — raw receive buffers (32 × 2048 B = 64 KiB, on the task heap).
-/// `msgs` — `mmsghdr` array handed to the kernel.
-/// `saddrs` — `sockaddr_in` source-address slots, one per message.
+/// `bufs`, raw receive buffers (32 × 2048 B = 64 KiB, on the task heap).
+/// `msgs`, `mmsghdr` array handed to the kernel.
+/// `saddrs`, `sockaddr_in` source-address slots, one per message.
 ///
 /// `iovec` entries are rebuilt inside [`BatchState::do_recv`] on every call so
 /// the struct is not self-referential and does not require `Pin`.
@@ -1296,10 +1296,10 @@ async fn recv_batch_async(sock: &UdpSocket, batch: &mut BatchState) -> std::io::
     loop {
         // Block until epoll says data is available.
         sock.readable().await?;
-        // try_io is synchronous — no Send requirement on the closure.
+        // try_io is synchronous, no Send requirement on the closure.
         match sock.try_io(tokio::io::Interest::READABLE, || batch.do_recv(fd)) {
             Ok(n) if n > 0 => return Ok(n),
-            Ok(_) => continue, // shouldn't happen — re-arm just in case
+            Ok(_) => continue, // shouldn't happen, re-arm just in case
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 // try_io already cleared the readiness bit; loop to readable().
                 continue;
@@ -1388,7 +1388,7 @@ async fn process_inbound_packet(
     // Keepalives are answered without auth: they are "are you alive" pings the
     // client uses to probe latency before registering, and they reveal nothing
     // the public health endpoint does not already expose. (No amplification
-    // risk — the response is the same size as the request.)
+    // risk, the response is the same size as the request.)
     if header.is_keepalive() {
         trace!(client = %client_addr, seq = header.sequence, "Keepalive received");
         let response = TunnelHeader::keepalive(header.sequence, now_us())
@@ -1418,7 +1418,7 @@ async fn process_inbound_packet(
     }
 
     if header.is_fin() {
-        info!(client = %client_addr, "Client sent FIN — closing session");
+        info!(client = %client_addr, "Client sent FIN, closing session");
         let sessions_lock = engine.sessions();
         let mut sessions = sessions_lock.write().await;
         if let Some(session) = sessions.remove(&client_addr) {
@@ -1566,7 +1566,7 @@ async fn process_inbound_packet(
             let parity_data = bytes::Bytes::copy_from_slice(game_payload);
             let mut decoder = session.fec_decoder.lock().await;
             if let Some((_idx, recovered)) = decoder.receive_parity(fh, parity_data) {
-                // Recovered a lost packet — forward to game server
+                // Recovered a lost packet, forward to game server
                 metrics.record_fec_recovery();
                 info!(
                     client = %client_addr,
@@ -1820,7 +1820,7 @@ async fn process_tcp_packet(
     conn.touch();
 
     if tcp_ext.flags & tcp_flags::RST != 0 {
-        info!(client = %client_addr, "TCP RST — tearing down connection");
+        info!(client = %client_addr, "TCP RST, tearing down connection");
         engine.remove_tcp_connection(&tuple).await;
         return;
     }
@@ -1999,7 +1999,7 @@ async fn run_tcp_connection(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Public entry point — dispatches to the platform-appropriate loop
+//  Public entry point, dispatches to the platform-appropriate loop
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Run the main relay loop on the data plane socket.
@@ -2007,7 +2007,7 @@ async fn run_tcp_connection(
 /// **Linux**: drains up to `BATCH` (32) packets per `recvmmsg` syscall.
 /// **Other platforms**: falls back to one `recv_from` per packet.
 ///
-/// This is the hot path — every game packet goes through here.
+/// This is the hot path, every game packet goes through here.
 #[cfg(target_os = "linux")]
 pub async fn run_relay_inbound(
     data_socket: Arc<UdpSocket>,
@@ -2134,7 +2134,7 @@ pub async fn run_session_response_listener(
     let mut buf = vec![0u8; 2048];
 
     // Single stack-allocated output buffer reused for every outbound packet.
-    // Lives in the task state (heap-allocated by Tokio) — zero per-packet alloc.
+    // Lives in the task state (heap-allocated by Tokio), zero per-packet alloc.
     // Size: TunnelHeader(20) + FecHeader(4) + max recv buf(2048) = MAX_RELAY_PKT.
     let mut pkt_buf = [0u8; MAX_RELAY_PKT];
 
@@ -2192,9 +2192,9 @@ pub async fn run_session_response_listener(
             // ── FEC mode: zero-alloc data + parity path (WF-008 Item L) ──────
             //
             // Three-phase zero-alloc protocol:
-            //   1. add_packet_inplace  — XOR into parity accumulator (no alloc)
-            //   2. emit_parity_to      — write parity directly into pkt_buf (no alloc)
-            //   3. next_block          — reset accumulator for the next block
+            //   1. add_packet_inplace , XOR into parity accumulator (no alloc)
+            //   2. emit_parity_to     , write parity directly into pkt_buf (no alloc)
+            //   3. next_block         , reset accumulator for the next block
             //
             // This eliminates both the per-data-packet `Bytes::copy_from_slice`
             // that `add_packet` used to perform and the `BytesMut::with_capacity`
@@ -2221,7 +2221,7 @@ pub async fn run_session_response_listener(
             pkt_buf[HEADER_SIZE..parity_offset].copy_from_slice(&fec_hdr.encode_to_array());
             pkt_buf[parity_offset..data_end].copy_from_slice(payload);
 
-            // Phase 1: XOR payload into parity accumulator — no allocation.
+            // Phase 1: XOR payload into parity accumulator, no allocation.
             let block_complete = encoder.add_packet_inplace(payload);
 
             // Send data packet to client (zero heap allocation)
@@ -2249,7 +2249,7 @@ pub async fn run_session_response_listener(
             }
 
             // Phase 2 + 3: if block complete, emit parity directly into pkt_buf
-            // and send — still zero heap allocation.
+            // and send, still zero heap allocation.
             if block_complete {
                 let parity_seq = session.response_seq.fetch_add(1, Ordering::Relaxed);
                 let parity_header = TunnelHeader::new_fec(
@@ -2261,11 +2261,11 @@ pub async fn run_session_response_listener(
                 let parity_fec = FecHeader::parity(block_id, session.fec_k);
 
                 // Phase 2: write parity content directly into the pre-allocated buffer.
-                // pkt_buf[parity_offset..] is free — the data packet was already sent.
+                // pkt_buf[parity_offset..] is free, the data packet was already sent.
                 let parity_len = encoder.emit_parity_to(&mut pkt_buf[parity_offset..]);
                 let par_end = parity_offset + parity_len;
 
-                // Write parity packet headers (overwrites the earlier data headers —
+                // Write parity packet headers (overwrites the earlier data headers,
                 // safe because the data packet was sent above).
                 pkt_buf[..HEADER_SIZE].copy_from_slice(&parity_header.encode_to_array());
                 pkt_buf[HEADER_SIZE..parity_offset].copy_from_slice(&parity_fec.encode_to_array());
@@ -2428,7 +2428,7 @@ pub async fn run_session_manager(
 ///
 /// Accepts TCP connections on the data-plane port, reads length-prefixed
 /// frames, and feeds each frame through the exact same [`process_inbound_packet`]
-/// pipeline as UDP — rate limiting, auth, abuse detection, destination
+/// pipeline as UDP, rate limiting, auth, abuse detection, destination
 /// validation, and FEC all apply identically.  Responses are written back as
 /// framed packets via [`ClientSender::Tcp`].
 pub async fn run_tcp_inbound(
@@ -2468,7 +2468,7 @@ pub async fn run_tcp_inbound(
         let permit = match Arc::clone(&semaphore).try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
-                debug!(client = %peer_v4, "TCP connection limit reached — dropping");
+                debug!(client = %peer_v4, "TCP connection limit reached, dropping");
                 continue;
             }
         };
@@ -2530,7 +2530,7 @@ pub async fn run_tcp_inbound(
                 }
             }
 
-            // Connection closed — cancel the session (stops its response
+            // Connection closed, cancel the session (stops its response
             // listener) and remove it from the engine.
             cancel.cancel();
             engine.sessions().write().await.remove(&peer_v4);
@@ -2883,7 +2883,7 @@ mod tests {
         let mut batch = BatchState::new();
         let mut received = 0usize;
 
-        // Drain with a reasonable timeout — should empty in 1–2 calls.
+        // Drain with a reasonable timeout, should empty in 1–2 calls.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
         while received < N {
             if tokio::time::Instant::now() > deadline {

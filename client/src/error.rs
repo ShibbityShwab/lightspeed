@@ -82,7 +82,7 @@ pub enum RouteError {
     #[error("Route selection timeout")]
     Timeout,
 
-    #[error("Failover exhausted — no routes remaining")]
+    #[error("Failover exhausted, no routes remaining")]
     FailoverExhausted,
 }
 

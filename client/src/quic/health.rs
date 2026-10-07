@@ -29,7 +29,7 @@ pub struct HealthCheckResult {
     pub checked_at: Instant,
 }
 
-/// Health checker — probes proxies at regular intervals.
+/// Health checker, probes proxies at regular intervals.
 pub struct HealthChecker {
     /// How often to check each proxy.
     pub interval: Duration,

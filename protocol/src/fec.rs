@@ -52,7 +52,7 @@ pub const MAX_BLOCK_SIZE: u8 = 16;
 
 /// Maximum packet payload size for FEC (MTU - headers).
 /// The internal parity scratch-buffer uses this size; the **emitted** parity
-/// packet is always smaller — only `max_payload_len_in_block + 2` bytes —
+/// packet is always smaller, only `max_payload_len_in_block + 2` bytes,
 /// because we track the maximum actual payload length and only XOR that prefix.
 pub const FEC_MAX_PAYLOAD: usize = 1400;
 
@@ -65,7 +65,7 @@ const DECODER_RING_CAPACITY: usize = 64;
 /// Number of blocks that must have elapsed before a ring slot is considered stale.
 /// If `max_seen_block_id.wrapping_sub(block.block_id) > STALE_BLOCK_THRESHOLD`,
 /// the block is evicted by `gc()`.  Setting this to `RING_CAPACITY` means
-/// any block that is more than 64 blocks behind the watermark is stale —
+/// any block that is more than 64 blocks behind the watermark is stale,
 /// at that point the ring has almost certainly rotated past its natural eviction.
 const STALE_BLOCK_THRESHOLD: u16 = DECODER_RING_CAPACITY as u16;
 
@@ -105,7 +105,7 @@ impl FecHeader {
         self.index >= self.k_size
     }
 
-    /// Encode to a fixed-size byte array — zero-alloc hot-path variant.
+    /// Encode to a fixed-size byte array, zero-alloc hot-path variant.
     ///
     /// Returns exactly `[block_id_hi, block_id_lo, index, k_size]` (4 bytes).
     #[inline]
@@ -114,7 +114,7 @@ impl FecHeader {
         [hi, lo, self.index, self.k_size]
     }
 
-    /// Encode to bytes (4 bytes) — appends to an existing BytesMut.
+    /// Encode to bytes (4 bytes), appends to an existing BytesMut.
     pub fn encode(&self, buf: &mut BytesMut) {
         buf.put_u16(self.block_id);
         buf.put_u8(self.index);
@@ -163,9 +163,9 @@ impl FecHeader {
 /// ## Zero-alloc hot path (WF-008 Item L)
 ///
 /// For the relay outbound hot path, use the three-phase zero-alloc API:
-/// 1. [`add_packet_inplace`] — XOR payload into accumulator, returns `bool`
-/// 2. [`emit_parity_to`]    — write parity into caller's buffer (no heap alloc)
-/// 3. [`next_block`]        — advance block ID and reset accumulator
+/// 1. [`add_packet_inplace`], XOR payload into accumulator, returns `bool`
+/// 2. [`emit_parity_to`]   , write parity into caller's buffer (no heap alloc)
+/// 3. [`next_block`]       , advance block ID and reset accumulator
 ///
 /// [`add_packet`] wraps this three-phase flow and returns a heap-allocated
 /// [`Bytes`] for callers that don't control their output buffer.
@@ -184,7 +184,7 @@ pub struct FecEncoder {
     data_count: u8,
     /// Running XOR parity scratch buffer (always FEC_MAX_PAYLOAD bytes).
     parity: Vec<u8>,
-    /// Maximum payload length seen in the current block — determines emit length.
+    /// Maximum payload length seen in the current block, determines emit length.
     parity_len: usize,
     /// Running XOR of all packet lengths (stored separately so we know the
     /// emit length before writing it into the parity content bytes).
@@ -327,7 +327,7 @@ impl FecEncoder {
 
 /// Tracks received packets for a single FEC block.
 ///
-/// ## WF-008 Item N — Inline received-packet array
+/// ## WF-008 Item N, Inline received-packet array
 ///
 /// `received` was previously `Vec<Option<Bytes>>`, which allocated `k_size × sizeof(Option<Bytes>)`
 /// bytes on the heap every time a new block was created.  Replacing it with a fixed
@@ -336,18 +336,18 @@ impl FecEncoder {
 /// functionality change.
 #[derive(Debug)]
 struct BlockState {
-    /// Block ID — used to validate ring-buffer slot ownership.
+    /// Block ID, used to validate ring-buffer slot ownership.
     block_id: u16,
     /// Received data packets indexed by their position in the block (0..k_size-1).
     ///
-    /// Fixed-size inline array — no heap allocation on block creation.
+    /// Fixed-size inline array, no heap allocation on block creation.
     /// Only indices 0..k_size are logically valid; the rest are always `None`.
     received: [Option<Bytes>; MAX_BLOCK_SIZE as usize],
     /// Parity packet (if received).
     parity: Option<Bytes>,
     /// Block size (K). Used to bound iteration over `received`.
     k_size: u8,
-    // NOTE: no `created: Instant` — age is tracked via block_id watermark in FecDecoder,
+    // NOTE: no `created: Instant`, age is tracked via block_id watermark in FecDecoder,
     // eliminating the ~150 ns Windows QPC syscall from the hot path (Item J).
 }
 
@@ -355,7 +355,7 @@ impl BlockState {
     fn new(block_id: u16, k_size: u8) -> Self {
         Self {
             block_id,
-            // [Option<Bytes>; 16]: Default gives [None; 16] — no heap alloc.
+            // [Option<Bytes>; 16]: Default gives [None; 16], no heap alloc.
             received: Default::default(),
             parity: None,
             k_size,
@@ -433,7 +433,7 @@ impl BlockState {
         // lengths_xor now holds the original length of the missing packet
         let orig_len = lengths_xor as usize;
         if orig_len > parity_content_len {
-            return None; // Invalid length — recovery failed
+            return None; // Invalid length, recovery failed
         }
 
         Some((
@@ -511,7 +511,7 @@ impl FecDecoder {
     }
 
     /// Process an incoming parity packet. Does NOT return the parity
-    /// as application data — instead, checks if we can now recover
+    /// as application data, instead, checks if we can now recover
     /// a missing data packet.
     ///
     /// Returns `Some((index, recovered_payload))` if a packet was recovered.
@@ -531,7 +531,7 @@ impl FecDecoder {
             }
         }
 
-        // Try recovery — result is fully owned (no borrow from self.ring)
+        // Try recovery, result is fully owned (no borrow from self.ring)
         let result = self.ring[idx].as_ref().and_then(|b| b.try_recover());
 
         match result {
@@ -578,7 +578,7 @@ impl FecDecoder {
     /// Garbage-collect stale blocks.
     ///
     /// A block is considered stale when `max_seen_block_id - block.block_id > STALE_BLOCK_THRESHOLD`
-    /// (wrapping-safe). This is O(DECODER_RING_CAPACITY) with pure integer arithmetic —
+    /// (wrapping-safe). This is O(DECODER_RING_CAPACITY) with pure integer arithmetic:
     /// no `Instant::now()` / syscall overhead.
     pub fn gc(&mut self) {
         let watermark = self.max_seen_block_id;
@@ -758,7 +758,7 @@ mod tests {
         encoder.add_packet(p1);
         let parity = encoder.add_packet(p2).unwrap();
 
-        // All packets received — parity triggers cleanup, no recovery
+        // All packets received, parity triggers cleanup, no recovery
         let mut decoder = FecDecoder::new();
         decoder.receive_data(&FecHeader::data(0, 0, 2), Bytes::from_static(p1));
         decoder.receive_data(&FecHeader::data(0, 1, 2), Bytes::from_static(p2));
@@ -781,7 +781,7 @@ mod tests {
         }
         let parity_bytes = parity.unwrap();
 
-        // Lose packets 1 and 3 — two losses, can't recover with 1 parity
+        // Lose packets 1 and 3, two losses, can't recover with 1 parity
         let mut decoder = FecDecoder::new();
         decoder.receive_data(
             &FecHeader::data(0, 0, 4),

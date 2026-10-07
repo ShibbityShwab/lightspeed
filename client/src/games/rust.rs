@@ -1,6 +1,6 @@
 //! # Rust (Facepunch) Game Configuration
 //!
-//! Game-specific settings for Facepunch Studios' Rust — the open-world
+//! Game-specific settings for Facepunch Studios' Rust, the open-world
 //! survival multiplayer game.
 //!
 //! > **Note:** This profile is for the *game* Rust (by Facepunch), not the
@@ -10,15 +10,15 @@
 //! ## Network Profile
 //!
 //! Rust uses direct UDP connections to community and official servers on the
-//! default port **28015**. There is no Steam Datagram Relay (SDR) — every
+//! default port **28015**. There is no Steam Datagram Relay (SDR), every
 //! session is a raw connection to the server's public IP, making Rust an
 //! ideal candidate for LightSpeed's proxy optimisation.
 //!
 //! ## Anti-Cheat
 //!
 //! Rust uses two layers:
-//! - **Easy Anti-Cheat (EAC)** — kernel-level driver, validates the game binary.
-//! - **Facepunch Anti-Hack (Rust+)** — server-side behavioural detection.
+//! - **Easy Anti-Cheat (EAC)**, kernel-level driver, validates the game binary.
+//! - **Facepunch Anti-Hack (Rust+)**, server-side behavioural detection.
 //!
 //! LightSpeed operates as a transparent UDP forwarder with no code injection
 //! or memory modification, so it is compatible with both systems.
@@ -55,7 +55,7 @@ impl GameConfig for RustConfig {
          2. Start LightSpeed: --game rust --game-server <SERVER_IP>:28015\n\
          3. Connect in the F1 console: `client.connect 127.0.0.1:28015`\n\
          4. Anti-cheat: EAC + Facepunch Anti-Hack are compatible (transparent UDP tunnel)\n\
-         5. Note: Rust uses direct UDP — no Steam Datagram Relay, ideal for proxying"
+         5. Note: Rust uses direct UDP, no Steam Datagram Relay, ideal for proxying"
             .to_string()
     }
 
@@ -64,7 +64,7 @@ impl GameConfig for RustConfig {
     }
 
     fn uses_sdr(&self) -> bool {
-        // Rust uses direct UDP to community/official servers — no SDR.
+        // Rust uses direct UDP to community/official servers, no SDR.
         false
     }
 
@@ -91,13 +91,13 @@ impl GameConfig for RustConfig {
         let ports = detect_rust_all_ports();
         if !ports.is_empty() {
             tracing::info!(
-                "🎮 RustClient.exe UDP sockets detected: {:?} — using multi-port BPF",
+                "🎮 RustClient.exe UDP sockets detected: {:?}, using multi-port BPF",
                 ports
             );
             return CaptureFilter::new_multi_port(vec![], ports);
         }
         tracing::debug!(
-            "RustClient.exe not found or has no UDP sockets — \
+            "RustClient.exe not found or has no UDP sockets, \
              using community range 28000-28100"
         );
         // Wide fallback covering the overwhelming majority of community servers.
@@ -200,7 +200,7 @@ fn rust_udp_all_ports(pid: u32) -> Vec<u16> {
             continue;
         }
 
-        // Extract port from "addr:port" — use rsplit to handle IPv6 addresses.
+        // Extract port from "addr:port", use rsplit to handle IPv6 addresses.
         if let Some(port_str) = parts[1].rsplit(':').next() {
             if let Ok(port) = port_str.parse::<u16>() {
                 // Skip port 0, well-known ports, LightSpeed proxy port,

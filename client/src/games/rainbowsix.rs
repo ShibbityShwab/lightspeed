@@ -1,6 +1,6 @@
 //! # Rainbow Six Siege Game Configuration
 //!
-//! Game-specific settings for Ubisoft's Rainbow Six Siege — the 5v5 tactical
+//! Game-specific settings for Ubisoft's Rainbow Six Siege, the 5v5 tactical
 //! shooter running on Ubisoft's AnvilNext engine.
 //!
 //! ## Network Profile
@@ -13,14 +13,14 @@
 //! ## Anti-Cheat
 //!
 //! Three layers ship with the game: **BattlEye** (user-mode module plus a
-//! kernel driver), **R6 Shieldguard** — Ubisoft's kernel-level protection,
-//! which refuses to start unless Secure Boot, HVCI and a TPM 2.0 are all
-//! present — and Ubisoft's account-level anti-cheat.
+//! kernel driver), **R6 Shieldguard**, Ubisoft's kernel-level protection, which
+//! refuses to start unless Secure Boot, HVCI and a TPM 2.0 are all present, and
+//! Ubisoft's account-level anti-cheat.
 //!
 //! LightSpeed is a transparent UDP forwarder: it does not inject code, open the
 //! game process, or touch game memory, so it sits outside what those systems
 //! look for. What is **UNVERIFIED** is whether Shieldguard's launch-time
-//! environment checks tolerate a local forwarding agent at all — it inspects
+//! environment checks tolerate a local forwarding agent at all: it inspects
 //! the boot chain rather than the network path, so the risk is indirect rather
 //! than a detection. Treat this profile as untested against Shieldguard until
 //! someone reports a real match through it.
@@ -58,7 +58,7 @@ impl GameConfig for RainbowSixConfig {
          1. Find your match server IP from the in-game scoreboard or a tool\n\
             like Resource Monitor while in a match\n\
          2. Start LightSpeed: --game rainbowsix --game-server <SERVER_IP>:10000\n\
-         3. Anti-cheat: BattlEye and R6 Shieldguard — LightSpeed does not\n\
+         3. Anti-cheat: BattlEye and R6 Shieldguard. LightSpeed does not\n\
             modify game memory or inject drivers, but Shieldguard's Secure\n\
             Boot/HVCI requirements make this profile UNVERIFIED; report back\n\
             if you run matches through it"
@@ -70,7 +70,7 @@ impl GameConfig for RainbowSixConfig {
     }
 
     fn uses_sdr(&self) -> bool {
-        // No Steam Datagram Relay — direct UDP to Ubisoft data centres.
+        // No Steam Datagram Relay: direct UDP to Ubisoft data centres.
         false
     }
 

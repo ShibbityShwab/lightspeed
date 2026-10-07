@@ -14,7 +14,7 @@
 //!
 //! If the inbound packets are tunneled, the proxy receives them with
 //! `orig_dst_addr = 192.168.x.x` (a private/RFC1918 IP) and drops them via
-//! the PrivateDestination abuse check — causing ~50% of all tunneled packets
+//! the PrivateDestination abuse check, causing ~50% of all tunneled packets
 //! to be silently dropped at the proxy. We filter them out here first.
 //!
 //! ### Windows Firewall and tunnel inbound
@@ -23,7 +23,7 @@
 //! when the application sent an outbound packet first (NAT hole punch). We add
 //! a temporary inbound rule for the process while capture is active.
 //!
-//! ### pcap is passive — it cannot redirect traffic
+//! ### pcap is passive, it cannot redirect traffic
 //! pcap observes a copy of each packet. The original packet still travels the
 //! direct path (client → game server). The tunnel creates a *parallel* path
 //! that the game client never uses for its active session. Actual ping
@@ -148,15 +148,15 @@ fn remove_firewall_rule() {}
 /// Run the pcap capture mode.
 ///
 /// # Parameters
-/// * `game`        — game profile (name, ports, BPF filter, etc.)
-/// * `proxy_addr`  — tunnel endpoint address
-/// * `proxy_id`    — human-readable proxy identifier for online learning
-/// * `proxy_region`— region string for online learning records
-/// * `online_learner` — shared online-learning state
-/// * `keepalive_timestamps` — shared seq → send-time map for RTT measurement
-/// * `fec_enabled` — whether to wrap packets with FEC headers
-/// * `fec_k`       — FEC block size (data packets per parity packet)
-/// * `interface`   — optional NIC name to capture on (auto-detect if `None`)
+/// * `game`       : game profile (name, ports, BPF filter, etc.)
+/// * `proxy_addr` , tunnel endpoint address
+/// * `proxy_id`   : human-readable proxy identifier for online learning
+/// * `proxy_region`: region string for online learning records
+/// * `online_learner`, shared online-learning state
+/// * `keepalive_timestamps`, shared seq → send-time map for RTT measurement
+/// * `fec_enabled`, whether to wrap packets with FEC headers
+/// * `fec_k`      : FEC block size (data packets per parity packet)
+/// * `interface`  : optional NIC name to capture on (auto-detect if `None`)
 ///
 /// Live stat handles filled by the capture task once it is running.
 /// Engine holds a `Arc<Mutex<Option<CaptureStatHandles>>>` slot; the task fills it.
@@ -306,7 +306,7 @@ async fn run_capture_mode_inner(
     add_firewall_rule();
 
     info!(
-        "⚡ Capture active — sniffing {} traffic on ports {:?}",
+        "⚡ Capture active, sniffing {} traffic on ports {:?}",
         game.name(),
         game.ports()
     );
@@ -421,7 +421,7 @@ async fn run_capture_mode_inner(
                         tracing::debug!("Tunnel recv error: {}", e);
                         continue;
                     }
-                    Err(_) => continue, // Timeout — check running flag
+                    Err(_) => continue, // Timeout, check running flag
                 };
 
                 injector_stats_ref
@@ -438,7 +438,7 @@ async fn run_capture_mode_inner(
                         }
                     };
 
-                // Process keepalive echoes — measure RTT for online learning
+                // Process keepalive echoes, measure RTT for online learning
                 if header.is_keepalive() {
                     let rtt_us = {
                         let mut ts_map = ka_timestamps.lock().await;

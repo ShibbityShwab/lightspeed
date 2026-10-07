@@ -16,9 +16,9 @@ use super::ProxyNode;
 pub struct FailoverConfig {
     /// Maximum keepalive misses before marking unhealthy.
     pub max_keepalive_misses: u32,
-    /// Latency threshold (μs) — failover if exceeded consistently.
+    /// Latency threshold (μs), failover if exceeded consistently.
     pub latency_threshold_us: u64,
-    /// Packet loss threshold (%) — failover if exceeded.
+    /// Packet loss threshold (%), failover if exceeded.
     pub loss_threshold_pct: f64,
     /// Cooldown before retrying a failed proxy.
     pub retry_cooldown: Duration,

@@ -21,7 +21,7 @@
 //! // List available interfaces
 //! let interfaces = capture::list_interfaces();
 //! for iface in &interfaces {
-//!     println!("{} [{}] — {}", iface.name,
+//!     println!("{} [{}], {}", iface.name,
 //!         if iface.is_up { "UP" } else { "DOWN" },
 //!         iface.description);
 //! }
@@ -118,15 +118,15 @@ pub fn pick_best_interface() -> Option<String> {
                 || desc.contains("pcie")
                 || desc.contains("lan")
             {
-                2u8 // Wired Ethernet — preferred
+                2u8 // Wired Ethernet, preferred
             } else if desc.contains("wifi")
                 || desc.contains("wi-fi")
                 || desc.contains("wireless")
                 || desc.contains("802.11")
             {
-                1u8 // WiFi — second choice
+                1u8 // WiFi, second choice
             } else {
-                0u8 // Other — avoid
+                0u8 // Other, avoid
             }
         })
         .map(|i| i.name.clone())

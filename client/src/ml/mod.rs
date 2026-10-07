@@ -85,7 +85,7 @@ impl RouteModel {
         // Validate minimum size (a valid bincode model should be > 100 bytes)
         if bytes.len() < 100 {
             return Err(MlError::PredictionFailed(
-                "Model file too small — likely corrupted".into(),
+                "Model file too small, likely corrupted".into(),
             ));
         }
         // Cap the upper bound so a corrupt or hostile model file can't exhaust memory.

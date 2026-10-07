@@ -2,11 +2,11 @@
 //!
 //! # Why WinDivert instead of pcap
 //!
-//! pcap is a **passive observer** — it copies packets but the originals still
+//! pcap is a **passive observer**, it copies packets but the originals still
 //! travel the direct game-client→server path.  The game session is unaffected
 //! and in-game ping reflects the direct RTT, not the tunnel RTT.
 //!
-//! WinDivert is a **kernel-mode interceptor** — it calls `WinDivertOpen` with
+//! WinDivert is a **kernel-mode interceptor**, it calls `WinDivertOpen` with
 //! a filter and when the kernel matches a packet it is held at the driver layer
 //! until the userspace process either re-injects it (`WinDivertSend`) or drops
 //! it by never calling send.  This lets us:
@@ -120,7 +120,7 @@ pub fn parse_ipv4_udp(raw: &[u8]) -> Option<(SocketAddrV4, SocketAddrV4, &[u8])>
 
 /// Build a raw IPv4+UDP packet from scratch.
 ///
-/// IP and UDP checksums are intentionally zeroed — WinDivert will recalculate
+/// IP and UDP checksums are intentionally zeroed, WinDivert will recalculate
 /// them when re-injecting if the `CHECKSUM` flag is NOT set in the flags
 /// argument to `WinDivertSend` (i.e., pass `0` for `flags` so WinDivert
 /// recalculates).  Alternatively call `WinDivertHelperCalcChecksums` before
@@ -304,7 +304,7 @@ pub fn build_ipv4_tcp(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  WinDivert redirect implementation — only compiled with the feature flag
+//  WinDivert redirect implementation, only compiled with the feature flag
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Configuration for the WinDivert redirect session.
@@ -312,8 +312,8 @@ pub fn build_ipv4_tcp(
 pub struct WinDivertConfig {
     /// Real game server address.
     ///
-    /// `Some(addr)` — specific server mode (filter targets exactly this IP:port).
-    /// `None`       — auto-detect mode (broad port-range filter; server IP is learned
+    /// `Some(addr)`, specific server mode (filter targets exactly this IP:port).
+    /// `None`      : auto-detect mode (broad port-range filter; server IP is learned
     ///                from the first intercepted outbound packet).
     pub server_addr: Option<SocketAddrV4>,
     /// UDP port range used in the WinDivert filter.
@@ -649,7 +649,7 @@ mod inner {
             }
 
             let Some(conn) = self.conns.get_mut(&tuple) else {
-                return outcome; // no local connection — drop (the relay rejected it)
+                return outcome; // no local connection, drop (the relay rejected it)
             };
             conn.last_activity = Instant::now();
 
@@ -825,9 +825,9 @@ mod inner {
     /// Run the WinDivert active redirect loop.
     ///
     /// Spawns two `spawn_blocking` threads:
-    /// - **intercept thread**: WinDivert recv loop — captures outbound Game→Server
+    /// - **intercept thread**: WinDivert recv loop, captures outbound Game→Server
     ///   packets, extracts UDP payload (or TCP segment), sends via an mpsc channel.
-    /// - **inject thread**: WinDivert send loop — receives assembled IP frames
+    /// - **inject thread**: WinDivert send loop, receives assembled IP frames
     ///   from an mpsc channel and injects them into the IP stack.
     ///
     /// An async task in between handles the proxy tunnel socket bidirectionally.
@@ -901,8 +901,8 @@ mod inner {
             }
         };
 
-        // Open WinDivert handle for injection (no filter — only used for sending).
-        // IMPORTANT: do NOT set sniff flag here — sniff makes the handle read-only
+        // Open WinDivert handle for injection (no filter, only used for sending).
+        // IMPORTANT: do NOT set sniff flag here, sniff makes the handle read-only
         // and WinDivertSend() will silently fail, meaning game never gets responses.
         let wd_inject =
             match OwnedHandle::open("false", WinDivertLayer::Network, 0, WinDivertFlags::new()) {
@@ -978,7 +978,7 @@ mod inner {
                 if !running_ic.load(Ordering::Relaxed) {
                     break;
                 }
-                // recv() is blocking — will return each captured packet.
+                // recv() is blocking, will return each captured packet.
                 match wd_ic.recv(&mut recv_buf) {
                     Ok((len, addr)) => {
                         backoff.on_success();
@@ -1081,7 +1081,7 @@ mod inner {
                                         let _ = wd_ic.send(data, &addr);
                                     }
                                     Decision::ResetToDetection => {
-                                        tracing::info!("🔄 Locked server stale — re-detecting");
+                                        tracing::info!("🔄 Locked server stale, re-detecting");
                                         reported_server = None;
                                         if let Ok(mut guard) = stats_ic.detected_server.lock() {
                                             *guard = None;
@@ -1097,7 +1097,7 @@ mod inner {
                                 }
                             }
                             None => {
-                                // Non-IPv4 / non-matching transport — re-inject unchanged.
+                                // Non-IPv4 / non-matching transport, re-inject unchanged.
                                 let _ = wd_ic.send(data, &addr);
                             }
                         }
@@ -1264,14 +1264,14 @@ mod inner {
         let mut tcp_tick = tokio::time::interval(TCP_RETRANSMIT_TICK);
         tcp_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        // The client's local source address — learned from the first intercepted
+        // The client's local source address, learned from the first intercepted
         // outbound packet (game sends from its ephemeral port on local IP).
         let mut game_src_learned: Option<SocketAddrV4> = None;
         // The effective server addr used for TunnelHeader encoding and inject spoofing.
         // Populated from the pre-configured addr or auto-learned on first packet.
         let mut active_server: Option<SocketAddrV4> = pre_known_server;
 
-        tracing::info!("⚡ WinDivert active — waiting for game traffic …");
+        tracing::info!("⚡ WinDivert active, waiting for game traffic …");
 
         loop {
             if !running.load(Ordering::Relaxed) {
@@ -1361,7 +1361,7 @@ mod inner {
                             for frame in outcome.inject {
                                 stats.bytes_injected.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                 if inject_tx.try_send(frame).is_err() {
-                                    tracing::warn!("Inject channel full — dropping TCP segment");
+                                    tracing::warn!("Inject channel full, dropping TCP segment");
                                     stats.errors.fetch_add(1, Ordering::Relaxed);
                                 }
                             }
@@ -1416,7 +1416,7 @@ mod inner {
                     let idle = term.evict_idle(now);
                     for frame in idle.inject {
                         if inject_tx.try_send(frame).is_err() {
-                            tracing::warn!("Inject channel full — dropping TCP RST");
+                            tracing::warn!("Inject channel full, dropping TCP RST");
                             stats.errors.fetch_add(1, Ordering::Relaxed);
                         }
                     }
@@ -1506,7 +1506,7 @@ mod inner {
                         for frame in outcome.inject {
                             stats.bytes_injected.fetch_add(frame.len() as u64, Ordering::Relaxed);
                             if inject_tx.try_send(frame).is_err() {
-                                tracing::warn!("Inject channel full — dropping TCP segment");
+                                tracing::warn!("Inject channel full, dropping TCP segment");
                                 stats.errors.fetch_add(1, Ordering::Relaxed);
                             }
                         }
@@ -1539,13 +1539,13 @@ mod inner {
                             // WinDivert will fill in the IP/UDP checksums on inject.
                             let spoof_src = match active_server {
                                 Some(s) => s,
-                                None => continue, // server not yet known — skip
+                                None => continue, // server not yet known, skip
                             };
                             let raw = build_ipv4_udp(spoof_src, game_src, &data);
                             stats.bytes_injected.fetch_add(data.len() as u64, Ordering::Relaxed);
                             // Send to inject thread via sync mpsc (non-blocking send)
                             if inject_tx.try_send(raw).is_err() {
-                                tracing::warn!("Inject channel full — dropping packet");
+                                tracing::warn!("Inject channel full, dropping packet");
                                 stats.errors.fetch_add(1, Ordering::Relaxed);
                             }
 

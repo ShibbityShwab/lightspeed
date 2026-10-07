@@ -44,7 +44,7 @@ impl RoutePrediction {
 /// latency through that proxy. Returns predictions for all proxies
 /// so the selector can choose the best one.
 ///
-/// Model bytes are a bincode-serialised `Vec<(f64, Vec<f64>)>` — one entry
+/// Model bytes are a bincode-serialised `Vec<(f64, Vec<f64>)>`, one entry
 /// per ensemble member, containing `(intercept, feature_weights)`.
 #[cfg(feature = "ml")]
 pub fn predict_route(
@@ -55,7 +55,7 @@ pub fn predict_route(
 
     let start = Instant::now();
 
-    // No model bytes yet (first run, model not yet trained) — fall back to heuristic.
+    // No model bytes yet (first run, model not yet trained), fall back to heuristic.
     if model_bytes.is_empty() {
         let scores: Vec<(String, f64)> = features_per_proxy
             .iter()
@@ -123,7 +123,7 @@ pub fn predict_route(
     })
 }
 
-/// Fallback prediction without ML — uses a simple heuristic.
+/// Fallback prediction without ML, uses a simple heuristic.
 ///
 /// Weighted score: 0.6 * current_latency + 0.2 * p50 + 0.1 * jitter + 0.1 * load_penalty
 #[cfg(not(feature = "ml"))]

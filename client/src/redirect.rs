@@ -615,7 +615,7 @@ impl UdpRedirect {
             self.local_port
         );
 
-        // Wait for shutdown — either GUI oneshot or Ctrl-C
+        // Wait for shutdown, either GUI oneshot or Ctrl-C
         match shutdown {
             Some(rx) => {
                 let _ = rx.await;

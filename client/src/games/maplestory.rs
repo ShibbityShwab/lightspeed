@@ -1,13 +1,13 @@
 //! # MapleStory Game Configuration
 //!
-//! Game-specific settings for Nexon's MapleStory — the long-running 2D
+//! Game-specific settings for Nexon's MapleStory, the long-running 2D
 //! side-scrolling MMORPG.
 //!
 //! ## Network Profile
 //!
 //! MapleStory game traffic runs over UDP on the login/chat port **8484**
 //! and the channel-server range **7575–7615**. Clients connect directly to
-//! Nexon's regional channel servers — there is no relay layer, which makes
+//! Nexon's regional channel servers, there is no relay layer, which makes
 //! the game a good candidate for LightSpeed proxying.
 //!
 //! ## Anti-Cheat
@@ -48,9 +48,9 @@ impl GameConfig for MapleStoryConfig {
     fn redirect_instructions(&self) -> String {
         "MapleStory redirect mode:\n\
          1. Start LightSpeed: --game maplestory --game-server <SERVER_IP>:8484\n\
-         2. Nexon assigns channel servers per region — redirect mode works\n\
+         2. Nexon assigns channel servers per region, redirect mode works\n\
             best for the login/chat connection on port 8484\n\
-         3. Anti-cheat: BlackCipher (NGS) is compatible — LightSpeed only\n\
+         3. Anti-cheat: BlackCipher (NGS) is compatible, LightSpeed only\n\
             reroutes UDP, it does not inject or modify game memory"
             .to_string()
     }
@@ -60,7 +60,7 @@ impl GameConfig for MapleStoryConfig {
     }
 
     fn typical_pps(&self) -> u32 {
-        // 2D game with a low tick rate — roughly 10-20 packets/sec during
+        // 2D game with a low tick rate, roughly 10-20 packets/sec during
         // normal play, spiking during mob-heavy maps and events.
         20
     }

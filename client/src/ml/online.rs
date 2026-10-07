@@ -164,7 +164,7 @@ impl OnlineLearner {
 
         // If no model loaded, train with synthetic + any existing live data
         if !self.model.is_loaded() {
-            tracing::info!("No saved model found — training initial model");
+            tracing::info!("No saved model found, training initial model");
             self.train_initial_model()?;
         }
 
@@ -322,7 +322,7 @@ impl OnlineLearner {
         let live_samples = self.collector.training_samples();
 
         if live_samples.len() >= 30 {
-            // Enough live data — train primarily on that
+            // Enough live data, train primarily on that
             tracing::info!(
                 "Training initial model from {} live samples",
                 live_samples.len()
@@ -331,7 +331,7 @@ impl OnlineLearner {
             self.model
                 .load_from_bytes(model_bytes, "live-initial", &report.model_type);
         } else {
-            // Not enough live data — use synthetic + whatever live we have
+            // Not enough live data, use synthetic + whatever live we have
             tracing::info!(
                 "Training initial model with synthetic data + {} live samples",
                 live_samples.len()

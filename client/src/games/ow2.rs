@@ -1,6 +1,6 @@
 //! # Overwatch 2 Game Configuration
 //!
-//! Game-specific settings for Blizzard Entertainment's Overwatch 2 — the
+//! Game-specific settings for Blizzard Entertainment's Overwatch 2, the
 //! 5v5 hero-shooter running on Blizzard's Battle.net infrastructure.
 //!
 //! ## Network Profile
@@ -26,7 +26,7 @@
 //!
 //! Overwatch 2 uses Blizzard's server-side anti-cheat ("Warden-style"
 //! heuristics in battle.net's backend). No kernel-mode driver is required
-//! on the client — LightSpeed's transparent UDP forwarding is fully compatible.
+//! on the client, LightSpeed's transparent UDP forwarding is fully compatible.
 
 use super::GameConfig;
 
@@ -40,7 +40,7 @@ impl GameConfig for Ow2Config {
 
     fn process_names(&self) -> &[&str] {
         // Battle.net launches `Overwatch.exe` for the game client.
-        // The launcher itself is `Battle.net.exe` — we do NOT capture that.
+        // The launcher itself is `Battle.net.exe`, we do NOT capture that.
         &["Overwatch.exe", "Overwatch_retail.exe"]
     }
 

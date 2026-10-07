@@ -40,12 +40,12 @@ async fn run_smoke_test_linux(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
 
     if !is_root() {
         tracing::info!("ℹ️  Skipping: requires root (CAP_NET_ADMIN) for nftables REDIRECT.");
-        tracing::info!("✅ Smoke test PASSED (skipped — not root)");
+        tracing::info!("✅ Smoke test PASSED (skipped, not root)");
         return Ok(());
     }
     if !command_available("nft") {
         tracing::info!("ℹ️  Skipping: `nft` was not found in PATH.");
-        tracing::info!("✅ Smoke test PASSED (skipped — nft unavailable)");
+        tracing::info!("✅ Smoke test PASSED (skipped, nft unavailable)");
         return Ok(());
     }
 
@@ -179,7 +179,7 @@ async fn run_smoke_test_linux(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
     // Connect the new socket (which makes the scanner see `.10`, no packets
     // required) but do NOT send until the rule has moved. A pre-swap flow
     // would create a no-NAT conntrack entry that a nat rule added later cannot
-    // capture — the mirror image of the fact-3 stickiness for the old flow.
+    // capture, the mirror image of the fact-3 stickiness for the old flow.
     drop(game);
     let game = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
     game.connect(target_b).await?;

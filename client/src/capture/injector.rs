@@ -1,4 +1,4 @@
-//! # Packet Injector — Response Path for Capture Mode
+//! # Packet Injector, Response Path for Capture Mode
 //!
 //! Delivers proxy responses back to the game client by sending UDP packets
 //! that appear to come from the original game server. This completes the

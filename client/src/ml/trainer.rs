@@ -4,8 +4,8 @@
 //! Evaluates multiple model types and selects the best performer.
 //!
 //! ## Models Evaluated
-//! - **Random Forest** (linfa-trees) — primary model, good accuracy + interpretable
-//! - **Linear Regression** (linfa-linear) — baseline, fast inference
+//! - **Random Forest** (linfa-trees), primary model, good accuracy + interpretable
+//! - **Linear Regression** (linfa-linear), baseline, fast inference
 //!
 //! All training code is behind `#[cfg(feature = "ml")]`.
 
@@ -51,7 +51,7 @@ pub fn train_test_split(
 ///
 /// Implemented as a bootstrap-aggregated (bagging) ensemble of linear
 /// regression models. Each model is trained on an 80% bootstrap subsample.
-/// Serialised as `Vec<(intercept: f64, weights: Vec<f64>)>` — fully
+/// Serialised as `Vec<(intercept: f64, weights: Vec<f64>)>`, fully
 /// compatible with `bincode` without any linfa serde dependency.
 #[cfg(feature = "ml")]
 pub fn train_random_forest(
@@ -75,7 +75,7 @@ pub fn train_random_forest(
     let n_features = NetworkFeatures::FEATURE_COUNT;
 
     // Train an ensemble of linear regressors with bootstrap sampling.
-    // Model is serialised as Vec<(intercept, weights)> — no linfa serde needed.
+    // Model is serialised as Vec<(intercept, weights)>, no linfa serde needed.
     let start = Instant::now();
 
     let n_models = 10;
@@ -180,7 +180,7 @@ pub fn train_random_forest(
         training_time.as_secs_f64() * 1000.0
     );
 
-    // Serialize as Vec<(intercept, weights)> — bincode-compatible
+    // Serialize as Vec<(intercept, weights)>, bincode-compatible
     let model_bytes = bincode::serialize(&ensemble)
         .map_err(|e| MlError::PredictionFailed(format!("Serialization failed: {}", e)))?;
 
@@ -286,7 +286,7 @@ pub fn train_linear_regression(
         r_squared
     );
 
-    // Serialise as (intercept, weights) — linfa models don't impl serde::Serialize
+    // Serialise as (intercept, weights), linfa models don't impl serde::Serialize
     let model_bytes = bincode::serialize(&(model.intercept(), model.params().to_vec()))
         .map_err(|e| MlError::PredictionFailed(format!("Serialization failed: {}", e)))?;
 
@@ -303,7 +303,7 @@ pub fn train_linear_regression(
     Ok((model_bytes, report))
 }
 
-/// Fallback training (no `ml` feature) — returns an error.
+/// Fallback training (no `ml` feature), returns an error.
 #[cfg(not(feature = "ml"))]
 pub fn train_random_forest(
     _data: &[TrainingSample],

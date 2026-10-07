@@ -169,7 +169,7 @@ impl PacketCapture for PcapCapture {
             // ── Parse Ethernet header (14 bytes) ────────────────
             let eth_type = u16::from_be_bytes([data[12], data[13]]);
             if eth_type != ETHERTYPE_IPV4 {
-                continue; // Not IPv4 — skip (could be ARP, IPv6, etc.)
+                continue; // Not IPv4, skip (could be ARP, IPv6, etc.)
             }
 
             // ── Parse IPv4 header ───────────────────────────────
@@ -270,7 +270,7 @@ impl PacketCapture for PcapCapture {
 
     fn next_packet(&mut self) -> Result<CapturedPacket, CaptureError> {
         Err(CaptureError::Pcap(
-            "Not implemented — pcap-capture feature not enabled".into(),
+            "Not implemented, pcap-capture feature not enabled".into(),
         ))
     }
 

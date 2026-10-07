@@ -34,7 +34,7 @@ pub struct AbuseConfig {
     /// Optional destination allowlist as `(network, prefix_len)` pairs.
     /// Empty = allow any public destination (backward-compatible default).
     /// Non-empty = only relay to destinations within these prefixes. This is
-    /// the primary defense for community relays — it stops the relay being
+    /// the primary defense for community relays, it stops the relay being
     /// aimed at arbitrary public IPs (DDoS reflection/amplification).
     pub destination_allowlist: Vec<(Ipv4Addr, u8)>,
 }
@@ -100,13 +100,13 @@ pub enum AbuseCheckResult {
     Allowed,
     /// Client is banned.
     Banned,
-    /// Amplification ratio exceeded — possible DDoS amplification.
+    /// Amplification ratio exceeded, possible DDoS amplification.
     AmplificationDetected,
-    /// Too many unique destinations — possible reflection attack.
+    /// Too many unique destinations, possible reflection attack.
     ReflectionDetected,
-    /// Destination is a private/internal IP — blocked.
+    /// Destination is a private/internal IP, blocked.
     PrivateDestination,
-    /// Destination is not in the configured allowlist — blocked.
+    /// Destination is not in the configured allowlist, blocked.
     DestinationNotAllowed,
 }
 
@@ -184,7 +184,7 @@ impl AbuseDetector {
             tracing::warn!(
                 client = %client_ip,
                 destinations = tracker.destinations.len(),
-                "Reflection attack detected — too many unique destinations"
+                "Reflection attack detected, too many unique destinations"
             );
             self.ban(client_ip);
             return AbuseCheckResult::ReflectionDetected;

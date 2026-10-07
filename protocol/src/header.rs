@@ -46,7 +46,7 @@ pub const PROTOCOL_VERSION_FEC: u8 = 4;
 /// Protocol version indicating both the FEC header and the TCP extension
 /// header follow the tunnel header, in that order: `FecHeader`, then
 /// `TcpExtHeader`, then the game stream payload. Version 5 always carries
-/// both extensions — TCP without FEC is out of scope because the lossy leg
+/// both extensions, TCP without FEC is out of scope because the lossy leg
 /// needs FEC underneath the reliable layer.
 pub const PROTOCOL_VERSION_TCP: u8 = 5;
 
@@ -110,9 +110,9 @@ pub mod flags {
     pub const KEEPALIVE: u8 = 0b0000_0001;
     /// Handshake packet.
     pub const HANDSHAKE: u8 = 0b0000_0010;
-    /// Fin — close tunnel gracefully.
+    /// Fin, close tunnel gracefully.
     pub const FIN: u8 = 0b0000_0100;
-    /// Fragment — packet is part of a fragmented message.
+    /// Fragment, packet is part of a fragmented message.
     pub const FRAGMENT: u8 = 0b0000_1000;
     // NOTE: Bits 4-7 are reserved for future use. FEC uses a separate
     // header extension signaled via the version/type field, not flags,
@@ -209,7 +209,7 @@ impl TunnelHeader {
         self
     }
 
-    /// Encode the header into a stack-allocated `[u8; 20]` array — **zero heap allocation**.
+    /// Encode the header into a stack-allocated `[u8; 20]` array, **zero heap allocation**.
     ///
     /// This is the hot-path encoding method. Use it whenever you are about to
     /// extend a `BytesMut` with the header bytes:
@@ -249,7 +249,7 @@ impl TunnelHeader {
 
     /// Encode the header into a heap-allocated `Bytes`.
     ///
-    /// **Prefer `encode_to_array()`** in hot paths — it avoids the allocation.
+    /// **Prefer `encode_to_array()`** in hot paths, it avoids the allocation.
     /// This method is kept for callers that need a `Bytes` return type (e.g.,
     /// legacy code, tests, or cases where `Bytes` is required by an API).
     pub fn encode(&self) -> Bytes {
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn test_header_version_check() {
         let mut data = vec![0u8; HEADER_SIZE];
-        data[0] = 0xF0; // Version 15 — invalid
+        data[0] = 0xF0; // Version 15, invalid
         let result = TunnelHeader::decode(&data);
         assert!(result.is_err());
     }

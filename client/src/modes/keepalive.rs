@@ -1,4 +1,4 @@
-//! Keepalive (idle) mode — maintains a proxy session with periodic pings.
+//! Keepalive (idle) mode, maintains a proxy session with periodic pings.
 //!
 //! Used when no `--game-server` is specified.  Sends keepalive packets every
 //! 5 s, measures round-trip latency for the online learner, and prints tunnel
@@ -21,10 +21,10 @@ use crate::tunnel::relay::UdpRelay;
 ///
 /// Blocks until Ctrl+C, then saves the online-learning state and returns.
 ///
-/// `telemetry` — if `Some`, RTT samples from keepalive echoes are recorded
+/// `telemetry`, if `Some`, RTT samples from keepalive echoes are recorded
 /// and flushed to the proxy on shutdown (opt-in, no PII).
 ///
-/// `telemetry_ctx` — the active game id and locale-derived country copied into
+/// `telemetry_ctx`, the active game id and locale-derived country copied into
 /// that shutdown report so it carries the same values as the periodic flushes.
 pub async fn run_keepalive_mode(
     relay: UdpRelay,
@@ -38,7 +38,7 @@ pub async fn run_keepalive_mode(
 ) -> anyhow::Result<()> {
     let stats = Arc::clone(&relay.stats);
 
-    info!("⚡ LightSpeed tunnel active — keepalive mode");
+    info!("⚡ LightSpeed tunnel active, keepalive mode");
     info!("   Use --game-server <ip:port> for full redirect mode");
     info!("   (Full packet capture requires --features pcap-capture)");
 

@@ -1,4 +1,4 @@
-//! WinDivert active redirect mode — public API mirroring `capture_mode.rs`.
+//! WinDivert active redirect mode, public API mirroring `capture_mode.rs`.
 //!
 //! Wraps [`crate::capture::windivert_redirect::run_windivert_redirect`] with
 //! the same shutdown-receiver + stat-slot pattern used by capture mode so that

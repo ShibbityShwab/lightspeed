@@ -66,7 +66,7 @@ impl CaptureFilter {
     /// Create a filter that matches any of a discrete set of ports.
     ///
     /// Used when netstat returns multiple candidate UDP ports for the game
-    /// process — we OR all of them together so the right one is always captured.
+    /// process, we OR all of them together so the right one is always captured.
     pub fn new_multi_port(server_ips: Vec<std::net::Ipv4Addr>, ports: Vec<u16>) -> Self {
         assert!(!ports.is_empty(), "ports list must not be empty");
 
@@ -95,7 +95,7 @@ impl CaptureFilter {
     }
 }
 
-/// Trait for packet capture — implemented per platform in `crate::capture`.
+/// Trait for packet capture, implemented per platform in `crate::capture`.
 pub trait PacketCapture: Send + Sync {
     /// Start capturing packets with the given filter.
     fn start(&mut self, filter: &CaptureFilter) -> Result<(), CaptureError>;

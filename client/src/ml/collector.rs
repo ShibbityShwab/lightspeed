@@ -196,7 +196,7 @@ impl RouteCollector {
 
     /// Convert all stored measurements into `TrainingSample` format for training.
     ///
-    /// Applies exponential decay weighting — recent samples appear more times
+    /// Applies exponential decay weighting, recent samples appear more times
     /// in the output, effectively giving them more weight during training.
     pub fn training_samples(&self) -> Vec<TrainingSample> {
         let mut samples = Vec::new();

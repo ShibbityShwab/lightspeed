@@ -134,7 +134,7 @@ pub mod disconnect_reason {
 ///
 /// A one-byte additive bitmap: bit 0 means the relay supports the TCP tunnel
 /// (protocol version 5). Pre-upgrade relays omit the byte, which decodes as
-/// zero — "no TCP".
+/// zero, "no TCP".
 pub mod caps {
     /// The relay supports the TCP tunnel (protocol version 5).
     pub const TCP_TUNNEL: u8 = 0b0000_0001;
@@ -807,7 +807,7 @@ mod tests {
             no_region
         );
 
-        // A legacy ack with no caps byte decodes as zero — "no TCP".
+        // A legacy ack with no caps byte decodes as zero, "no TCP".
         let legacy = ControlMessage::RegisterAck {
             session_id: 5,
             session_token: 0xEF,

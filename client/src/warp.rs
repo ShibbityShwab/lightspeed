@@ -8,7 +8,7 @@
 //!
 //! - **5-10ms latency improvement** by using NTT peering instead of ISP default
 //! - **MASQUE protocol** tunnels all traffic including UDP game packets
-//! - **Free tier** — no cost for the peering improvement
+//! - **Free tier**, no cost for the peering improvement
 //!
 //! ## Architecture
 //!
@@ -16,7 +16,7 @@
 //! Game → LightSpeed Client → [WARP/MASQUE] → CF Edge (NTT) → Proxy → Game Server
 //! ```
 //!
-//! The WARP tunnel is transparent — LightSpeed packets are sent normally
+//! The WARP tunnel is transparent, LightSpeed packets are sent normally
 //! to the proxy IP, but the OS routes them through WARP's virtual interface,
 //! which uses Cloudflare's optimized backbone.
 
@@ -237,7 +237,7 @@ impl WarpManager {
     pub fn info(&self) -> WarpInfo {
         let status = self.status();
 
-        // Single call to settings list — parse both fields from one output.
+        // Single call to settings list, parse both fields from one output.
         let (protocol, mode) = self
             .run_cli(&["settings", "list"])
             .ok()
@@ -249,7 +249,7 @@ impl WarpManager {
                     if protocol.is_none() && line_lower.contains("tunnel protocol") {
                         protocol = line.split(':').next_back().map(|s| s.trim().to_string());
                     }
-                    // "Mode:" — match exact word to avoid "Mode-switch-allowed:" etc.
+                    // "Mode:", match exact word to avoid "Mode-switch-allowed:" etc.
                     if mode.is_none() && {
                         let after_tab = line.split('\t').next_back().unwrap_or(line);
                         after_tab.trim_start().starts_with("Mode:")
@@ -384,7 +384,7 @@ impl WarpManager {
             .collect();
 
         if ranges.is_empty() {
-            debug!("warp-cli tunnel dump returned no IPv4 CIDRs — falling back to hardcoded list");
+            debug!("warp-cli tunnel dump returned no IPv4 CIDRs, falling back to hardcoded list");
             return None;
         }
 
@@ -423,7 +423,7 @@ impl WarpManager {
     /// In exclude mode (default), everything goes through WARP except
     /// the excluded ranges. First attempts to read the real exclude list from
     /// `warp-cli tunnel dump`; falls back to a hardcoded RFC 1918 set if the
-    /// command is unavailable. This is pure subnet math — WARP does not need
+    /// command is unavailable. This is pure subnet math, WARP does not need
     /// to be running for this check to succeed.
     pub fn is_ip_routed(&mut self, ip: Ipv4Addr) -> bool {
         let ip_u32 = u32::from(ip);
@@ -591,11 +591,11 @@ mod tests {
         );
         // Sanity: "connecting" IS a substring of "disconnecting" at the byte level
         assert!("disconnecting".contains("connecting"));
-        // Without the fix the old code would return Connecting — this test locks
+        // Without the fix the old code would return Connecting, this test locks
         // the corrected behaviour in place.
     }
 
-    /// "disconnected" contains "connected" as a substring — make sure we still
+    /// "disconnected" contains "connected" as a substring, make sure we still
     /// return Disconnected and not Connected.
     #[test]
     fn test_parse_disconnected_not_connected() {
@@ -632,7 +632,7 @@ mod tests {
         let _ = manager.is_installed();
     }
 
-    // ── Subnet routing (static helper — no warp-cli needed) ──────────────────
+    // ── Subnet routing (static helper, no warp-cli needed) ──────────────────
 
     #[test]
     fn test_is_ip_routed_public_ips() {

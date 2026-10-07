@@ -40,7 +40,7 @@ impl GameConfig for RobloxConfig {
          1. Roblox selects a high ephemeral source port per server instance,\n\
             so capture/intercept mode is preferred over redirect\n\
          2. Start LightSpeed: --game roblox --game-server <SERVER_IP>:PORT\n\
-         3. Anti-cheat: Byfron (Hyperion) — transparent UDP tunneling is safe"
+         3. Anti-cheat: Byfron (Hyperion), transparent UDP tunneling is safe"
             .to_string()
     }
 
