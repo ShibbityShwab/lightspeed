@@ -83,6 +83,30 @@ pub fn scan_for_games(process_names: &[&str]) -> Vec<ProcessInfo> {
         .collect()
 }
 
+use crate::games::process_name_matches;
+
+/// The PID of a running process whose image name matches `name`, if any.
+///
+/// This is the live resolution the start path performs for a
+/// [`ProcessTarget`](super::traits::ProcessTarget) that names an image but
+/// carries no PID - which is every target picked in the GUI. Matching is the
+/// same case-insensitive, `.exe`-optional rule the scanner already uses for game
+/// processes, so `"chrome"`, `"chrome.exe"` and `"Chrome.EXE"` all resolve.
+///
+/// The first match in the enumeration's own order (name, then PID) wins; a
+/// caller that needs a specific instance of a multi-process image should target
+/// it by PID instead.
+pub fn find_pid_by_name(name: &str) -> Option<u32> {
+    let wanted = name.trim();
+    if wanted.is_empty() {
+        return None;
+    }
+    crate::processes::list_running_processes()
+        .into_iter()
+        .find(|entry| process_name_matches(&entry.name, wanted))
+        .map(|entry| entry.pid)
+}
+
 /// Find a single game process and return its PID + routes.
 ///
 /// Helper that flattens `scan_for_games` to the first matching process.

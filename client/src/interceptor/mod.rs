@@ -56,6 +56,7 @@ pub mod recovery;
 pub mod rotation;
 #[cfg(target_os = "linux")]
 mod shadow_probe;
+pub mod socket_owners;
 pub mod teardown;
 pub mod traits;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]

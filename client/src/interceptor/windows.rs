@@ -72,6 +72,7 @@ use super::traits::{InterceptorConfig, InterceptorHandle, TrafficInterceptor};
 // plain userspace logic with no WinDivert dependency: they compile into this
 // module on every Windows build and are unit-tested without the driver.
 use super::flows::{DirectReason, FlowKey, FlowMap, FlowVerdict};
+use super::socket_owners::OwnerCache;
 use super::CapturePolicy;
 use crate::games::TransportProto;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -294,11 +295,58 @@ enum OutboundDecision {
 /// Process mode's attribution state: the bounded map plus the cap warning that
 /// was last surfaced, so the warning is emitted once per new tunneled count
 /// rather than once per packet.
+///
+/// Ownership is decided two ways, and both are needed. [`OwnerCache`] answers
+/// "does the target PID own the socket this packet left from?" by asking the OS
+/// for the live binding table - that is the only answer available for a flow
+/// that opened before this interceptor did, which is the normal case when the
+/// app is started while the game is already running. The [`FlowMap`] then holds
+/// the per-flow state (tunneled or not, freshness, the cap). A packet whose
+/// local port the table attributes to the target is promoted into the map
+/// before the map is consulted, so a pre-existing flow is relayed from its
+/// first captured datagram instead of waiting for a seed that UDP cannot
+/// supply.
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 struct ProcessAttributor {
     map: FlowMap,
+    owners: OwnerCache,
+    target_pid: Option<u32>,
     warned_tunneled: usize,
+    counts: AttributionCounts,
+    /// The tallies as last logged, so a quiet tick logs nothing.
+    reported: AttributionCounts,
+    last_report: Option<Instant>,
+    /// While nothing has matched yet, a few (source port, owner pids) pairs are
+    /// collected and reported once. Diagnostic only, bounded, and silenced for
+    /// the rest of the run after it fires.
+    unmatched_samples: Vec<(u16, Vec<u32>)>,
+    /// Whether the no-match diagnosis has already been reported.
+    diagnosed: bool,
 }
+
+/// Per-run tallies for the process-mode path.
+///
+/// These exist because silence is the worst failure mode an interceptor has: a
+/// user who picked a process and sees no relayed traffic cannot tell "nothing
+/// has been sent yet" from "your traffic is not being seen at all". The values
+/// are logged once per [`ATTRRIBUTION_REPORT_INTERVAL`] while any of them move.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct AttributionCounts {
+    /// Packets captured by the static filter.
+    captured: u64,
+    /// Captured packets whose local port the owner table attributed to the target.
+    owned_by_target: u64,
+    /// Packets routed into the tunnel.
+    tunneled: u64,
+    /// Packets sent back out on the direct path (excluded, unattributed, or
+    /// over the cap). Fail-open, never a drop.
+    direct: u64,
+}
+
+/// How often the tallies are surfaced while they are still moving.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+const ATTRRIBUTION_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The intercept thread's attribution state machine: one variant per capture
 /// policy.
@@ -308,7 +356,11 @@ struct ProcessAttributor {
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 enum Attributor {
     /// A picked process: userspace attribution, capped and fail-open.
-    Process(ProcessAttributor),
+    ///
+    /// Boxed because this arm carries the flow map, the owner cache and the
+    /// tallies, while the built-in path is one tracker; without the box every
+    /// stack frame holding an `Attributor` would be sized by the larger arm.
+    Process(Box<ProcessAttributor>),
     /// The built-in ports path, unchanged.
     Ports(ServerTracker),
 }
@@ -318,8 +370,8 @@ impl Attributor {
     /// One captured packet in, one route out.
     ///
     /// Fail-open at the call site: every arm either relays or re-injects. The
-    /// process arm's exclusion, attribution and cap handling lives in
-    /// [`route_outbound`], which is where the map is used.
+    /// process arm decides ownership against the OS's live binding table (see
+    /// [`ProcessAttributor`]), then consults the flow map for per-flow state.
     fn decide(
         &mut self,
         src: SocketAddrV4,
@@ -330,7 +382,64 @@ impl Attributor {
     ) -> OutboundDecision {
         match self {
             Self::Process(state) => {
+                state.counts.captured += 1;
+
+                // Ownership first: an unfiltered capture-all handle sees every
+                // process's UDP, so the packet is only ours if the OS says the
+                // target owns the local port it came from. This is what makes a
+                // flow that predates the handle work; a seeded route list
+                // cannot, because the UDP table carries no remote endpoint.
+                //
+                // The hint is deliberately weaker than a route: two processes
+                // can bind one port, so a hinted flow starts unlocked and must
+                // pass the map's own debounce before it can take a tunnel slot.
+                let owned = match state.target_pid {
+                    Some(pid) => state.owners.table(now).owns(src.port(), pid),
+                    // No PID resolved at start: fall back to the seeded map
+                    // rather than refusing every packet.
+                    None => true,
+                };
+
+                // While nothing has matched, collect a few unmatched source ports
+                // with their real owners and report them ONCE. A report of "I
+                // targeted my game and nothing happened" is answered by this line:
+                // it shows whether the captured ports belong to the target (a
+                // matching bug) or to nobody the table knows (the wrong traffic is
+                // being captured). Bounded to one message per run.
+                if !owned && state.counts.owned_by_target == 0 && !state.diagnosed {
+                    let pids = state.owners.table(now).pids_for_port(src.port()).to_vec();
+                    state.unmatched_samples.push((src.port(), pids));
+                    if state.unmatched_samples.len() >= 8 {
+                        let samples: Vec<String> = state
+                            .unmatched_samples
+                            .drain(..)
+                            .map(|(p, pids)| format!("{p}->{pids:?}"))
+                            .collect();
+                        tracing::info!(
+                            "🔍 process mode: no packet has matched the target yet; captured source \
+                             ports and their real owners: {}. Empty owner lists mean those ports \
+                             belong to neither the target nor any live socket; the target's ports \
+                             appearing here would instead point at a matching fault.",
+                            samples.join(" ")
+                        );
+                        state.diagnosed = true;
+                    }
+                }
+                if owned {
+                    state.counts.owned_by_target += 1;
+                    if let Some(pid) = state.target_pid {
+                        state.map.hint_port(src.port(), pid);
+                    }
+                }
+
                 let route = route_outbound(&mut state.map, src, dst, relay_addrs, now, payload_len);
+                match route {
+                    OutboundRoute::Tunnel => state.counts.tunneled += 1,
+                    OutboundRoute::Excluded | OutboundRoute::Reinject(_) => {
+                        state.counts.direct += 1
+                    }
+                }
+
                 // The cap lives in the map (`super::flows`): at most
                 // MAX_TUNNELED_FLOWS tunneled, warned from WARN_TUNNELED_FLOWS,
                 // and over the cap the flow goes direct and is counted
@@ -344,6 +453,28 @@ impl Attributor {
                     Some(_) => {}
                     None => state.warned_tunneled = 0,
                 }
+
+                // Surface the tallies while they are moving, so a run can never
+                // end in silence. A quiet tick logs nothing.
+                let due = match state.last_report {
+                    Some(last) => now.duration_since(last) >= ATTRRIBUTION_REPORT_INTERVAL,
+                    None => true,
+                };
+                if due && state.counts.captured > 0 {
+                    if state.counts != state.reported {
+                        tracing::info!(
+                            "📊 process mode: captured {} | owned by target {} | tunneled {} | direct {} | flows {}",
+                            state.counts.captured,
+                            state.counts.owned_by_target,
+                            state.counts.tunneled,
+                            state.counts.direct,
+                            report.tunneled,
+                        );
+                        state.reported = state.counts;
+                    }
+                    state.last_report = Some(now);
+                }
+
                 match route {
                     OutboundRoute::Tunnel => OutboundDecision::Tunnel(dst),
                     OutboundRoute::Excluded | OutboundRoute::Reinject(_) => {
@@ -364,10 +495,15 @@ impl Attributor {
 
 /// Build the attributor the intercept thread drives for this policy.
 ///
-/// Process mode seeds the map from the scanner's live routes for the target: a
-/// route is an observation of a live connection, so a seeded entry locks at
-/// once and interception starts with the first packet. A flow the scanner never
-/// saw is UNATTRIBUTED and goes direct, visibly - fail-open, never a drop.
+/// Process mode seeds the map from the scanner's live routes for the target *and*
+/// installs a live owner-lookup cache. Both are needed and neither is redundant:
+/// a seeded route locks immediately, but the scanner can only report sockets it
+/// could already see, and the UDP table carries no remote endpoint - so a flow
+/// that opened before this interceptor did is invisible to the seed list. The
+/// owner table answers for exactly that case by mapping a captured packet's local
+/// port to its owning PID, which the map then accepts through its own debounce.
+/// A flow neither source attributes is UNATTRIBUTED and goes direct, visibly -
+/// fail-open, never a drop.
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 fn build_attributor(
     policy: CapturePolicy,
@@ -382,10 +518,17 @@ fn build_attributor(
             // With no target PID the map accepts any attributed process, so the
             // pid handed to `seed` only has to be acceptable.
             map.seed(target_pid.unwrap_or(0), seed_routes, now);
-            Attributor::Process(ProcessAttributor {
+            Attributor::Process(Box::new(ProcessAttributor {
                 map,
+                owners: OwnerCache::default(),
+                target_pid,
                 warned_tunneled: 0,
-            })
+                counts: AttributionCounts::default(),
+                reported: AttributionCounts::default(),
+                last_report: None,
+                unmatched_samples: Vec::new(),
+                diagnosed: false,
+            }))
         }
         CapturePolicy::PortRange { .. } => {
             let mut tracker = ServerTracker::new(TrackerConfig::default());
@@ -464,7 +607,33 @@ impl TrafficInterceptor for WinDivertInterceptor {
             .filter(|r| seeds.contains(&r.remote))
             .cloned()
             .collect();
-        let target_pid = config.process_target.as_ref().and_then(|t| t.pid());
+        // The target's PID is resolved HERE against the live process table, per
+        // the contract on `ProcessTarget::pid`: a name is the identity (it
+        // survives a relaunch) and the PID is the hint that this overwrites. A
+        // caller that picks a process by name - every GUI path does - leaves
+        // `pid` as `None`, and without this resolution the owner lookup below
+        // would have no PID to match against and every packet would fall to the
+        // direct path while reporting nothing wrong.
+        let target_pid = match config.process_target.as_ref() {
+            Some(target) if target.is_set() => match target.name() {
+                Some(name) => crate::interceptor::process_scanner::find_pid_by_name(name),
+                None => target.pid(),
+            },
+            _ => None,
+        };
+        if let Some(target) = config.process_target.as_ref() {
+            match target_pid {
+                Some(pid) => tracing::info!(
+                    "🎯 process target '{}' resolved to PID {pid}",
+                    target.describe()
+                ),
+                None => tracing::warn!(
+                    "⚠️ process target '{}' is not running; capture stays broad and \
+                     nothing will be attributed until it starts",
+                    target.describe()
+                ),
+            }
+        }
 
         // Open intercept handle (captures matching outbound packets).
         tracing::info!("⚡ Opening WinDivert intercept handle...");
