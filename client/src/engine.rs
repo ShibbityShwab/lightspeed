@@ -15,6 +15,7 @@ use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
 use crate::games::TransportProto;
+use crate::interceptor::InterceptorConfig;
 use crate::modes::capture_mode::CaptureStatSlot;
 use crate::modes::redirect_windivert::WinDivertStatSlot;
 use crate::redirect::{RedirectStats, UdpRedirect};
@@ -1037,6 +1038,11 @@ impl LightSpeedEngine {
 
         self.spawn_registration(proxy_addr);
         self.note_telemetry_proxy(proxy_addr);
+        // The start line's label is computed BEFORE the config is moved into
+        // `start()`: it names whatever is actually intercepted, which depends on
+        // the target set on that config.
+        let target_label = Self::interceptor_target_label(&config, &game_name);
+
         // `start()` must run inside a Tokio runtime context: the WinDivert
         // backend calls `tokio::spawn`/`spawn_blocking`/`Handle::current()`,
         // which panic with "there is no reactor running" from a non-Tokio
@@ -1075,13 +1081,27 @@ impl LightSpeedEngine {
 
         tracing::info!(
             "🚀 Interceptor started for {} via {} (proxy {})",
-            game_name,
+            target_label,
             platform,
             proxy_addr,
         );
 
         self.interceptor_handle = Some(handle);
         Ok(())
+    }
+
+    /// What the start line names: the process a target set, else the game key.
+    ///
+    /// A process target is not the game key. The caller passes a fallback key only
+    /// so the config has one, and printing that key told the user "Interceptor
+    /// started for Fortnite" while the interceptor was relaying `chrome.exe`. What
+    /// the line must name is whatever is actually being intercepted, so a set target
+    /// wins and the key is the fallback for the built-in ports path.
+    fn interceptor_target_label(config: &InterceptorConfig, game_name: &str) -> String {
+        match config.process_target.as_ref() {
+            Some(target) if target.is_set() => format!("process {}", target.describe()),
+            _ => game_name.to_string(),
+        }
     }
 
     /// Stop the OOP interceptor (if running), waiting a bounded time for the
@@ -1435,6 +1455,58 @@ mod tests {
         assert!(!status.control_registered);
         assert_eq!(status.session_token, None);
         assert!(status.registration_error.is_some());
+    }
+
+    #[test]
+    fn the_start_line_names_the_target_process_not_the_fallback_key() {
+        // Field-verification regression: the interceptor logged "started for
+        // Fortnite" while relaying chrome.exe, because it printed the fallback
+        // game key instead of the picked process. The label must name what is
+        // actually intercepted.
+        let mut config = InterceptorConfig {
+            game_name: "fortnite".into(),
+            dynamic_server: false,
+            transport: TransportProto::Udp,
+            process_names: vec!["chrome.exe".to_string()],
+            process_target: Some(ProcessTarget::by_name("chrome.exe")),
+            port_range: (0, 0),
+            initial_routes: Vec::new(),
+            proxy_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
+            fec_enabled: false,
+            fec_k: 0,
+            adaptive_fec: Default::default(),
+            bypass: Default::default(),
+        };
+
+        assert_eq!(
+            LightSpeedEngine::interceptor_target_label(&config, "fortnite"),
+            "process chrome.exe"
+        );
+
+        // With a resolved PID the description carries it, so an operator can
+        // tell which instance of a multi-process image is being intercepted.
+        config.process_target = Some(ProcessTarget {
+            name: Some("chrome.exe".into()),
+            pid: Some(9348),
+        });
+        assert_eq!(
+            LightSpeedEngine::interceptor_target_label(&config, "fortnite"),
+            "process chrome.exe (PID 9348)"
+        );
+
+        // No target: the built-in ports path keeps naming its game key.
+        config.process_target = None;
+        assert_eq!(
+            LightSpeedEngine::interceptor_target_label(&config, "fortnite"),
+            "fortnite"
+        );
+
+        // An empty target is not a target, so the key still names the run.
+        config.process_target = Some(ProcessTarget::default());
+        assert_eq!(
+            LightSpeedEngine::interceptor_target_label(&config, "fortnite"),
+            "fortnite"
+        );
     }
 
     #[test]
