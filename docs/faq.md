@@ -27,6 +27,15 @@ Kernel-level packet interception requires elevated privileges - the same reason 
 
 ---
 
+### Can I add a game LightSpeed does not support?
+
+Yes, without waiting for a release. Custom games live in `profiles.toml` next to `config.toml`
+(Windows: `%APPDATA%\light-speed\profiles.toml`), and the GUI writes them for you through
+**Game → New custom game…**. Give the entry a name, the game's process name if you want
+auto-detection, and its UDP port range; after that both `--game <key>` and the GUI know it.
+Built-in games always take precedence when names collide, and `tcp_ports` is rejected because
+interception is UDP-only today. The exact file format is in the user guide.
+
 ## How It Works
 
 ### How does LightSpeed actually reduce ping?

@@ -15,7 +15,9 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | Flag | Description |
 |------|-------------|
 | `-c, --config <PATH>` | Path to config file (default: `lightspeed.toml`) |
-| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot`, `deadbydaylight`, `bodycam`, `csgo`, `roblox`, `zomboid`, `wardogs`, `minecraft`, `hunt` (run `--list-games` for the full list) |
+| `--profiles <PATH>` | Path to `profiles.toml` (your custom games and saved servers). Defaults to the per-user config dir: `%APPDATA%\light-speed\profiles.toml` on Windows, `~/Library/Application Support/light-speed/profiles.toml` on macOS, `$XDG_CONFIG_HOME/light-speed/profiles.toml` on Linux |
+| `--no-user-profiles` | Ignore `profiles.toml` for this run - built-in games only |
+| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot`, `deadbydaylight`, `bodycam`, `csgo`, `roblox`, `zomboid`, `wardogs`, `minecraft`, `minecraft-java`, `hunt`, `rainbowsix`, or a `key` from your `profiles.toml` (run `--list-games` for the full list) |
 | `-p, --proxy <ADDR>` | Proxy server address (`host:port`). Auto-selects from config if omitted |
 | `-v, --verbose` | Enable verbose logging |
 
@@ -100,6 +102,37 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | `--no-telemetry` | Disable telemetry (hard override, always wins) |
 
 Telemetry is **on by default** since v1.6.5. It sends anonymous aggregate metrics (p50/p95/p99 RTT, jitter, FEC counters, and the direct/relayed/saved latency numbers) to your own relay every 15 minutes. No IP address, identifier, or packet content is sent, and cells with fewer than 3 reports are suppressed. Disable it with `--no-telemetry` or `telemetry = false` under `[general]` in `lightspeed.toml`. See [Privacy](privacy.md).
+
+## Custom games
+
+Games LightSpeed does not ship are defined in a per-user `profiles.toml`, next to `config.toml`
+(`%APPDATA%\light-speed\profiles.toml` on Windows, `~/Library/Application Support/light-speed/profiles.toml`
+on macOS, `$XDG_CONFIG_HOME/light-speed/profiles.toml` on Linux - usually `~/.config/light-speed/`).
+
+```toml
+version = 1
+
+[[games]]
+name = "My Game"                 # required
+key = "my-game"                  # optional; derived from the name when omitted
+process_names = ["MyGame.exe"]   # optional; enables auto-detect and process targeting
+udp_ports = "27015-27050"        # optional; "lo-hi" or a single port
+dynamic_server = false           # optional; true for games that rotate servers
+notes = "..."                    # optional, shown in the UI
+
+[[servers]]                      # saved Manual / Custom presets
+name = "My community server"
+address = "203.0.113.7:27015"
+udp_ports = "27015-27050"        # optional override
+```
+
+- Resolution order: a built-in game first, then your profile by exact `key`.
+- A `key`, alias or `process_names` entry that a built-in already owns is a save-time error and
+  a load-time warning; built-in games always win.
+- `tcp_ports` is rejected at load and save: interception is UDP-only today, and a field that no
+  engine reads is worse than a clear error.
+- `--profiles <path>` reads a different file; `--no-user-profiles` ignores yours for one run.
+- `--list-games` prints the built-in games, then a `Your profiles` section when any exist.
 
 ## Examples
 

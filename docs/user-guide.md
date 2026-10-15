@@ -119,6 +119,31 @@ signed, so the first launch needs right-click → Open (or
 
 ---
 
+## Add your own game
+
+If your game is not in the list you do not have to wait for a release: define it yourself.
+Custom games and saved servers live in `profiles.toml`, next to `config.toml`:
+
+- **Windows:** `%APPDATA%\light-speed\profiles.toml`
+- **macOS:** `~/Library/Application Support/light-speed/profiles.toml`
+- **Linux:** `$XDG_CONFIG_HOME/light-speed/profiles.toml` (usually `~/.config/light-speed/`)
+
+A `[[games]]` entry takes `name` (required), an optional `key` (slugged from the name when you
+omit it), optional `process_names` (this is what makes auto-detect work), an optional
+`udp_ports` range such as `27015-27050`, an optional `dynamic_server` flag for games that rotate
+through new servers, and optional `notes`. Copy-paste the full sample from the
+[CLI reference](CLI-REFERENCE.md).
+
+In the app, the **Game** dropdown gains **My games** and **New custom game…**, which writes the
+same file. From the CLI, `lightspeed --game my-game` works as soon as the file exists,
+`--list-games` shows your entries under `Your profiles`, `--profiles <path>` points at a
+reproducible file, and `--no-user-profiles` ignores yours for one run.
+
+Rules worth knowing: an entry whose `key`, alias or `process_names` a built-in game already owns
+is refused on save and warned about on load, because built-in games always win. `tcp_ports` is
+rejected - interception is UDP-only today. Saved server presets for the Manual / Custom mode go
+in a `[[servers]]` entry with a `name` and an `address`.
+
 ## Choosing the Right Relay
 
 | You're in | Game server in | Best relay region |

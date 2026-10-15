@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Custom game profiles (`profiles.toml`).** Define your own games and saved servers in a
+  per-user file next to `config.toml`: `[[games]]` entries carry a name, an optional `key`,
+  process names, a UDP port range, a rotating-server flag and notes; `[[servers]]` entries keep
+  named presets for the Manual / Custom mode. They resolve wherever a built-in game does - the
+  GUI Game dropdown gains **My games** and **New custom game…**, and the CLI gains
+  `--profiles <path>` and `--no-user-profiles` with `--list-games` printing a `Your profiles`
+  section. Built-in games always win: an entry whose `key`, alias or `process_names` a built-in
+  already owns is a save-time error and a load-time warning. `tcp_ports` is rejected at load and
+  save because interception is UDP-only today. The built-in registry, the protocol wire ids,
+  `docs/supported-games.md` and the website counts do not move.
+- **The Manual / Custom port range now takes effect.** The Custom Port Range field used to be
+  persisted and then discarded at the call site; it now overrides the profile's scan range for
+  interception (manual range first, then the profile's `udp_ports`, then the built-in default).
 
 ## [1.7.0] - 2026-10-04
 

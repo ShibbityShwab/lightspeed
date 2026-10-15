@@ -109,7 +109,7 @@ Logs are printed to stdout — if you're on Windows, run `lightspeed.exe > light
 ```
 Thanks! We track game profile priority by community demand — added to the backlog.
 
-If you'd like to help, the game profile format is documented in [docs/protocol.md](../docs/protocol.md). PRs welcome!
+If you'd like to help, the game profile format for the built-in registry is documented in [docs/protocol.md](../docs/protocol.md). PRs welcome - though for a game you only need for yourself, `profiles.toml` does the job with no PR at all: see [Custom game profiles](../design/custom-games-and-process-targeting.md).
 ```
 
 ### Node region request — redirect to self-host

@@ -1,9 +1,61 @@
-# Current Phase: WF-054 Internationalization - complete and live; Rainbow Six Siege profile shipped
+# Current Phase: WF-055 Custom games + process-scoped capture - plan reworked by adversarial review, phase 1 executed, five owner gates pending
 
-**Workflow:** WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Workflow:** WF-055; WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
 **Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
-**Status:** Waves 1-4 deployed and repaired; GUI glyph coverage and every user-visible string fixed; docs warned and command-checked; game profile 22 shipped from the community backlog. Wave 2 (CLI) excluded by design.
+**Status:** WF-054 complete and live; WF-055's plan was reworked by adversarial review and phase 1 (profiles, saved servers, `resolve()`, the widened `process_names()` trait method, resolved `InterceptorConfig` flags, wiring the inert custom port range into the target) is executed. Plan: `docs/design/custom-games-and-process-targeting.md` (P1 answers the discussion's first two asks; P3 process-scoped capture on Windows; Linux nftables set with cgroup v2 deferred; macOS best-effort under OQ4). **Five owner gates are pending**, listed in section 8 and in the decisions entry for 2026-10-07. Changes are uncommitted pending owner review.
 **Last updated:** 2026-10-07
+
+---
+
+## 2026-10-07 (discussion #146) - custom games and process-scoped capture: research done, plan written
+
+**Mandate:** discussion #146 (iTerryTie) asks for three things: the Manual server/port fields
+persisted (shipped earlier today as `c46c6b7`), named custom games with pre-filled details, and
+intercepting all traffic of a chosen `.exe`. The owner's in-thread reply promised all three and
+flagged that process-based port detection did not work when the project started. This round was
+research + plan only; no application code changed.
+
+**The plan:** `docs/design/custom-games-and-process-targeting.md` (proposed, awaiting owner).
+Design A puts user games and saved servers in a per-user `profiles.toml` that resolves ahead of
+`GAME_REGISTRY` and implements `GameConfig` directly, so the six registration sites, the wire-id
+table and every count guard stay untouched (custom games report `UNKNOWN = 0`). Design B adds
+`CaptureTarget::{Ports,Process}` behind `TrafficInterceptor`, with a flow-attribution service
+and a multi-flow engine generalizing `order.rs`/`rotation.rs`. Platform matrix: Windows full
+support via the WinDivert FLOW layer (`Flow.ProcessId` is exposed by the pinned `windivert`
+crate, verified against the 2.2 docs), Linux full support via cgroup v2 + nftables
+`socket cgroupv2` (kernel >= 5.13) with a flow-set fallback, macOS best-effort via polled pf
+`rdr` rules because pf cannot match a PID; a Network Extension is deferred (paid Apple account
+vs `[COST_STUB]`).
+
+**What the adversarial review changed.** A second pass over the same plan rejected five of its calls, each
+with the reason recorded in `wat/state/decisions.md` (entry of 2026-10-07, "plan reworked by adversarial
+review"): the interning-by-`Box::leak` recommendation is out because the leak compounds on every editor save
+under `reload()`; a blanket trait default that calls `process_names()` is out as circular for a `String`-owning
+profile; `InterceptorConfig` carries resolved flags (`dynamic_server`, `transport`, `process_names`) instead of
+display-name lookups, with a test named for a `dynamic_server = true` profile that must not seed from
+`initial_routes.first()`; and the process picker's scope became owner gate OQ5, defaulting to a minimal
+Windows scanner extension with nothing polled on the egui thread. The resolution API is now stated as one path:
+`resolve()` is the only public resolver (`detect_game` first, then a user key, then the extended Unknown game
+error), and `detect_game` is private.
+
+**Corrections found while researching:**
+- The GUI custom port range is persisted and then discarded: `start_boost` parses it into
+  `let _ =` (`client-gui/src/app.rs:651`) and `engine.start_interceptor` takes no range. P1
+  wires it into the target so the shipped field finally actuates.
+- WinDivert's network layer cannot match `processId`; the network-layer PID comment is right
+  and the "PID-level" phrasing in surrounding docs describes intent, not behaviour
+  (`interceptor/windows.rs:129-146`).
+- The process scanner is shell-based and misses launcher/anti-cheat child processes; that is
+  the concrete mechanism behind "port detection by process was not working well".
+- `engine.start_windivert_for_game` has no live caller; `capture/{windows,macos,linux}.rs` are
+  placeholders and every platform captures through `pcap_backend.rs`.
+
+**Research base:** cited briefs on socket-to-PID attribution and on prior art (Mullvad,
+sing-box, WinDivert-based tools), a read-only repo map at `c46c6b7`, and first-hand
+verification against the pinned dependency and vendor docs; sources in the plan's section 9.
+
+**Not verified:** the WinDivert FLOW-layer path is designed, not exercised (needs admin and a
+real game); macOS parity is explicitly best-effort.
 
 ---
 

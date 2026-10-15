@@ -1315,3 +1315,112 @@ and relay-load cost above; removing the capability outright was rejected because
 are already implemented and are useful to the operators who explicitly ask for them.
 **Verification:** grep of this entry (date plus rationale) in `wat/state/decisions.md`.
 
+---
+
+### 2026-10-07: Custom game profiles and process-scoped interception - plan and phasing
+
+**Agent:** Architect + RustDev (research round)
+**Status:** Proposed (awaiting owner)
+**Rationale:** discussion #146 asks for saved custom games and process-scoped interception, and
+the owner replied he would probably do all of it and would revisit process targeting
+cross-platform. The plan is `docs/design/custom-games-and-process-targeting.md`. User profiles
+live in a per-user `profiles.toml` and resolve ahead of `GAME_REGISTRY` without touching the six
+registration sites or any count guard; custom games report wire id `UNKNOWN (0)`, so no protocol
+change. Process targeting adds `CaptureTarget::{Ports,Process}` behind `TrafficInterceptor`:
+Windows via the WinDivert FLOW layer (`Flow.ProcessId`, already in the pinned dependency), Linux
+via cgroup v2 + nftables `socket cgroupv2` with a flow-set fallback, macOS best-effort via
+polled pf rules since pf cannot match a PID. TCP and IPv6 are out of v1 scope.
+**Impact:** no code changed. P1 (profiles + saved servers + wiring the currently inert custom
+port range) answers the discussion's first two asks; P3 answers the third on Windows.
+**Alternatives Considered:** editing `lightspeed.toml` instead of a per-user file (rejected:
+that file is a per-invocation config, often a repo checkout); a WFP callout driver for Windows
+app-id filtering (rejected: EV signing and driver maintenance against the $0 mandate and the
+existing WinDivert dependency); a macOS Network Extension (rejected for now: paid Apple
+Developer Program conflicts with `[COST_STUB]`); eBPF attribution on Linux (deferred: root and
+complexity beyond the cgroup path).
+**Verification:** `docs/design/custom-games-and-process-targeting.md` exists as a new file in
+`git status`; section 2 claims re-read from the tree at `c46c6b7` this round; citations in
+section 9. No behavior changed, so no tests were run.
+
+---
+
+### 2026-10-07: discussion #146 phase-1 owner gates answered
+
+**Agent:** lead (mass-ulw execution), owner decisions
+**Status:** Accepted (owner answers), phase 2 held on one of them
+**Rationale:** phase 1 (design-doc amendments, the user-profile lane, and the three Windows benchmarks) was executed under run `cgpt-phase1` / `dag_673d337d-f816-41f9-8d0c-095931686c63` and verified by the lead's own gate run after a corrective pass (`cgpt-phase1-fix1` / `dag_835ccbf7-8a93-45e9-a89d-cbaa8d096187`). The owner then answered four gates:
+**OQ1 - destination cap:** cap 8, warning at 6. B-1 stays UNMEASURED (packet capture needs elevation), so the cap is an accepted default, not a measured one; a cross-crate guard test pins it below the relay's 10-destinations-per-10 s ban.
+**OQ2 - Windows capture policy:** HOLD phase 2 until an elevated B-2 measurement exists. The harness is built and `run-as-admin.cmd` + `python render_table.py --archive admin` produce the table; todos 19, 21, 22 (and, under this stricter reading, 18) wait.
+**OQ3 - attribution source:** both the WinDivert SOCKET and FLOW sources, decided at implementation from measurement, behind one interface.
+**OQ5 - picker scope:** a full cross-platform process list now (Windows/macOS/Linux) supersedes the minimal Windows-only extension for the LIST surface; process-mode interception stays Windows-first and Linux/macOS interception stays gated on the F5 field check.
+**Impact:** no code changed by this entry. Phase 1 remains uncommitted in the worktree (`HEAD` still `c46c6b7`). Verified phase-1 gate state: fmt/clippy(core, gui, workspace)/cli_profiles/gui-suite/protocol-suite/windows-feature-check all exit 0; `cargo test -p lightspeed-client` is 460 passed / 2 failed, and both failures (`telemetry::tests::{control_plane_unavailable_falls_back_to_http, failed_post_retains_samples}`) are pre-existing and environmental (PID 18464 listens on 127.0.0.1:8080 while the tests assert nothing does).
+**Verification:** `.omo/evidence/phase1-verification-by-lead.md` plus the per-todo evidence files and `target/hyperplan/gates-fix1.out`.
+
+---
+
+### 2026-10-07: WF-055 plan reworked by adversarial review - one resolution API, no leaks, five owner gates
+
+**Agent:** Architect + RustDev (review round, following the research round above)
+**Status:** Accepted for the plan (built-ins unchanged); owner gates pending
+**Rationale:** the same plan was put through a second, adversarial pass, and five of its calls did not survive.
+Each rejection is recorded with the reason, so none of them gets re-proposed as an improvement.
+
+- **`resolve()` is the only public resolution API.** Precedence is fixed: built-in `detect_game` first, then a
+  user profile by exact key, then the existing Unknown game error shape extended with a `Your profiles:` line
+  listing the user keys. `detect_game` becomes private (`pub(crate)`). Built-in first means a shipped key can
+  never change meaning under a user's feet, and it keeps the registry guards and the docs/website counts
+  meaning "built-in games" exactly as before.
+- **The trait method becomes `fn process_names(&self) -> Vec<&str>`.** A profile that owns its `String`s now
+  borrows from `&self`, which is what makes an owning profile possible at all. The 23 built-in impls are
+  mechanical edits.
+- **`Box::leak` is rejected.** The first draft recommended interning each user profile's strings at load,
+  citing `process_name_table`. That precedent leaks once, for `'static` built-in names. A user profile leaks on
+  every load, and the GUI calls `reload()` after each editor save, so the leak **compounds on every save** for
+  the life of the session. The 64-profile cap bounds one file, not a session of edits, so it bounds nothing
+  here. A GUI the user is meant to edit freely cannot pay that.
+- **A blanket default that calls `process_names()` is declared invalid.** It was the tempting way to skip the 23
+  impl edits, but it's circular: the method it would delegate to is the one whose signature has to change, so
+  the default either keeps `&[&str]` (a `String`-owning profile still can't implement it) or widens the trait
+  anyway. The mechanical edits are the honest path.
+- **`InterceptorConfig` carries resolved flags.** `dynamic_server`, `transport` and `process_names` arrive
+  resolved by `resolve()`, replacing the display-name lookups (`dynamic_server_for_name`,
+  `process_names_for_name`) that could quietly miss for a custom profile. The test that names the case: **a
+  `dynamic_server = true` custom profile must not seed from `initial_routes.first()`**, or a rotating title
+  tunnels at a lobby address the match abandoned.
+- **Picker scope is pending owner gate OQ5.** The default is a minimal Windows scanner extension: running
+  processes, image path, start-time identity, with the snapshot published off the UI thread and **nothing
+  polled on the egui thread**. The shell-based scanner already runs synchronously on the UI thread today,
+  which is part of why it misbehaves; a pick list that pauses the UI on `tasklist` is not shippable. Native
+  Win32 enumeration, launcher/child trees and the non-Windows variants stay behind OQ5.
+- **macOS parity claim withdrawn.** The plan no longer implies macOS process mode reaches parity. pf can't
+  match a PID, and attributing another process's sockets needs Apple's `com.apple.system-task-ports`
+  entitlement, which a paid account gates and `[COST_STUB]` rules out. Section 5.4 now ships the honest bound
+  only if the owner accepts it under OQ4.
+- **Built-ins stay untouched.** Data-driven built-ins (loading the shipped 23 through the same profile store)
+  were rejected again in 5.3: they would put shipped games on the same footing as user entries, empty out the
+  count guards and hand a user-editable file the power to regress a built-in port or process name.
+
+**The five owner gates.** Section 8 is where they're answered; none of them is resolved by this entry.
+
+1. Storage: per-user `profiles.toml` versus a `lightspeed.toml` section (recommended: per-user file).
+2. Scope: any user-marked process versus games-only (recommended: any, behind the public-destination rule, the
+   denylist and the flow cap).
+3. macOS scope (OQ4): accept the documented best-effort ceiling and ship, or hold macOS at port-set parity
+   (recommended: accept the bound, since the alternative is waiting on an entitlement we have no path to).
+4. Discussion #146: post a progress reply pointing at P1 once it lands, or stay silent until then.
+5. Process picker scope (OQ5): the minimal Windows scanner extension versus the larger cross-platform scanner
+   (recommended: minimal, per above).
+
+**Impact:** phase 1 of the plan (profiles, saved servers, `resolve()`, the widened trait, resolved flags, CLI
+and GUI surfaces, wiring the currently inert custom port range into the target) was executed against these
+corrections. Built-in behaviour is unchanged: same registry, same wire ids, same count guards, same filters.
+No protocol change, so no wire-format risk and nothing for a relay to update.
+**Alternatives Considered:** the rejected list above - `Box::leak` interning, a blanket `process_names()`
+ default, display-name lookups in `InterceptorConfig`, `initial_routes.first()` seeding for rotating titles,
+ data-driven built-ins, a macOS Network Extension, and picking the Windows attribution source (FLOW vs SOCKET)
+ before the B-3 numbers land.
+**Verification:** `rg -n "Box::leak" docs/design/custom-games-and-process-targeting.md` reports it only inside
+ section 4.4 as rejected, and the precedence text for `resolve()` is present in 4.3. No application behaviour
+ was exercised this round, so no tests were run; the plan's own gates (section 6.2 field gate, the B-1 and B-3
+ benchmarks) still stand between this document and a ship claim.
+

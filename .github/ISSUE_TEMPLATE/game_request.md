@@ -6,6 +6,12 @@ labels: game-request
 assignees: ''
 ---
 
+**Before you file this:** you do not have to wait for a release. Add the game yourself in
+`profiles.toml` - **Game → New custom game…** in the app, or see the
+[user guide](https://github.com/ShibbityShwab/lightspeed/blob/master/docs/user-guide.md) for the file
+format. File this request when you would rather have it built in; the details below are what a
+built-in profile needs.
+
 **Game name:**
 
 **Platform(s):** [e.g. Windows, Linux, macOS]
