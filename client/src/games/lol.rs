@@ -43,12 +43,13 @@ impl GameConfig for LolConfig {
         "League of Legends"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // Main game client process, launched by the Riot client launcher.
-        &[
+        [
             "League of Legends.exe",
             "LeagueOfLegends.exe", // Alternative capitalisation seen on some installs
         ]
+        .to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

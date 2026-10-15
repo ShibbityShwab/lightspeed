@@ -12,18 +12,19 @@ impl GameConfig for ZomboidConfig {
         "Project Zomboid"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // Windows: ProjectZomboid64.exe (32-bit build: ProjectZomboid32.exe).
         // macOS/Linux (Steam Java/native wrapper): the exact `ps comm` name is
         // TBD, may surface as `ProjectZomboid`, `ProjectZomboid64`, or `java`.
         // "java" is intentionally omitted to avoid false positives; verify the
         // real process name at runtime on a Mac.
-        &[
+        [
             "ProjectZomboid64.exe",
             "ProjectZomboid32.exe",
             "ProjectZomboid64",
             "ProjectZomboid",
         ]
+        .to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

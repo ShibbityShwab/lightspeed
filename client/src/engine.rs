@@ -498,8 +498,8 @@ impl LightSpeedEngine {
     ) -> Result<(), String> {
         self.stop_capture();
 
-        // Resolve game config from key string.
-        let game_box = crate::games::detect_game(game_key).map_err(|e| e.to_string())?;
+        // Resolve game config from key string (built-ins first, then user profiles).
+        let game_box = crate::games::resolve(game_key).map_err(|e| e.to_string())?;
 
         // Build the interface display string for the status panel.
         let iface_desc = interface_opt
@@ -896,62 +896,142 @@ impl LightSpeedEngine {
 
     // ── OOP TrafficInterceptor (multiplatform MITM) ───────────────────────
 
-    /// Start the OOP `TrafficInterceptor` for a game identified by `game_key`.
+    /// Start the OOP `TrafficInterceptor` for a game identified by `game_key`,
+    /// with no process target - the built-in ports path.
     ///
-    /// This is the **recommended** entry point for all new integrations:
-    ///
-    /// 1. Resolves the game profile.
-    /// 2. Runs the `ProcessScanner` to discover the game PID + live server routes.
-    /// 3. Creates the best available interceptor for the current OS.
-    /// 4. Starts kernel-level MITM interception automatically.
-    ///
-    /// On Windows this uses WinDivert with a per-process PID filter - zero false
-    /// positives even on shared game-server ports.
-    /// On Linux/macOS it uses nftables/pfctl with a server-specific redirect rule.
-    ///
-    /// Returns `Err(msg)` synchronously if the game key is unknown, the
-    /// interceptor is unavailable, or the start call fails.
+    /// Thin wrapper over
+    /// [`start_interceptor_with_target`](Self::start_interceptor_with_target)
+    /// passing `None`, so every existing caller keeps the ports-path behaviour.
     pub fn start_interceptor(
         &mut self,
         game_key: &str,
         proxy_addr: SocketAddrV4,
         fec: bool,
         fec_k: u8,
+        port_range_override: Option<(u16, u16)>,
     ) -> Result<(), String> {
-        self.stop_interceptor();
-
-        let game_box = crate::games::detect_game(game_key).map_err(|e| e.to_string())?;
-
-        // Build config: runs ProcessScanner synchronously on the calling thread.
-        // The GUI follows the client default: FEC on means the adaptive policy,
-        // and an explicit opt-out keeps the fixed codec, matching the CLI paths.
-        let config = crate::interceptor::build_config_for_game(
-            game_box.as_ref(),
+        self.start_interceptor_with_target(
+            game_key,
             proxy_addr,
             fec,
             fec_k,
-            crate::tunnel::adaptive::AdaptiveConfig {
-                enabled: fec,
-                ..Default::default()
-            },
+            port_range_override,
+            None,
         )
-        .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?;
+    }
+
+    /// Start the OOP `TrafficInterceptor`, optionally scoped to a picked process.
+    ///
+    /// This is the **recommended** entry point for all new integrations:
+    ///
+    /// 1. Resolves the game profile.
+    /// 2. Creates the best available interceptor for the current OS.
+    /// 3. Starts kernel-level MITM interception automatically.
+    ///
+    /// **Precedence, authoritative.** `process_target` wins over
+    /// `port_range_override`: when a process is picked the config is built for
+    /// that process, and no port range decides the target. `None` is the
+    /// built-in ports path, where `port_range_override` (the Manual / Custom
+    /// range the GUI parsed, when present) beats the profile's own range, and
+    /// `None` keeps the profile default.
+    ///
+    /// A process target is bound against the live process table **here**, at
+    /// start time: the image name is the identity, so the PID it binds to is
+    /// the one running now and a relaunch under a new PID still matches. When
+    /// the named process is not running the call returns `Err` naming it - it
+    /// never silently degrades to a port-range filter.
+    ///
+    /// The platform then applies the target as its capabilities allow: Windows
+    /// drives the WinDivert network layer, whose filter cannot match
+    /// `processId` (that needs the Flow/Socket layer), so it stays
+    /// address/port based and the target narrows it through the scanner's
+    /// routes.
+    ///
+    /// Returns `Err(msg)` synchronously if the game key is unknown, the picked
+    /// process is not running, the interceptor is unavailable, or the start
+    /// call fails.
+    pub fn start_interceptor_with_target(
+        &mut self,
+        game_key: &str,
+        proxy_addr: SocketAddrV4,
+        fec: bool,
+        fec_k: u8,
+        port_range_override: Option<(u16, u16)>,
+        process_target: Option<crate::interceptor::ProcessTarget>,
+    ) -> Result<(), String> {
+        self.stop_interceptor();
+
+        let game_box = crate::games::resolve(game_key).map_err(|e| e.to_string())?;
+
+        // The GUI follows the client default: FEC on means the adaptive policy,
+        // and an explicit opt-out keeps the fixed codec, matching the CLI paths.
+        let adaptive_fec = crate::tunnel::adaptive::AdaptiveConfig {
+            enabled: fec,
+            ..Default::default()
+        };
+
+        // Precedence, authoritative: a picked process beats the ports path. It
+        // is bound against the live process table at start time, so the image
+        // name (not a stale PID) is what binds, and a target whose process is
+        // not running fails honestly instead of degrading to a port range.
+        let config = match process_target {
+            Some(target) => {
+                // Runs the ProcessScanner synchronously on the calling thread.
+                let live = target
+                    .name()
+                    .and_then(|name| crate::interceptor::find_game_process(&[name]));
+                let resolved =
+                    match crate::interceptor::resolve_process_target(&target, live.as_ref()) {
+                        Some(resolved) => resolved,
+                        None => {
+                            return Err(format!(
+                                "process target '{}' is not running: start it (or pick a running \
+                                 process) and try again",
+                                target.describe()
+                            ))
+                        }
+                    };
+                let live_routes = live.map(|p| p.routes).unwrap_or_default();
+                crate::interceptor::build_config_for_process_target(
+                    game_box.as_ref(),
+                    resolved,
+                    live_routes,
+                    proxy_addr,
+                    fec,
+                    fec_k,
+                    adaptive_fec,
+                )
+            }
+            // Build config: runs ProcessScanner synchronously on the calling thread.
+            None => crate::interceptor::build_config_for_game_with_port_range(
+                game_box.as_ref(),
+                proxy_addr,
+                fec,
+                fec_k,
+                adaptive_fec,
+                port_range_override,
+            )
+            .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?,
+        };
 
         let interceptor = crate::interceptor::create_interceptor();
 
         interceptor.check_availability()?;
 
         let game_name = game_box.name().to_string();
-        let initial_server = config
-            .initial_routes
-            .first()
-            .map(|r| r.remote.to_string())
-            .unwrap_or_else(|| {
-                format!(
-                    "Auto-detecting ({}-{})…",
-                    config.port_range.0, config.port_range.1
-                )
-            });
+        let initial_server = match config.process_target.as_ref() {
+            Some(target) => format!("Process {}", target.describe()),
+            None => config
+                .initial_routes
+                .first()
+                .map(|r| r.remote.to_string())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Auto-detecting ({}-{})…",
+                        config.port_range.0, config.port_range.1
+                    )
+                }),
+        };
         let platform = interceptor.platform_name();
         let bypass_mode = config.bypass.mode.as_str();
 
@@ -1252,7 +1332,9 @@ mod tests {
         apply_registration_result, wait_for_redirect_ack, EngineStatus, LightSpeedEngine,
         DEFAULT_CONTROL_PORT,
     };
-    use crate::interceptor::{mock::MockInterceptor, InterceptorConfig, TrafficInterceptor};
+    use crate::interceptor::{
+        mock::MockInterceptor, InterceptorConfig, ProcessTarget, TrafficInterceptor, TransportProto,
+    };
 
     fn test_engine() -> LightSpeedEngine {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -1361,7 +1443,10 @@ mod tests {
         let handle = MockInterceptor::new()
             .start(InterceptorConfig {
                 game_name: "TestGame".into(),
-                pid: Some(12345),
+                dynamic_server: false,
+                transport: TransportProto::Udp,
+                process_names: vec!["TestGame.exe".to_string()],
+                process_target: Some(ProcessTarget::by_name("TestGame.exe")),
                 port_range: (27015, 27017),
                 initial_routes: Vec::new(),
                 proxy_addr: std::net::SocketAddrV4::new(
@@ -1388,6 +1473,33 @@ mod tests {
             engine.snapshot().bypass_evaluations,
             3,
             "the engine snapshot must surface the interceptor's steady-state count"
+        );
+    }
+
+    /// A picked process that is not running is reported, never silently
+    /// degraded to the port-range path.
+    #[test]
+    fn a_missing_process_target_is_reported_not_silently_ignored() {
+        let mut engine = test_engine();
+
+        let err = engine
+            .start_interceptor_with_target(
+                "rust",
+                "127.0.0.1:4434".parse().unwrap(),
+                false,
+                4,
+                None,
+                Some(ProcessTarget::by_name("lightspeed_no_such_process_xyz.exe")),
+            )
+            .expect_err("a named process that is not running must fail, not fall back to ports");
+
+        assert!(
+            err.contains("not running"),
+            "the error must name the missing process honestly, got: {err}"
+        );
+        assert!(
+            !engine.snapshot().interceptor_active,
+            "a failed start must not report an active interceptor"
         );
     }
 }

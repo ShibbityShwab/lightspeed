@@ -12,8 +12,8 @@ impl GameConfig for Dota2Config {
         "Dota 2"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["dota2.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["dota2.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

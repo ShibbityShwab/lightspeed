@@ -39,11 +39,11 @@ impl GameConfig for ApexConfig {
         "Apex Legends"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // Windows shipping binary.  The EA Desktop launcher also spawns
         // `EADesktop.exe` and `EABackgroundService.exe` but those are
         // launcher-only and do not handle game traffic.
-        &["r5apex.exe", "r5apex_dx12.exe"]
+        ["r5apex.exe", "r5apex_dx12.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

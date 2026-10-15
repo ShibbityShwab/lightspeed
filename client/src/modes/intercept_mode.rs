@@ -41,7 +41,7 @@ pub async fn run_intercept_mode(
     server_addr: Option<SocketAddrV4>,
 ) -> anyhow::Result<()> {
     // ── Resolve game profile ────────────────────────────────────────
-    let game = crate::games::detect_game(game_key)?;
+    let game = crate::games::resolve(game_key)?;
     let game_name = game.name().to_string();
     info!("🎮 Game: {} (ports: {:?})", game_name, game.ports());
 

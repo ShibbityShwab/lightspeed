@@ -15,8 +15,8 @@ impl GameConfig for CsgoConfig {
         "Counter-Strike: Global Offensive (Legacy)"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["csgo.exe", "csgo"]
+    fn process_names(&self) -> Vec<&str> {
+        ["csgo.exe", "csgo"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

@@ -25,8 +25,8 @@ impl GameConfig for DeadByDaylightConfig {
         "Dead by Daylight"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["DeadByDaylight-Win64-Shipping.exe", "DeadByDaylight.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["DeadByDaylight-Win64-Shipping.exe", "DeadByDaylight.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

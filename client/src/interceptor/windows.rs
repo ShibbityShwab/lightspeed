@@ -8,22 +8,74 @@
 //! ## Improvements over legacy `windivert_redirect.rs`
 //!
 //! - Implements the OOP [`TrafficInterceptor`] trait.
-//! - The network-layer WinDivert filter matches by port range (WinDivert only
-//!   supports `processId` at the Flow layer, not the Network layer), and always
-//!   excludes the proxy's own address so the client's tunnel traffic is never
-//!   intercepted.
-//! - Routes pre-seeded from [`ProcessScanner`] let the engine skip the
-//!   debounce accumulation window: interception starts with the first packet.
+//! - ONE static network-layer divert handle is opened at start and kept for the
+//!   life of the interception: no per-flow handle rebuilds, no swap on flow
+//!   change, no close/reopen on flow events. The filter text is built once by
+//!   [`build_capture_filter`] from the config's [`CapturePolicy`].
+//! - The network layer cannot match `processId` (only the Flow/Socket layers
+//!   can), so the filter never tries: process-targeted capture takes the whole
+//!   process's outbound UDP and attributes each packet in userspace.
+//! - Routes pre-seeded from `ProcessScanner` let the engine skip the debounce
+//!   accumulation window: interception starts with the first packet.
 //! - Stale-server timeout unchanged (5 s) - still auto-resets on map change.
+//!
+//! ## The data plane
+//!
+//! - **Process mode** ([`CapturePolicy::ProcessAll`], a picked process): every
+//!   captured packet's flow is looked up in the bounded
+//!   [`FlowMap`](super::flows::FlowMap) (`super::flows`, seeded from the
+//!   target's live routes). A flow attributed to the process is relayed - the
+//!   original is dropped and the payload is forwarded through the tunnel - and
+//!   every other packet (unattributed, over the tunnel cap, or excluded) is
+//!   re-injected immediately on the direct path. Nothing is silently dropped
+//!   and no unattributed flow is relayed.
+//! - **Port-scoped mode** ([`CapturePolicy::PortRange`], the built-in game
+//!   path): the same static handle and the same userspace single-server
+//!   `ServerTracker`, unchanged.
+//!
+//! The cap is enforced where the map is used: at most `MAX_TUNNELED_FLOWS`
+//! flows tunnel, a warning is raised from `WARN_TUNNELED_FLOWS`, and a flow
+//! over the cap goes direct and is counted UNATTRIBUTED (`super::flows`).
+//!
+//! ## Exclusions
+//!
+//! A packet to an excluded destination never enters the tunnel. The filter text
+//! excludes the relay's own address(es) and the [infra denylist
+//! ports][deny]; the userspace gate [`destination_is_excluded`] repeats those
+//! rules and adds the non-public-destination rule through the existing
+//! [`is_public_ipv4`](super::process_scanner::is_public_ipv4), which the filter
+//! language cannot express.
+//!
+//! [deny]: INFRA_DENYLIST_PORTS
+//!
+//! ## Reused from the proven engine, not re-invented
+//!
+//! The relay loop is the one proven in `capture/windivert_redirect.rs`:
+//! `parse_ipv4_udp` and `build_ipv4_udp` are imported from it verbatim, and the
+//! intercept -> drop-original -> wrap in a `TunnelHeader` -> send to the relay
+//! -> unwrap the reply -> inject a spoofed server packet shape mirrors that
+//! engine's UDP path. What this backend adds is the userspace attribution step
+//! and the exclusions.
 //!
 //! ## Requirements
 //! - Windows only.
 //! - `windivert-redirect` Cargo feature must be enabled.
 //! - `WinDivert64.sys` + `WinDivert.dll` must sit next to the exe.
-//! - Process must run as **Administrator**.
+//! - Process must run as **Administrator**, and process-targeted interception
+//!   needs a real process to point at: live behaviour is an F5 field check, and
+//!   the userspace logic below is what CI can cover.
 
 // Imports needed by both the full WinDivert impl and the stub:
 use super::traits::{InterceptorConfig, InterceptorHandle, TrafficInterceptor};
+
+// The capture policy, the exclusions and the per-packet routing decision are
+// plain userspace logic with no WinDivert dependency: they compile into this
+// module on every Windows build and are unit-tested without the driver.
+use super::flows::{DirectReason, FlowKey, FlowMap, FlowVerdict};
+use super::CapturePolicy;
+use crate::games::TransportProto;
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::time::Instant;
 
 // Imports only needed when WinDivert is actually compiled in:
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -33,15 +85,13 @@ use super::recovery::RecvBackoff;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::teardown::{recv_should_break, TeardownAck};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use super::traits::{InterceptorCounters, PlatformTeardown};
+use super::traits::{InterceptorCounters, PlatformTeardown, Route};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::windivert_handle::{is_fwp_in_use, OwnedHandle};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_udp};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use crate::tunnel::adaptive::InlineFecGate;
-#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use std::net::SocketAddrV4;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -72,6 +122,276 @@ impl WinDivertInterceptor {
 impl Default for WinDivertInterceptor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Capture policy, exclusions and per-packet routing (feature-independent)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The infrastructure services a relayed session must never send through the
+/// tunnel.
+///
+/// DNS, DHCP, mDNS, SSDP and NetBIOS are infrastructure chatter: relaying them
+/// through a game relay is wrong even for "all traffic of this process". The
+/// filter text excludes these destination ports and [`destination_is_excluded`]
+/// repeats the rule in userspace, so a packet to one of them goes direct and
+/// never enters the tunnel.
+///
+/// This is the client-side mirror of section 5.5 of
+/// `docs/design/custom-games-and-process-targeting.md`: the filter builder and
+/// the userspace gate both read this one list.
+pub const INFRA_DENYLIST_PORTS: [u16; 8] = [53, 67, 68, 5353, 1900, 137, 138, 139];
+
+/// Whether `dst` is excluded from the tunnel.
+///
+/// Three rules, every one of them "never relay this":
+/// 1. the destination port is in [`INFRA_DENYLIST_PORTS`];
+/// 2. the destination is one of the relay's own addresses - the client's own
+///    tunnel traffic must never be re-captured and relayed back into itself;
+/// 3. the destination is not a public IPv4 address
+///    ([`is_public_ipv4`](super::process_scanner::is_public_ipv4)), so a local
+///    or special-use destination is answered on the machine and has no business
+///    in a relay.
+///
+/// The filter text can express (1) and (2); (3) is a userspace rule because the
+/// WinDivert filter language has no notion of routability. This gate is what
+/// makes "a packet to an excluded destination never enters the tunnel" true for
+/// the non-public case as well.
+pub fn destination_is_excluded(dst: SocketAddrV4, relay_addrs: &[Ipv4Addr]) -> bool {
+    INFRA_DENYLIST_PORTS.contains(&dst.port())
+        || relay_addrs.contains(dst.ip())
+        || !super::process_scanner::is_public_ipv4(*dst.ip())
+}
+
+/// What the data plane should do with one captured outbound packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboundRoute {
+    /// Relay it: the original is dropped and the payload is forwarded through
+    /// the tunnel (the injected spoofed reply closes the loop).
+    Tunnel,
+    /// Re-inject the original packet unchanged on the direct path, because the
+    /// destination is excluded.
+    Excluded,
+    /// Re-inject the original unchanged: the flow is not attributed to the
+    /// selected process, or it is over the tunnel cap, which the map reports as
+    /// [`DirectReason::Unattributed`].
+    Reinject(DirectReason),
+}
+
+/// The userspace attribution decision for one captured packet.
+///
+/// Every captured packet passes through here, so this is the one place the
+/// process-targeted path decides relay-versus-direct. The exclusion gate runs
+/// first - an excluded destination never reaches the map, so it can never take
+/// a tunnel slot - then the packet's flow is looked up in `map`.
+///
+/// Fail-open is the map's invariant, restated at the call site: the only
+/// outcomes are [`OutboundRoute::Tunnel`], [`OutboundRoute::Excluded`] and a
+/// re-injection. There is no drop path.
+pub fn route_outbound(
+    map: &mut FlowMap,
+    src: SocketAddrV4,
+    dst: SocketAddrV4,
+    relay_addrs: &[Ipv4Addr],
+    now: Instant,
+    payload_len: usize,
+) -> OutboundRoute {
+    if destination_is_excluded(dst, relay_addrs) {
+        return OutboundRoute::Excluded;
+    }
+    match map.observe(
+        FlowKey::new(src, dst, TransportProto::Udp),
+        now,
+        payload_len,
+    ) {
+        FlowVerdict::Tunnel(_) => OutboundRoute::Tunnel,
+        FlowVerdict::Direct(reason) => OutboundRoute::Reinject(reason),
+    }
+}
+
+/// Build the one static network-layer filter this backend uses.
+///
+/// The handle is opened once from this string and never rebuilt, so the filter
+/// must be a superset of everything that may ever be tunneled: for
+/// [`CapturePolicy::ProcessAll`] that is every outbound UDP datagram, and for
+/// [`CapturePolicy::PortRange`] the configured inclusive range. `processId`
+/// appears nowhere, because the network layer cannot match it.
+///
+/// The exclusions are folded in here - every [`INFRA_DENYLIST_PORTS`] port and
+/// every relay address - so the kernel never even hands an excluded packet to
+/// the data plane. [`destination_is_excluded`] repeats the rules in userspace
+/// for the non-public case the filter language cannot express.
+pub fn build_capture_filter(policy: CapturePolicy, relay_addrs: &[Ipv4Addr]) -> String {
+    let mut filter = String::from("udp and outbound");
+    if let CapturePolicy::PortRange { lo, hi } = policy {
+        if lo == hi {
+            filter.push_str(&format!(" and udp.DstPort == {lo}"));
+        } else {
+            filter.push_str(&format!(" and udp.DstPort >= {lo} and udp.DstPort <= {hi}"));
+        }
+    }
+    for port in INFRA_DENYLIST_PORTS {
+        filter.push_str(&format!(" and udp.DstPort != {port}"));
+    }
+    for addr in relay_addrs {
+        filter.push_str(&format!(" and ip.DstAddr != {addr}"));
+    }
+    filter
+}
+
+/// The inbound mirror of [`build_capture_filter`], for the sniff-only
+/// shadow-direct handle: same capture scope and the same relay exclusions,
+/// mirrored to the reply direction.
+fn build_shadow_filter(policy: CapturePolicy, relay_addrs: &[Ipv4Addr]) -> String {
+    let mut filter = String::from("udp and inbound");
+    if let CapturePolicy::PortRange { lo, hi } = policy {
+        if lo == hi {
+            filter.push_str(&format!(" and udp.SrcPort == {lo}"));
+        } else {
+            filter.push_str(&format!(" and udp.SrcPort >= {lo} and udp.SrcPort <= {hi}"));
+        }
+    }
+    for addr in relay_addrs {
+        filter.push_str(&format!(" and ip.SrcAddr != {addr}"));
+    }
+    filter
+}
+
+/// Every address the client's own tunnel traffic can be addressed to: the
+/// configured relay plus whatever multipath destinations are active right now.
+///
+/// The process-wide filter would otherwise capture the client's own QUIC
+/// control and keepalive packets and relay them back into the tunnel, which is
+/// exactly the self-interception the relay-address exclusion exists to prevent.
+fn relay_addresses(config_proxy: SocketAddrV4) -> Vec<Ipv4Addr> {
+    let (dests, n) = crate::session::send_destinations(config_proxy);
+    let mut addrs = vec![*config_proxy.ip()];
+    for d in dests.iter().take(n) {
+        if !addrs.contains(d.ip()) {
+            addrs.push(*d.ip());
+        }
+    }
+    addrs
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Userspace attribution (gated: the port-scoped half needs the tracker)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The per-packet outbound action the intercept thread takes.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutboundDecision {
+    /// Relay: drop the original and forward the payload to the relay.
+    Tunnel(SocketAddrV4),
+    /// Re-inject the original packet unchanged on the direct path.
+    Reinject,
+    /// Port-scoped mode only: the locked server went stale; re-detect.
+    Redetect,
+}
+
+/// Process mode's attribution state: the bounded map plus the cap warning that
+/// was last surfaced, so the warning is emitted once per new tunneled count
+/// rather than once per packet.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+struct ProcessAttributor {
+    map: FlowMap,
+    warned_tunneled: usize,
+}
+
+/// The intercept thread's attribution state machine: one variant per capture
+/// policy.
+///
+/// Process mode attributes every captured packet in userspace through the
+/// bounded [`FlowMap`]; the built-in path keeps its single-server tracker.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+enum Attributor {
+    /// A picked process: userspace attribution, capped and fail-open.
+    Process(ProcessAttributor),
+    /// The built-in ports path, unchanged.
+    Ports(ServerTracker),
+}
+
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+impl Attributor {
+    /// One captured packet in, one route out.
+    ///
+    /// Fail-open at the call site: every arm either relays or re-injects. The
+    /// process arm's exclusion, attribution and cap handling lives in
+    /// [`route_outbound`], which is where the map is used.
+    fn decide(
+        &mut self,
+        src: SocketAddrV4,
+        dst: SocketAddrV4,
+        relay_addrs: &[Ipv4Addr],
+        now: Instant,
+        payload_len: usize,
+    ) -> OutboundDecision {
+        match self {
+            Self::Process(state) => {
+                let route = route_outbound(&mut state.map, src, dst, relay_addrs, now, payload_len);
+                // The cap lives in the map (`super::flows`): at most
+                // MAX_TUNNELED_FLOWS tunneled, warned from WARN_TUNNELED_FLOWS,
+                // and over the cap the flow goes direct and is counted
+                // UNATTRIBUTED. Surface the warning once per new count.
+                let report = state.map.report();
+                match &report.warning {
+                    Some(warning) if warning.tunneled != state.warned_tunneled => {
+                        tracing::warn!("⚠️ {}", warning.message);
+                        state.warned_tunneled = warning.tunneled;
+                    }
+                    Some(_) => {}
+                    None => state.warned_tunneled = 0,
+                }
+                match route {
+                    OutboundRoute::Tunnel => OutboundDecision::Tunnel(dst),
+                    OutboundRoute::Excluded | OutboundRoute::Reinject(_) => {
+                        OutboundDecision::Reinject
+                    }
+                }
+            }
+            Self::Ports(tracker) => match tracker.observe(dst, now, payload_len) {
+                Decision::Tunnel(server) => OutboundDecision::Tunnel(server),
+                Decision::ResetToDetection => OutboundDecision::Redetect,
+                Decision::ShadowDirect | Decision::PassThrough | Decision::StartDetection => {
+                    OutboundDecision::Reinject
+                }
+            },
+        }
+    }
+}
+
+/// Build the attributor the intercept thread drives for this policy.
+///
+/// Process mode seeds the map from the scanner's live routes for the target: a
+/// route is an observation of a live connection, so a seeded entry locks at
+/// once and interception starts with the first packet. A flow the scanner never
+/// saw is UNATTRIBUTED and goes direct, visibly - fail-open, never a drop.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn build_attributor(
+    policy: CapturePolicy,
+    target_pid: Option<u32>,
+    seed_routes: &[Route],
+    seeds: &[SocketAddrV4],
+    now: Instant,
+) -> Attributor {
+    match policy {
+        CapturePolicy::ProcessAll => {
+            let mut map = FlowMap::new(super::flows::FlowMapConfig::default(), target_pid);
+            // With no target PID the map accepts any attributed process, so the
+            // pid handed to `seed` only has to be acceptable.
+            map.seed(target_pid.unwrap_or(0), seed_routes, now);
+            Attributor::Process(ProcessAttributor {
+                map,
+                warned_tunneled: 0,
+            })
+        }
+        CapturePolicy::PortRange { .. } => {
+            let mut tracker = ServerTracker::new(TrackerConfig::default());
+            tracker.seed(seeds, now);
+            Attributor::Ports(tracker)
+        }
     }
 }
 
@@ -110,74 +430,41 @@ impl TrafficInterceptor for WinDivertInterceptor {
         use bytes::BytesMut;
         use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
         use std::collections::HashMap;
-        use std::time::Instant;
         use tokio::net::UdpSocket;
 
-        let (port_lo, port_hi) = config.port_range;
         let config_proxy = config.proxy_addr;
-        let dynamic_server = config.dynamic_server();
+        let dynamic_server = config.dynamic_server;
         let route_set: Vec<SocketAddrV4> = config.initial_routes.iter().map(|r| r.remote).collect();
         let seeds = effective_seeds(dynamic_server, &route_set);
         let pre_known_server: Option<SocketAddrV4> = seeds.first().copied();
 
-        // ── Build the WinDivert outbound filter ───────────────────────────
+        // ── Policy, attribution seeds and the ONE static filter ───────────
         //
-        // Priority order:
-        //   1. PID known  → `outbound and processId == N and udp.DstPort in {ports}`
-        //   2. Server IP known (from route scanner) → specific IP:port
-        //   3. Port range only → broad filter; debounce auto-detects the real server
-        let out_filter = match config.pid {
-            Some(pid) => {
-                // NOTE: `processId` is only valid for WinDivert Flow/Socket layers,
-                // not the Network layer used by `WinDivert::network()`.
-                // We log the PID for diagnostics but rely on port constraints +
-                // debounce auto-detection to isolate game traffic.
-                let port_clause = if port_lo == port_hi {
-                    format!("udp.DstPort == {port_lo}")
-                } else {
-                    format!("udp.DstPort >= {port_lo} and udp.DstPort <= {port_hi}")
-                };
-                tracing::info!(
-                    "🔒 WinDivert filter: PID {} (network layer, port range {}-{})",
-                    pid,
-                    port_lo,
-                    port_hi
-                );
-                format!("outbound and udp and {}", port_clause)
-            }
-            None => match pre_known_server {
-                Some(s) => {
-                    tracing::info!("🔒 WinDivert filter: IP {}:{}", s.ip(), s.port());
-                    format!(
-                        "udp and outbound and ip.DstAddr == {} and udp.DstPort == {}",
-                        s.ip(),
-                        s.port()
-                    )
-                }
-                None => {
-                    tracing::info!(
-                        "🔒 WinDivert filter: port range {}-{} (auto-detect mode)",
-                        port_lo,
-                        port_hi
-                    );
-                    if port_lo == port_hi {
-                        format!("udp and outbound and udp.DstPort == {port_lo}")
-                    } else {
-                        format!(
-                            "udp and outbound and udp.DstPort >= {port_lo} and udp.DstPort <= {port_hi}"
-                        )
-                    }
-                }
-            },
-        };
+        // The capture policy is derived in exactly one place (`capture_policy`
+        // in `mod.rs`): a picked process means capture the whole process's UDP
+        // and attribute it in userspace; the built-in path keeps its UDP port
+        // range. The filter built below is the only one this backend ever opens
+        // and the handle it opens lives for the whole interception: no per-flow
+        // rebuild, no swap on flow change, no close/reopen on flow events.
+        //
+        // `processId` is deliberately absent: the network layer cannot match it
+        // (only the Flow/Socket layers can), so the PID identifies the target
+        // through the userspace attribution below instead.
+        let policy = super::capture_policy(&config);
+        let relay_addrs = relay_addresses(config_proxy);
+        let out_filter = build_capture_filter(policy, &relay_addrs);
+        tracing::info!("🔀 WinDivert intercept filter ({policy:?}): {out_filter}");
 
-        // Never intercept the client's own tunnel traffic. The broad port-range
-        // filter also matches the QUIC control and keepalive packets addressed
-        // to the proxy; without this exclusion the auto-detect tracker locks the
-        // proxy's own address as the "game server".
-        let out_filter = format!("{out_filter} and ip.DstAddr != {}", config_proxy.ip());
-
-        tracing::info!("🔀 WinDivert intercept filter: {}", out_filter);
+        // The effective attribution seeds: the scanner's live routes, filtered
+        // by the dynamic-server rule. A rotating title gets none, so its
+        // entries earn their lock through the map's own debounce.
+        let seed_routes: Vec<Route> = config
+            .initial_routes
+            .iter()
+            .filter(|r| seeds.contains(&r.remote))
+            .cloned()
+            .collect();
+        let target_pid = config.process_target.as_ref().and_then(|t| t.pid());
 
         // Open intercept handle (captures matching outbound packets).
         tracing::info!("⚡ Opening WinDivert intercept handle...");
@@ -217,22 +504,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
         // Open a shadow-direct inbound handle. It is a sniff handle (copy, never
         // divert), so it observes replies from a tracked game server to a
-        // sampled game packet without disrupting either direction. The outbound
-        // filter is port-range based, so this mirrors it on SrcPort and the read
-        // loop additionally matches the source against the tracked server.
-        // Non-fatal: shadow sampling refines telemetry, it is never a reason to
-        // fail interception.
-        let shadow_filter = if port_lo == port_hi {
-            format!(
-                "udp and inbound and udp.SrcPort == {port_lo} and ip.SrcAddr != {}",
-                config_proxy.ip()
-            )
-        } else {
-            format!(
-                "udp and inbound and udp.SrcPort >= {port_lo} and udp.SrcPort <= {port_hi} and ip.SrcAddr != {}",
-                config_proxy.ip()
-            )
-        };
+        // sampled game packet without disrupting either direction. It mirrors
+        // the outbound capture scope on SrcPort and the read loop additionally
+        // matches the source against the tracked server. Non-fatal: shadow
+        // sampling refines telemetry, it is never a reason to fail interception.
+        let shadow_filter = build_shadow_filter(policy, &relay_addrs);
         tracing::info!(
             "🔀 WinDivert shadow-direct inbound filter: {}",
             shadow_filter
@@ -326,6 +602,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let itx = intercept_tx;
             let running_ic = Arc::clone(&running);
             let seeds_ic = seeds;
+            let seed_routes_ic = seed_routes;
+            let relay_addrs_ic = relay_addrs;
             let ack_ic = ack_tx.clone();
 
             tracing::info!("🚀 Spawning intercept thread...");
@@ -335,8 +613,15 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 const RECV_BACKOFF_BASE: Duration = Duration::from_millis(10);
                 const RECV_BACKOFF_MAX: Duration = Duration::from_millis(400);
 
-                let mut tracker = ServerTracker::new(TrackerConfig::default());
-                tracker.seed(&seeds_ic, Instant::now());
+                // The userspace attributor: the bounded FlowMap for a picked
+                // process, the single-server tracker for the built-in path.
+                let mut attributor = build_attributor(
+                    policy,
+                    target_pid,
+                    &seed_routes_ic,
+                    &seeds_ic,
+                    Instant::now(),
+                );
                 let mut reported_server: Option<SocketAddrV4> = pre_known_server;
                 let mut backoff =
                     RecvBackoff::new(RECV_MAX_RETRIES, RECV_BACKOFF_BASE, RECV_BACKOFF_MAX);
@@ -383,13 +668,25 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                             match parsed {
                                 Some((game_src, game_dst, payload)) => {
-                                    let decision =
-                                        tracker.observe(game_dst, Instant::now(), payload.len());
+                                    // Userspace attribution: the one decision
+                                    // point. Process mode looks the flow up in
+                                    // the bounded FlowMap (exclusions first, so
+                                    // an excluded destination never takes a
+                                    // tunnel slot); port-scoped mode keeps the
+                                    // single-server tracker.
+                                    let decision = attributor.decide(
+                                        game_src,
+                                        game_dst,
+                                        &relay_addrs_ic,
+                                        Instant::now(),
+                                        payload.len(),
+                                    );
 
-                                    // Publish the locked server before the decision
-                                    // can become a ShadowDirect sample: the shadow
-                                    // inbound thread pairs replies against it.
-                                    if let Decision::Tunnel(server) = decision {
+                                    // Publish the server this packet is bound
+                                    // for before the decision can become a
+                                    // shadow-direct sample: the shadow inbound
+                                    // thread pairs replies against it.
+                                    if let OutboundDecision::Tunnel(server) = decision {
                                         if reported_server != Some(server) {
                                             reported_server = Some(server);
                                             if let Ok(mut g) = counters_ic.detected_server.lock() {
@@ -399,22 +696,24 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                         }
                                     }
 
-                                    // When the shadow sampler is due for this locked
-                                    // server, this packet becomes a like-for-like
-                                    // direct application RTT sample.
+                                    // The shadow-direct exemption, kept: when the
+                                    // sampler is due for this server, this packet
+                                    // is re-injected unchanged on the direct path
+                                    // instead of relayed, and the sniff inbound
+                                    // handle times the reply.
                                     let decision = match decision {
-                                        Decision::Tunnel(server)
+                                        OutboundDecision::Tunnel(server)
                                             if crate::latency::record_shadow_outbound(
                                                 *server.ip(),
                                             ) =>
                                         {
-                                            Decision::ShadowDirect
+                                            OutboundDecision::Reinject
                                         }
                                         other => other,
                                     };
 
                                     match decision {
-                                        Decision::Tunnel(_) => {
+                                        OutboundDecision::Tunnel(_) => {
                                             counters_ic
                                                 .packets_intercepted
                                                 .fetch_add(1, Ordering::Relaxed);
@@ -428,19 +727,18 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                                 break;
                                             }
                                         }
-                                        Decision::ShadowDirect => {
+                                        OutboundDecision::Reinject => {
                                             // Re-inject the game's OWN packet
                                             // UNCHANGED on the direct path. No
                                             // synthetic packet and no payload
                                             // rewrite: the anti-cheat safety
-                                            // property. The reply is timed on the
-                                            // sniff inbound handle.
+                                            // property. This is also where an
+                                            // unattributed, over-cap or excluded
+                                            // packet goes, so nothing is silently
+                                            // dropped or relayed.
                                             let _ = wd_ic.send(data, &addr);
                                         }
-                                        Decision::PassThrough | Decision::StartDetection => {
-                                            let _ = wd_ic.send(data, &addr);
-                                        }
-                                        Decision::ResetToDetection => {
+                                        OutboundDecision::Redetect => {
                                             tracing::info!("🔄 Locked server stale - re-detecting");
                                             reported_server = None;
                                             if let Ok(mut g) = counters_ic.detected_server.lock() {
@@ -1139,3 +1437,283 @@ fn add_fw_rule(_port: u16) {}
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
 fn remove_fw_rule(_port: u16) {}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Tests: policy, exclusions and per-packet routing (no WinDivert needed)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::super::flows::{
+        AttributionEvent, FlowMapConfig, FlowObservation, MAX_TUNNELED_FLOWS, WARN_TUNNELED_FLOWS,
+    };
+    use super::*;
+    use std::time::Duration;
+
+    /// The remote port every game-server destination in these tests uses.
+    const SERVER_PORT: u16 = 7777;
+
+    /// A public game server.
+    fn public_server(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(104, 26, 1, last)
+    }
+
+    /// The game's local socket.
+    fn game() -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 5), 50_000)
+    }
+
+    fn dst_to(ip: Ipv4Addr) -> SocketAddrV4 {
+        SocketAddrV4::new(ip, SERVER_PORT)
+    }
+
+    /// A SOCKET-layer connect observation: the at-attach attribution event.
+    fn connect_obs(src: SocketAddrV4, remote: SocketAddrV4, pid: u32) -> FlowObservation {
+        FlowObservation {
+            key: FlowKey::new(src, remote, TransportProto::Udp),
+            pid,
+            event: AttributionEvent::SocketConnect,
+        }
+    }
+
+    fn at(base: Instant, ms: u64) -> Instant {
+        base + Duration::from_millis(ms)
+    }
+
+    // ── exclusions ────────────────────────────────────────────────────────
+
+    #[test]
+    fn infra_denylist_constant_matches_the_design_and_is_enforced_in_userspace() {
+        // The declared list, verbatim: DNS 53, DHCP 67/68, mDNS 5353, SSDP 1900,
+        // NetBIOS 137-139 (design section 5.5).
+        assert_eq!(
+            INFRA_DENYLIST_PORTS,
+            [53, 67, 68, 5353, 1900, 137, 138, 139]
+        );
+
+        for port in INFRA_DENYLIST_PORTS {
+            let dst = SocketAddrV4::new(public_server(50), port);
+            assert!(
+                destination_is_excluded(dst, &[]),
+                "port {port} must be excluded"
+            );
+        }
+        // A normal public game destination is not excluded.
+        assert!(!destination_is_excluded(dst_to(public_server(50)), &[]));
+    }
+
+    #[test]
+    fn capture_filter_carries_the_relay_address_and_the_infra_denylist() {
+        let relay = public_server(50);
+        let filter = build_capture_filter(CapturePolicy::ProcessAll, &[relay]);
+
+        assert!(filter.starts_with("udp and outbound"), "{filter}");
+        assert!(
+            filter.contains("ip.DstAddr != 104.26.1.50"),
+            "the relay's own address must be excluded: {filter}"
+        );
+        for port in INFRA_DENYLIST_PORTS {
+            assert!(
+                filter.contains(&format!("udp.DstPort != {port}")),
+                "port {port} must be excluded in the filter: {filter}"
+            );
+        }
+        // The network layer cannot match a process, so the filter must not try.
+        assert!(!filter.contains("rocessId"), "{filter}");
+    }
+
+    #[test]
+    fn non_public_destination_never_enters_the_tunnel() {
+        let t0 = Instant::now();
+        let mut map = FlowMap::new(FlowMapConfig::default(), None);
+        // Attribute the flow first, so only the exclusion can stop the tunnel.
+        let remote = dst_to(Ipv4Addr::new(10, 0, 0, 7));
+        assert!(map.attribute(connect_obs(game(), remote, 7), t0));
+
+        for ip in [
+            Ipv4Addr::new(10, 0, 0, 7),
+            Ipv4Addr::new(127, 0, 0, 1),
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(169, 254, 1, 1),
+            Ipv4Addr::new(224, 0, 0, 1),
+            Ipv4Addr::new(0, 0, 0, 0),
+        ] {
+            assert!(
+                destination_is_excluded(dst_to(ip), &[]),
+                "{ip} is not public and must be excluded"
+            );
+        }
+
+        assert_eq!(
+            route_outbound(&mut map, game(), remote, &[], t0, 100),
+            OutboundRoute::Excluded
+        );
+        assert_eq!(
+            map.tunneled_count(),
+            0,
+            "a non-public destination never takes a tunnel slot"
+        );
+    }
+
+    #[test]
+    fn relay_addresses_are_excluded_even_when_public() {
+        let t0 = Instant::now();
+        let relay = public_server(50);
+        let mut map = FlowMap::new(FlowMapConfig::default(), None);
+        assert!(map.attribute(connect_obs(game(), dst_to(relay), 7), t0));
+
+        assert_eq!(
+            route_outbound(&mut map, game(), dst_to(relay), &[relay], t0, 100),
+            OutboundRoute::Excluded,
+            "the client's own tunnel traffic must never be re-captured"
+        );
+        // Without the exclusion the same flow tunnels, so the test is not
+        // vacuous: it is the relay rule that turned it direct.
+        assert_eq!(
+            route_outbound(&mut map, game(), dst_to(relay), &[], t0, 100),
+            OutboundRoute::Tunnel
+        );
+    }
+
+    // ── attribution and fail-open ─────────────────────────────────────────
+
+    #[test]
+    fn unattributed_flow_is_re_injected_never_dropped_or_relayed() {
+        let t0 = Instant::now();
+        // Process mode: the map knows PID 4242 and nothing else.
+        let mut map = FlowMap::new(FlowMapConfig::default(), Some(4242));
+        let remote = dst_to(public_server(51));
+
+        assert_eq!(
+            route_outbound(&mut map, game(), remote, &[], t0, 100),
+            OutboundRoute::Reinject(DirectReason::Unattributed)
+        );
+        assert_eq!(map.tunneled_count(), 0);
+        let report = map.report();
+        assert_eq!(report.unattributed_flows, 1);
+        assert_eq!(report.tracked, 0, "an unattributed flow is not tracked");
+    }
+
+    #[test]
+    fn attributed_flow_is_tunneled_on_every_packet() {
+        let t0 = Instant::now();
+        let mut map = FlowMap::new(FlowMapConfig::default(), Some(4242));
+        let remote = dst_to(public_server(52));
+        assert!(map.attribute(connect_obs(game(), remote, 4242), t0));
+
+        for i in 0..3 {
+            assert_eq!(
+                route_outbound(&mut map, game(), remote, &[], at(t0, i * 10), 100),
+                OutboundRoute::Tunnel
+            );
+        }
+    }
+
+    // ── the cap and the warning, enforced where the map is used ───────────
+
+    #[test]
+    fn cap_admits_eight_tunneled_flows_and_the_ninth_goes_direct_unattributed() {
+        let t0 = Instant::now();
+        let mut map = FlowMap::new(FlowMapConfig::default(), None);
+        let src = game();
+
+        for i in 0..MAX_TUNNELED_FLOWS as u8 {
+            let remote = dst_to(public_server(i + 1));
+            assert!(map.attribute(connect_obs(src, remote, 7), t0));
+            assert_eq!(
+                route_outbound(&mut map, src, remote, &[], t0, 100),
+                OutboundRoute::Tunnel
+            );
+        }
+        assert_eq!(map.tunneled_count(), MAX_TUNNELED_FLOWS);
+
+        let ninth = dst_to(Ipv4Addr::new(104, 26, 2, 1));
+        assert!(map.attribute(connect_obs(src, ninth, 7), t0));
+        assert_eq!(
+            route_outbound(&mut map, src, ninth, &[], t0, 100),
+            OutboundRoute::Reinject(DirectReason::Unattributed),
+            "the ninth flow fails open and is reported UNATTRIBUTED"
+        );
+        let report = map.report();
+        assert_eq!(report.tunneled, MAX_TUNNELED_FLOWS);
+        assert_eq!(report.over_cap_packets, 1);
+        assert_eq!(report.unattributed_flows, 1);
+    }
+
+    #[test]
+    fn warning_fires_at_six_tunneled_flows() {
+        let t0 = Instant::now();
+        let mut map = FlowMap::new(FlowMapConfig::default(), None);
+        let src = game();
+
+        for i in 0..(WARN_TUNNELED_FLOWS as u8 - 1) {
+            let remote = dst_to(public_server(i + 1));
+            assert!(map.attribute(connect_obs(src, remote, 7), t0));
+            assert_eq!(
+                route_outbound(&mut map, src, remote, &[], t0, 100),
+                OutboundRoute::Tunnel
+            );
+        }
+        assert_eq!(map.tunneled_count(), WARN_TUNNELED_FLOWS - 1);
+        assert!(
+            map.report().warning.is_none(),
+            "no warning below the threshold"
+        );
+
+        let sixth = dst_to(public_server(60));
+        assert!(map.attribute(connect_obs(src, sixth, 7), t0));
+        assert_eq!(
+            route_outbound(&mut map, src, sixth, &[], t0, 100),
+            OutboundRoute::Tunnel
+        );
+
+        let warning = map.report().warning.expect("warning at the threshold");
+        assert_eq!(warning.tunneled, WARN_TUNNELED_FLOWS);
+        assert_eq!(warning.cap, MAX_TUNNELED_FLOWS);
+        assert!(warning.message.contains("3600"), "{}", warning.message);
+    }
+
+    // ── the policy variants ───────────────────────────────────────────────
+
+    #[test]
+    fn policy_variants_shape_the_capture_filter() {
+        // ProcessAll: every outbound UDP datagram, no port scope at all.
+        let all = build_capture_filter(CapturePolicy::ProcessAll, &[]);
+        assert_eq!(
+            all,
+            "udp and outbound and udp.DstPort != 53 and udp.DstPort != 67 and udp.DstPort != 68 \
+             and udp.DstPort != 5353 and udp.DstPort != 1900 and udp.DstPort != 137 \
+             and udp.DstPort != 138 and udp.DstPort != 139"
+        );
+        assert!(!all.contains("udp.DstPort >="), "{all}");
+
+        // PortRange: the built-in game path, unchanged.
+        let ranged = build_capture_filter(
+            CapturePolicy::PortRange {
+                lo: 28015,
+                hi: 28017,
+            },
+            &[],
+        );
+        assert!(
+            ranged
+                .starts_with("udp and outbound and udp.DstPort >= 28015 and udp.DstPort <= 28017"),
+            "{ranged}"
+        );
+        let single = build_capture_filter(CapturePolicy::PortRange { lo: 7777, hi: 7777 }, &[]);
+        assert!(
+            single.starts_with("udp and outbound and udp.DstPort == 7777"),
+            "{single}"
+        );
+
+        // The shadow mirror swaps the direction and keeps the relay exclusion.
+        let shadow = build_shadow_filter(
+            CapturePolicy::PortRange { lo: 7777, hi: 7777 },
+            &[public_server(50)],
+        );
+        assert_eq!(
+            shadow,
+            "udp and inbound and udp.SrcPort == 7777 and ip.SrcAddr != 104.26.1.50"
+        );
+    }
+}

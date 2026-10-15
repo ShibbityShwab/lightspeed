@@ -12,8 +12,8 @@ impl GameConfig for Cs2Config {
         "Counter-Strike 2"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["cs2.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["cs2.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

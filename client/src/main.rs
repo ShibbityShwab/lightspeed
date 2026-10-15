@@ -19,7 +19,9 @@ mod interceptor;
 mod latency;
 mod ml;
 mod modes;
+mod paths;
 mod process;
+mod profiles;
 mod quic;
 mod redirect;
 mod registry;
@@ -248,7 +250,7 @@ fn resolve_diagnose_server(cli: &Cli) -> anyhow::Result<SocketAddrV4> {
         return parse_proxy_addr(target);
     }
     let game = match cli.game.as_deref() {
-        Some(name) => Some(games::detect_game(name)?),
+        Some(name) => Some(games::resolve(name)?),
         None => games::auto_detect().ok(),
     };
     let game = game.ok_or_else(|| {
@@ -256,13 +258,14 @@ fn resolve_diagnose_server(cli: &Cli) -> anyhow::Result<SocketAddrV4> {
             "--diagnose needs a server: pass --target <ip:port>, or run it while a supported game is connected"
         )
     })?;
-    let found =
-        interceptor::process_scanner::find_game_process(game.process_names()).ok_or_else(|| {
+    let found = interceptor::process_scanner::find_game_process(&game.process_names()).ok_or_else(
+        || {
             anyhow::anyhow!(
                 "--diagnose could not find the {} process; pass --target <ip:port> instead",
                 game.name()
             )
-        })?;
+        },
+    )?;
     let route = found.routes.first().ok_or_else(|| {
         anyhow::anyhow!(
             "--diagnose found {} (PID {}) but no active server route; connect to a server first or pass --target",
@@ -283,8 +286,8 @@ fn known_game_server(cli: &Cli) -> Option<Ipv4Addr> {
     if let Some(raw) = cli.game_server.as_deref().or(cli.server_addr.as_deref()) {
         return parse_proxy_addr(raw).ok().map(|addr| *addr.ip());
     }
-    let game = games::detect_game(cli.game.as_deref()?).ok()?;
-    let found = interceptor::process_scanner::find_game_process(game.process_names())?;
+    let game = games::resolve(cli.game.as_deref()?).ok()?;
+    let found = interceptor::process_scanner::find_game_process(&game.process_names())?;
     found.routes.first().map(|route| *route.remote.ip())
 }
 
@@ -381,6 +384,17 @@ async fn main() -> anyhow::Result<()> {
         warn!("Config not found ({}), using defaults", e);
         config::Config::default()
     });
+
+    // ── User profiles (custom games + saved servers) ────────────
+    //
+    // Loaded once per process from the per-OS profiles.toml (or --profiles),
+    // then cached for the life of the process. `--no-user-profiles` skips the
+    // file entirely. The tolerant loader logs every entry it skipped, and a
+    // missing file is normal (a fresh install has none).
+    let profile_store = profiles::init(&profiles::StoreConfig::from_cli_flags(
+        cli.profiles.as_deref(),
+        cli.no_user_profiles,
+    ));
 
     // ── Adaptive FEC policy (opt-in, shared by every path) ────────
     //
@@ -560,16 +574,23 @@ async fn main() -> anyhow::Result<()> {
 
     // ── --list-games ──────────────────────────────────────────────
     if cli.list_games {
-        info!("🎮 Supported games:");
-        for game in games::all_games() {
-            let (lo, hi) = game.ports();
-            info!(
-                "   {:<12} ports {}-{} - {}",
-                game.name(),
-                lo,
-                hi,
-                game.process_names().join(", ")
-            );
+        let builtins: Vec<String> = games::all_games()
+            .into_iter()
+            .map(|game| {
+                let (lo, hi) = game.ports();
+                format!(
+                    "   {:<12} ports {}-{} - {}",
+                    game.name(),
+                    lo,
+                    hi,
+                    game.process_names().join(", ")
+                )
+            })
+            .collect();
+        let source = profile_store.path();
+        let profiles = profile_store.games();
+        for line in profiles::render_list_games(&builtins, &profiles, source.as_deref()) {
+            info!("{}", line);
         }
         return Ok(());
     }
@@ -754,10 +775,10 @@ async fn main() -> anyhow::Result<()> {
 
         // Games
         if let Some(ref g) = cli.game {
-            match games::detect_game(g) {
+            match games::resolve(g) {
                 Ok(game) => {
                     let found =
-                        interceptor::process_scanner::find_game_process(game.process_names());
+                        interceptor::process_scanner::find_game_process(&game.process_names());
                     info!("   Game:        {}", game.name());
                     info!("   Ports:       {}-{}", game.ports().0, game.ports().1);
                     match found {
@@ -856,10 +877,10 @@ async fn main() -> anyhow::Result<()> {
 
         // 3. Game detection
         if let Some(ref game_name) = cli.game {
-            match games::detect_game(game_name) {
+            match games::resolve(game_name) {
                 Ok(game) => {
                     let procs = game.process_names();
-                    let found = crate::interceptor::process_scanner::find_game_process(procs);
+                    let found = crate::interceptor::process_scanner::find_game_process(&procs);
                     match found {
                         Some(p) => info!(
                             "   ✅ Game '{}' detected: PID {} with {} routes",
@@ -939,7 +960,7 @@ async fn main() -> anyhow::Result<()> {
         info!("🔍 Scanning for game processes...");
         use interceptor::process_scanner;
         let game_names: Vec<String> = if let Some(ref g) = cli.game {
-            match games::detect_game(g) {
+            match games::resolve(g) {
                 Ok(boxed) => boxed
                     .process_names()
                     .iter()
@@ -992,7 +1013,7 @@ async fn main() -> anyhow::Result<()> {
 
         // If game specified, try to build config and show routes
         if let Some(ref game_name) = cli.game {
-            match games::detect_game(game_name) {
+            match games::resolve(game_name) {
                 Ok(game) => {
                     let proxy = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
                     let proxy_addr = match parse_proxy_addr(proxy) {
@@ -1014,7 +1035,7 @@ async fn main() -> anyhow::Result<()> {
                     match config_opt {
                         Some(cfg) => {
                             info!("   Game: {}", cfg.game_name);
-                            info!("   PID: {:?}", cfg.pid);
+                            info!("   Process target: {:?}", cfg.process_target);
                             info!("   Port range: {}-{}", cfg.port_range.0, cfg.port_range.1);
                             info!("   Routes discovered: {}", cfg.initial_routes.len());
                             for r in &cfg.initial_routes {
@@ -1078,7 +1099,7 @@ async fn main() -> anyhow::Result<()> {
     let game: Option<Box<dyn games::GameConfig>> = match cli.game.as_deref() {
         Some(name) => {
             info!("Game selected: {}", name);
-            Some(games::detect_game(name)?)
+            Some(games::resolve(name)?)
         }
         None => {
             if cli.game_server.is_some() {

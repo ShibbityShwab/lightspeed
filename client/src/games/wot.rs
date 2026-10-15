@@ -26,8 +26,8 @@ impl GameConfig for WotConfig {
         "World of Tanks"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["WorldOfTanks.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["WorldOfTanks.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

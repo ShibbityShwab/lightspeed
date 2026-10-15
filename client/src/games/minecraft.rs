@@ -25,15 +25,16 @@ impl GameConfig for MinecraftConfig {
         "Minecraft"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // `Minecraft.Windows.exe` is the Store (UWP) Bedrock client and carries
         // that image name at runtime. `Minecraft.exe` and `MinecraftLauncher.exe`
         // are launcher names, listed so a launcher-only moment still resolves.
-        &[
+        [
             "Minecraft.Windows.exe",
             "Minecraft.exe",
             "MinecraftLauncher.exe",
         ]
+        .to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {
@@ -82,12 +83,12 @@ impl GameConfig for MinecraftJavaConfig {
         "Minecraft Java Edition"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // Both image names are shared by every Java application - IDEs, build
         // tools, standalone servers - so the image name alone is ambiguous.
         // `command_line_marker()` supplies the discriminator that
         // auto-detection must verify before locking this profile in.
-        &["javaw.exe", "java.exe"]
+        ["javaw.exe", "java.exe"].to_vec()
     }
 
     fn command_line_marker(&self) -> Option<&str> {

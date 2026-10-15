@@ -43,13 +43,14 @@ impl GameConfig for WardogsConfig {
         "WARDOGS"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // `WardogsClient-Win64-Shipping.exe` is the gameplay client; Steam
         // launches `WardogsLauncher-Shipping.exe` first.
-        &[
+        [
             "WardogsClient-Win64-Shipping.exe",
             "WardogsLauncher-Shipping.exe",
         ]
+        .to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

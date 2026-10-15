@@ -35,11 +35,11 @@ impl GameConfig for RainbowSixConfig {
         "Rainbow Six Siege"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // `RainbowSix.exe` is the shipping binary. BattlEye games commonly
         // launch a `_BE` variant that owns the protected context, and Siege
         // does the same, so match both.
-        &["RainbowSix.exe", "RainbowSix_BE.exe"]
+        ["RainbowSix.exe", "RainbowSix_BE.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

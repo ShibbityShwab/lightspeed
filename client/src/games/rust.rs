@@ -34,8 +34,8 @@ impl GameConfig for RustConfig {
         "Rust"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["RustClient.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["RustClient.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

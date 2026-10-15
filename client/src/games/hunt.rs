@@ -40,10 +40,10 @@ impl GameConfig for HuntConfig {
         "Hunt: Showdown"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // `HuntGame.exe` is the gameplay client shipped by Steam; the launcher
         // is a separate process that exits once the game is running.
-        &["HuntGame.exe", "huntgame"]
+        ["HuntGame.exe", "huntgame"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

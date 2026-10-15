@@ -12,8 +12,8 @@ impl GameConfig for FortniteConfig {
         "Fortnite"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["FortniteClient-Win64-Shipping.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["FortniteClient-Win64-Shipping.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

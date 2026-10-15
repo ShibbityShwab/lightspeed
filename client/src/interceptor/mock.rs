@@ -110,12 +110,15 @@ impl TrafficInterceptor for MockInterceptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interceptor::traits::{InterceptorConfig, TrafficInterceptor};
+    use crate::interceptor::traits::{InterceptorConfig, ProcessTarget, TrafficInterceptor};
 
     fn test_config() -> InterceptorConfig {
         InterceptorConfig {
             game_name: "TestGame".into(),
-            pid: Some(12345),
+            dynamic_server: false,
+            transport: crate::interceptor::TransportProto::Udp,
+            process_names: vec!["TestGame.exe".to_string()],
+            process_target: Some(ProcessTarget::by_pid(12345)),
             port_range: (27015, 27017),
             initial_routes: vec![],
             proxy_addr: SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
@@ -159,7 +162,7 @@ mod tests {
         let _h = m.start(cfg.clone()).unwrap();
         let stored = m.last_config().unwrap();
         assert_eq!(stored.game_name, "TestGame");
-        assert_eq!(stored.pid, Some(12345));
+        assert_eq!(stored.process_target, Some(ProcessTarget::by_pid(12345)));
         assert_eq!(stored.port_range, (27015, 27017));
     }
 

@@ -32,8 +32,8 @@ impl GameConfig for MapleStoryConfig {
         "MapleStory"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["MapleStory.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["MapleStory.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

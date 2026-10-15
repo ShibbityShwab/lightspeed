@@ -24,8 +24,8 @@ impl GameConfig for GenshinConfig {
         "Genshin Impact"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["GenshinImpact.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["GenshinImpact.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

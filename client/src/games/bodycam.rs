@@ -31,12 +31,12 @@ impl GameConfig for BodycamConfig {
         "Bodycam"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // `Bodycam-Win64-Shipping.exe` is the gameplay process; `Bodycam.exe`
         // is the small UE5 launcher/bootstrapper at the install root.
         // (Linux auto-detection handles the kernel's 15-char `comm` truncation
         // of the Shipping exe name automatically.)
-        &["Bodycam-Win64-Shipping.exe", "Bodycam.exe"]
+        ["Bodycam-Win64-Shipping.exe", "Bodycam.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

@@ -43,10 +43,10 @@ impl GameConfig for ValorantConfig {
         "Valorant"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // Main game process, Riot client (VALORANT.exe) launches the
         // shipping binary; both names appear in tasklist.
-        &["VALORANT-Win64-Shipping.exe", "VALORANT.exe"]
+        ["VALORANT-Win64-Shipping.exe", "VALORANT.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

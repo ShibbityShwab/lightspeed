@@ -104,7 +104,10 @@ async fn run_smoke_test_linux(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let config = crate::interceptor::InterceptorConfig {
         game_name: "Fortnite".into(),
-        pid: None,
+        dynamic_server: true, // Fortnite rotates through ephemeral servers
+        transport: crate::games::TransportProto::Udp,
+        process_names: vec!["FortniteClient-Win64-Shipping.exe".to_string()],
+        process_target: None,
         port_range: (1024, 65535),
         initial_routes: vec![],
         proxy_addr,

@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use super::bypass::BypassConfig;
 use super::teardown::TeardownAck;
+use crate::games::TransportProto;
 use crate::tunnel::adaptive::AdaptiveConfig;
 use tokio::sync::oneshot;
 
@@ -70,6 +71,71 @@ pub struct ProcessInfo {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Process target
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// An authoritative process identity: "intercept this process".
+///
+/// The image name is the identity that survives a relaunch. A PID alone does
+/// not: the OS reuses PIDs, so a game restarted under a new PID would stop
+/// matching a number recorded earlier in the session. Whenever both fields are
+/// present the name decides, and the start path re-resolves the name to
+/// whatever PID is live at that moment.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ProcessTarget {
+    /// Image name, e.g. `"RustClient.exe"`. The preferred identity.
+    pub name: Option<String>,
+    /// OS process id, as recorded when the target was picked.
+    ///
+    /// A hint, not the identity: the start path overwrites it with the live
+    /// PID when the name still matches a running process.
+    pub pid: Option<u32>,
+}
+
+impl ProcessTarget {
+    /// Target an image by name - the identity that survives a relaunch.
+    pub fn by_name(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            pid: None,
+        }
+    }
+
+    /// Target a bare PID, for a caller that has no image name.
+    pub fn by_pid(pid: u32) -> Self {
+        Self {
+            name: None,
+            pid: Some(pid),
+        }
+    }
+
+    /// The image name to match, when the target names one.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// The recorded PID, when the target carries one.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
+    /// Whether the target identifies anything at all.
+    pub fn is_set(&self) -> bool {
+        self.name.is_some() || self.pid.is_some()
+    }
+
+    /// Human-readable identity for logs and error messages.
+    pub fn describe(&self) -> String {
+        match (self.name.as_deref(), self.pid) {
+            (Some(name), Some(pid)) => format!("{name} (PID {pid})"),
+            (Some(name), None) => name.to_string(),
+            (None, Some(pid)) => format!("PID {pid}"),
+            (None, None) => "<no process>".to_string(),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Interceptor config
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -79,12 +145,37 @@ pub struct InterceptorConfig {
     /// Human-readable game name (for logging).
     pub game_name: String,
 
-    /// OS process ID to target precisely, if already known.
+    /// Whether the resolved game profile rotates through ephemeral server
+    /// addresses (e.g. Fortnite).
     ///
-    /// On Windows, WinDivert can filter by `processId == N` - zero false
-    /// positives even on crowded game-server ports.  Leave `None` to use the
-    /// broader port-range filter.
-    pub pid: Option<u32>,
+    /// Carried as a resolved flag, never re-derived from `game_name`: the
+    /// config path must not depend on a display-name lookup, so a user profile
+    /// with no built-in display name behaves exactly like a built-in one.
+    /// When `true` the interceptor must not seed a lock from `initial_routes`
+    /// and must re-detect after every rotation.
+    pub dynamic_server: bool,
+
+    /// Transport the resolved profile carries its gameplay traffic over.
+    ///
+    /// UDP for every profile except Minecraft Java Edition's TCP.
+    pub transport: TransportProto,
+
+    /// Image names of the resolved profile's process(es).
+    ///
+    /// Resolved once by the config builder so no backend rebuilds them from
+    /// `game_name`.
+    pub process_names: Vec<String>,
+
+    /// The process this session is authoritative for, when a user picked one.
+    ///
+    /// This is the ONE way to say "intercept this process". When it is set it
+    /// wins over every port-range derivation, so no caller has to reason about
+    /// two fields deciding the target. `None` is the built-in ports path: a
+    /// port-range filter plus debounce auto-detection.
+    ///
+    /// The image name is the identity and the PID is a point-in-time hint; see
+    /// [`ProcessTarget`].
+    pub process_target: Option<ProcessTarget>,
 
     /// UDP port range to intercept when no specific server IP is known.
     ///
@@ -113,16 +204,6 @@ pub struct InterceptorConfig {
 
     /// Do-no-harm bypass gate configuration.
     pub bypass: BypassConfig,
-}
-
-impl InterceptorConfig {
-    /// Whether the configured game rotates through ephemeral server addresses.
-    ///
-    /// Derived from the game profile by display name. Unknown names default to
-    /// `false`, preserving the legacy lock-onto-first-route behaviour.
-    pub fn dynamic_server(&self) -> bool {
-        crate::games::dynamic_server_for_name(&self.game_name)
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -472,7 +553,10 @@ mod tests {
     fn config_for(game_name: &str) -> InterceptorConfig {
         InterceptorConfig {
             game_name: game_name.to_string(),
-            pid: None,
+            dynamic_server: false,
+            transport: TransportProto::Udp,
+            process_names: vec!["TestGame.exe".to_string()],
+            process_target: None,
             port_range: (1, 2),
             initial_routes: vec![],
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
@@ -494,10 +578,20 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_server_follows_the_game_profile() {
-        assert!(config_for("Fortnite").dynamic_server());
-        assert!(!config_for("Rust").dynamic_server());
-        assert!(!config_for("SmokeTest").dynamic_server());
+    fn resolved_flags_are_carried_verbatim_not_looked_up_by_name() {
+        // A display name that maps to no profile keeps whatever the resolved
+        // flags say: nothing on the config path looks a name up any more, so
+        // the values the builder resolved are the values a backend reads.
+        let mut config = config_for("Definitely Not A Game");
+        assert!(!config.dynamic_server);
+
+        config.dynamic_server = true;
+        config.transport = TransportProto::Tcp;
+        config.process_names = vec!["Other.exe".to_string()];
+
+        assert!(config.dynamic_server);
+        assert_eq!(config.transport, TransportProto::Tcp);
+        assert_eq!(config.process_names, vec!["Other.exe".to_string()]);
     }
 
     #[test]

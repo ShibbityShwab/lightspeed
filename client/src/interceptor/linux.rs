@@ -125,8 +125,8 @@ impl TrafficInterceptor for NftablesInterceptor {
         // Adaptive mode turns the codec on at its clamped effective K.
         let fec_active = fec_enabled || adaptive_cfg.enabled;
         let bypass_config = config.bypass;
-        let dynamic = config.dynamic_server();
-        let process_names = crate::games::process_names_for_name(&config.game_name);
+        let dynamic = config.dynamic_server;
+        let process_names = config.process_names.clone();
         let initial_routes: Vec<SocketAddrV4> =
             config.initial_routes.iter().map(|r| r.remote).collect();
 
@@ -605,9 +605,10 @@ impl TrafficInterceptor for NftablesInterceptor {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Collect the scanner's public remote routes, minus the proxy's own address.
-fn scan_candidates(process_names: &[&str], proxy: SocketAddrV4) -> Vec<SocketAddrV4> {
+fn scan_candidates(process_names: &[String], proxy: SocketAddrV4) -> Vec<SocketAddrV4> {
+    let process_refs: Vec<&str> = process_names.iter().map(|s| s.as_str()).collect();
     let mut out = Vec::new();
-    for process in super::process_scanner::scan_for_games(process_names) {
+    for process in super::process_scanner::scan_for_games(&process_refs) {
         for route in process.routes {
             let remote = route.remote;
             if !super::process_scanner::is_public_ipv4(*remote.ip()) {

@@ -25,8 +25,8 @@ impl GameConfig for RobloxConfig {
         "Roblox"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["RobloxPlayerBeta.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["RobloxPlayerBeta.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

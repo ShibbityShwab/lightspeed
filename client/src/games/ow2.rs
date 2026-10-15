@@ -38,10 +38,10 @@ impl GameConfig for Ow2Config {
         "Overwatch 2"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // Battle.net launches `Overwatch.exe` for the game client.
         // The launcher itself is `Battle.net.exe`, we do NOT capture that.
-        &["Overwatch.exe", "Overwatch_retail.exe"]
+        ["Overwatch.exe", "Overwatch_retail.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

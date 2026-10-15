@@ -25,8 +25,8 @@ impl GameConfig for RocketLeagueConfig {
         "Rocket League"
     }
 
-    fn process_names(&self) -> &[&str] {
-        &["RocketLeague.exe"]
+    fn process_names(&self) -> Vec<&str> {
+        ["RocketLeague.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

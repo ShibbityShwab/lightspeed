@@ -42,7 +42,7 @@ pub async fn run_demo(
 
     // ── 2. Game ──────────────────────────────────────────────────────
     info!("🎮 Game Profile");
-    match crate::games::detect_game(game_key) {
+    match crate::games::resolve(game_key) {
         Ok(game) => {
             let (lo, hi) = game.ports();
             info!("   Game:         {}", game.name());
@@ -51,7 +51,7 @@ pub async fn run_demo(
 
             // Check if running
             let found =
-                crate::interceptor::process_scanner::find_game_process(game.process_names());
+                crate::interceptor::process_scanner::find_game_process(&game.process_names());
             match found {
                 Some(p) => info!(
                     "   Status:       🟢 Running (PID {}, {} routes)",

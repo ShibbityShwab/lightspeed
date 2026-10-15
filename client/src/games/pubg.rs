@@ -39,11 +39,11 @@ impl GameConfig for PubgConfig {
         "PUBG: Battlegrounds"
     }
 
-    fn process_names(&self) -> &[&str] {
+    fn process_names(&self) -> Vec<&str> {
         // PUBG's Unreal Engine 4 executable, the game process name has
         // remained `TslGame.exe` since early access (TSL = The Squad-based
         // Last-player-standing game, Unreal's UE4 project codename).
-        &["TslGame.exe", "PUBG.exe"]
+        ["TslGame.exe", "PUBG.exe"].to_vec()
     }
 
     fn ports(&self) -> (u16, u16) {

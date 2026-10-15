@@ -32,7 +32,7 @@ pub async fn run_watch_mode(
     adaptive_fec: AdaptiveConfig,
     server_addr: Option<SocketAddrV4>,
 ) -> anyhow::Result<()> {
-    let game = crate::games::detect_game(game_key)?;
+    let game = crate::games::resolve(game_key)?;
     let game_name = game.name().to_string();
     let process_names: Vec<String> = game.process_names().iter().map(|s| s.to_string()).collect();
     let (lo, hi) = game.ports();
@@ -78,7 +78,12 @@ pub async fn run_watch_mode(
                         )
                         .unwrap_or(crate::interceptor::InterceptorConfig {
                             game_name: game_name.clone(),
-                            pid: Some(p.pid),
+                            dynamic_server: game.dynamic_server(),
+                            transport: game.transport(),
+                            process_names: process_names.clone(),
+                            process_target: Some(crate::interceptor::ProcessTarget::by_name(
+                                p.name.clone(),
+                            )),
                             port_range: (lo, hi),
                             initial_routes: vec![],
                             proxy_addr,
