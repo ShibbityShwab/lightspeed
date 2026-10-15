@@ -23,10 +23,14 @@ use crate::geo;
 use crate::globe;
 use crate::i18n;
 use crate::paths;
-use crate::platform::{Platform, QuitFlag, TrayAction, TrayHandle};
+use crate::platform::{default_port_range, Platform, QuitFlag, TrayAction, TrayHandle};
+use crate::processes::{self, ProcessEntry};
 use crate::race_watch::decide_switch;
 use crate::update::UpdateStatus;
 use eframe::egui;
+use lightspeed_client::interceptor::ProcessTarget;
+use lightspeed_client::profiles::schema::{is_valid_key, parse_port_range, slugify, PortRange};
+use lightspeed_client::profiles::{ProfileStore, UserGameProfile, UserServer};
 use lightspeed_client::{EngineStatus, LightSpeedEngine};
 
 // ── Tray state enum ──────────────────────────────────────────────────────────
@@ -96,11 +100,325 @@ pub fn games() -> &'static [GameEntry] {
             .map(|(key, display)| GameEntry {
                 key,
                 display,
-                default_port: lightspeed_client::games::detect_game(key)
+                default_port: lightspeed_client::games::resolve(key)
                     .map(|game| game.redirect_port())
                     .unwrap_or(0),
             })
             .collect()
+    })
+}
+
+// ── User games (profiles.toml) ─────────────────────────────────────────────
+
+/// The game the app has pinned: a built-in registry entry, or one of the
+/// user's own `[[games]]` profiles.
+///
+/// Returned by value because a user profile owns its strings: `GameEntry`'s
+/// `&'static str` cannot name a key that lives in `profiles.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PickedGame {
+    key: String,
+    display: String,
+    default_port: u16,
+}
+
+/// The process-wide profile store the editor reads and writes.
+///
+/// The same store `games::resolve` consults, so an edit saved here is live for
+/// the next Optimize in this process and for the next start from disk.
+fn profile_store() -> &'static ProfileStore {
+    lightspeed_client::profiles::global()
+}
+
+/// The loaded user game profiles, as of the store's last reload.
+fn user_profiles() -> Vec<UserGameProfile> {
+    profile_store().snapshot().games.clone()
+}
+
+/// The loaded saved servers, as of the store's last reload.
+fn user_servers() -> Vec<UserServer> {
+    profile_store().snapshot().servers.clone()
+}
+
+/// The keys of the loaded user game profiles.
+fn user_game_keys() -> Vec<String> {
+    user_profiles()
+        .into_iter()
+        .map(|profile| profile.key)
+        .collect()
+}
+
+/// One row of the Game dropdown, in render order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GamePickRow {
+    /// "Auto (detect)".
+    Auto,
+    /// "Manual / Custom…".
+    Manual,
+    /// A built-in game, by index into [`games`].
+    Builtin(usize),
+    /// The "My games" group label, drawn only when profiles exist.
+    MyGamesHeader,
+    /// A user profile, by index into the snapshot the UI holds.
+    User(usize),
+    /// "New custom game…", always the last row.
+    NewCustom,
+}
+
+/// The Game dropdown's rows: the two modes, every built-in in registry order,
+/// then the "My games" group, then "New custom game…".
+///
+/// Additive on purpose: the built-ins keep their order and their indices, so a
+/// `selected_game` key saved before profiles existed still means the same game,
+/// and the user's own list simply appears below them.
+fn game_pick_rows(builtin_count: usize, user_count: usize) -> Vec<GamePickRow> {
+    let mut rows = Vec::with_capacity(builtin_count + user_count + 4);
+    rows.push(GamePickRow::Auto);
+    rows.push(GamePickRow::Manual);
+    rows.extend((0..builtin_count).map(GamePickRow::Builtin));
+    if user_count > 0 {
+        rows.push(GamePickRow::MyGamesHeader);
+        rows.extend((0..user_count).map(GamePickRow::User));
+    }
+    rows.push(GamePickRow::NewCustom);
+    rows
+}
+
+/// The custom-game editor's fields, plus the profile it edits.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct GameEditorDraft {
+    /// The user profile being edited, by index into the store's games; `None`
+    /// while composing a new one.
+    editing: Option<usize>,
+    /// The schema key. Kept from the profile being edited, so renaming does not
+    /// silently orphan a key the user already put on a command line; empty for
+    /// a new draft, where the key is the slug of the name.
+    key: String,
+    name: String,
+    /// The process-names field, as typed (comma- or space-separated).
+    process_names: String,
+    /// The UDP-range field, as typed.
+    udp_range: String,
+    dynamic_server: bool,
+    notes: String,
+}
+
+impl GameEditorDraft {
+    /// A blank draft: "New custom game…".
+    fn new_profile() -> Self {
+        Self::default()
+    }
+
+    /// The draft that edits `profile`.
+    fn from_profile(index: usize, profile: &UserGameProfile) -> Self {
+        Self {
+            editing: Some(index),
+            key: profile.key.clone(),
+            name: profile.name.clone(),
+            process_names: profile.process_names.join(", "),
+            udp_range: profile
+                .udp_ports
+                .map(|range| range.to_string())
+                .unwrap_or_default(),
+            dynamic_server: profile.dynamic_server,
+            notes: profile.notes.clone().unwrap_or_default(),
+        }
+    }
+
+    /// The schema key this draft describes: the edited profile's own key, else
+    /// the slug of the name.
+    fn key(&self) -> Option<String> {
+        if !self.key.is_empty() {
+            return Some(self.key.clone());
+        }
+        slugify(self.name.trim())
+    }
+
+    /// The `[[games]]` entry this draft describes. Every field goes through the
+    /// schema's own parser, so what is written is what the fields hold.
+    fn to_profile(&self) -> UserGameProfile {
+        let notes = self.notes.trim();
+        UserGameProfile {
+            name: self.name.trim().to_string(),
+            key: self.key().unwrap_or_default(),
+            process_names: split_process_names(&self.process_names),
+            udp_ports: parse_user_port_range(&self.udp_range).ok().flatten(),
+            dynamic_server: self.dynamic_server,
+            notes: (!notes.is_empty()).then(|| notes.to_string()),
+        }
+    }
+}
+
+/// The editor's UDP-range field, parsed by the schema's own parser so the field
+/// and the file can never disagree about what a range is.
+fn parse_user_port_range(text: &str) -> Result<Option<PortRange>, String> {
+    parse_port_range(text)
+}
+
+/// The editor's process-names field: image names separated by commas or spaces,
+/// blanks dropped, so a trailing comma is not a typo the user has to hunt down.
+fn split_process_names(text: &str) -> Vec<String> {
+    text.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The built-in game that already answers to `key`, if any.
+///
+/// `detect_game` is crate-private, so the probe is `resolve` - the one public
+/// resolution path, whose built-in match arms (keys and aliases) answer first,
+/// exactly like the schema's own collision check. A key the user's store
+/// already defines is a duplicate of their own, not a built-in claim.
+fn builtin_claim_of_key(key: &str, user_keys: &[String]) -> Option<String> {
+    if user_keys.iter().any(|existing| existing == key) {
+        return None;
+    }
+    lightspeed_client::games::resolve(key)
+        .ok()
+        .map(|game| game.name().to_string())
+}
+
+/// The built-in game that already claims `process`, if any.
+///
+/// Image names compare case-insensitively, as they do on every platform the
+/// scanner runs on; this mirrors the schema's own collision check.
+fn builtin_claim_of_process(process: &str) -> Option<String> {
+    lightspeed_client::games::all_game_keys()
+        .into_iter()
+        .find_map(|(_, display)| {
+            lightspeed_client::games::process_names_for_name(display)
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(process))
+                .then(|| display.to_string())
+        })
+}
+
+/// The editor's live verdict on a draft: the schema's save rules, attributed to
+/// the field that carries each one, so the offending input is tinted while the
+/// user types instead of only when the save is refused.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DraftVerdict {
+    name_ok: bool,
+    udp_ok: bool,
+    key_ok: bool,
+    processes_ok: bool,
+    target_ok: bool,
+    /// The built-in game that claims the draft's key, when one does.
+    key_claimed_by: Option<String>,
+    /// The draft's key is already used by another of the user's own games.
+    key_duplicate: bool,
+}
+
+impl DraftVerdict {
+    /// Whether the draft can be saved: every field passes its own rule.
+    fn ok(&self) -> bool {
+        self.name_ok && self.udp_ok && self.key_ok && self.processes_ok && self.target_ok
+    }
+}
+
+/// Mirror the schema's save rules per field.
+///
+/// The authority stays the client's schema - `ProfileStore::save` re-validates
+/// and refuses - but a rule the user cannot see is a rule they cannot satisfy,
+/// so everything that can block a save is surfaced on the field that carries it.
+/// `user_keys` is the store's current keys; `editing` is the key of the profile
+/// being edited, which may keep its own.
+fn validate_draft(
+    draft: &GameEditorDraft,
+    user_keys: &[String],
+    editing: Option<&str>,
+) -> DraftVerdict {
+    let processes = split_process_names(&draft.process_names);
+    let range = parse_user_port_range(&draft.udp_range);
+    let key = draft.key();
+    let claimed_by = key
+        .as_deref()
+        .and_then(|k| builtin_claim_of_key(k, user_keys));
+    let duplicate = key
+        .as_deref()
+        .is_some_and(|k| Some(k) != editing && user_keys.iter().any(|existing| existing == k));
+    DraftVerdict {
+        name_ok: !draft.name.trim().is_empty(),
+        udp_ok: range.is_ok(),
+        key_ok: key.as_deref().is_some_and(is_valid_key) && claimed_by.is_none() && !duplicate,
+        processes_ok: processes
+            .iter()
+            .all(|process| builtin_claim_of_process(process).is_none()),
+        // At least one of the two targeting fields, as the schema requires.
+        target_ok: !processes.is_empty() || matches!(range, Ok(Some(_))),
+        key_claimed_by: claimed_by,
+        key_duplicate: duplicate,
+    }
+}
+
+/// The localized reasons a draft cannot be saved, in field order.
+///
+/// The verdict's flags say *which* field is wrong; the wording is the user's
+/// language, so a translated window never shows English rule prose.
+fn draft_reasons(verdict: &DraftVerdict, key: Option<&str>) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if !verdict.name_ok {
+        reasons.push(i18n::t("game.editor_name_required").into_owned());
+    }
+    if !verdict.udp_ok {
+        reasons.push(i18n::t("game.editor_udp_invalid").into_owned());
+    }
+    if !verdict.processes_ok {
+        reasons.push(i18n::t("game.editor_process_reserved").into_owned());
+    }
+    if !verdict.key_ok {
+        if let Some(builtin) = &verdict.key_claimed_by {
+            reasons.push(i18n::t_with(
+                "game.editor_key_reserved",
+                &[("key", key.unwrap_or_default()), ("name", builtin.as_str())],
+            ));
+        } else if verdict.key_duplicate {
+            reasons.push(i18n::t("game.editor_key_duplicate").into_owned());
+        } else {
+            reasons.push(i18n::t("game.editor_key_underivable").into_owned());
+        }
+    }
+    if !verdict.target_ok {
+        reasons.push(i18n::t("game.editor_target_required").into_owned());
+    }
+    reasons
+}
+
+/// The `[[servers]]` entry the Manual flow's "Save as…" builds from the fields
+/// on screen, or the reason it cannot: what is saved is what was typed.
+fn server_from_fields(name: &str, address: &str, port_range: &str) -> Result<UserServer, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(i18n::t("servers.invalid_name").into_owned());
+    }
+    let address = address.trim();
+    if address.parse::<SocketAddrV4>().is_err() {
+        return Err(i18n::t("servers.invalid_address").into_owned());
+    }
+    Ok(UserServer {
+        name: name.to_string(),
+        address: address.to_string(),
+        udp_ports: parse_user_port_range(port_range)?,
+    })
+}
+
+/// Persist the profiles document, and refresh the cached snapshot.
+///
+/// `ProfileStore::save` validates, writes, and reloads: the reload is what makes
+/// an edit take effect on the next `resolve()` - the next Optimize - without a
+/// restart, and the file write is what carries it into the next start.
+fn save_user_profiles(
+    store: &ProfileStore,
+    games: &[UserGameProfile],
+    servers: &[UserServer],
+) -> Result<(), String> {
+    store.save(games, servers).map_err(|errors| {
+        errors
+            .iter()
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
     })
 }
 
@@ -127,6 +445,84 @@ pub enum DiscoveryState {
     /// list and any error live in `LightSpeedApp::proxies` /
     /// `LightSpeedApp::discovery_error`.
     Done,
+}
+
+/// Lifecycle of the background process enumeration behind the editor's picker.
+///
+/// The same shape as [`DiscoveryState`], for the same reason: enumerating the
+/// host's processes (`CreateToolhelp32Snapshot`, a `/proc` walk, a `ps` fork)
+/// is not something the egui thread may do, so the work happens on a worker
+/// thread and the UI only ever polls the receiver.
+pub enum ProcessListState {
+    /// Nothing has been asked for yet.
+    Idle,
+    /// A background thread is enumerating the host's processes.
+    InFlight(Receiver<Vec<ProcessEntry>>),
+    /// The last enumeration finished (with rows, or with nothing at all); the
+    /// rows live in `LightSpeedApp::process_rows`.
+    Done,
+}
+
+/// What the picker is showing this frame: rows from the last enumeration, or a
+/// load still in flight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickerStatus {
+    Loading,
+    Ready,
+}
+
+/// The picker's live inputs for one frame, borrowed from the app.
+struct ProcessPicker<'a> {
+    /// The rows the last enumeration produced.
+    rows: &'a [ProcessEntry],
+    status: PickerStatus,
+    /// The filter field, editable in place.
+    search: &'a mut String,
+}
+
+/// What the picker knows about the last enumeration ({status} of
+/// [`ProcessListState`]).
+fn picker_status(state: &ProcessListState) -> PickerStatus {
+    match state {
+        ProcessListState::Done => PickerStatus::Ready,
+        // A load is either running or about to be started by the sheet's own
+        // open handler, so the honest thing on screen is the spinner's line.
+        ProcessListState::InFlight(_) | ProcessListState::Idle => PickerStatus::Loading,
+    }
+}
+
+/// The process target a picker row stands for: the image name - the identity
+/// that survives a relaunch - plus the PID the row was running under. The start
+/// path re-resolves the name against the live process table, so the PID is what
+/// the status surface shows, never what interception binds to.
+fn target_for_pick(entry: &ProcessEntry) -> ProcessTarget {
+    ProcessTarget {
+        name: Some(entry.name.clone()),
+        pid: Some(entry.pid),
+    }
+}
+
+/// The status-surface line for a picked process: `Target: <name> (PID <n>)`,
+/// naming the process exactly as the start path describes it.
+fn target_summary(target: &ProcessTarget) -> String {
+    let described = target.describe();
+    i18n::t_with("game.target_set", &[("target", described.as_str())])
+}
+
+/// Apply one frame of the target picker to the app's target.
+///
+/// A chosen row wins; an explicit Clear drops the target so the built-in Game
+/// path decides again; a frame with neither leaves the target alone.
+fn apply_target_choice(
+    current: Option<ProcessTarget>,
+    picked: Option<ProcessTarget>,
+    clear: bool,
+) -> Option<ProcessTarget> {
+    if clear {
+        None
+    } else {
+        picked.or(current)
+    }
 }
 
 /// A relay `/health` probe running on (or finished by) a background thread.
@@ -193,6 +589,31 @@ pub struct LightSpeedApp<P: Platform> {
 
     // ── Sheets and pickers ────────────────────────────────────────────────
     show_settings: bool,
+    /// The custom-game editor sheet.
+    show_game_editor: bool,
+    /// The editor's fields, and the profile they edit.
+    game_editor: GameEditorDraft,
+    /// The last saved profile's key, so `--game <key>` stays on screen.
+    editor_saved: Option<String>,
+    /// The editor's last refusal, verbatim from the profile store.
+    editor_error: Option<String>,
+    /// The editor's process picker: the background enumeration's lifecycle, the
+    /// rows it last produced, and the filter field.
+    process_list: ProcessListState,
+    process_rows: Vec<ProcessEntry>,
+    process_search: String,
+    /// A pinned user profile key, when the user picked one from "My games".
+    selected_custom: Option<String>,
+    /// The process the front door picked: relay every packet of ITS traffic.
+    /// `None` is the built-in Game path, where the profile's ports decide.
+    target_process: Option<ProcessTarget>,
+    /// Whether the "Target a process" picker sheet is open.
+    show_target_picker: bool,
+
+    /// The Manual flow's "Save as…" name field, and its outcome line.
+    save_server_name: String,
+    server_saved: Option<String>,
+    server_error: Option<String>,
 
     /// Language pinned in `config.toml`, or `None` to follow the OS locale.
     language: Option<String>,
@@ -272,6 +693,18 @@ impl<P: Platform> LightSpeedApp<P> {
                 .and_then(|key| games().iter().position(|entry| entry.key == key))
                 .unwrap_or(0)
         };
+        // A pinned key that is not a built-in is one of the user's profiles, so
+        // it stays pinned even though the built-in lookup above fell back to 0.
+        let selected_custom = if game_auto || game_manual {
+            None
+        } else {
+            saved
+                .selected_game
+                .as_deref()
+                .filter(|key| games().iter().all(|entry| entry.key != *key))
+                .filter(|key| user_game_keys().iter().any(|user_key| user_key == key))
+                .map(str::to_string)
+        };
         let mut proxies = saved.proxies.clone();
         for entry in env_proxies() {
             if !proxies.iter().any(|existing| existing.addr == entry.addr) {
@@ -320,6 +753,19 @@ impl<P: Platform> LightSpeedApp<P> {
             fonts_setup: false,
             header_icon: None,
             show_settings: false,
+            show_game_editor: false,
+            game_editor: GameEditorDraft::new_profile(),
+            editor_saved: None,
+            editor_error: None,
+            process_list: ProcessListState::Idle,
+            process_rows: Vec::new(),
+            process_search: String::new(),
+            selected_custom,
+            target_process: None,
+            show_target_picker: false,
+            save_server_name: String::new(),
+            server_saved: None,
+            server_error: None,
             language,
             boost_start: None,
             custom_port_input: saved.manual_port_range.clone(),
@@ -359,10 +805,32 @@ impl<P: Platform> LightSpeedApp<P> {
         self.selected_entry().map(|entry| entry.addr)
     }
 
-    fn selected_game(&self) -> &'static GameEntry {
+    /// The pinned game: a user profile when one is selected, else the built-in
+    /// at [`Self::selected_game_idx`].
+    ///
+    /// By value: a user profile owns its strings, so the pick cannot borrow from
+    /// a `&'static` registry table.
+    fn selected_game(&self) -> PickedGame {
+        if let Some(key) = &self.selected_custom {
+            if let Some(profile) = user_profiles()
+                .into_iter()
+                .find(|profile| profile.key == *key)
+            {
+                return PickedGame {
+                    key: profile.key,
+                    display: profile.name,
+                    default_port: profile.udp_ports.map(|range| range.lo).unwrap_or(0),
+                };
+            }
+        }
         let games = games();
         let idx = self.selected_game_idx.min(games.len().saturating_sub(1));
-        &games[idx]
+        let entry = &games[idx];
+        PickedGame {
+            key: entry.key.to_string(),
+            display: entry.display.to_string(),
+            default_port: entry.default_port,
+        }
     }
 
     fn connect_selected(&mut self) {
@@ -384,6 +852,40 @@ impl<P: Platform> LightSpeedApp<P> {
         self.discovery = DiscoveryState::InFlight(discovery::spawn_discovery());
     }
 
+    /// Begin (or restart) the background enumeration behind the editor's
+    /// process picker.
+    ///
+    /// Called when the sheet opens and from its Refresh button. A load already
+    /// in flight is left alone: it will land in a frame or two, and stacking a
+    /// second snapshot of the same machine would only waste work.
+    fn start_process_list(&mut self) {
+        if matches!(self.process_list, ProcessListState::InFlight(_)) {
+            return;
+        }
+        self.process_list = ProcessListState::InFlight(processes::spawn_process_list());
+    }
+
+    /// Collect a finished enumeration. The rows are published only once the
+    /// worker returns, so the picker never shows a half-built table.
+    fn poll_process_list(&mut self) {
+        let rows = match &self.process_list {
+            ProcessListState::InFlight(rx) => match rx.try_recv() {
+                Ok(rows) => Some(rows),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                // The worker cannot fail (the enumeration fails open), so a
+                // dropped sender means an empty table, not a hang on
+                // "Loading" for the rest of the session.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Vec::new()),
+            },
+            ProcessListState::Idle | ProcessListState::Done => None,
+        };
+        if let Some(rows) = rows {
+            tracing::info!("Process picker: {} processes", rows.len());
+            self.process_rows = rows;
+            self.process_list = ProcessListState::Done;
+        }
+    }
+
     fn persist_config(&self) {
         let config = GuiConfig {
             selected: self.selected_entry().map(|entry| entry.addr.to_string()),
@@ -398,7 +900,7 @@ impl<P: Platform> LightSpeedApp<P> {
             selected_game: if self.game_auto || self.game_manual {
                 None
             } else {
-                Some(self.selected_game().key.to_string())
+                Some(self.selected_game().key)
             },
         };
         if let Err(e) = config::save(&paths::config_file(), &config) {
@@ -645,21 +1147,31 @@ impl<P: Platform> LightSpeedApp<P> {
         });
     }
 
-    /// Start the interceptor boost for the selected game and relay.
+    /// Start the interceptor boost for the selected game and relay, for the
+    /// picked process when there is one.
+    ///
+    /// A picked process is the interception target and beats every port range:
+    /// the engine binds it by image name against the live process table at start
+    /// time. With no target the built-in Game path decides, exactly as before.
     fn start_boost(&mut self) {
-        // Warm up port detection for diagnostic logging.
-        let _ = parse_custom_port_range(&self.custom_port_input)
-            .unwrap_or_else(|| P::detect_game_ports(self.selected_game_idx));
+        // The persisted "Custom Port Range" actuates here: a well-formed range
+        // wins over the profile's own, and a blank or malformed one parses to
+        // `None` so the profile default stands. A typo never panics the UI
+        // thread and never silently drops a good range.
+        let port_range_override = parse_custom_port_range(&self.custom_port_input);
+        let process_target = self.target_process.clone();
 
         if let Some(proxy) = self.selected_proxy_addr() {
             let game_key = self.selected_game().key;
             let mut engine = lock_or_recover(&self.engine);
-            engine.set_telemetry_game(game_key);
-            let result = engine.start_interceptor(
-                game_key,
+            engine.set_telemetry_game(&game_key);
+            let result = engine.start_interceptor_with_target(
+                &game_key,
                 proxy,
                 self.fec_enabled,
                 4, // default FEC K
+                port_range_override,
+                process_target,
             );
             if let Err(e) = result {
                 tracing::error!("start_interceptor failed: {}", e);
@@ -879,10 +1391,16 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     /// The label/value ledger. At the short-height breakpoint the `Game server`
-    /// row is dropped and the values move into the scrolling region.
+    /// row is dropped and the values move into the scrolling region. The
+    /// `Target` row is drawn only while a process is targeted, so the ledger is
+    /// unchanged on the built-in path.
     fn ledger_rows(&self, ui: &mut egui::Ui, narrow: bool, short_mode: bool) {
         let relay = self.relay_value();
         self.ledger_row(ui, narrow, &i18n::t("route.relay"), &relay);
+        if let Some(target) = &self.target_process {
+            let target = LedgerValue::Data(target.describe());
+            self.ledger_row(ui, narrow, &i18n::t("route.target"), &target);
+        }
         if !short_mode {
             let game_server = self.game_server_value();
             self.ledger_row(ui, narrow, &i18n::t("route.game_server"), &game_server);
@@ -1048,6 +1566,9 @@ impl<P: Platform> LightSpeedApp<P> {
             };
             ui.label(egui::RichText::new(caption).size(BODY).color(text_2));
         }
+        // The front door for process-scoped interception, on the Game row it
+        // takes over whenever a process is picked.
+        self.target_control(ui);
         if self.game_manual {
             self.manual_section(ui);
         }
@@ -1129,9 +1650,11 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// The one-step game selector.
+    /// The one-step game selector: the two modes, the built-in registry, the
+    /// user's own profiles under "My games", and the way into the editor.
     fn game_combo(&mut self, ui: &mut egui::Ui) {
         let width = ui.available_width();
+        let user_games = user_profiles();
         let label = if self.game_manual {
             i18n::t("game.manual_server").into_owned()
         } else if self.game_auto {
@@ -1140,54 +1663,124 @@ impl<P: Platform> LightSpeedApp<P> {
                 None => i18n::t("game.auto_detect").into_owned(),
             }
         } else {
-            self.selected_game().display.to_string()
+            self.selected_game().display
         };
         let mut changed = false;
+        let mut open_editor = false;
         egui::ComboBox::from_id_salt("game_select")
             .selected_text(label)
             .width(width)
             .show_ui(ui, |ui| {
-                if ui
-                    .selectable_label(self.game_auto, i18n::t("game.auto_detect"))
-                    .clicked()
-                {
-                    self.game_auto = true;
-                    self.game_manual = false;
-                    changed = true;
-                }
-                ui.separator();
-                if ui
-                    .selectable_label(self.game_manual, i18n::t("game.manual_custom"))
-                    .clicked()
-                {
-                    self.game_manual = true;
-                    self.game_auto = false;
-                    changed = true;
-                }
-                ui.separator();
-                for (i, entry) in games().iter().enumerate() {
-                    if ui
-                        .selectable_label(
-                            !self.game_auto && !self.game_manual && i == self.selected_game_idx,
-                            entry.display,
-                        )
-                        .clicked()
-                    {
-                        self.selected_game_idx = i;
-                        self.game_auto = false;
-                        self.game_manual = false;
-                        changed = true;
+                for row in game_pick_rows(games().len(), user_games.len()) {
+                    match row {
+                        GamePickRow::Auto => {
+                            if ui
+                                .selectable_label(self.game_auto, i18n::t("game.auto_detect"))
+                                .clicked()
+                            {
+                                self.game_auto = true;
+                                self.game_manual = false;
+                                self.selected_custom = None;
+                                changed = true;
+                            }
+                        }
+                        GamePickRow::Manual => {
+                            if ui
+                                .selectable_label(self.game_manual, i18n::t("game.manual_custom"))
+                                .clicked()
+                            {
+                                self.game_manual = true;
+                                self.game_auto = false;
+                                self.selected_custom = None;
+                                changed = true;
+                            }
+                        }
+                        GamePickRow::Builtin(i) => {
+                            let picked = !self.game_auto
+                                && !self.game_manual
+                                && self.selected_custom.is_none()
+                                && i == self.selected_game_idx;
+                            if ui.selectable_label(picked, games()[i].display).clicked() {
+                                self.selected_game_idx = i;
+                                self.selected_custom = None;
+                                self.game_auto = false;
+                                self.game_manual = false;
+                                changed = true;
+                            }
+                        }
+                        GamePickRow::MyGamesHeader => {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(i18n::t("game.my_games"))
+                                    .size(CAPTION)
+                                    .color(text_3),
+                            );
+                        }
+                        GamePickRow::User(i) => {
+                            let profile = &user_games[i];
+                            let picked = !self.game_auto
+                                && !self.game_manual
+                                && self.selected_custom.as_deref() == Some(profile.key.as_str());
+                            if ui
+                                .selectable_label(picked, &profile.name)
+                                .on_hover_text(&profile.key)
+                                .clicked()
+                            {
+                                self.selected_custom = Some(profile.key.clone());
+                                self.game_auto = false;
+                                self.game_manual = false;
+                                changed = true;
+                            }
+                        }
+                        GamePickRow::NewCustom => {
+                            if ui.link(i18n::t("game.new_custom")).clicked() {
+                                ui.close();
+                                open_editor = true;
+                            }
+                        }
                     }
                 }
             });
         if changed {
             self.persist_config();
         }
+        if open_editor {
+            self.game_editor = GameEditorDraft::new_profile();
+            self.editor_saved = None;
+            self.editor_error = None;
+            self.process_search.clear();
+            // The picker's table is read once per open, on a worker thread; the
+            // egui thread only polls for it (see `poll_process_list`).
+            self.start_process_list();
+            self.show_game_editor = true;
+        }
+    }
+
+    /// The front door for process-scoped interception, sitting with the Game
+    /// row it takes over whenever a process is picked.
+    ///
+    /// A frame without a target offers the picker; a frame with one names the
+    /// process it will relay and offers the way back to the built-in Game path.
+    /// Nothing here enumerates: the picker's table is read once per open, on a
+    /// worker thread (see `start_process_list`), exactly like the editor's.
+    fn target_control(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(S2);
+        let action = target_front_door(ui, self.target_process.as_ref());
+        if action.clear {
+            self.target_process = None;
+        }
+        if action.open_picker {
+            self.process_search.clear();
+            self.start_process_list();
+            self.show_target_picker = true;
+        }
     }
 
     /// The "Manual / Custom…" flow: relay an explicit server straight from the
     /// Game field, for titles the auto-detect does not know.
     fn manual_section(&mut self, ui: &mut egui::Ui) {
+        let mut chosen_server: Option<usize> = None;
+        let mut save_server = false;
         ui.add_space(S2);
         ui.label(
             egui::RichText::new(
@@ -1213,14 +1806,50 @@ impl<P: Platform> LightSpeedApp<P> {
                 self.persist_config();
             }
         });
+
+        // Saved servers: a preset fills the address above and the range below.
+        let servers = user_servers();
+        if !servers.is_empty() {
+            ui.add_space(S2);
+            ui.horizontal(|ui| {
+                ui.label(i18n::t("servers.saved"));
+                let current = servers
+                    .iter()
+                    .position(|server| server.address == self.server_input.trim())
+                    .map(|i| servers[i].name.clone())
+                    .unwrap_or_else(|| i18n::t("servers.none").into_owned());
+                egui::ComboBox::from_id_salt("saved_server_select")
+                    .selected_text(current)
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        for (i, server) in servers.iter().enumerate() {
+                            let label = format!("{}  {}", server.name, server.address);
+                            if ui.selectable_label(false, label).clicked() {
+                                chosen_server = Some(i);
+                            }
+                        }
+                    });
+            });
+        }
         ui.add_space(S2);
+        // The example is the pinned game's own built-in scan range, so the
+        // field reads as the game about to be scanned rather than one fixed
+        // game's ports; a game with no range in the table keeps the format
+        // token as its example.
+        let game = self.selected_game();
+        let (lo, hi) = default_port_range(&game.key, game.default_port);
+        let range_example = if lo == 0 {
+            "lo-hi".to_string()
+        } else {
+            format!("{lo}-{hi}")
+        };
         ui.horizontal(|ui| {
             ui.label(i18n::t("route.custom_port_range")).on_hover_ui(|ui| {
-                ui.label(
+                ui.label(format!(
                     "Override the default port scan range for auto-detect. \
                      Use this if Packets Sent stays at 0 after 15 s.\n\
-                     Format: lo-hi  (e.g. 28015-28999)  or a single port.",
-                );
+                     Format: lo-hi  (e.g. {range_example})  or a single port."
+                ));
                 ui.hyperlink_to(
                     i18n::t("route.port_fix_guide"),
                     "https://github.com/ShibbityShwab/lightspeed/wiki/Troubleshooting#port-not-detected",
@@ -1228,20 +1857,78 @@ impl<P: Platform> LightSpeedApp<P> {
             });
             let port_valid = self.custom_port_input.is_empty()
                 || parse_custom_port_range(&self.custom_port_input).is_some();
-            let valid_color = if port_valid { text_1 } else { danger };
-            let port_edit = ui.add(
-                egui::TextEdit::singleline(&mut self.custom_port_input)
-                    .hint_text(i18n::t("route.port_hint"))
-                    .desired_width(200.0)
-                    .text_color(valid_color),
-            );
-            if port_edit.changed() {
+            // The one invalid-input treatment, shared with the profile editor.
+            if invalid_text_field(
+                ui,
+                &mut self.custom_port_input,
+                i18n::t_with("route.port_hint", &[("range", range_example.as_str())]),
+                200.0,
+                !port_valid,
+            )
+            .changed()
+            {
                 self.persist_config();
             }
-            if !port_valid {
-                ui.label(egui::RichText::new(i18n::t("proxies.invalid")).color(danger));
+        });
+        ui.add_space(S2);
+
+        // Save as: append the two fields above as a `[[servers]]` entry.
+        ui.horizontal(|ui| {
+            ui.label(i18n::t("servers.save_as"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.save_server_name)
+                    .hint_text(i18n::t("servers.save_name_hint"))
+                    .desired_width(160.0),
+            );
+            if ui.button(i18n::t("servers.save")).clicked() {
+                save_server = true;
             }
         });
+        if let Some(saved) = &self.server_saved {
+            ui.label(egui::RichText::new(saved).size(CAPTION).color(signal));
+        }
+        if let Some(error) = &self.server_error {
+            ui.label(egui::RichText::new(error).size(CAPTION).color(danger));
+        }
+        if let Some(i) = chosen_server {
+            self.server_input = servers[i].address.clone();
+            self.custom_port_input = servers[i]
+                .udp_ports
+                .map(|range| range.to_string())
+                .unwrap_or_default();
+            self.persist_config();
+        }
+        if save_server {
+            match server_from_fields(
+                &self.save_server_name,
+                &self.server_input,
+                &self.custom_port_input,
+            ) {
+                Ok(server) => {
+                    let store = profile_store();
+                    let mut servers = store.servers();
+                    servers.push(server.clone());
+                    match save_user_profiles(store, &store.games(), &servers) {
+                        Ok(()) => {
+                            self.server_saved = Some(i18n::t_with(
+                                "servers.saved_notice",
+                                &[("name", server.name.as_str())],
+                            ));
+                            self.server_error = None;
+                            self.save_server_name.clear();
+                        }
+                        Err(error) => {
+                            self.server_saved = None;
+                            self.server_error = Some(error);
+                        }
+                    }
+                }
+                Err(reason) => {
+                    self.server_saved = None;
+                    self.server_error = Some(reason);
+                }
+            }
+        }
         ui.add_space(S2);
 
         let server_valid = parse_server_addr(&self.server_input).is_some();
@@ -1268,13 +1955,13 @@ impl<P: Platform> LightSpeedApp<P> {
         }
 
         ui.add_space(S2);
-        let instruction = connect_instruction(
-            self.selected_game(),
-            self.server_input
-                .parse::<SocketAddrV4>()
-                .map(|a| a.port())
-                .unwrap_or(self.selected_game().default_port),
-        );
+        let picked = self.selected_game();
+        let local_port = self
+            .server_input
+            .parse::<SocketAddrV4>()
+            .map(|addr| addr.port())
+            .unwrap_or(picked.default_port);
+        let instruction = connect_instruction(&picked.key, local_port);
         ui.label(egui::RichText::new(instruction).size(BODY).color(text_2));
         ui.add_space(S2);
     }
@@ -1454,6 +2141,192 @@ impl<P: Platform> LightSpeedApp<P> {
             )
             .on_hover_text(i18n::t("about.star_hint"));
         });
+    }
+
+    /// `Custom game`: the profile editor, in the same sheet pattern as Settings.
+    ///
+    /// A new profile is composed here; the Game dropdown's "My games" group only
+    /// selects one that exists. Saving writes `profiles.toml` and reloads the
+    /// store, and the resulting key stays on screen so `--game <key>` is
+    /// discoverable without reading the file.
+    fn game_editor_sheet(&mut self, ctx: &egui::Context) {
+        let (max_w, max_h) = sheet_bounds(ctx);
+        let mut close = false;
+        let mut actions = EditorActions::default();
+        let user_games = user_profiles();
+        let user_keys = user_game_keys();
+        let editing_key = self
+            .game_editor
+            .editing
+            .and_then(|i| user_games.get(i))
+            .map(|profile| profile.key.clone());
+        let verdict = validate_draft(&self.game_editor, &user_keys, editing_key.as_deref());
+
+        let response = egui::Modal::new(egui::Id::new("game_editor_sheet"))
+            .backdrop_color(scrim)
+            .frame(sheet_frame())
+            .show(ctx, |ui| {
+                ui.set_max_width(max_w);
+                sheet_title(ui, &i18n::t("game.editor_title"));
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .show(ui, |ui| {
+                        game_editor_body(
+                            ui,
+                            &mut self.game_editor,
+                            &verdict,
+                            self.editor_saved.as_deref(),
+                            self.editor_error.as_deref(),
+                            &user_games,
+                            ProcessPicker {
+                                rows: &self.process_rows,
+                                status: picker_status(&self.process_list),
+                                search: &mut self.process_search,
+                            },
+                            &mut actions,
+                        );
+                    });
+                ui.add_space(S2);
+                if ui.button(i18n::t("action.close").as_ref()).clicked() {
+                    close = true;
+                }
+            });
+        if response.should_close() || close {
+            self.show_game_editor = false;
+        }
+
+        if actions.refresh_processes {
+            self.start_process_list();
+        }
+
+        if let Some(i) = actions.edit {
+            if let Some(profile) = user_games.get(i) {
+                self.game_editor = GameEditorDraft::from_profile(i, profile);
+                self.editor_saved = None;
+                self.editor_error = None;
+            }
+        }
+        if actions.save {
+            let profile = self.game_editor.to_profile();
+            let store = profile_store();
+            let mut games = store.games();
+            match self.game_editor.editing {
+                Some(i) if i < games.len() => games[i] = profile.clone(),
+                _ => games.push(profile.clone()),
+            }
+            match save_user_profiles(store, &games, &store.servers()) {
+                Ok(()) => {
+                    // Re-read through the store, which just reloaded: what the
+                    // sheet shows next is what the next start will read.
+                    let games = store.games();
+                    if let Some(i) = games.iter().position(|game| game.key == profile.key) {
+                        self.game_editor = GameEditorDraft::from_profile(i, &games[i]);
+                    }
+                    self.editor_saved = Some(i18n::t_with(
+                        "game.editor_saved",
+                        &[
+                            ("name", profile.name.as_str()),
+                            ("key", profile.key.as_str()),
+                        ],
+                    ));
+                    self.editor_error = None;
+                }
+                Err(error) => {
+                    self.editor_error = Some(error);
+                    self.editor_saved = None;
+                }
+            }
+        }
+        if actions.delete {
+            if let Some(i) = self.game_editor.editing {
+                let store = profile_store();
+                let mut games = store.games();
+                if i < games.len() {
+                    games.remove(i);
+                    match save_user_profiles(store, &games, &store.servers()) {
+                        Ok(()) => {
+                            self.game_editor = GameEditorDraft::new_profile();
+                            self.editor_saved = None;
+                            self.editor_error = None;
+                        }
+                        Err(error) => self.editor_error = Some(error),
+                    }
+                }
+            }
+        }
+    }
+
+    /// `Target a process`: pick a running program and relay all of its
+    /// traffic, whatever it is.
+    ///
+    /// The same picker, filter, off-thread enumeration and honest Loading /
+    /// Empty / No-match states as the editor's process field; the difference is
+    /// what a chosen row means - it becomes the interception target instead of
+    /// filling a text field.
+    fn target_picker_sheet(&mut self, ctx: &egui::Context) {
+        let (max_w, max_h) = sheet_bounds(ctx);
+        let mut close = false;
+        let mut clear = false;
+        let mut refresh = false;
+        let mut chosen: Option<ProcessTarget> = None;
+        let current = self.target_process.clone();
+
+        let response = egui::Modal::new(egui::Id::new("target_process_sheet"))
+            .backdrop_color(scrim)
+            .frame(sheet_frame())
+            .show(ctx, |ui| {
+                ui.set_max_width(max_w);
+                sheet_title(ui, &i18n::t("game.target_process"));
+                ui.label(
+                    egui::RichText::new(i18n::t("game.target_process_hint"))
+                        .size(BODY)
+                        .color(text_2),
+                );
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .show(ui, |ui| {
+                        let mut picker = ProcessPicker {
+                            rows: &self.process_rows,
+                            status: picker_status(&self.process_list),
+                            search: &mut self.process_search,
+                        };
+                        chosen = process_picker(
+                            ui,
+                            &mut picker,
+                            |entry| {
+                                current
+                                    .as_ref()
+                                    .and_then(ProcessTarget::name)
+                                    .is_some_and(|name| name.eq_ignore_ascii_case(&entry.name))
+                            },
+                            &mut refresh,
+                        )
+                        .map(target_for_pick);
+                    });
+                ui.add_space(S2);
+                ui.horizontal(|ui| {
+                    if current.is_some() && ui.button(i18n::t("game.target_clear")).clicked() {
+                        clear = true;
+                    }
+                    if ui.button(i18n::t("action.close")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        // The sheet's frame is gone; apply what it recorded. A chosen row wins
+        // and closes the sheet, Clear drops the target, and a frame with neither
+        // leaves the target alone.
+        if chosen.is_some() {
+            self.show_target_picker = false;
+        }
+        self.target_process = apply_target_choice(self.target_process.take(), chosen, clear);
+        if refresh {
+            self.start_process_list();
+        }
+        if response.should_close() || close {
+            self.show_target_picker = false;
+        }
     }
 
     /// `Proxy Manager`: the discovered and custom relay list, plus add/remove.
@@ -1723,6 +2596,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // Refresh engine snapshot and background relay state.
         self.status = lock_or_recover(&self.engine).snapshot();
         self.poll_discovery();
+        self.poll_process_list();
         self.poll_relay_race();
         self.poll_winner_probe();
         self.maybe_rerace();
@@ -1910,6 +2784,12 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         }
         if self.show_update_dialog {
             self.update_sheet(&ctx);
+        }
+        if self.show_target_picker {
+            self.target_picker_sheet(&ctx);
+        }
+        if self.show_game_editor {
+            self.game_editor_sheet(&ctx);
         }
 
         // ── Repaint schedule ─────────────────────────────────────────────
@@ -2156,9 +3036,9 @@ fn parse_server_addr(s: &str) -> Option<SocketAddrV4> {
     s.parse::<SocketAddrV4>().ok()
 }
 
-fn connect_instruction(game: &GameEntry, local_port: u16) -> String {
+fn connect_instruction(game_key: &str, local_port: u16) -> String {
     let port = local_port.to_string();
-    match game.key {
+    match game_key {
         "rust" => i18n::t_with("connect.rust", &[("port", port.as_str())]),
         "cs2" => i18n::t_with("connect.cs2", &[("port", port.as_str())]),
         "dota2" => i18n::t_with("connect.dota2", &[("port", port.as_str())]),
@@ -2264,17 +3144,6 @@ pub fn apply_discovery_result(
         DiscoveryOutcome::Failed(reason) => (existing.to_vec(), Some(reason.clone())),
     }
 }
-
-/// Known Steam-service UDP ports that RustClient.exe keeps open for
-/// Steam NAT punch / relay etc. - we skip these so the WinDivert filter
-/// doesn't intercept Steam traffic instead of game traffic.
-pub const STEAM_SERVICE_PORTS: &[u16] = &[
-    3478, 4379, 4380,  // Steam NAT punch / relay
-    27005, // Steam client source
-    27015, // Steam SRCDS / query
-    27020, // Steam TV
-    27036, 27037, // Steam Remote Play
-];
 
 /// Parse a user-supplied port range string.
 ///
@@ -2431,6 +3300,352 @@ fn field_label(ui: &mut egui::Ui, width: f32, text: &str) {
     );
 }
 
+/// What the custom-game editor asked for this frame.
+///
+/// The sheet cannot mutate the app while the body holds a `&mut` on the draft,
+/// so the body records intent and the sheet applies it after the frame. That
+/// record is also what the headless render test reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EditorActions {
+    /// "Edit" on one of the user's profiles, by index into the snapshot.
+    edit: Option<usize>,
+    save: bool,
+    delete: bool,
+    /// "Refresh" on the process picker: re-read the host's process table.
+    refresh_processes: bool,
+}
+
+/// The custom-game editor's body: the user's profiles, the five fields, the live
+/// verdict, the key, and the actions.
+///
+/// A free function rather than a method so the sheet can be rendered in a test
+/// without an engine, a tray, or a config file.
+fn game_editor_body(
+    ui: &mut egui::Ui,
+    draft: &mut GameEditorDraft,
+    verdict: &DraftVerdict,
+    editor_saved: Option<&str>,
+    editor_error: Option<&str>,
+    user_games: &[UserGameProfile],
+    mut picker: ProcessPicker<'_>,
+    actions: &mut EditorActions,
+) {
+    // The user's profiles, each with the way back into it.
+    section_label(ui, &i18n::t("game.editor_list"));
+    if user_games.is_empty() {
+        ui.label(
+            egui::RichText::new(i18n::t("game.editor_no_games"))
+                .size(BODY)
+                .color(text_2),
+        );
+    }
+    for (i, profile) in user_games.iter().enumerate() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(&profile.name).color(text_1));
+            ui.label(
+                egui::RichText::new(&profile.key)
+                    .size(CAPTION)
+                    .color(text_3),
+            );
+            if ui.button(i18n::t("game.editor_edit")).clicked() {
+                actions.edit = Some(i);
+            }
+        });
+    }
+    ui.add_space(S2);
+    hairline(ui);
+    ui.add_space(S2);
+
+    ui.horizontal(|ui| {
+        ui.label(i18n::t("game.editor_name"));
+        invalid_text_field(
+            ui,
+            &mut draft.name,
+            i18n::t("game.editor_name_hint"),
+            220.0,
+            !verdict.name_ok,
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label(i18n::t("game.editor_process_names"));
+        invalid_text_field(
+            ui,
+            &mut draft.process_names,
+            i18n::t("game.editor_process_hint"),
+            260.0,
+            !verdict.processes_ok,
+        );
+    });
+    // The picker sits directly under the field it fills: choosing a row appends
+    // its image name there, and the field stays a plain typed field.
+    let already = split_process_names(&draft.process_names);
+    let chosen = process_picker(
+        ui,
+        &mut picker,
+        |entry| {
+            already
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&entry.name))
+        },
+        &mut actions.refresh_processes,
+    );
+    if let Some(entry) = chosen {
+        draft.process_names = processes::append_name(&draft.process_names, &entry.name);
+    }
+    ui.horizontal(|ui| {
+        ui.label(i18n::t("game.editor_udp_range"));
+        invalid_text_field(
+            ui,
+            &mut draft.udp_range,
+            i18n::t("game.editor_udp_hint"),
+            200.0,
+            !verdict.udp_ok,
+        );
+    });
+    // No TCP field: the interception path is UDP-only, so the schema refuses a
+    // `tcp_ports` entry and the editor must not offer what a save would refuse.
+    ui.checkbox(
+        &mut draft.dynamic_server,
+        egui::RichText::new(i18n::t("game.editor_dynamic_server")).size(LABEL),
+    );
+    ui.horizontal(|ui| {
+        ui.label(i18n::t("game.editor_notes"));
+        ui.add(
+            egui::TextEdit::singleline(&mut draft.notes)
+                .hint_text(i18n::t("game.editor_notes_hint"))
+                .desired_width(260.0),
+        );
+    });
+
+    // Live validation, named on the field that carries it.
+    for reason in draft_reasons(verdict, draft.key().as_deref()) {
+        ui.label(egui::RichText::new(reason).size(CAPTION).color(danger));
+    }
+
+    // The key, while it is being composed and after it is saved: this is what
+    // `--game <key>` takes.
+    if let Some(key) = draft.key() {
+        ui.label(
+            egui::RichText::new(i18n::t_with("game.editor_key", &[("key", key.as_str())]))
+                .size(CAPTION)
+                .color(if verdict.key_ok { text_2 } else { danger }),
+        );
+    }
+    if let Some(saved) = editor_saved {
+        ui.label(egui::RichText::new(saved).size(CAPTION).color(signal));
+    }
+    if let Some(error) = editor_error {
+        ui.label(egui::RichText::new(error).size(CAPTION).color(danger));
+    }
+
+    ui.add_space(S2);
+    ui.label(
+        egui::RichText::new(i18n::t("game.editor_new_hint"))
+            .size(CAPTION)
+            .color(text_3),
+    );
+    ui.add_space(S2);
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(verdict.ok(), egui::Button::new(i18n::t("game.editor_save")))
+            .clicked()
+        {
+            actions.save = true;
+        }
+        if draft.editing.is_some() && ui.button(i18n::t("game.editor_delete")).clicked() {
+            actions.delete = true;
+        }
+    });
+}
+
+/// The live process picker: the machine's process table, filtered by a search
+/// field, where choosing a row is reported back to the caller.
+///
+/// The rows are whatever the last background enumeration returned - nothing in
+/// here enumerates or blocks, which is what makes it safe to draw from the egui
+/// thread. Degrading honestly is the point of the status line: an enumeration
+/// that came back empty (or a platform that will not enumerate at all) says so,
+/// and the caller's own field (or process target) keeps working without it.
+///
+/// The same picker serves the editor's process-names field and the app's
+/// process target: `highlighted` decides which rows draw as already chosen, and
+/// a click on a row is handed back so the caller decides what choosing means.
+/// `refresh` is set when the Refresh button is pressed.
+fn process_picker<'a>(
+    ui: &mut egui::Ui,
+    picker: &mut ProcessPicker<'a>,
+    mut highlighted: impl FnMut(&ProcessEntry) -> bool,
+    refresh: &mut bool,
+) -> Option<&'a ProcessEntry> {
+    ui.add_space(S2);
+    ui.horizontal(|ui| {
+        section_label(ui, &i18n::t("game.editor_process_picker"));
+        if ui.button(i18n::t("game.editor_process_refresh")).clicked() {
+            *refresh = true;
+        }
+    });
+
+    let width = ui.available_width();
+    ui.add(
+        egui::TextEdit::singleline(&mut *picker.search)
+            .hint_text(i18n::t("game.editor_process_search_hint"))
+            .desired_width(width),
+    );
+
+    // Copied out of the borrow of `picker` so the chosen row can be handed back
+    // with the picker's own lifetime.
+    let rows = picker.rows;
+    match picker.status {
+        PickerStatus::Loading => {
+            ui.label(
+                egui::RichText::new(i18n::t("game.editor_process_loading"))
+                    .size(CAPTION)
+                    .color(text_3),
+            );
+            None
+        }
+        PickerStatus::Ready => {
+            if rows.is_empty() {
+                ui.label(
+                    egui::RichText::new(i18n::t("game.editor_process_empty"))
+                        .size(CAPTION)
+                        .color(text_3),
+                );
+                None
+            } else {
+                let shown = processes::matching(rows, picker.search);
+                if shown.is_empty() {
+                    ui.label(
+                        egui::RichText::new(i18n::t("game.editor_process_no_match"))
+                            .size(CAPTION)
+                            .color(text_3),
+                    );
+                }
+                let mut chosen = None;
+                for entry in shown {
+                    if process_row(ui, entry, highlighted(entry)).clicked() {
+                        chosen = Some(entry);
+                    }
+                }
+                chosen
+            }
+        }
+    }
+}
+
+/// What one frame of the target front door asks the app to do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TargetRowAction {
+    /// "Target a process" was pressed: open the picker.
+    open_picker: bool,
+    /// "Clear target" was pressed: back to the built-in Game path.
+    clear: bool,
+}
+
+/// The front door, as a bare widget: the picked process and the way back to the
+/// built-in Game path, or the way in to the picker.
+///
+/// A frame with a target names it - `Target: <name> (PID <n>)` - and offers
+/// Clear; a frame without one offers the picker and says what it does. It
+/// records intent instead of mutating the app, so the caller applies it after
+/// the frame and the widget renders headlessly in a test.
+fn target_front_door(ui: &mut egui::Ui, target: Option<&ProcessTarget>) -> TargetRowAction {
+    let mut action = TargetRowAction::default();
+    ui.horizontal_wrapped(|ui| match target {
+        Some(target) => {
+            ui.label(
+                egui::RichText::new(target_summary(target))
+                    .size(LABEL)
+                    .color(text_1),
+            );
+            if ui.link(i18n::t("game.target_clear")).clicked() {
+                action.clear = true;
+            }
+        }
+        None => {
+            if ui.button(i18n::t("game.target_process")).clicked() {
+                action.open_picker = true;
+            }
+            ui.label(
+                egui::RichText::new(i18n::t("game.target_none"))
+                    .size(CAPTION)
+                    .color(text_3),
+            );
+        }
+    });
+    action
+}
+
+/// One picker row: the image name (emphasised), the PID, and the path's tail.
+///
+/// The whole row is the button - not a small control on it - and because it is
+/// a `selectable_label`, hover and the "already in the field" state come from
+/// the theme's own widget visuals instead of a hand-rolled fill. Choosing a row
+/// whose name the field already carries repaints the same row rather than
+/// changing anything: the append dedupes case-insensitively.
+fn process_row(ui: &mut egui::Ui, entry: &ProcessEntry, in_field: bool) -> egui::Response {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &entry.name,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::new(BODY, semibold()),
+            color: if in_field { text_3 } else { text_1 },
+            ..Default::default()
+        },
+    );
+    job.append(
+        &format!("  {}", entry.pid),
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::new(CAPTION, egui::FontFamily::Monospace),
+            color: text_3,
+            ..Default::default()
+        },
+    );
+    if let Some(path) = &entry.path {
+        job.append(
+            &format!(
+                "  {}",
+                processes::tail_path(path, processes::PATH_TAIL_CHARS)
+            ),
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(CAPTION),
+                color: text_3,
+                ..Default::default()
+            },
+        );
+    }
+    ui.selectable_label(in_field, job)
+}
+
+/// A single-line field whose ink turns `danger` while its content is invalid,
+/// with the existing `proxies.invalid` marker beside it.
+///
+/// The one implementation of the invalid-input treatment: the Manual flow's
+/// port range and every field of the profile editor share it, so "invalid"
+/// never looks like two different things.
+fn invalid_text_field(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: impl Into<egui::WidgetText>,
+    width: f32,
+    invalid: bool,
+) -> egui::Response {
+    let ink = if invalid { danger } else { text_1 };
+    let response = ui.add(
+        egui::TextEdit::singleline(text)
+            .hint_text(hint)
+            .desired_width(width)
+            .text_color(ink),
+    );
+    if invalid {
+        ui.label(egui::RichText::new(i18n::t("proxies.invalid")).color(danger));
+    }
+    response
+}
+
 /// A config row: label left at the wide breakpoint, label above at narrow, so
 /// the control always keeps a full-width tap target when the window is snapped
 /// beside a game.
@@ -2571,11 +3786,16 @@ mod tests {
         assert_eq!(*lock_or_recover(&mutex), "state");
     }
     use super::{
-        apply_discovery_result, close_decision, games, primary_action, should_apply_race,
-        should_race, CloseDecision,
+        apply_discovery_result, apply_target_choice, close_decision, draft_reasons,
+        game_editor_body, game_pick_rows, games, picker_status, primary_action, process_picker,
+        save_user_profiles, server_from_fields, should_apply_race, should_race, target_for_pick,
+        target_front_door, target_summary, validate_draft, CloseDecision, EditorActions,
+        GameEditorDraft, GamePickRow, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
+        TargetRowAction,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
+    use crate::processes::ProcessEntry;
     use std::net::SocketAddrV4;
 
     fn addr(s: &str) -> SocketAddrV4 {
@@ -2849,5 +4069,785 @@ mod tests {
         assert_eq!(group_digits(41), "41");
         assert_eq!(group_digits(12412), "12,412");
         assert_eq!(group_digits(1_234_567), "1,234,567");
+    }
+
+    /// Discussion #146's first ask, closed end to end: the "Custom Port Range"
+    /// the user typed in Manual mode is persisted, and once restored it
+    /// actuates - it is parsed and handed to the interceptor as the config's
+    /// `port_range`, beating the profile's own range.
+    ///
+    /// The two steps mirror `start_boost` exactly. The assertion is about
+    /// reaching `InterceptorConfig`, so it lives in this file (the one that
+    /// wires the stored string into the engine) rather than next to the TOML
+    /// round-trips in `config.rs`.
+    #[test]
+    fn a_stored_manual_port_range_reaches_the_interceptor_config() {
+        // As the loader restores it from disk.
+        let saved = crate::config::GuiConfig {
+            manual_port_range: "27000-27050".to_string(),
+            ..Default::default()
+        };
+
+        let game = lightspeed_client::games::resolve("rust").expect("rust is a built-in key");
+        let proxy = "127.0.0.1:4434".parse().unwrap();
+
+        let cfg = lightspeed_client::interceptor::build_config_for_game_with_port_range(
+            game.as_ref(),
+            proxy,
+            false,
+            4,
+            Default::default(),
+            super::parse_custom_port_range(&saved.manual_port_range),
+        )
+        .expect("a config is built even when the game process is not running");
+        assert_eq!(
+            cfg.port_range,
+            (27000, 27050),
+            "the stored Manual range must reach the interceptor config"
+        );
+
+        // A malformed stored value parses to `None`: the profile default
+        // stands and nothing panics.
+        let cfg = lightspeed_client::interceptor::build_config_for_game_with_port_range(
+            game.as_ref(),
+            proxy,
+            false,
+            4,
+            Default::default(),
+            super::parse_custom_port_range("not-a-range"),
+        )
+        .expect("a config is built even when the game process is not running");
+        assert_eq!(cfg.port_range, game.ports());
+    }
+
+    /// The Game dropdown's model, not its pixels: the two modes, every built-in
+    /// in registry order, then the user's own group, then the way in.
+    #[test]
+    fn the_my_games_group_sits_below_the_built_ins_and_ends_with_the_editor_entry() {
+        let built_ins = games().len();
+        let rows = game_pick_rows(built_ins, 2);
+        assert_eq!(rows[0], GamePickRow::Auto);
+        assert_eq!(rows[1], GamePickRow::Manual);
+
+        let builtin_at: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(at, row)| matches!(row, GamePickRow::Builtin(_)).then_some(at))
+            .collect();
+        assert_eq!(
+            builtin_at,
+            (2..built_ins + 2).collect::<Vec<_>>(),
+            "every built-in is present, in registry order, right below the modes"
+        );
+        for (at, row) in rows.iter().enumerate() {
+            if let GamePickRow::Builtin(i) = row {
+                assert_eq!(*i, at - 2, "built-in indices must not shift");
+            }
+        }
+
+        let header = rows
+            .iter()
+            .position(|row| *row == GamePickRow::MyGamesHeader)
+            .expect("the group header is drawn when profiles exist");
+        assert!(
+            builtin_at.iter().all(|at| *at < header),
+            "the My games group sits below the built-ins: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter()
+                .filter_map(|row| match row {
+                    GamePickRow::User(i) => Some(*i),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![0, 1],
+            "one row per profile, in store order"
+        );
+        assert_eq!(rows.last(), Some(&GamePickRow::NewCustom));
+
+        // No profiles, no group - and the editor entry stays reachable.
+        let rows = game_pick_rows(built_ins, 0);
+        assert!(!rows.contains(&GamePickRow::MyGamesHeader));
+        assert_eq!(rows.last(), Some(&GamePickRow::NewCustom));
+        assert_eq!(rows.len(), built_ins + 3);
+    }
+
+    /// The editor's live verdict against the authority that actually refuses a
+    /// save: for every draft, "the Save button is enabled" must equal "the
+    /// schema accepts the document the button would write".
+    #[test]
+    fn the_editor_verdict_mirrors_the_schema_save_rules() {
+        use lightspeed_client::profiles::schema::validate_for_save;
+        use lightspeed_client::profiles::UserGameProfile;
+
+        fn draft(name: &str, key: &str, processes: &str, udp: &str) -> GameEditorDraft {
+            GameEditorDraft {
+                key: key.to_string(),
+                name: name.to_string(),
+                process_names: processes.to_string(),
+                udp_range: udp.to_string(),
+                ..Default::default()
+            }
+        }
+
+        fn existing(key: &str) -> UserGameProfile {
+            UserGameProfile {
+                name: key.to_string(),
+                key: key.to_string(),
+                process_names: vec!["Mine.exe".to_string()],
+                udp_ports: None,
+                dynamic_server: false,
+                notes: None,
+            }
+        }
+
+        /// What the sheet's Save button would write.
+        fn document(
+            existing: &[UserGameProfile],
+            draft: &GameEditorDraft,
+            editing: Option<usize>,
+        ) -> Vec<UserGameProfile> {
+            let mut games = existing.to_vec();
+            match editing {
+                Some(i) if i < games.len() => games[i] = draft.to_profile(),
+                _ => games.push(draft.to_profile()),
+            }
+            games
+        }
+
+        let cases: Vec<(&str, GameEditorDraft, Option<usize>, Vec<UserGameProfile>)> = vec![
+            (
+                "a new profile with process names",
+                draft("My Game", "", "MyGame.exe", ""),
+                None,
+                vec![],
+            ),
+            (
+                "a new profile with only a UDP range",
+                draft("Ports Only", "", "", "27015-27050"),
+                None,
+                vec![],
+            ),
+            (
+                "a blank name",
+                draft("", "", "MyGame.exe", ""),
+                None,
+                vec![],
+            ),
+            (
+                "neither process names nor a range",
+                draft("Empty", "", "", ""),
+                None,
+                vec![],
+            ),
+            (
+                "a key a built-in claims",
+                draft("Sneaky", "minecraft", "MyGame.exe", ""),
+                None,
+                vec![],
+            ),
+            (
+                "a process name a built-in claims",
+                draft("Sneaky", "", "RustClient.exe", ""),
+                None,
+                vec![],
+            ),
+            (
+                "a key another profile already uses",
+                draft("Sneaky", "my-game", "MyGame.exe", ""),
+                None,
+                vec![existing("my-game")],
+            ),
+            (
+                "editing a profile keeps its own key",
+                draft("Renamed", "my-game", "MyGame.exe", ""),
+                Some(0),
+                vec![existing("my-game")],
+            ),
+            (
+                "a range that is not a range",
+                draft("Typo", "", "", "27015-abc"),
+                None,
+                vec![],
+            ),
+            (
+                "a range whose lo is above its hi",
+                draft("Backwards", "", "", "27050-27015"),
+                None,
+                vec![],
+            ),
+        ];
+
+        for (label, draft, editing, stored) in cases {
+            let keys: Vec<String> = stored.iter().map(|game| game.key.clone()).collect();
+            let editing_key = editing
+                .and_then(|i| stored.get(i))
+                .map(|game| game.key.clone());
+            let verdict = validate_draft(&draft, &keys, editing_key.as_deref());
+            let document = document(&stored, &draft, editing);
+            let accepted = validate_for_save(&document, &[]).is_ok();
+            assert_eq!(
+                verdict.ok(),
+                accepted,
+                "{label}: the editor and the schema disagree ({verdict:?}, {document:?})"
+            );
+        }
+    }
+
+    /// A range the schema would silently drop still blocks Save: the field has
+    /// to actuate, not vanish (the dead-control rule this round exists to fix).
+    #[test]
+    fn a_malformed_range_blocks_saving_even_though_the_schema_would_drop_it() {
+        let draft = GameEditorDraft {
+            name: "Typo".to_string(),
+            process_names: "MyGame.exe".to_string(),
+            udp_range: "27o15-27050".to_string(),
+            ..Default::default()
+        };
+        let verdict = validate_draft(&draft, &[], None);
+        assert!(!verdict.udp_ok, "the range field is the field at fault");
+        assert!(!verdict.ok(), "an unparseable range must block the save");
+
+        // The schema alone would drop the range and save a profile without it.
+        let document = vec![draft.to_profile()];
+        assert!(lightspeed_client::profiles::schema::validate_for_save(&document, &[]).is_ok());
+        assert_eq!(document[0].udp_ports, None);
+
+        // And the reason shown is the range, in the user's language.
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(Some("en"));
+        let reasons = draft_reasons(&verdict, draft.key().as_deref());
+        crate::i18n::set_language(None);
+        assert!(
+            reasons.iter().any(|reason| reason.contains("range")),
+            "the range must be named: {reasons:?}"
+        );
+    }
+
+    /// The Manual flow's "Save as…" writes a `[[servers]]` entry that survives
+    /// the round trip into the next start, and a game saved from the editor
+    /// lives in the same document without displacing it.
+    #[test]
+    fn a_saved_server_round_trips_through_the_profile_store() {
+        use lightspeed_client::profiles::ProfileStore;
+
+        let dir =
+            std::env::temp_dir().join(format!("lightspeed-gui-profiles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("profiles.toml");
+        let store = ProfileStore::load_from(&path);
+
+        let server = server_from_fields("My server", "203.0.113.7:27015", "27015-27050")
+            .expect("a named, well-formed server");
+        assert_eq!(server.address, "203.0.113.7:27015");
+        assert_eq!(
+            server.udp_ports.map(|range| range.to_string()).as_deref(),
+            Some("27015-27050")
+        );
+
+        // Exactly what the Save as button does: read the loaded list, append,
+        // write through the store.
+        let mut servers = store.servers();
+        servers.push(server.clone());
+        save_user_profiles(&store, &store.games(), &servers).expect("save the servers");
+
+        // The store reloaded as part of the save, so the next resolve in this
+        // process sees it without a restart.
+        assert_eq!(store.servers(), vec![server.clone()]);
+
+        // The editor's own write goes through the same document, and must not
+        // displace the saved server.
+        let game = GameEditorDraft {
+            name: "My Game".to_string(),
+            process_names: "MyGame.exe".to_string(),
+            ..Default::default()
+        }
+        .to_profile();
+        save_user_profiles(&store, std::slice::from_ref(&game), &servers)
+            .expect("save both halves");
+
+        // A fresh store is the next start: it reads both entries back.
+        let reopened = ProfileStore::load_from(&path);
+        assert_eq!(reopened.games(), vec![game]);
+        assert_eq!(reopened.servers(), vec![server]);
+        let text = std::fs::read_to_string(&path).expect("the document was written");
+        assert!(text.contains("[[servers]]"), "{text}");
+        assert!(text.contains("27015-27050"), "{text}");
+
+        // An unnamed or unaddressable server is refused before anything is
+        // written - the fields on screen are the fields that get saved.
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(Some("en"));
+        let unnamed = server_from_fields("  ", "203.0.113.7:27015", "");
+        let unaddressed = server_from_fields("Named", "not-an-address", "");
+        let bad_range = server_from_fields("Named", "203.0.113.7:27015", "nope");
+        crate::i18n::set_language(None);
+        assert!(unnamed.is_err() && unaddressed.is_err() && bad_range.is_err());
+        assert_eq!(reopened.servers().len(), 1, "a refusal writes nothing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The picker's one state machine: while a load is in flight - or has not
+    /// been started yet - the sheet says so; only a finished enumeration shows
+    /// rows.
+    #[test]
+    fn the_picker_reports_a_load_in_flight_and_a_finished_table() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert_eq!(
+            picker_status(&ProcessListState::Idle),
+            PickerStatus::Loading
+        );
+        assert_eq!(
+            picker_status(&ProcessListState::InFlight(rx)),
+            PickerStatus::Loading
+        );
+        assert_eq!(picker_status(&ProcessListState::Done), PickerStatus::Ready);
+        drop(tx);
+    }
+
+    /// The editor sheet, rendered and read back.
+    ///
+    /// Asserting on the widget calls would pass with the sheet wired to nothing,
+    /// so this drives the body the sheet itself draws and collects the text it
+    /// actually painted: the five fields, the process picker and its rows, the
+    /// key that `--game <key>` takes, and the actions - with no TCP field among
+    /// them.
+    #[test]
+    fn the_game_editor_sheet_draws_every_field_and_the_key() {
+        use eframe::egui;
+
+        fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+            match shape {
+                egui::Shape::Text(text) => out.push((
+                    text.galley.text().to_string(),
+                    text.pos.x + text.galley.size().x,
+                )),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(Some("en"));
+
+        let mut draft = GameEditorDraft::new_profile();
+        draft.name = "My Game".to_string();
+        draft.process_names = "MyGame.exe".to_string();
+        draft.udp_range = "27015-27050".to_string();
+        let verdict = validate_draft(&draft, &[], None);
+        assert!(
+            verdict.ok(),
+            "the fixture must be a valid draft: {verdict:?}"
+        );
+
+        // One picker row, with a path far wider than the sheet: the row has to
+        // be drawn, trimmed, and still stay inside the sheet (whose cap at a
+        // 440 px screen is `sheet_bounds`' 416).
+        let rows = vec![ProcessEntry {
+            pid: 4242,
+            name: "MyGame.exe".to_string(),
+            path: Some(
+                "C:\\Program Files\\Some Vendor\\A Very Long Game Folder\\bin\\win64\\MyGame.exe"
+                    .to_string(),
+            ),
+            started_at: None,
+        }];
+
+        let ctx = egui::Context::default();
+        super::install_fonts(&ctx, Some("en"));
+        super::apply_theme(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(440.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let mut search = String::new();
+        let mut actions = EditorActions::default();
+        let mut out = ctx.run_ui(raw, |ui| {
+            game_editor_body(
+                ui,
+                &mut draft,
+                &verdict,
+                None,
+                None,
+                &[],
+                ProcessPicker {
+                    rows: &rows,
+                    status: PickerStatus::Ready,
+                    search: &mut search,
+                },
+                &mut actions,
+            );
+        });
+        out.textures_delta.clear();
+        let mut drawn = Vec::new();
+        for clipped in &out.shapes {
+            collect(&clipped.shape, &mut drawn);
+        }
+        let frame = drawn
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let widest = drawn
+            .iter()
+            .map(|(_, right)| *right)
+            .fold(0.0_f32, f32::max);
+        crate::i18n::set_language(None);
+
+        // Drawn, and drawn in order: this is the sheet's vertical layout, top
+        // to bottom, read back off the frame.
+        let mut last = 0;
+        for expected in [
+            "My games",
+            "Name:",
+            "Process names:",
+            "Running processes",
+            "Refresh",
+            "Filter by name or path",
+            "UDP range:",
+            "Server rotates between matches",
+            "Notes:",
+            "Key: my-game - start the CLI with --game my-game",
+            "Save game",
+        ] {
+            let at = frame
+                .find(expected)
+                .unwrap_or_else(|| panic!("the sheet did not draw {expected:?}:\n{frame}"));
+            assert!(at >= last, "{expected:?} is drawn out of order:\n{frame}");
+            last = at;
+        }
+        // The picker row itself: the image name, the PID, and a path trimmed to
+        // its tail - the tail has to reach the frame, not the full path.
+        assert!(
+            frame.contains("MyGame.exe  4242  …bin\\win64\\MyGame.exe"),
+            "the picker did not draw the row's name, PID and trimmed path:\n{frame}"
+        );
+        assert!(
+            widest <= 416.0,
+            "a row was painted past the sheet's width ({widest} px):\n{frame}"
+        );
+        assert!(
+            !frame.contains("TCP"),
+            "the editor must not offer a TCP field:\n{frame}"
+        );
+        assert_eq!(actions, EditorActions::default(), "a render clicks nothing");
+    }
+
+    /// The pick the front door makes is the state the primary action starts
+    /// interception from: the chosen row becomes the target, the engine binds it
+    /// by image name against the live process table, and the config the
+    /// interceptor starts from carries that process - not a port range.
+    #[test]
+    fn a_picked_process_becomes_the_target_interception_starts_from() {
+        use lightspeed_client::interceptor::traits::ProcessInfo;
+        use lightspeed_client::interceptor::{
+            build_config_for_process_target, resolve_process_target,
+        };
+
+        let entry = ProcessEntry {
+            pid: 4242,
+            name: "MyGame.exe".to_string(),
+            path: Some("C:\\Games\\MyGame\\MyGame.exe".to_string()),
+            started_at: None,
+        };
+        let target = apply_target_choice(None, Some(target_for_pick(&entry)), false)
+            .expect("choosing a row sets the target");
+
+        // The status surface and the start path agree on the identity.
+        assert_eq!(target.describe(), "MyGame.exe (PID 4242)");
+
+        // What `start_boost` does with it: bind the name to the live table,
+        // then build the config the interceptor starts from.
+        let live = ProcessInfo {
+            pid: 4242,
+            name: "MyGame.exe".to_string(),
+            routes: vec![],
+        };
+        let bound =
+            resolve_process_target(&target, Some(&live)).expect("the running process binds");
+        let game = lightspeed_client::games::resolve("rust").expect("rust is a built-in key");
+        let cfg = build_config_for_process_target(
+            game.as_ref(),
+            bound.clone(),
+            vec![],
+            addr("127.0.0.1:4434"),
+            false,
+            4,
+            Default::default(),
+        );
+        assert_eq!(
+            cfg.process_target,
+            Some(bound),
+            "the config the primary action starts from must carry the picked process"
+        );
+        assert_eq!(
+            cfg.process_names,
+            vec!["MyGame.exe".to_string()],
+            "the config targets the picked image, not the profile's own processes"
+        );
+    }
+
+    /// Clearing drops the target, and the built-in Game path is exactly what the
+    /// primary action builds next: a config with no process target and the
+    /// profile's own port range standing again.
+    #[test]
+    fn clearing_the_target_returns_to_the_built_in_game_path() {
+        let target = ProcessTarget {
+            name: Some("MyGame.exe".to_string()),
+            pid: Some(4242),
+        };
+        assert_eq!(
+            apply_target_choice(Some(target.clone()), None, true),
+            None,
+            "Clear drops the target"
+        );
+        assert_eq!(
+            apply_target_choice(Some(target.clone()), None, false),
+            Some(target),
+            "a frame that neither picks nor clears leaves the target alone"
+        );
+
+        let game = lightspeed_client::games::resolve("rust").expect("rust is a built-in key");
+        let cfg = lightspeed_client::interceptor::build_config_for_game_with_port_range(
+            game.as_ref(),
+            addr("127.0.0.1:4434"),
+            false,
+            4,
+            Default::default(),
+            None,
+        )
+        .expect("the built-in path builds a config");
+        assert_eq!(
+            cfg.process_target, None,
+            "the built-in path carries no process target"
+        );
+        assert_eq!(
+            cfg.port_range,
+            game.ports(),
+            "the profile's own range decides again"
+        );
+    }
+
+    /// The status surface's line, through i18n: the same identity in English and
+    /// German, with the placeholder substituted and never left as a brace.
+    #[test]
+    fn the_target_status_line_names_the_process_and_its_pid() {
+        let _guard = crate::i18n::test_lock();
+        let target = ProcessTarget {
+            name: Some("MyGame.exe".to_string()),
+            pid: Some(4242),
+        };
+        crate::i18n::set_language(Some("en"));
+        assert_eq!(target_summary(&target), "Target: MyGame.exe (PID 4242)");
+        crate::i18n::set_language(Some("de"));
+        assert_eq!(target_summary(&target), "Ziel: MyGame.exe (PID 4242)");
+        crate::i18n::set_language(None);
+    }
+
+    /// The front door, rendered and read back: the picked process and the way
+    /// back to the built-in path, or the way in to the picker - inside a 320 px
+    /// window, with nothing clicked.
+    #[test]
+    fn the_target_front_door_draws_the_pick_and_the_way_back() {
+        use eframe::egui;
+
+        fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+            match shape {
+                egui::Shape::Text(text) => out.push((
+                    text.galley.text().to_string(),
+                    text.pos.x + text.galley.size().x,
+                )),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(Some("en"));
+        let target = ProcessTarget {
+            name: Some("MyGame.exe".to_string()),
+            pid: Some(4242),
+        };
+
+        let frame = |target: Option<&ProcessTarget>| -> (String, f32) {
+            let ctx = egui::Context::default();
+            super::install_fonts(&ctx, Some("en"));
+            super::apply_theme(&ctx);
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(320.0, 800.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let action = target_front_door(ui, target);
+                assert_eq!(
+                    action,
+                    TargetRowAction::default(),
+                    "a render clicks nothing"
+                );
+            });
+            out.textures_delta.clear();
+            let mut drawn = Vec::new();
+            for clipped in &out.shapes {
+                collect(&clipped.shape, &mut drawn);
+            }
+            let widest = drawn
+                .iter()
+                .map(|(_, right)| *right)
+                .fold(0.0_f32, f32::max);
+            (
+                drawn
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                widest,
+            )
+        };
+
+        let (set, set_wide) = frame(Some(&target));
+        assert!(
+            set.contains("Target: MyGame.exe (PID 4242)"),
+            "the front door did not name the picked process:\n{set}"
+        );
+        assert!(
+            set.contains("Clear target"),
+            "the front door did not offer the way back:\n{set}"
+        );
+        assert!(
+            set_wide <= 320.0,
+            "the front door drew past a 320 px window ({set_wide} px):\n{set}"
+        );
+
+        let (unset, unset_wide) = frame(None);
+        assert!(
+            unset.contains("Target a process"),
+            "the front door did not offer the picker:\n{unset}"
+        );
+        assert!(
+            unset.contains(crate::i18n::t("game.target_none").as_ref()),
+            "the front door did not say what it does:\n{unset}"
+        );
+        assert!(
+            unset_wide <= 320.0,
+            "the front door drew past a 320 px window ({unset_wide} px):\n{unset}"
+        );
+        crate::i18n::set_language(None);
+    }
+
+    /// The picker both surfaces share: an in-flight load, an empty table, and a
+    /// filter nothing matches each say what they are, and a finished table draws
+    /// its rows - all without enumerating or blocking.
+    #[test]
+    fn the_shared_picker_draws_loading_empty_and_no_match_honestly() {
+        use eframe::egui;
+
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.text().to_string()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(Some("en"));
+        let rows = vec![ProcessEntry {
+            pid: 7,
+            name: "steam.exe".to_string(),
+            path: Some("C:\\Steam\\steam.exe".to_string()),
+            started_at: None,
+        }];
+
+        let draw = |status: PickerStatus, rows: &[ProcessEntry], query: &str| -> String {
+            let ctx = egui::Context::default();
+            super::install_fonts(&ctx, Some("en"));
+            super::apply_theme(&ctx);
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(440.0, 800.0),
+                )),
+                ..Default::default()
+            };
+            let mut search = query.to_string();
+            let mut refresh = false;
+            let mut out = ctx.run_ui(raw, |ui| {
+                let mut picker = ProcessPicker {
+                    rows,
+                    status,
+                    search: &mut search,
+                };
+                let chosen = process_picker(ui, &mut picker, |_| false, &mut refresh);
+                assert!(chosen.is_none(), "a render clicks no row");
+            });
+            out.textures_delta.clear();
+            assert!(!refresh, "a render presses no button");
+            let mut drawn = Vec::new();
+            for clipped in &out.shapes {
+                collect(&clipped.shape, &mut drawn);
+            }
+            drawn.join("\n")
+        };
+
+        assert!(
+            draw(PickerStatus::Loading, &[], "")
+                .contains(crate::i18n::t("game.editor_process_loading").as_ref()),
+            "a load in flight must say so"
+        );
+        assert!(
+            draw(PickerStatus::Ready, &[], "")
+                .contains(crate::i18n::t("game.editor_process_empty").as_ref()),
+            "an empty table must say so"
+        );
+        assert!(
+            draw(PickerStatus::Ready, &rows, "nonesuch")
+                .contains(crate::i18n::t("game.editor_process_no_match").as_ref()),
+            "a filter nothing matches must say so"
+        );
+        let ready = draw(PickerStatus::Ready, &rows, "");
+        assert!(
+            ready.contains("steam.exe"),
+            "a finished table draws its rows:\n{ready}"
+        );
+        assert!(ready.contains('7'), "the row names the PID:\n{ready}");
+        crate::i18n::set_language(None);
+    }
+
+    /// The elevation gate is unchanged by targeting: an unelevated app asks for
+    /// a restart, never a start, whether or not a process is picked. The target
+    /// is not an input to the action slot at all, which is exactly why the
+    /// requirement stays honest.
+    #[test]
+    fn an_unelevated_app_still_asks_for_elevation_when_a_process_is_targeted() {
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(None);
+        // The arguments the frame passes with a target set and nothing boosting:
+        // unelevated, and either connected with a relay or not yet ready.
+        assert_eq!(
+            primary_action(false, false, true, true),
+            ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
+        );
+        assert_eq!(
+            primary_action(false, false, false, true),
+            ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
+        );
     }
 }

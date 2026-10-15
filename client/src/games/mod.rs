@@ -113,7 +113,11 @@ pub trait GameConfig: Send + Sync {
     fn name(&self) -> &str;
 
     /// Process name(s) to detect the game.
-    fn process_names(&self) -> &[&str];
+    ///
+    /// Returned by value so a profile that owns its names (a user profile
+    /// holding `Vec<String>`) can lend them for the call without leaking: the
+    /// returned `Vec` borrows from `&self` and dies with it.
+    fn process_names(&self) -> Vec<&str>;
 
     /// The game's primary network port range.
     ///
@@ -231,8 +235,13 @@ pub trait GameConfig: Send + Sync {
     }
 }
 
-/// Detect a game by name string.
-pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
+/// Detect a built-in game by name string.
+///
+/// Crate-private: [`resolve`] is the only public resolution API, so nothing
+/// outside this crate resolves a game key on its own. The registry guards and
+/// the schema's built-in collision probe still come through here, which is what
+/// keeps the built-in key set single-sourced.
+pub(crate) fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
     match name.to_lowercase().as_str() {
         "fortnite" => Ok(Box::new(fortnite::FortniteConfig)),
         "cs2" | "counter-strike" | "counterstrike" => Ok(Box::new(cs2::Cs2Config)),
@@ -252,11 +261,11 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "minecraft" | "mc" | "minecraftbedrock" | "minecraft-bedrock" => {
             Ok(Box::new(minecraft::MinecraftConfig))
         }
-        "minecraft-java" | "minecraftjava" | "java" => {
-            Ok(Box::new(minecraft::MinecraftJavaConfig))
-        }
+        "minecraft-java" | "minecraftjava" | "java" => Ok(Box::new(minecraft::MinecraftJavaConfig)),
         "genshin" | "genshinimpact" | "genshin-impact" => Ok(Box::new(genshin::GenshinConfig)),
-        "rocketleague" | "rocket-league" | "rocket" => Ok(Box::new(rocketleague::RocketLeagueConfig)),
+        "rocketleague" | "rocket-league" | "rocket" => {
+            Ok(Box::new(rocketleague::RocketLeagueConfig))
+        }
         "roblox" => Ok(Box::new(roblox::RobloxConfig)),
         "wot" | "worldoftanks" | "world-of-tanks" => Ok(Box::new(wot::WotConfig)),
         "zomboid" | "projectzomboid" | "project-zomboid" | "pz" => {
@@ -269,16 +278,93 @@ pub fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
         "rainbowsix" | "rainbow-six" | "rainbow-six-siege" | "r6" | "r6s" | "siege" => {
             Ok(Box::new(rainbowsix::RainbowSixConfig))
         }
-        _ => anyhow::bail!(
-            "Unknown game: '{}'. Supported: fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, minecraft-java, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt, rainbowsix",
-            name
-        ),
+        _ => Err(anyhow::anyhow!(unknown_game_message(name))),
+    }
+}
+
+/// The `Supported:` list, in one place so the built-in resolver and [`resolve`]
+/// cannot drift apart.
+const SUPPORTED_GAMES: &str = "fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, minecraft-java, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt, rainbowsix";
+
+/// The built-in `Unknown game` message: the unchanged head every existing
+/// caller matches on.
+fn unknown_game_message(name: &str) -> String {
+    format!("Unknown game: '{name}'. Supported: {SUPPORTED_GAMES}")
+}
+
+/// Resolve a game key to a profile - the only public resolution API.
+///
+/// Precedence, fixed and tested:
+/// 1. a built-in hit, so a shipped key always means the shipped profile;
+/// 2. a loaded user profile whose key matches exactly;
+/// 3. otherwise the built-in `Unknown game` error, extended with a
+///    `Your profiles:` line listing the loaded user keys.
+///
+/// The extension is empty-safe: with no profiles file the message is exactly
+/// the built-in one, so every existing caller and test keeps matching.
+pub fn resolve(key: &str) -> anyhow::Result<Box<dyn GameConfig>> {
+    if let Ok(game) = detect_game(key) {
+        return Ok(game);
+    }
+
+    let loaded = crate::profiles::global().games();
+    let mut user_keys: Vec<String> = Vec::with_capacity(loaded.len());
+    for profile in loaded {
+        if profile.key == key {
+            return Ok(Box::new(UserProfileConfig(profile)));
+        }
+        user_keys.push(profile.key);
+    }
+    user_keys.sort();
+    user_keys.dedup();
+
+    let mut message = unknown_game_message(key);
+    if !user_keys.is_empty() {
+        message.push_str(&format!("\nYour profiles: {}", user_keys.join(", ")));
+    }
+    Err(anyhow::anyhow!(message))
+}
+
+/// A loaded user profile as a [`GameConfig`].
+///
+/// The adapter between the owned `String`s a `profiles.toml` entry carries and
+/// the resolution surface: `process_names()` lends from `&self` and nothing is
+/// interned, so a `reload()` after an editor save strands nothing.
+struct UserProfileConfig(crate::profiles::UserGameProfile);
+
+impl GameConfig for UserProfileConfig {
+    fn name(&self) -> &str {
+        &self.0.name
+    }
+
+    fn process_names(&self) -> Vec<&str> {
+        self.0.process_names.iter().map(String::as_str).collect()
+    }
+
+    fn ports(&self) -> (u16, u16) {
+        self.0.udp_ports.map(|p| (p.lo, p.hi)).unwrap_or((0, 0))
+    }
+
+    fn anti_cheat(&self) -> &str {
+        "user-defined"
+    }
+
+    fn typical_pps(&self) -> u32 {
+        60
+    }
+
+    fn packet_size_range(&self) -> (usize, usize) {
+        (64, 1400)
+    }
+
+    fn dynamic_server(&self) -> bool {
+        self.0.dynamic_server
     }
 }
 
 /// Canonical CLI key + display name for every supported game, in menu order.
 ///
-/// This is the single source of truth: [`detect_game`] resolves the keys and
+/// This is the single source of truth: [`resolve`] resolves the keys and
 /// [`all_games`] / [`all_game_keys`] derive from it. Register every new game
 /// here (the `games` tests enforce the 20-entry count and key/name agreement).
 pub const GAME_REGISTRY: &[(&str, &str)] = &[
@@ -311,7 +397,7 @@ pub const GAME_REGISTRY: &[(&str, &str)] = &[
 ///
 /// Consumers (the GUI game list, `--list-games`) use this instead of
 /// hand-maintaining a parallel table. Derived from [`GAME_REGISTRY`], the same
-/// table [`detect_game`] resolves against.
+/// table [`resolve`] resolves against.
 pub fn all_game_keys() -> Vec<(&'static str, &'static str)> {
     GAME_REGISTRY.to_vec()
 }
@@ -330,44 +416,42 @@ pub fn all_games() -> Vec<Box<dyn GameConfig>> {
 /// Whether the game with the given display name rotates through ephemeral
 /// server addresses.
 ///
-/// Resolves the profile from [`all_games`] by exact display name so a caller
-/// holding only `InterceptorConfig::game_name` can consult the same
+/// Resolves the profile from [`builtin_profiles`] by exact display name so a
+/// caller holding only `InterceptorConfig::game_name` can consult the same
 /// `dynamic_server()` flag without re-deriving CLI keys. Unknown names return
 /// `false`, preserving the legacy lock-onto-first-route behaviour.
 pub fn dynamic_server_for_name(name: &str) -> bool {
-    all_games()
-        .into_iter()
-        .find(|g| g.name() == name)
-        .is_some_and(|g| g.dynamic_server())
+    builtin_profiles()
+        .iter()
+        .find(|game| game.name() == name)
+        .is_some_and(|game| game.dynamic_server())
+}
+
+/// Every built-in profile, resolved once and owned here for the life of the
+/// process.
+///
+/// Owning the boxes in this registry is what replaces the old interning table:
+/// a `&'static` borrow of a registry entry hands its names back with that same
+/// lifetime, so no profile and no name has to be leaked to reach `'static`.
+fn builtin_profiles() -> &'static [Box<dyn GameConfig>] {
+    static PROFILES: OnceLock<Vec<Box<dyn GameConfig>>> = OnceLock::new();
+    PROFILES.get_or_init(all_games).as_slice()
 }
 
 /// Resolve a game's process names from its exact display name.
 ///
-/// Mirrors [`dynamic_server_for_name`]: the profile is found in [`all_games`]
-/// by display name, so a caller holding only `InterceptorConfig::game_name`
-/// can recover the same process-name list the profile declares. The names are
-/// compile-time string literals; profiles are leaked once behind a cache so
-/// those literals can be returned as `&'static str` without per-call copying.
-/// Unknown names return an empty vec.
+/// Mirrors [`dynamic_server_for_name`]: the profile is found in
+/// [`builtin_profiles`] by display name, so a caller holding only
+/// `InterceptorConfig::game_name` can recover the same process-name list the
+/// profile declares. The names are compile-time string literals owned by the
+/// registry, so each call copies the pointers, never the strings. Unknown
+/// names return an empty vec.
 pub fn process_names_for_name(display_name: &str) -> Vec<&'static str> {
-    process_name_table()
+    builtin_profiles()
         .iter()
-        .find(|(name, _)| *name == display_name)
-        .map(|(_, names)| names.clone())
+        .find(|game| game.name() == display_name)
+        .map(|game| game.process_names())
         .unwrap_or_default()
-}
-
-fn process_name_table() -> &'static Vec<(&'static str, Vec<&'static str>)> {
-    static TABLE: OnceLock<Vec<(&'static str, Vec<&'static str>)>> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        all_games()
-            .into_iter()
-            .map(|game| {
-                let game: &'static dyn GameConfig = Box::leak(game);
-                (game.name(), game.process_names().to_vec())
-            })
-            .collect()
-    })
 }
 
 /// Match an observed process name against a known game process name.
@@ -420,7 +504,10 @@ pub fn auto_detect() -> anyhow::Result<Box<dyn GameConfig>> {
 
     for game in games {
         let marker = game.command_line_marker();
-        let hit = game.process_names().iter().find(|&&process_name| {
+        // Bind the owned `Vec` before borrowing it: the search must borrow
+        // from a binding, not from a temporary that dies with the call.
+        let process_names = game.process_names();
+        let hit = process_names.iter().find(|&&process_name| {
             processes
                 .iter()
                 .any(|p| process_entry_matches(p, process_name, marker))
@@ -844,6 +931,56 @@ mod tests {
         );
     }
 
+    /// A profile that owns its names must be able to lend them for the call
+    /// without any interning: the trait returns an owned `Vec`, so a
+    /// `Vec<String>`-backed profile implements it with no leaked copies.
+    #[test]
+    fn user_profile_names_borrow_without_leak() {
+        struct UserProfile {
+            names: Vec<String>,
+        }
+
+        impl GameConfig for UserProfile {
+            fn name(&self) -> &str {
+                "User Game"
+            }
+
+            fn process_names(&self) -> Vec<&str> {
+                self.names.iter().map(String::as_str).collect()
+            }
+
+            fn ports(&self) -> (u16, u16) {
+                (27015, 27015)
+            }
+
+            fn anti_cheat(&self) -> &str {
+                "user-defined"
+            }
+
+            fn typical_pps(&self) -> u32 {
+                60
+            }
+
+            fn packet_size_range(&self) -> (usize, usize) {
+                (64, 1400)
+            }
+        }
+
+        let profile = UserProfile {
+            names: vec!["MyGame.exe".to_string(), "MyGame-launcher.exe".to_string()],
+        };
+
+        let names = profile.process_names();
+        assert_eq!(names, vec!["MyGame.exe", "MyGame-launcher.exe"]);
+
+        // Each lent name points straight at the profile's own buffer: the
+        // strings were borrowed, not copied out and not interned.
+        for (lent, owned) in names.iter().zip(&profile.names) {
+            assert!(std::ptr::eq(lent.as_ptr(), owned.as_ptr()));
+            assert_eq!(lent.len(), owned.len());
+        }
+    }
+
     #[test]
     fn test_dynamic_server_for_name_matches_profiles() {
         assert!(dynamic_server_for_name("Fortnite"));
@@ -859,6 +996,25 @@ mod tests {
         // Note: "overwatch" is now a valid alias for Overwatch 2
         assert!(detect_game("warzone").is_err());
         assert!(detect_game("").is_err());
+    }
+
+    /// The public resolution API: a built-in key always wins, and an unknown
+    /// key reports the documented head (the `Your profiles:` line is covered
+    /// end-to-end by `tests/cli_profiles.rs`, where a store is loaded).
+    #[test]
+    fn resolve_prefers_a_built_in_then_reports_unknown_keys() {
+        let builtin = resolve("cs2").expect("cs2 is a built-in key");
+        assert_eq!(builtin.name(), "Counter-Strike 2");
+
+        let err = match resolve("zz-no-such-game-zz") {
+            Ok(_) => panic!("an unknown key must not resolve"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.starts_with("Unknown game: 'zz-no-such-game-zz'."),
+            "{err}"
+        );
+        assert!(err.contains("Supported:"), "{err}");
     }
 
     #[test]
@@ -1245,5 +1401,215 @@ mod tests {
         // On a real system there should be some processes, but CI containers
         // may return empty, that's fine.
         let _ = procs;
+    }
+
+    // ── user profiles never enter the built-in registries ───────────
+
+    /// Eight collision-free user profiles: a clean load that must leave both
+    /// shipped registries untouched.
+    const N_USER_PROFILES: &str = r#"
+version = 1
+
+[[games]]
+name = "Game One"
+udp_ports = "30001"
+
+[[games]]
+name = "Game Two"
+udp_ports = "30002"
+
+[[games]]
+name = "Game Three"
+udp_ports = "30003"
+
+[[games]]
+name = "Game Four"
+udp_ports = "30004"
+
+[[games]]
+name = "Game Five"
+udp_ports = "30005"
+
+[[games]]
+name = "Game Six"
+udp_ports = "30006"
+
+[[games]]
+name = "Game Seven"
+udp_ports = "30007"
+
+[[games]]
+name = "Game Eight"
+udp_ports = "30008"
+"#;
+
+    /// The registry-shape guard as a pure function of a candidate table.
+    ///
+    /// `GAME_REGISTRY` is a `const` slice, so the mutation check below cannot
+    /// doctor the real one: it doctors a copy and watches this same guard fail.
+    /// The 23-entry count and the wire-id completeness check are exactly the
+    /// shipped guards (`test_all_game_keys_count_matches_registry`,
+    /// `test_every_registry_key_resolves_to_game_id`). They are not weakened
+    /// for user profiles - that is the point of this test.
+    fn registry_guard(entries: &[(&str, &str)]) -> Result<(), String> {
+        if entries.len() != 23 {
+            return Err(format!(
+                "GAME_REGISTRY must stay at 23 entries, found {}",
+                entries.len()
+            ));
+        }
+        for (key, display) in entries {
+            if lightspeed_protocol::game_id::id_for_key(key)
+                == lightspeed_protocol::game_id::UNKNOWN
+            {
+                return Err(format!(
+                    "GAME_REGISTRY key {key:?} ({display:?}) is missing from the protocol GAME_IDS registry"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The protocol side of the same guard: the append-only wire-id table stays
+    /// at 23 entries, every id is unique, and none reuses the reserved
+    /// `UNKNOWN` (the protocol's `test_game_ids_unique_and_stable`).
+    fn game_ids_guard(ids: &[(&str, u8)]) -> Result<(), String> {
+        if ids.len() != 23 {
+            return Err(format!(
+                "GAME_IDS must stay at 23 entries, found {}",
+                ids.len()
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (key, id) in ids {
+            if *id == lightspeed_protocol::game_id::UNKNOWN {
+                return Err(format!(
+                    "GAME_IDS entry {key:?} reuses the reserved UNKNOWN id"
+                ));
+            }
+            if !seen.insert(*id) {
+                return Err(format!("GAME_IDS id {id} is not unique (entry {key:?})"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Loading N user profiles leaves `GAME_REGISTRY` at 23 entries and the
+    /// protocol `GAME_IDS` count guard intact, and none of the user keys leaks
+    /// into the built-in key set.
+    #[test]
+    fn user_profiles_never_enter_the_builtin_registries() {
+        // Load the profiles through the real store path (file -> loader ->
+        // cache), not just the pure parser, so the guard covers the whole
+        // "loading" path the CLI and GUI use.
+        let dir =
+            std::env::temp_dir().join(format!("lightspeed-registry-guard-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("profiles.toml");
+        std::fs::write(&path, N_USER_PROFILES).expect("write profiles file");
+
+        let store = crate::profiles::ProfileStore::load_from(&path);
+        let loaded = store.games();
+        assert_eq!(loaded.len(), 8, "eight clean profiles must load");
+        assert!(
+            store.snapshot().diagnostics.is_empty(),
+            "collision-free profiles must load silently: {:?}",
+            store.snapshot().diagnostics
+        );
+
+        // ... and both shipped registries are exactly as they were.
+        assert_eq!(GAME_REGISTRY.len(), 23, "23 supported games");
+        assert_eq!(
+            all_game_keys().len(),
+            GAME_REGISTRY.len(),
+            "GAME_REGISTRY must stay in sync with the supported games"
+        );
+        assert_eq!(
+            lightspeed_protocol::game_id::GAME_IDS.len(),
+            23,
+            "every real game needs one id"
+        );
+        assert!(registry_guard(GAME_REGISTRY).is_ok());
+        assert!(game_ids_guard(lightspeed_protocol::game_id::GAME_IDS).is_ok());
+
+        // No loaded key is a built-in or has slipped into the CLI key table.
+        for game in &loaded {
+            assert!(
+                detect_game(&game.key).is_err(),
+                "user key {:?} must not resolve as a built-in",
+                game.key
+            );
+            assert!(
+                !all_game_keys().iter().any(|(key, _)| *key == game.key),
+                "user key {:?} leaked into GAME_REGISTRY",
+                game.key
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Mutation check for the guard above: push a fake entry, watch the count
+    /// guard fail, restore, watch it pass - for both registries.
+    #[test]
+    fn the_registry_count_guards_are_mutation_checked() {
+        let mut registry: Vec<(&str, &str)> = GAME_REGISTRY.to_vec();
+        registry.push(("fake-game", "Fake Game"));
+        let err = registry_guard(&registry).expect_err("24 entries must fail the count guard");
+        assert!(err.contains("24"), "{err}");
+        registry.pop();
+        assert!(
+            registry_guard(&registry).is_ok(),
+            "the restored table must pass: {registry:?}"
+        );
+
+        let mut ids: Vec<(&str, u8)> = lightspeed_protocol::game_id::GAME_IDS.to_vec();
+        ids.push(("fake-game", 42));
+        let err = game_ids_guard(&ids).expect_err("24 ids must fail the count guard");
+        assert!(err.contains("24"), "{err}");
+        ids.pop();
+        assert!(game_ids_guard(&ids).is_ok(), "the restored table must pass");
+    }
+
+    /// Built-in precedence: a user profile claiming the canonical key `cs2` and
+    /// one claiming the alias `r6` both lose to the built-in profile, and the
+    /// loader reports the collision rather than staying silent.
+    #[test]
+    fn builtin_precedence_shadows_colliding_user_profiles() {
+        let text = r#"
+[[games]]
+name = "Not Counter-Strike"
+key = "cs2"
+udp_ports = "30001"
+
+[[games]]
+name = "Not Siege"
+key = "r6"
+udp_ports = "30002"
+"#;
+        let doc = crate::profiles::load_from_str(text);
+        assert_eq!(doc.games.len(), 2, "a collision is a warning, not a skip");
+
+        let warnings: Vec<&str> = doc
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == crate::profiles::Severity::Warning)
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(warnings.len(), 2, "{:?}", doc.diagnostics);
+        assert!(
+            warnings.contains(&"key 'cs2' is reserved by built-in game 'Counter-Strike 2'"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.contains(&"key 'r6' is reserved by built-in game 'Rainbow Six Siege'"),
+            "{warnings:?}"
+        );
+
+        // Both claimed keys are built-in keys, so `resolve` short-circuits at
+        // its built-in step and the user entries can never be reached: the
+        // canonical key and the alias both land on the shipped profile.
+        assert_eq!(resolve("cs2").unwrap().name(), "Counter-Strike 2");
+        assert_eq!(resolve("r6").unwrap().name(), "Rainbow Six Siege");
     }
 }
