@@ -12,6 +12,15 @@ pub struct Cli {
     #[arg(short, long, default_value = "lightspeed.toml")]
     pub config: String,
 
+    /// User profiles file (custom games + saved servers). Defaults to the
+    /// per-OS config dir, e.g. %APPDATA%\light-speed\profiles.toml on Windows.
+    #[arg(long, value_name = "PATH")]
+    pub profiles: Option<String>,
+
+    /// Ignore user profiles entirely: built-in games only.
+    #[arg(long, default_value_t = false)]
+    pub no_user_profiles: bool,
+
     /// Game to optimize (run --list-games for the full list)
     #[arg(short, long)]
     pub game: Option<String>,
@@ -264,6 +273,8 @@ mod tests {
     fn test_default_values() {
         let cli = Cli::try_parse_from(["lightspeed"]).unwrap();
         assert_eq!(cli.config, "lightspeed.toml");
+        assert!(cli.profiles.is_none());
+        assert!(!cli.no_user_profiles);
         assert!(!cli.verbose);
         assert!(!cli.dry_run);
         assert!(!cli.test_tunnel);
@@ -365,6 +376,7 @@ mod tests {
             "--force-direct",
             "--bypass-dry-run",
             "--adaptive-fec",
+            "--no-user-profiles",
         ])
         .unwrap();
         assert!(cli.verbose);
@@ -396,6 +408,28 @@ mod tests {
         assert!(cli.force_direct);
         assert!(cli.bypass_dry_run);
         assert!(cli.adaptive_fec);
+        assert!(cli.no_user_profiles);
+    }
+
+    #[test]
+    fn test_profile_flags() {
+        let cli = Cli::try_parse_from(["lightspeed"]).unwrap();
+        assert!(cli.profiles.is_none());
+        assert!(!cli.no_user_profiles);
+
+        let cli =
+            Cli::try_parse_from(["lightspeed", "--profiles", "custom/profiles.toml"]).unwrap();
+        assert_eq!(cli.profiles.as_deref(), Some("custom/profiles.toml"));
+        assert!(!cli.no_user_profiles);
+
+        let cli = Cli::try_parse_from([
+            "lightspeed",
+            "--profiles",
+            "custom/profiles.toml",
+            "--no-user-profiles",
+        ])
+        .unwrap();
+        assert!(cli.no_user_profiles);
     }
 
     #[test]
@@ -421,6 +455,8 @@ mod tests {
             "lightspeed",
             "--config",
             "custom.toml",
+            "--profiles",
+            "profiles.toml",
             "--game",
             "cs2",
             "--proxy",
@@ -444,6 +480,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.config, "custom.toml");
+        assert_eq!(cli.profiles.as_deref(), Some("profiles.toml"));
         assert_eq!(cli.game.as_deref(), Some("cs2"));
         assert_eq!(cli.proxy.as_deref(), Some("10.0.0.1:4434"));
         assert_eq!(cli.game_server.as_deref(), Some("1.2.3.4:7777"));
