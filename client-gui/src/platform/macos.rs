@@ -2,11 +2,11 @@
 //!
 //! **UNTESTED.** This backend compiles but has not been run on real macOS
 //! hardware. It is modeled on the Linux backend: stub tray (no menu-bar
-//! integration yet), `id -u` admin check, `tcpdump`/`dumpcap` capture check,
-//! and Rust port detection via `pgrep` + `lsof`.
+//! integration yet), `id -u` admin check, and `tcpdump`/`dumpcap` capture
+//! check.
 
-use crate::app::{TrayState, STEAM_SERVICE_PORTS};
-use crate::platform::{self, Platform, QuitFlag, TrayHandle};
+use crate::app::TrayState;
+use crate::platform::{Platform, QuitFlag, TrayHandle};
 use eframe::egui;
 
 /// No-op tray handle for macOS (no menu-bar integration yet).
@@ -23,8 +23,7 @@ impl TrayHandle for MacosTray {
 /// macOS [`Platform`] backend.
 ///
 /// **UNTESTED**: compiles but has not been validated on macOS hardware. Stub
-/// tray, `id -u` admin check, `tcpdump`/`dumpcap` capture check, and
-/// `pgrep` + `lsof` port detection.
+/// tray, `id -u` admin check, and `tcpdump`/`dumpcap` capture check.
 pub struct MacosPlatform;
 
 impl Platform for MacosPlatform {
@@ -72,10 +71,6 @@ impl Platform for MacosPlatform {
         // loaded here.
     }
 
-    fn detect_rust_ports() -> Option<(u16, u16)> {
-        detect_rust_ports_lsof()
-    }
-
     fn relaunch_as_admin() {
         let exe = std::env::current_exe().unwrap_or_default();
         let exe_str = exe.display().to_string();
@@ -92,58 +87,4 @@ impl Platform for MacosPlatform {
             .spawn();
         std::process::exit(0);
     }
-}
-
-// ── Port detection ───────────────────────────────────────────────────────────
-
-fn detect_rust_ports_lsof() -> Option<(u16, u16)> {
-    use std::process::Command;
-
-    let ps = Command::new("pgrep")
-        .args(["-x", "RustClient"])
-        .output()
-        .ok()?;
-    let pid_str = String::from_utf8_lossy(&ps.stdout).trim().to_string();
-    if pid_str.is_empty() {
-        return None;
-    }
-
-    tracing::debug!("RustClient PID = {}", pid_str);
-
-    // lsof -nP -a -p <pid> -iUDP lists that process's UDP sockets. The NAME
-    // column is "local:port" (listening) or "local:port->remote:port" (connected):
-    //   COMMAND     PID   USER   FD   TYPE  DEVICE SIZE/OFF NODE NAME
-    //   RustClient 1234  user   12u  IPv4  0x...       0t0  UDP  *:28015
-    let lsof = Command::new("lsof")
-        .args(["-nP", "-a", "-p", &pid_str, "-iUDP"])
-        .output()
-        .ok()?;
-    let mut ports: Vec<u16> = Vec::new();
-
-    for line in String::from_utf8_lossy(&lsof.stdout).lines().skip(1) {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 9 {
-            continue;
-        }
-        // The NAME column (index 8) holds the local:port (and remote:port when
-        // connected). Capture both so the interceptor covers the full range.
-        if let Some(name) = parts.get(8) {
-            for side in name.split("->") {
-                if let Some(port_str) = side.rsplit(':').next() {
-                    if let Ok(port) = port_str.parse::<u16>() {
-                        if port >= 1024
-                            && !STEAM_SERVICE_PORTS.contains(&port)
-                            && !ports.contains(&port)
-                        {
-                            ports.push(port);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    tracing::debug!("RustClient candidate UDP ports: {:?}", ports);
-
-    platform::ports_to_range(&ports)
 }

@@ -1,7 +1,7 @@
 //! # LightSpeed GUI - Platform Abstraction
 //!
 //! Traits and helpers that isolate platform-specific concerns (system tray,
-//! font paths, admin detection, game port discovery) behind a generic
+//! font paths, admin detection) behind a generic
 //! [`Platform`] + [`TrayHandle`] interface.  The Windows, Linux, and macOS
 //! backends live in [`windows`], [`linux`], and [`macos`] respectively and are
 //! selected at compile time via `#[cfg]`. The macOS backend is **untested**.
@@ -56,8 +56,11 @@ pub trait TrayHandle: Send {
     fn set_state(&self, state: TrayState, rtt_ms: f64);
 }
 
-/// Shared port-range look-up used by both Windows and Linux port-detection
-/// paths when live detection (netstat / ss) fails or is unavailable.
+/// The built-in UDP scan range for a game key, with `default_port` as the
+/// fallback for a key the table does not cover.
+///
+/// The Manual flow shows it as the port-range field's example, so the hint
+/// reads as the game about to be scanned.
 pub fn default_port_range(key: &str, default_port: u16) -> (u16, u16) {
     match key {
         "rust" => (28015, 30000),
@@ -73,19 +76,6 @@ pub fn default_port_range(key: &str, default_port: u16) -> (u16, u16) {
         "hunt" => (20000, 20099),
         _ => (default_port, default_port),
     }
-}
-
-/// Helper: convert a list of candidate ports into a (lo, hi) range.
-///
-/// The hi end is extended by at least 2 to give the WinDivert/interceptor
-/// filter a small buffer.
-pub(crate) fn ports_to_range(ports: &[u16]) -> Option<(u16, u16)> {
-    if ports.is_empty() {
-        return None;
-    }
-    let lo = *ports.iter().min().unwrap();
-    let hi = *ports.iter().max().unwrap();
-    Some((lo, hi.max(lo + 2)))
 }
 
 pub trait Platform {
@@ -108,27 +98,6 @@ pub trait Platform {
     /// affordance are skipped there (hiding would strand the window).
     fn has_system_tray() -> bool {
         false
-    }
-
-    /// Detect active game-server ports for a game.
-    ///
-    /// The default implementation tries `detect_rust_ports()` for "rust" and
-    /// falls back to `default_port_range()`.  Override `detect_rust_ports()`
-    /// (or this method entirely) to add platform-specific detection.
-    fn detect_game_ports(game_idx: usize) -> (u16, u16) {
-        let entry = &crate::app::games()[game_idx];
-        if entry.key == "rust" {
-            if let Some(range) = Self::detect_rust_ports() {
-                return range;
-            }
-        }
-        default_port_range(entry.key, entry.default_port)
-    }
-
-    /// Platform-specific Rust port detection (tasklist+netstat on Windows,
-    /// pgrep+ss on Linux).  Returns None when the process is not running.
-    fn detect_rust_ports() -> Option<(u16, u16)> {
-        None
     }
 
     /// Relaunch elevated, or do nothing when already elevated.

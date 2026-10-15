@@ -16,6 +16,7 @@ mod globe;
 mod i18n;
 mod paths;
 mod platform;
+mod processes;
 mod race_watch;
 mod self_update;
 mod single_instance;

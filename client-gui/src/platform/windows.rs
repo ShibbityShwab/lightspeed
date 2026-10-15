@@ -1,14 +1,13 @@
 //! # LightSpeed GUI - Windows Platform
 //!
 //! Real tray-icon backend using `tray_icon`, admin check via `net session`,
-//! capture check via `sc query npcap`, and Rust port detection via
-//! `tasklist` + `netstat`.
+//! and capture check via `sc query npcap`.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::app::{TrayState, STEAM_SERVICE_PORTS};
-use crate::platform::{self, Platform, QuitFlag, TrayAction, TrayHandle};
+use crate::app::TrayState;
+use crate::platform::{Platform, QuitFlag, TrayAction, TrayHandle};
 use eframe::egui;
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
@@ -250,10 +249,6 @@ impl Platform for WindowsPlatform {
         TRAY_AVAILABLE.load(Ordering::SeqCst)
     }
 
-    fn detect_rust_ports() -> Option<(u16, u16)> {
-        detect_rust_ports_netstat()
-    }
-
     /// Relaunch elevated, but only when that would actually change anything.
     ///
     /// The previous version always tore the process down and respawned it, so
@@ -317,77 +312,4 @@ fn lightning_icon(r: u8, g: u8, b: u8) -> Option<tray_icon::Icon> {
             None
         }
     }
-}
-
-// ── Port detection ───────────────────────────────────────────────────────────
-
-fn detect_rust_ports_netstat() -> Option<(u16, u16)> {
-    let tl = crate::platform::silent_command("tasklist")
-        .args(["/FI", "IMAGENAME eq RustClient.exe", "/FO", "CSV", "/NH"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&tl.stdout);
-    if text.trim().to_ascii_lowercase().starts_with("info:") || text.trim().is_empty() {
-        tracing::debug!("RustClient.exe not found in tasklist");
-        return None;
-    }
-    let pid: u32 = text
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split(',');
-            let _name = fields.next()?;
-            fields.next()?.trim().trim_matches('"').parse().ok()
-        })
-        .next()?;
-
-    tracing::debug!("RustClient.exe PID = {}", pid);
-
-    let ns = crate::platform::silent_command("netstat")
-        .args(["-ano", "-p", "UDP"])
-        .output()
-        .ok()?;
-
-    let pid_str = pid.to_string();
-    let mut ports: Vec<u16> = Vec::new();
-
-    for line in String::from_utf8_lossy(&ns.stdout).lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 4 {
-            continue;
-        }
-        if !parts[0].eq_ignore_ascii_case("UDP") {
-            continue;
-        }
-
-        let line_pid = parts.last().unwrap_or(&"");
-        if *line_pid != pid_str {
-            continue;
-        }
-
-        // Local address: parts[1]
-        if let Some(port_str) = parts[1].rsplit(':').next() {
-            if let Ok(port) = port_str.parse::<u16>() {
-                if port >= 1024 && !STEAM_SERVICE_PORTS.contains(&port) && !ports.contains(&port) {
-                    ports.push(port);
-                }
-            }
-        }
-
-        // Foreign address: parts[2]
-        if let Some(port_str) = parts[2].rsplit(':').next() {
-            if let Ok(port) = port_str.parse::<u16>() {
-                if !ports.contains(&port) && (28015..=30000).contains(&port) {
-                    ports.push(port);
-                }
-            }
-        }
-    }
-
-    tracing::debug!(
-        "RustClient.exe (PID {}) candidate UDP ports: {:?}",
-        pid,
-        ports
-    );
-
-    platform::ports_to_range(&ports)
 }
