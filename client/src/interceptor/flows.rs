@@ -612,6 +612,10 @@ pub struct FlowMap {
     /// PID hints from the UDP owner table, keyed by local port. That table has
     /// no remote endpoint, so a hint must earn its lock through the debounce.
     port_hints: HashMap<u16, u32>,
+
+    /// Hinted local ports whose flow locks on its first packet instead of
+    /// passing the debounce. Populated only for the target's own sockets.
+    locked_hint_ports: std::collections::HashSet<u16>,
     /// Distinct flows that could not be attributed (or were over the cap).
     unattributed: HashSet<FlowKey>,
     over_cap_packets: u64,
@@ -626,6 +630,7 @@ impl FlowMap {
             target_pid,
             entries: HashMap::new(),
             port_hints: HashMap::new(),
+            locked_hint_ports: std::collections::HashSet::new(),
             unattributed: HashSet::new(),
             over_cap_packets: 0,
         }
@@ -689,13 +694,34 @@ impl FlowMap {
     /// carries no remote endpoint, and two processes can bind the same port. A
     /// hinted flow therefore starts unlocked and must pass the debounce before
     /// it can tunnel.
+    ///
+    /// `lock_now` is for the one case where waiting is unsafe: the hint came
+    /// from the socket the *target process itself* owns, on a machine where no
+    /// layer event source is running. Field verification against a live game
+    /// showed the cost of waiting there - the flow map sat at `flows: 0` while
+    /// thousands of the game's packets went direct, and the game server saw a
+    /// client whose traffic had moved mid-match and dropped the session. When
+    /// the local port is the target's own, the ownership question is already
+    /// answered, so the flow locks on its first packet instead of the third.
     pub fn hint_port(&mut self, local_port: u16, pid: u32) {
-        if self.port_hints.contains_key(&local_port) || self.port_hints.len() < self.cfg.max_tracked
+        self.hint_port_locking(local_port, pid, false);
+    }
+
+    /// [`Self::hint_port`], optionally locking the flow on its first packet.
+    pub fn hint_port_locking(&mut self, local_port: u16, pid: u32, lock_now: bool) {
+        if self.port_hints.len() < self.cfg.max_tracked || self.port_hints.contains_key(&local_port)
         {
             self.port_hints.insert(local_port, pid);
         }
+        if lock_now {
+            self.locked_hint_ports.insert(local_port);
+        }
     }
 
+    /// Whether a hinted local port locks its flow on the first packet.
+    pub fn hint_locks_immediately(&self, local_port: u16) -> bool {
+        self.locked_hint_ports.contains(&local_port)
+    }
     /// Apply one layer observation.
     ///
     /// Returns whether it was recorded. A `BIND` observation carries no remote
@@ -752,15 +778,19 @@ impl FlowMap {
         self.expire(now);
 
         // A packet whose flow is unknown but whose local port is hinted can be
-        // attributed - through the debounce, never straight to a tunnel.
+        // attributed. The hint normally starts the flow unlocked so it must earn
+        // its tunnel slot through the debounce; a hint the caller marked as the
+        // target's own socket locks at once, because waiting there is what cost a
+        // live game its session (see `hint_port_locking`).
         let hint = self.port_hints.get(&key.local_port()).copied();
         if let Some(pid) = hint {
             let tracker_cfg = self.cfg.tracker;
             let max_tracked = self.cfg.max_tracked;
+            let lock_now = self.locked_hint_ports.contains(&key.local_port());
             if self.pid_accepted(pid) && self.entries.len() < max_tracked {
                 self.entries
                     .entry(key)
-                    .or_insert_with(|| FlowEntry::new(tracker_cfg, key, pid, false, now));
+                    .or_insert_with(|| FlowEntry::new(tracker_cfg, key, pid, lock_now, now));
             }
         }
 
@@ -941,6 +971,62 @@ mod tests {
     }
 
     // ── debounce and lock ──────────────────────────────────────────────────
+    #[test]
+    fn a_target_owned_hint_locks_on_the_first_packet() {
+        // Field-verification regression. A live ARC Raiders match was dropped
+        // because the socket-owner table proved the local port belonged to the
+        // target process, yet the flow still had to pass the debounce: the map
+        // sat at `flows: 0` while thousands of the game's packets went direct,
+        // and the server saw a client whose traffic had moved mid-match.
+        //
+        // When the owner table names the target's own socket, ownership is
+        // already settled, so the flow takes its tunnel slot immediately.
+        let t0 = Instant::now();
+        let k = key(14, 50_010, 7777);
+        let mut m = FlowMap::new(FlowMapConfig::default(), Some(4242));
+        m.hint_port_locking(50_010, 4242, true);
+
+        assert!(m.hint_locks_immediately(50_010));
+        // The very first packet tunnels - no detection window at all.
+        assert_eq!(m.observe(k, t0, 100), FlowVerdict::Tunnel(k));
+        assert_eq!(m.tunneled_count(), 1);
+        assert_eq!(m.pid_of(&k), Some(4242));
+    }
+
+    #[test]
+    fn a_hint_from_someone_else_still_passes_the_debounce() {
+        // The conservative rule is not weakened globally: a hint that does NOT
+        // come from the target's own socket keeps earning its slot through the
+        // debounce, because two processes can bind one port.
+        let t0 = Instant::now();
+        let k = key(15, 50_011, 7777);
+        let mut m = FlowMap::new(FlowMapConfig::default(), Some(4242));
+        m.hint_port(50_011, 4242);
+
+        assert!(!m.hint_locks_immediately(50_011));
+        assert_eq!(
+            m.observe(k, t0, 100),
+            FlowVerdict::Direct(DirectReason::Detecting)
+        );
+        assert_eq!(m.tunneled_count(), 0);
+    }
+
+    #[test]
+    fn an_immediate_lock_still_rejects_a_foreign_pid() {
+        // Locking early must not become a way to attribute someone else's
+        // traffic: the PID filter runs before the hint is recorded.
+        let t0 = Instant::now();
+        let k = key(16, 50_012, 7777);
+        let mut m = FlowMap::new(FlowMapConfig::default(), Some(4242));
+        m.hint_port_locking(50_012, 9999, true);
+
+        assert_eq!(
+            m.observe(k, t0, 100),
+            FlowVerdict::Direct(DirectReason::Unattributed)
+        );
+        assert_eq!(m.tunneled_count(), 0);
+    }
+
     #[test]
     fn hinted_flow_must_pass_the_debounce_before_it_locks() {
         let t0 = Instant::now();

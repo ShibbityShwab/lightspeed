@@ -256,8 +256,15 @@ pub fn build_config_for_game_with_port_range(
             p.routes
         }
         None => {
+            // The game is not running, so there is nothing to seed from. The
+            // caller decides whether that is fatal: [`Self`] is a pure config
+            // builder and still returns a config (with empty routes) so a
+            // preview or a dry run works, while `engine::start_interceptor`
+            // refuses to start interception on this same condition. Keeping the
+            // environment check out of here is what lets both behaviours exist
+            // without one lying to the other.
             tracing::info!(
-                "🎮 ProcessScanner: {} not running, interceptor will use port-range filter",
+                "🎮 ProcessScanner: {} is not running; no routes to seed",
                 game.name()
             );
             vec![]

@@ -428,7 +428,13 @@ impl Attributor {
                 if owned {
                     state.counts.owned_by_target += 1;
                     if let Some(pid) = state.target_pid {
-                        state.map.hint_port(src.port(), pid);
+                        // The owner table just proved this socket belongs to
+                        // the target process, so the flow locks on this packet
+                        // rather than waiting for the debounce. Field testing
+                        // against a live game showed the wait is what broke the
+                        // session: the map stayed at `flows: 0` while thousands
+                        // of the game's packets went direct.
+                        state.map.hint_port_locking(src.port(), pid, true);
                     }
                 }
 

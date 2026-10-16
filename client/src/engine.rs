@@ -15,6 +15,7 @@ use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
 use crate::games::TransportProto;
+use crate::interceptor::process_scanner::find_pid_by_name;
 use crate::interceptor::InterceptorConfig;
 use crate::modes::capture_mode::CaptureStatSlot;
 use crate::modes::redirect_windivert::WinDivertStatSlot;
@@ -1004,15 +1005,44 @@ impl LightSpeedEngine {
                 )
             }
             // Build config: runs ProcessScanner synchronously on the calling thread.
-            None => crate::interceptor::build_config_for_game_with_port_range(
-                game_box.as_ref(),
-                proxy_addr,
-                fec,
-                fec_k,
-                adaptive_fec,
-                port_range_override,
-            )
-            .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?,
+            None => {
+                let config = crate::interceptor::build_config_for_game_with_port_range(
+                    game_box.as_ref(),
+                    proxy_addr,
+                    fec,
+                    fec_k,
+                    adaptive_fec,
+                    port_range_override,
+                )
+                .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?;
+
+                // The config builder is pure and always returns a config, so the
+                // "is it actually running" check belongs here, at the one place
+                // that starts interception. Field verification selected Fortnite
+                // on a machine that did not have it installed: the old code
+                // started anyway, produced a near-total `1024-65535` UDP capture,
+                // and showed the user a success state while capturing nothing.
+                // Refusing with the real remedy is the honest outcome.
+                if config.initial_routes.is_empty() {
+                    let names = game_box.process_names().join(", ");
+                    let found = find_pid_by_name(
+                        game_box
+                            .process_names()
+                            .first()
+                            .copied()
+                            .unwrap_or_default(),
+                    );
+                    if found.is_none() {
+                        return Err(format!(
+                            "{} is not running (looked for {names}), so there is nothing to \
+                             intercept. Start the game, or use 'Target a process' to pick a \
+                             running program and relay all of its traffic.",
+                            game_box.name()
+                        ));
+                    }
+                }
+                config
+            }
         };
 
         let interceptor = crate::interceptor::create_interceptor();
@@ -1572,6 +1602,43 @@ mod tests {
         assert!(
             !engine.snapshot().interceptor_active,
             "a failed start must not report an active interceptor"
+        );
+    }
+
+    #[test]
+    fn a_built_in_game_that_is_not_running_is_refused_not_started() {
+        // Field-verification regression: the owner selected a built-in game on a
+        // machine that did not have it installed. The app started anyway, ran a
+        // near-total `1024-65535` UDP capture, and showed a success state while
+        // nothing was being intercepted - worse than an error, because it spends
+        // the machine's resources and teaches the user to distrust the tool.
+        //
+        // The refusal lives at the start path rather than in the config builder:
+        // the builder stays pure so a dry run or a port preview still works.
+        let mut engine = test_engine();
+
+        let err = engine
+            .start_interceptor(
+                // A real profile whose process is certainly not running here.
+                "hunt",
+                "127.0.0.1:4434".parse().unwrap(),
+                false,
+                4,
+                None,
+            )
+            .expect_err("a built-in game that is not running must be refused");
+
+        assert!(
+            err.contains("not running"),
+            "the error must say the game is not running, got: {err}"
+        );
+        assert!(
+            err.contains("Target a process"),
+            "the error must name the working alternative, got: {err}"
+        );
+        assert!(
+            !engine.snapshot().interceptor_active,
+            "a refused start must not report an active interceptor"
         );
     }
 }
