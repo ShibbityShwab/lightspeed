@@ -58,6 +58,18 @@ const RELAY_RECHECK_INTERVAL: Duration = Duration::from_secs(600);
 /// event, and the scan walks every process on the machine.
 const GAME_PRESENCE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How long traffic may be held direct before the app gives up identifying the
+/// game server and relays through the nearest relay anyway.
+///
+/// A hold exists so a player is never routed through a relay chosen before
+/// anyone knew where their server was. But a hold that never releases is worse
+/// than the thing it prevents: a game outside the profile list, or one whose
+/// ports are not matched, would mean no relaying at all and no explanation. Two
+/// minutes covers menus, matchmaking and loading; after that the fallback is the
+/// old behaviour, and the relay is still re-chosen for the server the moment one
+/// does lock.
+const HOLD_FALLBACK: Duration = Duration::from_secs(120);
+
 /// Every discovered relay's measured client leg, as the destination-aware
 /// chooser consumes it (a relay that did not answer carries `None`).
 type RelayLegs = Vec<(SocketAddrV4, Option<Duration>)>;
@@ -579,6 +591,10 @@ pub struct LightSpeedApp<P: Platform> {
     /// triggers a fresh choice and a repeated tick does not.
     chosen_for_server: Option<Ipv4Addr>,
 
+    /// When tunnelling was last withheld, so a hold that never finds a server
+    /// cannot strand the run silently.
+    held_since: Option<std::time::Instant>,
+
     /// When the process table was last scanned for a game.
     last_presence_check: Option<std::time::Instant>,
 
@@ -775,6 +791,7 @@ impl<P: Platform> LightSpeedApp<P> {
             relay_legs: None,
             relay_measurement: None,
             chosen_for_server: None,
+            held_since: None,
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -1133,6 +1150,37 @@ impl<P: Platform> LightSpeedApp<P> {
                 self.persist_config();
             }
         }
+
+        // The relay for this server is settled, whether or not it changed: the
+        // hold has served its purpose and traffic may now flow through it.
+        self.held_since = None;
+        if lock_or_recover(&self.engine).release_tunnelling() {
+            tracing::info!("Relay chosen for {server}; releasing the hold and relaying");
+        }
+    }
+
+    /// Give up on a hold that has not found a game server, rather than idle.
+    ///
+    /// A hold with no deadline is a silent failure: a game the profiles do not
+    /// know, or one whose ports we do not match, would leave the app relaying
+    /// nothing and saying nothing. Falling back keeps the app doing what it did
+    /// before the hold existed, and a server that locks later is still routed to
+    /// the right relay.
+    fn release_stale_hold(&mut self) {
+        let Some(since) = self.held_since else {
+            return;
+        };
+        if since.elapsed() < HOLD_FALLBACK {
+            return;
+        }
+        self.held_since = None;
+        if lock_or_recover(&self.engine).release_tunnelling() {
+            tracing::warn!(
+                "Could not identify the game server within {}s; relaying through the nearest \
+                 relay instead. Traffic stays direct until then.",
+                HOLD_FALLBACK.as_secs()
+            );
+        }
     }
 
     /// The live game server the interceptor is talking to, if any.
@@ -1411,6 +1459,26 @@ impl<P: Platform> LightSpeedApp<P> {
                 tracing::error!("start_interceptor failed: {}", e);
             } else {
                 self.boost_start = Some(std::time::Instant::now());
+
+                // Hold traffic direct until a relay has been chosen for the game
+                // server. This is the consumer-simple promise: never route a
+                // player through a relay picked before anyone knew where their
+                // server was. In the field that mistake tunnelled a match on a
+                // Sao Paulo server through a relay in Los Angeles, and the
+                // client's connect timed out.
+                //
+                // The interceptor still captures and attributes while held, so
+                // the destination is discovered and the hold can be released;
+                // holding never makes the server unknowable.
+                let held = engine.hold_tunnelling();
+                if held {
+                    self.held_since = Some(std::time::Instant::now());
+                    tracing::info!(
+                        "Holding traffic on the direct path until the game server is known"
+                    );
+                } else {
+                    tracing::debug!("This backend has no tunnelling gate; starting unheld");
+                }
             }
         }
     }
@@ -2923,6 +2991,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         self.poll_health();
         self.poll_game_presence();
         self.follow_game_server();
+        self.release_stale_hold();
 
         // Collect a finished update check from the background thread.
         if matches!(self.update_check, UpdateCheckState::Checking) {

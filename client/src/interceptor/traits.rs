@@ -12,7 +12,7 @@
 //! - **Recoverable**: Stale routes reset automatically.
 
 use std::net::SocketAddrV4;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -339,6 +339,9 @@ impl InterceptorCounters {
             bypass_advantage_ms: self.bypass_advantage_ms.lock().ok().and_then(|g| *g),
             packets_seen: self.packets_seen.load(Ordering::Relaxed),
             capture_diagnosis: self.capture_diagnosis.lock().ok().and_then(|g| g.clone()),
+            // Run-level state, filled in by the handle: the gate lives there, not
+            // in the counters.
+            tunnelling_enabled: None,
             platform,
         }
     }
@@ -380,6 +383,13 @@ pub struct InterceptorStats {
     pub detected_server: Option<SocketAddrV4>,
     /// Description of the most recent fatal error, if any.
     pub last_error: Option<String>,
+    /// Whether this run is permitted to tunnel, or `None` when the backend has
+    /// no gate.
+    ///
+    /// Surfaced so a UI can say "waiting to learn the game server" instead of
+    /// showing an idle-looking app while a hold is deliberately withholding the
+    /// relay. A hold with no explanation is indistinguishable from a fault.
+    pub tunnelling_enabled: Option<bool>,
     /// Smoothed `direct - relayed` advantage in milliseconds, when measured:
     /// positive means the relay is beating the direct path.
     pub bypass_advantage_ms: Option<f32>,
@@ -443,6 +453,14 @@ pub struct InterceptorHandle {
     /// Completes once every platform owner thread acknowledged that it stopped
     /// touching its handle.
     teardown_ack: Option<TeardownAck>,
+    /// Where this run is allowed to tunnel, when the backend supports holding.
+    ///
+    /// `None` on a backend that has not implemented the gate, which is why
+    /// [`Self::set_tunnelling_enabled`] reports whether it applied instead of
+    /// returning nothing: a caller must be able to tell "held" from "this
+    /// backend ignored me", or it would wait forever for a hold that never
+    /// happened.
+    tunnelling: Option<Arc<AtomicBool>>,
 }
 
 impl InterceptorHandle {
@@ -462,12 +480,49 @@ impl InterceptorHandle {
             platform,
             unblock,
             teardown_ack,
+            tunnelling: None,
         }
+    }
+
+    /// Hand this run the switch that gates tunnelling, so a caller can hold
+    /// traffic until it has chosen a relay for the game server.
+    ///
+    /// Only the backend that implements the gate calls this; elsewhere the
+    /// handle simply carries `None` and [`Self::set_tunnelling_enabled`] reports
+    /// that it did not apply.
+    pub fn attach_tunnelling_switch(&mut self, switch: Arc<AtomicBool>) {
+        self.tunnelling = Some(switch);
+    }
+
+    /// Allow or withhold tunnelling for this run.
+    ///
+    /// Returns whether the backend honoured it. `false` means this platform has
+    /// no gate, so the caller must NOT assume traffic is being held.
+    pub fn set_tunnelling_enabled(&self, enabled: bool) -> bool {
+        match &self.tunnelling {
+            Some(switch) => {
+                switch.store(enabled, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether tunnelling is currently permitted, or `None` when this backend
+    /// has no gate.
+    pub fn tunnelling_enabled(&self) -> Option<bool> {
+        self.tunnelling
+            .as_ref()
+            .map(|switch| switch.load(Ordering::Relaxed))
     }
 
     /// Snapshot the live counters - cheap, no lock held.
     pub fn snapshot(&self) -> InterceptorStats {
-        self.counters.snapshot(self.platform)
+        let mut stats = self.counters.snapshot(self.platform);
+        // The gate lives on the handle rather than the counters, because it is
+        // run-level state: the whole run is either permitted to tunnel or held.
+        stats.tunnelling_enabled = self.tunnelling_enabled();
+        stats
     }
 
     /// Send the shutdown signal and release any thread parked in a blocking

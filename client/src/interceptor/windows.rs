@@ -416,6 +416,7 @@ impl Attributor {
         relay_addrs: &[Ipv4Addr],
         now: Instant,
         payload_len: usize,
+        held: bool,
     ) -> OutboundDecision {
         match self {
             Self::Process(state) => {
@@ -519,6 +520,16 @@ impl Attributor {
                 }
 
                 match route {
+                    OutboundRoute::Tunnel if held => {
+                        // Held: the flow is attributed and locked, and its server
+                        // is published below, but nothing goes through a relay
+                        // until a caller has chosen one for that server. Counted
+                        // as direct-because-held rather than as unattributed, so
+                        // the status line does not accuse the game of being
+                        // unrecognised while it is simply being waited for.
+                        state.counts.direct += 1;
+                        OutboundDecision::Reinject(Some(dst))
+                    }
                     OutboundRoute::Tunnel => OutboundDecision::Tunnel(dst),
                     OutboundRoute::Excluded | OutboundRoute::Reinject(_) => {
                         OutboundDecision::Reinject(None)
@@ -526,6 +537,7 @@ impl Attributor {
                 }
             }
             Self::Ports(tracker) => match tracker.observe(dst, now, payload_len) {
+                Decision::Tunnel(server) if held => OutboundDecision::Reinject(Some(server)),
                 Decision::Tunnel(server) => OutboundDecision::Tunnel(server),
                 Decision::ResetToDetection => OutboundDecision::Redetect,
                 // A shadow-direct sample would be the LOCKED server being sent
@@ -764,6 +776,13 @@ impl TrafficInterceptor for WinDivertInterceptor {
         // Shared state
         let counters = Arc::new(InterceptorCounters::default());
         let running = Arc::new(AtomicBool::new(true));
+        // Where the run is allowed to tunnel. Starts ENABLED so every existing
+        // caller behaves exactly as before; a caller that wants to hold traffic
+        // until it has chosen a relay for the game server clears it first and
+        // sets it once the choice is made. Gated here, at the action layer, so
+        // attribution and server discovery keep running throughout: holding must
+        // not make the destination unknowable, or nothing could ever release it.
+        let tunnelling = Arc::new(AtomicBool::new(true));
         tracing::info!("✅ Shared state created");
 
         // Pre-seed detected_server if we already know it from the route scanner.
@@ -822,6 +841,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let wd_ic = Arc::clone(&wd_intercept);
             let counters_ic = Arc::clone(&counters);
             let if_cache_ic = Arc::clone(&if_addr_cache);
+            let tunnelling_ic = Arc::clone(&tunnelling);
             let itx = intercept_tx;
             let running_ic = Arc::clone(&running);
             let seeds_ic = seeds;
@@ -911,6 +931,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                         &relay_addrs_ic,
                                         Instant::now(),
                                         payload.len(),
+                                        !tunnelling_ic.load(Ordering::Relaxed),
                                     );
 
                                     // Publish the server this packet is bound
@@ -1529,12 +1550,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
         );
 
         setup_guard.disarm();
-        Ok(InterceptorHandle::new(
-            shutdown_tx,
-            counters,
-            "WinDivert",
-            Some(teardown),
-        ))
+        let mut handle = InterceptorHandle::new(shutdown_tx, counters, "WinDivert", Some(teardown));
+        handle.attach_tunnelling_switch(tunnelling);
+        Ok(handle)
     }
 }
 

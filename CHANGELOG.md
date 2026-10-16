@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Traffic is held on the direct path until a relay has been chosen for the game server.**
+  The failure this prevents is the worst one this project can produce: with the relay picked before
+  anyone knew where the server was, a match on a Sao Paulo server was tunnelled through a relay in
+  Los Angeles and the client's connect timed out. While held, the interceptor still captures and
+  attributes (discovery is deliberately independent of tunnelling), so the game server is still
+  learned and the hold is released as soon as a relay has been chosen for it. The hold is bounded:
+  if no server is identified within two minutes the app falls back to the nearest relay and says so,
+  because a hold that never releases would mean no relaying at all and no explanation.
+  `set_tunnelling_enabled` reports whether the backend honoured it, so a caller can never wait
+  forever on a hold that silently never happened.
+- **The capture now says when it is producing nothing.** `packets_seen` counts every packet the
+  handle produces before any policy, because the relayed-packet counter reads zero both when nothing
+  needed relaying and when the capture filter is wrong. After 30 seconds with nothing captured the
+  app warns in plain language and publishes the explanation on the snapshot (`capture_diagnosis`),
+  so a consumer is told the app is not working instead of being shown a healthy status.
+- **The relay verdict is a sentence.** `advantage_phrase` states whether the relay is helping, not
+  helping, or within noise, with thresholds tied to the bypass gate's own constants so the wording
+  cannot drift from the decision. The measured advantage is on the snapshot as
+  `bypass_advantage_ms`; the field trace's one honest data point was +230 ms in favour of the relay,
+  which had been visible only as a debug-formatted field in a log nobody read.
+
 ### Fixed
+
+- **Discovery no longer depends on tunnelling.** The game server was published only from the tunnel
+  decision, so the app could not learn a destination it was not already relaying to, and any server
+  routed direct was invisible. The decision now carries the server on the re-inject path too, and the
+  publish derives from the decision rather than the action taken.
 
 - **Relay selection never actually ran: the destination-aware chooser always returned nothing.**
   A client-leg measurement is taken against a relay's `/health` endpoint, which serves on a separate

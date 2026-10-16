@@ -133,6 +133,19 @@ pub struct EngineStatus {
     pub interceptor_injected: u64,
     /// Errors.
     pub interceptor_errors: u64,
+    /// Every packet the capture handle produced, before any policy, so a UI can
+    /// tell "nothing needed relaying" from "the filter matches nothing".
+    pub interceptor_seen: u64,
+    /// Plain-language explanation when the capture is producing nothing, so the
+    /// app can admit it is not working instead of looking healthy.
+    pub capture_diagnosis: Option<String>,
+    /// Whether the run is permitted to tunnel, or `None` when the backend has no
+    /// gate. `Some(false)` means traffic is deliberately held direct until a
+    /// relay has been chosen for the known game server.
+    pub tunnelling_enabled: Option<bool>,
+    /// Smoothed `direct - relayed` advantage in milliseconds, when measured:
+    /// positive means the relay is actually beating the direct path.
+    pub bypass_advantage_ms: Option<f32>,
     /// Payloads forwarded with fragmentation allowed for exceeding the
     /// conservative tunnel payload budget.
     pub interceptor_payloads_over_budget: u64,
@@ -1120,6 +1133,24 @@ impl LightSpeedEngine {
         Ok(())
     }
 
+    /// Withhold tunnelling until a relay has been chosen for the game server.
+    ///
+    /// Returns whether the backend honoured it. `false` means this platform has
+    /// no gate, so the caller must not assume traffic is being held: it would
+    /// otherwise wait forever on a hold that never happened.
+    pub fn hold_tunnelling(&mut self) -> bool {
+        self.interceptor_handle
+            .as_ref()
+            .is_some_and(|h| h.set_tunnelling_enabled(false))
+    }
+
+    /// Permit tunnelling again, once a relay has been chosen for the server.
+    pub fn release_tunnelling(&mut self) -> bool {
+        self.interceptor_handle
+            .as_ref()
+            .is_some_and(|h| h.set_tunnelling_enabled(true))
+    }
+
     /// What the start line names: the process a target set, else the game key.
     ///
     /// A process target is not the game key. The caller passes a fallback key only
@@ -1205,6 +1236,10 @@ impl LightSpeedEngine {
         if let Some(ref handle) = self.interceptor_handle {
             let ist = handle.snapshot();
             snap.interceptor_intercepted = ist.packets_intercepted;
+            snap.interceptor_seen = ist.packets_seen;
+            snap.capture_diagnosis = ist.capture_diagnosis.clone();
+            snap.tunnelling_enabled = ist.tunnelling_enabled;
+            snap.bypass_advantage_ms = ist.bypass_advantage_ms;
             snap.interceptor_from_proxy = ist.packets_from_proxy;
             snap.interceptor_injected = ist.packets_injected;
             snap.interceptor_errors = ist.errors;
