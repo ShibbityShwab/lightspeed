@@ -13,6 +13,15 @@ pub mod interceptor;
 pub use engine::{EngineStatus, LightSpeedEngine};
 pub use registry::{discover_relays, RelayInfo};
 
+/// The destination-aware relay chooser, re-exported for the GUI.
+///
+/// `route` itself stays crate-private: the GUI needs the ranking types to
+/// choose a relay for the live game server, and nothing else from that module.
+pub use route::relay_choice::{
+    best as best_relay_for_destination, best_at as best_relay_for_destination_at,
+    rank as rank_relays_for_destination, RelayCandidate, ScoredRelay,
+};
+
 pub(crate) mod capture;
 pub(crate) mod cli;
 pub(crate) mod config;

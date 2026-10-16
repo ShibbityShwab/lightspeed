@@ -74,6 +74,7 @@ pub fn default_port_range(key: &str, default_port: u16) -> (u16, u16) {
         "wardogs" => (7777, 7788),
         "minecraft" => (19132, 19133),
         "hunt" => (20000, 20099),
+        "arcraiders" => (7600, 7777),
         _ => (default_port, default_port),
     }
 }

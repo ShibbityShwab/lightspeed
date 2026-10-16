@@ -10,7 +10,9 @@ pub mod destination;
 pub mod failover;
 pub mod multipath;
 pub mod regions;
+pub mod relay_choice;
 pub mod selector;
+pub mod server_location;
 
 use std::net::SocketAddrV4;
 

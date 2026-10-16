@@ -860,6 +860,17 @@ impl BypassGate {
 
         if out.flipped {
             self.counters.bypass_flips.fetch_add(1, Ordering::Relaxed);
+            // The number, and the sentence a person can act on. The field is
+            // what the UI reads; the phrase is what the log says.
+            if let Ok(mut g) = self.counters.bypass_advantage_ms.lock() {
+                *g = out.advantage_ms;
+            }
+            tracing::info!(
+                "📶 Relay verdict for {}: {} ({})",
+                inp.server,
+                advantage_phrase(out.advantage_ms),
+                out.state.as_str()
+            );
             tracing::info!(
                 server = %inp.server,
                 state = out.state.as_str(),
@@ -961,9 +972,55 @@ pub fn steady_state_step(
     gate.evaluate(server, now, relay_healthy, fec_enabled)
 }
 
+/// Plain-language reading of the measured relay advantage, for logs and the UI.
+///
+/// `advantage_ms` is `direct - relayed`, so positive means the relay is winning.
+/// The thresholds come from this module's own decision constants rather than new
+/// numbers, so the wording cannot drift from what the gate actually does.
+///
+/// This exists because `advantage_ms = ?Some(230.54)` is the project's central
+/// number and it was only ever visible as a debug-formatted field in a log line
+/// nobody read. A consumer needs the sentence, not the float.
+pub fn advantage_phrase(advantage_ms: Option<f32>) -> &'static str {
+    match advantage_ms {
+        None => "not measured yet",
+        Some(ms) if ms >= RELAY_KEEP_ADVANTAGE_MS => "the relay is helping",
+        Some(ms) if ms <= 0.0 => "the relay is not helping: going direct would be better",
+        Some(_) => "roughly even: within measurement noise",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_phrase_agrees_with_the_decision_thresholds() {
+        // The wording must track the gate's own constants: a phrase that says
+        // "helping" while the gate says Direct would be worse than no phrase.
+        assert_eq!(advantage_phrase(None), "not measured yet");
+        assert_eq!(
+            advantage_phrase(Some(RELAY_KEEP_ADVANTAGE_MS)),
+            "the relay is helping"
+        );
+        assert_eq!(
+            advantage_phrase(Some(230.5)),
+            "the relay is helping",
+            "the field figure of ~230 ms is a clear win"
+        );
+        assert_eq!(
+            advantage_phrase(Some(0.0)),
+            "the relay is not helping: going direct would be better"
+        );
+        assert_eq!(
+            advantage_phrase(Some(-40.0)),
+            "the relay is not helping: going direct would be better"
+        );
+        assert_eq!(
+            advantage_phrase(Some(RELAY_KEEP_ADVANTAGE_MS / 2.0)),
+            "roughly even: within measurement noise"
+        );
+    }
     use std::net::Ipv4Addr;
 
     fn server(n: u8) -> SocketAddrV4 {

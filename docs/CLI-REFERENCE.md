@@ -17,7 +17,7 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | `-c, --config <PATH>` | Path to config file (default: `lightspeed.toml`) |
 | `--profiles <PATH>` | Path to `profiles.toml` (your custom games and saved servers). Defaults to the per-user config dir: `%APPDATA%\light-speed\profiles.toml` on Windows, `~/Library/Application Support/light-speed/profiles.toml` on macOS, `$XDG_CONFIG_HOME/light-speed/profiles.toml` on Linux |
 | `--no-user-profiles` | Ignore `profiles.toml` for this run - built-in games only |
-| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot`, `deadbydaylight`, `bodycam`, `csgo`, `roblox`, `zomboid`, `wardogs`, `minecraft`, `minecraft-java`, `hunt`, `rainbowsix`, or a `key` from your `profiles.toml` (run `--list-games` for the full list) |
+| `-g, --game <GAME>` | Game to optimize: `fortnite`, `cs2`, `dota2`, `rust`, `apex`, `valorant`, `ow2`, `lol`, `pubg`, `maplestory`, `genshin`, `rocketleague`, `wot`, `deadbydaylight`, `bodycam`, `csgo`, `roblox`, `zomboid`, `wardogs`, `minecraft`, `minecraft-java`, `hunt`, `rainbowsix`, `arcraiders`, or a `key` from your `profiles.toml` (run `--list-games` for the full list) |
 | `-p, --proxy <ADDR>` | Proxy server address (`host:port`). Auto-selects from config if omitted |
 | `-v, --verbose` | Enable verbose logging |
 

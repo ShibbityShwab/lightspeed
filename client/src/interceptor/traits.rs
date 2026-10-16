@@ -218,6 +218,15 @@ pub struct InterceptorConfig {
 pub struct InterceptorCounters {
     /// Outbound game packets intercepted and forwarded to proxy.
     pub packets_intercepted: AtomicU64,
+    /// Every UDP packet the capture handle produced, before any policy.
+    ///
+    /// `packets_intercepted` counts what was *relayed*, so it reads zero both
+    /// when the filter is right and nothing needed relaying, and when the
+    /// filter is wrong and matched nothing at all. Those are opposite problems
+    /// and the field run that produced this counter could not tell them apart: a
+    /// capture filter aimed at the client's own ports logged
+    /// "interceptor started" and then saw no packets for an entire session.
+    pub packets_seen: AtomicU64,
     /// Bytes intercepted (outbound).
     pub bytes_intercepted: AtomicU64,
     /// Spoofed inbound packets injected back to the game.
@@ -261,6 +270,18 @@ pub struct InterceptorCounters {
     pub detected_server: std::sync::Mutex<Option<SocketAddrV4>>,
     /// Human-readable description of the most recent fatal error, if any.
     pub last_error: std::sync::Mutex<Option<String>>,
+    /// Smoothed `direct - relayed` advantage in milliseconds, when measured.
+    ///
+    /// The project's central number: whether the relay is actually beating the
+    /// direct path. Surfaced so a consumer-facing status can say it in words
+    /// instead of leaving it in a log field.
+    pub bypass_advantage_ms: std::sync::Mutex<Option<f32>>,
+    /// Plain-language explanation set when the capture is producing nothing.
+    ///
+    /// Distinct from [`Self::last_error`]: nothing has failed, and the tunnel is
+    /// healthy, but the app is not doing its job and would otherwise report
+    /// success indefinitely.
+    pub capture_diagnosis: std::sync::Mutex<Option<String>>,
 }
 
 impl Default for InterceptorCounters {
@@ -285,6 +306,9 @@ impl Default for InterceptorCounters {
             bypass_hold: AtomicU64::new(0),
             detected_server: std::sync::Mutex::new(None),
             last_error: std::sync::Mutex::new(None),
+            bypass_advantage_ms: std::sync::Mutex::new(None),
+            packets_seen: AtomicU64::new(0),
+            capture_diagnosis: std::sync::Mutex::new(None),
         }
     }
 }
@@ -312,6 +336,9 @@ impl InterceptorCounters {
             bypass_hold: self.bypass_hold.load(Ordering::Relaxed),
             detected_server: self.detected_server.lock().map(|g| *g).unwrap_or(None),
             last_error: self.last_error.lock().ok().and_then(|g| g.clone()),
+            bypass_advantage_ms: self.bypass_advantage_ms.lock().ok().and_then(|g| *g),
+            packets_seen: self.packets_seen.load(Ordering::Relaxed),
+            capture_diagnosis: self.capture_diagnosis.lock().ok().and_then(|g| g.clone()),
             platform,
         }
     }
@@ -353,6 +380,15 @@ pub struct InterceptorStats {
     pub detected_server: Option<SocketAddrV4>,
     /// Description of the most recent fatal error, if any.
     pub last_error: Option<String>,
+    /// Smoothed `direct - relayed` advantage in milliseconds, when measured:
+    /// positive means the relay is beating the direct path.
+    pub bypass_advantage_ms: Option<f32>,
+    /// Plain-language explanation when the capture is producing nothing, so a
+    /// consumer can be told "this is not working" instead of being shown a
+    /// healthy-looking status.
+    pub capture_diagnosis: Option<String>,
+    /// Every UDP packet the capture handle produced, before any policy.
+    pub packets_seen: u64,
     /// Platform name: `"WinDivert"`, `"nftables"`, `"pf"`, …
     pub platform: &'static str,
 }

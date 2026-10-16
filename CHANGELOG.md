@@ -7,7 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Relay selection never actually ran: the destination-aware chooser always returned nothing.**
+  A client-leg measurement is taken against a relay's `/health` endpoint, which serves on a separate
+  port from the relay's advertised data address, so samples arrived keyed `ip:8080` while the chooser
+  compared them against `ip:4434`. The comparison never matched, every candidate was dropped as a
+  result of the failed lookup, and `choose_relay_for_destination` returned `None` on every call since
+  it was written - so the app silently kept whatever the client-to-relay race picked. In the field
+  that routed a match on a Sao Paulo server through the Los Angeles relay from Bangkok, roughly
+  17,000 km the wrong way, and the client's connect timed out. Samples are now paired onto their
+  relay by IP at one named seam (`pair_relay_legs`) and stored keyed by the data address, with the
+  chooser matching on IP as well; three tests pin the pairing, its ordering, and that a failed probe
+  stays `None` rather than reading as a zero-latency relay.
+- **The periodic relay re-race could drag the relay back off a server-driven choice.** The race ranks
+  the client leg alone and runs again on a timer, so it would re-apply the very pick the
+  destination-aware selection exists to override. Its winner is now declined while a relay is
+  governed by a known game server; the race still runs so its measurements stay fresh.
+- **ARC Raiders' port range was the client's, not the server's.** `ports()` is matched as a
+  *destination* range (`udp.DstPort`), and the profile was filled with the client's own local
+  bindings read from `Get-NetUDPEndpoint`, so the capture filter asked for packets going *to*
+  61606-61632 while the game sends *from* those ports *to* 7777/7600. Interception started, logged
+  success, and captured nothing: no counters, no locked server, and a relay that never moved.
+  Corrected to 7600-7777, the destination ports a working session locked 738 times. The bug passed
+  every unit test, both mutation checks, and three clippy runs while being inert in production,
+  which is why the port assertions now include one that forbids the client's local ports outright.
+
 ### Added
+
+- **ARC Raiders profile, with process name and UDP range measured from the running game.**
+  ARC Raiders runs the gameplay client `PioneerGame.exe` and binds UDP **61606-61632**; both were
+  read off a live install in a raid rather than from a port-forwarding guide, whose published
+  figures (4171/4175/4179) match none of the game's real sockets. The profile rotates servers per
+  raid (`dynamic_server`), so the interceptor re-detects the destination instead of locking onto a
+  stale one. TCP 443 to the game's backend is deliberately excluded: the capture filter is UDP
+  only, so a TCP port in the range would match nothing.
+- **Relay selection now ranks the whole path to the game server.** The GUI used to race discovered
+  relays by client-to-relay latency, which answers "which relay is closest to me" - only half the
+  path, and the wrong half when the game server is in another region. Selection now scores
+  `client leg + relay-to-server leg`, using the exact relay coordinates from `infra/geo/regions.json`
+  and the game server's position from the GUI's offline country database, with measured legs
+  preferred and a great-circle prior as the fallback. A player in Bangkok joining an Ashburn server
+  picked Los Angeles before (244 ms client leg, wrong continent) and picks New Jersey now (286 ms
+  client leg, 340 km from the server instead of 3,652 km).
+- **Zero-click auto-detect.** With Auto detect selected, relaying starts when a known game appears
+  and stops when it exits, so a match is optimized from its first packet instead of from whenever
+  the button was pressed. A manual game pick or a manual process target disables it, so an
+  automatic scan never overrides an explicit choice.
 
 - **Custom game profiles (`profiles.toml`).** Define your own games and saved servers in a
   per-user file next to `config.toml`: `[[games]]` entries carry a name, an optional `key`,

@@ -188,11 +188,34 @@ pub fn spawn_relay_race(addrs: Vec<SocketAddrV4>) -> Receiver<Option<SocketAddrV
     rx
 }
 
+/// Measure every address on a background thread; the receiver yields the full
+/// sample set once, so a caller ranking the whole path has every leg.
+pub fn spawn_relay_measurement(
+    addrs: Vec<SocketAddrV4>,
+) -> Receiver<Vec<(SocketAddrV4, Option<Duration>)>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(measure_all_blocking(&addrs));
+    });
+    rx
+}
+
 /// Probe every address concurrently and return the one with the lowest
 /// round-trip to `/health`. Addresses that fail to answer are ignored.
 pub fn race_blocking(addrs: &[SocketAddrV4]) -> Option<SocketAddrV4> {
+    fastest_addr(measure_all_blocking(addrs))
+}
+
+/// Probe every address concurrently and return every measured round trip.
+///
+/// [`race_blocking`] keeps only the winner, which throws away exactly the
+/// per-relay figures a destination-aware choice needs: knowing that Los Angeles
+/// answers in 244 ms is useless without knowing what New Jersey answers, because
+/// the winner of that race is not the winner of the whole path. Addresses that
+/// fail to answer are omitted rather than reported as zero.
+pub fn measure_all_blocking(addrs: &[SocketAddrV4]) -> Vec<(SocketAddrV4, Option<Duration>)> {
     if addrs.is_empty() {
-        return None;
+        return Vec::new();
     }
     let (tx, rx) = mpsc::channel();
     std::thread::scope(|scope| {
@@ -209,12 +232,10 @@ pub fn race_blocking(addrs: &[SocketAddrV4]) -> Option<SocketAddrV4> {
     // Rebuild in input order so equal latencies keep the discovery order.
     let mut samples: Vec<(usize, SocketAddrV4, Option<Duration>)> = rx.iter().collect();
     samples.sort_by_key(|(index, _, _)| *index);
-    fastest_addr(
-        samples
-            .into_iter()
-            .map(|(_, addr, latency)| (addr, latency))
-            .collect(),
-    )
+    samples
+        .into_iter()
+        .map(|(_, addr, latency)| (addr, latency))
+        .collect()
 }
 
 /// Time one `/health` round trip, or `None` when the relay does not answer.

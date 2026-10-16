@@ -72,6 +72,10 @@ use super::traits::{InterceptorConfig, InterceptorHandle, TrafficInterceptor};
 // plain userspace logic with no WinDivert dependency: they compile into this
 // module on every Windows build and are unit-tested without the driver.
 use super::flows::{DirectReason, FlowKey, FlowMap, FlowVerdict};
+// Only `ProcessAttributor` uses the owner cache, and that struct exists only when
+// the WinDivert data plane is compiled in, so the import carries the same gate:
+// unconditional, it is dead code in a default build and fails `-D warnings`.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::socket_owners::OwnerCache;
 use super::CapturePolicy;
 use crate::games::TransportProto;
@@ -287,9 +291,33 @@ enum OutboundDecision {
     /// Relay: drop the original and forward the payload to the relay.
     Tunnel(SocketAddrV4),
     /// Re-inject the original packet unchanged on the direct path.
-    Reinject,
+    ///
+    /// Carries the game server when this packet was attributed to the game but
+    /// is going direct anyway (a shadow-direct sample of the locked server, in
+    /// the ports path). That is what decouples *discovery* from *tunnelling*:
+    /// without it the server is only ever published on the relay path, so the
+    /// app cannot learn a destination it is not already relaying to, and any
+    /// server held direct is invisible.
+    Reinject(Option<SocketAddrV4>),
     /// Port-scoped mode only: the locked server went stale; re-detect.
     Redetect,
+}
+
+/// The game server this decision is bound for, if it identifies one.
+///
+/// One place so the publish site and its tests cannot disagree about which
+/// decisions reveal a destination.
+///
+/// Gated with [`OutboundDecision`] itself: this is WinDivert data-plane logic,
+/// and an ungated reference here breaks the default-feature build (the same
+/// platform-cfg trap that has bitten this repo before).
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn detected_server(decision: OutboundDecision) -> Option<SocketAddrV4> {
+    match decision {
+        OutboundDecision::Tunnel(server) => Some(server),
+        OutboundDecision::Reinject(Some(server)) => Some(server),
+        OutboundDecision::Reinject(None) | OutboundDecision::Redetect => None,
+    }
 }
 
 /// Process mode's attribution state: the bounded map plus the cap warning that
@@ -347,6 +375,15 @@ struct AttributionCounts {
 /// How often the tallies are surfaced while they are still moving.
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 const ATTRRIBUTION_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Evaluation ticks with zero captured packets before the capture is called out.
+///
+/// Ticks are `interceptor::bypass::EVAL_INTERVAL` (10 s), so this is about 30 s:
+/// long enough that a quiet moment or a slow game start is not reported as a
+/// fault, short enough that a consumer learns the truth while still in the
+/// lobby rather than after a whole session of nothing.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+const CAPTURE_SILENCE_TICKS: u32 = 3;
 
 /// The intercept thread's attribution state machine: one variant per capture
 /// policy.
@@ -484,15 +521,26 @@ impl Attributor {
                 match route {
                     OutboundRoute::Tunnel => OutboundDecision::Tunnel(dst),
                     OutboundRoute::Excluded | OutboundRoute::Reinject(_) => {
-                        OutboundDecision::Reinject
+                        OutboundDecision::Reinject(None)
                     }
                 }
             }
             Self::Ports(tracker) => match tracker.observe(dst, now, payload_len) {
                 Decision::Tunnel(server) => OutboundDecision::Tunnel(server),
                 Decision::ResetToDetection => OutboundDecision::Redetect,
-                Decision::ShadowDirect | Decision::PassThrough | Decision::StartDetection => {
-                    OutboundDecision::Reinject
+                // A shadow-direct sample would be the LOCKED server being sent
+                // direct for measurement, so it identifies the destination just
+                // as clearly as a tunnel does, and publishing it keeps discovery
+                // working for a server that is not being relayed.
+                //
+                // Note: nothing constructs `ShadowDirect` today (it is matched in
+                // this file and in `flows.rs` but produced nowhere), so this arm
+                // is currently unreachable. It is kept correct rather than
+                // deleted so that wiring the ports-path sampler later cannot
+                // silently reintroduce the "a held server is invisible" bug.
+                Decision::ShadowDirect => OutboundDecision::Reinject(Some(dst)),
+                Decision::PassThrough | Decision::StartDetection => {
+                    OutboundDecision::Reinject(None)
                 }
             },
         }
@@ -841,6 +889,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             let parsed =
                                 parse_ipv4_udp(data).map(|(src, dst, pl)| (src, dst, pl.to_vec()));
 
+                            // Count every packet the filter produced, before any
+                            // policy. A filter that matches nothing leaves this
+                            // at zero, which is the difference between "nothing
+                            // needed relaying" and "the filter is wrong".
+                            if parsed.is_some() {
+                                counters_ic.packets_seen.fetch_add(1, Ordering::Relaxed);
+                            }
+
                             match parsed {
                                 Some((game_src, game_dst, payload)) => {
                                     // Userspace attribution: the one decision
@@ -861,7 +917,13 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     // for before the decision can become a
                                     // shadow-direct sample: the shadow inbound
                                     // thread pairs replies against it.
-                                    if let OutboundDecision::Tunnel(server) = decision {
+                                    //
+                                    // Derived from the decision rather than from the
+                                    // action taken, so a server this run is HOLDING
+                                    // direct is still discovered. That is what lets a
+                                    // relay be chosen for a server before any traffic
+                                    // is sent through one.
+                                    if let Some(server) = detected_server(decision) {
                                         if reported_server != Some(server) {
                                             reported_server = Some(server);
                                             if let Ok(mut g) = counters_ic.detected_server.lock() {
@@ -882,7 +944,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                                 *server.ip(),
                                             ) =>
                                         {
-                                            OutboundDecision::Reinject
+                                            OutboundDecision::Reinject(Some(server))
                                         }
                                         other => other,
                                     };
@@ -902,7 +964,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                                 break;
                                             }
                                         }
-                                        OutboundDecision::Reinject => {
+                                        OutboundDecision::Reinject(_) => {
                                             // Re-inject the game's OWN packet
                                             // UNCHANGED on the direct path. No
                                             // synthetic packet and no payload
@@ -1169,6 +1231,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     super::bypass::BypassGate::new(bypass_config, Arc::clone(&counters_t));
                 let mut eval_timer = tokio::time::interval(super::bypass::EVAL_INTERVAL);
                 eval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                // Consecutive evaluation ticks that have seen no packet at all.
+                let mut silent_ticks: u32 = 0;
 
                 let mut seq: u16 = 0;
                 let mut buf = vec![0u8; 65535];
@@ -1389,6 +1453,37 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     true,
                                     fec_active,
                                 );
+                            }
+
+                            // Tell the truth about a capture that is producing
+                            // nothing. The interceptor has already reported
+                            // success at this point, so silence here would be
+                            // read as "all good" while nothing at all is being
+                            // seen. Raised once, with the two things worth
+                            // checking, because a wrong capture filter is the
+                            // failure mode that looks exactly like a healthy
+                            // one from the outside.
+                            if counters_t.packets_seen.load(Ordering::Relaxed) == 0 {
+                                silent_ticks += 1;
+                                if silent_ticks == CAPTURE_SILENCE_TICKS {
+                                    let message = "No game packets have been captured since \
+                                         interception started. The tunnel is up but nothing is \
+                                         flowing through it, which usually means the capture \
+                                         filter does not match this game's traffic (for a \
+                                         built-in profile, its UDP port range). Check the \
+                                         game's ports or target the process directly."
+                                        .to_string();
+                                    tracing::warn!("⚠️ {message}");
+                                    if let Ok(mut g) = counters_t.capture_diagnosis.lock() {
+                                        *g = Some(message);
+                                    }
+                                }
+                            } else if silent_ticks != 0 {
+                                // Traffic arrived; the diagnosis no longer applies.
+                                silent_ticks = 0;
+                                if let Ok(mut g) = counters_t.capture_diagnosis.lock() {
+                                    *g = None;
+                                }
                             }
                         }
                     }
@@ -1624,6 +1719,39 @@ mod tests {
     };
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn a_server_held_direct_is_still_discovered() {
+        // Discovery must not depend on tunnelling. The field failure this pins:
+        // the server was published only from `Tunnel(server)`, so the app could
+        // not learn a destination it was not already relaying to. That rules out
+        // ever choosing a relay for a server before sending it traffic, and it
+        // hides any server that goes direct (a shadow-direct sample, or a flow
+        // this run is deliberately holding).
+        let server = SocketAddrV4::new(public_server(1), SERVER_PORT);
+
+        assert_eq!(
+            detected_server(OutboundDecision::Tunnel(server)),
+            Some(server),
+            "a tunnelled packet identifies its server"
+        );
+        assert_eq!(
+            detected_server(OutboundDecision::Reinject(Some(server))),
+            Some(server),
+            "a packet attributed to the game but held direct still identifies its server"
+        );
+    }
+
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn a_stray_packet_never_invents_a_server() {
+        // The other half of the contract: traffic that is not the game's must not
+        // be published as the game server, or the relay would be chosen for a
+        // destination the player is not playing on.
+        assert_eq!(detected_server(OutboundDecision::Reinject(None)), None);
+        assert_eq!(detected_server(OutboundDecision::Redetect), None);
+    }
 
     /// The remote port every game-server destination in these tests uses.
     const SERVER_PORT: u16 = 7777;

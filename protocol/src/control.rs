@@ -74,7 +74,8 @@ pub mod game_id {
     /// Mojang's Minecraft, Java Edition (TCP gameplay over 25565).
     pub const MINECRAFT_JAVA: u8 = 22;
     pub const RAINBOWSIX: u8 = 23;
-
+    /// Embark Studios' ARC Raiders (UDP gameplay over 61606-61632).
+    pub const ARCRAIDERS: u8 = 24;
     /// Canonical CLI key mapped to its wire id, ordered by ascending id.
     ///
     /// Keys byte-match the client's canonical `--game` CLI strings. [`UNKNOWN`]
@@ -103,6 +104,7 @@ pub mod game_id {
         ("hunt", HUNT),
         ("minecraft-java", MINECRAFT_JAVA),
         ("rainbowsix", RAINBOWSIX),
+        ("arcraiders", ARCRAIDERS),
     ];
 
     /// Resolve a CLI game key to its wire id, or [`UNKNOWN`] when absent.
@@ -999,13 +1001,13 @@ mod tests {
 
     #[test]
     fn test_game_ids_unique_and_stable() {
-        assert_eq!(game_id::GAME_IDS.len(), 23, "every real game needs one id");
+        assert_eq!(game_id::GAME_IDS.len(), 24, "every real game needs one id");
 
         // Each id 1..=23 must appear exactly once (0 stays reserved for UNKNOWN).
-        let mut seen = [0u8; 24];
+        let mut seen = [0u8; 25];
         for (key, id) in game_id::GAME_IDS.iter().copied() {
             assert!(
-                (1..=23).contains(&id),
+                (1..=24).contains(&id),
                 "key {key:?} has out-of-range id {id}"
             );
             assert_eq!(seen[id as usize], 0, "duplicate id {id}");

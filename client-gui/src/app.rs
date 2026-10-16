@@ -31,7 +31,11 @@ use eframe::egui;
 use lightspeed_client::interceptor::ProcessTarget;
 use lightspeed_client::profiles::schema::{is_valid_key, parse_port_range, slugify, PortRange};
 use lightspeed_client::profiles::{ProfileStore, UserGameProfile, UserServer};
-use lightspeed_client::{EngineStatus, LightSpeedEngine};
+use lightspeed_client::{
+    best_relay_for_destination, best_relay_for_destination_at, EngineStatus, LightSpeedEngine,
+    RelayCandidate,
+};
+use std::net::Ipv4Addr;
 
 // ── Tray state enum ──────────────────────────────────────────────────────────
 
@@ -47,6 +51,16 @@ pub enum TrayState {
 /// While auto-select is on and the tunnel is up, how often to re-run the relay
 /// race so a better - or newly faster - relay can take over.
 const RELAY_RECHECK_INTERVAL: Duration = Duration::from_secs(600);
+
+/// How often to scan the process table for a game appearing or exiting.
+///
+/// Slower than a relay probe on purpose: starting a game is a minutes-scale
+/// event, and the scan walks every process on the machine.
+const GAME_PRESENCE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Every discovered relay's measured client leg, as the destination-aware
+/// chooser consumes it (a relay that did not answer carries `None`).
+type RelayLegs = Vec<(SocketAddrV4, Option<Duration>)>;
 
 /// Hysteresis for a connected re-race: a winner must beat the relay in use by
 /// this many milliseconds before the GUI switches away from it.
@@ -555,6 +569,29 @@ pub struct LightSpeedApp<P: Platform> {
     selected_proxy_idx: usize,
     auto_select: bool,
     relay_race: Option<Receiver<Option<SocketAddrV4>>>,
+
+    /// Measured client legs for every discovered relay, kept so the
+    /// destination-aware choice can rank the whole path rather than the winner
+    /// of a client-leg race.
+    relay_legs: Option<RelayLegs>,
+
+    /// The game server the current relay was chosen for, so a new raid's server
+    /// triggers a fresh choice and a repeated tick does not.
+    chosen_for_server: Option<Ipv4Addr>,
+
+    /// When the process table was last scanned for a game.
+    last_presence_check: Option<std::time::Instant>,
+
+    /// Whether a game was present at the last scan, so a start/stop happens on a
+    /// transition only and not on every tick.
+    auto_game_present: bool,
+
+    /// Latched once the auto-start has launched for the current game presence, so
+    /// the watcher does not restart the tunnel on every tick.
+    auto_started_for_presence: bool,
+
+    /// A client-leg measurement in flight for every relay.
+    relay_measurement: Option<Receiver<RelayLegs>>,
     /// When the periodic auto-select re-race last started; cleared while
     /// disconnected or while auto-select is off so the clock restarts cleanly.
     last_race: Option<std::time::Instant>,
@@ -735,6 +772,12 @@ impl<P: Platform> LightSpeedApp<P> {
             selected_proxy_idx,
             auto_select,
             relay_race: None,
+            relay_legs: None,
+            relay_measurement: None,
+            chosen_for_server: None,
+            last_presence_check: None,
+            auto_game_present: false,
+            auto_started_for_presence: false,
             last_race: None,
             winner_probe: None,
             show_proxy_manager: false,
@@ -909,6 +952,13 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     /// Race the discovered relays and connect to the fastest one.
+    ///
+    /// This is the fallback for when nothing is known about the destination. A
+    /// race answers "which relay is closest to *me*", which is only half the
+    /// path: for a player joining a server in another region it produced a
+    /// wrong answer in the field (Los Angeles for an Ashburn server, from
+    /// Bangkok). [`Self::start_destination_choice`] is preferred whenever a game
+    /// server is known, and this remains for the case where none is.
     fn start_relay_race(&mut self) {
         let addrs: Vec<SocketAddrV4> = self
             .proxies
@@ -920,6 +970,176 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         tracing::info!("Racing {} relays for the lowest latency", addrs.len());
         self.relay_race = Some(discovery::spawn_relay_race(addrs));
+    }
+
+    /// Choose the relay that minimises the whole path to the live game server.
+    ///
+    /// Preferred over [`Self::start_relay_race`] whenever a destination is known,
+    /// because the relay-to-server leg is the half that decides whether relaying
+    /// beats going direct. Returns `None` when no server is locked yet, which is
+    /// when the client-leg race is still the best information available.
+    ///
+    /// The client legs come from [`Self::start_relay_measurement`], which measures
+    /// every relay rather than only the winner: the winner of the client-leg race
+    /// is exactly the relay this function is usually about to reject.
+    fn choose_relay_for_destination(&self) -> Option<SocketAddrV4> {
+        let server = self.game_server_addr()?;
+        let measured = self.relay_legs.as_ref()?;
+
+        // The server's position, from the offline country database the globe
+        // already renders from. Country-level precision is enough here for the
+        // same reason it is enough on the globe: the question is which relay is
+        // on the right side of the server, and a country centroid answers that
+        // for every case that matters - an Ashburn server resolves to US, which
+        // is thousands of kilometres from any non-US relay and, within the US,
+        // still discriminates a coast once the relay positions are exact.
+        let server_location =
+            crate::geo::locate(server).map(|(_, (lat, lon))| (lat as f64, lon as f64));
+
+        let candidates: Vec<RelayCandidate> = self
+            .proxies
+            .iter()
+            .filter_map(|entry| {
+                // Match on the IP, not the whole address. The client leg is
+                // measured against each relay's `/health` endpoint, which lives
+                // on `HEALTH_PORT` rather than the advertised data port, so a
+                // full-address comparison silently drops every candidate and the
+                // chooser returns `None` forever. That is what happened: the
+                // destination-aware selection never produced a single result and
+                // the app stayed on the client-leg winner.
+                let client_leg_us = measured
+                    .iter()
+                    .find(|(addr, _)| addr.ip() == entry.addr.ip())
+                    .and_then(|(_, latency)| latency.map(|d| d.as_micros() as u64))?;
+                Some(RelayCandidate {
+                    relay: entry.addr,
+                    region: Some(discovery::friendly_label(
+                        entry.node_id.as_deref().unwrap_or_default(),
+                    )),
+                    node_id: entry.node_id.clone(),
+                    client_leg_us: Some(client_leg_us),
+                    client_jitter_us: 0,
+                })
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let best = match server_location {
+            Some(loc) => best_relay_for_destination_at(server, loc, &candidates)?,
+            None => best_relay_for_destination(server, &candidates)?,
+        };
+        tracing::info!(
+            "Destination-aware relay choice for {server}: {} ({:?}, total {} ms)",
+            best.relay,
+            best.dest_source,
+            best.total_leg_us / 1000
+        );
+        Some(best.relay)
+    }
+
+    /// Measure every discovered relay's client leg on a background thread.
+    ///
+    /// The results feed the destination-aware choice, which needs all of them:
+    /// ranking the whole path requires knowing both the relay that is closest to
+    /// the player and the relay that is closest to the server, and those are
+    /// usually different relays.
+    fn start_relay_measurement(&mut self) {
+        let addrs: Vec<SocketAddrV4> = self
+            .proxies
+            .iter()
+            .map(|entry| discovery::health_endpoint(entry.addr))
+            .collect();
+        if addrs.is_empty() {
+            return;
+        }
+        self.relay_measurement = Some(discovery::spawn_relay_measurement(addrs));
+    }
+
+    /// Collect a finished client-leg measurement, then choose for the destination.
+    fn poll_relay_measurement(&mut self) {
+        let samples = match &self.relay_measurement {
+            Some(rx) => match rx.try_recv() {
+                Ok(samples) => samples,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+            },
+            None => return,
+        };
+        self.relay_measurement = None;
+
+        // Translate the samples back to the relays they belong to before storing
+        // them, so everything downstream can keep meaning "relay" by its data
+        // address.
+        self.relay_legs = Some(pair_relay_legs(&self.proxies, &samples));
+
+        if !self.auto_select {
+            return;
+        }
+        if let Some(addr) = self.choose_relay_for_destination() {
+            if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
+                if idx != self.selected_proxy_idx {
+                    tracing::info!("Selected {addr} for the current game server");
+                    self.selected_proxy_idx = idx;
+                    self.connect_selected();
+                    self.persist_config();
+                }
+            }
+        }
+    }
+
+    /// Re-select the relay whenever the game server changes.
+    ///
+    /// Relay selection needs a destination, and the destination only exists once
+    /// interception has run and locked a game server. Without this, the app
+    /// connects by the client-leg race (which chose Los Angeles for an Ashburn
+    /// server) and would stay there for the whole match, because the initial
+    /// choice happens before any server is known.
+    ///
+    /// The extraction-shooter case makes this a per-match event: a new raid is a
+    /// new server, possibly in a new region, and the relay that was right for the
+    /// last match is not necessarily right for this one.
+    fn follow_game_server(&mut self) {
+        if !self.auto_select || !self.status.interceptor_active {
+            return;
+        }
+        let server = match self.game_server_addr() {
+            Some(server) => server,
+            None => return,
+        };
+        if self.chosen_for_server == Some(server) {
+            return;
+        }
+
+        // The choice needs measured client legs for every relay; ask for them if
+        // this is the first server of the session.
+        if self.relay_legs.is_none() && self.relay_measurement.is_none() {
+            self.start_relay_measurement();
+            return;
+        }
+
+        self.chosen_for_server = Some(server);
+        let chosen = self.choose_relay_for_destination();
+        let Some(addr) = chosen else {
+            return;
+        };
+        if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
+            if idx != self.selected_proxy_idx {
+                tracing::info!("Following the game server: switching to {addr}");
+                self.selected_proxy_idx = idx;
+                self.connect_selected();
+                self.persist_config();
+            }
+        }
+    }
+
+    /// The live game server the interceptor is talking to, if any.
+    fn game_server_addr(&self) -> Option<Ipv4Addr> {
+        let raw = self.status.interceptor_server.as_str();
+        let host = raw.split(':').next()?;
+        host.parse::<Ipv4Addr>().ok()
     }
 
     /// Apply a finished latency race: connect to the winner when auto-select is
@@ -937,6 +1157,19 @@ impl<P: Platform> LightSpeedApp<P> {
             None => return,
         };
         self.relay_race = None;
+
+        // Once a relay has been chosen for a known game server, that choice
+        // governs. The race ranks the client leg alone, which is the half of the
+        // path that put a live match on a relay 17,000 km from its server, and it
+        // runs again on a timer - so without this guard it would keep dragging the
+        // relay back to the client-leg winner. The race still runs so its samples
+        // stay fresh; only its winner is declined.
+        if self.chosen_for_server.is_some() {
+            tracing::debug!(
+                "Declining the client-leg race winner; the relay is chosen for the game server"
+            );
+            return;
+        }
 
         if self.auto_select && self.status.connected {
             self.consider_connected_winner(winner);
@@ -1037,6 +1270,7 @@ impl<P: Platform> LightSpeedApp<P> {
             Some(at) if at.elapsed() >= RELAY_RECHECK_INTERVAL => {
                 self.last_race = Some(std::time::Instant::now());
                 self.start_relay_race();
+                self.start_relay_measurement();
             }
             Some(_) => {}
             None => self.last_race = Some(std::time::Instant::now()),
@@ -1194,6 +1428,91 @@ impl<P: Platform> LightSpeedApp<P> {
     /// Relaunch with elevated privileges so the interceptor can start.
     fn restart_elevated(&mut self) {
         P::relaunch_as_admin();
+    }
+
+    /// Watch for a game appearing or exiting, and relay without being asked.
+    ///
+    /// This is what removes the button press the user has to remember: with
+    /// `game_auto` on, relaying starts when a known game shows up and stops when
+    /// it leaves, so a match is optimized from its first packet rather than from
+    /// whichever moment the user noticed. Detection is throttled because it
+    /// scans the whole process table, and a scan per frame would be wasteful for
+    /// a signal that changes on the scale of minutes.
+    ///
+    /// A manual game pick or a manual process target disables the arm entirely:
+    /// the user has expressed an intent that an automatic scan must not override.
+    fn poll_game_presence(&mut self) {
+        if !self.game_auto && !self.game_manual {
+            self.auto_detected_game = None;
+            self.auto_game_present = false;
+            return;
+        }
+
+        let due = match self.last_presence_check {
+            Some(at) => at.elapsed() >= GAME_PRESENCE_INTERVAL,
+            None => true,
+        };
+        if !due {
+            return;
+        }
+        self.last_presence_check = Some(std::time::Instant::now());
+
+        // A manual process target is the user's explicit choice; never fight it.
+        if self.target_process.is_some() {
+            return;
+        }
+
+        let detected = try_auto_detect_game();
+        let present = detected.is_some();
+        let changed = detected != self.auto_detected_game;
+        self.auto_detected_game = detected;
+        self.auto_game_present = present;
+
+        if changed {
+            tracing::info!(
+                "Game presence changed: {}",
+                if present {
+                    self.auto_detected_game.as_deref().unwrap_or("unknown")
+                } else {
+                    "none"
+                }
+            );
+        }
+
+        // Start once per game presence, not on every tick. Verified live: an
+        // earlier version acted only on a presence *transition*, which fired
+        // before the relay was connected and then never retried; removing the
+        // transition gate overshot the other way and restarted the tunnel
+        // repeatedly (`Racing 8 relays` every few seconds). The latch below is
+        // the middle: it retries until the start succeeds, then holds until the
+        // game actually leaves.
+        if present {
+            if self.auto_started_for_presence {
+                return;
+            }
+            if self.status.interceptor_active {
+                self.auto_started_for_presence = true;
+                return;
+            }
+            if self.status.connected {
+                tracing::info!(
+                    "Game present and relay connected; starting interception for {}",
+                    self.auto_detected_game.as_deref().unwrap_or("unknown")
+                );
+                self.start_boost();
+                // Latch regardless of the result. A start that failed because the
+                // game is mid-launch would otherwise retry forever, and a start
+                // that succeeded must not repeat; either way the tunnel is now
+                // the engine's to manage until the game leaves.
+                self.auto_started_for_presence = true;
+            }
+        } else if self.status.interceptor_active {
+            tracing::info!("Game exited; stopping the relay it was using");
+            self.stop_boost();
+            self.auto_started_for_presence = false;
+        } else {
+            self.auto_started_for_presence = false;
+        }
     }
 
     /// Open the GUI trace log in the OS file manager.
@@ -2598,9 +2917,12 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         self.poll_discovery();
         self.poll_process_list();
         self.poll_relay_race();
+        self.poll_relay_measurement();
         self.poll_winner_probe();
         self.maybe_rerace();
         self.poll_health();
+        self.poll_game_presence();
+        self.follow_game_server();
 
         // Collect a finished update check from the background thread.
         if matches!(self.update_check, UpdateCheckState::Checking) {
@@ -3044,6 +3366,40 @@ fn connect_instruction(game_key: &str, local_port: u16) -> String {
         "dota2" => i18n::t_with("connect.dota2", &[("port", port.as_str())]),
         _ => i18n::t_with("connect.generic", &[("port", port.as_str())]),
     }
+}
+
+/// Pair measured client-leg samples back onto the proxy entries they belong to.
+///
+/// # Why this exists
+///
+/// A client-leg measurement is taken against a relay's `/health` endpoint, which
+/// serves on `discovery::HEALTH_PORT`, while the relay's tunnel address - the
+/// thing the rest of the app, the config file, and the chooser all call "the
+/// relay" - is the advertised data port. Samples therefore come back keyed by
+/// `ip:8080` while every consumer compares them against `ip:4434`.
+///
+/// A full-address comparison across that seam never matches, and it fails
+/// **silently**: the lookup yields `None`, every candidate is dropped, the
+/// destination-aware chooser returns `None`, and the app keeps whatever the
+/// client-leg race picked. That is how a live match got routed through Los
+/// Angeles to a server in Sao Paulo, 17,000 km the wrong way.
+///
+/// Pairing happens on the IP, which the health endpoint preserves, and the result
+/// is keyed by the entry's data address so nothing downstream sees a health port.
+/// One pair per entry that has a sample, in entry order.
+fn pair_relay_legs(
+    entries: &[crate::config::ProxyEntry],
+    measured: &[(SocketAddrV4, Option<Duration>)],
+) -> Vec<(SocketAddrV4, Option<Duration>)> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            measured
+                .iter()
+                .find(|(addr, _)| addr.ip() == entry.addr.ip())
+                .map(|(_, latency)| (entry.addr, *latency))
+        })
+        .collect()
 }
 
 fn try_auto_detect_game() -> Option<String> {
@@ -3785,18 +4141,89 @@ mod tests {
         assert!(result.is_err(), "the panic must poison the mutex");
         assert_eq!(*lock_or_recover(&mutex), "state");
     }
+
+    #[test]
+    fn client_leg_samples_pair_onto_data_addresses_not_health_ports() {
+        // The regression that kept a live match on the wrong relay. A measurement
+        // is taken against `ip:HEALTH_PORT`, and the entry's address is the
+        // advertised data port, so comparing whole addresses matches nothing and
+        // the chooser silently returns `None` forever. Pairing is by IP.
+        let entries = vec![
+            ProxyEntry::custom(addr("207.246.106.36:4434"), "LAX"),
+            ProxyEntry::custom(addr("207.246.124.117:4434"), "EWR"),
+        ];
+        let measured = vec![
+            (
+                addr("207.246.106.36:8080"),
+                Some(Duration::from_millis(244)),
+            ),
+            (
+                addr("207.246.124.117:8080"),
+                Some(Duration::from_millis(286)),
+            ),
+        ];
+
+        let legs = pair_relay_legs(&entries, &measured);
+
+        assert_eq!(legs.len(), 2, "both relays must survive the pairing");
+        assert_eq!(
+            legs[0].0,
+            addr("207.246.106.36:4434"),
+            "the stored key must be the data address, not the health port"
+        );
+        assert_eq!(legs[0].1, Some(Duration::from_millis(244)));
+        assert_eq!(legs[1].0, addr("207.246.124.117:4434"));
+        assert_eq!(legs[1].1, Some(Duration::from_millis(286)));
+    }
+
+    #[test]
+    fn pairing_keeps_entry_order_and_omits_relays_with_no_sample() {
+        // Entry order matters downstream (ties break on the relay address), and a
+        // relay that did not answer must be absent rather than reported as zero.
+        let entries = vec![
+            ProxyEntry::custom(addr("10.0.0.1:4434"), "a"),
+            ProxyEntry::custom(addr("10.0.0.2:4434"), "b"),
+            ProxyEntry::custom(addr("10.0.0.3:4434"), "c"),
+        ];
+        let measured = vec![
+            (addr("10.0.0.3:8080"), Some(Duration::from_millis(90))),
+            (addr("10.0.0.1:8080"), Some(Duration::from_millis(10))),
+        ];
+
+        let legs = pair_relay_legs(&entries, &measured);
+
+        assert_eq!(
+            legs.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+            vec![addr("10.0.0.1:4434"), addr("10.0.0.3:4434")],
+            "entry order is honoured and the relay with no sample is omitted"
+        );
+    }
+
+    #[test]
+    fn a_failed_probe_pairs_as_none_rather_than_a_zero_latency() {
+        // A relay that answered `None` has no usable leg: it must not look like a
+        // zero-millisecond relay, which would win every comparison.
+        let entries = vec![ProxyEntry::custom(addr("10.0.0.1:4434"), "a")];
+        let measured = vec![(addr("10.0.0.1:8080"), None)];
+
+        let legs = pair_relay_legs(&entries, &measured);
+
+        assert_eq!(legs.len(), 1);
+        assert_eq!(legs[0].1, None, "a failure stays a failure");
+    }
     use super::{
         apply_discovery_result, apply_target_choice, close_decision, draft_reasons,
-        game_editor_body, game_pick_rows, games, picker_status, primary_action, process_picker,
-        save_user_profiles, server_from_fields, should_apply_race, should_race, target_for_pick,
-        target_front_door, target_summary, validate_draft, CloseDecision, EditorActions,
-        GameEditorDraft, GamePickRow, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
-        TargetRowAction,
+        game_editor_body, game_pick_rows, games, pair_relay_legs, picker_status, primary_action,
+        process_picker, save_user_profiles, server_from_fields, should_apply_race, should_race,
+        target_for_pick, target_front_door, target_summary, validate_draft, CloseDecision,
+        EditorActions, GameEditorDraft, GamePickRow, PickerStatus, ProcessListState, ProcessPicker,
+        ProcessTarget, TargetRowAction,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
     use crate::processes::ProcessEntry;
     use std::net::SocketAddrV4;
+    use std::time::Duration;
 
     fn addr(s: &str) -> SocketAddrV4 {
         s.parse().expect("test address")
