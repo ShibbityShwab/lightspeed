@@ -72,7 +72,7 @@ const HOLD_FALLBACK: Duration = Duration::from_secs(120);
 
 /// Every discovered relay's measured client leg, as the destination-aware
 /// chooser consumes it (a relay that did not answer carries `None`).
-type RelayLegs = Vec<(SocketAddrV4, Option<Duration>)>;
+type RelayLegs = Vec<(SocketAddrV4, Option<discovery::RelaySample>)>;
 
 /// Hysteresis for a connected re-race: a winner must beat the relay in use by
 /// this many milliseconds before the GUI switches away from it.
@@ -1027,7 +1027,12 @@ impl<P: Platform> LightSpeedApp<P> {
                 let client_leg_us = measured
                     .iter()
                     .find(|(addr, _)| addr.ip() == entry.addr.ip())
-                    .and_then(|(_, latency)| latency.map(|d| d.as_micros() as u64))?;
+                    .and_then(|(_, sample)| sample.map(|s| s.median.as_micros() as u64))?;
+                let client_jitter_us = measured
+                    .iter()
+                    .find(|(addr, _)| addr.ip() == entry.addr.ip())
+                    .and_then(|(_, sample)| sample.map(|s| s.jitter.as_micros() as u64))
+                    .unwrap_or(0);
                 Some(RelayCandidate {
                     relay: entry.addr,
                     region: Some(discovery::friendly_label(
@@ -1035,7 +1040,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     )),
                     node_id: entry.node_id.clone(),
                     client_leg_us: Some(client_leg_us),
-                    client_jitter_us: 0,
+                    client_jitter_us,
                 })
             })
             .collect();
@@ -1561,6 +1566,29 @@ impl<P: Platform> LightSpeedApp<P> {
             if self.status.interceptor_active {
                 self.auto_started_for_presence = true;
                 return;
+            }
+            // Zero clicks means the relay leg needs no press either, so the
+            // auto-start path connects when nothing is connected yet. A user
+            // who pinned a relay (`auto_select` off) has made the call already,
+            // so their pick is connected directly and never re-raced. Both
+            // happen at most once per presence: re-connecting each tick would
+            // reset the control-plane link while the race is still in flight.
+            if !self.auto_started_for_presence
+                && should_race(self.auto_select, self.status.connected, self.proxies.len())
+            {
+                tracing::info!(
+                    "Game present and no relay connected; connecting one before interception"
+                );
+                self.start_relay_race();
+                self.auto_started_for_presence = true;
+            } else if !self.auto_started_for_presence
+                && self.selected_proxy_addr().is_some()
+                && !self.status.connected
+            {
+                tracing::info!("Game present; connecting the pinned relay before interception");
+                self.connect_selected();
+                self.persist_config();
+                self.auto_started_for_presence = true;
             }
             if self.status.connected {
                 tracing::info!(
@@ -3458,8 +3486,8 @@ fn connect_instruction(game_key: &str, local_port: u16) -> String {
 /// One pair per entry that has a sample, in entry order.
 fn pair_relay_legs(
     entries: &[crate::config::ProxyEntry],
-    measured: &[(SocketAddrV4, Option<Duration>)],
-) -> Vec<(SocketAddrV4, Option<Duration>)> {
+    measured: &[(SocketAddrV4, Option<discovery::RelaySample>)],
+) -> Vec<(SocketAddrV4, Option<discovery::RelaySample>)> {
     entries
         .iter()
         .filter_map(|entry| {
@@ -4222,14 +4250,8 @@ mod tests {
             ProxyEntry::custom(addr("207.246.124.117:4434"), "EWR"),
         ];
         let measured = vec![
-            (
-                addr("207.246.106.36:8080"),
-                Some(Duration::from_millis(244)),
-            ),
-            (
-                addr("207.246.124.117:8080"),
-                Some(Duration::from_millis(286)),
-            ),
+            (addr("207.246.106.36:8080"), Some(sample(244, 88))),
+            (addr("207.246.124.117:8080"), Some(sample(286, 31))),
         ];
 
         let legs = pair_relay_legs(&entries, &measured);
@@ -4240,9 +4262,9 @@ mod tests {
             addr("207.246.106.36:4434"),
             "the stored key must be the data address, not the health port"
         );
-        assert_eq!(legs[0].1, Some(Duration::from_millis(244)));
+        assert_eq!(legs[0].1, Some(sample(244, 88)));
         assert_eq!(legs[1].0, addr("207.246.124.117:4434"));
-        assert_eq!(legs[1].1, Some(Duration::from_millis(286)));
+        assert_eq!(legs[1].1, Some(sample(286, 31)));
     }
 
     #[test]
@@ -4255,8 +4277,8 @@ mod tests {
             ProxyEntry::custom(addr("10.0.0.3:4434"), "c"),
         ];
         let measured = vec![
-            (addr("10.0.0.3:8080"), Some(Duration::from_millis(90))),
-            (addr("10.0.0.1:8080"), Some(Duration::from_millis(10))),
+            (addr("10.0.0.3:8080"), Some(sample(90, 5))),
+            (addr("10.0.0.1:8080"), Some(sample(10, 2))),
         ];
 
         let legs = pair_relay_legs(&entries, &measured);
@@ -4296,6 +4318,14 @@ mod tests {
 
     fn addr(s: &str) -> SocketAddrV4 {
         s.parse().expect("test address")
+    }
+
+    /// A measured relay leg: median and spread, both in milliseconds.
+    fn sample(median_ms: u64, jitter_ms: u64) -> crate::discovery::RelaySample {
+        crate::discovery::RelaySample {
+            median: Duration::from_millis(median_ms),
+            jitter: Duration::from_millis(jitter_ms),
+        }
     }
 
     /// Renders one frame with the app's fonts and theme installed.

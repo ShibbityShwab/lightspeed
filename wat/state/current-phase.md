@@ -1,9 +1,44 @@
-# Current Phase: WF-055 Custom games + process-scoped capture - plan reworked by adversarial review, phase 1 executed, five owner gates pending
+# Current Phase: WF-056 destination-aware relaying - held-until-chosen and zero-click landed; jitter now measured; the live relay-follow run is the one open proof
 
-**Workflow:** WF-055; WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
+**Workflow:** WF-056; WF-055; WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
 **Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
-**Status:** WF-054 complete and live; WF-055's plan was reworked by adversarial review and phase 1 (profiles, saved servers, `resolve()`, the widened `process_names()` trait method, resolved `InterceptorConfig` flags, wiring the inert custom port range into the target) is executed. Plan: `docs/design/custom-games-and-process-targeting.md` (P1 answers the discussion's first two asks; P3 process-scoped capture on Windows; Linux nftables set with cgroup v2 deferred; macOS best-effort under OQ4). **Five owner gates are pending**, listed in section 8 and in the decisions entry for 2026-10-07. Changes are uncommitted pending owner review.
-**Last updated:** 2026-10-07
+**Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. This round finished the jitter measurement that the ranking was already weighting at zero, and made a detected game connect a relay on its own. **The one open proof is a live run**: no session has yet shown a `Following the game server` line with real gameplay traffic, so the relay-follow is verified by unit tests and compile only. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
+**Last updated:** 2026-10-17
+
+---
+
+## 2026-10-17 - the ranking's stability term stops being a constant, and auto-detect connects the relay it needs
+
+**Picked up where the previous session stopped:** an uncommitted change replacing the
+GUI's single-sample client-leg measurement with a five-probe `RelaySample` (median +
+spread) was in the tree, half done. It is now finished, tested and green; the numbers
+below are from this round's runs, not from memory.
+
+**The spread definition took three attempts and the failures are the point.** `max - min`
+over five whole-millisecond probes lets one spike dominate a term the ranking doubles
+(`JITTER_WEIGHT = 2`). Nearest-rank p90 - p10 does not tail off: `ceil(0.9n)` at n=5 keeps
+the worst probe and p10 is the fastest, i.e. identical to `max - min`. Linear-interpolated
+p90 - p10 passes both a spike test and a steady-link test, yet one spike still produced
+115 ms of jitter against a 3 ms true spread and pulled p10 up towards itself. What shipped
+is **second-slowest minus fastest**, which holds out exactly one probe at each end and is
+what the tests pin: a single 290 ms spike among 99-102 ms probes reads as 3 ms, not 191.
+
+**The example count is five**, not the three the half-finished change chose, because with
+three probes the held-out-and-floor combination collapses back to `max - min`.
+
+**Zero-click now reaches the relay leg.** A detected game used to start interception only
+if a relay was already connected, which made "zero clicks" untrue for a cold start. It
+now starts the client-leg race when nothing is connected, or connects the pinned relay
+directly when the user turned auto-select off; both latch once per game presence, and the
+pinned path never re-races the user's choice.
+
+**Verified:** `cargo fmt --all --check` clean; `cargo clippy -p lightspeed-gui --all-targets
+-- -D warnings` clean; `cargo test -p lightspeed-gui --bin lightspeed-gui` green including
+the five new `summarise`/`measure_spreads_blocking` tests. **Not verified:** nothing here
+has run against a live game. The jitter change alters relay choice, so the next live
+session should show a `Destination-aware relay choice` line whose total differs from the
+pre-change pick only when a relay's spread justifies it, and the zero-click connect should
+appear in the trace as `connecting one before interception`.
 
 ---
 

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The relay ranking now weighs measured instability, not a zero.** The whole-path score
+  already weighted jitter twice, but it was always handed zero: each relay was probed once for
+  the client-leg race, and one probe cannot show spread. The GUI now probes every relay five
+  times when it measures, ranks on the median, and scores swing as second-slowest minus fastest,
+  so a lone slow probe (the realistic outlier on a congested mobile link) cannot decide the relay
+  for the whole interval on its own.
+- **A detected game connects a relay on its own.** With Auto detect selected, a game appearing
+  now also connects a relay when nothing was connected, so relaying starts without a press.
+  With auto-select on it starts the client-leg race and the destination-aware choice takes over
+  once the server locks; with auto-select off the user's pinned relay is connected directly and
+  never re-raced.
 - **Traffic is held on the direct path until a relay has been chosen for the game server.**
   The failure this prevents is the worst one this project can produce: with the relay picked before
   anyone knew where the server was, a match on a Sao Paulo server was tunnelled through a relay in

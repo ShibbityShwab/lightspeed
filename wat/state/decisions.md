@@ -265,6 +265,16 @@ lesson as the append-history ARG_MAX work.
 
 ## Entries
 
+### 2026-10-17: Relay spread is second-slowest minus fastest, over five probes
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted
+**Rationale:** The whole-path ranking doubles jitter (`JITTER_WEIGHT = 2`) but was always handed zero, because each relay was probed once. Measuring spread over a handful of whole-millisecond probes makes the estimator matter more than the sample count: `max - min` lets one spike decide; nearest-rank p90 - p10 at n=5 is exactly `max - min` (`ceil(0.9n)` is the last sample and p10 is the first); linear-interpolated p90 - p10 still read 115 ms against a 3 ms truth for one spike. The owner's goal is the lowest latency and the most stable connection, and on his congested mobile link the slow probe is the realistic outlier while a fast one is just a quiet moment. Holding out exactly one probe at each end (second-slowest minus fastest) reports that spike as 3 ms, and five probes leave three middle samples.
+**Impact:** `client-gui/src/discovery.rs` gains `RelaySample` (median + spread), `RELAY_PROBES = 5` and `measure_spreads_blocking`; the GUI's client-leg measurement uses it, so `client_jitter_us` is a measured value in relay choice for the first time. Five tests pin the estimator (steady link, one spike, one probe, empty, and the blocking measurement's ordering with an unanswered relay). The chooser's scoring is unchanged.
+**Alternatives Considered:** Three probes (the half-finished change's number): collapses to `max - min` once one is held out at each end. Nearest-rank p90 - p10: no tail-off at these sample counts. Linear-interpolated p90 - p10: passes simple tests, but a single spike still contributes 75% of its excess. More probes: real cost per relay on every recheck, for a signal that already separates a steady relay from a spiky one.
+
+---
+
 ### 2026-05-25: Initial Decision Log Created
 
 **Agent:** Architect

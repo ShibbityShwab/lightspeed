@@ -192,12 +192,99 @@ pub fn spawn_relay_race(addrs: Vec<SocketAddrV4>) -> Receiver<Option<SocketAddrV
 /// sample set once, so a caller ranking the whole path has every leg.
 pub fn spawn_relay_measurement(
     addrs: Vec<SocketAddrV4>,
-) -> Receiver<Vec<(SocketAddrV4, Option<Duration>)>> {
+) -> Receiver<Vec<(SocketAddrV4, Option<RelaySample>)>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(measure_all_blocking(&addrs));
+        let _ = tx.send(measure_spreads_blocking(&addrs));
     });
     rx
+}
+
+/// One relay's measured client leg: the latency and how much it moved.
+///
+/// Both are needed because the owner's goal is "lowest latency and the most stable
+/// connection", and on a mobile link the spread is what makes a match feel bad
+/// even when the median is fine. A single probe cannot see spread: the ranking
+/// weights jitter, and until this existed it was always handed zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RelaySample {
+    /// Middle value across the probes.
+    pub median: Duration,
+    /// Spread across the probes: second-slowest minus fastest, so one spike or
+    /// one lucky fast probe does not decide it.
+    pub jitter: Duration,
+}
+
+/// How many times each relay is probed before its leg is written up.
+///
+/// Five, not one, because a single probe cannot see spread and the ranking weighs
+/// it twice (`JITTER_WEIGHT` in `relay_choice`). Five still leaves three probes in
+/// the middle once the fastest and slowest are held out, so one spike cannot
+/// decide the relay. The cost is bounded: once per relay per
+/// `RELAY_RECHECK_INTERVAL`, never per packet.
+pub const RELAY_PROBES: usize = 5;
+
+/// Probe every address `RELAY_PROBES` times and return each one's median and
+/// spread, in input order.
+///
+/// Unlike [`measure_all_blocking`], which takes one sample and is used for the
+/// fastest-relay race, this exists to characterise a link. A relay that does not
+/// answer at all is omitted rather than reported as zero.
+pub fn measure_spreads_blocking(
+    addrs: &[SocketAddrV4],
+) -> Vec<(SocketAddrV4, Option<RelaySample>)> {
+    if addrs.is_empty() {
+        return Vec::new();
+    }
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        for (index, addr) in addrs.iter().enumerate() {
+            let tx = tx.clone();
+            let addr = *addr;
+            scope.spawn(move || {
+                let mut times: Vec<Duration> = Vec::with_capacity(RELAY_PROBES);
+                for _ in 0..RELAY_PROBES {
+                    if let Some(rtt) = probe_latency(addr) {
+                        times.push(rtt);
+                    }
+                }
+                let _ = tx.send((index, addr, summarise(&mut times)));
+            });
+        }
+    });
+    drop(tx);
+
+    let mut samples: Vec<(usize, SocketAddrV4, Option<RelaySample>)> = rx.iter().collect();
+    samples.sort_by_key(|(index, _, _)| *index);
+    samples
+        .into_iter()
+        .map(|(_, addr, spread)| (addr, spread))
+        .collect()
+}
+
+/// Median and spread of the successful probes, or `None` when none succeeded.
+///
+/// The spread holds out one probe at each end (second-slowest minus fastest)
+/// rather than being `max - min`: with a handful of probes, one transient spike
+/// would otherwise dominate a term the ranking doubles and decide the relay for
+/// the whole interval. The low end is the outright fastest probe because on a
+/// congested mobile link the slow probe is the realistic outlier, while a fast
+/// one is how a quiet moment looks.
+fn summarise(times: &mut [Duration]) -> Option<RelaySample> {
+    if times.is_empty() {
+        return None;
+    }
+    times.sort_unstable();
+    let n = times.len();
+    let median = times[n / 2];
+    // The handful of probes makes max - min unusable, but a percentile over five
+    // samples is also too coarse to separate "steady with one spike" from "slow
+    // every time": with sorted samples the answer is the second-slowest against
+    // the fastest, which holds out exactly one probe at each end.
+    let fast = times[0];
+    let typical_slow = times[n - 1 - usize::from(n > 1)];
+    let jitter = typical_slow.saturating_sub(fast);
+    Some(RelaySample { median, jitter })
 }
 
 /// Probe every address concurrently and return the one with the lowest
@@ -311,8 +398,9 @@ fn parse_health(body: &str) -> Result<RelayHealth, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        fastest_addr, friendly_label, health_endpoint, parse_health, parse_nodes, probe_blocking,
-        race_blocking, spawn_relay_race, split_body, RelayHealth,
+        fastest_addr, friendly_label, health_endpoint, measure_spreads_blocking, parse_health,
+        parse_nodes, probe_blocking, race_blocking, spawn_relay_race, split_body, summarise,
+        RelayHealth, RelaySample, RELAY_PROBES,
     };
     use std::net::SocketAddrV4;
     use std::time::Duration;
@@ -492,6 +580,127 @@ mod tests {
         let winner = race_blocking(&[closed, responder]);
         handle.join().expect("server thread");
         assert_eq!(winner, Some(responder));
+    }
+
+    #[test]
+    fn summarise_reports_the_median_and_the_tail_spread() {
+        // An even count has no middle element; the upper middle is the median of
+        // record, so a split sample set does not depend on how it was sorted.
+        // Sorted 10, 20, 30, 40: the median is the upper middle, and the spread
+        // is second-slowest minus fastest.
+        let mut times = [
+            Duration::from_millis(40),
+            Duration::from_millis(10),
+            Duration::from_millis(30),
+            Duration::from_millis(20),
+        ];
+        assert_eq!(
+            summarise(&mut times),
+            Some(RelaySample {
+                median: Duration::from_millis(30),
+                jitter: Duration::from_millis(20),
+            })
+        );
+    }
+
+    #[test]
+    fn summarise_ignores_a_single_outlier_probe() {
+        let mut times = [
+            Duration::from_millis(100),
+            Duration::from_millis(101),
+            Duration::from_millis(99),
+            Duration::from_millis(102),
+            Duration::from_millis(290),
+        ];
+        // max - min would report 191 ms of swing, and the ranking doubles that,
+        // so one spike would outvote a relay that is otherwise steady.
+        assert_eq!(
+            summarise(&mut times),
+            Some(RelaySample {
+                median: Duration::from_millis(101),
+                jitter: Duration::from_millis(3),
+            })
+        );
+    }
+
+    #[test]
+    fn summarise_of_one_probe_has_no_spread_information() {
+        let mut times = [Duration::from_millis(77)];
+        assert_eq!(
+            summarise(&mut times),
+            Some(RelaySample {
+                median: Duration::from_millis(77),
+                jitter: Duration::ZERO,
+            })
+        );
+        assert_eq!(summarise(&mut []), None);
+    }
+
+    #[test]
+    fn spreads_are_returned_in_input_order_and_silent_relays_are_none() {
+        use std::io::{Read, Write};
+
+        // Two ports bound then dropped: connects are refused, which is the
+        // "relay did not answer" case the measurement must not report as zero.
+        let silent = |()| -> SocketAddrV4 {
+            match std::net::TcpListener::bind("127.0.0.1:0")
+                .expect("bind")
+                .local_addr()
+                .expect("addr")
+            {
+                std::net::SocketAddr::V4(v4) => v4,
+                std::net::SocketAddr::V6(_) => unreachable!("bound to IPv4"),
+            }
+        };
+        let first = silent(());
+        let second = silent(());
+        let refused = [first, second];
+
+        let samples = measure_spreads_blocking(&refused);
+        assert_eq!(samples.len(), refused.len());
+        assert_eq!(
+            samples.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(),
+            refused.to_vec(),
+            "results stay in input order"
+        );
+        assert!(
+            samples.iter().all(|(_, sample)| sample.is_none()),
+            "a relay that never answered has no sample, not a zero one"
+        );
+
+        let samples = measure_spreads_blocking(&[]);
+        assert!(samples.is_empty());
+
+        // One relay answering every probe: the median is a real round trip and
+        // the spread across five loopback probes is reported, not left at zero.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let responder = match listener.local_addr().expect("addr") {
+            std::net::SocketAddr::V4(v4) => v4,
+            std::net::SocketAddr::V6(_) => unreachable!("bound to IPv4"),
+        };
+        let handle = std::thread::spawn(move || {
+            for _ in 0..RELAY_PROBES {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf);
+                    let body = r#"{"packets_relayed":0,"sessions_created":0}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            }
+        });
+        let measured = measure_spreads_blocking(&[responder]);
+        handle.join().expect("server thread");
+        assert_eq!(measured.len(), 1);
+        assert_eq!(measured[0].0, responder);
+        assert!(
+            measured[0].1.map(|s| s.median) > Some(Duration::ZERO),
+            "a relay that answered has a real median"
+        );
     }
 
     #[test]
