@@ -66,3 +66,6 @@ web/placement.json
 .omo/
 .cortexkit/
 .playwright-mcp/
+
+# Written by the Localization workflow; read as an artifact, not committed.
+localization-report.md

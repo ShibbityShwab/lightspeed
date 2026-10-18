@@ -1,0 +1,47 @@
+name: Localization
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to translate and commit to"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: localization-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  translate:
+    name: Translate new English copy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
+
+      - name: Translate, rebuild and check
+        run: bash scripts/localization-update.sh
+
+      - name: Commit the translated catalogs and pages
+        run: |
+          if git diff --quiet -- web scripts/localization-state.json docs localization-report.md; then
+            echo "nothing to translate"
+            exit 0
+          fi
+          git config user.name "lightspeed-localization[bot]"
+          git config user.email "lightspeed-localization@users.noreply.github.com"
+          git add web scripts/localization-state.json docs localization-report.md
+          git commit -m "chore(i18n): translate changed English copy"
+          git push
+
+      - name: Attach the unreviewed translation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: localization-report
+          path: localization-report.md
+          if-no-files-found: ignore

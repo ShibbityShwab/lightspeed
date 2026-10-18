@@ -20,6 +20,21 @@ should know rather than discover:
 Adding or removing a language is atomic: the picker entry, the `native_name`,
 the catalog and the generated page change together.
 
+## How the translations stay in step
+
+The chore that caused eight locales to still say "22 games" after the count went
+to 24 is now a script: `scripts/localization-sync.py`. It hashes the English
+source of every catalog key and every localized doc page, records each hash in
+`scripts/localization-state.json`, and translates only what has no current
+translation. A string whose English has not moved is never retouched, so the
+wording here is stable; a string whose English moved is reported by
+`--check` (which CI runs) and retranslated only with `--retranslate`, so an
+edit to an English sentence gets a look before eight languages change.
+
+It needs no account: it talks to a free LibreTranslate instance, overridable
+with `LIGHTSPEED_TRANSLATE_URL` or `--endpoint` (a self-hosted one keeps the copy
+on hardware the project controls). `[COST_STUB]` rules out a paid API.
+
 ## English
 
 | Document |  |

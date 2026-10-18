@@ -141,6 +141,12 @@ jobs:
       - name: Translated docs carry the unreviewed banner
         run: python scripts/localized-docs.py --check
 
+      # Same idea, one level down: a catalog key or doc page whose English moved
+      # and whose translation did not is drift even when every string is present.
+      # Fix it with the Localization workflow, which translates and commits.
+      - name: Translations match their English source
+        run: python scripts/localization-sync.py --check
+
   macos-smoke:
     name: macOS Smoke Test
     runs-on: macos-latest

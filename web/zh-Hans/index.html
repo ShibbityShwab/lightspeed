@@ -230,7 +230,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>启动 LightSpeed</h3>
-            <p>在游戏前运行这个轻量客户端。它会自动识别 23 个内置配置：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft（Bedrock 和 Java）以及 Hunt: Showdown、Rainbow Six Siege。</p>
+            <p>在游戏前运行轻量级客户端。它自动检测 24 个内置配置文件：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、英雄联盟、PUBG、MapleStory、Genshin Impact、Rocket League、坦克世界、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft（基岩和 Java）、Hunt: Showdown、彩虹六号围攻和ARC攻略。</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -374,7 +374,7 @@
       <div class="container">
         <p class="section-eyebrow">兼容性</p>
         <h2 class="section-title">支持的游戏</h2>
-        <p class="section-subtitle">22 款游戏的内置配置。即装即玩。</p>
+        <p class="section-subtitle">24 种游戏的内置配置文件。顺便进来玩一下。</p>
         <div class="games-grid">
           <article class="game-card">
             <div class="game-head">
@@ -633,6 +633,17 @@
               <span class="game-tag">BattlEye + Shieldguard</span>
             </div>
             <p>直接通过 UDP 连接 Ubisoft 的区域比赛服务器。LightSpeed 转发数据包时不接触游戏内存，但 Shieldguard 在启动时要求 Secure Boot、HVCI 和 TPM，此配置尚未针对它验证。</p>
+            <div class="game-status game-status-ready">就绪</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-arc" aria-hidden="true">弧</span>
+              <h3>ARC攻略</h3>
+            </div>
+            <div class="game-details">
+              UDP 7600-7777 轻松反作弊
+            </div>
+            <p>袭击被分配给轮换的专用服务器，因此配置文件会在每次匹配时重新检测服务器。专为加入不属于他们的区域的玩家而设计：中继选择在游戏服务器附近，而不是您附近。</p>
             <div class="game-status game-status-ready">就绪</div>
           </article>
         </div>
@@ -1016,7 +1027,7 @@
           </details>
           <details class="faq-item">
             <summary>支持哪些游戏？</summary>
-            <p>目前有 22 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft 和 Hunt: Showdown、Rainbow Six Siege 都内置了配置。用 <code>--game &lt;name&gt;</code> 启动，或交给自动检测即可。其他任何基于 UDP 的游戏都可以通过手动端口配置使用。</p>
+            <p>目前有 24 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、英雄联盟、PUBG、MapleStory、Genshin Impact、Rocket League、坦克世界、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft、Hunt: Showdown、彩虹六号围攻和 ARC Raiders 都有内置配置文件。只需使用 <code>--game &lt;name&gt;</code> 运行或让自动检测检测到它。任何其他基于 UDP 的游戏都可以使用手动端口配置。</p>
           </details>
           <details class="faq-item">
             <summary>我的数据安全吗？</summary>
