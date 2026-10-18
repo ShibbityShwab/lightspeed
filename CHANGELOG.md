@@ -68,6 +68,9 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **The Relayed counter now shows process-first traffic.** The row only read the older redirect mode's
+  counter, so a session relaying through the interceptor showed "start optimizing to count" while
+  packets were moving (#154).
 - **Discovery no longer depends on tunnelling.** The game server was published only from the tunnel
   decision, so the app could not learn a destination it was not already relaying to, and any server
   routed direct was invisible. The decision now carries the server on the re-inject path too, and the
