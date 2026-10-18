@@ -20,7 +20,6 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use super::traits::{ProcessInfo, Route, TransportProtocol};
-#[cfg(target_os = "linux")]
 use crate::games::process_name_matches;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,8 +81,6 @@ pub fn scan_for_games(process_names: &[&str]) -> Vec<ProcessInfo> {
         })
         .collect()
 }
-
-use crate::games::process_name_matches;
 
 /// The PID of a running process whose image name matches `name`, if any.
 ///
