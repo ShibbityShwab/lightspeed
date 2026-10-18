@@ -104,6 +104,19 @@ start the app, let Auto detect find `PioneerGame.exe`, and read the trace for
 do not need a game server are proven live: the release watcher fires on the
 engine runtime.
 
+### 2026-10-18, relay health - a verdict on whether traffic leaves, not just is decided
+
+Committed as `d0b7287`. `packets_tunnel_sent` counts sends that returned Ok in
+the Windows tunnel, the snapshot carries it, and the GUI logs `Relay verdict: ...`
+when the per-window comparison changes (healthy, or `n of m relayed datagrams
+never left... switch relay`). Three tests pin the movement rule, UDP loss
+tolerance, the idle case and the switch-only-while-held rule.
+**NOT verified live:** no run has produced an `Unsent` verdict; producing one
+needs a relay that accepts the connection and then drops the data, which is not
+something I can manufacture from here. A normal run should log one
+`Relay verdict: every relayed datagram left...` line ten seconds after relaying
+starts, and nothing more while it stays healthy.
+
 **Not yet re-proven live after removing the probes.** The fixed binary still has
 to show `Hold release watcher armed (relay already up: true)` followed by
 `The relay connected while the hold was still waiting for the game server` on a
