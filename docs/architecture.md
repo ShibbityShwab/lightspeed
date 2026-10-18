@@ -1,6 +1,6 @@
 # <picture><source media="(prefers-color-scheme: dark)" srcset="../web/assets/brand/lightspeed-mark-inverse.svg"><img src="../web/assets/brand/lightspeed-mark.svg" width="26" height="26" align="absmiddle" alt=""></picture> LightSpeed Architecture
 
-> Last updated: 2026-10-01 - Content re-verified against v1.6.14 (the figures below still hold: eight sponsor-funded relays, on-by-default telemetry with the ping-saved metric, GUI auto-select of the fastest relay, installer pipeline (cargo-dist), self-hosted proxy model, token authentication, TCP tunnel, configurable ports, 19-game support). Originally written for v1.6.5.
+> Last updated: 2026-10-18 - the built-in game count is 24 as of v1.8.0; the architecture below was last re-verified against v1.6.14 (the figures below still hold: eight sponsor-funded relays, on-by-default telemetry with the ping-saved metric, GUI relay selection, installer pipeline (cargo-dist), self-hosted proxy model, token authentication, TCP tunnel, configurable ports). Originally written for v1.6.5.
 
 ---
 

@@ -121,17 +121,16 @@ LightSpeed ships three packages. **You only need one**:
 | Platform | Command |
 |-----------|---------|
 | **macOS and Linux** | `brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed && brew install ShibbityShwab/lightspeed/lightspeed` (current at the latest release) |
-| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (bucket is current at 1.6.14) |
-| **Windows (Chocolatey)** | `choco install lightspeed` (live; **1.6.14 submitted and pending moderation** - the feed still serves 1.6.3 until a moderator approves) |
+| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (bucket is current at 1.8.0) |
+| **Windows (Chocolatey)** | `choco install lightspeed` (live; **1.8.0 submitted and pending moderation** - the feed serves 1.7.0 until a moderator approves) |
 | **Windows (winget)** | not published yet: `winget install ShibbityShwab.LightSpeed` will fail until the first manifest merges. Use the MSI from [Releases](https://github.com/ShibbityShwab/lightspeed/releases). |
 | **Arch Linux** | `yay -S lightspeed-bin` (AUR, prepared but not yet published; Arch registration is closed) |
 
-> **Windows package managers are catching up.** The Scoop bucket now serves the
-> current release, and Chocolatey has 1.6.14 submitted and pending moderation
-> (the feed still serves 1.6.3 until a moderator approves). winget has no
-> published manifest yet - the first submission is awaiting a Microsoft
-> moderator. For Windows, the MSI or `.zip` from
-> [Releases](https://github.com/ShibbityShwab/lightspeed/releases) is always
+> **Windows package managers are catching up.** The Scoop bucket serves 1.8.0.
+> Chocolatey has 1.8.0 submitted and pending moderation (the feed serves 1.7.0
+> until a moderator approves). winget has no published manifest yet - the first
+> submission is awaiting a Microsoft moderator. For Windows, the MSI or `.zip`
+> from [Releases](https://github.com/ShibbityShwab/lightspeed/releases) is always
 > current. macOS and Linux users get the current version from Homebrew.
 
 ### One-line Install (Linux and macOS)
