@@ -1481,6 +1481,18 @@ impl<P: Platform> LightSpeedApp<P> {
                     tracing::info!(
                         "Holding traffic on the direct path until the game server is known"
                     );
+                    // The relay connected for this game can arrive on a frame the
+                    // GUI's own release never sees, so the engine ends the hold
+                    // itself the moment that happens. Nothing changes for a run
+                    // that does find its server: `follow_game_server` releases
+                    // first, and this only stops the watcher.
+                    let status = lock_or_recover(&self.engine).status_watch();
+                    let armed = engine.release_hold_when_connected(move || {
+                        status.read().map(|s| s.connected).unwrap_or(false)
+                    });
+                    if !armed {
+                        tracing::debug!("No release watcher: this run is not held");
+                    }
                 } else {
                     tracing::debug!("This backend has no tunnelling gate; starting unheld");
                 }

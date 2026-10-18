@@ -229,6 +229,11 @@ pub struct LightSpeedEngine {
     windivert_stat_slot: Option<WinDivertStatSlot>,
     /// Live handle for the OOP TrafficInterceptor (multiplatform MITM).
     interceptor_handle: Option<crate::interceptor::InterceptorHandle>,
+    /// Watcher that ends the current hold once its predicate says so.
+    ///
+    /// See [`Self::release_hold_when_connected`]; `None` when the run is not
+    /// held or the backend has no gate.
+    hold_watch: Option<tokio::task::JoinHandle<()>>,
     /// Periodic telemetry flush task, running while a relay is connected and
     /// telemetry is enabled.
     telemetry_flush: Option<tokio::task::JoinHandle<()>>,
@@ -259,6 +264,7 @@ impl LightSpeedEngine {
             windivert_done_rx: None,
             windivert_stat_slot: None,
             interceptor_handle: None,
+            hold_watch: None,
             telemetry_flush: None,
             telemetry_proxy: None,
             telemetry_game_id: lightspeed_protocol::game_id::UNKNOWN,
@@ -909,6 +915,14 @@ impl LightSpeedEngine {
         }
     }
 
+    /// How often [`Self::release_hold_when_connected`] asks whether the relay it
+    /// is waiting for has connected.
+    ///
+    /// Lives here rather than on the GUI's frame loop because that loop stops
+    /// when the window is not being redrawn, which is exactly when a player is in
+    /// a match and the hold must end without the GUI's help.
+    pub const HOLD_CONNECT_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
     // ── OOP TrafficInterceptor (multiplatform MITM) ───────────────────────
 
     /// Start the OOP `TrafficInterceptor` for a game identified by `game_key`,
@@ -1146,9 +1160,53 @@ impl LightSpeedEngine {
 
     /// Permit tunnelling again, once a relay has been chosen for the server.
     pub fn release_tunnelling(&mut self) -> bool {
+        self.stop_hold_watch();
         self.interceptor_handle
             .as_ref()
             .is_some_and(|h| h.set_tunnelling_enabled(true))
+    }
+
+    /// Release a hold as soon as `connected` says the relay is up, without
+    /// waiting for the caller to notice.
+    ///
+    /// The GUI's own release runs once per frame, and a frame is the one thing a
+    /// GUI starved of focus cannot promise: the hold outlived the relay it had
+    /// connected, so a session stayed on the direct path while the hold's own
+    /// two-minute fallback eventually fired. This watcher runs on the engine's
+    /// runtime instead, where the relay's arrival (a frame loop at 100 ms) is
+    /// the clock that matters.
+    ///
+    /// Returns whether a watcher was armed; `false` when this run is not held or
+    /// the backend has no gate, in which case there is nothing to release.
+    pub fn release_hold_when_connected(
+        &mut self,
+        connected: impl Fn() -> bool + Send + 'static,
+    ) -> bool {
+        let Some(switch) = self
+            .interceptor_handle
+            .as_ref()
+            .and_then(|h| h.tunnelling_switch())
+        else {
+            return false;
+        };
+        self.stop_hold_watch();
+        self.hold_watch = Some(self.rt.spawn(async move {
+            while !connected() {
+                tokio::time::sleep(Self::HOLD_CONNECT_POLL).await;
+            }
+            switch.store(true, Ordering::Relaxed);
+            tracing::info!(
+                "The relay connected while the hold was still waiting for the game server; \
+                 releasing it so the match is not left on the direct path"
+            );
+        }));
+        true
+    }
+
+    fn stop_hold_watch(&mut self) {
+        if let Some(watch) = self.hold_watch.take() {
+            watch.abort();
+        }
     }
 
     /// What the start line names: the process a target set, else the game key.
@@ -1184,6 +1242,12 @@ impl LightSpeedEngine {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+
+    /// A poisoned status lock does not brick snapshots; this is the same
+    /// recovery for a caller that needs the live status rather than a copy.
+    pub fn status_watch(&self) -> Arc<RwLock<EngineStatus>> {
+        Arc::clone(&self.status)
+    }
 
     /// Snapshot of current engine state, including live stats from all modes.
     pub fn snapshot(&self) -> EngineStatus {
@@ -1571,6 +1635,47 @@ mod tests {
         assert_eq!(
             LightSpeedEngine::interceptor_target_label(&config, "fortnite"),
             "fortnite"
+        );
+    }
+
+    #[test]
+    fn release_hold_when_connected_is_armed_only_for_a_gated_run() {
+        // Contract: `false` means nothing is being held, so a caller must not
+        // assume a release is coming. The mock has no gate.
+        let mut engine = test_engine();
+        assert!(
+            !engine.release_hold_when_connected(|| false),
+            "an engine with no interceptor has nothing to hold"
+        );
+
+        let handle = MockInterceptor::new()
+            .start(InterceptorConfig {
+                game_name: "TestGame".into(),
+                dynamic_server: false,
+                transport: TransportProto::Udp,
+                process_names: vec!["TestGame.exe".to_string()],
+                process_target: Some(ProcessTarget::by_name("TestGame.exe")),
+                port_range: (27015, 27017),
+                initial_routes: Vec::new(),
+                proxy_addr: std::net::SocketAddrV4::new(
+                    std::net::Ipv4Addr::new(127, 0, 0, 1),
+                    4434,
+                ),
+                fec_enabled: false,
+                fec_k: 4,
+                adaptive_fec: crate::tunnel::adaptive::AdaptiveConfig::default(),
+                bypass: Default::default(),
+            })
+            .expect("mock interceptor starts");
+        engine.interceptor_handle = Some(handle);
+
+        assert!(
+            !engine.release_hold_when_connected(|| true),
+            "a backend with no tunnelling gate must report that it cannot release a hold"
+        );
+        assert!(
+            !engine.hold_tunnelling(),
+            "the mock has no gate, so holding traffic is reported as not applied"
         );
     }
 

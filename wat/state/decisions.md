@@ -2,7 +2,48 @@
 
 > **Canonical log of significant technical decisions for the LightSpeed project.**
 > Each entry includes the date, deciding agent, rationale, and impact.
-> Last entry: 2026-10-05
+> Last entry: 2026-10-18
+
+---
+
+### 2026-10-18: A hold is released by the engine, not by whatever frame the GUI manages
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (`client/src/engine.rs`, `client/src/interceptor/traits.rs`, `client-gui/src/app.rs`)
+**Rationale:** the hold shipped in `5749664` had exactly one caller that could
+end it: the GUI's per-frame `release_tunnelling`. A frame loop stopped (or
+starved) while a player is actually in a match is the normal case, so the one
+moment the hold needed to end was the one moment its release could wait. The
+timing was also wrong at the other end: the zero-click path connects a relay
+while the hold is still waiting for a server, and the hold's only other exit was
+the two-minute fallback, which would put a wrong relay in front of a player whose
+wait was over because the game had left.
+**Impact:** `InterceptorHandle` exposes the tunnelling switch it already owned
+(`tunnelling_switch()`), and `LightSpeedEngine::release_hold_when_connected` arms
+a task on the engine's own multi-threaded runtime that waits for the predicate and
+flips the switch, at most 100 ms after the relay connects. The destination-aware
+release still comes first on every run that finds its server and aborts the
+watcher; `release_tunnelling` also aborts it, so a stale watcher can never release
+a later run's hold. A backend with no gate returns `false` from the arming call,
+matching `hold_tunnelling`, so "nothing is being held" stays distinguishable from
+"held, release pending".
+**Alternatives Considered:** driving `ctx.request_repaint()` from a timer was
+rejected because it makes the frame loop a promise the GUI never had to keep and
+couples the hold's correctness to viewport behaviour. Polling the relay from the
+engine only when a server is missing was rejected as a second source of truth for
+"connected" when the status write already happens on the runtime.
+**Verification:** `cargo fmt --all --check` clean; `cargo clippy -p
+lightspeed-gui -p lightspeed-client --all-targets -- -D warnings` clean;
+`cargo test -p lightspeed-client --lib` 552 passed; `cargo test -p
+lightspeed-client --features windivert-redirect --lib interceptor::windows` 11
+passed; `cargo test -p lightspeed-gui --bin lightspeed-gui` 127 passed. The new
+`release_hold_when_connected_is_armed_only_for_a_gated_run` pins that an engine
+with no interceptor and a backend with no gate both report `false` rather than
+promising a release. **NOT verified:** the watcher firing against a live game is
+not reproduced by any test here: the mock interceptor has no gate, and the
+WinDivert gate needs a live run. The claim it fixes (a hold outliving its relay)
+is untested in the field; the next live session should show the new trace line
+within a second of `Following the game server` or of the fallback.
 
 ---
 

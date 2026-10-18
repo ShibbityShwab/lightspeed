@@ -484,6 +484,16 @@ impl InterceptorHandle {
         }
     }
 
+    /// The switch that gates tunnelling for this run, when the backend has one.
+    ///
+    /// A caller that has to hold traffic and also learn something the held run
+    /// discovers (the game server, for instance) attaches its own watcher to
+    /// this switch instead of polling: the platform flips it and the watcher
+    /// sees the flip. `None` on a backend with no gate.
+    pub fn tunnelling_switch(&self) -> Option<Arc<AtomicBool>> {
+        self.tunnelling.clone()
+    }
+
     /// Hand this run the switch that gates tunnelling, so a caller can hold
     /// traffic until it has chosen a relay for the game server.
     ///

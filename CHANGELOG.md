@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The hold ends when its relay connects, on the engine's clock rather than the GUI's.** The
+  release used to run only on the GUI's frame loop, and a window that is not being redrawn stops
+  that loop: a hold outlived the relay it had connected and the match sat on the direct path until
+  the two-minute fallback fired. The engine now arms a watcher on its own runtime when a hold
+  begins, and releases the hold within about a tenth of a second of the relay connecting. A run
+  whose server is found first is unchanged: the destination-aware release happens first and the
+  watcher is simply dropped.
 - **The relay ranking now weighs measured instability, not a zero.** The whole-path score
   already weighted jitter twice, but it was always handed zero: each relay was probed once for
   the client-leg race, and one probe cannot show spread. The GUI now probes every relay five

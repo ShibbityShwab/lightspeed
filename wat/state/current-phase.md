@@ -2,8 +2,48 @@
 
 **Workflow:** WF-056; WF-055; WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
 **Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
-**Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. This round finished the jitter measurement that the ranking was already weighting at zero, and made a detected game connect a relay on its own. **The one open proof is a live run**: no session has yet shown a `Following the game server` line with real gameplay traffic, so the relay-follow is verified by unit tests and compile only. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
-**Last updated:** 2026-10-17
+**Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. 2026-10-17 finished the jitter measurement that the ranking was already weighting at zero and made a detected game connect a relay on its own; 2026-10-18 gave the hold an exit that does not depend on the GUI's frame loop. **The one open proof is a live run**: no session has yet shown a `Following the game server` line with real gameplay traffic, so the relay-follow is verified by unit tests and compile only. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
+**Last updated:** 2026-10-18
+
+---
+
+## 2026-10-18 - the hold can no longer outlive the relay it connected
+
+**Picked up where the previous session stopped:** WF-056's open item is the live
+run that proves the relay-follow. Reading the trace and the code for that proof
+turned up a release path with one caller: `follow_game_server`'s
+`release_tunnelling`, which runs on the GUI's frame loop. Every gap in that loop
+(a window not being redrawn, which is the normal state during a match) left the
+hold on, so the one run that matters most was also the one least able to end the
+hold. The zero-click path made it sharper: it connects a relay while the hold is
+still waiting for a server, and with `follow_game_server` skipped in that window
+the only exit was the two-minute fallback, which would install a relay chosen
+before the server was known.
+
+**What shipped:** `InterceptorHandle::tunnelling_switch()` exposes the gate the
+handle already carried, and `LightSpeedEngine::release_hold_when_connected` arms a
+watcher on the engine's multi-threaded runtime that releases the hold within
+about 100 ms of `connected` becoming true. It is armed right after
+`hold_tunnelling()` succeeds in `start_boost`, aborted by `release_tunnelling`, and
+returns `false` on a backend with no gate (the mock, Linux, macOS), so a caller
+can still tell "nothing is held" from "held, release pending".
+
+**Verified:** fmt clean; clippy `-D warnings` clean on `lightspeed-gui` and
+`lightspeed-client`; client lib 552 passed; GUI bin 127 passed; the Windows
+WinDivert attribution tests build and pass with `--features windivert-redirect`
+(11 passed), including `a_server_held_direct_is_still_discovered`, which is the
+property the release depends on. The new engine test pins the no-gate contract.
+The `--all-features` client test link fails on this host with a MinGW link error;
+that combination (windivert + quic + ml in one test binary) is not one the
+project's own gates run, and it fails before any of these tests execute.
+
+**Still open, unchanged:** the live relay-follow proof. Nothing here was run
+against a game. The trace to look for is
+`The relay connected while the hold was still waiting for the game server`, then
+`📊 process mode: ... | tunneled <n>` advancing, and
+`Following the game server: switching to <addr>` once the server locks. With
+ARC Raiders running, the first two can be seen from a lobby before joining a
+raid; the third needs a match.
 
 ---
 
