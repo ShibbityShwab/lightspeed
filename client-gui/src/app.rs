@@ -1486,12 +1486,19 @@ impl<P: Platform> LightSpeedApp<P> {
                     // itself the moment that happens. Nothing changes for a run
                     // that does find its server: `follow_game_server` releases
                     // first, and this only stops the watcher.
-                    let status = lock_or_recover(&self.engine).status_watch();
-                    let armed = engine.release_hold_when_connected(move || {
-                        status.read().map(|s| s.connected).unwrap_or(false)
-                    });
+                    //
+                    // The engine guard is dropped before the watcher is armed
+                    // again: arming spawns a task on the engine runtime, and
+                    // holding this mutex across that spawn is what stopped the
+                    // arming call from ever returning in a live run.
+                    let status = engine.status_watch();
+                    drop(engine);
+                    let armed =
+                        lock_or_recover(&self.engine).release_hold_when_connected(move || {
+                            status.read().map(|s| s.connected).unwrap_or(false)
+                        });
                     if !armed {
-                        tracing::debug!("No release watcher: this run is not held");
+                        tracing::warn!("No release watcher: this run is not held");
                     }
                 } else {
                     tracing::debug!("This backend has no tunnelling gate; starting unheld");

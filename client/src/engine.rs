@@ -1182,15 +1182,26 @@ impl LightSpeedEngine {
         &mut self,
         connected: impl Fn() -> bool + Send + 'static,
     ) -> bool {
-        let Some(switch) = self
+        // The switch first, so this borrow of the handle ends before the watcher
+        // borrows `rt`: the caller drops its engine guard before this call (the
+        // watcher reads the shared status on the engine runtime, and arming used
+        // to deadlock against that when the guard was still held).
+        let switch = self
             .interceptor_handle
             .as_ref()
-            .and_then(|h| h.tunnelling_switch())
-        else {
+            .and_then(|h| h.tunnelling_switch());
+        let Some(switch) = switch else {
             return false;
         };
         self.stop_hold_watch();
         self.hold_watch = Some(self.rt.spawn(async move {
+            // Liveness trace: the watcher started. A session with a hold and no
+            // line from this task proves it never ran, which nothing else in the
+            // log could distinguish from a hold that ended another way.
+            tracing::info!(
+                "Hold release watcher armed (relay already up: {})",
+                connected()
+            );
             while !connected() {
                 tokio::time::sleep(Self::HOLD_CONNECT_POLL).await;
             }

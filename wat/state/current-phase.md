@@ -45,6 +45,37 @@ against a game. The trace to look for is
 ARC Raiders running, the first two can be seen from a lobby before joining a
 raid; the third needs a match.
 
+### 2026-10-18, later the same day - the arming call was deadlocking, and the GUI froze
+
+**What the first live probe run showed.** A throwaway UDP sender
+(`.omo/live-hold-proof/sender.ps1`, a copy of `powershell.exe` sending to a public
+7777 endpoint every 50 ms) was picked as the target and Optimize pressed. Four
+runs, all identical: `Interceptor started`, `Holding traffic on the direct path`,
+`tunnelled 0`, and **no** `Hold release watcher armed` line. Temporary probes
+(`GATE PROBE`, all removed) localized it: `hold_tunnelling` returned true with the
+handle present, and the arming call never returned, so the frame loop never
+finished that frame and the window stopped repainting. The cause is the order in
+`start_boost`: the engine mutex is held, the watcher is armed, and arming spawns
+a task on the engine runtime whose first act (and every poll after it) takes the
+status lock, which by then is the only lock in the system order that interacts
+with the engine mutex held by the GUI thread. The fix is structural: the guard is
+dropped before the arming call, and the closure reads the shared status on its
+own.
+
+**Second real finding, same runs.** The first attempt targeted `powershell.exe`
+(the driving shell) and its traffic matched nothing because the UDP packet was
+sent from a child process; that was my probe's fault, not the app's. It did,
+however, expose that the no-match report needed four unrelated ports before it
+fired: `windows.rs` now reports after four distinct unmatched ports, and the
+report says whether any of them is the target's (a late match) or none (a wrong
+pick), which is what a caller needs to act.
+
+**Not yet re-proven live after removing the probes.** The fixed binary still has
+to show `Hold release watcher armed (relay already up: true)` followed by
+`The relay connected while the hold was still waiting for the game server` on a
+run with the relay already connected; the probes that showed the deadlock are
+removed, so this is the next live check, not a finished one.
+
 ---
 
 ## 2026-10-17 - the ranking's stability term stops being a constant, and auto-detect connects the relay it needs
@@ -2486,8 +2517,12 @@ the `gpu-switch` script documents, leaving the dGPU unbound until a reboot.
 
 ## Next Action
 
-1. Reboot the host to restore the RX 9070 XT to `amdgpu` after the VM stop left
-   it unbound (the vfio-pci teardown fault).
+The current items live at the top of this file, under the WF-056 entry; this
+2026-09 section is kept as the record of what closed here.
+
+1. ~~Reboot the host to restore the RX 9070 XT to `amdgpu`~~ - closed: the card
+   is enumerated by the GUI as Vulkan `AMD Radeon RX 9070 XT` (trace,
+   2026-10-18 12:45).
 2. The owner decides on a v1.4.4 release (all audit fixes are on `master`).
 3. WF-024 candidates: fix the `--live-test` exit code and the no-`quic` stub;
    `--repair-windivert` recovery command; registry cert pinning (F5) and binary

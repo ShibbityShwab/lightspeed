@@ -464,7 +464,7 @@ impl Attributor {
                     }
                     let pids = state.owners.table(now).pids_for_port(src.port()).to_vec();
                     state.unmatched_samples.push((src.port(), pids));
-                    if state.unmatched_ports.len() >= 8 {
+                    if state.unmatched_ports.len() >= 4 {
                         state.diagnose_unmatched();
                     }
                 }
