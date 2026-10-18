@@ -6,6 +6,25 @@
 
 ---
 
+### 2026-10-18: A release tag may move until the release object exists, then never
+
+**Agent:** DevOps + SecOps
+**Status:** Accepted (`v1.8.0` tagged at `2d5e31e`)
+**Rationale:** `v1.8.0` was tagged, pushed, and the cargo-dist run was cancelled three
+times before any GitHub Release existed: first for the #154 Relayed-row fix, then for
+`rustls 0.23.46`, then for the changelog line naming the advisories. Re-pointing a tag
+after publication would break every checksum and installer already handed out, so the
+rule is the publication object, not the push: while `gh release view <tag>` says "release
+not found" and the workflow is still building, moving the tag is free; after the release
+exists, a fix is a new patch version.
+**Impact:** the published 1.8.0 contains the process-first verifier, the #154 display fix
+and the rustls advisory fixes. Four RUSTSEC advisories (2026-0346..0349) patched in
+0.23.46 had been failing the Security Audit workflow on every push since 2026-10-14, and
+the release would have shipped them. A release candidate is not ready until the Security
+Audit run on its commit is green, not just CI.
+
+---
+
 ### 2026-10-18: The relay verdict is measured on movement, and a switch is only safe while held
 
 **Agent:** RustDev + QAEngineer
