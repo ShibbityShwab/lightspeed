@@ -16,9 +16,13 @@
 //!
 //! The gameplay client is `PioneerGame.exe` (image `PioneerGame`). Steam runs a
 //! launcher process as well, so two `PioneerGame` images are visible while the
-//! game is up; the interceptor binds by image name, which matches the gameplay
-//! client either way. Verified on a live install at
-//! `...\steamapps\common\Arc Raiders\PioneerGame\Binaries\Win64\`.
+//! game is up. Binding by image name alone can resolve to the launcher: measured
+//! live on 2026-10-18, the launcher owned no game sockets and targeting it
+//! captured nothing, while the gameplay client owned 26 UDP sockets. Process-
+//! scoped runs must therefore pick the PID that owns those sockets (the
+//! `--verify-game` live stage does exactly that), and the GUI's process picker
+//! carries the chosen PID. The `PioneerGame.exe` image was verified on a live
+//! install at `...\steamapps\common\Arc Raiders\PioneerGame\Binaries\Win64\`.
 //!
 //! ## Ports (the SERVER's ports, which is what `ports()` means)
 //!
