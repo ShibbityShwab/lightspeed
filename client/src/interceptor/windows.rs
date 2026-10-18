@@ -350,6 +350,14 @@ struct ProcessAttributor {
     unmatched_samples: Vec<(u16, Vec<u32>)>,
     /// Whether the no-match diagnosis has already been reported.
     diagnosed: bool,
+    /// Captured source ports paired with whether the target owned them, until
+    /// the filtered question is answered. Field testing a throwaway sender
+    /// showed the old diagnosis cannot answer it: the first one or two datagrams
+    /// of a newly opened socket can be captured before the OS binding table has
+    /// indexed the port, so the sample filled with real unrelated traffic and
+    /// the report said "nothing matched" about ports that would have matched
+    /// moments later.
+    unmatched_ports: Vec<(u16, bool)>,
 }
 
 /// Per-run tallies for the process-mode path.
@@ -445,22 +453,19 @@ impl Attributor {
                 // matching bug) or to nobody the table knows (the wrong traffic is
                 // being captured). Bounded to one message per run.
                 if !owned && state.counts.owned_by_target == 0 && !state.diagnosed {
+                    // Asked of the table NOW rather than reusing `owned`: the
+                    // binding may have been indexed since this packet's own
+                    // check, and that difference is the whole question.
+                    let owned_now = state
+                        .target_pid
+                        .is_some_and(|pid| state.owners.table(now).owns(src.port(), pid));
+                    if !state.unmatched_ports.iter().any(|(p, _)| *p == src.port()) {
+                        state.unmatched_ports.push((src.port(), owned_now));
+                    }
                     let pids = state.owners.table(now).pids_for_port(src.port()).to_vec();
                     state.unmatched_samples.push((src.port(), pids));
-                    if state.unmatched_samples.len() >= 8 {
-                        let samples: Vec<String> = state
-                            .unmatched_samples
-                            .drain(..)
-                            .map(|(p, pids)| format!("{p}->{pids:?}"))
-                            .collect();
-                        tracing::info!(
-                            "🔍 process mode: no packet has matched the target yet; captured source \
-                             ports and their real owners: {}. Empty owner lists mean those ports \
-                             belong to neither the target nor any live socket; the target's ports \
-                             appearing here would instead point at a matching fault.",
-                            samples.join(" ")
-                        );
-                        state.diagnosed = true;
+                    if state.unmatched_ports.len() >= 8 {
+                        state.diagnose_unmatched();
                     }
                 }
                 if owned {
@@ -559,6 +564,51 @@ impl Attributor {
     }
 }
 
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+impl ProcessAttributor {
+    /// Report once why nothing has matched the target, in the words that decide
+    /// whether the fix is on the app or on the game.
+    ///
+    /// The question a caller cannot answer from a counter is whether the target's
+    /// traffic is missing because the attribution is wrong or because the target
+    /// simply is not sending anything the capture sees. Asking the table again at
+    /// report time answers that: a port captured from the target that the table
+    /// still cannot attribute means the match is late or incomplete, not that the
+    /// process is idle.
+    fn diagnose_unmatched(&mut self) {
+        let ours = self
+            .unmatched_ports
+            .iter()
+            .filter(|(_, owned)| *owned)
+            .count();
+        let samples: Vec<String> = self
+            .unmatched_samples
+            .drain(..)
+            .map(|(p, pids)| format!("{p}->{pids:?}"))
+            .collect();
+        if ours > 0 {
+            tracing::info!(
+                "🔍 process mode: {ours} captured source ports DO belong to the target ({}) but \
+                 were not attributed yet; they will match as the binding table catches up. Other \
+                 samples: {}",
+                self.target_pid
+                    .map_or("unknown".to_string(), |p| p.to_string()),
+                samples.join(" ")
+            );
+        } else {
+            tracing::info!(
+                "🔍 process mode: no captured source port belongs to target PID {}. Captured \
+                 ports and their real owners: {}. If the target is running and sending, its ports \
+                 are not in the capture at all - check the picked process, not the attribution.",
+                self.target_pid
+                    .map_or("unknown".to_string(), |p| p.to_string()),
+                samples.join(" ")
+            );
+        }
+        self.diagnosed = true;
+    }
+}
+
 /// Build the attributor the intercept thread drives for this policy.
 ///
 /// Process mode seeds the map from the scanner's live routes for the target *and*
@@ -594,6 +644,7 @@ fn build_attributor(
                 last_report: None,
                 unmatched_samples: Vec::new(),
                 diagnosed: false,
+                unmatched_ports: Vec::new(),
             }))
         }
         CapturePolicy::PortRange { .. } => {
@@ -1758,6 +1809,47 @@ mod tests {
             detected_server(OutboundDecision::Reinject(Some(server))),
             Some(server),
             "a packet attributed to the game but held direct still identifies its server"
+        );
+    }
+
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn the_no_match_diagnosis_can_tell_our_traffic_from_a_wrong_pick() {
+        // The probe run that motivated this: a freshly opened socket's first
+        // datagrams were captured before the binding table indexed its port, so
+        // the captured samples were real unrelated traffic and the old report
+        // said "nothing matched" about what was really a late match. The
+        // distinction now comes from asking the table again at report time.
+        let mut state = ProcessAttributor {
+            map: FlowMap::new(FlowMapConfig::default(), Some(4242)),
+            owners: OwnerCache::default(),
+            target_pid: Some(4242),
+            warned_tunneled: 0,
+            counts: AttributionCounts::default(),
+            reported: AttributionCounts::default(),
+            last_report: None,
+            unmatched_samples: vec![(61390, vec![4004]), (27036, vec![15104])],
+            diagnosed: false,
+            unmatched_ports: vec![(61390, false), (27036, false)],
+        };
+
+        assert!(
+            !state.unmatched_ports.iter().any(|(_, owned)| *owned),
+            "unrelated traffic never counts as our own"
+        );
+        state.diagnose_unmatched();
+        assert!(state.diagnosed, "the diagnosis fires once per run");
+        assert!(
+            state.unmatched_samples.is_empty(),
+            "the samples are consumed by the report, not left to grow"
+        );
+
+        state.diagnosed = false;
+        state.unmatched_ports = vec![(61390, false), (51515, true)];
+        state.unmatched_samples = vec![(51515, vec![4242])];
+        assert!(
+            state.unmatched_ports.iter().any(|(_, owned)| *owned),
+            "a captured port the table attributes to the target is the late-match case"
         );
     }
 
