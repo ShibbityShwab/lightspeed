@@ -2061,13 +2061,17 @@ impl<P: Platform> LightSpeedApp<P> {
     /// `/health` counters are lifetime totals for the whole fleet node, not our
     /// session, so they must never be shown as if they were ours.
     fn routed_value(&self) -> LedgerValue {
-        if self.status.redirect_active {
-            LedgerValue::Data(format!(
-                "{} pkts  this session",
-                group_digits(self.status.redirect_pkts_out)
-            ))
-        } else {
-            LedgerValue::Hint(i18n::t("route.count_hint"))
+        let counted = routed_count(
+            self.status.redirect_active,
+            self.status.redirect_pkts_out,
+            self.status.interceptor_active,
+            self.status.interceptor_tunnel_sent,
+        );
+        match counted {
+            Some(packets) => {
+                LedgerValue::Data(format!("{} pkts  this session", group_digits(packets)))
+            }
+            None => LedgerValue::Hint(i18n::t("route.count_hint")),
         }
     }
 
@@ -3903,6 +3907,27 @@ enum LedgerValue {
     Hint(Cow<'static, str>),
 }
 
+/// Which counter the "Relayed" row is showing, if any.
+///
+/// The row used to read only the redirect mode's counter, so a session using the
+/// process-first interceptor showed "start optimizing to count" while it was
+/// actively relaying: the screenshot in issue #154. Redirect wins when both are
+/// set because the redirect counter is the older, narrower mode.
+fn routed_count(
+    redirect_active: bool,
+    redirect_pkts: u64,
+    interceptor_active: bool,
+    interceptor_sent: u64,
+) -> Option<u64> {
+    if redirect_active {
+        Some(redirect_pkts)
+    } else if interceptor_active {
+        Some(interceptor_sent)
+    } else {
+        None
+    }
+}
+
 /// The ledger's label cell: caption ink, fixed width, left-aligned.
 fn ledger_label(ui: &mut egui::Ui, width: f32, text: &str) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, ROW_H), egui::Sense::hover());
@@ -4833,6 +4858,21 @@ mod tests {
         assert_eq!(
             primary_action(true, false, true, false),
             ("OPTIMIZE MY ROUTE".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn the_relayed_row_reads_the_interceptor_too() {
+        // Issue #154: a process-first session showed "start optimizing to count"
+        // while it was relaying, because the row only watched redirect mode.
+        use super::routed_count;
+        assert_eq!(routed_count(false, 0, true, 32), Some(32));
+        assert_eq!(routed_count(true, 7, true, 32), Some(7));
+        assert_eq!(routed_count(false, 0, false, 0), None);
+        assert_eq!(
+            routed_count(false, 0, true, 0),
+            Some(0),
+            "an active interceptor with nothing sent is a real zero, not a missing value"
         );
     }
 
