@@ -2944,7 +2944,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-client"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2982,7 +2982,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-gui"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3008,7 +3008,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-protocol"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -3022,7 +3022,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-proxy"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "anyhow",
  "bytes",

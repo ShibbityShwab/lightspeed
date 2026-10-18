@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No unreleased changes yet._
+
+## [1.8.0] - 2026-10-18
+
 ### Added
 
 - **`--verify-game` proves a profile against the running game, not against its unit tests.**
@@ -1057,7 +1061,8 @@ The first release of LightSpeed - a zero-cost, open-source global network optimi
 - Amplification prevention.
 - No Critical or High audit findings.
 
-[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/ShibbityShwab/lightspeed/compare/v1.7.0...v1.8.0
 [0.5.1]: https://github.com/ShibbityShwab/lightspeed/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ShibbityShwab/lightspeed/compare/v0.4.1...v0.4.2
