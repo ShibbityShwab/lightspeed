@@ -124,6 +124,34 @@ removed; the check that replaced this note is below.
 
 ---
 
+## 2026-10-18 - the live relay-follow proof, driven with computer use
+
+The GUI and ARC Raiders were launched by hand, ARC Raiders was switched to a window with
+Alt+Enter, and the join flow was driven with desktop input. Two real bugs surfaced before
+the proof:
+
+1. **Auto detect started the wrong game.** A GUI launched before the game kept the picker
+   index fixed at construction (`Fortnite`, the first entry), so the zero-click start ran
+   `start_interceptor` for Fortnite while ARC Raiders was on screen and latched the failure.
+   `pick_game_entry` now resolves `auto_detected_game` in Auto mode (`5503781`).
+2. **Turning Auto on did nothing while a server was locked.** The per-server choice
+   suppressed `follow_game_server`, so the app stayed on the relay it was connected to. The
+   choice is cleared when Auto is enabled, so the locked server is re-evaluated at once.
+
+**The proof, in order, on the fixed build:** `Interceptor started for ARC Raiders`, the
+hold armed and released, `Locked game server: 34.95.157.202:7600`, and
+`Relay verdict: every relayed datagram left for the relay`. The relay was then moved to
+Los Angeles manually and Auto re-enabled; the trace produced
+`Destination-aware relay choice for 34.95.157.202: 45.77.32.236:4434 (RegionPrior, total 469 ms)`,
+`Following the game server: switching to 45.77.32.236:4434`, and
+`Relay chosen for 34.95.157.202; releasing the hold and relaying`. The GUI showed
+`SGP - Singapore` and `Relayed 10 pkts this session`, and the counter advanced through 6,
+10, 30, 34 and 38 during the session. The game was on the DESTINATIONS screen, not in a
+raid: the destination markers did not accept synthetic clicks, but the game's backend was
+connected and the server lock is what the follow path consumes, so no gameplay was needed.
+
+---
+
 ## 2026-10-18 - a way to prove a profile, and a release prepared but not published
 
 **`--verify-game` exists and has been run against the real game.** It resolves a
