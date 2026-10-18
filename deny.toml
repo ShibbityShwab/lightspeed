@@ -22,6 +22,10 @@ ignore = [
   { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; linfa transitive dep, upstream migration tracked" },
   { id = "RUSTSEC-2026-0190", reason = "anyhow unsound in downcast_mut; CLI binary, no user-controlled error context chaining" },
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; GUI font parsing via egui, no network-facing code" },
+  # -- zvariant/zbus_names moved into zbus and are no longer standalone -------
+  { id = "RUSTSEC-2026-0370", reason = "zvariant consolidating into zbus; Linux accessibility stack via eframe/accesskit, GUI-only, no network surface" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names consolidating into zbus; Linux accessibility stack via eframe/accesskit, GUI-only" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive consolidating into zbus; build-time derive for the Linux accessibility stack" },
 ]
 
 [licenses]
