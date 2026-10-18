@@ -597,6 +597,37 @@ struct ProcessPicker<'a> {
 
 /// What the picker knows about the last enumeration ({status} of
 /// [`ProcessListState`]).
+/// Resolve the game a start should use.
+///
+/// In Auto mode this is whatever detection last found, not the index the picker
+/// was built with. The index is fixed at construction, so a GUI launched before
+/// the game falls back to the first entry (Fortnite), and the zero-click start
+/// then failed with "Fortnite is not running" while ARC Raiders was on screen.
+fn pick_game_entry(game_auto: bool, auto_key: Option<&str>, selected_idx: usize) -> PickedGame {
+    let games = games();
+    if game_auto {
+        if let Some(key) = auto_key {
+            if let Some(entry) = games
+                .iter()
+                .find(|entry| entry.key.eq_ignore_ascii_case(key))
+            {
+                return PickedGame {
+                    key: entry.key.to_string(),
+                    display: entry.display.to_string(),
+                    default_port: entry.default_port,
+                };
+            }
+        }
+    }
+    let idx = selected_idx.min(games.len().saturating_sub(1));
+    let entry = &games[idx];
+    PickedGame {
+        key: entry.key.to_string(),
+        display: entry.display.to_string(),
+        default_port: entry.default_port,
+    }
+}
+
 fn picker_status(state: &ProcessListState) -> PickerStatus {
     match state {
         ProcessListState::Done => PickerStatus::Ready,
@@ -983,14 +1014,11 @@ impl<P: Platform> LightSpeedApp<P> {
                 };
             }
         }
-        let games = games();
-        let idx = self.selected_game_idx.min(games.len().saturating_sub(1));
-        let entry = &games[idx];
-        PickedGame {
-            key: entry.key.to_string(),
-            display: entry.display.to_string(),
-            default_port: entry.default_port,
-        }
+        pick_game_entry(
+            self.game_auto,
+            self.auto_detected_game.as_deref(),
+            self.selected_game_idx,
+        )
     }
 
     fn connect_selected(&mut self) {
@@ -2229,6 +2257,14 @@ impl<P: Platform> LightSpeedApp<P> {
 
         if auto != self.auto_select {
             self.auto_select = auto;
+            if auto {
+                // Re-evaluate the server that is already locked: without this,
+                // turning Auto on while a match is live keeps whatever relay is
+                // connected, because `follow_game_server` returns early once the
+                // server has a choice. Measured live: Auto selected, still on
+                // Los Angeles for a Sao Paulo server.
+                self.chosen_for_server = None;
+            }
             self.persist_config();
             if auto && !self.status.connected {
                 self.start_relay_race();
@@ -4859,6 +4895,21 @@ mod tests {
             primary_action(true, false, true, false),
             ("OPTIMIZE MY ROUTE".to_string(), false)
         );
+    }
+
+    #[test]
+    fn auto_mode_starts_the_detected_game_not_the_first_entry() {
+        // The GUI can start before the game, so the picker's index is fixed at
+        // construction and falls back to the first entry. Auto mode must follow
+        // detection instead, or the zero-click start runs the wrong profile.
+        let detected = super::pick_game_entry(true, Some("arcraiders"), 0);
+        assert_eq!(detected.key, "arcraiders");
+
+        let manual = super::pick_game_entry(false, Some("arcraiders"), 0);
+        assert_ne!(manual.key, "arcraiders");
+
+        let absent = super::pick_game_entry(true, None, 0);
+        assert_eq!(absent.key, super::games()[0].key);
     }
 
     #[test]

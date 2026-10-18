@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Fixed
+
+- **Auto detect starts the game that is actually running.** The picker's index is fixed at
+  construction, so a GUI launched before the game fell back to the first registry entry and
+  the zero-click start ran Fortnite's profile while ARC Raiders was on screen. Auto mode now
+  resolves the detected game key for the start.
+- **Selecting Auto re-evaluates the server already locked.** Turning Auto back on kept the
+  connected relay because the per-server choice suppressed the follow; measured live, a Sao
+  Paulo server stayed on Los Angeles until the server changed. The choice is cleared when
+  Auto is enabled, so the relay follows immediately.
 
 ## [1.8.0] - 2026-10-18
 
