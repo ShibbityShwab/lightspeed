@@ -144,25 +144,33 @@ failure here: `packets_from_proxy` was 7, the keepalive cadence of a 30 s run, a
 the lobby sent no gameplay replies. A match is still what would prove
 `Following the game server`.
 
-**Release 1.8.0 is tagged at `f19175f` and building.** The workspace version moved
-from 1.7.0 (52 commits behind) to 1.8.0. The tag moved four times before any GitHub
-Release existed, each for a real gate that was red: the #154 Relayed-row fix, the
-four rustls advisories (`0140eb8`), the changelog line naming them, and the
-`zbus`/`zvariant` unmaintained notices in `deny.toml` (`f19175f`). Security Audit
-on `f19175f` is green, including `cargo deny`; the cross-platform cargo-dist build
-is the only thing still running. The rule from this is recorded in
+**Release 1.8.0 is published.** https://github.com/ShibbityShwab/lightspeed/releases/tag/v1.8.0,
+published 2026-10-18T18:13:25Z, not a draft or prerelease, 39 assets including
+`lightspeed-gui-x86_64-pc-windows-msvc.msi` and the client zips for Windows, Linux
+and both macOS architectures. The tag is `f19175f`; it moved four times before the
+release object existed, each for a real red gate: the #154 Relayed-row fix, the four
+rustls advisories (`0140eb8`), the changelog line naming them, and the
+`zbus`/`zvariant` unmaintained notices in `deny.toml` (`f19175f`). Security Audit on
+`f19175f` is green, including `cargo deny`. The rule is recorded in
 `wat/state/decisions.md`: a tag may move until `gh release view` finds an object,
 never after.
+
+The release workflow's own bump jobs: scoop and chocolatey succeeded, winget and the
+announcement succeeded, and `bump-homebrew` was cancelled by a concurrency collision
+with a superseded tag run. The formula was moved to 1.8.0 by hand with the same
+script and the published checksums (`986a952`).
 
 **Backlog:** the three dependabot groups were applied directly on `master`
 (`0698c5a`, `d8de1cf`, `b751872`) and their PRs, plus the three dependabot
 recreated, are closed as superseded; no PR is open. #154 has its diagnosis: the
-Relayed row read only redirect mode, fixed in `74688b9`. #148, #153 and #147 have
-evidence-based replies, and #152 was closed as a duplicate. What remains open on
-GitHub is #154 (waiting on the reporter's 1.8.0 retest), #140/#147 (waiting on a
-relay name if it persists), #59 (an old multi-comment bug), and the game requests
-#137/#141/#143 (already answered and implemented) and #148/#153 (process-first
-escape hatch documented), where the missing piece is measured ports from a player.
+Relayed row read only redirect mode, fixed in `74688b9` and included in 1.8.0.
+#148, #153 and #147 have evidence-based replies, and #152 was closed as a duplicate.
+What remains open on GitHub is #154 (waiting on the reporter's 1.8.0 retest),
+#140/#147 (waiting on a relay name if it persists), #59 (an old multi-comment bug),
+and the game requests #137/#141/#143 (already answered and implemented) and
+#148/#153 (process-first escape hatch documented), where the missing piece is
+measured ports from a player.
+
 
 
 ---
