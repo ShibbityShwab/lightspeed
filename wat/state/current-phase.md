@@ -124,6 +124,41 @@ removed; the check that replaced this note is below.
 
 ---
 
+## 2026-10-18 - a way to prove a profile, and a release prepared but not published
+
+**`--verify-game` exists and has been run against the real game.** It resolves a
+profile, checks process names, wire id and port range, picks the PID that owns the
+most UDP sockets (ARC Raiders runs `PioneerGame.exe` twice, and the first pick was
+the Embark launcher), then runs the interceptor against the process for a bounded
+window and requires the counters to move. It caught two real defects on its first
+run: the non-FEC tunnel send path never incremented `packets_tunnel_sent`, so a
+healthy relay read as broken, and the launcher-versus-game PID pick above. Both are
+fixed (`3b14c97`).
+
+**Live evidence, ARC Raiders in the Speranza lobby, windowed:** launched through
+Steam (`steam://rungameid/1808500`), switched to windowed with Alt+Enter, verified
+twice. Final run: `ports (7600, 7777)`, PIDs `[6224, 23788]`, target `23788` with
+26 local UDP ports, `seen 370 | relayed 32 | sent 32 | injected 0 | errors 0`,
+`locked game server 35.228.254.12:7600`, verdict `pass`. `injected 0` is not a
+failure here: `packets_from_proxy` was 7, the keepalive cadence of a 30 s run, and
+the lobby sent no gameplay replies. A match is still what would prove
+`Following the game server`.
+
+**Release 1.8.0 is prepared, not published.** The workspace version moved from
+1.7.0 (52 commits behind) to 1.8.0, the changelog's Unreleased wave is dated and
+linked, and the release commit is pushed (`b14bb40`). Nothing is tagged, because a
+tag starts cargo-dist and publishes binaries and a GitHub Release.
+
+**Open work, in priority order:** tag `v1.8.0` for the first release since
+2026-10-04; the three dependabot PRs (#151, #150, #145) have green checks from
+before 50+ master commits and need a rebase and a fresh run, not a blind merge;
+#154 (Valorant GUI) needs a reproduction; #140/#147's QUIC 120 did not reproduce
+against any of the eight official relays from this host (`--test-control` passed on
+all eight), so it needs the reporter's relay name; and #153/#152/#148/#137/#143 are
+game requests, where process-first targeting already works as the escape hatch.
+
+---
+
 ## 2026-10-18 - the push that ended eleven days of unverified work, and localization became a script
 
 **The first CI run in eleven days found two defects that every local gate on this Windows host had missed**,
