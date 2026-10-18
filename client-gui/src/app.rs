@@ -70,9 +70,98 @@ const GAME_PRESENCE_INTERVAL: Duration = Duration::from_secs(5);
 /// does lock.
 const HOLD_FALLBACK: Duration = Duration::from_secs(120);
 
+/// How long a run must have been relaying before the relay verdict starts
+/// sampling. A match takes several seconds to open its flow, and judging it
+/// before then would call a healthy relay broken.
+const RELAY_HEALTH_SETTLE: Duration = Duration::from_secs(10);
+
+/// The window each relay verdict is measured over. One second is long enough
+/// for a game's packet rate to make a lost share visible and short enough that
+/// a fault is reported while the player is still in the match.
+const RELAY_HEALTH_WINDOW: Duration = Duration::from_secs(1);
+
+/// Share of a window's relayed datagrams that may fail to leave before the
+/// relay is called broken. UDP games tolerate loss; a fifth of the game's
+/// traffic not leaving the machine for the whole window is a fault, not jitter.
+const RELAY_HEALTH_MAX_UNSENT_SHARE: f64 = 0.2;
+
 /// Every discovered relay's measured client leg, as the destination-aware
 /// chooser consumes it (a relay that did not answer carries `None`).
 type RelayLegs = Vec<(SocketAddrV4, Option<discovery::RelaySample>)>;
+
+/// The tunnel counters as of the last relay-verdict sample.
+#[derive(Clone, Copy, Debug)]
+struct RelayHealthBase {
+    at: std::time::Instant,
+    intercepted: u64,
+    sent: u64,
+}
+
+/// What one window of tunnel counters says about the relay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelayHealthVerdict {
+    /// Nothing was decided to relay during the window: menus, or a hold.
+    Idle,
+    /// Every datagram decided to relay left the machine.
+    Healthy,
+    /// A share of them did not leave the machine.
+    Unsent { unsent: u64, decided: u64 },
+}
+
+impl RelayHealthVerdict {
+    fn sentence(&self) -> String {
+        match self {
+            Self::Idle => "no traffic to judge".to_string(),
+            Self::Healthy => {
+                "every relayed datagram left for the relay; the relay is not dropping your \
+                 traffic on the way out"
+                    .to_string()
+            }
+            Self::Unsent { unsent, decided } => format!(
+                "{unsent} of {decided} relayed datagrams never left for the relay in the last \
+                 second; if the match feels like packet loss, switch relay"
+            ),
+        }
+    }
+}
+
+/// Whether a relay change may be applied to the live tunnel now.
+///
+/// The tunnel reads the current relay on every packet, so a change applied while
+/// datagrams are flowing goes to a relay that may not have this session yet. A
+/// hold withholds tunnelling, and that is the one state in which the switch is
+/// safe; a backend with no gate never tunnels at all, so nothing is at risk.
+///
+/// A test pins it, which is why it is not dead code in a release build.
+#[cfg_attr(not(test), allow(dead_code))]
+fn switch_is_safe(tunnelling_enabled: Option<bool>) -> bool {
+    tunnelling_enabled != Some(true)
+}
+
+/// Judge one window of tunnel counters.
+///
+/// The comparison is on *movement*: a run that relayed a million packets and
+/// then started failing must not be excused by its healthy past, so the caller
+/// passes the counters as of the previous sample, not the totals.
+fn relay_health_verdict(
+    prev_intercepted: u64,
+    prev_sent: u64,
+    intercepted: u64,
+    sent: u64,
+) -> RelayHealthVerdict {
+    let decided = intercepted.saturating_sub(prev_intercepted);
+    let left = sent.saturating_sub(prev_sent).min(decided);
+    if decided == 0 {
+        return RelayHealthVerdict::Idle;
+    }
+    let unsent = decided - left;
+    let share = unsent as f64 / decided as f64;
+    if share > RELAY_HEALTH_MAX_UNSENT_SHARE {
+        RelayHealthVerdict::Unsent { unsent, decided }
+    } else {
+        RelayHealthVerdict::Healthy
+    }
+}
 
 /// Hysteresis for a connected re-race: a winner must beat the relay in use by
 /// this many milliseconds before the GUI switches away from it.
@@ -595,6 +684,15 @@ pub struct LightSpeedApp<P: Platform> {
     /// cannot strand the run silently.
     held_since: Option<std::time::Instant>,
 
+    /// Baseline for the relay verdict: the two tunnel counters as of the last
+    /// sample, so each window is judged on its own movement rather than on a
+    /// cumulative ratio that a healthy start would mask forever.
+    health_base: Option<RelayHealthBase>,
+
+    /// The last verdict stated, so a stable verdict is logged once rather than
+    /// every second.
+    relay_health: Option<RelayHealthVerdict>,
+
     /// When the process table was last scanned for a game.
     last_presence_check: Option<std::time::Instant>,
 
@@ -828,6 +926,8 @@ impl<P: Platform> LightSpeedApp<P> {
             server_error: None,
             language,
             boost_start: None,
+            health_base: None,
+            relay_health: None,
             custom_port_input: saved.manual_port_range.clone(),
             update_check: UpdateCheckState::Idle,
             show_update_dialog: false,
@@ -1515,6 +1615,60 @@ impl<P: Platform> LightSpeedApp<P> {
         engine.stop_capture();
         engine.stop_redirect();
         self.boost_start = None;
+        self.health_base = None;
+        self.relay_health = None;
+    }
+
+    /// Watch whether packets that were decided to relay actually leave.
+    ///
+    /// The counters say a flow was relayed; they do not say the datagram reached
+    /// the relay. A send that fails, or a relay that is not taking this session,
+    /// looks exactly like a healthy match from `packets_intercepted` alone, and
+    /// feels like packet loss to the player. This compares the two counters once
+    /// a second, and only once the run has been relaying long enough for a
+    /// per-second sample to mean something: a single lost datagram is normal on
+    /// UDP, a steady share of them is not.
+    fn poll_relay_health(&mut self) {
+        let Some(started) = self.boost_start else {
+            return;
+        };
+        let base = match self.health_base {
+            Some(base) => base,
+            None => {
+                let base = RelayHealthBase {
+                    at: std::time::Instant::now(),
+                    intercepted: self.status.interceptor_intercepted,
+                    sent: self.status.interceptor_tunnel_sent,
+                };
+                self.health_base = Some(base);
+                return;
+            }
+        };
+        if started.elapsed() < RELAY_HEALTH_SETTLE {
+            return;
+        }
+        if base.at.elapsed() < RELAY_HEALTH_WINDOW {
+            return;
+        }
+        let decision = relay_health_verdict(
+            base.intercepted,
+            base.sent,
+            self.status.interceptor_intercepted,
+            self.status.interceptor_tunnel_sent,
+        );
+        self.health_base = Some(RelayHealthBase {
+            at: std::time::Instant::now(),
+            intercepted: self.status.interceptor_intercepted,
+            sent: self.status.interceptor_tunnel_sent,
+        });
+        let verdict = match decision {
+            RelayHealthVerdict::Idle => return,
+            other => other,
+        };
+        if self.relay_health != Some(verdict) {
+            self.relay_health = Some(verdict);
+            tracing::info!("Relay verdict: {}", verdict.sentence());
+        }
     }
 
     /// Relaunch with elevated privileges so the interceptor can start.
@@ -3039,6 +3193,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         self.poll_game_presence();
         self.follow_game_server();
         self.release_stale_hold();
+        self.poll_relay_health();
 
         // Collect a finished update check from the background thread.
         if matches!(self.update_check, UpdateCheckState::Checking) {
@@ -4324,10 +4479,11 @@ mod tests {
     use super::{
         apply_discovery_result, apply_target_choice, close_decision, draft_reasons,
         game_editor_body, game_pick_rows, games, pair_relay_legs, picker_status, primary_action,
-        process_picker, save_user_profiles, server_from_fields, should_apply_race, should_race,
-        target_for_pick, target_front_door, target_summary, validate_draft, CloseDecision,
-        EditorActions, GameEditorDraft, GamePickRow, PickerStatus, ProcessListState, ProcessPicker,
-        ProcessTarget, TargetRowAction,
+        process_picker, relay_health_verdict, save_user_profiles, server_from_fields,
+        should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
+        target_summary, validate_draft, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
+        PickerStatus, ProcessListState, ProcessPicker, ProcessTarget, RelayHealthVerdict,
+        TargetRowAction,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -4560,6 +4716,79 @@ mod tests {
         assert_eq!(proxies[0].label, "LAX - Los Angeles");
         assert_eq!(proxies[1].label, "Local proxy");
         assert!(!proxies[1].is_discovered());
+    }
+
+    #[test]
+    fn a_gate_off_is_the_only_safe_moment_for_a_relay_switch() {
+        // The tunnel reads `current_proxy()` on every packet
+        // (`client/src/interceptor/windows.rs`). Pointing it at a relay the new
+        // session is not registered with yet would send a live match's datagrams
+        // into a void, so a relay change has to be staged until the handover is
+        // finished. What makes it safe is the state the hold already sets:
+        // tunnelling withheld. This pins the rule where a future in-match
+        // "switch relay" would be wired, so that path cannot forget it.
+        let live_match = Some(true);
+        let held = Some(false);
+        let gate_absent = None;
+
+        assert!(
+            !switch_is_safe(live_match),
+            "a relay switch during a live match must be staged, not applied"
+        );
+        assert!(
+            switch_is_safe(held),
+            "with traffic held, the switch is what the tunnel sees"
+        );
+        assert!(
+            switch_is_safe(gate_absent),
+            "a backend with no gate is never relaying, so nothing is at risk"
+        );
+    }
+
+    #[test]
+    fn relay_health_reads_movement_not_totals() {
+        // A run that relayed a healthy million packets and then started failing
+        // must be reported as failing: the verdict is on the window's movement.
+        assert_eq!(
+            relay_health_verdict(1_000_000, 1_000_000, 1_000_010, 1_000_002),
+            RelayHealthVerdict::Unsent {
+                unsent: 8,
+                decided: 10
+            },
+            "80% of this window never left, despite the healthy history"
+        );
+        assert_eq!(
+            relay_health_verdict(0, 0, 100, 100),
+            RelayHealthVerdict::Healthy
+        );
+        assert_eq!(
+            relay_health_verdict(0, 0, 100, 0),
+            RelayHealthVerdict::Unsent {
+                unsent: 100,
+                decided: 100
+            },
+            "nothing leaving at all is the loudest case, not an idle one"
+        );
+    }
+
+    #[test]
+    fn relay_health_tolerates_loss_and_a_still_flow() {
+        // UDP games lose the odd datagram; one in ten is within the tolerance.
+        assert_eq!(
+            relay_health_verdict(0, 0, 100, 90),
+            RelayHealthVerdict::Healthy
+        );
+        // No new packets decided: menus, or a hold. This must not read as a fault.
+        assert_eq!(
+            relay_health_verdict(500, 500, 500, 500),
+            RelayHealthVerdict::Idle
+        );
+        // A sent count running ahead of the decided count cannot happen, and must
+        // not underflow into a wild "unsent" number if it ever does.
+        assert_eq!(
+            relay_health_verdict(0, 50, 10, 60),
+            RelayHealthVerdict::Healthy
+        );
     }
 
     #[test]

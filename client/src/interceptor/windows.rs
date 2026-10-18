@@ -1372,12 +1372,16 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     .adaptive_parity_ratio_bp
                                     .store(fec_gate.parity_ratio_bp(), Ordering::Relaxed);
                                 crate::latency::record_outbound(*game_dst.ip());
-                                let _ = crate::tunnel::transport::send_datagram(
+                                let sent = crate::tunnel::transport::send_datagram(
                                     &tunnel_socket,
                                     &buf2,
                                     crate::session::current_proxy().unwrap_or(config_proxy),
                                 )
-                                .await;
+                                .await
+                                .is_ok();
+                                if sent {
+                                    counters_t.packets_tunnel_sent.fetch_add(1, Ordering::Relaxed);
+                                }
                                 if let Some(pb) = parity.filter(|_| emit_parity) {
                                     let ps = seq.wrapping_add(1);
                                     let ph = lightspeed_protocol::TunnelHeader::new_fec(ps, ts, game_src, game_dst)

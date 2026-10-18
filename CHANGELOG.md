@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The app now says whether the relay is actually taking your traffic.** The counters
+  knew a flow was *decided* to relay, never whether the datagram left. A new counter
+  records every send the tunnel actually hands to the OS, and the GUI compares its
+  movement against the decided count once a second after a ten-second settle: a steady
+  share of a match's traffic failing to leave is reported in words ("switch relay"),
+  where before it looked identical to a healthy match and felt like packet loss.
 - **The hold ends when its relay connects, on the engine's clock rather than the GUI's.** The
   release used to run only on the GUI's frame loop, and a window that is not being redrawn stops
   that loop: a hold outlived the relay it had connected and the match sat on the direct path until

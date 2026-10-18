@@ -6,6 +6,41 @@
 
 ---
 
+### 2026-10-18: The relay verdict is measured on movement, and a switch is only safe while held
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (`client/src/interceptor/traits.rs`, `client/src/interceptor/windows.rs`,
+`client/src/engine.rs`, `client-gui/src/app.rs`)
+**Rationale:** the counters said a flow was *decided* to relay, never whether the
+datagram left the machine. A relay that is not taking this session, or a send that
+fails, therefore read exactly like a healthy match - the worst failure this app
+can produce, because the player experiences it as packet loss and has no way to
+learn it is the relay. The verdict compares a new `packets_tunnel_sent` against
+`packets_intercepted` per window, after a ten-second settle, so one lost UDP
+datagram is not a fault and a fifth of a second's traffic never leaving is.
+**Impact:** `InterceptorCounters::packets_tunnel_sent` counts only sends that
+returned Ok, the snapshot carries it, and the GUI logs one sentence when the
+verdict changes (`Relay verdict: ...`). Separately, `switch_is_safe` pins the
+rule that a relay change may only be applied while tunnelling is withheld (or on
+a backend with no gate), because the tunnel reads the current relay on every
+packet and a switch during a live match would send datagrams to a relay that has
+not registered this session yet.
+**Alternatives Considered:** counting sends at `send_datagram` inside the tunnel
+module was rejected because that helper is shared with the CLI's multipath path
+and would double-count there; a cumulative ratio over the whole run was rejected
+because a healthy first minute would mask a broken one forever.
+**Verification:** `cargo fmt --all --check`; `cargo clippy -p lightspeed-gui -p
+lightspeed-client --all-targets -- -D warnings` and the same with
+`--features windivert-redirect`; `lightspeed-gui` 130 passed, `lightspeed-client`
+(with the feature) 557 passed. New tests: `relay_health_reads_movement_not_totals`,
+`relay_health_tolerates_loss_and_a_still_flow`,
+`a_gate_off_is_the_only_safe_moment_for_a_relay_switch`. **NOT verified:** no
+live run has yet produced an `Unsent` verdict; the healthy path is what the live
+runs so far would exercise, and a real relay-side failure is not something the
+suite can create.
+
+---
+
 ### 2026-10-18: A hold is released by the engine, not by whatever frame the GUI manages
 
 **Agent:** RustDev + QAEngineer

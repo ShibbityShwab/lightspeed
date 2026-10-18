@@ -227,6 +227,14 @@ pub struct InterceptorCounters {
     /// capture filter aimed at the client's own ports logged
     /// "interceptor started" and then saw no packets for an entire session.
     pub packets_seen: AtomicU64,
+    /// Outbound datagrams the tunnel handed to the OS toward the relay.
+    ///
+    /// Separate from `packets_intercepted`, which counts what was *decided* to
+    /// be relayed: a send that fails never leaves the machine, so the pair tells
+    /// "no server chosen yet" (both zero) apart from "packets are going nowhere"
+    /// (intercepted climbing, sent not). A user whose match connects but feels
+    /// like packet loss has no other way to tell which relay-side fault this is.
+    pub packets_tunnel_sent: AtomicU64,
     /// Bytes intercepted (outbound).
     pub bytes_intercepted: AtomicU64,
     /// Spoofed inbound packets injected back to the game.
@@ -308,6 +316,7 @@ impl Default for InterceptorCounters {
             last_error: std::sync::Mutex::new(None),
             bypass_advantage_ms: std::sync::Mutex::new(None),
             packets_seen: AtomicU64::new(0),
+            packets_tunnel_sent: AtomicU64::new(0),
             capture_diagnosis: std::sync::Mutex::new(None),
         }
     }
@@ -338,6 +347,7 @@ impl InterceptorCounters {
             last_error: self.last_error.lock().ok().and_then(|g| g.clone()),
             bypass_advantage_ms: self.bypass_advantage_ms.lock().ok().and_then(|g| *g),
             packets_seen: self.packets_seen.load(Ordering::Relaxed),
+            packets_tunnel_sent: self.packets_tunnel_sent.load(Ordering::Relaxed),
             capture_diagnosis: self.capture_diagnosis.lock().ok().and_then(|g| g.clone()),
             // Run-level state, filled in by the handle: the gate lives there, not
             // in the counters.
@@ -399,6 +409,8 @@ pub struct InterceptorStats {
     pub capture_diagnosis: Option<String>,
     /// Every UDP packet the capture handle produced, before any policy.
     pub packets_seen: u64,
+    /// Outbound datagrams actually handed to the OS toward the relay.
+    pub packets_tunnel_sent: u64,
     /// Platform name: `"WinDivert"`, `"nftables"`, `"pf"`, …
     pub platform: &'static str,
 }

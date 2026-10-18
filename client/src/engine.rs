@@ -136,6 +136,11 @@ pub struct EngineStatus {
     /// Every packet the capture handle produced, before any policy, so a UI can
     /// tell "nothing needed relaying" from "the filter matches nothing".
     pub interceptor_seen: u64,
+    /// Outbound datagrams the tunnel actually handed to the OS toward the relay,
+    /// against `interceptor_intercepted`, which counts what was decided to be
+    /// relayed. The pair tells a held flow (both zero) from a relay that is not
+    /// taking the traffic (intercepted climbing, sent not).
+    pub interceptor_tunnel_sent: u64,
     /// Plain-language explanation when the capture is producing nothing, so the
     /// app can admit it is not working instead of looking healthy.
     pub capture_diagnosis: Option<String>,
@@ -1312,6 +1317,7 @@ impl LightSpeedEngine {
             let ist = handle.snapshot();
             snap.interceptor_intercepted = ist.packets_intercepted;
             snap.interceptor_seen = ist.packets_seen;
+            snap.interceptor_tunnel_sent = ist.packets_tunnel_sent;
             snap.capture_diagnosis = ist.capture_diagnosis.clone();
             snap.tunnelling_enabled = ist.tunnelling_enabled;
             snap.bypass_advantage_ms = ist.bypass_advantage_ms;
