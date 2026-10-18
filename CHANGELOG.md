@@ -133,6 +133,14 @@ _No unreleased changes yet._
   persisted and then discarded at the call site; it now overrides the profile's scan range for
   interception (manual range first, then the profile's `udp_ports`, then the built-in default).
 
+### Security
+
+- **rustls 0.23.46.** Four advisories published on 2026-10-14 are patched in this version
+  (RUSTSEC-2026-0346 through 0349: TLS session secrets in `Debug` output, application data
+  sent after an ECH rejection, a Brotli certificate decompression allocation, and a
+  ServerHello key-share downgrade). The Security Audit workflow had been red on every push
+  since the advisories landed, so this release is the first clean one.
+
 ## [1.7.0] - 2026-10-04
 
 ### Added
