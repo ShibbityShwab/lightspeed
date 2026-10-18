@@ -531,6 +531,7 @@ async fn main() -> anyhow::Result<()> {
             || cli.benchmark
             || cli.diagnose
             || cli.status
+            || cli.verify_game.is_some()
             || cli.interception_mode.is_some();
         if !has_mode {
             info!("╔════════════════════════════════════════════╗");
@@ -1059,6 +1060,25 @@ async fn main() -> anyhow::Result<()> {
             info!("   (specify --game <name> to scan for a specific game's routes)");
         }
 
+        return Ok(());
+    }
+
+    // ── --verify-game ─────────────────────────────────────────────
+    if let Some(key) = cli.verify_game.clone() {
+        let proxy = match resolve_proxy_addr(&cli, &config).await {
+            Ok(resolved) => Some(resolved.addr),
+            Err(error) => {
+                warn!("   No relay resolved, live stage skipped: {error}");
+                None
+            }
+        };
+        let path = cli.verify_report.as_deref().map(std::path::Path::new);
+        let verdict =
+            crate::modes::verify_game::run_verify_game(&key, proxy, cli.verify_seconds, path)
+                .await?;
+        if verdict.is_fail() {
+            anyhow::bail!("game verification failed for '{key}'");
+        }
         return Ok(());
     }
 

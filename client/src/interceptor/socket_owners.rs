@@ -82,6 +82,20 @@ impl UdpOwnerTable {
         self.pids_for_port(port).contains(&pid)
     }
 
+    /// Every local port bound by `pid`, unsorted.
+    ///
+    /// A game that ships a launcher under the same image name (ARC Raiders runs
+    /// `PioneerGame.exe` twice) has no other on-disk way to tell which of the two
+    /// is the client, and picking the launcher makes process-targeted capture
+    /// attribute nothing.
+    pub fn ports_for_pid(&self, pid: u32) -> Vec<u16> {
+        self.by_port
+            .iter()
+            .filter(|(_, pids)| pids.contains(&pid))
+            .map(|(port, _)| *port)
+            .collect()
+    }
+
     /// Whether any process owns a socket on `port`.
     pub fn is_bound(&self, port: u16) -> bool {
         self.by_port.contains_key(&port)
@@ -288,6 +302,28 @@ mod tests {
         }]);
         assert!(!t.is_bound(2));
         assert!(t.pids_for_port(2).is_empty());
+    }
+
+    #[test]
+    fn ports_are_indexed_by_owner_as_well_as_by_port() {
+        let table = UdpOwnerTable::from_owners([
+            UdpOwner {
+                local: sock([0, 0, 0, 0], 7777),
+                pid: 10,
+            },
+            UdpOwner {
+                local: sock([0, 0, 0, 0], 7778),
+                pid: 10,
+            },
+            UdpOwner {
+                local: sock([0, 0, 0, 0], 443),
+                pid: 20,
+            },
+        ]);
+        let mut ports = table.ports_for_pid(10);
+        ports.sort_unstable();
+        assert_eq!(ports, vec![7777, 7778]);
+        assert_eq!(table.ports_for_pid(30), Vec::<u16>::new());
     }
 
     #[test]

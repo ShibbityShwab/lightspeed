@@ -13,6 +13,8 @@ pub mod redirect_windivert;
 pub mod reroute;
 pub mod tunnel_test;
 
+pub mod verify_game;
+
 pub mod benchmark_mode;
 pub mod demo_mode;
 pub mod intercept_mode;

@@ -1406,12 +1406,18 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 crate::latency::record_outbound(*game_dst.ip());
                                 let (dests, n) = crate::session::send_destinations(config_proxy);
                                 for d in dests.iter().take(n) {
-                                    let _ = crate::tunnel::transport::send_datagram(
+                                    let sent = crate::tunnel::transport::send_datagram(
                                         &tunnel_socket,
                                         &pkt,
                                         *d,
                                     )
-                                    .await;
+                                    .await
+                                    .is_ok();
+                                    if sent {
+                                        counters_t
+                                            .packets_tunnel_sent
+                                            .fetch_add(1, Ordering::Relaxed);
+                                    }
                                 }
                             }
                             seq = seq.wrapping_add(1);

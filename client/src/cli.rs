@@ -233,6 +233,19 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub scan_processes: bool,
 
+    /// Prove that a game profile captures, attributes and relays that game's own
+    /// traffic. Prints a human report and exits 1 when the profile fails.
+    #[arg(long, value_name = "GAME")]
+    pub verify_game: Option<String>,
+
+    /// Seconds to capture during --verify-game. 0 skips the live stage.
+    #[arg(long, default_value_t = 30)]
+    pub verify_seconds: u64,
+
+    /// Write the --verify-game report as JSON to this path.
+    #[arg(long, value_name = "PATH")]
+    pub verify_report: Option<String>,
+
     /// Share anonymous aggregate latency stats (on by default).
     /// Sends p50/p95/p99 RTT, jitter, and FEC counters to the relay every
     /// 15 minutes. No IP address, identifier, or packet content is ever sent,

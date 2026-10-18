@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--verify-game` proves a profile against the running game, not against its unit tests.**
+  It resolves the profile, checks the process names, wire id and port range, picks the
+  process that owns the most UDP sockets (launchers share the game's image name), starts
+  the interceptor for a bounded run, and requires the counters to move: packets seen,
+  packets attributed, packets that actually left for the relay, and a locked server. It
+  writes a JSON report and exits 1 on failure. This is the check that catches a port range
+  which matches nothing, because such a profile passes every unit test and differs from a
+  quiet lobby in exactly one counter.
 - **The app now says whether the relay is actually taking your traffic.** The counters
   knew a flow was *decided* to relay, never whether the datagram left. A new counter
   records every send the tunnel actually hands to the OS, and the GUI compares its

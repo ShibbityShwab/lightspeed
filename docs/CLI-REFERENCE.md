@@ -92,6 +92,21 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 | `--benchmark` | Run latency benchmark (direct vs LightSpeed routing) |
 | `--target <ADDR>` | Target server for `--benchmark` and `--diagnose` (`ip:port`) |
 | `--scan-processes` | Scan for running game processes |
+| `--verify-game <GAME>` | Prove a profile captures, attributes and relays that game's own traffic; exits 1 on failure |
+| `--verify-seconds <N>` | Seconds to capture during `--verify-game` (default 30; 0 skips the live stage) |
+| `--verify-report <PATH>` | Write the `--verify-game` result as JSON |
+
+`--verify-game` runs in two stages. The static stage resolves the profile, checks its
+process names, port range and wire id, and reports every UDP destination the game is
+talking to that falls outside the declared range. The live stage starts the interceptor
+for the running game, targets the process that owns the most UDP sockets (launchers
+share the game's image name), and requires the counters to move: packets seen by the
+capture, packets attributed to the game, packets that actually left for the relay, and a
+locked game server. A profile whose filter matches nothing passes every unit test and
+looks like a quiet lobby in every counter except `packets_seen`, which is why that
+counter is the first thing the report names. The live stage needs Administrator (or
+root) and the `windivert-redirect` feature on Windows; without either it reports that
+plainly instead of guessing.
 | `--registry <URL>` | Community registry URL (signed node list) for relay discovery; with `--probe-proxies` its nodes are probed too |
 
 ### Telemetry
