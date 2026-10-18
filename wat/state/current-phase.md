@@ -64,17 +64,51 @@ own.
 
 **Second real finding, same runs.** The first attempt targeted `powershell.exe`
 (the driving shell) and its traffic matched nothing because the UDP packet was
-sent from a child process; that was my probe's fault, not the app's. It did,
+sent from a child process; that was my probe's fault, not the app's. The
+freeze that same run produced (the picker's click sent nothing because the UI
+thread never returned) was the deadlock above, reproduced four times. It did,
 however, expose that the no-match report needed four unrelated ports before it
 fired: `windows.rs` now reports after four distinct unmatched ports, and the
 report says whether any of them is the target's (a late match) or none (a wrong
 pick), which is what a caller needs to act.
 
+### 2026-10-18, after the fix - the release fires live, and the follow still needs a match
+
+Committed as `073717a`. A fresh run on that build, with a single throwaway UDP
+sender (`LightSpeedProbe.exe`, the alias from `.omo/live-hold-proof/sender.ps1`)
+picked as the target and the relay already connected, produced exactly this, in
+order, once each (both lines are unique in the whole trace file):
+
+```
+14:16:20.158199Z  INFO Holding traffic on the direct path until the game server is known
+14:16:20.158260Z  INFO Hold release watcher armed (relay already up: true)
+14:16:20.158287Z  INFO The relay connected while the hold was still waiting for the game server; releasing it so the match is not left on the direct path
+```
+
+27 microseconds between arming and release: the watcher ran on the engine
+runtime and flipped the gate on its first check. The GUI stayed responsive
+(OPTIMIZING shown, counters live) instead of freezing, which is the deadlock
+that was fixed. `tunneled` stayed 0 because the target was a bare UDP copy of
+`powershell.exe`, not a game: it sends 20 datagrams a second to
+`34.19.104.121:7777` but the owner table never attributed its port to the
+target (`owned by target 0`). Whether that is the probe's own limitation or an
+attribution gap is not settled, and settling it is the reason the next run
+should target the game rather than a probe. The lower no-match threshold is
+compiled and unit-tested; I stopped the app before its first four-port sample
+had printed, so it was not observed on this run.
+
+**Still the one open proof:** `Following the game server: switching to <addr>`
+and an advancing `tunneled` count need a real game. With ARC Raiders running,
+start the app, let Auto detect find `PioneerGame.exe`, and read the trace for
+`🔍 Locked game server`, then `Following the game server`. The hold paths that
+do not need a game server are proven live: the release watcher fires on the
+engine runtime.
+
 **Not yet re-proven live after removing the probes.** The fixed binary still has
 to show `Hold release watcher armed (relay already up: true)` followed by
 `The relay connected while the hold was still waiting for the game server` on a
 run with the relay already connected; the probes that showed the deadlock are
-removed, so this is the next live check, not a finished one.
+removed; the check that replaced this note is below.
 
 ---
 
