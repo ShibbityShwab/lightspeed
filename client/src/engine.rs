@@ -292,6 +292,11 @@ impl LightSpeedEngine {
     /// Start (or restart) the keepalive loop toward `proxy_addr`.
     pub fn connect(&mut self, proxy_addr: SocketAddrV4) {
         self.disconnect();
+        // Publish the relay the data plane will use. The session token is
+        // stored per relay, and `session_token()` reads it through this
+        // address; without it the interceptor stamps the stale single-path
+        // default after the first rotation.
+        crate::session::set_current_proxy(proxy_addr);
         let (tx, rx) = oneshot::channel();
         self.shutdown_tx = Some(tx);
         let generation = {
@@ -929,6 +934,14 @@ impl LightSpeedEngine {
     pub const HOLD_CONNECT_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
     // ── OOP TrafficInterceptor (multiplatform MITM) ───────────────────────
+
+    /// Whether an interceptor is currently running.
+    ///
+    /// A relay change has to restart the data plane only when there is one;
+    /// at startup the interceptor is started later, against the selected relay.
+    pub fn is_intercepting(&self) -> bool {
+        self.interceptor_handle.is_some()
+    }
 
     /// Start the OOP `TrafficInterceptor` for a game identified by `game_key`,
     /// with no process target - the built-in ports path.

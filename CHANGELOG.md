@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes yet._
 
+## [1.8.3] - 2026-10-19
+
+### Fixed
+
+- **A relay switch now moves the data plane with the control plane.** Switching relays reconnected
+  the control plane only, so the interceptor kept its old tunnel socket and sent the game's packets
+  to the old relay while the session token belonged to the new one. The old relay auth-rejected
+  every packet and a match could never finish connecting. Any relay change restarts a running
+  interceptor on the new relay.
+- **Packets carry the current relay's rotated token.** Rotation publishes a per-relay token, but the
+  data plane read the single-path default, which stayed on the pre-rotation token and was rejected
+  after the relay's 30-second grace. The token now resolves through the current relay.
+- **One packet goes to one relay.** A multipath spread sent the same single-token header to two
+  relays; the second rejected it, and when it accepted, the game saw a duplicate. Until each
+  destination has its own token, the data plane sends on the current relay only.
+
 ## [1.8.2] - 2026-10-19
 
 ### Fixed
@@ -1099,7 +1115,8 @@ The first release of LightSpeed - a zero-cost, open-source global network optimi
 - Amplification prevention.
 - No Critical or High audit findings.
 
-[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.3...HEAD
+[1.8.3]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/ShibbityShwab/lightspeed/compare/v1.7.0...v1.8.0

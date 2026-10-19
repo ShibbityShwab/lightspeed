@@ -1027,9 +1027,49 @@ impl<P: Platform> LightSpeedApp<P> {
         };
         let addr = entry.addr;
         let node_id = entry.node_id.clone();
+        let was_intercepting = {
+            let mut engine = lock_or_recover(&self.engine);
+            let running = engine.is_intercepting();
+            engine.connect(addr);
+            engine.set_node_id(node_id);
+            running
+        };
+        // Any relay change moves the data plane with it: a switch that only
+        // reconnects the control plane leaves the interceptor sending to the
+        // old relay while the token belongs to the new one.
+        if was_intercepting {
+            self.restart_interceptor_on_selected_relay();
+        }
+    }
+
+    /// Move a running interceptor onto the relay the follow just selected.
+    ///
+    /// `connect_selected` reconnects the control plane only. The data plane is
+    /// a separate socket created with the proxy address at start time, so
+    /// without this restart the game keeps sending to the old relay while the
+    /// session token belongs to the new one, and the old relay rejects every
+    /// packet. The hold is deliberately not re-armed: the server is locked and
+    /// its relay is already chosen, so the new interceptor should relay at once.
+    fn restart_interceptor_on_selected_relay(&mut self) {
+        let Some(proxy) = self.selected_proxy_addr() else {
+            return;
+        };
+        let game_key = self.selected_game().key;
+        let port_range_override = parse_custom_port_range(&self.custom_port_input);
+        let process_target = self.target_process.clone();
         let mut engine = lock_or_recover(&self.engine);
-        engine.connect(addr);
-        engine.set_node_id(node_id);
+        engine.set_telemetry_game(&game_key);
+        match engine.start_interceptor_with_target(
+            &game_key,
+            proxy,
+            self.fec_enabled,
+            4, // default FEC K
+            port_range_override,
+            process_target,
+        ) {
+            Ok(()) => tracing::info!("Restarted interception on the new relay {proxy}"),
+            Err(e) => tracing::error!("relay switch could not restart interception: {e}"),
+        }
     }
 
     fn start_discovery(&mut self) {
@@ -1281,6 +1321,8 @@ impl<P: Platform> LightSpeedApp<P> {
                 self.selected_proxy_idx = idx;
                 self.connect_selected();
                 self.persist_config();
+                // `connect_selected` restarts a running interceptor on the new
+                // relay, so there is no second restart here.
             }
         }
 

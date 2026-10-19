@@ -255,8 +255,20 @@ pub fn set_session_token(token: u32) {
     TOKENS.set_default(token);
 }
 
-/// Get the single-path session token (0 when unregistered).
+/// Get the data-plane token to stamp on a packet.
+///
+/// Prefers the current relay's per-path token, where rotation publishes, and
+/// falls back to the single-path default when no relay is set or the path has
+/// no entry. Using the default unconditionally is a live bug: after the first
+/// rotation the default still holds the old token, which the relay accepts for
+/// its 30-second grace and then rejects for the rest of the session.
 pub fn session_token() -> u32 {
+    if let Some(proxy) = current_proxy() {
+        let token = TOKENS.path(proxy);
+        if token != 0 {
+            return token;
+        }
+    }
     TOKENS.default_token()
 }
 
@@ -388,26 +400,24 @@ pub fn is_known_proxy(source: SocketAddr, config_fallback: SocketAddrV4) -> bool
     dests.iter().take(n).any(|d| *d == source_v4)
 }
 
-/// Relay destinations for an outbound packet: the multipath spread when two or
-/// more paths are active, otherwise the single current relay. Returns
-/// `(destinations, count)`; only the first `count` entries are valid.
+/// Relay destinations for an outbound packet.
+///
+/// A tunnel header carries **one** session token, minted for one relay. Sending
+/// the same header to a second relay is an auth rejection there, and when the
+/// second relay happens to accept it the game receives a duplicate it never
+/// asked for. Until each destination is stamped with its own token, the data
+/// plane sends on the current relay only.
 pub fn send_destinations(
     config_fallback: SocketAddrV4,
 ) -> ([SocketAddrV4; MAX_MULTIPATH_PATHS], usize) {
-    let paths = multipath_paths();
-    let active = paths.iter().filter(|p| **p != UNSPECIFIED).count();
-    if active >= 2 && duplication_allowed() {
-        (paths, active)
-    } else {
-        (
-            [
-                current_proxy().unwrap_or(config_fallback),
-                UNSPECIFIED,
-                UNSPECIFIED,
-            ],
-            1,
-        )
-    }
+    (
+        [
+            current_proxy().unwrap_or(config_fallback),
+            UNSPECIFIED,
+            UNSPECIFIED,
+        ],
+        1,
+    )
 }
 
 /// The test harness runs `#[test]`s in parallel and the token store is
@@ -430,6 +440,8 @@ mod tests {
     #[test]
     fn test_session_token_set_get() {
         let _guard = token_test_guard();
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+        reset_all_tokens();
         assert_eq!(session_token(), 0);
         set_session_token(0xAB);
         assert_eq!(session_token(), 0xAB);
@@ -440,6 +452,7 @@ mod tests {
     #[test]
     fn per_path_token_roundtrip() {
         let _guard = token_test_guard();
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
         reset_all_tokens();
         set_session_token(0xAA);
         let path_a = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 7), 4434);
@@ -490,10 +503,33 @@ mod tests {
             current_proxy(),
             Some(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 1))
         );
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
     }
 
     #[test]
-    fn duplication_gate_defaults_open_and_collapses_the_spread() {
+    fn session_token_prefers_the_current_relay_path() {
+        let _guard = token_test_guard();
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+        reset_all_tokens();
+        let relay = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 14), 4434);
+        set_session_token(0xAA);
+        set_path_token(relay, 0x11);
+
+        set_current_proxy(relay);
+        assert_eq!(session_token(), 0x11, "the relay's rotated token wins");
+        clear_path_token(relay);
+        assert_eq!(
+            session_token(),
+            0xAA,
+            "without a path entry the single-path default is used"
+        );
+
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+        reset_all_tokens();
+    }
+
+    #[test]
+    fn a_packet_is_sent_on_one_relay_only() {
         let _guard = token_test_guard();
         reset_all_tokens();
         let primary = SocketAddrV4::new(Ipv4Addr::new(1, 1, 1, 1), 4434);
@@ -501,18 +537,18 @@ mod tests {
         set_current_proxy(primary);
         set_multipath_paths(vec![primary, secondary]);
 
+        // A tunnel header carries one relay's token. Spreading the same header
+        // to a second relay is an auth rejection there and a duplicate for the
+        // game, so the send set stays on the current relay even when the
+        // multipath spread is populated and duplication is allowed.
         set_duplication_allowed(true);
         let (dests, n) = send_destinations(primary);
-        assert_eq!(n, 2, "an open gate keeps the multipath spread");
-        assert!(dests.iter().take(n).any(|d| *d == primary));
-        assert!(dests.iter().take(n).any(|d| *d == secondary));
+        assert_eq!(n, 1, "one token means one relay");
+        assert_eq!(dests[0], primary);
 
         set_duplication_allowed(false);
         let (dests, n) = send_destinations(primary);
-        assert_eq!(
-            n, 1,
-            "a closed gate must send only on the single current relay"
-        );
+        assert_eq!(n, 1);
         assert_eq!(dests[0], primary);
 
         set_duplication_allowed(true);
@@ -524,6 +560,7 @@ mod tests {
     #[test]
     fn rotation_publishes_the_new_token() {
         let _guard = token_test_guard();
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
         reset_all_tokens();
         let relay = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 9), 4434);
         set_session_token(0xAA);
@@ -564,6 +601,7 @@ mod tests {
     #[test]
     fn rotation_without_an_active_session_is_a_no_op() {
         let _guard = token_test_guard();
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
         reset_all_tokens();
         let relay = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 11), 4434);
 
@@ -582,6 +620,7 @@ mod tests {
     #[test]
     fn rotation_of_a_per_path_token_updates_only_that_path() {
         let _guard = token_test_guard();
+        set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
         reset_all_tokens();
         set_session_token(0xAA);
         let relay = SocketAddrV4::new(Ipv4Addr::new(45, 32, 72, 12), 4434);
