@@ -165,6 +165,12 @@ rather than the last outbound destination. Live check on the fixed GUI: register
 and logged `session token rotated ... old_token=3871532485 new_token=3943877340` at 05:09:30,
 exactly 120 s later.
 
+Published 05:06:19Z with 39 assets (including the Windows GUI MSI), `/releases/latest` points at
+it, and Security Audit on `60958cf` is green. Homebrew and the in-repo Scoop manifest were bumped
+by the workflow (`247c23a`, `1995d19`); the public bucket was pushed to 1.8.2 (`19c0a0d`).
+Chocolatey's bump job was cancelled by the concurrency collision and its feed still serves 1.7.0,
+so that channel is pending moderation.
+
 ---
 
 ## 2026-10-18 - the live relay-follow proof, driven with computer use
