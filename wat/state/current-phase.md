@@ -145,6 +145,28 @@ across a server change.
 
 ---
 
+## 2026-10-19 - 1.8.2: the expired relay token behind the stalled match join
+
+The step-by-step ARC Raiders run on 1.8.1 found the real cause of a match that would not finish
+connecting: the relay keeps a data-plane token valid for 300 s (`TOKEN_TTL` in
+`proxy/src/auth.rs`) while the client rotated every 1800 s (`client/src/config.rs` and the GUI's
+`DEFAULT_TOKEN_ROTATION_SECS`). The GUI registered at 04:30:42 and the match server was locked at
+04:36:23, 341 s later; every game UDP packet then carried an expired token and the relay dropped
+it as unauthorized. The lobby stayed usable because its control-plane keepalives need no auth.
+The SGP relay's `/health` showed `drops_auth_rejected` at 11,278 against 2,217 relayed, and a
+controlled 5-packet data probe moved `drops_auth_rejected` by exactly 5 while `packets_relayed`
+stayed flat.
+
+1.8.2 (`60958cf`, tag `v1.8.2`) moves the TTL and rotation into
+`lightspeed_protocol::{SESSION_TOKEN_TTL, SESSION_TOKEN_ROTATION}` (300 s / 120 s), clamps a
+configured interval at or above the lifetime with a warning, makes `--live-test` skip its data
+phase when it has no registered token, and injects replies from the server in the tunnel header
+rather than the last outbound destination. Live check on the fixed GUI: registered at 05:07:30
+and logged `session token rotated ... old_token=3871532485 new_token=3943877340` at 05:09:30,
+exactly 120 s later.
+
+---
+
 ## 2026-10-18 - the live relay-follow proof, driven with computer use
 
 The GUI and ARC Raiders were launched by hand, ARC Raiders was switched to a window with
