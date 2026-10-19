@@ -23,6 +23,14 @@ use crate::redirect::{RedirectStats, UdpRedirect};
 
 // ── Public types ─────────────────────────────────────────────────────────
 
+/// Liveness counters the GUI's no-reply watchdog reads.
+pub struct InterceptorHealth {
+    pub detected_server: Option<std::net::SocketAddrV4>,
+    pub packets_intercepted: u64,
+    pub packets_injected: u64,
+    pub tunnelling_enabled: Option<bool>,
+}
+
 /// Snapshot of tunnel state - cheap to clone, safe to share.
 #[derive(Clone, Debug, Default)]
 pub struct EngineStatus {
@@ -941,6 +949,19 @@ impl LightSpeedEngine {
     /// at startup the interceptor is started later, against the selected relay.
     pub fn is_intercepting(&self) -> bool {
         self.interceptor_handle.is_some()
+    }
+
+    /// Liveness counters for the GUI's no-reply watchdog.
+    pub fn interceptor_health(&self) -> Option<InterceptorHealth> {
+        self.interceptor_handle.as_ref().map(|handle| {
+            let stats = handle.snapshot();
+            InterceptorHealth {
+                detected_server: stats.detected_server,
+                packets_intercepted: stats.packets_intercepted,
+                packets_injected: stats.packets_injected,
+                tunnelling_enabled: stats.tunnelling_enabled,
+            }
+        })
     }
 
     /// Start the OOP `TrafficInterceptor` for a game identified by `game_key`,

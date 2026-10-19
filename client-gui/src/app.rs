@@ -70,6 +70,31 @@ const GAME_PRESENCE_INTERVAL: Duration = Duration::from_secs(5);
 /// does lock.
 const HOLD_FALLBACK: Duration = Duration::from_secs(120);
 
+/// How long a relay may carry outbound traffic with no data reply before the
+/// session falls back to direct. A healthy join's first reply arrives in
+/// milliseconds; a join that returns nothing sits on a loading screen, so this
+/// is long enough to be sure and short enough to save the connection.
+const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Minimum intercepted packets before the no-reply watchdog may fire, so a
+/// couple of menu packets cannot trip it.
+const RELAY_REPLY_MIN_INTERCEPTED: u64 = 10;
+
+/// Tracks whether the current relay has brought a data packet back for the
+/// current server. The interceptor counters are cumulative, so the baseline is
+/// re-taken whenever the server changes.
+struct RelayReplyWatch {
+    server: std::net::SocketAddrV4,
+    baseline_intercepted: u64,
+    last_injected: u64,
+    last_progress: std::time::Instant,
+}
+
+/// Whether the no-reply watchdog should send this session direct.
+fn relay_reply_watchdog_trips(elapsed: Duration, intercepted_since: u64) -> bool {
+    elapsed >= RELAY_REPLY_TIMEOUT && intercepted_since >= RELAY_REPLY_MIN_INTERCEPTED
+}
+
 /// How long a run must have been relaying before the relay verdict starts
 /// sampling. A match takes several seconds to open its flow, and judging it
 /// before then would call a healthy relay broken.
@@ -715,6 +740,9 @@ pub struct LightSpeedApp<P: Platform> {
     /// cannot strand the run silently.
     held_since: Option<std::time::Instant>,
 
+    /// The no-reply watchdog for the current relayed server.
+    relay_reply_watch: Option<RelayReplyWatch>,
+
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
     /// cumulative ratio that a healthy start would mask forever.
@@ -921,6 +949,7 @@ impl<P: Platform> LightSpeedApp<P> {
             relay_measurement: None,
             chosen_for_server: None,
             held_since: None,
+            relay_reply_watch: None,
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -1019,6 +1048,61 @@ impl<P: Platform> LightSpeedApp<P> {
             self.auto_detected_game.as_deref(),
             self.selected_game_idx,
         )
+    }
+
+    /// Fall back to direct when a relay carries the game's outbound packets but
+    /// never brings a data packet back.
+    ///
+    /// A healthy join's first reply is injected within milliseconds. A join
+    /// whose relay returns nothing sat on a black loading screen until the user
+    /// turned LightSpeed off, so this watcher makes that fallback automatic:
+    /// after three seconds of outbound traffic with no injected data, the
+    /// session stops tunnelling and the game reconnects direct.
+    fn poll_relay_reply_watchdog(&mut self) {
+        let Some(health) = lock_or_recover(&self.engine).interceptor_health() else {
+            self.relay_reply_watch = None;
+            return;
+        };
+        let Some(server) = health.detected_server else {
+            self.relay_reply_watch = None;
+            return;
+        };
+        if health.tunnelling_enabled != Some(true) {
+            self.relay_reply_watch = None;
+            return;
+        }
+
+        let now = std::time::Instant::now();
+        let watch = match self.relay_reply_watch.take() {
+            Some(mut watch) if watch.server == server => {
+                if health.packets_injected > watch.last_injected {
+                    watch.last_injected = health.packets_injected;
+                    watch.last_progress = now;
+                }
+                watch
+            }
+            _ => RelayReplyWatch {
+                server,
+                baseline_intercepted: health.packets_intercepted,
+                last_injected: health.packets_injected,
+                last_progress: now,
+            },
+        };
+
+        let intercepted_since = health
+            .packets_intercepted
+            .saturating_sub(watch.baseline_intercepted);
+        if relay_reply_watchdog_trips(now.duration_since(watch.last_progress), intercepted_since) {
+            if lock_or_recover(&self.engine).hold_tunnelling() {
+                tracing::warn!(
+                    server = %watch.server,
+                    intercepted = intercepted_since,
+                    "No reply through the relay for this server; switching the session direct"
+                );
+            }
+        } else {
+            self.relay_reply_watch = Some(watch);
+        }
     }
 
     fn connect_selected(&mut self) {
@@ -3273,6 +3357,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         self.maybe_rerace();
         self.poll_health();
         self.poll_game_presence();
+        self.poll_relay_reply_watchdog();
         self.follow_game_server();
         self.release_stale_hold();
         self.poll_relay_health();
@@ -4503,7 +4588,26 @@ fn group_digits(n: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::lock_or_recover;
+    use super::{
+        lock_or_recover, relay_reply_watchdog_trips, RELAY_REPLY_MIN_INTERCEPTED,
+        RELAY_REPLY_TIMEOUT,
+    };
+
+    #[test]
+    fn no_reply_watchdog_requires_both_time_and_traffic() {
+        assert!(!relay_reply_watchdog_trips(
+            RELAY_REPLY_TIMEOUT - std::time::Duration::from_millis(1),
+            RELAY_REPLY_MIN_INTERCEPTED
+        ));
+        assert!(!relay_reply_watchdog_trips(
+            RELAY_REPLY_TIMEOUT,
+            RELAY_REPLY_MIN_INTERCEPTED - 1
+        ));
+        assert!(relay_reply_watchdog_trips(
+            RELAY_REPLY_TIMEOUT,
+            RELAY_REPLY_MIN_INTERCEPTED
+        ));
+    }
 
     #[test]
     fn a_poisoned_mutex_is_recovered_not_panicked() {

@@ -165,11 +165,11 @@ pub fn build_ipv4_udp(src: SocketAddrV4, dst: SocketAddrV4, payload: &[u8]) -> V
 /// One's-complement checksum over `data` (RFC 1071).
 fn internet_checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
-    let mut chunks = data.chunks_exact(2);
-    for chunk in &mut chunks {
-        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    let (words, remainder) = data.as_chunks::<2>();
+    for word in words {
+        sum += u16::from_be_bytes(*word) as u32;
     }
-    if let [last] = chunks.remainder() {
+    if let [last] = remainder {
         sum += u16::from_be_bytes([*last, 0]) as u32;
     }
     while sum >> 16 != 0 {
