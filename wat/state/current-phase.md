@@ -173,6 +173,24 @@ so that channel is pending moderation.
 
 ---
 
+## 2026-10-19 - 1.8.3: the missing checksum behind every black-screen join
+
+The black screen was the injected reply's **IPv4 header checksum**. `build_ipv4_udp` left the
+header checksum zeroed with a comment that "WinDivert fills" it; `WinDivertSend` does not compute
+checksums, so every synthetic reply the client injected was dropped by the game's network stack.
+The relay reported the reply sent, the client counted it injected, and the game saw nothing. Three
+data-plane faults had to be fixed to get the outbound to the right relay with the right token
+before this last link was visible: any relay change restarts the interceptor, the token resolves
+through the current relay, and one packet goes to one relay.
+
+Proof after the checksum fix: the same join injected 597, 368, 452, 585 and 818-byte replies, the
+SGP relay carried 20,284 packets with `drops_auth_rejected: 0`, and the raid loaded (player in the
+match, timer 18:50). Gates: fmt, 558 client, 139 proxy, 132 GUI, clippy including the WinDivert
+feature, advisories. `v1.8.3` is tagged at `ce5092d`; release run 39214096933 is queued. The two
+data-response logs were diagnostic and moved to `debug` so a normal trace stays readable.
+
+---
+
 ## 2026-10-18 - the live relay-follow proof, driven with computer use
 
 The GUI and ARC Raiders were launched by hand, ARC Raiders was switched to a window with
