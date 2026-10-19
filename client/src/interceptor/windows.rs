@@ -320,6 +320,17 @@ fn detected_server(decision: OutboundDecision) -> Option<SocketAddrV4> {
     }
 }
 
+/// The server address a tunneled reply is injected from.
+///
+/// The relay swaps the header's endpoints on the inbound leg, so
+/// `orig_src_addr` is the game server. The last outbound destination is not a
+/// substitute: a join that talks to more than one server would inject the
+/// reply from the wrong source and the game would drop it.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn reply_source(header: &lightspeed_protocol::TunnelHeader) -> SocketAddrV4 {
+    header.orig_src_addr()
+}
+
 /// Process mode's attribution state: the bounded map plus the cap warning that
 /// was last surfaced, so the warning is emitted once per new tunneled count
 /// rather than once per packet.
@@ -1509,10 +1520,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                             if let Some(data) = game_data {
                                 if !data.is_empty() {
-                                    let spoof_src = match active_server {
-                                        Some(s) => s,
-                                        None => continue,
-                                    };
+                                    // The relay swaps the header's endpoints on the
+                                    // inbound leg, so `orig_src_addr` is the game
+                                    // server the reply came from. Trusting the last
+                                    // outbound destination instead is wrong as soon
+                                    // as a join talks to more than one server: the
+                                    // reply is then injected from the wrong source
+                                    // and the game drops it.
+                                    let spoof_src = reply_source(&header);
                                     let raw = build_ipv4_udp(spoof_src, game_src, &data);
                                     counters_t.bytes_injected.fetch_add(data.len() as u64, Ordering::Relaxed);
                                     if inject_tx.try_send(raw).is_err() {
@@ -1798,6 +1813,20 @@ mod tests {
     };
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn a_reply_is_injected_from_the_server_in_its_header() {
+        // The relay swaps the endpoints on the inbound leg. The client used to
+        // spoof replies from the last server it saw outbound instead, which is
+        // wrong the moment a join talks to more than one server: the game gets
+        // a reply from an address it never asked and drops it.
+        let server = SocketAddrV4::new(public_server(9), SERVER_PORT);
+        let game = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 50_000);
+        let reply = lightspeed_protocol::TunnelHeader::new(7, 0, server, game);
+
+        assert_eq!(reply_source(&reply), server);
+    }
 
     #[test]
     #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]

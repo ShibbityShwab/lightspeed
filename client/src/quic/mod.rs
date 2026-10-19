@@ -16,8 +16,9 @@ pub mod health;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Default session-token rotation interval in seconds, matching
-/// `config::TunnelConfig`'s serde default.
-pub const DEFAULT_TOKEN_ROTATION_SECS: u64 = 1800;
+/// `config::TunnelConfig`'s serde default and staying below the relay's
+/// [`lightspeed_protocol::SESSION_TOKEN_TTL`].
+pub const DEFAULT_TOKEN_ROTATION_SECS: u64 = lightspeed_protocol::SESSION_TOKEN_ROTATION.as_secs();
 
 /// Session-token rotation interval in seconds (0 = disabled). The control-plane
 /// supervisor reads it; the engine applies the configured value through

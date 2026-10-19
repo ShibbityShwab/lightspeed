@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes yet._
 
+## [1.8.2] - 2026-10-19
+
+### Fixed
+
+- **A session no longer loses its relay token after five minutes.** The relay keeps a data-plane
+  session token valid for 300 seconds while the client only asked for a replacement every 1800,
+  so any session older than five minutes sent game packets with an expired token and the relay
+  dropped every one. That is a match that never finishes connecting while the lobby, carried by
+  the control plane, keeps working. Rotation now defaults to 120 seconds; an interval at or above
+  the token lifetime is clamped with a warning instead of silently disabling the data plane.
+- **The live data test no longer blames the relay for an unregistered probe.** `--live-test` never
+  registered a session, so its data phase carried token 0 and the relay correctly rejected it.
+  It now skips that phase and says why, instead of reporting a relay failure.
+
 ## [1.8.1] - 2026-10-19
 
 ### Fixed
@@ -1085,7 +1099,8 @@ The first release of LightSpeed - a zero-cost, open-source global network optimi
 - Amplification prevention.
 - No Critical or High audit findings.
 
-[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/ShibbityShwab/lightspeed/compare/v1.7.0...v1.8.0
 [0.5.1]: https://github.com/ShibbityShwab/lightspeed/compare/v0.5.0...v0.5.1

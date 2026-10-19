@@ -234,82 +234,93 @@ pub async fn run_live_test(
     info!("──────────────────────────────────────────────────────");
 
     if let Some(echo_addr) = echo_server {
-        for (label, proxy) in &proxy_addrs {
-            let socket = match UdpSocket::bind("0.0.0.0:0").await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("  ❌ {}, socket bind failed: {}", label, e);
-                    total_fail += 1;
-                    continue;
-                }
-            };
+        if crate::session::session_token() == 0 {
+            warn!(
+                "  ⏭️  Skipped, no registered session token: the relay would reject the data probes as unauthorized"
+            );
+            info!("     The data phase needs a token from a relay registration, which this probe does not do");
+            total_skip += 1;
+        } else {
+            for (label, proxy) in &proxy_addrs {
+                let socket = match UdpSocket::bind("0.0.0.0:0").await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("  ❌ {}, socket bind failed: {}", label, e);
+                        total_fail += 1;
+                        continue;
+                    }
+                };
 
-            let local_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 12345);
-            let num_packets = 5;
-            let mut rtts = Vec::new();
-            let mut payload_matches = 0u32;
+                let local_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 12345);
+                let num_packets = 5;
+                let mut rtts = Vec::new();
+                let mut payload_matches = 0u32;
 
-            for seq in 0..num_packets as u16 {
-                let payload = format!("LIGHTSPEED_LIVE_TEST_{}", seq);
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros() as u32;
+                for seq in 0..num_packets as u16 {
+                    let payload = format!("LIGHTSPEED_LIVE_TEST_{}", seq);
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros() as u32;
 
-                let header = TunnelHeader::new(seq, ts, local_addr, echo_addr)
-                    .with_session_token(crate::session::session_token());
-                let packet = header.encode_with_payload(payload.as_bytes());
+                    let header = TunnelHeader::new(seq, ts, local_addr, echo_addr)
+                        .with_session_token(crate::session::session_token());
+                    let packet = header.encode_with_payload(payload.as_bytes());
 
-                let send_time = std::time::Instant::now();
-                if socket.send_to(&packet, proxy).await.is_err() {
-                    continue;
-                }
+                    let send_time = std::time::Instant::now();
+                    if socket.send_to(&packet, proxy).await.is_err() {
+                        continue;
+                    }
 
-                let mut buf = vec![0u8; 2048];
-                if let Ok(Ok((len, _))) =
-                    tokio::time::timeout(Duration::from_millis(5000), socket.recv_from(&mut buf))
-                        .await
-                {
-                    let rtt = send_time.elapsed().as_micros() as u64;
-                    rtts.push(rtt);
-
-                    if let Ok((_hdr, resp_payload)) = TunnelHeader::decode_with_payload(&buf[..len])
+                    let mut buf = vec![0u8; 2048];
+                    if let Ok(Ok((len, _))) = tokio::time::timeout(
+                        Duration::from_millis(5000),
+                        socket.recv_from(&mut buf),
+                    )
+                    .await
                     {
-                        if resp_payload == payload.as_bytes() {
-                            payload_matches += 1;
+                        let rtt = send_time.elapsed().as_micros() as u64;
+                        rtts.push(rtt);
+
+                        if let Ok((_hdr, resp_payload)) =
+                            TunnelHeader::decode_with_payload(&buf[..len])
+                        {
+                            if resp_payload == payload.as_bytes() {
+                                payload_matches += 1;
+                            }
                         }
                     }
+
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
 
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-
-            if rtts.is_empty() {
-                warn!(
-                    "  ❌ {} → echo({}): 0/{} responses",
-                    label, echo_addr, num_packets
-                );
-                total_fail += 1;
-            } else {
-                let avg = rtts.iter().sum::<u64>() as f64 / rtts.len() as f64 / 1000.0;
-                let min = *rtts.iter().min().unwrap() as f64 / 1000.0;
-                let max = *rtts.iter().max().unwrap() as f64 / 1000.0;
-                let status = if payload_matches == rtts.len() as u32 {
-                    "✅"
+                if rtts.is_empty() {
+                    warn!(
+                        "  ❌ {} → echo({}): 0/{} responses",
+                        label, echo_addr, num_packets
+                    );
+                    total_fail += 1;
                 } else {
-                    "⚠️"
-                };
-                info!(
+                    let avg = rtts.iter().sum::<u64>() as f64 / rtts.len() as f64 / 1000.0;
+                    let min = *rtts.iter().min().unwrap() as f64 / 1000.0;
+                    let max = *rtts.iter().max().unwrap() as f64 / 1000.0;
+                    let status = if payload_matches == rtts.len() as u32 {
+                        "✅"
+                    } else {
+                        "⚠️"
+                    };
+                    info!(
                     "  {} {} → echo({}): {}/{} received, {}/{} payload match, avg={:.1}ms min={:.1}ms max={:.1}ms",
                     status, label, echo_addr,
                     rtts.len(), num_packets,
                     payload_matches, rtts.len(),
                     avg, min, max
                 );
-                if payload_matches > 0 {
-                    total_pass += 1;
-                } else {
-                    total_fail += 1;
+                    if payload_matches > 0 {
+                        total_pass += 1;
+                    } else {
+                        total_fail += 1;
+                    }
                 }
             }
         }

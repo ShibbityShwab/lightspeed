@@ -114,11 +114,13 @@ pub struct TunnelConfig {
 
     /// Session-token rotation interval in seconds.
     ///
-    /// **On by default (1800 s).** Every interval, the control-plane task asks
-    /// the relay for a fresh data-plane session token and swaps it in
-    /// atomically, keeping the old token valid for a short transition so
-    /// in-flight packets are not dropped. Set to `0` to disable rotation and
-    /// keep exactly the previous behaviour.
+    /// **On by default (120 s, below the relay's 300 s token lifetime).** Every
+    /// interval, the control-plane task asks the relay for a fresh data-plane
+    /// session token and swaps it in atomically, keeping the old token valid
+    /// for a short transition so in-flight packets are not dropped. A value at
+    /// or above the lifetime is clamped to the default: a token that expires
+    /// before the next rotation makes the relay drop every game packet. Set to
+    /// `0` to disable rotation and keep exactly the previous behaviour.
     #[serde(default = "default_token_rotation_secs")]
     pub token_rotation_secs: u64,
 }
@@ -313,7 +315,7 @@ fn default_fec_max_overhead_pct() -> u32 {
 }
 
 fn default_token_rotation_secs() -> u64 {
-    1800
+    lightspeed_protocol::SESSION_TOKEN_ROTATION.as_secs()
 }
 
 fn default_min_samples() -> usize {
@@ -407,7 +409,24 @@ impl Config {
         // The control-plane supervisor runs without access to the `Config`
         // value, so publish the one setting it reads directly. A missing file
         // falls back to `Config::default()`, which matches the global default.
-        crate::quic::set_token_rotation_secs(config.tunnel.token_rotation_secs);
+        //
+        // Values at or above the relay's token lifetime are clamped to the
+        // safe rotation interval: the relay drops data packets for an expired
+        // token, so a longer interval disables the data plane after five
+        // minutes of every session.
+        let rotation = match config.tunnel.token_rotation_secs {
+            0 => 0,
+            secs if secs >= lightspeed_protocol::SESSION_TOKEN_TTL.as_secs() => {
+                tracing::warn!(
+                    configured = secs,
+                    using = lightspeed_protocol::SESSION_TOKEN_ROTATION.as_secs(),
+                    "token_rotation_secs is not below the relay token lifetime; clamping"
+                );
+                lightspeed_protocol::SESSION_TOKEN_ROTATION.as_secs()
+            }
+            secs => secs,
+        };
+        crate::quic::set_token_rotation_secs(rotation);
         Ok(config)
     }
 
@@ -438,7 +457,14 @@ mod tests {
         assert!(config.tunnel.adaptive_fec);
         assert_eq!(config.tunnel.fec_max_overhead_pct, 25);
         assert!(!config.tunnel.path_mtu_discovery);
-        assert_eq!(config.tunnel.token_rotation_secs, 1800);
+        assert_eq!(
+            config.tunnel.token_rotation_secs,
+            lightspeed_protocol::SESSION_TOKEN_ROTATION.as_secs()
+        );
+        assert!(
+            config.tunnel.token_rotation_secs < lightspeed_protocol::SESSION_TOKEN_TTL.as_secs(),
+            "the default rotation must stay below the relay token lifetime"
+        );
         assert!(config.proxy.servers.is_empty());
         assert_eq!(config.proxy.quic_port, 4433);
         assert_eq!(config.proxy.data_port, 4434);
@@ -487,7 +513,10 @@ mod tests {
         assert!(tunnel.adaptive_fec);
         assert_eq!(tunnel.fec_max_overhead_pct, 25);
         assert!(!tunnel.path_mtu_discovery);
-        assert_eq!(tunnel.token_rotation_secs, 1800);
+        assert_eq!(
+            tunnel.token_rotation_secs,
+            lightspeed_protocol::SESSION_TOKEN_ROTATION.as_secs()
+        );
 
         let proxy = ProxyConfig::default();
         assert!(proxy.servers.is_empty());
@@ -774,6 +803,17 @@ keepalive_ms = "not_a_number"
         let loaded = Config::load(path_str).unwrap();
         assert_eq!(loaded.tunnel.token_rotation_secs, 90);
         assert_eq!(crate::quic::token_rotation_secs(), 90);
+
+        // A value at or above the relay's lifetime would let the token expire
+        // between rotations; the loader must clamp it to the safe default.
+        std::fs::write(&tmp_file, "[tunnel]\ntoken_rotation_secs = 1800\n").unwrap();
+        let loaded = Config::load(path_str).unwrap();
+        assert_eq!(loaded.tunnel.token_rotation_secs, 1800);
+        assert_eq!(
+            crate::quic::token_rotation_secs(),
+            lightspeed_protocol::SESSION_TOKEN_ROTATION.as_secs(),
+            "a rotation longer than the token lifetime must be clamped"
+        );
 
         let _ = std::fs::remove_file(&tmp_file);
         crate::quic::set_token_rotation_secs(crate::quic::DEFAULT_TOKEN_ROTATION_SECS);

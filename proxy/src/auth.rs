@@ -36,7 +36,8 @@ use std::time::{Duration, Instant};
 use crate::handoff::AuthTokenSnapshot;
 
 /// Lifetime of a freshly issued token.
-pub const TOKEN_TTL: Duration = Duration::from_secs(300);
+/// How long a data-plane token stays valid.
+pub const TOKEN_TTL: Duration = lightspeed_protocol::SESSION_TOKEN_TTL;
 
 /// Grace window for the previous token after a same-principal re-registration.
 pub const PREVIOUS_TOKEN_GRACE: Duration = Duration::from_secs(30);
