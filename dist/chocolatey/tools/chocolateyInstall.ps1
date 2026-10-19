@@ -5,8 +5,8 @@ $toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $packageArgs = @{
   packageName    = $env:ChocolateyPackageName
   unzipLocation  = $toolsDir
-  url64bit       = 'https://github.com/ShibbityShwab/lightspeed/releases/download/v1.8.0/lightspeed-client-x86_64-pc-windows-msvc.zip'
-  checksum64     = '9c847260588f9638b4d1bb69a72763f0f6b503aaeefe46480370442395463e8e'
+  url64bit       = 'https://github.com/ShibbityShwab/lightspeed/releases/download/v1.8.1/lightspeed-client-x86_64-pc-windows-msvc.zip'
+  checksum64     = '7d04d74d391b4e2d4aad62824ef7a8405604d1a051fac1191f4a9e2517ca96ed'
   checksumType64 = 'sha256'
 }
 
