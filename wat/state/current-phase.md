@@ -120,7 +120,28 @@ to show `Hold release watcher armed (relay already up: true)` followed by
 run with the relay already connected; the probes that showed the deadlock are
 removed; the check that replaced this note is below.
 
-**Last updated:** 2026-10-18
+**Last updated:** 2026-10-19
+
+---
+
+## 2026-10-19 - 1.8.1 published: the two GUI fixes the live run found
+
+`v1.8.1` was tagged at `48f9e33` and published at 04:00:32Z with 39 assets,
+including `lightspeed-gui-x86_64-pc-windows-msvc.msi`; `/releases/latest` points
+at it and Security Audit on the tag commit is green. Pre-tag gates: fmt, clippy
+on both crates, 556 + 77 + 139 + 132 tests, `cargo deny check advisories`.
+
+Channels: Chocolatey and Homebrew were bumped by the release workflow (the
+Homebrew job ran green this time); `bump-scoop` was cancelled by the same
+concurrency collision as 1.8.0 and this host has no `jq`, so the in-repo manifest
+was updated with a small Python helper using the published digest (`2365137`) and
+the public bucket was pushed to 1.8.1 (`44a2ec4` in scoop-bucket). The workflow's
+run still reports `cancelled` for that reason; winget remains "not bootstrapped"
+until the first manifest is merged.
+
+Next: test the game flow across several games (matrix in
+`.omo/live-hold-proof/game-flow-matrix.md`), including one rejoin to see the follow
+across a server change.
 
 ---
 
