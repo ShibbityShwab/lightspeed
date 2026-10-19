@@ -1454,6 +1454,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                             if !header.is_keepalive() {
                                 crate::latency::record_inbound(*header.orig_src_addr().ip());
+                                tracing::debug!(
+                                    from = %header.orig_src_addr(),
+                                    bytes = payload.len(),
+                                    "relay data response received"
+                                );
                             }
 
                             if header.is_keepalive() {
@@ -1530,9 +1535,17 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     let spoof_src = reply_source(&header);
                                     let raw = build_ipv4_udp(spoof_src, game_src, &data);
                                     counters_t.bytes_injected.fetch_add(data.len() as u64, Ordering::Relaxed);
-                                    if inject_tx.try_send(raw).is_err() {
-                                        tracing::warn!("Inject channel full - dropping response");
-                                        counters_t.errors.fetch_add(1, Ordering::Relaxed);
+                                    match inject_tx.try_send(raw) {
+                                        Ok(()) => tracing::debug!(
+                                            from = %spoof_src,
+                                            to = %game_src,
+                                            bytes = data.len(),
+                                            "injected game reply"
+                                        ),
+                                        Err(_) => {
+                                            tracing::warn!("Inject channel full - dropping response");
+                                            counters_t.errors.fetch_add(1, Ordering::Relaxed);
+                                        }
                                     }
                                 }
                             }

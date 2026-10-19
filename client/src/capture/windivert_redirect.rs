@@ -139,19 +139,43 @@ pub fn build_ipv4_udp(src: SocketAddrV4, dst: SocketAddrV4, payload: &[u8]) -> V
     pkt.extend_from_slice(&[0x40, 0x00]); // flags=DF, fragment offset=0
     pkt.push(64); // TTL
     pkt.push(17); // protocol = UDP
-    pkt.extend_from_slice(&[0x00, 0x00]); // header checksum (zeroed; WinDivert fills)
+    pkt.extend_from_slice(&[0x00, 0x00]); // header checksum (filled below)
     pkt.extend_from_slice(&src.ip().octets()); // src IP
     pkt.extend_from_slice(&dst.ip().octets()); // dst IP
+
+    // WinDivertSend does not compute checksums; the header checksum is
+    // mandatory, and a zero one makes the game's stack drop the reply.
+    let header_checksum = internet_checksum(&pkt[..20]);
+    pkt[10..12].copy_from_slice(&header_checksum.to_be_bytes());
 
     // ── UDP header (8 bytes) ─────────────────────────────────────────────
     pkt.extend_from_slice(&src.port().to_be_bytes());
     pkt.extend_from_slice(&dst.port().to_be_bytes());
     pkt.extend_from_slice(&udp_len.to_be_bytes());
-    pkt.extend_from_slice(&[0x00, 0x00]); // UDP checksum (zeroed; WinDivert fills)
+    // A zero UDP checksum is legal for IPv4 (RFC 768) and is what the
+    // spoofed reply has always carried; the IP checksum above is the one
+    // that was breaking delivery.
+    pkt.extend_from_slice(&[0x00, 0x00]); // UDP checksum (not computed)
 
     // ── Payload ──────────────────────────────────────────────────────────
     pkt.extend_from_slice(payload);
     pkt
+}
+
+/// One's-complement checksum over `data` (RFC 1071).
+fn internet_checksum(data: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    let mut chunks = data.chunks_exact(2);
+    for chunk in &mut chunks {
+        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    }
+    if let [last] = chunks.remainder() {
+        sum += u16::from_be_bytes([*last, 0]) as u32;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    !(sum as u16)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1689,7 +1713,9 @@ pub async fn run_windivert_redirect(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_ipv4_tcp, parse_ipv4_tcp, parse_ipv4_udp};
+    use super::{
+        build_ipv4_tcp, build_ipv4_udp, internet_checksum, parse_ipv4_tcp, parse_ipv4_udp,
+    };
     use std::net::{Ipv4Addr, SocketAddrV4};
 
     /// A minimal valid IPv4+UDP datagram with the given IHL nibble.
@@ -1851,5 +1877,19 @@ mod tests {
             sum = (sum & 0xffff) + (sum >> 16);
         }
         assert_eq!(tcp_checksum, !(sum as u16));
+    }
+
+    #[test]
+    fn injected_udp_has_a_valid_ipv4_header_checksum() {
+        let src = SocketAddrV4::new(Ipv4Addr::new(9, 8, 7, 6), 1234);
+        let dst = SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 5678);
+        let pkt = build_ipv4_udp(src, dst, b"hello");
+
+        assert_ne!(&pkt[10..12], &[0, 0], "a zero IP checksum is invalid");
+        assert_eq!(
+            internet_checksum(&pkt[..20]),
+            0,
+            "a valid IPv4 header sums to zero under the one's-complement checksum"
+        );
     }
 }

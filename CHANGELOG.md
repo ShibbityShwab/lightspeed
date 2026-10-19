@@ -24,6 +24,10 @@ _No unreleased changes yet._
 - **One packet goes to one relay.** A multipath spread sent the same single-token header to two
   relays; the second rejected it, and when it accepted, the game saw a duplicate. Until each
   destination has its own token, the data plane sends on the current relay only.
+- **Relayed replies are now accepted by the game.** The injected server reply carried a zero IPv4
+  header checksum, and WinDivert does not compute one on send, so the game's network stack dropped
+  every reply from the relay. The join hung on a black screen while the relay reported the packets
+  as sent. The interceptor now writes the header checksum, with a regression test.
 
 ## [1.8.2] - 2026-10-19
 
