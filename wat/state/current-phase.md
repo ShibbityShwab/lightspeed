@@ -1,8 +1,8 @@
-# Current Phase: WF-056 destination-aware relaying - 1.8.4 shipped the server-side ranking and the truthful direct label; the ARC Raiders TCP control plane is the open gap
+# Current Phase: WF-056 destination-aware relaying - 1.8.4 shipped the server-side ranking and the truthful direct label; both-transports capture is implemented and the live ARC Raiders join is the open proof
 
 **Workflow:** WF-056; WF-055; WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
 **Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
-**Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. 2026-10-17 finished the jitter measurement that the ranking was already weighting at zero and made a detected game connect a relay on its own; 2026-10-18 gave the hold an exit that does not depend on the GUI's frame loop. **The live relay-follow is proven** (2026-10-18: `Following the game server: switching to 45.77.32.236:4434`, `Relayed` 6 -> 38). 1.8.4 (`59f20c8`) shipped the reliability fixes and closed three rustls/webpki advisories; the open item is now the ARC Raiders transport split, where the game's TCP 443 goes direct while its UDP is relayed.
+**Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. 2026-10-17 finished the jitter measurement that the ranking was already weighting at zero and made a detected game connect a relay on its own; 2026-10-18 gave the hold an exit that does not depend on the GUI's frame loop. **The live relay-follow is proven** (2026-10-18: `Following the game server: switching to 45.77.32.236:4434`, `Relayed` 6 -> 38). 1.8.4 (`59f20c8`) shipped the reliability fixes and closed three rustls/webpki advisories; the ARC Raiders transport split is implemented in `dfa1413`, and the live join through it is the open proof.
 
 ## 2026-10-21 - 1.8.4: the relay ranking follows the server, and the direct label tells the truth
 
@@ -39,7 +39,28 @@ prove the return path.
 
 **Next:** build the both-transports interceptor (UDP and the game's TCP in one session) so ARC
 Raiders can use Frankfurt for both, then run the game-flow matrix and close the ARC Raiders entry.
-Design and work breakdown: `docs/design/both-transports-capture.md`. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
+Design and work breakdown: `docs/design/both-transports-capture.md`.
+
+## 2026-10-21 - both-transports capture is implemented, not live-proven
+
+Committed as `dfa1413` (unreleased; `v1.8.4` stays at `59f20c8`). The TCP
+terminator and the v5 TCP wire helpers moved out of the legacy redirect engine
+into `client/src/capture/tcp.rs`, with 4 tests. The GUI interceptor now adds the
+profile's secondary TCP range to its WinDivert filter, dispatches TCP segments
+through the terminator, and carries both transports on the same tunnel socket
+and session token. ARC Raiders declares `capture_tcp_ports() = (443, 443)`; its
+`tcp_ports()` stays `(0, 0)` so the portable pcap filter and the
+process-targeted path remain UDP-only.
+
+Verified: fmt, clippy `-D warnings` on the workspace and the WinDivert feature,
+571 client lib tests with the feature, 565 default, 133 GUI. The filter test
+pins that a profile without a secondary range keeps the old UDP-only string.
+
+**Not live-proven:** no ARC Raiders session has run through this build. The open
+questions are the relay's destination allowlist for TCP 443 and the real
+handshake; the next run should show the relay's `packets_relayed` and
+`egress_bytes` growing for both transports and the game joining from one source
+address. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
 
 ## 2026-10-18 - the hold can no longer outlive the relay it connected
 

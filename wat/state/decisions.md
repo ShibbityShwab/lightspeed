@@ -36,6 +36,15 @@ only use a relay for its UDP half.
 
 ---
 
+### 2026-10-21: A secondary capture port is not the profile's gameplay transport
+
+**Agent:** RustDev
+**Status:** Accepted (`dfa1413`)
+**Rationale:** `tcp_ports()` drives the portable pcap filter, which is single-transport; declaring ARC Raiders' TCP 443 there replaced its UDP 7600-7777 filter, and the existing guard test caught it. The WinDivert both-transports path needs a second clause, not a different primary transport.
+**Impact:** `GameConfig::capture_tcp_ports()` is the new opt-in and defaults to `(0, 0)`. ARC Raiders sets it to `(443, 443)`; `tcp_ports()` stays `(0, 0)`, and process-targeted capture stays UDP-only until per-flow TCP attribution exists.
+
+---
+
 ### 2026-10-18: A release tag may move until the release object exists, then never
 
 **Agent:** DevOps + SecOps
