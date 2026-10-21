@@ -1,8 +1,44 @@
-# Current Phase: WF-056 destination-aware relaying - held-until-chosen and zero-click landed; jitter now measured; the live relay-follow run is the one open proof
+# Current Phase: WF-056 destination-aware relaying - 1.8.4 shipped the server-side ranking and the truthful direct label; the ARC Raiders TCP control plane is the open gap
 
 **Workflow:** WF-056; WF-055; WF-054; WF-053, WF-052, WF-051, WF-050, WF-049, WF-048, WF-047, WF-046, WF-045, WF-044, WF-043 below
 **Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
-**Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. 2026-10-17 finished the jitter measurement that the ranking was already weighting at zero and made a detected game connect a relay on its own; 2026-10-18 gave the hold an exit that does not depend on the GUI's frame loop. **The one open proof is a live run**: no session has yet shown a `Following the game server` line with real gameplay traffic, so the relay-follow is verified by unit tests and compile only. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
+**Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. 2026-10-17 finished the jitter measurement that the ranking was already weighting at zero and made a detected game connect a relay on its own; 2026-10-18 gave the hold an exit that does not depend on the GUI's frame loop. **The live relay-follow is proven** (2026-10-18: `Following the game server: switching to 45.77.32.236:4434`, `Relayed` 6 -> 38). 1.8.4 (`59f20c8`) shipped the reliability fixes and closed three rustls/webpki advisories; the open item is now the ARC Raiders transport split, where the game's TCP 443 goes direct while its UDP is relayed.
+
+## 2026-10-21 - 1.8.4: the relay ranking follows the server, and the direct label tells the truth
+
+The 2026-10-19 investigation answered the owner's "it should traverse Frankfurt" report, and its
+answer was never delivered because the session was cut off while the release gates ran. The
+Frankfurt relay was healthy: it forwarded the game's UDP (1,290 packets, 70,131 bytes,
+`drops_relay_send_errors: 0`) and its egress counter, which covers both directions, equaled the
+client-to-server bytes exactly. **Zero bytes came back.** The live game held TCP
+`34.160.204.112:443`, the ARC Raiders profile declares only UDP 7600-7777, and the WinDivert
+interceptor is UDP-only, so the TCP control plane left from the client's own address while the UDP
+left from Frankfurt; the server saw one session from two source addresses and answered neither.
+Adding TCP 443 to the profile was tried and reverted: a non-zero `tcp_ports` makes the capture
+filter TCP-only and drops the game's UDP.
+
+Committed as `59f20c8` (tag `v1.8.4`):
+- relay ranking sorts by the relay-to-server leg first, in 50 ms buckets, then total path and
+  jitter, with the Brussels/Singapore test;
+- the return-path watchdog runs on a background thread and sends the session direct when fewer
+  than a quarter of the outbound packets come back after three seconds (24 of 100 trips, 25 does
+  not);
+- a pinned relay is re-armed for every new game server;
+- a better relay found mid-session is logged for the next session instead of restarting the
+  interceptor under a live match;
+- the route ledger says "Direct fallback" for any non-tunnelling session, without claiming the
+  relay failed;
+- `--live-test` registers a data-plane session before its probes;
+- rustls-webpki 0.103.16, webpki-roots 1.0.10 and webpki-root-certs 1.0.10 close
+  RUSTSEC-2026-0381/-0382/-0383; chacha20 0.10.2 replaces a yanked 0.10.1.
+
+Verified on this tree: fmt, cargo check, clippy `-D warnings` (workspace and the WinDivert
+feature), `cargo deny check`, 559 client lib, 174 proxy (139 lib plus integration targets), 133 GUI.
+The `--live-test` DNS branch is still blocked by the relay's destination allowlist, so it does not
+prove the return path.
+
+**Next:** build the both-transports interceptor (UDP and the game's TCP in one session) so ARC
+Raiders can use Frankfurt for both, then run the game-flow matrix and close the ARC Raiders entry. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
 
 ## 2026-10-18 - the hold can no longer outlive the relay it connected
 

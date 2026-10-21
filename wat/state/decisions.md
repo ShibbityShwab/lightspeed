@@ -2,7 +2,37 @@
 
 > **Canonical log of significant technical decisions for the LightSpeed project.**
 > Each entry includes the date, deciding agent, rationale, and impact.
-> Last entry: 2026-10-18
+> Last entry: 2026-10-21
+
+---
+
+### 2026-10-21: The relay is ranked by the leg it owns, not by the leg the client can see
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (`client/src/route/relay_choice.rs`, `59f20c8`)
+**Rationale:** the client-leg race answers "which relay is closest to me", but for a game server in
+another region the server-side leg decides whether the relay is usable at all. A relay on the wrong
+side of the world can be rejected by the server's region check, and its relay-to-server latency
+cannot be recovered by a shorter client hop. Field evidence: a European server was being carried
+through Singapore while the European relay existed.
+**Impact:** `sort_scored` compares `dest_leg_us` in 50 ms buckets first, then total path plus twice
+the jitter, then the address for a stable tie-break. The new test pins a Brussels server choosing
+the Frankfurt relay over a relay with a much shorter client leg.
+
+---
+
+### 2026-10-21: Zero return bytes through a forwarding relay means a transport split, not a relay fault
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (`wat/state/current-phase.md`, `59f20c8`; follow-on work open)
+**Rationale:** the Frankfurt relay's egress equaled the client-to-server bytes and
+`drops_relay_send_errors` stayed zero, so the relay forwarded the game's UDP. The live game also
+held TCP `34.160.204.112:443`, which the UDP-only interceptor never captured, so the server saw one
+session from two source addresses. A profile-only `tcp_ports` entry was rejected because it makes
+the capture filter TCP-only and drops the game's UDP.
+**Impact:** the relay is exonerated for the ARC Raiders join failure; the fix is a both-transports
+interceptor that carries UDP and the game's TCP in one session. Until that lands, ARC Raiders can
+only use a relay for its UDP half.
 
 ---
 
