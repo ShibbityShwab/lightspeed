@@ -234,93 +234,126 @@ pub async fn run_live_test(
     info!("──────────────────────────────────────────────────────");
 
     if let Some(echo_addr) = echo_server {
-        if crate::session::session_token() == 0 {
-            warn!(
-                "  ⏭️  Skipped, no registered session token: the relay would reject the data probes as unauthorized"
-            );
-            info!("     The data phase needs a token from a relay registration, which this probe does not do");
-            total_skip += 1;
-        } else {
-            for (label, proxy) in &proxy_addrs {
-                let socket = match UdpSocket::bind("0.0.0.0:0").await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!("  ❌ {}, socket bind failed: {}", label, e);
-                        total_fail += 1;
-                        continue;
-                    }
+        for (label, proxy) in &proxy_addrs {
+            // Register a data-plane session. Keepalives need no auth, but the
+            // data phase does: without this the relay correctly rejects the
+            // probes and a healthy relay looks broken.
+            let quic_addr = std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+                *proxy.ip(),
+                config.proxy.quic_port,
+            ));
+            let mut control = match crate::quic::ControlClient::new() {
+                Ok(control) => control,
+                Err(e) => {
+                    warn!("  ❌ {}, control client failed: {}", label, e);
+                    total_fail += 1;
+                    continue;
+                }
+            };
+            if let Err(e) = control.connect(quic_addr, 0).await {
+                warn!("  ❌ {}, registration failed: {}", label, e);
+                total_fail += 1;
+                continue;
+            }
+            if let Some(token) = control.session_token() {
+                // The data header resolves through the current relay's path
+                // token; publish this registration's token there so it cannot
+                // inherit a previous session's token.
+                crate::session::set_path_token(*proxy, token);
+            }
+
+            let socket = match UdpSocket::bind("0.0.0.0:0").await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("  ❌ {}, socket bind failed: {}", label, e);
+                    total_fail += 1;
+                    continue;
+                }
+            };
+
+            let local_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 12345);
+            let num_packets = 5;
+            let data_token = control.session_token().unwrap_or(0);
+            let mut rtts = Vec::new();
+            let mut payload_matches = 0u32;
+
+            for seq in 0..num_packets as u16 {
+                let payload: Vec<u8> = if echo_addr.port() == 53 {
+                    // A public resolver answers a real query; an absent echo
+                    // server does not. The response payload differs, so the
+                    // match count stays low, but any response proves the
+                    // relay's return path.
+                    let mut q = vec![
+                        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    ];
+                    q.push(7);
+                    q.extend_from_slice(b"example");
+                    q.push(3);
+                    q.extend_from_slice(b"com");
+                    q.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x01]);
+                    q
+                } else {
+                    format!("LIGHTSPEED_LIVE_TEST_{}", seq).into_bytes()
                 };
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u32;
 
-                let local_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 12345);
-                let num_packets = 5;
-                let mut rtts = Vec::new();
-                let mut payload_matches = 0u32;
+                let header = TunnelHeader::new(seq, ts, local_addr, echo_addr)
+                    .with_session_token(data_token);
+                let packet = header.encode_with_payload(&payload);
 
-                for seq in 0..num_packets as u16 {
-                    let payload = format!("LIGHTSPEED_LIVE_TEST_{}", seq);
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_micros() as u32;
-
-                    let header = TunnelHeader::new(seq, ts, local_addr, echo_addr)
-                        .with_session_token(crate::session::session_token());
-                    let packet = header.encode_with_payload(payload.as_bytes());
-
-                    let send_time = std::time::Instant::now();
-                    if socket.send_to(&packet, proxy).await.is_err() {
-                        continue;
-                    }
-
-                    let mut buf = vec![0u8; 2048];
-                    if let Ok(Ok((len, _))) = tokio::time::timeout(
-                        Duration::from_millis(5000),
-                        socket.recv_from(&mut buf),
-                    )
-                    .await
-                    {
-                        let rtt = send_time.elapsed().as_micros() as u64;
-                        rtts.push(rtt);
-
-                        if let Ok((_hdr, resp_payload)) =
-                            TunnelHeader::decode_with_payload(&buf[..len])
-                        {
-                            if resp_payload == payload.as_bytes() {
-                                payload_matches += 1;
-                            }
-                        }
-                    }
-
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                let send_time = std::time::Instant::now();
+                if socket.send_to(&packet, proxy).await.is_err() {
+                    continue;
                 }
 
-                if rtts.is_empty() {
-                    warn!(
-                        "  ❌ {} → echo({}): 0/{} responses",
-                        label, echo_addr, num_packets
-                    );
-                    total_fail += 1;
+                let mut buf = vec![0u8; 2048];
+                if let Ok(Ok((len, _))) =
+                    tokio::time::timeout(Duration::from_millis(5000), socket.recv_from(&mut buf))
+                        .await
+                {
+                    let rtt = send_time.elapsed().as_micros() as u64;
+                    rtts.push(rtt);
+
+                    if let Ok((_hdr, resp_payload)) = TunnelHeader::decode_with_payload(&buf[..len])
+                    {
+                        if resp_payload == payload.as_slice() {
+                            payload_matches += 1;
+                        }
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            if rtts.is_empty() {
+                warn!(
+                    "  ❌ {} → echo({}): 0/{} responses",
+                    label, echo_addr, num_packets
+                );
+                total_fail += 1;
+            } else {
+                let avg = rtts.iter().sum::<u64>() as f64 / rtts.len() as f64 / 1000.0;
+                let min = *rtts.iter().min().unwrap() as f64 / 1000.0;
+                let max = *rtts.iter().max().unwrap() as f64 / 1000.0;
+                let status = if payload_matches == rtts.len() as u32 {
+                    "✅"
                 } else {
-                    let avg = rtts.iter().sum::<u64>() as f64 / rtts.len() as f64 / 1000.0;
-                    let min = *rtts.iter().min().unwrap() as f64 / 1000.0;
-                    let max = *rtts.iter().max().unwrap() as f64 / 1000.0;
-                    let status = if payload_matches == rtts.len() as u32 {
-                        "✅"
-                    } else {
-                        "⚠️"
-                    };
-                    info!(
+                    "⚠️"
+                };
+                info!(
                     "  {} {} → echo({}): {}/{} received, {}/{} payload match, avg={:.1}ms min={:.1}ms max={:.1}ms",
                     status, label, echo_addr,
                     rtts.len(), num_packets,
                     payload_matches, rtts.len(),
                     avg, min, max
                 );
-                    if payload_matches > 0 {
-                        total_pass += 1;
-                    } else {
-                        total_fail += 1;
-                    }
+                if payload_matches > 0 {
+                    total_pass += 1;
+                } else {
+                    total_fail += 1;
                 }
             }
         }

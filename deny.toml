@@ -15,12 +15,9 @@ ignore = [
   { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; macro-only crate, zero runtime security impact" },
   # -- protobuf (Prometheus metrics only, no user-controlled parsing) --------
   { id = "RUSTSEC-2024-0437", reason = "protobuf used only in prometheus monitoring; no user-controlled parsing surface" },
-  # -- rand 0.8 seed entropy in debug/warn log (not a runtime vuln in release) -
-  { id = "RUSTSEC-2026-0097", reason = "rand 0.8 logs seed in debug/warn mode; trace logging disabled in release builds" },
   # -- unmaintained crates with no safe upgrade path -------------------------
   { id = "RUSTSEC-2025-0141", reason = "bincode unmaintained; v1.3.3 considered complete by maintainers, zero runtime risk" },
   { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; linfa transitive dep, upstream migration tracked" },
-  { id = "RUSTSEC-2026-0190", reason = "anyhow unsound in downcast_mut; CLI binary, no user-controlled error context chaining" },
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; GUI font parsing via egui, no network-facing code" },
   # -- zvariant/zbus_names moved into zbus and are no longer standalone -------
   { id = "RUSTSEC-2026-0370", reason = "zvariant consolidating into zbus; Linux accessibility stack via eframe/accesskit, GUI-only, no network surface" },

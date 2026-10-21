@@ -72,6 +72,8 @@ pub struct ScoredRelay {
     pub relay: SocketAddrV4,
     /// Estimated total round trip `client -> relay -> server`, microseconds.
     pub total_leg_us: u64,
+    /// Estimated relay-to-server leg, microseconds. Ranked first.
+    pub dest_leg_us: u64,
     /// How the second leg was obtained, for the log line and for tests.
     pub dest_source: DestLegSource,
     /// Jitter estimate carried forward, microseconds.
@@ -103,6 +105,30 @@ pub const PRIOR_UNDERTAINTY_US: u64 = 25_000;
 /// on a mobile link, 20 ms of swing hurts more than 20 ms of median.
 pub const JITTER_WEIGHT: u64 = 2;
 
+/// Sort by the server-side leg first, then by total path and jitter.
+///
+/// A relay near the game server must win even when the client leg to it is
+/// longer: a relay on the wrong side of the world can be rejected by the
+/// server's region check, and its server-side latency is the part that cannot
+/// be recovered. Fifty-millisecond buckets keep small estimate differences from
+/// flapping the choice between two relays on the same side.
+fn sort_scored(scored: &mut [ScoredRelay]) {
+    scored.sort_by(|a, b| {
+        a.dest_leg_us
+            .saturating_div(50_000)
+            .cmp(&b.dest_leg_us.saturating_div(50_000))
+            .then_with(|| {
+                a.total_leg_us
+                    .saturating_add(a.jitter_us.saturating_mul(JITTER_WEIGHT))
+                    .cmp(
+                        &b.total_leg_us
+                            .saturating_add(b.jitter_us.saturating_mul(JITTER_WEIGHT)),
+                    )
+            })
+            .then_with(|| a.relay.cmp(&b.relay))
+    });
+}
+
 /// Rank relays for a destination, best first.
 ///
 /// This is the coarse entry point: it has no destination position, so the
@@ -124,15 +150,7 @@ pub fn rank(server: Ipv4Addr, candidates: &[RelayCandidate]) -> Vec<ScoredRelay>
         })
         .collect();
 
-    scored.sort_by(|a, b| {
-        a.total_leg_us
-            .saturating_add(a.jitter_us.saturating_mul(JITTER_WEIGHT))
-            .cmp(
-                &b.total_leg_us
-                    .saturating_add(b.jitter_us.saturating_mul(JITTER_WEIGHT)),
-            )
-            .then_with(|| a.relay.cmp(&b.relay))
-    });
+    sort_scored(&mut scored);
     scored
 }
 
@@ -170,15 +188,7 @@ pub fn rank_at(
         .filter_map(|c| score_one_at(server, server_location, dest_region.as_deref(), c))
         .collect();
 
-    scored.sort_by(|a, b| {
-        a.total_leg_us
-            .saturating_add(a.jitter_us.saturating_mul(JITTER_WEIGHT))
-            .cmp(
-                &b.total_leg_us
-                    .saturating_add(b.jitter_us.saturating_mul(JITTER_WEIGHT)),
-            )
-            .then_with(|| a.relay.cmp(&b.relay))
-    });
+    sort_scored(&mut scored);
     scored
 }
 
@@ -223,6 +233,7 @@ fn score_with(
         total_leg_us: client_leg_us
             .saturating_add(dest_leg_us)
             .saturating_add(penalty),
+        dest_leg_us,
         dest_source,
         jitter_us: candidate.client_jitter_us,
     })
@@ -618,5 +629,36 @@ mod tests {
         let again = rank(server, &candidates);
         assert_eq!(first, again, "ranking must not flap between calls");
         assert_eq!(first[0].relay, candidates[1].relay);
+    }
+
+    fn relay_node(ip: [u8; 4], node_id: &str, client_us: u64) -> RelayCandidate {
+        RelayCandidate {
+            relay: SocketAddrV4::new(Ipv4Addr::from(ip), 4434),
+            region: None,
+            node_id: Some(node_id.to_string()),
+            client_leg_us: Some(client_us),
+            client_jitter_us: 0,
+        }
+    }
+
+    #[test]
+    fn a_relay_near_the_server_beats_a_short_client_leg_on_the_wrong_continent() {
+        // The owner's requirement: a European game server must use the European
+        // relay even when the client's shortest leg is to Singapore. The server
+        // may reject a source from another region, and the relay-to-server leg
+        // is the latency the client cannot recover.
+        let server = Ipv4Addr::new(35, 195, 201, 202); // Brussels, europe-west
+        let brussels = (50.85, 4.35);
+        let candidates = [
+            relay_node([45, 77, 32, 236], "relay-sgp-1", 60_000),
+            relay_node([95, 179, 164, 138], "relay-fra", 220_000),
+        ];
+
+        let ranked = rank_at(server, brussels, &candidates);
+        assert_eq!(
+            ranked[0].relay.ip(),
+            &Ipv4Addr::new(95, 179, 164, 138),
+            "the relay nearest the server must win"
+        );
     }
 }

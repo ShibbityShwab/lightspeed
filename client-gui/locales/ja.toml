@@ -28,6 +28,7 @@ relay_ready_pick = "リレーの準備完了。ゲームを選択してくださ
 relay_ready_named = "リレーの準備完了: {name} を選択中"
 game_server = "ゲームサーバー"
 relayed = "経由済み"
+direct_fallback = "Direct fallback"
 place_hint = "-- 最適化を開始すると表示されます"
 count_hint = "-- 最適化を開始すると計測されます"
 port_fix_guide = "ポートが検出されません - 対処ガイド"

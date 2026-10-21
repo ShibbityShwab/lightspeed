@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes yet._
 
+## [1.8.4] - 2026-10-21
+
+### Fixed
+
+- A relay that forwards a session but returns little or no traffic no longer leaves the game hanging. The return-path watchdog now compares **inbound to outbound** over a three-second window and sends the session direct when less than a quarter comes back. On a live match server that returned 0 of 27 packets, the switch happened in 3.4 seconds.
+- The pinned relay is re-armed for **every new game server**, so a no-reply fallback on the lobby backend no longer pins the whole match direct.
+- Relay selection now ranks by the **server-side leg** first, in 50 ms buckets, then total latency and jitter, so the relay nearest the game server beats a short client-side hop on the wrong continent.
+- The route ledger shows `Direct fallback` when the session was deliberately sent direct, so a selected relay is never shown as if it were carrying traffic.
+
+### Added
+
+- The live integration test now registers a data-plane session before its data probes, so the data phase runs instead of skipping.
+
+### Security
+
+- Patch bumps close three rustls/webpki advisories: `rustls-webpki` 0.103.16, `webpki-roots` 1.0.10 and `webpki-root-certs` 1.0.10 reject certificate paths through distrusted emSign intermediates (RUSTSEC-2026-0381, -0382, -0383). `chacha20` 0.10.2 replaces the yanked 0.10.1.
+
 ## [1.8.3] - 2026-10-19
 
 ### Fixed
