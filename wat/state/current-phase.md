@@ -38,7 +38,8 @@ The `--live-test` DNS branch is still blocked by the relay's destination allowli
 prove the return path.
 
 **Next:** build the both-transports interceptor (UDP and the game's TCP in one session) so ARC
-Raiders can use Frankfurt for both, then run the game-flow matrix and close the ARC Raiders entry. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
+Raiders can use Frankfurt for both, then run the game-flow matrix and close the ARC Raiders entry.
+Design and work breakdown: `docs/design/both-transports-capture.md`. WF-055's plan document stays as the design record; its five owner gates were voided by the process-first pivot rather than answered.
 
 ## 2026-10-18 - the hold can no longer outlive the relay it connected
 
