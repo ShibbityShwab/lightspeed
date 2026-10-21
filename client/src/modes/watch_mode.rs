@@ -80,6 +80,10 @@ pub async fn run_watch_mode(
                             game_name: game_name.clone(),
                             dynamic_server: game.dynamic_server(),
                             transport: game.transport(),
+                            capture_tcp_ports: {
+                                let tcp = game.tcp_ports();
+                                (tcp != (0, 0)).then_some(tcp)
+                            },
                             process_names: process_names.clone(),
                             process_target: Some(crate::interceptor::ProcessTarget::by_name(
                                 p.name.clone(),

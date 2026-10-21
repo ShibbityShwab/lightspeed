@@ -94,7 +94,7 @@ use super::traits::{InterceptorCounters, PlatformTeardown, Route};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::windivert_handle::{is_fwp_in_use, OwnedHandle};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_udp};
+use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_tcp, parse_ipv4_udp};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use crate::tunnel::adaptive::InlineFecGate;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -227,7 +227,15 @@ pub fn route_outbound(
 /// every relay address - so the kernel never even hands an excluded packet to
 /// the data plane. [`destination_is_excluded`] repeats the rules in userspace
 /// for the non-public case the filter language cannot express.
-pub fn build_capture_filter(policy: CapturePolicy, relay_addrs: &[Ipv4Addr]) -> String {
+///
+/// When `capture_tcp_ports` is set and the policy is port-scoped, the result is
+/// a disjunction of the UDP scope and that TCP range. `ProcessAll` stays
+/// UDP-only until per-flow TCP attribution exists, so its filter is unchanged.
+pub fn build_capture_filter(
+    policy: CapturePolicy,
+    relay_addrs: &[Ipv4Addr],
+    capture_tcp_ports: Option<(u16, u16)>,
+) -> String {
     let mut filter = String::from("udp and outbound");
     if let CapturePolicy::PortRange { lo, hi } = policy {
         if lo == hi {
@@ -242,7 +250,25 @@ pub fn build_capture_filter(policy: CapturePolicy, relay_addrs: &[Ipv4Addr]) -> 
     for addr in relay_addrs {
         filter.push_str(&format!(" and ip.DstAddr != {addr}"));
     }
-    filter
+
+    let Some((tcp_lo, tcp_hi)) = capture_tcp_ports else {
+        return filter;
+    };
+    if matches!(policy, CapturePolicy::ProcessAll) {
+        return filter;
+    }
+    let mut tcp = String::from("tcp and outbound");
+    if tcp_lo == tcp_hi {
+        tcp.push_str(&format!(" and tcp.DstPort == {tcp_lo}"));
+    } else {
+        tcp.push_str(&format!(
+            " and tcp.DstPort >= {tcp_lo} and tcp.DstPort <= {tcp_hi}"
+        ));
+    }
+    for addr in relay_addrs {
+        tcp.push_str(&format!(" and ip.DstAddr != {addr}"));
+    }
+    format!("({filter}) or ({tcp})")
 }
 
 /// The inbound mirror of [`build_capture_filter`], for the sniff-only
@@ -283,6 +309,24 @@ fn relay_addresses(config_proxy: SocketAddrV4) -> Vec<Ipv4Addr> {
 // ─────────────────────────────────────────────────────────────────────────────
 //  Userspace attribution (gated: the port-scoped half needs the tracker)
 // ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+#[derive(Debug)]
+enum CapturedPacket {
+    Udp {
+        game_src: SocketAddrV4,
+        game_dst: SocketAddrV4,
+        payload: Vec<u8>,
+    },
+    Tcp {
+        game_src: SocketAddrV4,
+        game_dst: SocketAddrV4,
+        flags: u8,
+        seq: u32,
+        ack: u32,
+        payload: Vec<u8>,
+    },
+}
 
 /// The per-packet outbound action the intercept thread takes.
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -723,7 +767,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
         // through the userspace attribution below instead.
         let policy = super::capture_policy(&config);
         let relay_addrs = relay_addresses(config_proxy);
-        let out_filter = build_capture_filter(policy, &relay_addrs);
+        let out_filter = build_capture_filter(policy, &relay_addrs, config.capture_tcp_ports);
         tracing::info!("🔀 WinDivert intercept filter ({policy:?}): {out_filter}");
 
         // The effective attribution seeds: the scanner's live routes, filtered
@@ -859,8 +903,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             Arc::new(std::sync::Mutex::new(None));
 
         // Channels
-        let (intercept_tx, mut intercept_rx) =
-            tokio::sync::mpsc::channel::<(SocketAddrV4, SocketAddrV4, Vec<u8>)>(512);
+        let (intercept_tx, mut intercept_rx) = tokio::sync::mpsc::channel::<CapturedPacket>(512);
         let (inject_tx, inject_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(512);
         tracing::info!("✅ Channels created");
 
@@ -909,6 +952,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let seeds_ic = seeds;
             let seed_routes_ic = seed_routes;
             let relay_addrs_ic = relay_addrs;
+            let capture_tcp_ic = config.capture_tcp_ports;
             let ack_ic = ack_tx.clone();
 
             tracing::info!("🚀 Spawning intercept thread...");
@@ -966,6 +1010,39 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     );
                                     *guard = Some(cached);
                                 }
+                            }
+
+                            if let Some((game_src, game_dst, flags, seq, ack, payload)) =
+                                parse_ipv4_tcp(data)
+                            {
+                                counters_ic.packets_seen.fetch_add(1, Ordering::Relaxed);
+                                let in_range = capture_tcp_ic
+                                    .map(|(lo, hi)| (lo..=hi).contains(&game_dst.port()))
+                                    .unwrap_or(false);
+                                if in_range {
+                                    counters_ic
+                                        .packets_intercepted
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    counters_ic
+                                        .bytes_intercepted
+                                        .fetch_add(payload.len() as u64, Ordering::Relaxed);
+                                    if itx
+                                        .blocking_send(CapturedPacket::Tcp {
+                                            game_src,
+                                            game_dst,
+                                            flags,
+                                            seq,
+                                            ack,
+                                            payload: payload.to_vec(),
+                                        })
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                } else {
+                                    let _ = wd_ic.send(data, &addr);
+                                }
+                                continue;
                             }
 
                             let parsed =
@@ -1041,7 +1118,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                                 .bytes_intercepted
                                                 .fetch_add(payload.len() as u64, Ordering::Relaxed);
                                             if itx
-                                                .blocking_send((game_src, game_dst, payload))
+                                                .blocking_send(CapturedPacket::Udp {
+                                                    game_src,
+                                                    game_dst,
+                                                    payload,
+                                                })
                                                 .is_err()
                                             {
                                                 break;
@@ -1287,6 +1368,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
             // Main async loop: forward intercepted packets to proxy, inject responses.
             let fec_enabled = config.fec_enabled;
             let fec_k = config.fec_k;
+            let capture_tcp = config.capture_tcp_ports;
             let adaptive_cfg = config.adaptive_fec;
             let fec_active = fec_enabled || adaptive_cfg.enabled;
             let bypass_config = config.bypass;
@@ -1304,6 +1386,17 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     std::net::SocketAddr,
                     lightspeed_protocol::FecDecoder,
                 > = std::collections::HashMap::new();
+                let mut tcp_terminator = capture_tcp.map(|_| {
+                    crate::capture::tcp::TcpTerminator::new(Arc::new(
+                        crate::capture::tcp::TcpTerminatorStats::default(),
+                    ))
+                });
+                let mut tcp_fec_encoder =
+                    capture_tcp.map(|_| lightspeed_protocol::FecEncoder::new(fec_k.max(1)));
+                let mut tcp_fec_decoder =
+                    capture_tcp.map(|_| lightspeed_protocol::FecDecoder::new());
+                let mut tcp_tick = tokio::time::interval(Duration::from_millis(50));
+                tcp_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
                 // The steady-state do-no-harm gate. WinDivert is the backend
                 // that re-injects the game's own packets onto the direct path,
@@ -1332,9 +1425,69 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                         // Intercepted game → proxy
                         maybe = intercept_rx.recv() => {
-                            let (game_src, game_dst, payload) = match maybe {
+                            let captured = match maybe {
                                 Some(p) => p,
                                 None => break,
+                            };
+                            let (game_src, game_dst, payload) = match captured {
+                                CapturedPacket::Udp {
+                                    game_src,
+                                    game_dst,
+                                    payload,
+                                } => (game_src, game_dst, payload),
+                                CapturedPacket::Tcp {
+                                    game_src,
+                                    game_dst,
+                                    flags,
+                                    seq: game_seq,
+                                    ack: game_ack,
+                                    payload,
+                                } => {
+                                    let term = tcp_terminator
+                                        .as_mut()
+                                        .expect("TCP terminator is present when TCP capture is enabled");
+                                    let tuple = lightspeed_protocol::Tcp5Tuple {
+                                        src_ip: *game_src.ip(),
+                                        src_port: game_src.port(),
+                                        dst_ip: *game_dst.ip(),
+                                        dst_port: game_dst.port(),
+                                    };
+                                    let outcome = term.on_game_segment(
+                                        tuple, game_src, game_dst, flags, game_seq, game_ack, &payload,
+                                    );
+                                    for frame in outcome.inject {
+                                        counters_t
+                                            .bytes_injected
+                                            .fetch_add(frame.len() as u64, Ordering::Relaxed);
+                                        if inject_tx.try_send(frame).is_err() {
+                                            tracing::warn!(
+                                                "Inject channel full - dropping TCP segment"
+                                            );
+                                            counters_t.errors.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
+                                    let encoder = tcp_fec_encoder
+                                        .as_mut()
+                                        .expect("TCP FEC encoder is present when TCP capture is enabled");
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_micros() as u32;
+                                    for segment in &outcome.segments {
+                                        crate::capture::tcp::send_tcp_segment(
+                                            &tunnel_socket,
+                                            crate::session::current_proxy().unwrap_or(config_proxy),
+                                            encoder,
+                                            &mut seq,
+                                            ts,
+                                            game_src,
+                                            game_dst,
+                                            segment,
+                                        )
+                                        .await;
+                                    }
+                                    continue;
+                                }
                             };
 
                             if game_src_learned.is_none() {
@@ -1465,6 +1618,41 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 continue; // keepalive echo - RTT measured by keepalive task
                             }
 
+                            if header.has_tcp() {
+                                let Some(term) = tcp_terminator.as_mut() else { continue; };
+                                let Some(decoder) = tcp_fec_decoder.as_mut() else { continue; };
+                                let Some(protected) =
+                                    lightspeed_protocol::decode_fec_payload(payload, decoder)
+                                else {
+                                    continue;
+                                };
+                                let Some((tcp_ext, game_payload)) =
+                                    lightspeed_protocol::decode_tcp_payload(&protected)
+                                else {
+                                    continue;
+                                };
+                                let server = header.orig_src_addr();
+                                let game = header.orig_dst_addr();
+                                let tuple = lightspeed_protocol::Tcp5Tuple {
+                                    src_ip: *game.ip(),
+                                    src_port: game.port(),
+                                    dst_ip: *server.ip(),
+                                    dst_port: server.port(),
+                                };
+                                let outcome =
+                                    term.on_tunnel(tuple, server, game, &tcp_ext, game_payload);
+                                for frame in outcome.inject {
+                                    counters_t
+                                        .bytes_injected
+                                        .fetch_add(frame.len() as u64, Ordering::Relaxed);
+                                    if inject_tx.try_send(frame).is_err() {
+                                        tracing::warn!("Inject channel full - dropping TCP segment");
+                                        counters_t.errors.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
+                                continue;
+                            }
+
                             let game_src = match game_src_learned {
                                 Some(gs) => gs,
                                 None => continue,
@@ -1548,6 +1736,56 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        _ = tcp_tick.tick() => {
+                            let Some(term) = tcp_terminator.as_mut() else { continue; };
+                            let Some(encoder) = tcp_fec_encoder.as_mut() else { continue; };
+                            let now = Instant::now();
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_micros() as u32;
+                            for (tuple, segment) in term.poll_retransmit(now) {
+                                let src = SocketAddrV4::new(tuple.src_ip, tuple.src_port);
+                                let dst = SocketAddrV4::new(tuple.dst_ip, tuple.dst_port);
+                                crate::capture::tcp::send_tcp_segment(
+                                    &tunnel_socket,
+                                    crate::session::current_proxy().unwrap_or(config_proxy),
+                                    encoder,
+                                    &mut seq,
+                                    ts,
+                                    src,
+                                    dst,
+                                    &segment,
+                                )
+                                .await;
+                            }
+                            let idle = term.evict_idle(now);
+                            for frame in idle.inject {
+                                counters_t
+                                    .bytes_injected
+                                    .fetch_add(frame.len() as u64, Ordering::Relaxed);
+                                if inject_tx.try_send(frame).is_err() {
+                                    tracing::warn!("Inject channel full - dropping TCP RST");
+                                    counters_t.errors.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                            for (tuple, segment) in idle.segments {
+                                let src = SocketAddrV4::new(tuple.src_ip, tuple.src_port);
+                                let dst = SocketAddrV4::new(tuple.dst_ip, tuple.dst_port);
+                                crate::capture::tcp::send_tcp_segment(
+                                    &tunnel_socket,
+                                    crate::session::current_proxy().unwrap_or(config_proxy),
+                                    encoder,
+                                    &mut seq,
+                                    ts,
+                                    src,
+                                    dst,
+                                    &segment,
+                                )
+                                .await;
                             }
                         }
 
@@ -1970,7 +2208,7 @@ mod tests {
     #[test]
     fn capture_filter_carries_the_relay_address_and_the_infra_denylist() {
         let relay = public_server(50);
-        let filter = build_capture_filter(CapturePolicy::ProcessAll, &[relay]);
+        let filter = build_capture_filter(CapturePolicy::ProcessAll, &[relay], None);
 
         assert!(filter.starts_with("udp and outbound"), "{filter}");
         assert!(
@@ -2143,7 +2381,7 @@ mod tests {
     #[test]
     fn policy_variants_shape_the_capture_filter() {
         // ProcessAll: every outbound UDP datagram, no port scope at all.
-        let all = build_capture_filter(CapturePolicy::ProcessAll, &[]);
+        let all = build_capture_filter(CapturePolicy::ProcessAll, &[], None);
         assert_eq!(
             all,
             "udp and outbound and udp.DstPort != 53 and udp.DstPort != 67 and udp.DstPort != 68 \
@@ -2159,13 +2397,15 @@ mod tests {
                 hi: 28017,
             },
             &[],
+            None,
         );
         assert!(
             ranged
                 .starts_with("udp and outbound and udp.DstPort >= 28015 and udp.DstPort <= 28017"),
             "{ranged}"
         );
-        let single = build_capture_filter(CapturePolicy::PortRange { lo: 7777, hi: 7777 }, &[]);
+        let single =
+            build_capture_filter(CapturePolicy::PortRange { lo: 7777, hi: 7777 }, &[], None);
         assert!(
             single.starts_with("udp and outbound and udp.DstPort == 7777"),
             "{single}"
@@ -2180,5 +2420,31 @@ mod tests {
             shadow,
             "udp and inbound and udp.SrcPort == 7777 and ip.SrcAddr != 104.26.1.50"
         );
+    }
+
+    #[test]
+    fn both_transports_add_the_tcp_clause_and_leave_udp_alone() {
+        let udp_only = build_capture_filter(
+            CapturePolicy::PortRange { lo: 7600, hi: 7777 },
+            &[public_server(50)],
+            None,
+        );
+        assert!(udp_only.starts_with("udp and outbound"), "{udp_only}");
+        assert!(!udp_only.contains("tcp"), "{udp_only}");
+
+        let both = build_capture_filter(
+            CapturePolicy::PortRange { lo: 7600, hi: 7777 },
+            &[public_server(50)],
+            Some((443, 443)),
+        );
+        assert!(both.starts_with("(udp and outbound"), "{both}");
+        assert!(
+            both.contains("tcp and outbound and tcp.DstPort == 443"),
+            "{both}"
+        );
+        assert!(both.contains("ip.DstAddr != 104.26.1.50"), "{both}");
+
+        let process = build_capture_filter(CapturePolicy::ProcessAll, &[], Some((443, 443)));
+        assert!(!process.contains("tcp"), "{process}");
     }
 }

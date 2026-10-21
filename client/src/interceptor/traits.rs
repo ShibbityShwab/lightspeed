@@ -160,6 +160,10 @@ pub struct InterceptorConfig {
     /// UDP for every profile except Minecraft Java Edition's TCP.
     pub transport: TransportProto,
 
+    /// Optional secondary TCP port range to capture alongside the primary
+    /// transport. `None` keeps the capture filter exactly as before.
+    pub capture_tcp_ports: Option<(u16, u16)>,
+
     /// Image names of the resolved profile's process(es).
     ///
     /// Resolved once by the config builder so no backend rebuilds them from
@@ -668,6 +672,7 @@ mod tests {
             game_name: game_name.to_string(),
             dynamic_server: false,
             transport: TransportProto::Udp,
+            capture_tcp_ports: None,
             process_names: vec!["TestGame.exe".to_string()],
             process_target: None,
             port_range: (1, 2),

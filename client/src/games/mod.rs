@@ -134,6 +134,16 @@ pub trait GameConfig: Send + Sync {
         (0, 0)
     }
 
+    /// Secondary TCP port range the WinDivert interceptor captures alongside
+    /// the primary transport, or `(0, 0)` for a single-transport capture.
+    ///
+    /// Kept separate from [`GameConfig::tcp_ports`]: the portable pcap filter is
+    /// single-transport and a non-zero `tcp_ports` replaces its UDP filter,
+    /// while this only adds a TCP clause in the Windows backend.
+    fn capture_tcp_ports(&self) -> (u16, u16) {
+        (0, 0)
+    }
+
     /// Which IP transport carries this game's gameplay traffic.
     ///
     /// Defaults to UDP. Minecraft Java Edition returns

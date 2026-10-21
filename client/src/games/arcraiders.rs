@@ -106,6 +106,12 @@ impl GameConfig for ArcRaidersConfig {
         (7600, 7777)
     }
 
+    fn capture_tcp_ports(&self) -> (u16, u16) {
+        // The game's control plane stays on TCP 443 to its backend. Carrying it
+        // on the same relay keeps one source address for the whole session.
+        (443, 443)
+    }
+
     fn anti_cheat(&self) -> &str {
         "Easy Anti-Cheat"
     }
@@ -186,6 +192,16 @@ mod tests {
         assert!(
             !(lo..=hi).contains(&443),
             "TCP 443 must never be a UDP port"
+        );
+    }
+
+    #[test]
+    fn the_control_plane_is_a_secondary_tcp_capture_only() {
+        assert_eq!(ArcRaidersConfig.capture_tcp_ports(), (443, 443));
+        assert_eq!(ArcRaidersConfig.tcp_ports(), (0, 0));
+        assert_eq!(
+            ArcRaidersConfig.transport(),
+            crate::games::TransportProto::Udp
         );
     }
 

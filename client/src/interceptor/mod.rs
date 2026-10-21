@@ -384,10 +384,16 @@ fn assemble_config(
         .filter(|route| seed_addrs.contains(&route.remote))
         .collect();
 
+    let capture_tcp_ports = {
+        let tcp = game.capture_tcp_ports();
+        (tcp != (0, 0)).then_some(tcp)
+    };
+
     InterceptorConfig {
         game_name: game.name().to_string(),
         dynamic_server,
         transport: game.transport(),
+        capture_tcp_ports,
         process_names,
         process_target,
         port_range,
@@ -942,6 +948,7 @@ mod tests {
             game_name: "Rust".into(),
             dynamic_server: false,
             transport: TransportProto::Udp,
+            capture_tcp_ports: None,
             process_names: vec!["RustClient.exe".to_string()],
             process_target: Some(ProcessTarget::by_name("RustClient.exe")),
             port_range: (28015, 28017),
@@ -980,6 +987,7 @@ mod tests {
                 game_name: "Test".into(),
                 dynamic_server: false,
                 transport: TransportProto::Udp,
+                capture_tcp_ports: None,
                 process_names: vec!["TestGame.exe".to_string()],
                 process_target: None,
                 port_range: (1, 2),
@@ -1005,6 +1013,7 @@ mod tests {
             game_name: "Rust".into(),
             dynamic_server: false,
             transport: TransportProto::Udp,
+            capture_tcp_ports: None,
             process_names: vec!["RustClient.exe".to_string()],
             process_target: None,
             port_range: (28015, 28017),

@@ -106,6 +106,7 @@ async fn run_smoke_test_linux(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
         game_name: "Fortnite".into(),
         dynamic_server: true, // Fortnite rotates through ephemeral servers
         transport: crate::games::TransportProto::Udp,
+        capture_tcp_ports: None,
         process_names: vec!["FortniteClient-Win64-Shipping.exe".to_string()],
         process_target: None,
         port_range: (1024, 65535),

@@ -117,6 +117,7 @@ mod tests {
             game_name: "TestGame".into(),
             dynamic_server: false,
             transport: crate::interceptor::TransportProto::Udp,
+            capture_tcp_ports: None,
             process_names: vec!["TestGame.exe".to_string()],
             process_target: Some(ProcessTarget::by_pid(12345)),
             port_range: (27015, 27017),

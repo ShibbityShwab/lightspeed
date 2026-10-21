@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Added
+
+- **The Windows interceptor can carry a game's TCP control plane beside its UDP gameplay.** The shared TCP terminator moved to `client/src/capture/tcp.rs`, the WinDivert filter adds the profile's `capture_tcp_ports` as a second clause, and both transports share one tunnel socket and session token so the server sees one source address. ARC Raiders declares TCP 443. The portable pcap path and process-targeted capture stay UDP-only until per-flow TCP attribution exists.
 
 ## [1.8.4] - 2026-10-21
 

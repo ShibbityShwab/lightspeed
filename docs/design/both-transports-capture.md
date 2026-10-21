@@ -65,8 +65,9 @@ pub transport: TransportProto,          // primary; drives the server lock (UDP 
 pub capture_tcp_ports: Option<(u16, u16)>, // secondary; None for every existing game
 ```
 
-`GameConfig::tcp_ports()` feeds `capture_tcp_ports` when it is non-zero. ARC
-Raiders returns `(443, 443)`. The profile's `transport()` stays `Udp`, so every
+`GameConfig::capture_tcp_ports()` feeds `capture_tcp_ports` when it is non-zero.
+ARC Raiders returns `(443, 443)`. Its `tcp_ports()` stays `(0, 0)` so the portable
+pcap filter is still UDP-only, and its `transport()` stays `Udp`, so every
 existing call site keeps its meaning and the server lock keeps following the
 game's UDP server.
 
@@ -135,7 +136,8 @@ and add a proxy test.
    token.
 4. **Keep the server lock on UDP**: split `detected_server` from secondary
    destinations; log the TCP backend at info once per connection.
-5. **ARC Raiders profile**: `tcp_ports() -> (443, 443)`.
+5. **ARC Raiders profile**: `capture_tcp_ports() -> (443, 443)`; `tcp_ports()`
+   stays `(0, 0)` so the portable pcap filter is unchanged.
 6. **Docs**: game profile, CLI reference if a flag is added, and this design's
    status line.
 

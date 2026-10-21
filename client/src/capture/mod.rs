@@ -41,6 +41,7 @@ pub mod macos;
 
 pub mod injector;
 pub mod pcap_backend;
+pub mod tcp;
 pub mod windivert_redirect;
 
 use crate::error::CaptureError;
