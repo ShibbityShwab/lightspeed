@@ -2803,7 +2803,7 @@ impl<P: Platform> LightSpeedApp<P> {
     fn settings_sheet(&mut self, ctx: &egui::Context) {
         let (max_w, max_h) = sheet_bounds(ctx);
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::new("settings_sheet"))
+        let response = egui::Modal::new(egui::Id::unique("settings_sheet"))
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
@@ -2992,7 +2992,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .map(|profile| profile.key.clone());
         let verdict = validate_draft(&self.game_editor, &user_keys, editing_key.as_deref());
 
-        let response = egui::Modal::new(egui::Id::new("game_editor_sheet"))
+        let response = egui::Modal::new(egui::Id::unique("game_editor_sheet"))
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
@@ -3101,7 +3101,7 @@ impl<P: Platform> LightSpeedApp<P> {
         let mut chosen: Option<ProcessTarget> = None;
         let current = self.target_process.clone();
 
-        let response = egui::Modal::new(egui::Id::new("target_process_sheet"))
+        let response = egui::Modal::new(egui::Id::unique("target_process_sheet"))
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
@@ -3166,7 +3166,7 @@ impl<P: Platform> LightSpeedApp<P> {
         let mut add_addr: Option<SocketAddrV4> = None;
         let mut reset = false;
 
-        let response = egui::Modal::new(egui::Id::new("proxy_manager_sheet"))
+        let response = egui::Modal::new(egui::Id::unique("proxy_manager_sheet"))
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
@@ -3281,7 +3281,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// The self-update check result, install handoff, and any failure.
     fn update_sheet(&mut self, ctx: &egui::Context) {
         let (max_w, max_h) = sheet_bounds(ctx);
-        let response = egui::Modal::new(egui::Id::new("update_sheet"))
+        let response = egui::Modal::new(egui::Id::unique("update_sheet"))
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
@@ -4884,7 +4884,7 @@ mod tests {
             .iter()
             .map(|(name, data)| {
                 let face =
-                    FontArc::try_from_vec(data.font.to_vec()).expect("a bundled face must parse");
+                    FontArc::try_from_vec(data.bytes().to_vec()).expect("a bundled face must parse");
                 (name.clone(), face)
             })
             .collect();
