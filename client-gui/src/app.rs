@@ -88,23 +88,85 @@ struct RelayReplyWatch {
     server: std::net::SocketAddrV4,
     baseline_intercepted: u64,
     baseline_injected: u64,
+    baseline_from_proxy: u64,
     started: std::time::Instant,
 }
 
-/// Whether the no-reply watchdog should send this session direct.
+/// Why the relay path was abandoned, for the trace.
+///
+/// The three causes need different answers from the reader, so the log must not
+/// collapse them into one sentence: the first is the relay's or the game
+/// server's fault, the second is ours, and the third is a relay that forwards
+/// but barely answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayReplyFault {
+    /// The relay produced no datagram for this server at all.
+    NoReplyFromRelay,
+    /// The relay returned datagrams and the client injected none of them, so
+    /// the local injection path is the fault, not the relay.
+    InjectionFailed,
+    /// The relay returned something, but too little of the traffic it carried.
+    TooFewReplies,
+}
+
+/// Whether the no-reply watchdog should send this session direct, and why.
 ///
 /// A relay that returns a few packets can still be starving the session: the
 /// game needs a meaningful share of its traffic back, not just one reply. If
 /// less than a quarter of the outbound packets come back after the settle
 /// window, the relay is not carrying this server and the session goes direct.
-fn relay_reply_watchdog_trips(
+///
+/// `from_proxy_since` separates a silent relay from a broken local injection
+/// path. Both are reported as a fallback, but only the first is the relay's
+/// fault, and a user asking which side failed needs the log to say so.
+fn relay_reply_fault(
     elapsed: Duration,
     intercepted_since: u64,
     injected_since: u64,
-) -> bool {
-    elapsed >= RELAY_REPLY_TIMEOUT
-        && intercepted_since >= RELAY_REPLY_MIN_INTERCEPTED
-        && injected_since.saturating_mul(4) < intercepted_since
+    from_proxy_since: u64,
+) -> Option<RelayReplyFault> {
+    if elapsed < RELAY_REPLY_TIMEOUT
+        || intercepted_since < RELAY_REPLY_MIN_INTERCEPTED
+        || injected_since.saturating_mul(4) >= intercepted_since
+    {
+        return None;
+    }
+    if from_proxy_since == 0 {
+        Some(RelayReplyFault::NoReplyFromRelay)
+    } else if injected_since == 0 {
+        Some(RelayReplyFault::InjectionFailed)
+    } else {
+        Some(RelayReplyFault::TooFewReplies)
+    }
+}
+
+/// The trace line for a fault. Kept beside the decision so the wording cannot
+/// drift from the counters it quotes.
+fn relay_reply_fault_message(
+    fault: RelayReplyFault,
+    intercepted_since: u64,
+    injected_since: u64,
+    from_proxy_since: u64,
+    errors: u64,
+    last_error: Option<&str>,
+) -> String {
+    match fault {
+        RelayReplyFault::NoReplyFromRelay => format!(
+            "Relay return path is starving the session; switching it direct \
+             (intercepted={intercepted_since} injected={injected_since} from_relay=0)"
+        ),
+        RelayReplyFault::InjectionFailed => format!(
+            "The relay returned {from_proxy_since} datagram(s) and none could be injected, \
+             so this is the local injection path, not the relay; switching direct \
+             (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since} \
+             errors={errors} last_error={})",
+            last_error.unwrap_or("none")
+        ),
+        RelayReplyFault::TooFewReplies => format!(
+            "Relay return path is starving the session; switching it direct \
+             (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since})"
+        ),
+    }
 }
 
 /// Spawn the no-reply fallback on a background thread.
@@ -142,6 +204,7 @@ fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFl
                     server,
                     baseline_intercepted: health.packets_intercepted,
                     baseline_injected: health.packets_injected,
+                    baseline_from_proxy: health.packets_from_proxy,
                     started: now,
                 },
             };
@@ -151,21 +214,34 @@ fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFl
             let injected_since = health
                 .packets_injected
                 .saturating_sub(current.baseline_injected);
-            if relay_reply_watchdog_trips(
+            let from_proxy_since = health
+                .packets_from_proxy
+                .saturating_sub(current.baseline_from_proxy);
+            let fault = relay_reply_fault(
                 now.duration_since(current.started),
                 intercepted_since,
                 injected_since,
-            ) {
-                if lock_or_recover(&engine).hold_tunnelling() {
-                    tracing::warn!(
-                        server = %current.server,
-                        intercepted = intercepted_since,
-                        injected = injected_since,
-                        "Relay return path is starving the session; switching it direct"
-                    );
+                from_proxy_since,
+            );
+            match fault {
+                Some(fault) => {
+                    if lock_or_recover(&engine).hold_tunnelling() {
+                        tracing::warn!(
+                            server = %current.server,
+                            fault = ?fault,
+                            "{}",
+                            relay_reply_fault_message(
+                                fault,
+                                intercepted_since,
+                                injected_since,
+                                from_proxy_since,
+                                health.errors,
+                                health.last_error.as_deref(),
+                            )
+                        );
+                    }
                 }
-            } else {
-                watch = Some(current);
+                None => watch = Some(current),
             }
         }
     });
@@ -4664,26 +4740,63 @@ fn group_digits(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        lock_or_recover, relay_reply_watchdog_trips, RELAY_REPLY_MIN_INTERCEPTED,
-        RELAY_REPLY_TIMEOUT,
+        lock_or_recover, relay_reply_fault, relay_reply_fault_message, RelayReplyFault,
+        RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_TIMEOUT,
     };
 
     #[test]
     fn no_reply_watchdog_requires_time_traffic_and_a_return_path() {
-        assert!(!relay_reply_watchdog_trips(
-            RELAY_REPLY_TIMEOUT - std::time::Duration::from_millis(1),
-            100,
-            0
-        ));
-        assert!(!relay_reply_watchdog_trips(
-            RELAY_REPLY_TIMEOUT,
-            RELAY_REPLY_MIN_INTERCEPTED - 1,
-            0
-        ));
+        assert_eq!(
+            relay_reply_fault(
+                RELAY_REPLY_TIMEOUT - std::time::Duration::from_millis(1),
+                100,
+                0,
+                0
+            ),
+            None
+        );
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, RELAY_REPLY_MIN_INTERCEPTED - 1, 0, 0),
+            None
+        );
         // A quarter back is not enough; a relay returning a trickle must not
         // keep a starving session on the tunnel.
-        assert!(!relay_reply_watchdog_trips(RELAY_REPLY_TIMEOUT, 100, 25));
-        assert!(relay_reply_watchdog_trips(RELAY_REPLY_TIMEOUT, 100, 24));
+        assert_eq!(relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 25, 25), None);
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 24, 24),
+            Some(RelayReplyFault::TooFewReplies)
+        );
+    }
+
+    #[test]
+    fn a_silent_relay_and_a_broken_injector_are_told_apart() {
+        // The user-visible question this answers: three relays all "starving"
+        // is the relay fleet, while a relay that answered and produced nothing
+        // on screen is ours. The counters distinguish them, so the log must too.
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 0, 0),
+            Some(RelayReplyFault::NoReplyFromRelay)
+        );
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 0, 9),
+            Some(RelayReplyFault::InjectionFailed)
+        );
+        let message = relay_reply_fault_message(
+            RelayReplyFault::InjectionFailed,
+            100,
+            0,
+            9,
+            57,
+            Some("WinDivert inject error: invalid handle"),
+        );
+        assert!(message.contains("local injection path"), "{message}");
+        assert!(message.contains("from_relay=9"), "{message}");
+        assert!(message.contains("errors=57"), "{message}");
+        assert!(message.contains("invalid handle"), "{message}");
+        let silent =
+            relay_reply_fault_message(RelayReplyFault::NoReplyFromRelay, 100, 0, 0, 0, None);
+        assert!(silent.contains("from_relay=0"), "{silent}");
+        assert!(!silent.contains("local injection"), "{silent}");
     }
 
     #[test]
