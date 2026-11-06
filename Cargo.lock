@@ -665,9 +665,9 @@ dependencies = [
 
 [[package]]
 name = "axoupdater"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "077098f88d71d47d8e5e922acae9817e1229201701927e84ffeca793356cf64a"
+checksum = "0ff120905809a9ec70a810193d34841abfea1abad1ea1161456a81b2965bfd57"
 dependencies = [
  "axoasset",
  "axoprocess",
@@ -5387,7 +5387,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -6325,9 +6325,9 @@ dependencies = [
 
 [[package]]
 name = "webbrowser"
-version = "1.2.4"
+version = "1.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62c35be770821a214dbc362fc26908c853e776c0004294d0b10b8a6bad582f94"
+checksum = "d2c8ddfbbf66e501434657400268cefe51b95140a0266236415cda7627732df7"
 dependencies = [
  "jni",
  "log",
