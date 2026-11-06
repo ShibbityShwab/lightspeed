@@ -27,7 +27,7 @@ toml = { workspace = true }
 # stack, aws-lc-rs via reqwest/axoupdater), which makes rustls's automatic
 # provider selection panic on the first QUIC call. main.rs pins `ring`.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-eframe = { version = "0.36", features = ["default", "glow"] }
+eframe = { version = "0.37", features = ["default", "glow"] }
 egui_plot = "0.37"
 # Decode the embedded brand PNGs at runtime: the window/taskbar icon
 # (main.rs) and the in-app header mark (app.rs). PNG only, no default
