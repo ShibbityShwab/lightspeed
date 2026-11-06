@@ -28,7 +28,7 @@ toml = { workspace = true }
 # provider selection panic on the first QUIC call. main.rs pins `ring`.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 eframe = { version = "0.36", features = ["default", "glow"] }
-egui_plot = "0.37"
+egui_plot = "0.38"
 # Decode the embedded brand PNGs at runtime: the window/taskbar icon
 # (main.rs) and the in-app header mark (app.rs). PNG only, no default
 # features, so this adds no extra decoders to the build.
