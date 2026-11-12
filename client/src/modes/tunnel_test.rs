@@ -68,9 +68,8 @@ pub async fn run_tunnel_test(mut relay: UdpRelay, proxy_addr: SocketAddrV4) -> a
     if received > 0 {
         info!("   ✅ Tunnel is working!");
     } else {
-        info!("   ⚠️  No responses (expected if no game server at test destination)");
-        info!("   The proxy received and forwarded the packets successfully");
-        info!("   if you see session logs on the proxy side.");
+        info!("   ⚠️  No responses received; this proves only that the packets left this host.");
+        info!("   Check the relay's session counters to confirm it forwarded them.");
     }
 
     Ok(())
