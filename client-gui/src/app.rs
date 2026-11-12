@@ -1455,6 +1455,26 @@ impl<P: Platform> LightSpeedApp<P> {
         if let Some(addr) = self.choose_relay_for_destination() {
             if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
                 if idx != self.selected_proxy_idx {
+                    // The same rule as `follow_game_server`: a relay change moves
+                    // the data plane, so it is only safe while tunnelling is
+                    // withheld. A re-measurement during a live match records the
+                    // better server-side relay for the next session instead of
+                    // restarting the interceptor under the player.
+                    let gate = lock_or_recover(&self.engine)
+                        .interceptor_health()
+                        .and_then(|health| health.tunnelling_enabled);
+                    if !switch_is_safe(gate) {
+                        let current = self
+                            .proxies
+                            .get(self.selected_proxy_idx)
+                            .map(|entry| entry.addr)
+                            .unwrap_or(addr);
+                        tracing::info!(
+                            "Keeping the live session on {current}; {addr} is better for this \
+                             server and applies next session"
+                        );
+                        return;
+                    }
                     tracing::info!("Selected {addr} for the current game server");
                     self.selected_proxy_idx = idx;
                     self.connect_selected();
@@ -1620,21 +1640,27 @@ impl<P: Platform> LightSpeedApp<P> {
             return;
         }
 
-        if !should_apply_race(self.auto_select, self.status.connected) {
+        if !should_apply_race(
+            self.auto_select,
+            self.status.connected,
+            self.game_server_addr().is_some(),
+        ) {
             return;
         }
         let Some(addr) = winner else {
             tracing::warn!("Relay latency race found no reachable relay");
             return;
         };
-        if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
-            if idx != self.selected_proxy_idx {
-                tracing::info!("Auto-selected the fastest relay {addr}");
-                self.selected_proxy_idx = idx;
-            }
-            self.connect_selected();
-            self.persist_config();
+        let Some(idx) = proxy_index_for(&self.proxies, addr) else {
+            tracing::warn!("Relay race winner {addr} is not in the proxy list; ignoring it");
+            return;
+        };
+        if idx != self.selected_proxy_idx {
+            tracing::info!("Auto-selected the fastest relay {}", self.proxies[idx].addr);
+            self.selected_proxy_idx = idx;
         }
+        self.connect_selected();
+        self.persist_config();
     }
 
     /// A re-race finished while connected: time the winner before letting it
@@ -1644,7 +1670,10 @@ impl<P: Platform> LightSpeedApp<P> {
             tracing::warn!("Relay latency race found no reachable relay");
             return;
         };
-        if Some(addr) == self.selected_proxy_addr() {
+        if self
+            .selected_proxy_addr()
+            .is_some_and(|current| same_relay_endpoint(current, addr))
+        {
             return; // Already on the fastest relay.
         }
         self.winner_probe = Some(WinnerProbe {
@@ -1691,12 +1720,17 @@ impl<P: Platform> LightSpeedApp<P> {
             );
             return;
         }
-        if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
-            tracing::info!("Auto-switched to the faster relay {addr} ({winner_rtt_ms} ms)");
-            self.selected_proxy_idx = idx;
-            self.connect_selected();
-            self.persist_config();
-        }
+        let Some(idx) = proxy_index_for(&self.proxies, addr) else {
+            tracing::warn!("Re-race winner {addr} is not in the proxy list; ignoring it");
+            return;
+        };
+        tracing::info!(
+            "Auto-switched to the faster relay {} ({winner_rtt_ms} ms)",
+            self.proxies[idx].addr
+        );
+        self.selected_proxy_idx = idx;
+        self.connect_selected();
+        self.persist_config();
     }
 
     /// While auto-select is on and the tunnel is up, re-run the relay race
@@ -3991,6 +4025,24 @@ fn pair_relay_legs(
         .collect()
 }
 
+/// The proxy entry a measured relay endpoint belongs to.
+///
+/// Client legs are measured against each relay's `/health` endpoint, which lives
+/// on [`discovery::HEALTH_PORT`], while [`crate::config::ProxyEntry::addr`] is the
+/// advertised data port. A full-address comparison therefore matches nothing and
+/// silently discards every race winner; the public IP identifies the relay.
+fn proxy_index_for(proxies: &[crate::config::ProxyEntry], addr: SocketAddrV4) -> Option<usize> {
+    proxies
+        .iter()
+        .position(|entry| same_relay_endpoint(entry.addr, addr))
+}
+
+/// Whether two endpoints name the same relay. The `/health` probe uses a
+/// different port than the data plane, so only the IP can be compared.
+fn same_relay_endpoint(a: SocketAddrV4, b: SocketAddrV4) -> bool {
+    a.ip() == b.ip()
+}
+
 fn try_auto_detect_game() -> Option<String> {
     match lightspeed_client::games::auto_detect() {
         Ok(game) => {
@@ -4047,8 +4099,14 @@ pub fn should_race(auto_select: bool, connected: bool, proxy_count: usize) -> bo
 
 /// Whether a finished latency race may still steer the selection. A relay the
 /// user pinned or a connection they started meanwhile wins.
-pub fn should_apply_race(auto_select: bool, connected: bool) -> bool {
-    auto_select && !connected
+/// Whether a finished client-leg race may choose the relay.
+///
+/// The race ranks the relay closest to the player, which is the wrong question
+/// once the game server is known: [`Self::choose_relay_for_destination`] ranks
+/// the whole path by the server-side leg. Defer to it whenever a server has been
+/// locked, so a client-leg winner cannot become the data-plane relay.
+pub fn should_apply_race(auto_select: bool, connected: bool, server_known: bool) -> bool {
+    auto_select && !connected && !server_known
 }
 
 pub fn close_decision(
@@ -4873,14 +4931,41 @@ mod tests {
         assert_eq!(legs.len(), 1);
         assert_eq!(legs[0].1, None, "a failure stays a failure");
     }
+
+    #[test]
+    fn a_health_port_winner_resolves_to_its_data_plane_relay() {
+        // The race measures `IP:8080`, the proxy list stores `IP:4434`. A
+        // full-address lookup matched nothing, so auto-select never connected.
+        let entries = vec![
+            ProxyEntry::discovered("relay-a", addr("203.0.113.10:4434"), "A"),
+            ProxyEntry::discovered("relay-b", addr("203.0.113.11:4434"), "B"),
+        ];
+        assert_eq!(
+            proxy_index_for(&entries, addr("203.0.113.11:8080")),
+            Some(1)
+        );
+        assert_eq!(proxy_index_for(&entries, addr("203.0.113.12:8080")), None);
+    }
+
+    #[test]
+    fn the_relay_in_use_is_recognised_by_ip_across_ports() {
+        assert!(same_relay_endpoint(
+            addr("203.0.113.10:4434"),
+            addr("203.0.113.10:8080")
+        ));
+        assert!(!same_relay_endpoint(
+            addr("203.0.113.10:4434"),
+            addr("203.0.113.11:8080")
+        ));
+    }
     use super::{
         apply_discovery_result, apply_target_choice, close_decision, draft_reasons,
         game_editor_body, game_pick_rows, games, pair_relay_legs, picker_status, primary_action,
-        process_picker, relay_health_verdict, save_user_profiles, server_from_fields,
-        should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
-        target_summary, validate_draft, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
-        PickerStatus, ProcessListState, ProcessPicker, ProcessTarget, RelayHealthVerdict,
-        TargetRowAction,
+        process_picker, proxy_index_for, relay_health_verdict, same_relay_endpoint,
+        save_user_profiles, server_from_fields, should_apply_race, should_race, switch_is_safe,
+        target_for_pick, target_front_door, target_summary, validate_draft, CloseDecision,
+        EditorActions, GameEditorDraft, GamePickRow, PickerStatus, ProcessListState, ProcessPicker,
+        ProcessTarget, RelayHealthVerdict, TargetRowAction,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -5076,10 +5161,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_relay_or_live_connection_beats_a_late_race_result() {
-        assert!(should_apply_race(true, false));
-        assert!(!should_apply_race(false, false), "user pinned a relay");
-        assert!(!should_apply_race(true, true), "connected meanwhile");
+    fn a_pinned_relay_a_live_connection_or_a_known_server_beats_a_late_race_result() {
+        assert!(should_apply_race(true, false, false));
+        assert!(
+            !should_apply_race(false, false, false),
+            "user pinned a relay"
+        );
+        assert!(!should_apply_race(true, true, false), "connected meanwhile");
+        assert!(
+            !should_apply_race(true, false, true),
+            "a known game server governs the relay choice"
+        );
     }
 
     #[test]
