@@ -2,7 +2,7 @@
 //! that game's own traffic.
 //!
 //! The static checks catch the drift classes (unknown key, empty process list,
-//! inverted port range, missing wire id), and the live stage answers the only
+//! inverted port range), and the live stage answers the only
 //! question a user actually cares about: did bytes the game sent reach the relay
 //! and come back? A profile whose filter matches nothing looks identical to a
 //! quiet lobby in every counter except `packets_seen`, so both are reported.
@@ -99,10 +99,8 @@ pub async fn run_verify_game(
             .problems
             .push(format!("inverted port range {:?}", report.ports));
     }
-    if report.wire_id == lightspeed_protocol::game_id::UNKNOWN {
-        report
-            .problems
-            .push("no protocol wire id for this key".into());
+    if let Some(note) = wire_id_note(report.wire_id) {
+        report.notes.push(note.to_string());
     }
 
     let running = crate::processes::list_running_processes();
@@ -215,6 +213,15 @@ pub async fn run_verify_game(
         println!("  report: {}", path.display());
     }
     Ok(report.verdict)
+}
+
+/// The wire id is a protocol-era game table, not a property a user profile can
+/// declare. A custom profile therefore resolves to UNKNOWN; that limits
+/// telemetry attribution but says nothing about capture or tunnelling, so it
+/// must not fail the profile.
+fn wire_id_note(wire_id: u8) -> Option<&'static str> {
+    (wire_id == lightspeed_protocol::game_id::UNKNOWN)
+        .then_some("custom profile: no protocol wire id, so telemetry reports UNKNOWN")
 }
 
 fn verdict_from(problems: &[String], has_live: bool) -> Verdict {
@@ -367,7 +374,7 @@ async fn live_stage(
 
 #[cfg(test)]
 mod tests {
-    use super::{verdict_from, Verdict};
+    use super::{verdict_from, wire_id_note, Verdict};
 
     #[test]
     fn a_static_clean_run_is_inconclusive_not_a_pass() {
@@ -385,5 +392,11 @@ mod tests {
             verdict_from(&["capture saw no packets".into()], true),
             Verdict::Fail
         );
+    }
+
+    #[test]
+    fn a_custom_profile_wire_id_is_a_note_not_a_failure() {
+        assert!(wire_id_note(lightspeed_protocol::game_id::UNKNOWN).is_some());
+        assert!(wire_id_note(lightspeed_protocol::game_id::FORTNITE).is_none());
     }
 }
