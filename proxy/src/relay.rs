@@ -2941,8 +2941,8 @@ mod tests {
                 Ok(Ok(n)) => {
                     received += n;
                     // Verify lengths look right
-                    for i in 0..n {
-                        assert_eq!(batch.msgs[i].msg_len as usize, 64);
+                    for m in batch.msgs.iter().take(n) {
+                        assert_eq!(m.msg_len as usize, 64);
                     }
                 }
                 Ok(Err(e)) => panic!("recv_batch_async error: {}", e),
@@ -3487,8 +3487,8 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(n >= 1);
-        for i in 0..n {
-            assert_eq!(batch.msgs[i].msg_len as usize, 32);
+        for m in batch.msgs.iter().take(n) {
+            assert_eq!(m.msg_len as usize, 32);
         }
     }
 }
