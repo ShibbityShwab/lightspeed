@@ -87,6 +87,9 @@ const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 /// so this stays low.
 const RELAY_REPLY_MIN_INTERCEPTED: u64 = 2;
 
+/// Returned datagrams a window needs before a zero injection count is called a
+/// local fault rather than a quiet relay.
+const RELAY_REPLY_MIN_RETURNED: u64 = 5;
 /// Tracks whether the current relay has brought a data packet back for the
 /// current server. The interceptor counters are cumulative, so the baseline is
 /// re-taken whenever the server changes.
@@ -169,7 +172,11 @@ fn relay_reply_fault(
     }
     if from_proxy_since == 0 {
         Some(RelayReplyFault::NoReplyFromRelay)
-    } else if injected_since == 0 {
+    } else if injected_since == 0 && from_proxy_since >= RELAY_REPLY_MIN_RETURNED {
+        // One lone datagram proves nothing about the injector: a relay that
+        // barely answers looks the same as one that answers and is dropped.
+        // Only a real run of returns with zero injections is a local fault -
+        // the live run that mislabelled itself had exactly one.
         Some(RelayReplyFault::InjectionFailed)
     } else {
         Some(RelayReplyFault::TooFewReplies)
@@ -5594,6 +5601,21 @@ mod tests {
         assert_eq!(routed_count(false, 0, true, 32), Some(32));
         assert_eq!(routed_count(true, 7, true, 32), Some(7));
         assert_eq!(routed_count(false, 0, false, 0), None);
+    }
+
+    #[test]
+    fn one_returned_datagram_is_not_an_injection_fault() {
+        let elapsed = std::time::Duration::from_secs(5);
+        assert_eq!(
+            super::relay_reply_fault(elapsed, 60, 0, 1),
+            Some(super::RelayReplyFault::TooFewReplies),
+            "a single reply is a quiet relay, not a broken injector"
+        );
+        assert_eq!(
+            super::relay_reply_fault(elapsed, 600, 0, 40),
+            Some(super::RelayReplyFault::InjectionFailed),
+            "a run of returns with zero injections is the injector"
+        );
     }
 
     #[test]
