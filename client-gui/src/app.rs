@@ -70,6 +70,12 @@ const GAME_PRESENCE_INTERVAL: Duration = Duration::from_secs(5);
 /// does lock.
 const HOLD_FALLBACK: Duration = Duration::from_secs(120);
 
+/// How long a locked game server must persist before the relay is chosen for
+/// it. A lobby backend locks first and is replaced by the match server a few
+/// seconds later; committing on the first address chooses the relay for the
+/// lobby and stages the match.
+const LOCK_SETTLE: Duration = Duration::from_secs(3);
+
 /// How long a relay may carry outbound traffic with no data reply before the
 /// session falls back to direct. A healthy join's first reply arrives in
 /// milliseconds; a join that returns nothing sits on a loading screen, so this
@@ -887,6 +893,10 @@ pub struct LightSpeedApp<P: Platform> {
     /// The game server the current relay was chosen for, so a new raid's server
     /// triggers a fresh choice and a repeated tick does not.
     chosen_for_server: Option<Ipv4Addr>,
+    /// The address last locked and when, for the settle window: the relay is not
+    /// chosen until one address survives [`LOCK_SETTLE`].
+    locked_addr: Option<Ipv4Addr>,
+    locked_since: Option<std::time::Instant>,
     /// Whether a relay has been chosen for the server this run locked, shared
     /// with the engine's hold watcher: the relay being *connected* is not the
     /// same condition as a relay having been chosen *for that server*, and
@@ -1108,6 +1118,8 @@ impl<P: Platform> LightSpeedApp<P> {
             relay_legs: None,
             relay_measurement: None,
             chosen_for_server: None,
+            locked_addr: None,
+            locked_since: None,
             server_chosen: Arc::new(AtomicBool::new(false)),
             held_since: None,
             direct_fallback: false,
@@ -1535,8 +1547,35 @@ impl<P: Platform> LightSpeedApp<P> {
         }
 
         let first_server = self.chosen_for_server.is_none();
+        let held_now = lock_or_recover(&self.engine)
+            .interceptor_health()
+            .and_then(|health| health.tunnelling_enabled)
+            == Some(false);
+
+        // Nothing is flowing while the hold is up, so this is the only window in
+        // which a wrong guess can be corrected for free. Wait for the address to
+        // settle instead of committing to whatever locked first.
+        if first_server && held_now {
+            if self.locked_addr != Some(server) {
+                self.locked_addr = Some(server);
+                self.locked_since = Some(std::time::Instant::now());
+                tracing::info!(
+                    "Waiting for the game server to settle before choosing a relay ({server})"
+                );
+                return;
+            }
+            if !self
+                .locked_since
+                .is_some_and(|since| since.elapsed() >= LOCK_SETTLE)
+            {
+                return;
+            }
+        }
+
         self.chosen_for_server = Some(server);
         self.server_chosen.store(true, Ordering::Relaxed);
+        self.locked_addr = None;
+        self.locked_since = None;
         let chosen = self.choose_relay_for_destination();
         let Some(addr) = chosen else {
             return;
@@ -2587,6 +2626,8 @@ impl<P: Platform> LightSpeedApp<P> {
                 // Los Angeles for a Sao Paulo server.
                 self.chosen_for_server = None;
                 self.server_chosen.store(false, Ordering::Relaxed);
+                self.locked_addr = None;
+                self.locked_since = None;
             }
             self.persist_config();
             if auto && !self.status.connected {
