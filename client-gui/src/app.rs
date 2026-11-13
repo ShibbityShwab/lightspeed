@@ -2194,8 +2194,14 @@ impl<P: Platform> LightSpeedApp<P> {
         // A direct fallback is not optimisation. The live ROB RUN run read
         // "OPTIMIZING" in green while the ledger underneath said "Direct
         // fallback" and the relay had returned nothing: the state word must
-        // describe the route, not the intent.
-        let (word, word_color) = if boosting && self.direct_fallback {
+        // describe the route, not the intent. A hold is the third case: the
+        // engine is deliberately keeping traffic direct until a relay is chosen
+        // for this server, which is a normal few seconds at match start and must
+        // not read as a fallback that already failed.
+        let holding = is_holding(self.direct_fallback, self.session_sent());
+        let (word, word_color) = if boosting && holding {
+            (i18n::t("state.holding").to_uppercase(), warn)
+        } else if boosting && self.direct_fallback {
             (i18n::t("state.direct").to_uppercase(), warn)
         } else if boosting {
             (i18n::t("state.optimizing").to_uppercase(), signal)
@@ -2205,7 +2211,9 @@ impl<P: Platform> LightSpeedApp<P> {
             (i18n::t("state.idle").to_uppercase(), text_1)
         };
 
-        let sub_line = if boosting {
+        let sub_line = if boosting && holding {
+            i18n::t("route.choosing").into_owned()
+        } else if boosting {
             // Naming a relay beside DIRECT would repeat the old lie in a smaller
             // font, so the fallback replaces the relay here.
             let relay = if self.direct_fallback {
@@ -2379,12 +2387,12 @@ impl<P: Platform> LightSpeedApp<P> {
         let relay = self.relay_value();
         self.ledger_row(ui, narrow, &i18n::t("route.relay"), &relay);
         if self.direct_fallback {
-            self.ledger_row(
-                ui,
-                narrow,
-                &i18n::t("route.path"),
-                &LedgerValue::Warn(i18n::t("route.direct_fallback")),
-            );
+            let path = if is_holding(self.direct_fallback, self.session_sent()) {
+                LedgerValue::Warn(i18n::t("state.holding"))
+            } else {
+                LedgerValue::Warn(i18n::t("route.direct_fallback"))
+            };
+            self.ledger_row(ui, narrow, &i18n::t("route.path"), &path);
         }
         if let Some(target) = &self.target_process {
             let target = LedgerValue::Data(target.describe());
@@ -2467,13 +2475,19 @@ impl<P: Platform> LightSpeedApp<P> {
     /// Packets THIS session has pushed through the relay. The relay's own
     /// `/health` counters are lifetime totals for the whole fleet node, not our
     /// session, so they must never be shown as if they were ours.
-    fn routed_value(&self) -> LedgerValue {
-        let sent = routed_count(
+    /// Outbound datagrams this session handed to the relay, in whichever mode
+    /// is running.
+    fn session_sent(&self) -> Option<u64> {
+        routed_count(
             self.status.redirect_active,
             self.status.redirect_pkts_out,
             self.status.interceptor_active,
             self.status.interceptor_tunnel_sent,
-        );
+        )
+    }
+
+    fn routed_value(&self) -> LedgerValue {
+        let sent = self.session_sent();
         let returned = returned_count(
             self.status.redirect_active,
             self.status.redirect_pkts_in,
@@ -4420,6 +4434,12 @@ fn mode_counter(
     }
 }
 
+/// The engine is holding traffic direct, and nothing has been sent yet: it is
+/// waiting on a relay choice, not recovering from one that failed.
+fn is_holding(direct_fallback: bool, sent: Option<u64>) -> bool {
+    direct_fallback && sent.unwrap_or(0) == 0
+}
+
 /// Whether the Game row should explain that nothing is selected yet, and which
 /// key to say it with.
 ///
@@ -5500,6 +5520,20 @@ mod tests {
         assert_eq!(routed_count(false, 0, true, 32), Some(32));
         assert_eq!(routed_count(true, 7, true, 32), Some(7));
         assert_eq!(routed_count(false, 0, false, 0), None);
+    }
+
+    #[test]
+    fn a_hold_is_not_a_failed_fallback() {
+        assert!(super::is_holding(true, Some(0)));
+        assert!(
+            !super::is_holding(true, Some(1)),
+            "once a datagram has left, direct is a fallback, not a hold"
+        );
+        assert!(!super::is_holding(false, None));
+        assert!(
+            super::is_holding(true, None),
+            "a direct run that has not counted yet is still holding"
+        );
     }
 
     #[test]
