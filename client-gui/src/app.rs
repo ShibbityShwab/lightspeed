@@ -98,6 +98,36 @@ struct RelayReplyWatch {
     started: std::time::Instant,
 }
 
+/// A server this watchdog took direct, and when it may try the relay again.
+///
+/// Without this, one transient fault - a relay restart, a stall during a
+/// control-plane reconnect - kept a session on the direct path for the rest of
+/// the match, even when the relay was demonstrably carrying replies again: a
+/// live match showed 157 sent and 162 back while the header still read DIRECT.
+#[derive(Clone, Copy, Debug)]
+struct ReplyFallback {
+    server: std::net::SocketAddrV4,
+    /// Retries already made for this server.
+    retries: u32,
+    /// Earliest moment for the next one.
+    due: std::time::Instant,
+}
+
+/// How long the watchdog waits before re-testing a relay it abandoned, in the
+/// order the attempts are made. After the last one the session stays direct
+/// until the server changes or the run restarts: a relay that failed three
+/// spaced tests is not going to carry this server.
+const RELAY_RETRY_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(20),
+    Duration::from_secs(45),
+    Duration::from_secs(90),
+];
+
+/// The wait before retry number `retries + 1`, or `None` once they are spent.
+fn retry_delay(retries: u32) -> Option<Duration> {
+    RELAY_RETRY_BACKOFF.get(retries as usize).copied()
+}
+
 /// Why the relay path was abandoned, for the trace.
 ///
 /// The three causes need different answers from the reader, so the log must not
@@ -184,6 +214,7 @@ fn relay_reply_fault_message(
 fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) {
     std::thread::spawn(move || {
         let mut watch: Option<RelayReplyWatch> = None;
+        let mut fallback: Option<ReplyFallback> = None;
         while !quit.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(500));
             let health = {
@@ -192,18 +223,47 @@ fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFl
             };
             let Some(health) = health else {
                 watch = None;
+                fallback = None;
                 continue;
             };
             let Some(server) = health.detected_server else {
                 watch = None;
+                fallback = None;
                 continue;
             };
+            let now = std::time::Instant::now();
+            // A different server is a different session; the old fallback's
+            // history says nothing about it.
+            if fallback.as_ref().is_some_and(|f| f.server != server) {
+                fallback = None;
+            }
             if health.tunnelling_enabled != Some(true) {
                 watch = None;
+                // No recorded fallback means this is the GUI's hold, which is
+                // not ours to lift.
+                let Some(abandoned) = fallback else {
+                    continue;
+                };
+                if now < abandoned.due {
+                    fallback = Some(abandoned);
+                    continue;
+                }
+                if lock_or_recover(&engine).release_tunnelling() {
+                    tracing::info!(
+                        server = %abandoned.server,
+                        attempt = abandoned.retries + 1,
+                        "Re-testing the relay for this server after a direct fallback"
+                    );
+                    fallback = Some(ReplyFallback {
+                        retries: abandoned.retries + 1,
+                        due: now,
+                        ..abandoned
+                    });
+                } else {
+                    fallback = Some(abandoned);
+                }
                 continue;
             }
-
-            let now = std::time::Instant::now();
             let current = match watch.take() {
                 Some(watch) if watch.server == server => watch,
                 _ => RelayReplyWatch {
@@ -231,7 +291,21 @@ fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFl
             );
             match fault {
                 Some(fault) => {
+                    let retries = fallback
+                        .as_ref()
+                        .filter(|f| f.server == server)
+                        .map(|f| f.retries)
+                        .unwrap_or(0);
                     if lock_or_recover(&engine).hold_tunnelling() {
+                        // A day out is "never" for a match; it keeps the retry
+                        // branch armed without another field to carry it.
+                        let wait =
+                            retry_delay(retries).unwrap_or(Duration::from_secs(60 * 60 * 24));
+                        fallback = Some(ReplyFallback {
+                            server,
+                            retries,
+                            due: now + wait,
+                        });
                         tracing::warn!(
                             server = %current.server,
                             fault = ?fault,
@@ -5520,6 +5594,27 @@ mod tests {
         assert_eq!(routed_count(false, 0, true, 32), Some(32));
         assert_eq!(routed_count(true, 7, true, 32), Some(7));
         assert_eq!(routed_count(false, 0, false, 0), None);
+    }
+
+    #[test]
+    fn an_abandoned_relay_is_retried_a_few_times_then_left_alone() {
+        assert_eq!(
+            super::retry_delay(0),
+            Some(std::time::Duration::from_secs(20))
+        );
+        assert_eq!(
+            super::retry_delay(1),
+            Some(std::time::Duration::from_secs(45))
+        );
+        assert_eq!(
+            super::retry_delay(2),
+            Some(std::time::Duration::from_secs(90))
+        );
+        assert_eq!(
+            super::retry_delay(3),
+            None,
+            "after three spaced tests a relay that keeps failing is left alone"
+        );
     }
 
     #[test]
