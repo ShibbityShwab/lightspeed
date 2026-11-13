@@ -121,13 +121,14 @@ LightSpeed ships three packages. **You only need one**:
 | Platform | Command |
 |-----------|---------|
 | **macOS and Linux** | `brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed && brew install ShibbityShwab/lightspeed/lightspeed` (current at the latest release) |
-| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (the bucket copy is at 1.8.2; the manifest in this repo is at 1.8.4 and is synced to the bucket by hand) |
-| **Windows (Chocolatey)** | `choco install lightspeed` (live, current at 1.8.4) |
+| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (the bucket copy is at 1.8.2; the manifest in this repo is at 1.9.0 and is synced to the bucket by hand) |
+| **Windows (Chocolatey)** | `choco install lightspeed` (1.9.0 is pushed and awaiting moderator approval; the feed serves 1.8.4 until then) |
 | **Windows (winget)** | not published yet: `winget install ShibbityShwab.LightSpeed` will fail until the first manifest merges. Use the MSI from [Releases](https://github.com/ShibbityShwab/lightspeed/releases). |
 | **Arch Linux** | `yay -S lightspeed-bin` (AUR, prepared but not yet published; Arch registration is closed) |
 
 > **Windows package managers are not all current.** The Chocolatey feed serves
-> 1.8.4. The Scoop bucket still serves 1.8.2 because publishing to it is a
+> 1.8.4 while the 1.9.0 package awaits moderator approval. The Scoop bucket
+> still serves 1.8.2 because publishing to it is a
 > manual sync, and winget has no published manifest yet (the first submission is
 > awaiting a Microsoft moderator). For Scoop and winget, the MSI or `.zip` from
 > [Releases](https://github.com/ShibbityShwab/lightspeed/releases) is current.
