@@ -28,7 +28,12 @@ jobs:
     outputs:
       tags: ${{ steps.meta.outputs.tags }}
       labels: ${{ steps.meta.outputs.labels }}
+      image: ${{ steps.image.outputs.ref }}
     steps:
+      - name: Lowercase the image reference
+        id: image
+        run: echo "ref=$(echo '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -81,7 +86,7 @@ jobs:
           # Push an untagged image and keep its digest; the merge job is what
           # publishes `latest`/sha/branch, so a half-finished matrix never
           # leaves a tag pointing at a single-architecture image.
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ needs.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
           cache-from: type=gha,scope=${{ matrix.scope }}
           cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
@@ -130,7 +135,7 @@ jobs:
         working-directory: /tmp/digests
         run: |
           set -euo pipefail
-          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          image="${{ needs.meta.outputs.image }}"
           refs=""
           for file in *; do
             refs="$refs $image@sha256:$file"
