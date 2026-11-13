@@ -88,23 +88,85 @@ struct RelayReplyWatch {
     server: std::net::SocketAddrV4,
     baseline_intercepted: u64,
     baseline_injected: u64,
+    baseline_from_proxy: u64,
     started: std::time::Instant,
 }
 
-/// Whether the no-reply watchdog should send this session direct.
+/// Why the relay path was abandoned, for the trace.
+///
+/// The three causes need different answers from the reader, so the log must not
+/// collapse them into one sentence: the first is the relay's or the game
+/// server's fault, the second is ours, and the third is a relay that forwards
+/// but barely answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayReplyFault {
+    /// The relay produced no datagram for this server at all.
+    NoReplyFromRelay,
+    /// The relay returned datagrams and the client injected none of them, so
+    /// the local injection path is the fault, not the relay.
+    InjectionFailed,
+    /// The relay returned something, but too little of the traffic it carried.
+    TooFewReplies,
+}
+
+/// Whether the no-reply watchdog should send this session direct, and why.
 ///
 /// A relay that returns a few packets can still be starving the session: the
 /// game needs a meaningful share of its traffic back, not just one reply. If
 /// less than a quarter of the outbound packets come back after the settle
 /// window, the relay is not carrying this server and the session goes direct.
-fn relay_reply_watchdog_trips(
+///
+/// `from_proxy_since` separates a silent relay from a broken local injection
+/// path. Both are reported as a fallback, but only the first is the relay's
+/// fault, and a user asking which side failed needs the log to say so.
+fn relay_reply_fault(
     elapsed: Duration,
     intercepted_since: u64,
     injected_since: u64,
-) -> bool {
-    elapsed >= RELAY_REPLY_TIMEOUT
-        && intercepted_since >= RELAY_REPLY_MIN_INTERCEPTED
-        && injected_since.saturating_mul(4) < intercepted_since
+    from_proxy_since: u64,
+) -> Option<RelayReplyFault> {
+    if elapsed < RELAY_REPLY_TIMEOUT
+        || intercepted_since < RELAY_REPLY_MIN_INTERCEPTED
+        || injected_since.saturating_mul(4) >= intercepted_since
+    {
+        return None;
+    }
+    if from_proxy_since == 0 {
+        Some(RelayReplyFault::NoReplyFromRelay)
+    } else if injected_since == 0 {
+        Some(RelayReplyFault::InjectionFailed)
+    } else {
+        Some(RelayReplyFault::TooFewReplies)
+    }
+}
+
+/// The trace line for a fault. Kept beside the decision so the wording cannot
+/// drift from the counters it quotes.
+fn relay_reply_fault_message(
+    fault: RelayReplyFault,
+    intercepted_since: u64,
+    injected_since: u64,
+    from_proxy_since: u64,
+    errors: u64,
+    last_error: Option<&str>,
+) -> String {
+    match fault {
+        RelayReplyFault::NoReplyFromRelay => format!(
+            "Relay return path is starving the session; switching it direct \
+             (intercepted={intercepted_since} injected={injected_since} from_relay=0)"
+        ),
+        RelayReplyFault::InjectionFailed => format!(
+            "The relay returned {from_proxy_since} datagram(s) and none could be injected, \
+             so this is the local injection path, not the relay; switching direct \
+             (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since} \
+             errors={errors} last_error={})",
+            last_error.unwrap_or("none")
+        ),
+        RelayReplyFault::TooFewReplies => format!(
+            "Relay return path is starving the session; switching it direct \
+             (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since})"
+        ),
+    }
 }
 
 /// Spawn the no-reply fallback on a background thread.
@@ -142,6 +204,7 @@ fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFl
                     server,
                     baseline_intercepted: health.packets_intercepted,
                     baseline_injected: health.packets_injected,
+                    baseline_from_proxy: health.packets_from_proxy,
                     started: now,
                 },
             };
@@ -151,21 +214,34 @@ fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFl
             let injected_since = health
                 .packets_injected
                 .saturating_sub(current.baseline_injected);
-            if relay_reply_watchdog_trips(
+            let from_proxy_since = health
+                .packets_from_proxy
+                .saturating_sub(current.baseline_from_proxy);
+            let fault = relay_reply_fault(
                 now.duration_since(current.started),
                 intercepted_since,
                 injected_since,
-            ) {
-                if lock_or_recover(&engine).hold_tunnelling() {
-                    tracing::warn!(
-                        server = %current.server,
-                        intercepted = intercepted_since,
-                        injected = injected_since,
-                        "Relay return path is starving the session; switching it direct"
-                    );
+                from_proxy_since,
+            );
+            match fault {
+                Some(fault) => {
+                    if lock_or_recover(&engine).hold_tunnelling() {
+                        tracing::warn!(
+                            server = %current.server,
+                            fault = ?fault,
+                            "{}",
+                            relay_reply_fault_message(
+                                fault,
+                                intercepted_since,
+                                injected_since,
+                                from_proxy_since,
+                                health.errors,
+                                health.last_error.as_deref(),
+                            )
+                        );
+                    }
                 }
-            } else {
-                watch = Some(current);
+                None => watch = Some(current),
             }
         }
     });
@@ -1379,6 +1455,26 @@ impl<P: Platform> LightSpeedApp<P> {
         if let Some(addr) = self.choose_relay_for_destination() {
             if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
                 if idx != self.selected_proxy_idx {
+                    // The same rule as `follow_game_server`: a relay change moves
+                    // the data plane, so it is only safe while tunnelling is
+                    // withheld. A re-measurement during a live match records the
+                    // better server-side relay for the next session instead of
+                    // restarting the interceptor under the player.
+                    let gate = lock_or_recover(&self.engine)
+                        .interceptor_health()
+                        .and_then(|health| health.tunnelling_enabled);
+                    if !switch_is_safe(gate) {
+                        let current = self
+                            .proxies
+                            .get(self.selected_proxy_idx)
+                            .map(|entry| entry.addr)
+                            .unwrap_or(addr);
+                        tracing::info!(
+                            "Keeping the live session on {current}; {addr} is better for this \
+                             server and applies next session"
+                        );
+                        return;
+                    }
                     tracing::info!("Selected {addr} for the current game server");
                     self.selected_proxy_idx = idx;
                     self.connect_selected();
@@ -1544,21 +1640,27 @@ impl<P: Platform> LightSpeedApp<P> {
             return;
         }
 
-        if !should_apply_race(self.auto_select, self.status.connected) {
+        if !should_apply_race(
+            self.auto_select,
+            self.status.connected,
+            self.game_server_addr().is_some(),
+        ) {
             return;
         }
         let Some(addr) = winner else {
             tracing::warn!("Relay latency race found no reachable relay");
             return;
         };
-        if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
-            if idx != self.selected_proxy_idx {
-                tracing::info!("Auto-selected the fastest relay {addr}");
-                self.selected_proxy_idx = idx;
-            }
-            self.connect_selected();
-            self.persist_config();
+        let Some(idx) = proxy_index_for(&self.proxies, addr) else {
+            tracing::warn!("Relay race winner {addr} is not in the proxy list; ignoring it");
+            return;
+        };
+        if idx != self.selected_proxy_idx {
+            tracing::info!("Auto-selected the fastest relay {}", self.proxies[idx].addr);
+            self.selected_proxy_idx = idx;
         }
+        self.connect_selected();
+        self.persist_config();
     }
 
     /// A re-race finished while connected: time the winner before letting it
@@ -1568,7 +1670,10 @@ impl<P: Platform> LightSpeedApp<P> {
             tracing::warn!("Relay latency race found no reachable relay");
             return;
         };
-        if Some(addr) == self.selected_proxy_addr() {
+        if self
+            .selected_proxy_addr()
+            .is_some_and(|current| same_relay_endpoint(current, addr))
+        {
             return; // Already on the fastest relay.
         }
         self.winner_probe = Some(WinnerProbe {
@@ -1615,12 +1720,17 @@ impl<P: Platform> LightSpeedApp<P> {
             );
             return;
         }
-        if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
-            tracing::info!("Auto-switched to the faster relay {addr} ({winner_rtt_ms} ms)");
-            self.selected_proxy_idx = idx;
-            self.connect_selected();
-            self.persist_config();
-        }
+        let Some(idx) = proxy_index_for(&self.proxies, addr) else {
+            tracing::warn!("Re-race winner {addr} is not in the proxy list; ignoring it");
+            return;
+        };
+        tracing::info!(
+            "Auto-switched to the faster relay {} ({winner_rtt_ms} ms)",
+            self.proxies[idx].addr
+        );
+        self.selected_proxy_idx = idx;
+        self.connect_selected();
+        self.persist_config();
     }
 
     /// While auto-select is on and the tunnel is up, re-run the relay race
@@ -3915,6 +4025,24 @@ fn pair_relay_legs(
         .collect()
 }
 
+/// The proxy entry a measured relay endpoint belongs to.
+///
+/// Client legs are measured against each relay's `/health` endpoint, which lives
+/// on [`discovery::HEALTH_PORT`], while [`crate::config::ProxyEntry::addr`] is the
+/// advertised data port. A full-address comparison therefore matches nothing and
+/// silently discards every race winner; the public IP identifies the relay.
+fn proxy_index_for(proxies: &[crate::config::ProxyEntry], addr: SocketAddrV4) -> Option<usize> {
+    proxies
+        .iter()
+        .position(|entry| same_relay_endpoint(entry.addr, addr))
+}
+
+/// Whether two endpoints name the same relay. The `/health` probe uses a
+/// different port than the data plane, so only the IP can be compared.
+fn same_relay_endpoint(a: SocketAddrV4, b: SocketAddrV4) -> bool {
+    a.ip() == b.ip()
+}
+
 fn try_auto_detect_game() -> Option<String> {
     match lightspeed_client::games::auto_detect() {
         Ok(game) => {
@@ -3971,8 +4099,14 @@ pub fn should_race(auto_select: bool, connected: bool, proxy_count: usize) -> bo
 
 /// Whether a finished latency race may still steer the selection. A relay the
 /// user pinned or a connection they started meanwhile wins.
-pub fn should_apply_race(auto_select: bool, connected: bool) -> bool {
-    auto_select && !connected
+/// Whether a finished client-leg race may choose the relay.
+///
+/// The race ranks the relay closest to the player, which is the wrong question
+/// once the game server is known: [`Self::choose_relay_for_destination`] ranks
+/// the whole path by the server-side leg. Defer to it whenever a server has been
+/// locked, so a client-leg winner cannot become the data-plane relay.
+pub fn should_apply_race(auto_select: bool, connected: bool, server_known: bool) -> bool {
+    auto_select && !connected && !server_known
 }
 
 pub fn close_decision(
@@ -4664,26 +4798,63 @@ fn group_digits(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        lock_or_recover, relay_reply_watchdog_trips, RELAY_REPLY_MIN_INTERCEPTED,
-        RELAY_REPLY_TIMEOUT,
+        lock_or_recover, relay_reply_fault, relay_reply_fault_message, RelayReplyFault,
+        RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_TIMEOUT,
     };
 
     #[test]
     fn no_reply_watchdog_requires_time_traffic_and_a_return_path() {
-        assert!(!relay_reply_watchdog_trips(
-            RELAY_REPLY_TIMEOUT - std::time::Duration::from_millis(1),
-            100,
-            0
-        ));
-        assert!(!relay_reply_watchdog_trips(
-            RELAY_REPLY_TIMEOUT,
-            RELAY_REPLY_MIN_INTERCEPTED - 1,
-            0
-        ));
+        assert_eq!(
+            relay_reply_fault(
+                RELAY_REPLY_TIMEOUT - std::time::Duration::from_millis(1),
+                100,
+                0,
+                0
+            ),
+            None
+        );
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, RELAY_REPLY_MIN_INTERCEPTED - 1, 0, 0),
+            None
+        );
         // A quarter back is not enough; a relay returning a trickle must not
         // keep a starving session on the tunnel.
-        assert!(!relay_reply_watchdog_trips(RELAY_REPLY_TIMEOUT, 100, 25));
-        assert!(relay_reply_watchdog_trips(RELAY_REPLY_TIMEOUT, 100, 24));
+        assert_eq!(relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 25, 25), None);
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 24, 24),
+            Some(RelayReplyFault::TooFewReplies)
+        );
+    }
+
+    #[test]
+    fn a_silent_relay_and_a_broken_injector_are_told_apart() {
+        // The user-visible question this answers: three relays all "starving"
+        // is the relay fleet, while a relay that answered and produced nothing
+        // on screen is ours. The counters distinguish them, so the log must too.
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 0, 0),
+            Some(RelayReplyFault::NoReplyFromRelay)
+        );
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 0, 9),
+            Some(RelayReplyFault::InjectionFailed)
+        );
+        let message = relay_reply_fault_message(
+            RelayReplyFault::InjectionFailed,
+            100,
+            0,
+            9,
+            57,
+            Some("WinDivert inject error: invalid handle"),
+        );
+        assert!(message.contains("local injection path"), "{message}");
+        assert!(message.contains("from_relay=9"), "{message}");
+        assert!(message.contains("errors=57"), "{message}");
+        assert!(message.contains("invalid handle"), "{message}");
+        let silent =
+            relay_reply_fault_message(RelayReplyFault::NoReplyFromRelay, 100, 0, 0, 0, None);
+        assert!(silent.contains("from_relay=0"), "{silent}");
+        assert!(!silent.contains("local injection"), "{silent}");
     }
 
     #[test]
@@ -4760,14 +4931,41 @@ mod tests {
         assert_eq!(legs.len(), 1);
         assert_eq!(legs[0].1, None, "a failure stays a failure");
     }
+
+    #[test]
+    fn a_health_port_winner_resolves_to_its_data_plane_relay() {
+        // The race measures `IP:8080`, the proxy list stores `IP:4434`. A
+        // full-address lookup matched nothing, so auto-select never connected.
+        let entries = vec![
+            ProxyEntry::discovered("relay-a", addr("203.0.113.10:4434"), "A"),
+            ProxyEntry::discovered("relay-b", addr("203.0.113.11:4434"), "B"),
+        ];
+        assert_eq!(
+            proxy_index_for(&entries, addr("203.0.113.11:8080")),
+            Some(1)
+        );
+        assert_eq!(proxy_index_for(&entries, addr("203.0.113.12:8080")), None);
+    }
+
+    #[test]
+    fn the_relay_in_use_is_recognised_by_ip_across_ports() {
+        assert!(same_relay_endpoint(
+            addr("203.0.113.10:4434"),
+            addr("203.0.113.10:8080")
+        ));
+        assert!(!same_relay_endpoint(
+            addr("203.0.113.10:4434"),
+            addr("203.0.113.11:8080")
+        ));
+    }
     use super::{
         apply_discovery_result, apply_target_choice, close_decision, draft_reasons,
         game_editor_body, game_pick_rows, games, pair_relay_legs, picker_status, primary_action,
-        process_picker, relay_health_verdict, save_user_profiles, server_from_fields,
-        should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
-        target_summary, validate_draft, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
-        PickerStatus, ProcessListState, ProcessPicker, ProcessTarget, RelayHealthVerdict,
-        TargetRowAction,
+        process_picker, proxy_index_for, relay_health_verdict, same_relay_endpoint,
+        save_user_profiles, server_from_fields, should_apply_race, should_race, switch_is_safe,
+        target_for_pick, target_front_door, target_summary, validate_draft, CloseDecision,
+        EditorActions, GameEditorDraft, GamePickRow, PickerStatus, ProcessListState, ProcessPicker,
+        ProcessTarget, RelayHealthVerdict, TargetRowAction,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -4963,10 +5161,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_relay_or_live_connection_beats_a_late_race_result() {
-        assert!(should_apply_race(true, false));
-        assert!(!should_apply_race(false, false), "user pinned a relay");
-        assert!(!should_apply_race(true, true), "connected meanwhile");
+    fn a_pinned_relay_a_live_connection_or_a_known_server_beats_a_late_race_result() {
+        assert!(should_apply_race(true, false, false));
+        assert!(
+            !should_apply_race(false, false, false),
+            "user pinned a relay"
+        );
+        assert!(!should_apply_race(true, true, false), "connected meanwhile");
+        assert!(
+            !should_apply_race(true, false, true),
+            "a known game server governs the relay choice"
+        );
     }
 
     #[test]

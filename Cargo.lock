@@ -665,9 +665,9 @@ dependencies = [
 
 [[package]]
 name = "axoupdater"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "077098f88d71d47d8e5e922acae9817e1229201701927e84ffeca793356cf64a"
+checksum = "0ff120905809a9ec70a810193d34841abfea1abad1ea1161456a81b2965bfd57"
 dependencies = [
  "axoasset",
  "axoprocess",
@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-client"
-version = "1.8.4"
+version = "1.9.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2997,7 +2997,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-gui"
-version = "1.8.4"
+version = "1.9.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3023,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-protocol"
-version = "1.8.4"
+version = "1.9.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -3037,7 +3037,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-proxy"
-version = "1.8.4"
+version = "1.9.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6325,9 +6325,9 @@ dependencies = [
 
 [[package]]
 name = "webbrowser"
-version = "1.2.4"
+version = "1.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62c35be770821a214dbc362fc26908c853e776c0004294d0b10b8a6bad582f94"
+checksum = "fe8d20d0214027baf11b8b0cc307c1da7657d8f4db9aa956f7de27a6fb1acbd5"
 dependencies = [
  "jni",
  "log",

@@ -697,8 +697,9 @@ async fn main() -> anyhow::Result<()> {
     if cli.demo {
         let game_key = cli.game.as_deref().unwrap_or("rust");
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
-        let proxy_addr = parse_proxy_addr(proxy_str)?;
-        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        // The demo's probes are unauthenticated keepalives, which a relay
+        // answers without a session. Registering here waited the full QUIC
+        // timeout whenever no relay was running, so the banner took 60 s.
         return run_demo(&config, game_key, proxy_str).await;
     }
 

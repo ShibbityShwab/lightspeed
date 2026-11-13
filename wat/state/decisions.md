@@ -2,7 +2,37 @@
 
 > **Canonical log of significant technical decisions for the LightSpeed project.**
 > Each entry includes the date, deciding agent, rationale, and impact.
-> Last entry: 2026-10-21
+> Last entry: 2026-11-12
+
+---
+
+### 2026-11-12: A race winner is identified by relay IP, at every comparison
+
+**Agent:** RustDev + QAEngineer
+**Status:** Accepted (`client-gui/src/app.rs`, regression tests in the same file)
+**Rationale:** the client-leg race measures each relay's `/health` endpoint on port 8080, while the proxy list stores the advertised data port 4434. `poll_relay_race` compared whole addresses, so every winner failed the lookup and the function returned without logging anything: a clean first run never connected, and the next launch connected to the first registry entry. The same full-address comparison sat in `consider_connected_winner` and `poll_winner_probe`, which disabled continuous re-evaluation too.
+**Impact:** `proxy_index_for` and `same_relay_endpoint` compare the relay IP at all three sites and warn when a winner is not in the list. A clean run now logs `Auto-selected the fastest relay <data-address>` and connects.
+**Verification:** `cargo test -p lightspeed-gui` 136 passed; the two new tests pin a health-port winner resolving to its data-plane entry, and the connected relay being recognised across ports.
+
+---
+
+### 2026-11-12: A known game server overrides the client-leg race
+
+**Agent:** RustDev
+**Status:** Accepted (`client-gui/src/app.rs`)
+**Rationale:** the client-leg race answers "which relay is closest to me"; once the interceptor has locked the game server, the only question that matters is which relay is closest to that server. The ranking module already sorts by the destination leg first, but `poll_relay_race` could still apply its client-leg winner when a server was known but no choice had been recorded, and `poll_relay_measurement` could restart the data plane mid-match.
+**Impact:** `should_apply_race` now takes `server_known` and declines the race; the destination-aware choice is applied only while tunnelling is withheld, otherwise it is staged for the next session. Before any server is known there is no server-relative latency, so the initial connection remains a provisional control-plane choice and the HOLD keeps game traffic off it.
+**Verification:** GUI 136 passed; the route-ranking suite 10 passed; the test `a_pinned_relay_a_live_connection_or_a_known_server_beats_a_late_race_result` pins the new predicate.
+
+---
+
+### 2026-11-12: A relay-side TCP connection belongs to the client that created it
+
+**Agent:** RustDev + SecOps
+**Status:** Accepted (`proxy/src/relay.rs`, `proxy/tests/integration_security.rs`)
+**Rationale:** the v5 5-tuple is supplied in the tunnel header and the connection table is relay-global. With no owner stored, any client with a valid token could present another client's tuple and RST, FIN, or splice its stream; two clients behind different NATs presenting the same tuple could also collide.
+**Impact:** `TcpConnState` stores the creating client's address. A non-SYN packet from any other address is dropped and counted as an auth rejection, and a SYN that finds another client's tuple is refused. This applies to the unreleased both-transports path.
+**Verification:** new unit test `a_tcp_connection_belongs_to_the_client_that_opened_it` and integration test `a_tcp_connection_is_owned_by_the_client_that_opened_it` (the owner's RST still tears the connection down; another client's does not).
 
 ---
 

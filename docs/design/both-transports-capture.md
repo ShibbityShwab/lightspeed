@@ -1,7 +1,8 @@
 # Both-transports capture: UDP and TCP in one interceptor session
 
 Design plan for the ARC Raiders transport split.
-Status: **proposed, awaiting owner review.** Base revision `4aa3221` (after 1.8.4). Date 2026-10-21.
+Status: **implemented on master (`dfa1413`); not in a release and not yet live-proven.**
+Base revision `4aa3221` (after 1.8.4). Date 2026-10-21; status updated 2026-11-12.
 
 ## 1. The problem
 

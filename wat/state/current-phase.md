@@ -4,6 +4,34 @@
 **Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
 **Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. 2026-10-17 finished the jitter measurement that the ranking was already weighting at zero and made a detected game connect a relay on its own; 2026-10-18 gave the hold an exit that does not depend on the GUI's frame loop. **The live relay-follow is proven** (2026-10-18: `Following the game server: switching to 45.77.32.236:4434`, `Relayed` 6 -> 38). 1.8.4 (`59f20c8`) shipped the reliability fixes and closed three rustls/webpki advisories; the ARC Raiders transport split is implemented in `dfa1413`, and the live join through it is the open proof.
 
+## 2026-11-12 - audit fixes on a real Windows host: auto-select applies, and the TCP relay has an owner
+
+A full local build/test pass (Rust 1.99.1, MSVC 17.14.45, Windows SDK 10.0.26100)
+found and fixed:
+
+- the client-leg race compared the `/health` endpoint (`IP:8080`) against the proxy
+  list (`IP:4434`), so every winner was silently discarded: a clean first run stayed
+  "No relay yet" and the next launch used the first registry relay. The lookup now
+  matches the relay IP at all three race sites and warns on a miss, with two
+  regression tests;
+- the v5 TCP connection table was relay-global with no owner, so an authenticated
+  client could RST or splice another client's connection by presenting its tuple.
+  `TcpConnState` now stores the creator; mismatched packets are dropped as auth
+  rejections and a SYN for an owned tuple is refused (unit + integration test);
+- `--demo` no longer registers a QUIC session first (60 s before, 3 s end to end);
+- `--verify-game` reports a custom profile's missing wire id as a note, not a `Fail`;
+- `--test-tunnel` no longer claims forwarding it did not observe;
+- `docs/deploy-proxy.md` now documents the real TOFU trust model and the 32-bit token;
+- a known game server now overrides the client-leg race: the destination-aware
+  ranking (server-side leg first) governs, and a re-measurement during a live
+  match is staged for the next session instead of restarting the data plane.
+
+**Verified:** fmt; clippy `-D warnings` on the workspace, the GUI, and the WinDivert
+client; client lib 566 and bin 557; proxy 176 default (190 with `quic`); GUI 136; route
+ranking 10; the fixed binaries launched, and the GUI logged
+`Auto-selected the fastest relay 65.20.92.201:4434` on a clean run. The telemetry
+opt-in rule conflict remains an owner decision.
+
 ## 2026-10-21 - 1.8.4: the relay ranking follows the server, and the direct label tells the truth
 
 The 2026-10-19 investigation answered the owner's "it should traverse Frankfurt" report, and its

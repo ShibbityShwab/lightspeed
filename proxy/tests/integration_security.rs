@@ -20,7 +20,10 @@ use lightspeed_proxy::metrics::ProxyMetrics;
 use lightspeed_proxy::rate_limit::RateLimiter;
 use lightspeed_proxy::relay::{self, RelayEngine};
 
-use lightspeed_protocol::TunnelHeader;
+use lightspeed_protocol::{
+    build_tcp_packet, tcp_flags, FecHeader, Tcp5Tuple, TcpExtHeader, TunnelHeader,
+    PROTOCOL_VERSION_TCP,
+};
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -120,6 +123,49 @@ fn make_public_packet(seq: u16, token: u32, src: SocketAddrV4) -> Vec<u8> {
     let public_dest = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 34), 80);
     let header = TunnelHeader::new(seq, now_us(), src, public_dest).with_session_token(token);
     header.encode_with_payload(b"test_payload").to_vec()
+}
+
+/// Build a v5 datagram carrying one TCP segment for `src` -> `dst`.
+fn make_tcp_packet(
+    seq: u16,
+    token: u32,
+    src: SocketAddrV4,
+    dst: SocketAddrV4,
+    flags: u8,
+) -> Vec<u8> {
+    let mut header = TunnelHeader::new_fec(seq, now_us(), src, dst).with_session_token(token);
+    header.version = PROTOCOL_VERSION_TCP;
+    let fec = FecHeader::data(seq, 0, 4);
+    let ext = TcpExtHeader {
+        tcp_seq: 0,
+        tcp_ack: 0,
+        flags,
+        window: 0,
+        reserved: [0, 0],
+    };
+    build_tcp_packet(&header, &fec, &ext, &[]).to_vec()
+}
+
+/// Wait, bounded, for the relay's TCP connection table to reach `expected`.
+async fn wait_for_tcp_count(engine: &RelayEngine, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while engine.tcp_connection_count().await != expected {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("TCP connection count did not reach the expected value");
+}
+
+/// Wait, bounded, for the mismatched packet to be counted as an auth rejection.
+async fn wait_for_auth_rejection(metrics: &ProxyMetrics, before: u64) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while metrics.auth_rejections.load(Ordering::Relaxed) <= before {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the mismatched packet was not recorded as an auth rejection");
 }
 
 /// Build a tunnel packet targeting a private IP.
@@ -381,6 +427,66 @@ async fn test_malformed_packet_dropped() {
         "All malformed packets should be dropped, got {}",
         dropped
     );
+}
+
+#[tokio::test]
+async fn a_tcp_connection_is_owned_by_the_client_that_opened_it() {
+    let relay = start_relay(RelayTestConfig {
+        require_auth: true,
+        ..Default::default()
+    })
+    .await;
+    {
+        let mut auth = relay.authenticator.write().await;
+        auth.authorize(Ipv4Addr::LOCALHOST, 0, 42, Instant::now());
+    }
+
+    let a = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let b = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let a_addr = to_v4(a.local_addr().unwrap());
+
+    let game_src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 10), 50000);
+    let server = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 34), 443);
+    let tuple = Tcp5Tuple {
+        src_ip: *game_src.ip(),
+        src_port: game_src.port(),
+        dst_ip: *server.ip(),
+        dst_port: server.port(),
+    };
+
+    // A owns the connection. Creating it directly keeps the dial (and any
+    // external host) out of the test; only the packet path is under test.
+    relay
+        .engine
+        .get_or_create_tcp_connection(tuple, a_addr, 4)
+        .await
+        .unwrap();
+    assert_eq!(relay.engine.tcp_connection_count().await, 1);
+
+    // B has a valid token but did not open the connection. Its RST must not
+    // reach the connection's teardown path.
+    let before = relay.metrics.auth_rejections.load(Ordering::Relaxed);
+    b.send_to(
+        &make_tcp_packet(1, 42, game_src, server, tcp_flags::RST),
+        relay.data_addr,
+    )
+    .await
+    .unwrap();
+    wait_for_auth_rejection(&relay.metrics, before).await;
+    assert_eq!(
+        relay.engine.tcp_connection_count().await,
+        1,
+        "another client's RST must not tear down the connection"
+    );
+
+    // The owner's RST does tear it down, so the assertion above is not vacuous.
+    a.send_to(
+        &make_tcp_packet(2, 42, game_src, server, tcp_flags::RST),
+        relay.data_addr,
+    )
+    .await
+    .unwrap();
+    wait_for_tcp_count(&relay.engine, 0).await;
 }
 
 #[tokio::test]

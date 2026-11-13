@@ -108,16 +108,20 @@ packets from a client until that client has registered over the QUIC control pla
 
 ### How it works
 
-The control plane is **QUIC with mTLS**. The flow is:
+The control plane is **QUIC with a self-signed server certificate pinned trust-on-first-use
+(TOFU) by the client**. Registration is anonymous: there is no client certificate. The
+first connection records the certificate fingerprint and every later connection to that
+address must present the same one, so a changed certificate is rejected as a possible MITM.
+The flow is:
 
 1. A client connects to the QUIC control port (`4433`) and sends a `Register` message.
 2. The proxy checks capacity, generates a random `session_token`, and records the client's IP.
 3. The proxy replies with a `RegisterAck` carrying the `session_token`.
 4. The client stamps that token into **every** data-plane packet header.
-5. The proxy validates an **(IP, token)** pair on every data-plane packet, dropping any that do not match.
+5. The proxy validates an **(IP, data-plane port, token)** triple on every data-plane packet, dropping any that do not match.
 
 This raises the bar for abuse: a random UDP sender cannot relay through your node without
-first completing a QUIC registration. The token is 8-bit (defense-in-depth alongside the
+first completing a QUIC registration. The token is 32-bit (defense-in-depth alongside the
 IP binding); the enforcement path is covered by `proxy/tests/integration_security.rs`.
 
 ### Requirements for token auth to work

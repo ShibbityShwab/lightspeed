@@ -49,3 +49,12 @@ libxcb-shape0-dev = "*"
 libxcb-xfixes0-dev = "*"
 libgl1-mesa-dev = "*"
 libgtk-3-dev = "*"
+
+# The default `macos-14` label no longer provisions a runner for this repo: the
+# aarch64 macOS job is cancelled within a second with no runner assigned, which
+# cancels the whole Release run and leaves no GitHub Release. `macos-latest`
+# acquires a runner today (the CI workflow's macOS smoke test uses it), so pin
+# the arm64 macOS build there.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-latest"
+

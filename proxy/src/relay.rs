@@ -513,14 +513,18 @@ enum TcpCmd {
 }
 
 /// Proxy-side connection state for one TCP-tunnelled game connection, keyed
-/// by its 5-tuple (see [`Tcp5Tuple`]).
+/// by its 5-tuple (see [`Tcp5Tuple`]) and owned by the client that opened it.
 ///
-/// The tunnel is one UDP socket per client, so the client's UDP source port
-/// is deliberately not part of the key; the 5-tuple is carried verbatim in
-/// the tunnel header and is what gets dialled on the server side.
+/// The 5-tuple is carried verbatim in the tunnel header, so it is client-supplied
+/// and not unique across the relay: two clients behind different NATs can present
+/// the same game source and destination. The owner is therefore checked on every
+/// packet; without it, any authenticated client could reset or inject into another
+/// client's connection by guessing the tuple.
 pub struct TcpConnState {
     /// The connection's 5-tuple (game source and destination).
     pub tuple: Tcp5Tuple,
+    /// The authenticated client that created this connection.
+    owner: SocketAddrV4,
     /// The shared sequenced-reliable channel for this connection. The receiver
     /// orders client→server bytes; the sender sequences server→client bytes.
     /// Mutex-protected because the inbound path and the connection task each
@@ -549,10 +553,16 @@ pub struct TcpConnState {
 impl TcpConnState {
     /// Create the state and its command channel. `fec_k` is the client leg's
     /// FEC block size; `cancel` is the shared teardown signal.
-    pub fn new(tuple: Tcp5Tuple, fec_k: u8, cancel: CancellationToken) -> Self {
+    pub fn new(
+        tuple: Tcp5Tuple,
+        owner: SocketAddrV4,
+        fec_k: u8,
+        cancel: CancellationToken,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(64);
         Self {
             tuple,
+            owner,
             reliable: tokio::sync::Mutex::new(TcpReliable::new(2, 2)),
             conn_tx: std::sync::Mutex::new(Some(tx)),
             conn_rx: std::sync::Mutex::new(Some(rx)),
@@ -573,6 +583,11 @@ impl TcpConnState {
     /// Take the command channel receiver, returning `None` once taken.
     fn take_conn_rx(&self) -> Option<mpsc::Receiver<TcpCmd>> {
         self.conn_rx.lock().unwrap().take()
+    }
+
+    /// The authenticated client that opened this connection.
+    pub fn owner(&self) -> SocketAddrV4 {
+        self.owner
     }
 
     /// Refresh this connection's activity clock.
@@ -922,20 +937,28 @@ impl RelayEngine {
         self.tcp_conns.read().await.len()
     }
 
-    /// Get or create the TCP connection for a 5-tuple.
+    /// Get or create the TCP connection for a 5-tuple owned by `client_addr`.
     ///
     /// Creation counts like one session: it obeys `max_sessions` (against the
     /// UDP session count plus the TCP connection count) and the egress budget
     /// hard threshold. Returns `(state, true)` on creation and
     /// `(state, false)` when the connection already existed.
+    ///
+    /// A tuple that already belongs to a different client is refused: the
+    /// 5-tuple is client-supplied, so returning the existing state would let one
+    /// client splice into another's stream.
     pub async fn get_or_create_tcp_connection(
         &self,
         tuple: Tcp5Tuple,
+        client_addr: SocketAddrV4,
         fec_k: u8,
     ) -> anyhow::Result<(Arc<TcpConnState>, bool)> {
         {
             let conns = self.tcp_conns.read().await;
             if let Some(existing) = conns.get(&tuple) {
+                if existing.owner() != client_addr {
+                    anyhow::bail!("TCP 5-tuple is owned by another client");
+                }
                 return Ok((Arc::clone(existing), false));
             }
         }
@@ -950,12 +973,20 @@ impl RelayEngine {
                 .map_err(anyhow::Error::from)?;
         }
 
-        let conn = Arc::new(TcpConnState::new(tuple, fec_k, CancellationToken::new()));
+        let conn = Arc::new(TcpConnState::new(
+            tuple,
+            client_addr,
+            fec_k,
+            CancellationToken::new(),
+        ));
         let mut conns = self.tcp_conns.write().await;
         if self.is_handoff_frozen() {
             anyhow::bail!("handoff in progress: refusing to create a TCP connection");
         }
         if let Some(existing) = conns.get(&tuple) {
+            if existing.owner() != client_addr {
+                anyhow::bail!("TCP 5-tuple is owned by another client");
+            }
             return Ok((Arc::clone(existing), false));
         }
         // The shared session budget: one UDP session plus one TCP connection
@@ -1723,7 +1754,10 @@ async fn process_tcp_packet(
         .map(|(ext, _)| ext.flags & tcp_flags::SYN != 0)
         .unwrap_or(false);
     let conn = if is_syn {
-        match engine.get_or_create_tcp_connection(tuple, fec_k).await {
+        match engine
+            .get_or_create_tcp_connection(tuple, client_addr, fec_k)
+            .await
+        {
             Ok((conn, is_new)) => {
                 if is_new {
                     metrics.record_session_created();
@@ -1781,6 +1815,15 @@ async fn process_tcp_packet(
             metrics.record_drop(DropReason::Malformed);
             return;
         };
+        if conn.owner() != client_addr {
+            warn!(
+                client = %client_addr,
+                owner = %conn.owner(),
+                "TCP packet for another client's connection dropped"
+            );
+            metrics.record_drop(DropReason::Auth);
+            return;
+        }
         conn
     };
 
@@ -2898,8 +2941,8 @@ mod tests {
                 Ok(Ok(n)) => {
                     received += n;
                     // Verify lengths look right
-                    for i in 0..n {
-                        assert_eq!(batch.msgs[i].msg_len as usize, 64);
+                    for m in batch.msgs.iter().take(n) {
+                        assert_eq!(m.msg_len as usize, 64);
                     }
                 }
                 Ok(Err(e)) => panic!("recv_batch_async error: {}", e),
@@ -3058,12 +3101,16 @@ mod tests {
         }
     }
 
+    fn tcp_client(port: u16) -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 2), port)
+    }
+
     #[tokio::test]
     async fn tcp_connection_creation_counts_against_the_session_budget() {
         let engine = RelayEngine::new(1);
 
         let (conn, is_new) = engine
-            .get_or_create_tcp_connection(tcp_tuple(12345), 4)
+            .get_or_create_tcp_connection(tcp_tuple(12345), tcp_client(40000), 4)
             .await
             .unwrap();
         assert!(is_new);
@@ -3071,7 +3118,7 @@ mod tests {
 
         // Same tuple resolves to the existing connection, not a new one.
         let (same, is_new_again) = engine
-            .get_or_create_tcp_connection(tcp_tuple(12345), 4)
+            .get_or_create_tcp_connection(tcp_tuple(12345), tcp_client(40000), 4)
             .await
             .unwrap();
         assert!(!is_new_again);
@@ -3079,9 +3126,32 @@ mod tests {
 
         // A different 5-tuple would exceed max_sessions (1), so it is refused.
         assert!(engine
-            .get_or_create_tcp_connection(tcp_tuple(23456), 4)
+            .get_or_create_tcp_connection(tcp_tuple(23456), tcp_client(40000), 4)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_tcp_connection_belongs_to_the_client_that_opened_it() {
+        let engine = RelayEngine::new(10);
+        let tuple = tcp_tuple(12345);
+        let owner = tcp_client(40000);
+        let other = tcp_client(40001);
+
+        let (_, is_new) = engine
+            .get_or_create_tcp_connection(tuple, owner, 4)
+            .await
+            .unwrap();
+        assert!(is_new);
+
+        // The tuple is client-supplied, so a second client presenting it must
+        // not be handed the first client's connection.
+        let error = match engine.get_or_create_tcp_connection(tuple, other, 4).await {
+            Ok(_) => panic!("a different client must not share the connection"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("another client"), "{error}");
+        assert_eq!(engine.tcp_connection_count().await, 1);
     }
 
     #[tokio::test]
@@ -3089,7 +3159,7 @@ mod tests {
         let engine = RelayEngine::new_with_timeout(10, Duration::from_millis(20));
 
         let (_conn, is_new) = engine
-            .get_or_create_tcp_connection(tcp_tuple(12345), 4)
+            .get_or_create_tcp_connection(tcp_tuple(12345), tcp_client(40000), 4)
             .await
             .unwrap();
         assert!(is_new);
@@ -3147,7 +3217,12 @@ mod tests {
         );
         header.version = lightspeed_protocol::PROTOCOL_VERSION_TCP;
         let engine = Arc::new(RelayEngine::new(10));
-        let conn = Arc::new(TcpConnState::new(tuple, 4, CancellationToken::new()));
+        let conn = Arc::new(TcpConnState::new(
+            tuple,
+            client_addr,
+            4,
+            CancellationToken::new(),
+        ));
         engine
             .tcp_table()
             .write()
@@ -3412,8 +3487,8 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(n >= 1);
-        for i in 0..n {
-            assert_eq!(batch.msgs[i].msg_len as usize, 32);
+        for m in batch.msgs.iter().take(n) {
+            assert_eq!(m.msg_len as usize, 32);
         }
     }
 }

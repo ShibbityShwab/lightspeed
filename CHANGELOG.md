@@ -5,11 +5,23 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.9.0] - 2026-11-13
 
 ### Added
 
 - **The Windows interceptor can carry a game's TCP control plane beside its UDP gameplay.** The shared TCP terminator moved to `client/src/capture/tcp.rs`, the WinDivert filter adds the profile's `capture_tcp_ports` as a second clause, and both transports share one tunnel socket and session token so the server sees one source address. ARC Raiders declares TCP 443. The portable pcap path and process-targeted capture stay UDP-only until per-flow TCP attribution exists.
+
+### Fixed
+
+- **GUI auto-select now applies its winner.** The race probes each relay's `/health` endpoint on port 8080, but the winner was looked up by the full data-plane address (port 4434), so every result was silently discarded: a clean first run stayed "No relay yet" and the next launch connected to the first registry entry. The lookup now matches on the relay IP at every race site, with a warning when a winner is unknown.
+- **A known game server now overrides the client-leg race.** Once the interceptor locks a server, the race that ranks relays by the player's own latency can no longer choose the data-plane relay: the destination-aware ranking, which sorts by the server-side leg first, governs. A re-measurement during a live match stages a better server-side relay for the next session instead of restarting the data plane under the player.
+- **`--demo` no longer waits 60 seconds before printing.** It registered a QUIC session first, which waited the full connect timeout when no relay was listening; the banner now appears immediately (3 s end to end with the keepalive probes).
+- **`--verify-game` no longer fails a custom profile for a missing wire id.** The wire id is a built-in protocol table, not something a user profile can declare, so a custom profile now reports a note that telemetry shows UNKNOWN instead of a `Fail`.
+- **`--test-tunnel` no longer claims the proxy forwarded packets it never saw return.** With zero responses it says only that the packets left this host and points at the relay's counters.
+
+### Security
+
+- **A TCP-tunnelled connection is bound to the client that opened it.** The v5 5-tuple is client-supplied and shared across the relay, so an authenticated client could previously RST or splice another client's connection by presenting the same tuple. The relay now stores the owner and drops a mismatched packet (counted as an auth rejection); a SYN for an owned tuple is refused.
 
 ## [1.8.4] - 2026-10-21
 

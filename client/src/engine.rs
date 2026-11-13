@@ -28,6 +28,15 @@ pub struct InterceptorHealth {
     pub detected_server: Option<std::net::SocketAddrV4>,
     pub packets_intercepted: u64,
     pub packets_injected: u64,
+    /// Datagrams received from a known relay. Read beside `packets_injected`
+    /// so a relay that returned nothing can be told apart from a client that
+    /// received replies and failed to inject them.
+    pub packets_from_proxy: u64,
+    /// The interceptor's last recorded error, when it has one.
+    pub last_error: Option<String>,
+    /// Interceptor errors, including failed WinDivert sends. A rising count
+    /// with `packets_from_proxy` also rising is an injection fault.
+    pub errors: u64,
     pub tunnelling_enabled: Option<bool>,
 }
 
@@ -959,6 +968,9 @@ impl LightSpeedEngine {
                 detected_server: stats.detected_server,
                 packets_intercepted: stats.packets_intercepted,
                 packets_injected: stats.packets_injected,
+                packets_from_proxy: stats.packets_from_proxy,
+                last_error: stats.last_error,
+                errors: stats.errors,
                 tunnelling_enabled: stats.tunnelling_enabled,
             }
         })

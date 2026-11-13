@@ -25,6 +25,10 @@
 //!     fec_k: 4,
 //!     adaptive_fec: Default::default(),
 //!     bypass: Default::default(),
+//!     // A profile that needs the game's TCP control plane relayed beside its
+//!     // UDP gameplay declares it here (ARC Raiders uses 443). `None` captures
+//!     // UDP only, which is every other profile.
+//!     capture_tcp_ports: None,
 //! };
 //!
 //! let interceptor = create_interceptor();
