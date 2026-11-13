@@ -79,6 +79,8 @@ pub mod game_id {
     /// Raven Software's Jedi Knight II: Jedi Outcast, played through the NWH
     /// Multiplayer client (UDP gameplay over 28070).
     pub const JEDIOUTCAST: u8 = 25;
+    /// CipSoft's Tibia (UDP login server 7171, game world 7172).
+    pub const TIBIA: u8 = 26;
     /// Canonical CLI key mapped to its wire id, ordered by ascending id.
     ///
     /// Keys byte-match the client's canonical `--game` CLI strings. [`UNKNOWN`]
@@ -109,6 +111,7 @@ pub mod game_id {
         ("rainbowsix", RAINBOWSIX),
         ("arcraiders", ARCRAIDERS),
         ("jedioutcast", JEDIOUTCAST),
+        ("tibia", TIBIA),
     ];
 
     /// Resolve a CLI game key to its wire id, or [`UNKNOWN`] when absent.
@@ -1005,19 +1008,19 @@ mod tests {
 
     #[test]
     fn test_game_ids_unique_and_stable() {
-        assert_eq!(game_id::GAME_IDS.len(), 25, "every real game needs one id");
+        assert_eq!(game_id::GAME_IDS.len(), 26, "every real game needs one id");
 
-        // Each id 1..=25 must appear exactly once (0 stays reserved for UNKNOWN).
-        let mut seen = [0u8; 26];
+        // Each id 1..=26 must appear exactly once (0 stays reserved for UNKNOWN).
+        let mut seen = [0u8; 27];
         for (key, id) in game_id::GAME_IDS.iter().copied() {
             assert!(
-                (1..=25).contains(&id),
+                (1..=26).contains(&id),
                 "key {key:?} has out-of-range id {id}"
             );
             assert_eq!(seen[id as usize], 0, "duplicate id {id}");
             seen[id as usize] += 1;
         }
-        for id in 1..=25u8 {
+        for id in 1..=26u8 {
             assert_eq!(seen[id as usize], 1, "id {id} missing or duplicated");
         }
 
@@ -1046,6 +1049,7 @@ mod tests {
         assert_eq!(game_id::RAINBOWSIX, 23);
         assert_eq!(game_id::ARCRAIDERS, 24);
         assert_eq!(game_id::JEDIOUTCAST, 25);
+        assert_eq!(game_id::TIBIA, 26);
     }
 
     #[test]
