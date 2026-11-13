@@ -891,6 +891,17 @@ mod tests {
     }
 
     #[test]
+    fn the_supported_games_page_lists_every_registry_entry() {
+        let page = include_str!("../../../docs/supported-games.md");
+        for (key, display) in GAME_REGISTRY {
+            assert!(
+                page.contains(&format!("`--game {key}`")),
+                "docs/supported-games.md has no row for {key:?} ({display})"
+            );
+        }
+    }
+
+    #[test]
     fn test_all_game_keys_resolve_and_match_display_names() {
         for (key, display) in all_game_keys() {
             let game = detect_game(key)

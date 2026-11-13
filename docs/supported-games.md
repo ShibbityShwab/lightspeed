@@ -30,7 +30,7 @@ LightSpeed includes built-in profiles for 25 popular multiplayer games. Each pro
 | 20 | **Minecraft** | `--game minecraft` | 19132-19133 | None | `Minecraft.Windows.exe` |
 | 21 | **Hunt: Showdown** | `--game hunt` | 20000-20099 | Easy Anti-Cheat (EAC) | `HuntGame.exe` |
 | 22 | **Rainbow Six Siege** | `--game rainbowsix` | 10000-10099 | BattlEye + R6 Shieldguard | `RainbowSix.exe` |
-| 23 | **Dead by Daylight** | `--game deadbydaylight` | 21845-24000 | Easy Anti-Cheat | `DeadByDaylight-Win64-Shipping.exe` |
+| 23 | **Minecraft Java Edition** | `--game minecraft-java` | 25565 (TCP) | None | `javaw.exe` |
 | 24 | **ARC Raiders** | `--game arcraiders` | 7600-7777 | Easy Anti-Cheat | `PioneerGame.exe` |
 | 25 | **Jedi Knight II: Jedi Outcast (NWH)** | `--game jedioutcast` | 28070 | None reported | `nwhmp.exe` |
 
