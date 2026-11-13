@@ -32,6 +32,7 @@
 //! - **Hunt: Showdown**: `HuntGame.exe`
 //! - **Jedi Knight II: Jedi Outcast (NWH)**: `nwhmp.exe`
 //! - **Tibia**: `Tibia.exe`
+//! - **ROB RUN**: `ROB RUN.exe`
 //!
 //! ## Capture Filters
 //!
@@ -58,6 +59,7 @@ pub mod ow2;
 pub mod pubg;
 pub mod rainbowsix;
 pub mod roblox;
+pub mod robrun;
 pub mod rocketleague;
 pub mod rust;
 pub mod tibia;
@@ -298,13 +300,14 @@ pub(crate) fn detect_game(name: &str) -> anyhow::Result<Box<dyn GameConfig>> {
             Ok(Box::new(jedioutcast::JediOutcastConfig))
         }
         "tibia" => Ok(Box::new(tibia::TibiaConfig)),
+        "robrun" | "rob-run" => Ok(Box::new(robrun::RobRunConfig)),
         _ => Err(anyhow::anyhow!(unknown_game_message(name))),
     }
 }
 
 /// The `Supported:` list, in one place so the built-in resolver and [`resolve`]
 /// cannot drift apart.
-const SUPPORTED_GAMES: &str = "fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, minecraft-java, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt, rainbowsix, arcraiders, jedioutcast, tibia";
+const SUPPORTED_GAMES: &str = "fortnite, cs2, csgo, bodycam, deadbydaylight, dota2, rust, valorant, apex, ow2, lol, pubg, maplestory, minecraft, minecraft-java, genshin, rocketleague, roblox, wot, zomboid, wardogs, hunt, rainbowsix, arcraiders, jedioutcast, tibia, robrun";
 
 /// The built-in `Unknown game` message: the unchanged head every existing
 /// caller matches on.
@@ -414,6 +417,7 @@ pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("arcraiders", "ARC Raiders"),
     ("jedioutcast", "Jedi Knight II: Jedi Outcast (NWH)"),
     ("tibia", "Tibia"),
+    ("robrun", "ROB RUN"),
 ];
 
 /// Return every CLI key paired with its display name.
@@ -871,6 +875,9 @@ mod tests {
         "jedi",
         // Tibia
         "tibia",
+        // ROB RUN
+        "robrun",
+        "rob-run",
     ];
 
     #[test]
@@ -893,7 +900,7 @@ mod tests {
             GAME_REGISTRY.len(),
             "GAME_REGISTRY must stay in sync with the supported games"
         );
-        assert_eq!(GAME_REGISTRY.len(), 26, "26 supported games");
+        assert_eq!(GAME_REGISTRY.len(), 27, "27 supported games");
     }
 
     #[test]
@@ -1492,14 +1499,14 @@ udp_ports = "30008"
     ///
     /// `GAME_REGISTRY` is a `const` slice, so the mutation check below cannot
     /// doctor the real one: it doctors a copy and watches this same guard fail.
-    /// The 26-entry count and the wire-id completeness check are exactly the
+    /// The 27-entry count and the wire-id completeness check are exactly the
     /// shipped guards (`test_all_game_keys_count_matches_registry`,
     /// `test_every_registry_key_resolves_to_game_id`). They are not weakened
     /// for user profiles - that is the point of this test.
     fn registry_guard(entries: &[(&str, &str)]) -> Result<(), String> {
-        if entries.len() != 26 {
+        if entries.len() != 27 {
             return Err(format!(
-                "GAME_REGISTRY must stay at 26 entries, found {}",
+                "GAME_REGISTRY must stay at 27 entries, found {}",
                 entries.len()
             ));
         }
@@ -1519,9 +1526,9 @@ udp_ports = "30008"
     /// at 23 entries, every id is unique, and none reuses the reserved
     /// `UNKNOWN` (the protocol's `test_game_ids_unique_and_stable`).
     fn game_ids_guard(ids: &[(&str, u8)]) -> Result<(), String> {
-        if ids.len() != 26 {
+        if ids.len() != 27 {
             return Err(format!(
-                "GAME_IDS must stay at 26 entries, found {}",
+                "GAME_IDS must stay at 27 entries, found {}",
                 ids.len()
             ));
         }
@@ -1563,7 +1570,7 @@ udp_ports = "30008"
         );
 
         // ... and both shipped registries are exactly as they were.
-        assert_eq!(GAME_REGISTRY.len(), 26, "26 supported games");
+        assert_eq!(GAME_REGISTRY.len(), 27, "27 supported games");
         assert_eq!(
             all_game_keys().len(),
             GAME_REGISTRY.len(),
@@ -1571,7 +1578,7 @@ udp_ports = "30008"
         );
         assert_eq!(
             lightspeed_protocol::game_id::GAME_IDS.len(),
-            26,
+            27,
             "every real game needs one id"
         );
         assert!(registry_guard(GAME_REGISTRY).is_ok());
@@ -1600,8 +1607,8 @@ udp_ports = "30008"
     fn the_registry_count_guards_are_mutation_checked() {
         let mut registry: Vec<(&str, &str)> = GAME_REGISTRY.to_vec();
         registry.push(("fake-game", "Fake Game"));
-        let err = registry_guard(&registry).expect_err("26 entries must fail the count guard");
-        assert!(err.contains("26"), "{err}");
+        let err = registry_guard(&registry).expect_err("27 entries must fail the count guard");
+        assert!(err.contains("27"), "{err}");
         registry.pop();
         assert!(
             registry_guard(&registry).is_ok(),
@@ -1610,8 +1617,8 @@ udp_ports = "30008"
 
         let mut ids: Vec<(&str, u8)> = lightspeed_protocol::game_id::GAME_IDS.to_vec();
         ids.push(("fake-game", 42));
-        let err = game_ids_guard(&ids).expect_err("26 ids must fail the count guard");
-        assert!(err.contains("26"), "{err}");
+        let err = game_ids_guard(&ids).expect_err("27 ids must fail the count guard");
+        assert!(err.contains("27"), "{err}");
         ids.pop();
         assert!(game_ids_guard(&ids).is_ok(), "the restored table must pass");
     }

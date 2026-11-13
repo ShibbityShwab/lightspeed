@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 26 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 27 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
 
 ---
 
@@ -34,6 +34,7 @@ LightSpeed includes built-in profiles for 26 popular multiplayer games. Each pro
 | 24 | **ARC Raiders** | `--game arcraiders` | 7600-7777 | Easy Anti-Cheat | `PioneerGame.exe` |
 | 25 | **Jedi Knight II: Jedi Outcast (NWH)** | `--game jedioutcast` | 28070 | None reported | `nwhmp.exe` |
 | 26 | **Tibia** | `--game tibia` | 7171-7172 | BattlEye | `Tibia.exe` |
+| 27 | **ROB RUN** | `--game robrun` | 32768-60999 (ephemeral) | Easy Anti-Cheat | `ROB RUN.exe` |
 
 > **Rainbow Six Siege note:** the profile is **UNVERIFIED against R6
 > Shieldguard.** Siege ships three anti-cheat layers - BattlEye, Shieldguard and

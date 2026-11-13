@@ -77,6 +77,7 @@ pub fn default_port_range(key: &str, default_port: u16) -> (u16, u16) {
         "arcraiders" => (7600, 7777),
         "jedioutcast" => (28070, 28070),
         "tibia" => (7171, 7172),
+        "robrun" => (32768, 60999),
         _ => (default_port, default_port),
     }
 }
