@@ -6,7 +6,7 @@
 # ──────────────────────────────────────────────────────────────
 
 # ── Stage 1: Build ───────────────────────────────────────────
-FROM rust:1.99.1-slim-bookworm AS builder
+FROM rust:1.100.0-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -17,6 +17,11 @@ COPY client/Cargo.toml client/Cargo.toml
 COPY proxy/Cargo.toml proxy/Cargo.toml
 # client-gui is Windows-only but must be present for workspace resolution
 COPY client-gui/Cargo.toml client-gui/Cargo.toml
+# The manifests declare bench targets, so cargo refuses to parse the workspace
+# unless the bench files exist. They are not compiled by a --bin build; they
+# only have to be present.
+COPY proxy/benches proxy/benches
+COPY protocol/benches protocol/benches
 
 # Create dummy source files to cache dependency compilation
 RUN mkdir -p protocol/src client/src proxy/src client-gui/src && \
@@ -27,7 +32,7 @@ RUN mkdir -p protocol/src client/src proxy/src client-gui/src && \
     echo "fn main() {}" > client-gui/src/main.rs
 
 # Build dependencies only (cached layer)
-RUN cargo build --release --bin lightspeed-proxy --features quic || echo "Note: dependency cache layer may need real source"
+RUN cargo build --release --bin lightspeed-proxy --features quic
 
 # Now copy real source code
 COPY protocol/ protocol/
