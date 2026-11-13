@@ -16,7 +16,6 @@ lightspeed-client = { path = "../client", features = ["quic", "windivert-redirec
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tracing-appender = "0.2"
 anyhow = { workspace = true }
 axoupdater = "0.10.2"
 dirs = "7.0"
@@ -28,7 +27,6 @@ toml = { workspace = true }
 # provider selection panic on the first QUIC call. main.rs pins `ring`.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 eframe = { version = "0.36", features = ["default", "glow"] }
-egui_plot = "0.37"
 # Decode the embedded brand PNGs at runtime: the window/taskbar icon
 # (main.rs) and the in-app header mark (app.rs). PNG only, no default
 # features, so this adds no extra decoders to the build.
