@@ -334,6 +334,32 @@ pub fn current_proxy() -> Option<SocketAddrV4> {
     Some(SocketAddrV4::new(ip, port))
 }
 
+/// The game server the interceptor has locked onto, packed like [`CURRENT_PROXY`]
+/// (0 = none yet).
+///
+/// Published the moment the interceptor detects a server, so the re-routing loop
+/// can rank relays for *that server* instead of the address passed at startup -
+/// a game the player launched without naming a server had no destination at all,
+/// and every re-route then fell back to client-nearest.
+static LOCKED_DESTINATION: AtomicU64 = AtomicU64::new(0);
+
+/// Publish the game server the interceptor just locked.
+pub fn set_locked_destination(addr: SocketAddrV4) {
+    let packed = (u64::from(u32::from(*addr.ip())) << 16) | u64::from(addr.port());
+    LOCKED_DESTINATION.store(packed, Ordering::Relaxed);
+}
+
+/// The locked game server, or `None` until the interceptor has seen one.
+pub fn locked_destination() -> Option<SocketAddrV4> {
+    let packed = LOCKED_DESTINATION.load(Ordering::Relaxed);
+    if packed == 0 {
+        return None;
+    }
+    let ip = Ipv4Addr::from((packed >> 16) as u32);
+    let port = (packed & 0xFFFF) as u16;
+    Some(SocketAddrV4::new(ip, port))
+}
+
 /// Set the active multipath relay destinations (fewer than 2 disables it).
 pub fn set_multipath_paths(addrs: Vec<SocketAddrV4>) {
     multipath().lock().unwrap().set_paths(addrs);

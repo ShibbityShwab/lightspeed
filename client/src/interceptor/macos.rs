@@ -226,6 +226,7 @@ impl TrafficInterceptor for PfInterceptor {
             let mut g = counters.detected_server.lock().unwrap();
             *g = Some(server_addr);
         }
+        crate::session::set_locked_destination(server_addr);
 
         let running = Arc::new(AtomicBool::new(true));
 

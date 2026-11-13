@@ -4,12 +4,12 @@
 //! better one when the current path degrades. Builds on the one-shot probe +
 //! select logic in [`super::proxy_probe`].
 
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
 use tokio::sync::watch;
 
-use crate::route::ProxyHealth;
+use crate::route::{ProxyHealth, RouteStrategy};
 
 use super::proxy_probe::{select_best_proxy, ProbeCandidate};
 
@@ -26,6 +26,29 @@ fn should_switch(current_latency: Option<u64>, candidate_latency: u64) -> bool {
             candidate_latency < cur.saturating_sub(threshold)
         }
     }
+}
+
+/// Decide between a client-leg re-race and a destination-aware ranking.
+///
+/// The latency threshold applies to the client leg, which is what a `Nearest`
+/// race measures. A `DestinationAware` result has already priced the relay's
+/// leg to the game server, so its winner can legitimately have a *worse* client
+/// leg than the relay currently carrying the match - the case that kept a
+/// player on a nearby relay while the server sat on another continent.
+fn should_switch_for(
+    destination_aware: bool,
+    current: Option<SocketAddrV4>,
+    best: SocketAddrV4,
+    current_latency: Option<u64>,
+    best_latency: u64,
+) -> bool {
+    if current == Some(best) {
+        return false;
+    }
+    if destination_aware {
+        return true;
+    }
+    should_switch(current_latency, best_latency)
 }
 
 /// Order multipath paths by accumulated win rate (highest first). Paths with
@@ -113,6 +136,12 @@ pub async fn run_continuous_rerouting(
     let mut current = crate::session::current_proxy();
     let mut current_latency: Option<u64> = None;
     let mut supervised_paths: Vec<SocketAddrV4> = Vec::new();
+    // The destination already reported to a relay. The registration ack is the
+    // only source of a destination's region, and the estimator needs that region
+    // to price the relay-to-server leg, so the first iteration after a server is
+    // locked spends one registration learning it.
+    let mut reported_destination: Option<SocketAddrV4> = None;
+    const UNSPECIFIED: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
     loop {
         tokio::select! {
@@ -120,8 +149,26 @@ pub async fn run_continuous_rerouting(
             _ = tokio::time::sleep(REROUTE_INTERVAL) => {}
         }
 
+        let destination = crate::session::locked_destination().unwrap_or(game_server);
+        let known_destination = destination != UNSPECIFIED;
+
+        // Seed the region for a newly locked server through the relay already in
+        // use, so the selection that follows can rank the whole path instead of
+        // falling back to client-nearest.
+        if known_destination && reported_destination != Some(destination) {
+            if let Some(relay) = current {
+                crate::quic::register_session_with_destination(
+                    relay,
+                    control_port,
+                    Some(*destination.ip()),
+                )
+                .await;
+                reported_destination = Some(destination);
+            }
+        }
+
         let route =
-            match select_best_proxy(&candidates, data_port, control_port, game_server, &strategy)
+            match select_best_proxy(&candidates, data_port, control_port, destination, &strategy)
                 .await
             {
                 Ok(r) => r,
@@ -147,18 +194,38 @@ pub async fn run_continuous_rerouting(
             continue;
         };
 
-        if current == Some(best.data_addr) || !should_switch(current_latency, best_latency) {
+        let destination_aware = matches!(&route.strategy, RouteStrategy::DestinationAware);
+        if !should_switch_for(
+            destination_aware,
+            current,
+            best.data_addr,
+            current_latency,
+            best_latency,
+        ) {
             continue;
         }
 
-        match crate::quic::register_session(best.data_addr, control_port).await {
+        let registered = if known_destination {
+            crate::quic::register_session_with_destination(
+                best.data_addr,
+                control_port,
+                Some(*destination.ip()),
+            )
+            .await
+        } else {
+            crate::quic::register_session(best.data_addr, control_port).await
+        };
+
+        match registered {
             Some(_) => {
                 crate::session::set_current_proxy(best.data_addr);
                 tracing::info!(
                     from = ?current,
                     to = %best.data_addr,
+                    destination = %destination,
+                    destination_aware,
                     latency_us = best_latency,
-                    "Rerouted to a faster relay"
+                    "Rerouted to a better relay"
                 );
                 current = Some(best.data_addr);
                 current_latency = Some(best_latency);
@@ -194,5 +261,48 @@ mod tests {
     #[test]
     fn test_no_switch_on_worse_candidate() {
         assert!(!should_switch(Some(100_000), 150_000));
+    }
+
+    #[test]
+    fn destination_aware_switches_to_the_relay_the_server_is_near() {
+        // Live case: a player in Asia on a US East server. Singapore wins the
+        // client leg (65 ms) but loses the whole path (65 + ~230); Los Angeles
+        // has the worse client leg (214 ms) and the better path (214 + ~65).
+        let sgp = SocketAddrV4::new(Ipv4Addr::new(45, 77, 32, 236), 4434);
+        let lax = SocketAddrV4::new(Ipv4Addr::new(207, 246, 106, 36), 4434);
+        assert!(should_switch_for(
+            true,
+            Some(sgp),
+            lax,
+            Some(65_000),
+            214_000
+        ));
+        // The same swap must not happen on a client-leg race alone.
+        assert!(!should_switch_for(
+            false,
+            Some(sgp),
+            lax,
+            Some(65_000),
+            214_000
+        ));
+    }
+
+    #[test]
+    fn no_switch_when_already_on_the_best_relay() {
+        let lax = SocketAddrV4::new(Ipv4Addr::new(207, 246, 106, 36), 4434);
+        assert!(!should_switch_for(
+            true,
+            Some(lax),
+            lax,
+            Some(214_000),
+            214_000
+        ));
+        assert!(!should_switch_for(
+            false,
+            Some(lax),
+            lax,
+            Some(214_000),
+            214_000
+        ));
     }
 }

@@ -760,6 +760,9 @@ fn evaluate_pre_gate(
 }
 
 fn publish_detected(counters: &InterceptorCounters, server: Option<SocketAddrV4>) {
+    if let Some(srv) = server {
+        crate::session::set_locked_destination(srv);
+    }
     let mut guard = counters.detected_server.lock().unwrap();
     if *guard != server {
         *guard = server;

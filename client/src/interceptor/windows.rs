@@ -1086,6 +1086,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     if let Some(server) = detected_server(decision) {
                                         if reported_server != Some(server) {
                                             reported_server = Some(server);
+                                            crate::session::set_locked_destination(server);
                                             if let Ok(mut g) = counters_ic.detected_server.lock() {
                                                 *g = Some(server);
                                             }
