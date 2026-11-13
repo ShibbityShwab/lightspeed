@@ -310,13 +310,11 @@ jobs:
       - plan
       - host
     if: ${{ always() && github.event_name == 'push' && needs.host.result == 'success' }}
-    # Serialize the three bump jobs: they all commit to master, and on the
-    # v1.7.0 release they raced - the homebrew push won and chocolatey's and
-    # scoop's rejects aborted their remaining steps (including the nupkg
-    # push). One concurrency group makes them queue instead.
-    concurrency:
-      group: release-bump-${{ github.ref }}
-      cancel-in-progress: false
+    # The three bump jobs all commit to master, so they must not run at the same
+    # time. `needs` chains them instead of a concurrency group: the group kept
+    # cancelling bump-chocolatey (a queued job in a group loses its slot when a
+    # newer job in the same group appears), which left the nuspec on the
+    # previous version on both v1.9.0 and v1.10.0.
     permissions:
       contents: write
     runs-on: "ubuntu-22.04"
@@ -354,10 +352,8 @@ jobs:
     needs:
       - plan
       - host
+      - bump-homebrew
     if: ${{ always() && github.event_name == 'push' && needs.host.result == 'success' }}
-    concurrency:
-      group: release-bump-${{ github.ref }}
-      cancel-in-progress: false
     permissions:
       contents: write
     runs-on: "ubuntu-22.04"
@@ -413,10 +409,8 @@ jobs:
     needs:
       - plan
       - host
+      - bump-chocolatey
     if: ${{ always() && github.event_name == 'push' && needs.host.result == 'success' }}
-    concurrency:
-      group: release-bump-${{ github.ref }}
-      cancel-in-progress: false
     permissions:
       contents: write
     runs-on: "ubuntu-22.04"
