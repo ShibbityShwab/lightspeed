@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 use std::net::SocketAddrV4;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -887,6 +887,11 @@ pub struct LightSpeedApp<P: Platform> {
     /// The game server the current relay was chosen for, so a new raid's server
     /// triggers a fresh choice and a repeated tick does not.
     chosen_for_server: Option<Ipv4Addr>,
+    /// Whether a relay has been chosen for the server this run locked, shared
+    /// with the engine's hold watcher: the relay being *connected* is not the
+    /// same condition as a relay having been chosen *for that server*, and
+    /// releasing on the former is what kept a startup relay in place.
+    server_chosen: Arc<AtomicBool>,
 
     /// When tunnelling was last withheld, so a hold that never finds a server
     /// cannot strand the run silently.
@@ -1103,6 +1108,7 @@ impl<P: Platform> LightSpeedApp<P> {
             relay_legs: None,
             relay_measurement: None,
             chosen_for_server: None,
+            server_chosen: Arc::new(AtomicBool::new(false)),
             held_since: None,
             direct_fallback: false,
             last_presence_check: None,
@@ -1511,6 +1517,7 @@ impl<P: Platform> LightSpeedApp<P> {
             // fresh chance at the relay: a no-reply fallback on the lobby
             // backend must not pin the whole session direct.
             self.chosen_for_server = Some(server);
+            self.server_chosen.store(true, Ordering::Relaxed);
             self.held_since = None;
             if lock_or_recover(&self.engine).release_tunnelling() {
                 tracing::info!(
@@ -1529,6 +1536,7 @@ impl<P: Platform> LightSpeedApp<P> {
 
         let first_server = self.chosen_for_server.is_none();
         self.chosen_for_server = Some(server);
+        self.server_chosen.store(true, Ordering::Relaxed);
         let chosen = self.choose_relay_for_destination();
         let Some(addr) = chosen else {
             return;
@@ -1917,10 +1925,12 @@ impl<P: Platform> LightSpeedApp<P> {
                     // holding this mutex across that spawn is what stopped the
                     // arming call from ever returning in a live run.
                     let status = engine.status_watch();
+                    let chosen = Arc::clone(&self.server_chosen);
                     drop(engine);
                     let armed =
                         lock_or_recover(&self.engine).release_hold_when_connected(move || {
-                            status.read().map(|s| s.connected).unwrap_or(false)
+                            chosen.load(Ordering::Relaxed)
+                                && status.read().map(|s| s.connected).unwrap_or(false)
                         });
                     if !armed {
                         tracing::warn!("No release watcher: this run is not held");
@@ -2576,6 +2586,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 // server has a choice. Measured live: Auto selected, still on
                 // Los Angeles for a Sao Paulo server.
                 self.chosen_for_server = None;
+                self.server_chosen.store(false, Ordering::Relaxed);
             }
             self.persist_config();
             if auto && !self.status.connected {
