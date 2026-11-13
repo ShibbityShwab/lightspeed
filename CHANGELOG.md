@@ -5,6 +5,23 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-11-13
+
+### Added
+
+- **Jedi Knight II: Jedi Outcast, played through the NWH Multiplayer client.** `nwhmp.exe` over UDP `28070`, a single port, so the capture filter is `udp port 28070`. Requested in #170.
+- **Tibia.** `Tibia.exe` and `TibiaLauncher.exe` over UDP `7171-7172` (login server and game world), BattlEye recorded. Requested in #171. The `client.exe` newer installs also mention is deliberately not matched by name.
+
+### Changed
+
+- **The Docker image is built natively per architecture.** The arm64 leg ran under QEMU and took roughly 28 of the ~29 minutes a build needed; it now compiles on a free arm64 runner in parallel with amd64, and a merge job publishes the multi-arch manifest once both succeed. A build is now about four minutes.
+- **Regression benchmarks run on release tags.** They were 952 of the 955 seconds of CI on every push; CI's remaining critical path is about three minutes.
+- **The Rust toolchain is pinned** in `rust-toolchain.toml` and in every workflow, so a stable release cannot change the lint set under a green tree overnight.
+
+### Fixed
+
+- **The supported-games page is checked against the registry.** It had drifted: Dead by Daylight was listed twice and Minecraft Java Edition had no row at all.
+
 ## [1.9.0] - 2026-11-13
 
 ### Added
