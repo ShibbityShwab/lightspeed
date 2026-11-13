@@ -76,6 +76,9 @@ pub mod game_id {
     pub const RAINBOWSIX: u8 = 23;
     /// Embark Studios' ARC Raiders (UDP gameplay over 61606-61632).
     pub const ARCRAIDERS: u8 = 24;
+    /// Raven Software's Jedi Knight II: Jedi Outcast, played through the NWH
+    /// Multiplayer client (UDP gameplay over 28070).
+    pub const JEDIOUTCAST: u8 = 25;
     /// Canonical CLI key mapped to its wire id, ordered by ascending id.
     ///
     /// Keys byte-match the client's canonical `--game` CLI strings. [`UNKNOWN`]
@@ -105,6 +108,7 @@ pub mod game_id {
         ("minecraft-java", MINECRAFT_JAVA),
         ("rainbowsix", RAINBOWSIX),
         ("arcraiders", ARCRAIDERS),
+        ("jedioutcast", JEDIOUTCAST),
     ];
 
     /// Resolve a CLI game key to its wire id, or [`UNKNOWN`] when absent.
@@ -1001,19 +1005,19 @@ mod tests {
 
     #[test]
     fn test_game_ids_unique_and_stable() {
-        assert_eq!(game_id::GAME_IDS.len(), 24, "every real game needs one id");
+        assert_eq!(game_id::GAME_IDS.len(), 25, "every real game needs one id");
 
-        // Each id 1..=23 must appear exactly once (0 stays reserved for UNKNOWN).
-        let mut seen = [0u8; 25];
+        // Each id 1..=25 must appear exactly once (0 stays reserved for UNKNOWN).
+        let mut seen = [0u8; 26];
         for (key, id) in game_id::GAME_IDS.iter().copied() {
             assert!(
-                (1..=24).contains(&id),
+                (1..=25).contains(&id),
                 "key {key:?} has out-of-range id {id}"
             );
             assert_eq!(seen[id as usize], 0, "duplicate id {id}");
             seen[id as usize] += 1;
         }
-        for id in 1..=22u8 {
+        for id in 1..=25u8 {
             assert_eq!(seen[id as usize], 1, "id {id} missing or duplicated");
         }
 
@@ -1038,6 +1042,10 @@ mod tests {
         assert_eq!(game_id::WARDDOGS, 19);
         assert_eq!(game_id::MINECRAFT, 20);
         assert_eq!(game_id::HUNT, 21);
+        assert_eq!(game_id::MINECRAFT_JAVA, 22);
+        assert_eq!(game_id::RAINBOWSIX, 23);
+        assert_eq!(game_id::ARCRAIDERS, 24);
+        assert_eq!(game_id::JEDIOUTCAST, 25);
     }
 
     #[test]
