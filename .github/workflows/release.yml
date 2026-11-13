@@ -530,3 +530,45 @@ jobs:
         with:
           identifier: ShibbityShwab.LightSpeed
           token: ${{ secrets.WINGET_TOKEN }}
+
+  # A release is not done until every package manifest points at the new
+  # version. On v1.9.0 the chocolatey bump was cancelled by the bump
+  # concurrency group while two runs overlapped: the tag and the GitHub
+  # Release were fine, but the nuspec stayed on the previous version and the
+  # feed was never pushed. This turns that silent drift into a red release.
+  verify-bumps:
+    needs:
+      - bump-homebrew
+      - bump-chocolatey
+      - bump-scoop
+    if: ${{ always() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+
+      - name: Verify every package manifest matches the tag
+        shell: bash
+        run: |
+          set -uo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          fail=0
+          for attempt in 1 2 3 4 5 6; do
+            git pull --ff-only origin master || true
+            fail=0
+            grep -q "version \"$VERSION\"" Formula/lightspeed.rb || fail=1
+            grep -q "<version>$VERSION</version>" dist/chocolatey/lightspeed.nuspec || fail=1
+            grep -q "releases/download/v$VERSION/" dist/chocolatey/tools/chocolateyInstall.ps1 || fail=1
+            grep -q "\"version\": \"$VERSION\"" dist/scoop/lightspeed.json || fail=1
+            [ "$fail" -eq 0 ] && break
+            sleep 20
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::a package manifest is still not at $VERSION after the bump jobs"
+            grep -n "version" Formula/lightspeed.rb | head -3 || true
+            grep -n "<version>" dist/chocolatey/lightspeed.nuspec | head -3 || true
+            grep -n '"version"' dist/scoop/lightspeed.json | head -3 || true
+            exit 1
+          fi
+          echo "all package manifests are at $VERSION"
