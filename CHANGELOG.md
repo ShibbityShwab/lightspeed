@@ -5,6 +5,45 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-11-13
+
+### Added
+
+- **The relay is chosen for the server the game is actually talking to.** The
+  interceptor publishes the server it locks, and the reroute loop ranks relays
+  on the whole path - your leg and the relay's leg to that server - instead of
+  a startup address. A destination-aware winner may also switch without
+  clearing the client-leg threshold, since a better match server further away
+  can still shorten the route. The interceptor and the redirect backend both
+  publish the lock now, on Windows, Linux and macOS.
+
+### Fixed
+
+- **The status rail describes the route instead of the intent.** A session that
+  had fallen back to the direct path still read `OPTIMIZING` in green with a
+  relay named underneath it. Direct has its own state word and its own `Path`
+  row, and the hold that runs while a relay is being chosen for a freshly
+  locked server reads `HOLDING` instead of a fallback that already failed.
+- **A match no longer starts on a relay nobody chose for it.** The GUI holds
+  traffic on the direct path until a relay has been picked for the locked
+  server, and waits for that address to survive three seconds before deciding,
+  so the first address to appear can no longer own the choice.
+- **`Relayed` counts both directions** - `N sent / M back` - and turns amber
+  when traffic left and nothing returned, which is the exact state that used to
+  read as a healthy session.
+- **`No game detected` no longer appears under a pinned game.** The caption is
+  only used for an empty pick in auto mode, where it is true.
+- **The round-trip figure says what it measures.** The headline millisecond
+  value is the leg to the relay, not the game's own ping; it now says so on
+  hover.
+- **Settings reports the capture backend that is working** (`WinDivert`,
+  active) instead of `pcap mode: not detected` while WinDivert is relaying.
+
+### Security
+
+- quinn-proto 0.11.19 and quinn-udp 0.5.16 for RUSTSEC-2026-0523,
+  RUSTSEC-2026-0524 and RUSTSEC-2026-0538.
+
 ## [1.10.0] - 2026-11-13
 
 ### Added
