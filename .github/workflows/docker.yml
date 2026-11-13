@@ -12,14 +12,47 @@ on:
       - '.github/workflows/docker.yml'
   workflow_dispatch:
 
+# Two native builds instead of one QEMU build. Compiling the Rust dependency
+# graph for arm64 under emulation took the bulk of a ~28 minute run; the arm64
+# standard runner is free for public repositories, so each platform now builds
+# on its own architecture and a last job stitches the digests into one
+# multi-arch manifest with the same tags as before.
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/lightspeed-proxy
 
 jobs:
-  build-and-push:
-    name: Build & Push
+  meta:
+    name: Tags
     runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+    steps:
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=
+            type=ref,event=branch
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            scope: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            scope: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -34,30 +67,78 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU (for ARM64 cross-build)
-        uses: docker/setup-qemu-action@v4
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=
-            type=ref,event=branch
-
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: infra/docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          labels: ${{ needs.meta.outputs.labels }}
+          # Push an untagged image and keep its digest; the merge job is what
+          # publishes `latest`/sha/branch, so a half-finished matrix never
+          # leaves a tag pointing at a single-architecture image.
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.scope }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish multi-arch manifest
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          refs=""
+          for file in *; do
+            refs="$refs $image@sha256:$file"
+          done
+          tagargs=""
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tagargs="$tagargs -t $tag"
+          done <<< "${{ needs.meta.outputs.tags }}"
+          echo "creating manifest for:$tagargs"
+          docker buildx imagetools create $tagargs $refs
+          docker buildx imagetools inspect "$image:latest" | head -20
