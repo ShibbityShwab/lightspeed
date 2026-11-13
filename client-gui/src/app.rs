@@ -2191,7 +2191,13 @@ impl<P: Platform> LightSpeedApp<P> {
     /// The full-bleed state rail: the state word, the live round trip, and the
     /// one-line description of what is happening.
     fn state_rail(&self, ui: &mut egui::Ui, boosting: bool, narrow: bool) {
-        let (word, word_color) = if boosting {
+        // A direct fallback is not optimisation. The live ROB RUN run read
+        // "OPTIMIZING" in green while the ledger underneath said "Direct
+        // fallback" and the relay had returned nothing: the state word must
+        // describe the route, not the intent.
+        let (word, word_color) = if boosting && self.direct_fallback {
+            (i18n::t("state.direct").to_uppercase(), warn)
+        } else if boosting {
             (i18n::t("state.optimizing").to_uppercase(), signal)
         } else if self.status.connected {
             (i18n::t("state.connected").to_uppercase(), text_1)
@@ -2200,11 +2206,16 @@ impl<P: Platform> LightSpeedApp<P> {
         };
 
         let sub_line = if boosting {
-            let relay = self
-                .selected_entry()
-                .and_then(|e| e.node_id.as_deref())
-                .map(discovery::friendly_label)
-                .unwrap_or_else(|| self.status.proxy_addr.clone());
+            // Naming a relay beside DIRECT would repeat the old lie in a smaller
+            // font, so the fallback replaces the relay here.
+            let relay = if self.direct_fallback {
+                i18n::t("route.direct_fallback").into_owned()
+            } else {
+                self.selected_entry()
+                    .and_then(|e| e.node_id.as_deref())
+                    .map(discovery::friendly_label)
+                    .unwrap_or_else(|| self.status.proxy_addr.clone())
+            };
             format!("{}  \u{2192}  {}", self.selected_game().display, relay)
         } else if self.status.connected {
             match &self.auto_detected_game {
@@ -2255,7 +2266,8 @@ impl<P: Platform> LightSpeedApp<P> {
                                     .size(METRIC)
                                     .family(egui::FontFamily::Monospace)
                                     .color(*color),
-                            );
+                            )
+                            .on_hover_text(i18n::t("route.rtt_hint"));
                         });
                     }
                 }
@@ -2269,7 +2281,8 @@ impl<P: Platform> LightSpeedApp<P> {
                             .size(METRIC)
                             .family(egui::FontFamily::Monospace)
                             .color(*color),
-                    );
+                    )
+                    .on_hover_text(i18n::t("route.rtt_hint"));
                 });
             }
         }
@@ -2365,6 +2378,14 @@ impl<P: Platform> LightSpeedApp<P> {
     fn ledger_rows(&self, ui: &mut egui::Ui, narrow: bool, short_mode: bool) {
         let relay = self.relay_value();
         self.ledger_row(ui, narrow, &i18n::t("route.relay"), &relay);
+        if self.direct_fallback {
+            self.ledger_row(
+                ui,
+                narrow,
+                &i18n::t("route.path"),
+                &LedgerValue::Warn(i18n::t("route.direct_fallback")),
+            );
+        }
         if let Some(target) = &self.target_process {
             let target = LedgerValue::Data(target.describe());
             self.ledger_row(ui, narrow, &i18n::t("route.target"), &target);
@@ -2401,6 +2422,9 @@ impl<P: Platform> LightSpeedApp<P> {
             LedgerValue::Hint(text) => {
                 ui.label(egui::RichText::new(text.as_ref()).size(BODY).color(text_3));
             }
+            LedgerValue::Warn(text) => {
+                ui.label(egui::RichText::new(text.as_ref()).size(BODY).color(warn));
+            }
         }
     }
 
@@ -2421,14 +2445,8 @@ impl<P: Platform> LightSpeedApp<P> {
         } else {
             LedgerValue::Data(self.status.proxy_addr.clone())
         };
-        if self.direct_fallback {
-            if let LedgerValue::Data(value) = base {
-                return LedgerValue::Data(format!(
-                    "{value} - {}",
-                    i18n::t("route.direct_fallback")
-                ));
-            }
-        }
+        // Direct fallback used to be glued onto this value, which made a relay
+        // name and a routing state read as one string. It has its own row now.
         base
     }
 
@@ -2450,17 +2468,28 @@ impl<P: Platform> LightSpeedApp<P> {
     /// `/health` counters are lifetime totals for the whole fleet node, not our
     /// session, so they must never be shown as if they were ours.
     fn routed_value(&self) -> LedgerValue {
-        let counted = routed_count(
+        let sent = routed_count(
             self.status.redirect_active,
             self.status.redirect_pkts_out,
             self.status.interceptor_active,
             self.status.interceptor_tunnel_sent,
         );
-        match counted {
-            Some(packets) => {
-                LedgerValue::Data(format!("{} pkts  this session", group_digits(packets)))
+        let returned = returned_count(
+            self.status.redirect_active,
+            self.status.redirect_pkts_in,
+            self.status.interceptor_active,
+            self.status.interceptor_from_proxy,
+        );
+        match (sent, returned) {
+            (Some(sent), Some(returned)) => {
+                let (text, starving) = relayed_row_text(sent, returned);
+                if starving {
+                    LedgerValue::Warn(text.into())
+                } else {
+                    LedgerValue::Data(text)
+                }
             }
-            None => LedgerValue::Hint(i18n::t("route.count_hint")),
+            _ => LedgerValue::Hint(i18n::t("route.count_hint")),
         }
     }
 
@@ -2539,13 +2568,12 @@ impl<P: Platform> LightSpeedApp<P> {
                         .color(text_1),
                 );
             });
-        } else if !self.game_manual {
-            let caption = if self.game_auto {
-                i18n::t("game.none_detected_hint")
-            } else {
-                i18n::t("game.none_detected")
-            };
-            ui.label(egui::RichText::new(caption).size(BODY).color(text_2));
+        } else if let Some(key) = game_caption(
+            self.game_auto,
+            self.game_manual,
+            self.auto_detected_game.as_deref(),
+        ) {
+            ui.label(egui::RichText::new(i18n::t(key)).size(BODY).color(text_2));
         }
         // The front door for process-scoped interception, on the Game row it
         // takes over whenever a process is picked.
@@ -3059,8 +3087,15 @@ impl<P: Platform> LightSpeedApp<P> {
             self.reveal_log_file();
         }
         ui.add_space(S1);
-        ui.label(
-            egui::RichText::new(i18n::t_with(
+        // "pcap mode: not detected" read as broken while WinDivert was happily
+        // relaying. Report the backend that is actually capturing.
+        let capture = if self.status.interceptor_active {
+            i18n::t_with(
+                "settings.capture_active",
+                &[("backend", self.status.interceptor_platform)],
+            )
+        } else {
+            i18n::t_with(
                 "settings.capture_status",
                 &[(
                     "state",
@@ -3071,10 +3106,9 @@ impl<P: Platform> LightSpeedApp<P> {
                     }
                     .as_ref(),
                 )],
-            ))
-            .size(CAPTION)
-            .color(text_3),
-        );
+            )
+        };
+        ui.label(egui::RichText::new(capture).size(CAPTION).color(text_3));
         ui.add_space(S3);
 
         ui.add_space(S3);
@@ -4329,6 +4363,8 @@ enum LedgerValue {
     Data(String),
     /// A dim prose hint where there is no value to show.
     Hint(Cow<'static, str>),
+    /// Data that is working as designed but degraded, in the warning colour.
+    Warn(Cow<'static, str>),
 }
 
 /// Which counter the "Relayed" row is showing, if any.
@@ -4343,13 +4379,76 @@ fn routed_count(
     interceptor_active: bool,
     interceptor_sent: u64,
 ) -> Option<u64> {
+    mode_counter(
+        redirect_active,
+        redirect_pkts,
+        interceptor_active,
+        interceptor_sent,
+    )
+}
+
+/// What this session has received back from the relay, in the same mode the
+/// sent count came from.
+fn returned_count(
+    redirect_active: bool,
+    redirect_pkts_in: u64,
+    interceptor_active: bool,
+    interceptor_from_proxy: u64,
+) -> Option<u64> {
+    mode_counter(
+        redirect_active,
+        redirect_pkts_in,
+        interceptor_active,
+        interceptor_from_proxy,
+    )
+}
+
+/// The counter pair for whichever interception mode is running. Redirect wins
+/// when both are set because it is the older, narrower mode.
+fn mode_counter(
+    redirect_active: bool,
+    redirect_value: u64,
+    interceptor_active: bool,
+    interceptor_value: u64,
+) -> Option<u64> {
     if redirect_active {
-        Some(redirect_pkts)
+        Some(redirect_value)
     } else if interceptor_active {
-        Some(interceptor_sent)
+        Some(interceptor_value)
     } else {
         None
     }
+}
+
+/// Whether the Game row should explain that nothing is selected yet, and which
+/// key to say it with.
+///
+/// Only auto mode can be waiting on a game. A pinned choice is the user's own
+/// and is already named in the dropdown, so captioning it "No game detected" -
+/// the state the live audit caught, under a `Game: ROB RUN` picker - contradicts
+/// the row it sits beneath. `None` means draw nothing.
+fn game_caption(auto: bool, manual: bool, detected: Option<&str>) -> Option<&'static str> {
+    if detected.is_some() || manual || !auto {
+        None
+    } else {
+        Some("game.none_detected_hint")
+    }
+}
+
+/// The `Relayed` row: what left this host, and what the relay sent back.
+///
+/// The row used to count only outbound packets, so a starving relay - the live
+/// ROB RUN run, 54 sent with nothing returned - read as a healthy session. The
+/// second element is true when the session is known to be starving.
+fn relayed_row_text(sent: u64, returned: u64) -> (String, bool) {
+    let text = i18n::t_with(
+        "route.sent_returned",
+        &[
+            ("sent", group_digits(sent).as_str()),
+            ("returned", group_digits(returned).as_str()),
+        ],
+    );
+    (text, sent > 0 && returned == 0)
 }
 
 /// The ledger's label cell: caption ink, fixed width, left-aligned.
@@ -5401,10 +5500,42 @@ mod tests {
         assert_eq!(routed_count(false, 0, true, 32), Some(32));
         assert_eq!(routed_count(true, 7, true, 32), Some(7));
         assert_eq!(routed_count(false, 0, false, 0), None);
+    }
+
+    #[test]
+    fn a_starving_relay_is_not_reported_as_a_healthy_row() {
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(None);
+        let (text, starving) = super::relayed_row_text(54, 0);
+        assert!(starving, "54 sent and nothing back is the starving case");
+        assert!(text.contains("54"), "the sent count must survive: {text}");
+        assert!(
+            text.contains(" 0 "),
+            "the zero return must be visible, not implied: {text}"
+        );
+        let (_, starving) = super::relayed_row_text(54, 50);
+        assert!(!starving, "a relay that answers is not starving");
+        let (_, starving) = super::relayed_row_text(0, 0);
+        assert!(!starving, "an idle session has nothing to warn about");
+    }
+
+    #[test]
+    fn the_game_caption_never_contradicts_a_pinned_game() {
         assert_eq!(
-            routed_count(false, 0, true, 0),
-            Some(0),
-            "an active interceptor with nothing sent is a real zero, not a missing value"
+            super::game_caption(true, false, None),
+            Some("game.none_detected_hint"),
+            "auto mode with nothing running is the one case that needs the hint"
+        );
+        assert_eq!(
+            super::game_caption(false, false, None),
+            None,
+            "a pinned game is named in the dropdown; a 'no game' caption fights it"
+        );
+        assert_eq!(super::game_caption(true, false, Some("robrun")), None);
+        assert_eq!(
+            super::game_caption(true, true, None),
+            None,
+            "manual mode names its server elsewhere"
         );
     }
 

@@ -29,6 +29,9 @@ relay_ready_named = "Ретранслятор готов, выбрано: {name}
 game_server = "Игровой сервер"
 relayed = "Передано"
 direct_fallback = "Прямое подключение"
+path = "Маршрут"
+sent_returned = "{sent} отправлено / {returned} получено"
+rtt_hint = "Время до релея и обратно - это не пинг в игре"
 place_hint = "-- запустите оптимизацию, чтобы определить"
 count_hint = "-- запустите оптимизацию, чтобы посчитать"
 port_fix_guide = "Порт не обнаружен — руководство"
@@ -38,6 +41,7 @@ start_manual = "Запустить оптимизацию (вручную)"
 disconnected = "Отключено"
 connected = "Подключено"
 optimizing = "Оптимизация"
+direct = "Напрямую"
 error = "Ошибка"
 idle = "Не оптимизируется"
 
@@ -54,6 +58,7 @@ share_stats = "Делиться анонимной статистикой зад
 capture_status = "Модуль захвата (режим pcap): {state}"
 capture_available = "доступен"
 capture_missing = "не обнаружен"
+capture_active = "Бэкенд перехвата: {backend} (активен)"
 
 [proxies]
 title = "Управление ретрансляторами"
