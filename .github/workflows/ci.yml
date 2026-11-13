@@ -17,8 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.100.0
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
@@ -42,7 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
       - uses: Swatinem/rust-cache@v2
 
       - name: Install System Dependencies
@@ -152,7 +155,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
       - uses: Swatinem/rust-cache@v2
 
       - name: Build (release)
@@ -166,8 +171,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.100.0
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
 
@@ -203,8 +209,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.100.0
           components: clippy
       - uses: Swatinem/rust-cache@v2
 
@@ -219,8 +226,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.100.0
           components: clippy
       - uses: Swatinem/rust-cache@v2
 
@@ -238,33 +246,6 @@ jobs:
       - name: Test GUI
         run: cargo test -p lightspeed-gui
 
-  benchmarks:
-    name: Benchmark Regression
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install System Dependencies
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-
-      - name: Install critcmp
-        uses: taiki-e/install-action@v2
-        with:
-          tool: critcmp
-
-      - name: Run benchmarks (report only)
-        run: cargo bench --workspace --exclude lightspeed-gui
-
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
-        with:
-          name: bench-results
-          path: target/criterion/
-          retention-days: 7
-          if-no-files-found: warn
-
   feature-matrix:
     name: Feature Matrix (${{ matrix.features }})
     runs-on: ubuntu-latest
@@ -276,7 +257,9 @@ jobs:
           - "ml"
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
       - uses: Swatinem/rust-cache@v2
 
       - name: Install System Dependencies
@@ -296,7 +279,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
       - uses: Swatinem/rust-cache@v2
 
       - name: Install System Dependencies

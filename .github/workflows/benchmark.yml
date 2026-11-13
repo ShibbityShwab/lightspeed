@@ -1,0 +1,41 @@
+name: Benchmarks
+
+# Regression benchmarks are a release gate, not a per-push gate: a criterion
+# run is ~16 minutes on its own, which was 99% of the CI critical path for a
+# suite that cannot regress on a docs change. Run them when a release tag is
+# pushed, and on demand when a performance question needs an answer.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  benchmark-regression:
+    name: Benchmark Regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Install critcmp
+        uses: taiki-e/install-action@v2
+        with:
+          tool: critcmp
+
+      - name: Run benchmarks (report only)
+        run: cargo bench --workspace --exclude lightspeed-gui
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: target/criterion/
+          retention-days: 30
+          if-no-files-found: warn
