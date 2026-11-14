@@ -2496,6 +2496,17 @@ impl<P: Platform> LightSpeedApp<P> {
             });
     }
 
+    /// One `label  value` row in the Settings components block.
+    fn component_row(ui: &mut egui::Ui, label: &str, value: &str) {
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [120.0, 18.0],
+                egui::Label::new(egui::RichText::new(label).size(CAPTION).color(text_3)),
+            );
+            ui.monospace(value);
+        });
+    }
+
     /// The label/value ledger. At the short-height breakpoint the `Game server`
     /// row is dropped and the values move into the scrolling region. The
     /// `Target` row is drawn only while a process is targeted, so the ledger is
@@ -3319,6 +3330,52 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S3);
 
         ui.add_space(S3);
+
+        // Components: what the client depends on and what state each is in, so a
+        // bug report can answer "is WinDivert there, am I elevated, which build
+        // is this" without reading a log. Labels are literal here rather than in
+        // the catalogs: this block is diagnostic text and is worth translating
+        // only once its rows have settled.
+        hairline(ui);
+        ui.add_space(S2);
+        ui.label(
+            egui::RichText::new("Components")
+                .size(CAPTION)
+                .color(text_2),
+        );
+        ui.add_space(S1);
+        Self::component_row(ui, "Version", env!("CARGO_PKG_VERSION"));
+        Self::component_row(
+            ui,
+            "Elevation",
+            if self.is_admin {
+                "administrator"
+            } else {
+                "standard user"
+            },
+        );
+        Self::component_row(
+            ui,
+            "Capture",
+            if self.status.interceptor_active {
+                self.status.interceptor_platform
+            } else {
+                "idle"
+            },
+        );
+        Self::component_row(
+            ui,
+            "Npcap",
+            if self.capture_available {
+                "installed"
+            } else {
+                "not installed"
+            },
+        );
+        Self::component_row(ui, "Relays", {
+            &format!("{} configured", self.proxies.len())
+        });
+        ui.add_space(S2);
 
         // About: the brand mark and the project links.
         hairline(ui);
