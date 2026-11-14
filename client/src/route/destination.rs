@@ -392,7 +392,6 @@ struct PendingSample {
 
 #[derive(Default)]
 struct Sampler {
-    pending: HashMap<Ipv4Addr, PendingSample>,
     last_sample: HashMap<Ipv4Addr, Instant>,
     /// When the last reply for a server arrived, to tell a quiet flow (one
     /// outbound whose reply is unambiguous) from a busy one, where a reply
@@ -465,13 +464,6 @@ pub fn note_outbound(server: Ipv4Addr) -> bool {
         }
         _ => sampler.last_sample.insert(server, now),
     };
-    sampler.pending.insert(
-        server,
-        PendingSample {
-            sent_at: now,
-            relay,
-        },
-    );
     true
 }
 
@@ -483,23 +475,22 @@ pub fn note_inbound(server: Ipv4Addr) {
     let now = Instant::now();
     let mut sampler = sampler().lock().unwrap_or_else(PoisonError::into_inner);
     sampler.last_inbound.insert(server, now);
-    // A reply that lands inside the probe window answers the armed send.
-    if let Some(armed) = sampler.armed.remove(&server) {
-        if let (Some(rtt_us), Some(relay)) = (probe_rtt(armed.sent_at, now), armed.relay) {
-            if let Some(estimator) = global() {
-                estimator.observe_path_probe(relay, server, rtt_us);
-            }
-        }
-    }
-    let Some(sample) = sampler.pending.remove(&server) else {
+    // Only an attributed reply feeds the estimator. The rate-limited pairing this
+    // replaces dated the reply against an arbitrary earlier packet and read short
+    // by the flow's packet period, so every destination leg it produced was
+    // inflated. Ranking now waits for real samples or falls back to the region
+    // prior, which is what it did before any were installed.
+    let Some(armed) = sampler.armed.remove(&server) else {
+        return;
+    };
+    let (Some(rtt_us), Some(relay)) = (probe_rtt(armed.sent_at, now), armed.relay) else {
         return;
     };
     drop(sampler);
-    let Some(relay) = sample.relay else {
-        return;
-    };
-    let rtt_us = now.saturating_duration_since(sample.sent_at).as_micros() as u64;
-    observe_tunnelled(relay, server, rtt_us);
+    if let Some(estimator) = global() {
+        estimator.observe_path_probe(relay, server, rtt_us);
+        estimator.observe_tunnelled(relay, server, rtt_us);
+    }
 }
 
 #[cfg(test)]

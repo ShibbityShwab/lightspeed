@@ -1321,7 +1321,7 @@ impl<P: Platform> LightSpeedApp<P> {
             process_search: String::new(),
             selected_custom,
             target_process: None,
-            show_target_picker: false,
+            show_target_picker: std::env::var_os("LIGHTSPEED_OPEN_PICKER").is_some(),
             save_server_name: String::new(),
             server_saved: None,
             server_error: None,
@@ -1339,6 +1339,10 @@ impl<P: Platform> LightSpeedApp<P> {
             discovery_error: None,
             health: None,
         };
+
+        if std::env::var_os("LIGHTSPEED_OPEN_UPDATE").is_some() {
+            app.start_update_check();
+        }
 
         // Reconnect to the persisted relay immediately; discovery may replace
         // the list a moment later without dropping the connection.
@@ -2062,6 +2066,14 @@ impl<P: Platform> LightSpeedApp<P> {
         engine.disconnect();
     }
 
+    /// QA: open a sheet the UI otherwise only reaches through game state, so its
+    /// layout can be checked at 320 px without a live match or a pending release.
+    fn open_sheet_for_review(&mut self) {
+        if std::env::var_os("LIGHTSPEED_OPEN_UPDATE").is_some() {
+            self.start_update_check();
+        }
+    }
+
     fn start_update_check(&mut self) {
         if matches!(self.update_check, UpdateCheckState::Checking) {
             return;
@@ -2464,10 +2476,9 @@ impl<P: Platform> LightSpeedApp<P> {
             // The headline is the player's ping, which is the whole loop through
             // the relay when a quiet-flow probe has measured it; the relay leg is
             // only what is left to show when nothing has been attributed yet.
-            let (reading, hint) = if self.path_rtt_ms > 0.0 {
-                (self.path_rtt_ms, i18n::t("route.path_hint"))
-            } else {
-                (self.status.latest_rtt_ms, i18n::t("route.rtt_hint"))
+            let (reading, hint) = match self.path_rtt_shown() {
+                Some((path, _)) => (path, i18n::t("route.path_hint")),
+                None => (self.status.latest_rtt_ms, i18n::t("route.rtt_hint")),
             };
             let text = if reading > 0.0 {
                 format!("{reading:>3.0} ms")
@@ -2543,7 +2554,6 @@ impl<P: Platform> LightSpeedApp<P> {
                     at,
                     colour: if active { accent } else { border_1 },
                     label: entry.label.clone(),
-                    emphasis: if active { 1.0 } else { 0.0 },
                 });
             }
         }
@@ -2566,7 +2576,6 @@ impl<P: Platform> LightSpeedApp<P> {
                 at,
                 colour: warn,
                 label: code.to_string(),
-                emphasis: 0.8,
             });
             at
         });
@@ -2599,24 +2608,6 @@ impl<P: Platform> LightSpeedApp<P> {
             });
     }
 
-    /// One `label  value` row in the Settings components block.
-    fn component_row(ui: &mut egui::Ui, label: &str, value: &str) {
-        // Wrapped, not horizontal: at 320 px a long value such as
-        // "not installed (pcap fallback only)" forced the row wider than the
-        // sheet, and the sheet wider than the window, which clipped the text on
-        // both sides.
-        ui.horizontal_wrapped(|ui| {
-            ui.add_sized(
-                [84.0, 16.0],
-                egui::Label::new(egui::RichText::new(label).size(CAPTION).color(text_3)),
-            );
-            // Proportional, not monospace: this block sits inside Settings, whose
-            // every other line is proportional, and the mono column read as a
-            // ledger pasted in from another screen.
-            ui.label(egui::RichText::new(value).size(CAPTION).color(text_2));
-        });
-    }
-
     /// The label/value ledger. At the short-height breakpoint the `Game server`
     /// row is dropped and the values move into the scrolling region. The
     /// `Target` row is drawn only while a process is targeted, so the ledger is
@@ -2632,12 +2623,8 @@ impl<P: Platform> LightSpeedApp<P> {
         // because the relay leg beside it is instantaneous and swings: a stale
         // probe can legitimately read below the current leg without either
         // number being wrong.
-        if self.path_rtt_ms > 0.0 {
-            let age = self
-                .path_rtt_age
-                .map(|age| age.as_secs())
-                .unwrap_or_default();
-            let value = LedgerValue::Data(format!("{:.0} ms \u{00b7} {}s", self.path_rtt_ms, age));
+        if let Some((path, age)) = self.path_rtt_shown() {
+            let value = LedgerValue::Data(format!("{path:.0} ms \u{00b7} {age}s"));
             self.ledger_row(ui, narrow, &i18n::t("route.path_rtt"), &value);
         }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
@@ -3345,7 +3332,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
-                ui.set_max_width(max_w);
+                ui.set_width(max_w);
                 sheet_title(ui, &i18n::t("settings.title"));
                 egui::ScrollArea::vertical()
                     // Size the body from the space that actually remains after
@@ -3646,10 +3633,10 @@ impl<P: Platform> LightSpeedApp<P> {
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
-                ui.set_max_width(max_w);
+                ui.set_width(max_w);
                 sheet_title(ui, &i18n::t("game.editor_title"));
                 egui::ScrollArea::vertical()
-                    .max_height(max_h)
+                    .max_height((max_h - 190.0).max(160.0))
                     .show(ui, |ui| {
                         game_editor_body(
                             ui,
@@ -3755,7 +3742,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
-                ui.set_max_width(max_w);
+                ui.set_width(max_w);
                 sheet_title(ui, &i18n::t("game.target_process"));
                 ui.label(
                     egui::RichText::new(i18n::t("game.target_process_hint"))
@@ -3763,7 +3750,7 @@ impl<P: Platform> LightSpeedApp<P> {
                         .color(text_2),
                 );
                 egui::ScrollArea::vertical()
-                    .max_height(max_h)
+                    .max_height((max_h - 190.0).max(160.0))
                     .show(ui, |ui| {
                         let mut picker = ProcessPicker {
                             rows: &self.process_rows,
@@ -3945,10 +3932,10 @@ impl<P: Platform> LightSpeedApp<P> {
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
-                ui.set_max_width(max_w);
+                ui.set_width(max_w);
                 sheet_title(ui, &i18n::t("update.sheet_title"));
                 egui::ScrollArea::vertical()
-                    .max_height(max_h)
+                    .max_height((max_h - 190.0).max(160.0))
                     .show(ui, |ui| {
                         match &self.update_check {
                             UpdateCheckState::Checking => {
@@ -4362,7 +4349,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 ///
 /// The bundled Inter is a 230-codepoint subset - no Cyrillic, no Greek, no CJK -
 /// so every family needs real fallbacks. `semibold` used to chain only
-/// `["inter_semibold", "inter"]`, which made every emphasised Russian label draw
 /// as tofu while the regular text beside it rendered fine through epaint's
 /// built-in Ubuntu-Light.
 ///
@@ -4477,8 +4463,6 @@ fn cjk_order(locale: Option<&str>) -> ([&'static str; 3], [&'static str; 3]) {
 pub(crate) fn install_fonts(ctx: &egui::Context, locale: Option<&str>) {
     ctx.set_fonts(font_definitions(locale));
 }
-
-/// The font family for emphasised text, matching the website's font weights.
 fn semibold() -> egui::FontFamily {
     egui::FontFamily::Name("semibold".into())
 }
@@ -4823,16 +4807,11 @@ fn action_button(ui: &mut egui::Ui, text: &str, kind: ActionKind, ready: bool) -
     // fits, with a floor so it stays readable.
     let inner_w = (ui.available_width() - 24.0).max(80.0);
     let mut size = EMPHASIS;
-    let mut probe =
+    let measured =
         ui.painter()
             .layout_no_wrap(text.to_owned(), egui::FontId::new(size, semibold()), text_1);
-    if probe.size().x > inner_w {
-        size = (EMPHASIS * inner_w / probe.size().x).max(9.0);
-        probe = ui.painter().layout_no_wrap(
-            text.to_owned(),
-            egui::FontId::new(size, semibold()),
-            text_1,
-        );
+    if measured.size().x > inner_w {
+        size = (EMPHASIS * inner_w / measured.size().x).max(9.0);
     }
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), ACTION_H),
@@ -5282,8 +5261,6 @@ fn target_front_door(ui: &mut egui::Ui, target: Option<&ProcessTarget>) -> Targe
     });
     action
 }
-
-/// One picker row: the image name (emphasised), the PID, and the path's tail.
 ///
 /// The whole row is the button - not a small control on it - and because it is
 /// a `selectable_label`, hover and the "already in the field" state come from
@@ -5745,7 +5722,6 @@ mod tests {
     /// bytes inside them, not a copy of the chain, so dropping a face from a
     /// family or adding a catalog character nothing carries both fail here. The
     /// bundled Inter is a 230-codepoint subset and `semibold` once chained only
-    /// Inter - every emphasised Cyrillic label in the shipped build was tofu.
     #[test]
     fn every_catalog_glyph_is_drawable_in_every_family() {
         use ab_glyph::{Font as _, FontArc};
