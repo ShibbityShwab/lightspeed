@@ -129,6 +129,12 @@ struct ReplyFallback {
 /// spaced tests is not going to carry this server.
 const RELAY_RETRY_BACKOFF: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(120)];
 
+/// Whole seconds until a pending re-test, for the route line. Floors at one so
+/// the text never reads "retry in 0s" just before the relay is promoted.
+fn retry_seconds_left(due: Option<std::time::Instant>, now: std::time::Instant) -> Option<u64> {
+    Some(due?.saturating_duration_since(now).as_secs().max(1))
+}
+
 /// The wait before retry number `retries + 1`, or `None` once they are spent.
 fn retry_delay(retries: u32) -> Option<Duration> {
     RELAY_RETRY_BACKOFF.get(retries as usize).copied()
@@ -2635,10 +2641,9 @@ impl<P: Platform> LightSpeedApp<P> {
         let Some(due) = *lock_or_recover(&self.relay_retry_at) else {
             return base;
         };
-        let secs = due
-            .saturating_duration_since(std::time::Instant::now())
-            .as_secs()
-            .max(1);
+        let Some(secs) = retry_seconds_left(Some(due), std::time::Instant::now()) else {
+            return base;
+        };
         let secs = secs.to_string();
         format!(
             "{base} \u{00b7} {}",
@@ -5956,6 +5961,26 @@ mod tests {
             Some(super::RelayReplyFault::InjectionFailed),
             "a run of returns with zero injections is the injector"
         );
+    }
+
+    #[test]
+    fn the_retry_countdown_names_whole_seconds_and_never_zero() {
+        let now = std::time::Instant::now();
+        assert_eq!(
+            super::retry_seconds_left(Some(now + std::time::Duration::from_secs(27)), now),
+            Some(27)
+        );
+        assert_eq!(
+            super::retry_seconds_left(Some(now + std::time::Duration::from_millis(200)), now),
+            Some(1),
+            "a re-test that is nearly due still reads as one second, not zero"
+        );
+        assert_eq!(
+            super::retry_seconds_left(Some(now - std::time::Duration::from_secs(5)), now),
+            Some(1),
+            "an overdue re-test is the watchdog's to run; the line says one second"
+        );
+        assert_eq!(super::retry_seconds_left(None, now), None);
     }
 
     #[test]
