@@ -86,13 +86,7 @@ pub struct RelayDestinationEstimator {
     /// Destination IPv4 to canonical region key, populated from the relay's
     /// registration ack when the relay can resolve the destination country.
     dest_regions: StdMutex<HashMap<Ipv4Addr, String>>,
-    /// Recent paired tunnelled round trips per (relay, destination), kept only
-    /// for the whole-loop figure the window shows.
-    path_floors: StdMutex<HashMap<(SocketAddrV4, Ipv4Addr), VecDeque<u64>>>,
 }
-
-/// How many pairings the whole-loop floor remembers per pair.
-const PATH_FLOOR_WINDOW: usize = 32;
 
 impl RelayDestinationEstimator {
     /// Create an empty estimator.
@@ -166,36 +160,6 @@ impl RelayDestinationEstimator {
         let mut sorted = tunnelled.iter().copied().collect::<Vec<_>>();
         sorted.sort_unstable();
         Some((median_sorted(&sorted), tunnelled.len()))
-    }
-
-    /// Record one paired tunnelled round trip for the whole-loop figure.
-    ///
-    /// Kept apart from `observe_tunnelled` on purpose: the ranking consumes a
-    /// median, and a median of pairings that answer earlier packets is an
-    /// overestimate. The floor - the fastest pairing seen recently - is the
-    /// figure closest to the real round trip.
-    pub fn observe_path_floor(&self, relay: SocketAddrV4, destination: Ipv4Addr, us: u64) {
-        if !is_plausible(us) {
-            return;
-        }
-        let mut floors = self
-            .path_floors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let entry = floors.entry((relay, destination)).or_default();
-        if entry.len() >= PATH_FLOOR_WINDOW {
-            entry.pop_front();
-        }
-        entry.push_back(us);
-    }
-
-    /// The fastest paired round trip recently seen for the pair, if any.
-    pub fn path_floor_us(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<u64> {
-        self.path_floors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&(relay, destination))
-            .and_then(|samples| samples.iter().copied().min())
     }
 
     /// A pooled destination-leg estimate across every measured relay pair.
@@ -363,27 +327,17 @@ pub fn set_destination_region(destination: Ipv4Addr, region: &str) {
     ensure_global().set_destination_region(destination, region);
 }
 
-/// One outbound tunnel send, waiting for a reply to pair with.
 #[derive(Clone, Copy)]
-struct PendingSend {
+struct PendingSample {
     sent_at: Instant,
     relay: Option<SocketAddrV4>,
 }
 
 #[derive(Default)]
 struct Sampler {
-    /// Outbounds still unmatched, oldest first. A reply is paired with the
-    /// oldest outstanding send rather than the newest one: on a chatty flow the
-    /// reply arriving now answers a packet sent earlier, so pairing with the
-    /// newest send reads far below the true round trip - it once reported 45 ms
-    /// against a 220 ms relay leg, which is physically impossible.
-    pending: HashMap<Ipv4Addr, VecDeque<PendingSend>>,
+    pending: HashMap<Ipv4Addr, PendingSample>,
     last_sample: HashMap<Ipv4Addr, Instant>,
 }
-
-/// How many unmatched outbounds one server may accumulate. A stalled flow must
-/// not grow this without bound.
-const MAX_PENDING_SENDS: usize = 256;
 
 static SAMPLER: OnceLock<StdMutex<Sampler>> = OnceLock::new();
 
@@ -401,23 +355,19 @@ pub fn note_outbound(server: Ipv4Addr) -> bool {
     let now = Instant::now();
     let relay = crate::session::current_proxy();
     let mut sampler = sampler().lock().unwrap_or_else(PoisonError::into_inner);
-    // Every send is queued for pairing, not only the sampled ones: pairing a
-    // reply against a rate-limited subset would date it from an arbitrary
-    // earlier packet and read short by the sampling interval.
-    let queue = sampler.pending.entry(server).or_default();
-    if queue.len() >= MAX_PENDING_SENDS {
-        queue.pop_front();
-    }
-    queue.push_back(PendingSend {
-        sent_at: now,
-        relay,
-    });
     match sampler.last_sample.get(&server) {
         Some(last) if now.saturating_duration_since(*last) < DEST_SAMPLE_INTERVAL => {
             return false;
         }
         _ => sampler.last_sample.insert(server, now),
     };
+    sampler.pending.insert(
+        server,
+        PendingSample {
+            sent_at: now,
+            relay,
+        },
+    );
     true
 }
 
@@ -427,13 +377,12 @@ pub fn note_outbound(server: Ipv4Addr) -> bool {
 /// longer know, is discarded.
 pub fn note_inbound(server: Ipv4Addr) {
     let now = Instant::now();
-    let front = sampler()
+    let Some(sample) = sampler()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .pending
-        .get_mut(&server)
-        .and_then(|queue| queue.pop_front());
-    let Some(sample) = front else {
+        .remove(&server)
+    else {
         return;
     };
     let Some(relay) = sample.relay else {
@@ -441,9 +390,6 @@ pub fn note_inbound(server: Ipv4Addr) {
     };
     let rtt_us = now.saturating_duration_since(sample.sent_at).as_micros() as u64;
     observe_tunnelled(relay, server, rtt_us);
-    // The fastest pairing is the closest this can get to the real round trip
-    // without per-packet correlation, and it can never read below the relay leg.
-    ensure_global().observe_path_floor(relay, server, rtt_us);
 }
 
 #[cfg(test)]
@@ -626,45 +572,6 @@ mod tests {
         let s = steady.estimate(relay(1), server(1)).unwrap();
         let n = noisy.estimate(relay(1), server(1)).unwrap();
         assert!(s.confidence > n.confidence);
-    }
-
-    fn the_path_floor_keeps_the_fastest_recent_pairing() {
-        let est = RelayDestinationEstimator::new();
-        est.observe_path_floor(relay(1), server(1), 250_000);
-        est.observe_path_floor(relay(1), server(1), 244_000);
-        est.observe_path_floor(relay(1), server(1), 900_000);
-        assert_eq!(est.path_floor_us(relay(1), server(1)), Some(244_000));
-        assert_eq!(
-            est.path_floor_us(relay(2), server(1)),
-            None,
-            "unmeasured relay"
-        );
-    }
-
-    #[test]
-    fn the_path_floor_forgets_samples_outside_its_window() {
-        let est = RelayDestinationEstimator::new();
-        est.observe_path_floor(relay(1), server(1), 10_000);
-        for _ in 0..PATH_FLOOR_WINDOW {
-            est.observe_path_floor(relay(1), server(1), 300_000);
-        }
-        assert_eq!(
-            est.path_floor_us(relay(1), server(1)),
-            Some(300_000),
-            "one fast sample from long ago must not pin the figure forever"
-        );
-    }
-
-    #[test]
-    fn the_path_floor_is_kept_apart_from_the_ranking_samples() {
-        let est = RelayDestinationEstimator::new();
-        est.observe_path_floor(relay(1), server(1), 240_000);
-        assert_eq!(est.path_floor_us(relay(1), server(1)), Some(240_000));
-        assert_eq!(
-            est.estimate(relay(1), server(1)),
-            None,
-            "a display sample must not become a ranking measurement"
-        );
     }
 
     #[test]
