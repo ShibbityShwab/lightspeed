@@ -2725,8 +2725,28 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
+    /// The measured client leg for `addr`, in milliseconds, when the last
+    /// measurement pass produced one.
+    fn leg_ms(&self, addr: std::net::SocketAddrV4) -> Option<u64> {
+        let sample = self
+            .relay_legs
+            .as_ref()?
+            .iter()
+            .find(|(candidate, _)| *candidate == addr)?
+            .1
+            .as_ref()?;
+        Some(u64::try_from(sample.median.as_millis()).unwrap_or(u64::MAX))
+    }
+
     /// The Boost Server selector: auto-select or a pinned relay, one dropdown.
     fn boost_server_combo(&mut self, ui: &mut egui::Ui) {
+        // The picker shows each relay's measured client leg, so it needs the
+        // measurement the destination-aware chooser already uses. Opening the
+        // picker is the moment the user wants those numbers; measuring then
+        // costs one background pass and never blocks the frame.
+        if self.relay_legs.is_none() && self.relay_measurement.is_none() {
+            self.start_relay_measurement();
+        }
         let width = ui.available_width();
         if self.proxies.is_empty() {
             match &self.discovery {
@@ -2774,7 +2794,14 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.separator();
                 for (i, entry) in self.proxies.iter().enumerate() {
                     let picked = !auto && i == self.selected_proxy_idx;
-                    if ui.selectable_label(picked, &entry.label).clicked() {
+                    // A name alone asks the user to choose blind. The measured
+                    // client leg is already in memory for the destination-aware
+                    // chooser, so the picker shows the number it ranks on.
+                    let text = match self.leg_ms(entry.addr) {
+                        Some(ms) => format!("{}  {ms:>3} ms", entry.label),
+                        None => entry.label.clone(),
+                    };
+                    if ui.selectable_label(picked, text).clicked() {
                         auto = false;
                         chosen = Some(i);
                     }
