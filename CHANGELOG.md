@@ -5,6 +5,45 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.3] - 2026-11-14
+
+### Added
+
+- **Server ping.** An ICMP echo to the game server, with the age of the reading,
+  shown in the route card and used as the headline while it is fresh. It is the
+  one latency figure the client can measure with real correlation, because the
+  reply carries the request's sequence. It measures the direct path - no relay -
+  and the relay leg is shown beside it.
+
+### Changed
+
+- **Relay re-tests are bounded.** Two attempts (30 s, then 120 s) and then the
+  server is recorded as rejecting the relay for the session. The route line
+  carries the wait ("Direct fallback - retry in 27s") instead of the window
+  flipping between DIRECT and OPTIMIZING with no explanation.
+- **The Relayed row counts the session, not the process,** and reads "N up ·
+  M down": a relay switch starts it over, and the two numbers are independent
+  tallies rather than a ratio.
+- The headline names which latency it shows.
+
+### Fixed
+
+- Settings, the relay list, the process picker and the update sheet all fit a
+  320 px window; the Settings sheet no longer overruns a short window.
+- The Manual (custom server) card no longer grows past the window's right edge.
+- The client installs the destination estimator at startup, so measured samples
+  reach relay ranking instead of being discarded.
+- Several sheets and the relay row were sized from `available_width()` inside
+  horizontal rows, which counts space already used.
+
+### Removed
+
+- **The whole-loop latency figure.** It could not be measured: three attribution
+  designs produced 45 ms, 3101 ms and 0.157 ms against a relay leg of 220-240 ms
+  in live testing, each impossible. The window now shows only figures it
+  actually measures. Relay ranking consequently estimates the server leg from
+  the region prior rather than from a measurement.
+
 ## [1.10.2] - 2026-11-14
 
 ### Added
