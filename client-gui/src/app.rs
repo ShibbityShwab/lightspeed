@@ -3012,12 +3012,18 @@ impl<P: Platform> LightSpeedApp<P> {
         );
         ui.add_space(S1);
         ui.horizontal(|ui| {
-            ui.label(i18n::t("route.server_label"));
+            let label = ui.label(i18n::t("route.server_label"));
             let default_port = self.selected_game().default_port;
+            // The row's own right edge, not `available_width`: inside a horizontal
+            // row that value still counts the space the label already took, so a
+            // field sized from it pushed the card past the window edge.
+            let field_w =
+                (ui.max_rect().right() - label.rect.right() - ui.spacing().item_spacing.x - 2.0)
+                    .max(80.0);
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.server_input)
                     .hint_text(format!("e.g. 123.45.67.89:{default_port}"))
-                    .desired_width(220.0),
+                    .desired_width(field_w),
             );
             // Written as it is typed, so the address is still here after a
             // restart even if the window is hidden to the tray rather than
@@ -3040,7 +3046,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     .unwrap_or_else(|| i18n::t("servers.none").into_owned());
                 egui::ComboBox::from_id_salt("saved_server_select")
                     .selected_text(current)
-                    .width(200.0)
+                    .width((ui.available_width() - 8.0).max(80.0))
                     .show_ui(ui, |ui| {
                         for (i, server) in servers.iter().enumerate() {
                             let label = format!("{}  {}", server.name, server.address);
@@ -3064,7 +3070,9 @@ impl<P: Platform> LightSpeedApp<P> {
             format!("{lo}-{hi}")
         };
         ui.horizontal(|ui| {
-            ui.label(i18n::t("route.custom_port_range")).on_hover_ui(|ui| {
+            let label = ui
+                .label(i18n::t("route.custom_port_range"))
+                .on_hover_ui(|ui| {
                 ui.label(format!(
                     "Override the default port scan range for auto-detect. \
                      Use this if Packets Sent stays at 0 after 15 s.\n\
@@ -3082,7 +3090,14 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui,
                 &mut self.custom_port_input,
                 i18n::t_with("route.port_hint", &[("range", range_example.as_str())]),
-                200.0,
+                // Sized from the row's own right edge: inside a horizontal row
+                // `available_width` still counts the label, so a field sized from
+                // it made the card wider than the window.
+                (ui.max_rect().right()
+                    - label.rect.right()
+                    - ui.spacing().item_spacing.x
+                    - 2.0)
+                    .max(80.0),
                 !port_valid,
             )
             .changed()
@@ -3097,15 +3112,20 @@ impl<P: Platform> LightSpeedApp<P> {
         // overran a 320 px card and the button was clipped at the edge.
         ui.label(i18n::t("servers.save_as"));
         ui.horizontal(|ui| {
-            let reserve = 78.0;
-            ui.add(
-                egui::TextEdit::singleline(&mut self.save_server_name)
-                    .hint_text(i18n::t("servers.save_name_hint"))
-                    .desired_width((ui.available_width() - reserve).max(80.0)),
-            );
-            if ui.button(i18n::t("servers.save")).clicked() {
-                save_server = true;
-            }
+            // Button first from the right, then the field takes the remainder:
+            // a guessed reserve for the button was 18 px short in this locale, so
+            // the row pushed the card past the window edge.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(i18n::t("servers.save")).clicked() {
+                    save_server = true;
+                }
+                let field_w = (ui.available_width() - ui.spacing().item_spacing.x).max(80.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.save_server_name)
+                        .hint_text(i18n::t("servers.save_name_hint"))
+                        .desired_width(field_w),
+                );
+            });
         });
         if let Some(saved) = &self.server_saved {
             ui.label(egui::RichText::new(saved).size(CAPTION).color(signal));
