@@ -432,7 +432,7 @@ fn probe_is_attributable(last_inbound: Option<Instant>, now: Instant) -> bool {
 /// belong to it.
 fn probe_rtt(sent_at: Instant, now: Instant) -> Option<u64> {
     let elapsed = now.saturating_duration_since(sent_at);
-    (elapsed <= PROBE_WINDOW).then(|| elapsed.as_micros() as u64)
+    (elapsed <= PROBE_WINDOW).then_some(elapsed.as_micros() as u64)
 }
 
 pub fn note_outbound(server: Ipv4Addr) -> bool {

@@ -2070,14 +2070,6 @@ impl<P: Platform> LightSpeedApp<P> {
         engine.disconnect();
     }
 
-    /// QA: open a sheet the UI otherwise only reaches through game state, so its
-    /// layout can be checked at 320 px without a live match or a pending release.
-    fn open_sheet_for_review(&mut self) {
-        if std::env::var_os("LIGHTSPEED_OPEN_UPDATE").is_some() {
-            self.start_update_check();
-        }
-    }
-
     fn start_update_check(&mut self) {
         if matches!(self.update_check, UpdateCheckState::Checking) {
             return;
@@ -3605,7 +3597,7 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
 
         // About: the brand mark and the project links.
-        ui.spacing_mut().item_spacing.y = S2 as f32;
+        ui.spacing_mut().item_spacing.y = S2;
         hairline(ui);
         ui.add_space(S2);
         section_label(ui, &i18n::t("settings.about"));
@@ -4342,7 +4334,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                                 .corner_radius(egui::CornerRadius::same(R_CARD))
                                 .inner_margin(egui::Margin::same(S3 as i8))
                                 .show(ui, |ui| {
-                                    ui.set_width((target - 2.0 * S3 as f32).max(200.0));
+                                    ui.set_width((target - 2.0 * S3).max(200.0));
                                     self.config_body(ui, narrow, short);
                                 });
                         });
@@ -5463,7 +5455,7 @@ fn sheet_frame() -> egui::Frame {
 /// overflows a 320 px window.
 fn sheet_bounds(ctx: &egui::Context) -> (f32, f32) {
     let screen = ctx.content_rect();
-    let max_w = (screen.width() - 24.0 - 2.0 * S4 as f32).min(420.0 - 2.0 * S4 as f32);
+    let max_w = (screen.width() - 24.0 - 2.0 * S4).min(420.0 - 2.0 * S4);
     // Leave room for the title and the Close button inside the sheet itself: the
     // old 120 px reserve plus an unscaled body pushed the last rows past the
     // bottom of the window at 320 px wide.
@@ -6070,10 +6062,10 @@ mod tests {
 
     #[test]
     fn the_relayed_row_counts_from_where_the_session_started() {
-        assert_eq!(session_delta(180, 95, Some((100, 50))), (80, 45));
-        assert_eq!(session_delta(180, 95, None), (180, 95));
+        assert_eq!(super::session_delta(180, 95, Some((100, 50))), (80, 45));
+        assert_eq!(super::session_delta(180, 95, None), (180, 95));
         assert_eq!(
-            session_delta(5, 3, Some((100, 50))),
+            super::session_delta(5, 3, Some((100, 50))),
             (0, 0),
             "counters that restarted below the baseline must not wrap"
         );
