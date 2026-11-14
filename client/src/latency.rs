@@ -435,6 +435,23 @@ impl LatencyTracker {
         inner.relayed.push(rtt_ms as f32);
     }
 
+    /// The last direct (ICMP) median for `server`, with how long ago it was taken.
+    ///
+    /// This is the one latency figure on the client that is a real correlated
+    /// round trip: an ICMP echo carries its own sequence, so the reply genuinely
+    /// answers the request. It measures client to game server directly and says
+    /// nothing about the relayed path, which is why the age comes with it.
+    pub fn direct_sample_ms(&self, server: Ipv4Addr) -> Option<(f32, Duration)> {
+        let now = self.clock.now();
+        let inner = self.lock();
+        inner.direct.get(&server).map(|sample| {
+            (
+                sample.median_ms,
+                now.saturating_duration_since(sample.measured_at),
+            )
+        })
+    }
+
     /// Claim the rate-limit slot and run one blocking direct burst.
     pub fn maybe_probe_direct(&self, server: Ipv4Addr) -> Option<f32> {
         if !self.note_outbound(server) {
@@ -473,6 +490,7 @@ impl LatencyTracker {
     }
 
     /// Latest direct median across servers, if a burst has produced one.
+    /// The most recently measured direct median across all servers.
     pub fn direct_p50_ms(&self) -> Option<f32> {
         self.lock().latest_direct()
     }
@@ -837,6 +855,25 @@ pub fn relayed_p50_ms() -> Option<f32> {
     global().and_then(|tracker| tracker.relayed_p50_ms())
 }
 
+/// Direct (ICMP) ping to `server`, with how long ago it was measured, through the
+/// process-wide tracker.
+///
+/// This is the one figure on the client that is a genuinely correlated round
+/// trip: an ICMP echo carries its own sequence, so the reply answers the request
+/// that produced it. It measures the client-to-server path directly - with no
+/// relay in it - which is why the age travels with the number.
+pub fn direct_sample(server: Ipv4Addr) -> Option<(f32, Duration)> {
+    global().and_then(|tracker| tracker.direct_sample_ms(server))
+}
+
+/// Run one direct burst against `server` through the process-wide tracker.
+///
+/// Blocking: five ICMP probes with timeouts is seconds of work, so call this from
+/// a worker thread rather than the UI loop.
+pub fn probe_direct(server: Ipv4Addr) -> Option<f32> {
+    global().and_then(|tracker| tracker.maybe_probe_direct(server))
+}
+
 /// Record one client->relay keepalive RTT (ms) for `relay`. Gated on local
 /// measurement; a single-hop sample, not the end-to-end relayed round trip.
 pub fn record_client_relay_rtt(relay: SocketAddrV4, rtt_ms: f32) {
@@ -1016,6 +1053,25 @@ mod tests {
 
     const SERVER: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 7);
     const OTHER_SERVER: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 9);
+
+    #[test]
+    fn the_direct_sample_carries_the_value_and_its_age() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(
+            Arc::new(ScriptedProber::new(vec![Some(300.0)])),
+            clock.clone(),
+        );
+        assert_eq!(t.direct_sample_ms(SERVER), None, "nothing measured yet");
+        // One burst of plausible replies, then read it back with its age.
+        let prober = ScriptedProber::new(vec![Some(280.0), Some(300.0), Some(320.0), None, None]);
+        let t = tracker(Arc::new(prober), clock.clone());
+        assert_eq!(t.run_direct_burst(SERVER), Some(300.0));
+        clock.advance(Duration::from_secs(7));
+        let (ms, age) = t.direct_sample_ms(SERVER).expect("measured");
+        assert_eq!(ms, 300.0);
+        assert_eq!(age, Duration::from_secs(7), "age travels with the figure");
+        assert_eq!(t.direct_sample_ms(OTHER_SERVER), None, "per server");
+    }
 
     #[test]
     fn median_selects_the_middle_reply() {

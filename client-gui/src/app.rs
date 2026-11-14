@@ -84,6 +84,9 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// Eight seconds, not three: a live match judged on three-second windows fell
 /// back three times on samples of 2, 7 and 3 packets while the session as a
 /// whole returned 187 replies for 309 sends.
+/// How old a direct-ping sample may be before the window asks for a fresh one.
+const PING_REFRESH_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
 const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Minimum intercepted packets before the no-reply watchdog may fire.
@@ -1040,6 +1043,11 @@ pub struct LightSpeedApp<P: Platform> {
     /// Cumulative `(up, down)` counters as they stood when this session started,
     /// so the Relayed row describes the current session rather than the process.
     relayed_base: Option<(String, u64, u64)>,
+    /// Direct (ICMP) ping to the game server in ms, with its age in seconds. The
+    /// one figure here that is a real correlated round trip.
+    server_ping: Option<(f32, u64)>,
+    /// Set while a worker thread runs a direct burst, which blocks for seconds.
+    ping_in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
 
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
@@ -1277,6 +1285,8 @@ impl<P: Platform> LightSpeedApp<P> {
             held_since: None,
             direct_fallback: false,
             relayed_base: None,
+            server_ping: None,
+            ping_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -2156,6 +2166,29 @@ impl<P: Platform> LightSpeedApp<P> {
         self.relay_health = None;
     }
 
+    /// Read the measured direct ping to the game server, and start a burst when
+    /// the figure is missing or old.
+    ///
+    /// The burst is ICMP echo, which is the only latency the client can measure
+    /// with real correlation: the reply carries the request's sequence. It runs on
+    /// a worker thread because five probes with timeouts block for seconds.
+    fn refresh_server_ping(&mut self, server: std::net::Ipv4Addr) {
+        let sample = lightspeed_client::latency::direct_sample(server);
+        self.server_ping = sample.map(|(ms, age)| (ms, age.as_secs()));
+        let stale = sample.is_none_or(|(_, age)| age > PING_REFRESH_AFTER);
+        if !stale {
+            return;
+        }
+        let flag = std::sync::Arc::clone(&self.ping_in_flight);
+        if flag.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        std::thread::spawn(move || {
+            let _ = lightspeed_client::latency::probe_direct(server);
+            flag.store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
     /// What identifies the run the Relayed counters describe: a new relay or a new
     /// game server is a new session, and the row starts counting again.
     fn session_key(&self) -> String {
@@ -2173,6 +2206,9 @@ impl<P: Platform> LightSpeedApp<P> {
                 health.tunnelling_enabled == Some(false) && health.detected_server.is_some()
             })
             .unwrap_or(false);
+        if let Some(server) = health.as_ref().and_then(|health| health.detected_server) {
+            self.refresh_server_ping(*server.ip());
+        }
         if self.status.interceptor_active || self.status.redirect_active {
             let key = self.session_key();
             let stale = self
@@ -2426,13 +2462,14 @@ impl<P: Platform> LightSpeedApp<P> {
             // The headline is the player's ping, which is the whole loop through
             // the relay when a quiet-flow probe has measured it; the relay leg is
             // only what is left to show when nothing has been attributed yet.
-            // The headline is the measured client-to-relay round trip. A whole-loop
-            // figure was built on quiet-flow attribution and removed: in live
-            // traffic it produced 0.157 ms against a 234 ms relay leg and then
-            // stopped producing anything at all, so the window shows only what it
-            // can measure.
-            let reading = self.status.latest_rtt_ms;
-            let hint = i18n::t("route.rtt_hint");
+            // The headline is the game-server ping when a direct measurement is
+            // fresh: that is the figure a player compares with the one their game
+            // shows, and ICMP is the only latency here with real correlation.
+            // Otherwise the relay leg, which is always measured.
+            let (reading, hint) = match self.server_ping {
+                Some((ms, age)) if age <= 60 => (ms as f64, i18n::t("route.server_ping_hint")),
+                _ => (self.status.latest_rtt_ms, i18n::t("route.rtt_hint")),
+            };
             let text = if reading > 0.0 {
                 format!("{reading:>3.0} ms")
             } else {
@@ -2576,6 +2613,10 @@ impl<P: Platform> LightSpeedApp<P> {
         // because the relay leg beside it is instantaneous and swings: a stale
         // probe can legitimately read below the current leg without either
         // number being wrong.
+        if let Some((ms, age)) = self.server_ping {
+            let value = LedgerValue::Data(format!("{ms:.0} ms \u{00b7} {age}s"));
+            self.ledger_row(ui, narrow, &i18n::t("route.server_ping"), &value);
+        }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
             self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
