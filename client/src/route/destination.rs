@@ -86,7 +86,13 @@ pub struct RelayDestinationEstimator {
     /// Destination IPv4 to canonical region key, populated from the relay's
     /// registration ack when the relay can resolve the destination country.
     dest_regions: StdMutex<HashMap<Ipv4Addr, String>>,
+    /// Recent quiet-flow probes per (relay, destination): whole-path round trips
+    /// the window shows, kept away from the ranking samples.
+    path_probes: StdMutex<HashMap<(SocketAddrV4, Ipv4Addr), VecDeque<u64>>>,
 }
+
+/// How many quiet-flow probes the whole-loop figure remembers per pair.
+const PATH_PROBE_WINDOW: usize = 16;
 
 impl RelayDestinationEstimator {
     /// Create an empty estimator.
@@ -160,6 +166,37 @@ impl RelayDestinationEstimator {
         let mut sorted = tunnelled.iter().copied().collect::<Vec<_>>();
         sorted.sort_unstable();
         Some((median_sorted(&sorted), tunnelled.len()))
+    }
+
+    /// Record one quiet-flow probe: a round trip whose reply could be
+    /// attributed to a single send because the flow had gone silent first.
+    ///
+    /// Kept apart from the ranking samples: a probe measures the whole path and
+    /// says nothing about the destination leg on its own.
+    pub fn observe_path_probe(&self, relay: SocketAddrV4, destination: Ipv4Addr, us: u64) {
+        if !is_plausible(us) {
+            return;
+        }
+        let mut probes = self
+            .path_probes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let entry = probes.entry((relay, destination)).or_default();
+        if entry.len() >= PATH_PROBE_WINDOW {
+            entry.pop_front();
+        }
+        entry.push_back(us);
+    }
+
+    /// The fastest quiet-flow probe in the window, which is the whole-loop round
+    /// trip the player would call their ping. `None` until the flow goes quiet
+    /// for [`PROBE_QUIET_GAP`] with a reply inside [`PROBE_WINDOW`].
+    pub fn path_probe_us(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<u64> {
+        self.path_probes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(relay, destination))
+            .and_then(|samples| samples.iter().copied().min())
     }
 
     /// A pooled destination-leg estimate across every measured relay pair.
@@ -337,7 +374,21 @@ struct PendingSample {
 struct Sampler {
     pending: HashMap<Ipv4Addr, PendingSample>,
     last_sample: HashMap<Ipv4Addr, Instant>,
+    /// When the last reply for a server arrived, to tell a quiet flow (one
+    /// outbound whose reply is unambiguous) from a busy one, where a reply
+    /// cannot be attributed to any particular send.
+    last_inbound: HashMap<Ipv4Addr, Instant>,
+    /// A send made after a quiet gap, waiting for the reply that answers it.
+    armed: HashMap<Ipv4Addr, PendingSample>,
 }
+
+/// A flow has to be silent this long before the next outbound counts as an
+/// unambiguous probe: long enough that no earlier packet's reply can still be in
+/// flight on a normal link, short enough to fire between bursts.
+pub const PROBE_QUIET_GAP: Duration = Duration::from_millis(250);
+
+/// How long an armed probe waits for its reply before giving up.
+pub const PROBE_WINDOW: Duration = Duration::from_secs(2);
 
 static SAMPLER: OnceLock<StdMutex<Sampler>> = OnceLock::new();
 
@@ -351,10 +402,37 @@ fn sampler() -> &'static StdMutex<Sampler> {
 /// estimator samples a small fraction of gameplay rather than every packet.
 /// Returns `true` only when this call recorded a fresh sample, so callers can
 /// hang a one-shot per-server side effect off the same rate limit.
+/// Whether a send made now can be attributed its reply: true when the flow has
+/// been silent for [`PROBE_QUIET_GAP`], because then no earlier packet's reply
+/// can still be in flight to be mistaken for this one's.
+fn probe_is_attributable(last_inbound: Option<Instant>, now: Instant) -> bool {
+    last_inbound.is_none_or(|last| now.saturating_duration_since(last) >= PROBE_QUIET_GAP)
+}
+
+/// The round trip of an armed probe, or `None` when the reply came too late to
+/// belong to it.
+fn probe_rtt(sent_at: Instant, now: Instant) -> Option<u64> {
+    let elapsed = now.saturating_duration_since(sent_at);
+    (elapsed <= PROBE_WINDOW).then(|| elapsed.as_micros() as u64)
+}
+
 pub fn note_outbound(server: Ipv4Addr) -> bool {
     let now = Instant::now();
     let relay = crate::session::current_proxy();
     let mut sampler = sampler().lock().unwrap_or_else(PoisonError::into_inner);
+    // Arm a whole-loop probe when the flow has been quiet: then the next reply
+    // is unambiguously this packet's answer, which is the one case where the
+    // round trip can be attributed at all.
+    let quiet = probe_is_attributable(sampler.last_inbound.get(&server).copied(), now);
+    if quiet {
+        sampler.armed.insert(
+            server,
+            PendingSample {
+                sent_at: now,
+                relay,
+            },
+        );
+    }
     match sampler.last_sample.get(&server) {
         Some(last) if now.saturating_duration_since(*last) < DEST_SAMPLE_INTERVAL => {
             return false;
@@ -377,14 +455,20 @@ pub fn note_outbound(server: Ipv4Addr) -> bool {
 /// longer know, is discarded.
 pub fn note_inbound(server: Ipv4Addr) {
     let now = Instant::now();
-    let Some(sample) = sampler()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .pending
-        .remove(&server)
-    else {
+    let mut sampler = sampler().lock().unwrap_or_else(PoisonError::into_inner);
+    sampler.last_inbound.insert(server, now);
+    // A reply that lands inside the probe window answers the armed send.
+    if let Some(armed) = sampler.armed.remove(&server) {
+        if let (Some(rtt_us), Some(relay)) = (probe_rtt(armed.sent_at, now), armed.relay) {
+            if let Some(estimator) = global() {
+                estimator.observe_path_probe(relay, server, rtt_us);
+            }
+        }
+    }
+    let Some(sample) = sampler.pending.remove(&server) else {
         return;
     };
+    drop(sampler);
     let Some(relay) = sample.relay else {
         return;
     };
@@ -572,6 +656,67 @@ mod tests {
         let s = steady.estimate(relay(1), server(1)).unwrap();
         let n = noisy.estimate(relay(1), server(1)).unwrap();
         assert!(s.confidence > n.confidence);
+    }
+
+    #[test]
+    fn only_a_quiet_flow_makes_a_reply_attributable() {
+        let now = Instant::now();
+        assert!(probe_is_attributable(None, now), "first send on a flow");
+        assert!(
+            probe_is_attributable(Some(now - PROBE_QUIET_GAP), now),
+            "exactly the quiet gap is quiet enough"
+        );
+        assert!(
+            !probe_is_attributable(Some(now - Duration::from_millis(10)), now),
+            "a busy flow's reply cannot be attributed to one send"
+        );
+    }
+
+    #[test]
+    fn a_probe_reply_must_land_inside_its_window() {
+        let now = Instant::now();
+        assert_eq!(
+            probe_rtt(now - Duration::from_millis(240), now),
+            Some(240_000)
+        );
+        assert!(
+            probe_rtt(now - PROBE_WINDOW, now).is_some(),
+            "the edge of the window still counts"
+        );
+        assert_eq!(
+            probe_rtt(now - PROBE_WINDOW - Duration::from_millis(1), now),
+            None,
+            "a reply that late belongs to something else"
+        );
+    }
+
+    #[test]
+    fn the_path_probe_keeps_the_fastest_recent_sample_only() {
+        let est = RelayDestinationEstimator::new();
+        assert_eq!(est.path_probe_us(relay(1), server(1)), None);
+        est.observe_path_probe(relay(1), server(1), 260_000);
+        est.observe_path_probe(relay(1), server(1), 244_000);
+        est.observe_path_probe(relay(1), server(1), 900_000);
+        assert_eq!(est.path_probe_us(relay(1), server(1)), Some(244_000));
+        for _ in 0..PATH_PROBE_WINDOW {
+            est.observe_path_probe(relay(1), server(1), 300_000);
+        }
+        assert_eq!(
+            est.path_probe_us(relay(1), server(1)),
+            Some(300_000),
+            "a fast sample from long ago must not pin the figure"
+        );
+    }
+
+    #[test]
+    fn a_probe_never_feeds_the_relay_ranking() {
+        let est = RelayDestinationEstimator::new();
+        est.observe_path_probe(relay(1), server(1), 250_000);
+        assert_eq!(
+            est.estimate(relay(1), server(1)),
+            None,
+            "a whole-path probe is not a destination-leg measurement"
+        );
     }
 
     #[test]
