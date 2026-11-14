@@ -2500,10 +2500,18 @@ impl<P: Platform> LightSpeedApp<P> {
     fn component_row(ui: &mut egui::Ui, label: &str, value: &str) {
         ui.horizontal(|ui| {
             ui.add_sized(
-                [120.0, 18.0],
+                [96.0, 16.0],
                 egui::Label::new(egui::RichText::new(label).size(CAPTION).color(text_3)),
             );
-            ui.monospace(value);
+            ui.add_sized(
+                [ui.available_width(), 16.0],
+                egui::Label::new(
+                    egui::RichText::new(value)
+                        .size(CAPTION)
+                        .monospace()
+                        .color(text_1),
+                ),
+            );
         });
     }
 
