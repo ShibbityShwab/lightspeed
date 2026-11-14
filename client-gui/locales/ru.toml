@@ -62,6 +62,8 @@ capture_status = "Модуль захвата (режим pcap): {state}"
 capture_available = "доступен"
 capture_missing = "не обнаружен"
 capture_active = "Бэкенд перехвата: {backend} (активен)"
+remeasure = "Измерить релеи заново"
+hold_policy = "Ждёт релей до {secs} с, затем использует прямой путь."
 
 [proxies]
 title = "Управление ретрансляторами"

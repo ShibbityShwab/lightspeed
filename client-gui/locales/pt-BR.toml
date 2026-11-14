@@ -62,6 +62,8 @@ capture_status = "Backend de captura (modo pcap): {state}"
 capture_available = "disponível"
 capture_missing = "não detectado"
 capture_active = "Backend de captura: {backend} (ativo)"
+remeasure = "Medir os relays novamente"
+hold_policy = "Aguarda até {secs}s por um relay antes de usar o caminho direto."
 
 [proxies]
 title = "Gerenciador de relés"

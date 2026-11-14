@@ -62,6 +62,8 @@ capture_status = "抓包后端（pcap 模式）：{state}"
 capture_available = "可用"
 capture_missing = "未检测到"
 capture_active = "Capture backend: {backend} (active)"
+remeasure = "Re-measure relays"
+hold_policy = "Waits up to {secs}s for a relay before using the direct path."
 
 [proxies]
 title = "中继管理"

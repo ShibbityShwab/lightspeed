@@ -31,6 +31,8 @@ capture_status = "Capture backend (pcap mode): {state}"
 capture_available = "available"
 capture_missing = "not detected"
 capture_active = "Capture backend: {backend} (active)"
+remeasure = "Re-measure relays"
+hold_policy = "Waits up to {secs}s for a relay before using the direct path."
 
 [proxies]
 title = "Proxy Manager"

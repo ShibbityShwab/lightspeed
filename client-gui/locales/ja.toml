@@ -62,6 +62,8 @@ capture_status = "キャプチャバックエンド（pcap モード）: {state}
 capture_available = "利用可能"
 capture_missing = "検出されません"
 capture_active = "Capture backend: {backend} (active)"
+remeasure = "Re-measure relays"
+hold_policy = "Waits up to {secs}s for a relay before using the direct path."
 
 [proxies]
 title = "リレー管理"

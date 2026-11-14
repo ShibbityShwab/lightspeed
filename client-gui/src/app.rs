@@ -3273,6 +3273,16 @@ impl<P: Platform> LightSpeedApp<P> {
             self.reveal_log_file();
         }
         ui.add_space(S1);
+        if ui
+            .button(i18n::t("settings.remeasure"))
+            .on_hover_text(
+                "Probe every relay again and refresh the numbers the relay picker shows.",
+            )
+            .clicked()
+        {
+            self.start_relay_measurement();
+        }
+        ui.add_space(S1);
         // "pcap mode: not detected" read as broken while WinDivert was happily
         // relaying. Report the backend that is actually capturing.
         let capture = if self.status.interceptor_active {
@@ -3295,6 +3305,17 @@ impl<P: Platform> LightSpeedApp<P> {
             )
         };
         ui.label(egui::RichText::new(capture).size(CAPTION).color(text_3));
+        ui.add_space(S1);
+        // The hold is a policy the client applies silently; saying it in the
+        // settings gives the wait a reason and a duration.
+        ui.label(
+            egui::RichText::new(i18n::t_with(
+                "settings.hold_policy",
+                &[("secs", LOCK_SETTLE.as_secs().to_string().as_str())],
+            ))
+            .size(CAPTION)
+            .color(text_3),
+        );
         ui.add_space(S3);
 
         ui.add_space(S3);

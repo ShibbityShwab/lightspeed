@@ -62,6 +62,8 @@ capture_status = "캔처 백엔드(pcap 모드): {state}"
 capture_available = "사용 가능"
 capture_missing = "감지되지 않음"
 capture_active = "Capture backend: {backend} (active)"
+remeasure = "Re-measure relays"
+hold_policy = "Waits up to {secs}s for a relay before using the direct path."
 
 [proxies]
 title = "릴레이 관리"
