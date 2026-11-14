@@ -4,6 +4,21 @@
 **Agent:** RustDev + QAEngineer + DevOps (lead-verified with the repo's own gates and the served pages)
 **Status:** WF-056 is the live workstream (discussion #146's asks all shipped under WF-055 and process-first interception is the front door). In tree and green: whole-path relay ranking, ARC Raiders, discovery decoupled from tunnelling, the HOLD switch (tunnel only once a relay is chosen for the locked server, two-minute fallback), the capture watchdog and the relay verdict in words. 2026-10-17 finished the jitter measurement that the ranking was already weighting at zero and made a detected game connect a relay on its own; 2026-10-18 gave the hold an exit that does not depend on the GUI's frame loop. **The live relay-follow is proven** (2026-10-18: `Following the game server: switching to 45.77.32.236:4434`, `Relayed` 6 -> 38). 1.8.4 (`59f20c8`) shipped the reliability fixes and closed three rustls/webpki advisories; the ARC Raiders transport split is implemented in `dfa1413`, and the live join through it is the open proof.
 
+## 2026-11-14 - WF-057 interface design: the state contract, then the layout
+
+**Agent:** InterfaceDesigner (lead-verified against screenshots of the real window)
+
+The client's worst defects have been state defects, so design work now starts
+from a contract rather than a mockup: `docs/design/interface.md` names the nine
+states, what each one must say, and which fact drives it. The persona is
+`InterfaceDesigner` in `wat/archive/agents.md`.
+
+Order of work: demote the globe so status outranks decoration; put measured
+latency and the destination-aware winner into the relay picker; restructure
+Settings (two items today, no routing controls); fix the Proxy Manager row that
+wraps its delete button onto its own line. Every step is verified by screenshot
+at narrow and wide width, boosting and idle, not by the diff.
+
 ## 2026-11-12 - audit fixes on a real Windows host: auto-select applies, and the TCP relay has an owner
 
 A full local build/test pass (Rust 1.99.1, MSVC 17.14.45, Windows SDK 10.0.26100)

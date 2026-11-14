@@ -129,9 +129,9 @@ pub const ACTION_H: f32 = 48.0;
 /// 64 px: the RTT sparkline's height.
 pub const PLOT_H: f32 = 64.0;
 /// 132 px: the globe at default width.
-pub const GLOBE_LG: f32 = 132.0;
+pub const GLOBE_LG: f32 = 92.0;
 /// 104 px: the globe at narrow width.
-pub const GLOBE_SM: f32 = 104.0;
+pub const GLOBE_SM: f32 = 76.0;
 /// 72 px: the globe in the short-height breakpoint.
 pub const GLOBE_XS: f32 = 72.0;
 /// 24 px: one ledger row's allocation.
