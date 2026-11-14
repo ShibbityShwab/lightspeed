@@ -3283,7 +3283,13 @@ impl<P: Platform> LightSpeedApp<P> {
         }
 
         // Routing behaviour: whether a relay the watchdog abandoned gets a
-        // second look. Off means one missed window keeps the session direct.
+        // second look. It is its own section rather than a third checkbox under
+        // Privacy, and it sits before Maintenance because it changes what the
+        // client does, not how it is maintained.
+        ui.add_space(S3);
+        hairline(ui);
+        ui.add_space(S2);
+        section_label(ui, "Routing");
         let retry = ui
             .checkbox(
                 &mut self.retry_after_fallback,
