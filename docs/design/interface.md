@@ -45,13 +45,27 @@ Rules that follow from the contract:
 
 ## Known issues (audited live, 2026-11-13/14)
 
-- The globe consumes roughly 40% of a 520 px window to place one marker.
-- The relay picker lists names only: no measured latency, and no marker for the relay the
-  destination-aware chooser would pick for the current server.
-- Settings holds two items (language, one privacy toggle) and no routing controls.
-- Proxy Manager wraps the EWR row's delete button onto its own line; `Reset to defaults`
-  and per-relay delete have no confirmation.
-- Sparkline has no axis, units or label.
+Closed on 2026-11-14:
+
+- The globe took a third of the card for one marker - now 92 px (76 narrow).
+- The relay picker listed names only - it now shows each relay's measured client
+  leg, marks the relay the destination-aware chooser picked, and measures on open.
+- Settings held two items - it now carries Re-measure relays, the hold policy,
+  and a Components block (version, elevation, capture, Npcap, relays).
+- Capture was described twice, once as "pcap mode: not detected" - one statement
+  remains, and Npcap says what it is for.
+- The Proxy Manager row wrapped its delete button - every row is one line now.
+- Nothing let a player opt out of relay re-tests - Settings has the switch, and
+  the watchdog reads it live.
+
+Open:
+
+- **The window is often absent from the OS window list while a game has focus.**
+  Automated clicks fail with a stale handle and a user cannot find the client
+  either. `PrintWindow` captures it for evidence, which is a workaround, not a
+  fix.
+- The sparkline still has no axis, units or label.
+- The Components labels are English-only by decision; revisit when the rows settle.
 
 ## Verification protocol
 
