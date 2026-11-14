@@ -73,6 +73,40 @@ window enforces a larger minimum. Clipping is not an acceptable answer.
 **Proof.** Two captures per change: 435x720 and 720x610. The second one is the
 case that exposed the rail stretching to fill the window.
 
+## Ordering and one style system (proposed 2026-11-14)
+
+Today the window stacks: state rail, primary action, map card with the ledger,
+then Relay, Game, Target, then the footer. Two problems with that reading:
+
+1. **The action comes before the choice it acts on.** You are invited to press
+   OPTIMIZE before being told which relay and game it would use. The pickers are
+   the inputs; the button is the outcome.
+2. **Mixed containers.** The card, the pickers, the target row and the footer each
+   compute their own margin and radius, so nothing lines up on a left edge except
+   by accident.
+
+Proposed order (top to bottom):
+
+| # | Band | Why |
+| --- | --- | --- |
+| 1 | State rail (word, metric, sub-line) | What is happening, first |
+| 2 | Map + ledger card | Where it is happening |
+| 3 | Relay picker (with measured leg) | The first input |
+| 4 | Game picker | The second input |
+| 5 | Target a process (secondary, de-emphasised) | Optional path |
+| 6 | Primary action | The outcome of 3-5 |
+| 7 | Footer (Hide, Settings, Quit) | Never moves |
+
+Proposed style system - one value per role, no local overrides:
+
+- **Card**: one surface colour, R_CARD radius, S3 padding, 1 px border. The map,
+  the pickers and the ledger all live on it.
+- **Input**: one control height (CONTROL_H), one radius (R_CONTROL), one fill,
+  one border. A dropdown and a button are the same object until pressed.
+- **Margins**: only S1/S2/S3/S4, left edge aligned to a single gutter; nothing
+  centres except the map.
+- **Type**: three sizes here - STATE, BODY/LABEL, CAPTION. No ad-hoc sizes.
+
 ## Known issues (audited live, 2026-11-13/14)
 
 Closed on 2026-11-14:
