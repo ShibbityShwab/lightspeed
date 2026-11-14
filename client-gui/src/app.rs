@@ -229,6 +229,7 @@ fn spawn_relay_reply_watchdog(
     engine: Arc<Mutex<LightSpeedEngine>>,
     quit: QuitFlag,
     rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>>,
+    retry_enabled: Arc<std::sync::atomic::AtomicBool>,
 ) {
     std::thread::spawn(move || {
         let mut watch: Option<RelayReplyWatch> = None;
@@ -318,8 +319,13 @@ fn spawn_relay_reply_watchdog(
                     if lock_or_recover(&engine).hold_tunnelling() {
                         // A day out is "never" for a match; it keeps the retry
                         // branch armed without another field to carry it.
-                        let wait =
-                            retry_delay(retries).unwrap_or(Duration::from_secs(60 * 60 * 24));
+                        let wait = if retry_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                            retry_delay(retries).unwrap_or(Duration::from_secs(60 * 60 * 24))
+                        } else {
+                            // Retries switched off: this is the last word, so the
+                            // server is recorded as rejecting the relay straight away.
+                            Duration::from_secs(60 * 60 * 24)
+                        };
                         *lock_or_recover(&rejected) =
                             retry_delay(retries).is_none().then_some(server);
                         fallback = Some(ReplyFallback {
@@ -1065,6 +1071,8 @@ pub struct LightSpeedApp<P: Platform> {
     /// Persisted: whether a relay the watchdog took the session direct from may
     /// be re-tested. Off means one fault keeps the session direct.
     retry_after_fallback: bool,
+    /// The same flag, readable by the watchdog thread.
+    retry_enabled: Arc<std::sync::atomic::AtomicBool>,
     auto_detected_game: Option<String>,
 
     // ── System state ──────────────────────────────────────────────────────
@@ -1213,11 +1221,15 @@ impl<P: Platform> LightSpeedApp<P> {
         i18n::set_language(language.as_deref());
 
         let relay_rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>> = Arc::new(Mutex::new(None));
+        let retry_enabled = Arc::new(std::sync::atomic::AtomicBool::new(
+            saved.retry_after_fallback,
+        ));
 
         spawn_relay_reply_watchdog(
             Arc::clone(&engine),
             Arc::clone(&quit),
             Arc::clone(&relay_rejected),
+            Arc::clone(&retry_enabled),
         );
         let mut app = Self {
             engine,
@@ -1254,6 +1266,7 @@ impl<P: Platform> LightSpeedApp<P> {
             capture_available: P::is_capture_available(),
             share_latency_stats,
             retry_after_fallback: saved.retry_after_fallback,
+            retry_enabled,
             auto_detected_game,
             is_admin,
             fonts_setup: false,
@@ -2972,6 +2985,29 @@ impl<P: Platform> LightSpeedApp<P> {
                 }
             });
         if changed {
+            self.persist_config();
+        }
+
+        // Routing behaviour: whether a relay the watchdog abandoned gets a
+        // second look. Off means one missed window keeps the session direct.
+        let retry = ui
+            .checkbox(
+                &mut self.retry_after_fallback,
+                egui::RichText::new("Re-test a relay after falling back")
+                    .size(LABEL)
+                    .family(semibold()),
+            )
+            .on_hover_text(
+                "When on, a relay the watchdog took the session direct from is \
+                 re-tested after 20 s, then 45 s, then 90 s. Off leaves the \
+                 session on the direct path until the next match.",
+            )
+            .changed();
+        if retry {
+            self.retry_enabled.store(
+                self.retry_after_fallback,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             self.persist_config();
         }
         if open_editor {
