@@ -3351,7 +3351,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     // Size the body from the space that actually remains after
                     // the frame padding, the title and Close; a fixed reserve left
                     // the last button clipped behind Close once Settings grew.
-                    .max_height((max_h - 150.0).max(160.0))
+                    .max_height((max_h - 190.0).max(160.0))
                     // The sheet scrolls by design; a scrollbar that only appears
                     // on hover left About below the fold with no cue that it was
                     // there.
