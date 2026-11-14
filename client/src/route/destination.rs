@@ -188,15 +188,18 @@ impl RelayDestinationEstimator {
         entry.push_back(us);
     }
 
-    /// The fastest quiet-flow probe in the window, which is the whole-loop round
-    /// trip the player would call their ping. `None` until the flow goes quiet
-    /// for [`PROBE_QUIET_GAP`] with a reply inside [`PROBE_WINDOW`].
+    /// The most recent quiet-flow probe, which is the whole-loop round trip the
+    /// player would call their ping. The newest and not the fastest of the
+    /// window: a fast sample taken while the path was briefly better would sit
+    /// below the instantaneous relay leg beside it and read as a contradiction.
+    /// `None` until the flow goes quiet for [`PROBE_QUIET_GAP`] and a reply lands
+    /// inside [`PROBE_WINDOW`].
     pub fn path_probe_us(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<u64> {
         self.path_probes
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&(relay, destination))
-            .and_then(|samples| samples.iter().copied().min())
+            .and_then(|samples| samples.back().copied())
     }
 
     /// A pooled destination-leg estimate across every measured relay pair.
@@ -691,20 +694,24 @@ mod tests {
     }
 
     #[test]
-    fn the_path_probe_keeps_the_fastest_recent_sample_only() {
+    fn the_path_probe_reports_the_newest_sample_and_forgets_old_ones() {
         let est = RelayDestinationEstimator::new();
         assert_eq!(est.path_probe_us(relay(1), server(1)), None);
         est.observe_path_probe(relay(1), server(1), 260_000);
         est.observe_path_probe(relay(1), server(1), 244_000);
-        est.observe_path_probe(relay(1), server(1), 900_000);
-        assert_eq!(est.path_probe_us(relay(1), server(1)), Some(244_000));
+        assert_eq!(
+            est.path_probe_us(relay(1), server(1)),
+            Some(244_000),
+            "the newest probe wins, not the fastest"
+        );
         for _ in 0..PATH_PROBE_WINDOW {
             est.observe_path_probe(relay(1), server(1), 300_000);
         }
+        assert_eq!(est.path_probe_us(relay(1), server(1)), Some(300_000));
         assert_eq!(
-            est.path_probe_us(relay(1), server(1)),
-            Some(300_000),
-            "a fast sample from long ago must not pin the figure"
+            est.path_probe_us(relay(2), server(1)),
+            None,
+            "a different relay has no probe"
         );
     }
 
