@@ -4671,8 +4671,17 @@ enum ActionKind {
 /// AA-safe) and brightens to `accent` on hover; Danger uses `bg-3` with a
 /// danger hairline and ink, tinting with `danger-soft` on hover.
 fn action_button(ui: &mut egui::Ui, text: &str, kind: ActionKind, ready: bool) -> egui::Response {
+    // The label wraps and the button grows to fit it. "RESTART AS ADMINISTRATOR TO
+    // OPTIMIZE" is wider than a 320 px window at the emphasis size, and the
+    // painter drew it straight through the button's edge.
+    let font = egui::FontId::new(EMPHASIS, semibold());
+    let inner_w = (ui.available_width() - 24.0).max(80.0);
+    let probe = ui
+        .painter()
+        .layout(text.to_owned(), font.clone(), text_1, inner_w);
+    let height = (probe.size().y + 24.0).max(ACTION_H);
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), ACTION_H),
+        egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
     );
     let hovered = response.hovered() && ready;
@@ -4715,13 +4724,9 @@ fn action_button(ui: &mut egui::Ui, text: &str, kind: ActionKind, ready: bool) -
         );
         painter.rect_filled(square, 0.0, danger);
     }
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::new(EMPHASIS, semibold()),
-        ink,
-    );
+    let galley = painter.layout(text.to_owned(), font, ink, rect.width() - 24.0);
+    let pos = rect.center() - galley.size() / 2.0;
+    painter.galley(pos, galley, ink);
     response
 }
 
