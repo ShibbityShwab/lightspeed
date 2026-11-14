@@ -1,5 +1,5 @@
 {
-    "version": "1.10.2",
+    "version": "1.10.3",
     "description": "Zero-cost global network optimizer for multiplayer games (CLI client)",
     "homepage": "https://github.com/ShibbityShwab/lightspeed",
     "license": {
@@ -13,8 +13,8 @@
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.10.2/lightspeed-client-x86_64-pc-windows-msvc.zip",
-            "hash": "9ebf31f13eaf0d11dc9337223eb0961893154f065d86bee8032e0a3cf90f0ca4"
+            "url": "https://github.com/ShibbityShwab/lightspeed/releases/download/v1.10.3/lightspeed-client-x86_64-pc-windows-msvc.zip",
+            "hash": "752e315165364100bf7fd487412dff56e58f3dbbf46c96020ba864fb58d369ee"
         }
     },
     "bin": "lightspeed.exe",
