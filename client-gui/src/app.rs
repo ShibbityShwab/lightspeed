@@ -3012,15 +3012,14 @@ impl<P: Platform> LightSpeedApp<P> {
         let mut chosen_server: Option<usize> = None;
         let mut save_server = false;
         ui.add_space(S2);
+        // One line, not three: the paragraph said the same thing as the fields
+        // directly beneath it and cost a wrapped block of height.
         ui.label(
-            egui::RichText::new(
-                "Enter your game server's IP and port to start optimizing without \
-                 waiting for auto-detect.",
-            )
-            .size(BODY)
-            .color(text_2),
+            egui::RichText::new("Enter the server's IP and port.")
+                .size(CAPTION)
+                .color(text_3),
         );
-        ui.add_space(S2);
+        ui.add_space(S1);
         ui.horizontal(|ui| {
             ui.label(i18n::t("route.server_label"));
             let default_port = self.selected_game().default_port;
@@ -5138,14 +5137,13 @@ fn target_front_door(ui: &mut egui::Ui, target: Option<&ProcessTarget>) -> Targe
             }
         }
         None => {
-            if ui.button(i18n::t("game.target_process")).clicked() {
+            if ui
+                .button(i18n::t("game.target_process"))
+                .on_hover_text(i18n::t("game.target_none"))
+                .clicked()
+            {
                 action.open_picker = true;
             }
-            ui.label(
-                egui::RichText::new(i18n::t("game.target_none"))
-                    .size(CAPTION)
-                    .color(text_3),
-            );
         }
     });
     action
@@ -6684,8 +6682,9 @@ mod tests {
             "the front door did not offer the picker:\n{unset}"
         );
         assert!(
-            unset.contains(crate::i18n::t("game.target_none").as_ref()),
-            "the front door did not say what it does:\n{unset}"
+            !unset.contains(crate::i18n::t("game.target_none").as_ref()),
+            "the explanation is a hover now - drawn inline it wrapped to two lines \
+             at 320 px and pushed the sheet taller:\n{unset}"
         );
         assert!(
             unset_wide <= 320.0,
