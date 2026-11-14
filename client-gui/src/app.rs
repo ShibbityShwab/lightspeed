@@ -4116,7 +4116,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 bottom: S3 as i8,
             }))
             .show(ui, |ui| {
-                egui::ScrollArea::vertical()
+                let out = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         // Cap and centre the column. `set_max_width` alone left the
@@ -4130,6 +4130,18 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             self.config_body(ui, narrow, short);
                         });
                     });
+
+                // Fixed width, content height: the window grows and shrinks with
+                // what is drawn, so nothing is hidden and nothing is left empty.
+                // The 8 px deadband keeps a one-pixel text re-wrap from becoming a
+                // resize loop.
+                let chrome = (viewport.height() - out.inner_rect.height()).max(0.0);
+                let needed = (chrome + out.content_size.y + 2.0).clamp(420.0, 1400.0);
+                if (needed - viewport.height()).abs() > 8.0 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                        320.0, needed,
+                    )));
+                }
             });
 
         // ── In-window sheets ─────────────────────────────────────────────
