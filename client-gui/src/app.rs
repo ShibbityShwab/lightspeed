@@ -82,7 +82,7 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// back three times on samples of 2, 7 and 3 packets while the session as a
 /// whole returned 187 replies for 309 sends.
 /// How old a direct-ping sample may be before the window asks for a fresh one.
-const PING_REFRESH_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+const PING_REFRESH_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
 const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -1045,6 +1045,9 @@ pub struct LightSpeedApp<P: Platform> {
     server_ping: Option<(f32, u64)>,
     /// Set while a worker thread runs a direct burst, which blocks for seconds.
     ping_in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// When the latency comparison was last logged, so the trace carries a
+    /// periodic record of what each path is doing without flooding it.
+    compared_at: Option<std::time::Instant>,
 
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
@@ -1284,6 +1287,7 @@ impl<P: Platform> LightSpeedApp<P> {
             relayed_base: None,
             server_ping: None,
             ping_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            compared_at: None,
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -2180,6 +2184,51 @@ impl<P: Platform> LightSpeedApp<P> {
         self.relay_health = None;
     }
 
+    /// Record what each path is doing, every ten seconds.
+    ///
+    /// The geometry says a relay cannot reduce round trip, so the only thing it
+    /// can offer is steadiness. That is a measurable claim: direct ping against
+    /// the client-to-relay leg, and each one's spread.
+    fn log_latency_comparison(&mut self) {
+        if !self.status.connected {
+            return;
+        }
+        let due = self
+            .compared_at
+            .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(10));
+        if !due {
+            return;
+        }
+        self.compared_at = Some(std::time::Instant::now());
+        let relay_spread = {
+            let mut history = self.status.rtt_history.clone();
+            history.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            if history.len() >= 4 {
+                let lo = history[history.len() / 10];
+                let hi = history[history.len() * 9 / 10];
+                Some(hi - lo)
+            } else {
+                None
+            }
+        };
+        let server = self
+            .status
+            .interceptor_server
+            .split(':')
+            .next()
+            .and_then(|ip| ip.parse::<std::net::Ipv4Addr>().ok());
+        tracing::info!(
+            direct_ms = self.server_ping.map(|(ms, _)| ms),
+            direct_jitter_ms = server.map(lightspeed_client::latency::direct_jitter),
+            shadow_jitter_ms = lightspeed_client::latency::shadow_direct_jitter_ms(),
+            relay_ms = self.status.latest_rtt_ms,
+            relay_spread_ms = relay_spread,
+            relayed_jitter_ms = lightspeed_client::latency::relayed_jitter_ms(),
+            relay = %self.status.proxy_addr,
+            "Latency comparison"
+        );
+    }
+
     /// Read the measured direct ping to the game server, and start a burst when
     /// the figure is missing or old.
     ///
@@ -2223,6 +2272,7 @@ impl<P: Platform> LightSpeedApp<P> {
         if let Some(server) = health.as_ref().and_then(|health| health.detected_server) {
             self.refresh_server_ping(*server.ip());
         }
+        self.log_latency_comparison();
         if self.status.interceptor_active || self.status.redirect_active {
             let key = self.session_key();
             let stale = self

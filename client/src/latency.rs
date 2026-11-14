@@ -36,7 +36,7 @@
 //! only invoked from the interceptor, never fires when the interceptor is
 //! stopped. Its samples are not reported unless telemetry is on.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, PoisonError};
@@ -53,6 +53,9 @@ pub const DIRECT_PROBE_COUNT: usize = 5;
 pub const MIN_PLAUSIBLE_DIRECT_MS: f32 = 1.0;
 /// Minimum plausible replies in a burst before a median is meaningful.
 pub const MIN_DIRECT_SAMPLES: usize = 3;
+
+/// How many burst medians the direct path keeps, for its own jitter figure.
+pub const DIRECT_HISTORY_CAPACITY: usize = 16;
 /// How long a stored direct median remains pairable with a relayed window.
 pub const DIRECT_MEDIAN_TTL: Duration = Duration::from_secs(300);
 /// Timeout for each ICMP probe reply.
@@ -273,6 +276,9 @@ struct ClientRelaySample {
 #[derive(Default)]
 struct Inner {
     direct: HashMap<Ipv4Addr, DirectSample>,
+    /// Recent burst medians per server, newest last: the direct path's own
+    /// spread, which is what a relay has to beat to be worth its hop.
+    direct_history: HashMap<Ipv4Addr, VecDeque<f32>>,
     pending: HashMap<Ipv4Addr, Instant>,
     last_burst: HashMap<Ipv4Addr, Instant>,
     client_relay: HashMap<SocketAddrV4, ClientRelaySample>,
@@ -435,6 +441,18 @@ impl LatencyTracker {
         inner.relayed.push(rtt_ms as f32);
     }
 
+    /// Jitter of the direct (ICMP) burst medians for `server`.
+    ///
+    /// A relay can only ever offer steadiness, never a shorter round trip, so this
+    /// is the figure that has to exist for that claim to be checkable at all.
+    /// `None` until two bursts have been recorded.
+    pub fn direct_jitter_ms(&self, server: Ipv4Addr) -> Option<f32> {
+        let inner = self.lock();
+        let history = inner.direct_history.get(&server)?;
+        let samples: Vec<f32> = history.iter().copied().collect();
+        (samples.len() >= 2).then(|| ring_jitter(&samples))
+    }
+
     /// The last direct (ICMP) median for `server`, with how long ago it was taken.
     ///
     /// This is the one latency figure on the client that is a real correlated
@@ -479,13 +497,21 @@ impl LatencyTracker {
         replies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let median = TelemetryCollector::percentile(&replies, 50.0);
         let measured_at = self.clock.now();
-        self.lock().direct.insert(
-            server,
-            DirectSample {
-                median_ms: median,
-                measured_at,
-            },
-        );
+        {
+            let mut inner = self.lock();
+            inner.direct.insert(
+                server,
+                DirectSample {
+                    median_ms: median,
+                    measured_at,
+                },
+            );
+            let history = inner.direct_history.entry(server).or_default();
+            if history.len() >= DIRECT_HISTORY_CAPACITY {
+                history.pop_front();
+            }
+            history.push_back(median);
+        }
         Some(median)
     }
 
@@ -864,6 +890,11 @@ pub fn relayed_p50_ms() -> Option<f32> {
 /// relay in it - which is why the age travels with the number.
 pub fn direct_sample(server: Ipv4Addr) -> Option<(f32, Duration)> {
     global().and_then(|tracker| tracker.direct_sample_ms(server))
+}
+
+/// Jitter of the direct path to `server`, from the burst medians so far.
+pub fn direct_jitter(server: Ipv4Addr) -> Option<f32> {
+    global().and_then(|tracker| tracker.direct_jitter_ms(server))
 }
 
 /// Run one direct burst against `server` through the process-wide tracker.
