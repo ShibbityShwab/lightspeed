@@ -3185,7 +3185,10 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.set_max_width(max_w);
                 sheet_title(ui, &i18n::t("settings.title"));
                 egui::ScrollArea::vertical()
-                    .max_height((max_h - 104.0).max(160.0))
+                    // Size the body from the space that actually remains after
+                    // the frame padding, the title and Close; a fixed reserve left
+                    // the last button clipped behind Close once Settings grew.
+                    .max_height((max_h - 150.0).max(160.0))
                     // The sheet scrolls by design; a scrollbar that only appears
                     // on hover left About below the fold with no cue that it was
                     // there.
@@ -5255,7 +5258,8 @@ fn sheet_frame() -> egui::Frame {
 /// overflows a 320 px window.
 fn sheet_bounds(ctx: &egui::Context) -> (f32, f32) {
     let screen = ctx.content_rect();
-    let max_w = (screen.width() - 24.0).min(420.0);
+    let max_w =
+        (screen.width() - 24.0 - 2.0 * S4 as f32).min(420.0 - 2.0 * S4 as f32);
     // Leave room for the title and the Close button inside the sheet itself: the
     // old 120 px reserve plus an unscaled body pushed the last rows past the
     // bottom of the window at 320 px wide.
