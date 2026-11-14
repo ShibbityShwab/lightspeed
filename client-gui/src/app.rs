@@ -3370,6 +3370,9 @@ impl<P: Platform> LightSpeedApp<P> {
                 .size(CAPTION)
                 .color(text_2),
         );
+        // A table, not a list of controls: tighten the rows here and put the
+        // spacing back before the next section.
+        ui.spacing_mut().item_spacing.y = 2.0;
         ui.add_space(S1);
         Self::component_row(ui, "Version", env!("CARGO_PKG_VERSION"));
         Self::component_row(
@@ -3405,6 +3408,7 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
 
         // About: the brand mark and the project links.
+        ui.spacing_mut().item_spacing.y = S2 as f32;
         hairline(ui);
         ui.add_space(S2);
         section_label(ui, &i18n::t("settings.about"));
