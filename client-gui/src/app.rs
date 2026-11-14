@@ -1062,6 +1062,9 @@ pub struct LightSpeedApp<P: Platform> {
     /// The Game field's "Manual / Custom…" mode: relay an explicit server.
     game_manual: bool,
     share_latency_stats: bool,
+    /// Persisted: whether a relay the watchdog took the session direct from may
+    /// be re-tested. Off means one fault keeps the session direct.
+    retry_after_fallback: bool,
     auto_detected_game: Option<String>,
 
     // ── System state ──────────────────────────────────────────────────────
@@ -1250,6 +1253,7 @@ impl<P: Platform> LightSpeedApp<P> {
             fec_enabled: false,
             capture_available: P::is_capture_available(),
             share_latency_stats,
+            retry_after_fallback: saved.retry_after_fallback,
             auto_detected_game,
             is_admin,
             fonts_setup: false,
@@ -1433,6 +1437,7 @@ impl<P: Platform> LightSpeedApp<P> {
             proxies: self.proxies.clone(),
             auto_select: self.auto_select,
             share_latency_stats: self.share_latency_stats,
+            retry_after_fallback: self.retry_after_fallback,
             game_auto: self.game_auto,
             manual_mode: self.game_manual,
             language: self.language.clone(),

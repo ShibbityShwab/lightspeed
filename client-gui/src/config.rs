@@ -61,6 +61,10 @@ pub struct GuiConfig {
     /// When true, share anonymous aggregate latency statistics with the relay.
     /// On by default; no IP address, identifier, or packet content is sent.
     pub share_latency_stats: bool,
+    /// When true, a relay the no-reply watchdog took the session direct from is
+    /// re-tested after 20 s, then 45 s, then 90 s. Off means the first fault
+    /// leaves the session direct for the rest of the match.
+    pub retry_after_fallback: bool,
     /// When true, the GUI follows the auto-detected game instead of a pinned
     /// pick - the Game field's "Auto (detect)" entry, on like the relay's.
     pub game_auto: bool,
@@ -86,6 +90,7 @@ impl Default for GuiConfig {
             proxies: Vec::new(),
             auto_select: true,
             share_latency_stats: true,
+            retry_after_fallback: true,
             game_auto: true,
             selected_game: None,
             manual_mode: false,
@@ -128,6 +133,10 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         .unwrap_or(true);
     let share_latency_stats = table
         .get("share_latency_stats")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let retry_after_fallback = table
+        .get("retry_after_fallback")
         .and_then(Value::as_bool)
         .unwrap_or(true);
     let manual_mode = table
@@ -198,6 +207,7 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         proxies,
         auto_select,
         share_latency_stats,
+        retry_after_fallback,
         game_auto,
         selected_game,
         manual_mode,
@@ -222,6 +232,10 @@ pub fn render(config: &GuiConfig) -> String {
     table.insert(
         "share_latency_stats".into(),
         Value::Boolean(config.share_latency_stats),
+    );
+    table.insert(
+        "retry_after_fallback".into(),
+        Value::Boolean(config.retry_after_fallback),
     );
     if let Some(language) = &config.language {
         table.insert("language".into(), Value::String(language.clone()));
@@ -307,6 +321,7 @@ mod tests {
             ],
             auto_select: true,
             share_latency_stats: true,
+            retry_after_fallback: true,
             game_auto: true,
             selected_game: None,
             manual_mode: false,
