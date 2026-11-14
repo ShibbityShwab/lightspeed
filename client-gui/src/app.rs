@@ -4129,7 +4129,19 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         let target = ui.available_width().min(560.0);
                         ui.vertical_centered(|ui| {
                             ui.set_width(target);
-                            self.config_body(ui, narrow, short);
+                            // Same surface, radius, border and padding as the map
+                            // card above: the pickers were bare fields on the panel
+                            // while the status sat on a card, which is the style
+                            // split the review called out.
+                            egui::Frame::new()
+                                .fill(bg_2)
+                                .stroke(egui::Stroke::new(1.0, border_1))
+                                .corner_radius(egui::CornerRadius::same(R_CARD))
+                                .inner_margin(egui::Margin::same(S3 as i8))
+                                .show(ui, |ui| {
+                                    ui.set_width((target - 2.0 * S3 as f32).max(200.0));
+                                    self.config_body(ui, narrow, short);
+                                });
                         });
                     });
 
