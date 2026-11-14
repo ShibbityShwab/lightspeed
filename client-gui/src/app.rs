@@ -2801,7 +2801,14 @@ impl<P: Platform> LightSpeedApp<P> {
                         Some(ms) => format!("{}  {ms:>3} ms", entry.label),
                         None => entry.label.clone(),
                     };
-                    if ui.selectable_label(picked, text).clicked() {
+                    if ui
+                        .selectable_label(picked, text)
+                        .on_hover_text(
+                            "Median of five probes to this relay: the client leg only, \
+                             not the path to your game server and not your in-game ping.",
+                        )
+                        .clicked()
+                    {
                         auto = false;
                         chosen = Some(i);
                     }
@@ -3541,8 +3548,22 @@ impl<P: Platform> LightSpeedApp<P> {
                     .max_height(max_h)
                     .show(ui, |ui| {
                         for (i, entry) in self.proxies.iter().enumerate() {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(egui::RichText::new(&entry.label).color(text_1));
+                            // The row used to wrap, which pushed the delete button
+                            // onto its own line for the one relay whose label and
+                            // address together overran the sheet. Truncate the name
+                            // instead and keep the button where it belongs.
+                            ui.horizontal(|ui| {
+                                // A fixed column, not `available_width()`: inside the
+                                // scroll area that value is unbounded, and the name
+                                // column grew until the whole sheet slid off-screen.
+                                let name_w = 110.0;
+                                ui.add_sized(
+                                    [name_w, 18.0],
+                                    egui::Label::new(
+                                        egui::RichText::new(&entry.label).color(text_1),
+                                    )
+                                    .truncate(),
+                                );
                                 ui.monospace(entry.addr.to_string());
                                 ui.label(
                                     egui::RichText::new(
@@ -3551,9 +3572,14 @@ impl<P: Platform> LightSpeedApp<P> {
                                     .size(CAPTION)
                                     .color(text_3),
                                 );
-                                if ui.button("×").clicked() {
-                                    remove_idx = Some(i);
-                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.button("×").clicked() {
+                                            remove_idx = Some(i);
+                                        }
+                                    },
+                                );
                             });
                         }
                         if self.proxies.is_empty() {
