@@ -4671,17 +4671,25 @@ enum ActionKind {
 /// AA-safe) and brightens to `accent` on hover; Danger uses `bg-3` with a
 /// danger hairline and ink, tinting with `danger-soft` on hover.
 fn action_button(ui: &mut egui::Ui, text: &str, kind: ActionKind, ready: bool) -> egui::Response {
-    // The label wraps and the button grows to fit it. "RESTART AS ADMINISTRATOR TO
-    // OPTIMIZE" is wider than a 320 px window at the emphasis size, and the
-    // painter drew it straight through the button's edge.
-    let font = egui::FontId::new(EMPHASIS, semibold());
+    // Shrink to fit rather than wrap: "RESTART AS ADMINISTRATOR TO OPTIMIZE" is
+    // wider than a 320 px window at the emphasis size, and a two-line button
+    // pushed the rest of the column down. The type scales down until the line
+    // fits, with a floor so it stays readable.
     let inner_w = (ui.available_width() - 24.0).max(80.0);
-    let probe = ui
-        .painter()
-        .layout(text.to_owned(), font.clone(), text_1, inner_w);
-    let height = (probe.size().y + 24.0).max(ACTION_H);
+    let mut size = EMPHASIS;
+    let mut probe =
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), egui::FontId::new(size, semibold()), text_1);
+    if probe.size().x > inner_w {
+        size = (EMPHASIS * inner_w / probe.size().x).max(9.0);
+        probe = ui.painter().layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::new(size, semibold()),
+            text_1,
+        );
+    }
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), height),
+        egui::vec2(ui.available_width(), ACTION_H),
         egui::Sense::click(),
     );
     let hovered = response.hovered() && ready;
@@ -4724,7 +4732,7 @@ fn action_button(ui: &mut egui::Ui, text: &str, kind: ActionKind, ready: bool) -
         );
         painter.rect_filled(square, 0.0, danger);
     }
-    let galley = painter.layout(text.to_owned(), font, ink, rect.width() - 24.0);
+    let galley = painter.layout_no_wrap(text.to_owned(), egui::FontId::new(size, semibold()), ink);
     let pos = rect.center() - galley.size() / 2.0;
     painter.galley(pos, galley, ink);
     response
