@@ -80,12 +80,19 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// session falls back to direct. A healthy join's first reply arrives in
 /// milliseconds; a join that returns nothing sits on a loading screen, so this
 /// is long enough to be sure and short enough to save the connection.
-const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
+///
+/// Eight seconds, not three: a live match judged on three-second windows fell
+/// back three times on samples of 2, 7 and 3 packets while the session as a
+/// whole returned 187 replies for 309 sends.
+const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Minimum intercepted packets before the no-reply watchdog may fire, so a
-/// single menu packet cannot trip it. A join handshake is only a few packets,
-/// so this stays low.
-const RELAY_REPLY_MIN_INTERCEPTED: u64 = 2;
+/// Minimum intercepted packets before the no-reply watchdog may fire.
+///
+/// The share test needs a sample to mean anything. At two packets, one late
+/// reply reads as starvation and one missing reply reads as 50% loss, so a
+/// sparse moment at match start took healthy sessions direct. Twenty packets is
+/// under a second of a live match and several seconds of a quiet one.
+const RELAY_REPLY_MIN_INTERCEPTED: u64 = 20;
 
 /// Returned datagrams a window needs before a zero injection count is called a
 /// local fault rather than a quiet relay.
@@ -5604,8 +5611,24 @@ mod tests {
     }
 
     #[test]
+    fn a_sparse_window_is_not_starvation() {
+        // The live failure: 7 packets, 1 reply, called starving while the
+        // session's own total was 187 replies for 309 sends.
+        assert_eq!(
+            super::relay_reply_fault(super::RELAY_REPLY_TIMEOUT, 7, 0, 1),
+            None,
+            "a seven-packet window is too small to judge"
+        );
+        assert_eq!(
+            super::relay_reply_fault(super::RELAY_REPLY_TIMEOUT, 40, 0, 0),
+            Some(super::RelayReplyFault::NoReplyFromRelay),
+            "a real sample with no replies at all is still a fallback"
+        );
+    }
+
+    #[test]
     fn one_returned_datagram_is_not_an_injection_fault() {
-        let elapsed = std::time::Duration::from_secs(5);
+        let elapsed = super::RELAY_REPLY_TIMEOUT;
         assert_eq!(
             super::relay_reply_fault(elapsed, 60, 0, 1),
             Some(super::RelayReplyFault::TooFewReplies),
