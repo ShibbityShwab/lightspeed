@@ -487,10 +487,12 @@ pub fn note_inbound(server: Ipv4Addr) {
         return;
     };
     drop(sampler);
-    if let Some(estimator) = global() {
-        estimator.observe_path_probe(relay, server, rtt_us);
-        estimator.observe_tunnelled(relay, server, rtt_us);
-    }
+    // Nothing is recorded. Live measurement showed this attribution cannot be
+    // trusted on real traffic: it produced 0.157 ms against a 234 ms relay leg
+    // and then stopped producing samples at all. A wrong destination leg moves
+    // relay choice, so the estimator keeps its region prior rather than a
+    // fabricated measurement.
+    let _ = (relay, rtt_us);
 }
 
 #[cfg(test)]

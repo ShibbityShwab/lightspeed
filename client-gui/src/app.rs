@@ -88,14 +88,12 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// How old a whole-loop probe may be before the window stops showing it. The
 /// relay leg beside it moves by tens of milliseconds within seconds, so an older
 /// probe can read below the current leg and look like a contradiction.
-const PATH_PROBE_MAX_AGE: Duration = Duration::from_secs(5);
 
 /// How far below the instantaneous relay leg a probe may sit before it is called
 /// a mis-paired sample. A whole-loop round trip crosses that leg, so anything
 /// meaningfully under it is not a measurement of the path - bad pairings produced
 /// 1 ms and 4 ms against a ~273 ms leg. The slack covers the leg being sampled a
 /// moment apart from the probe.
-const PATH_PROBE_LEG_SLACK_MS: f64 = 15.0;
 
 const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -1049,9 +1047,7 @@ pub struct LightSpeedApp<P: Platform> {
     direct_fallback: bool,
     /// Estimated whole-loop RTT to the game server through the relay, in ms;
     /// 0.0 until the sampler has enough paired round trips for this pair.
-    path_rtt_ms: f64,
     /// How long ago the probe behind `path_rtt_ms` was taken.
-    path_rtt_age: Option<std::time::Duration>,
     /// Cumulative `(up, down)` counters as they stood when this session started,
     /// so the Relayed row describes the current session rather than the process.
     relayed_base: Option<(String, u64, u64)>,
@@ -1291,8 +1287,6 @@ impl<P: Platform> LightSpeedApp<P> {
             server_chosen: Arc::new(AtomicBool::new(false)),
             held_since: None,
             direct_fallback: false,
-            path_rtt_ms: 0.0,
-            path_rtt_age: None,
             relayed_base: None,
             last_presence_check: None,
             auto_game_present: false,
@@ -2173,49 +2167,6 @@ impl<P: Platform> LightSpeedApp<P> {
         self.relay_health = None;
     }
 
-    /// Watch whether packets that were decided to relay actually leave.
-    ///
-    /// The counters say a flow was relayed; they do not say the datagram reached
-    /// the relay. A send that fails, or a relay that is not taking this session,
-    /// looks exactly like a healthy match from `packets_intercepted` alone, and
-    /// feels like packet loss to the player. This compares the two counters once
-    /// a second, and only once the run has been relaying long enough for a
-    /// per-second sample to mean something: a single lost datagram is normal on
-    /// UDP, a steady share of them is not.
-    /// The whole-loop figure: client to relay to the game server and back.
-    ///
-    /// The keepalive echo measures only the client-to-relay leg, so the headline
-    /// number never matched the game's own ping. The client already pairs live
-    /// tunnelled round trips per (relay, server) for relay ranking; this reads
-    /// that estimator rather than measuring anything new. Zero while either side
-    /// is unknown or short of samples, which keeps the row absent instead of
-    /// showing a guess.
-    fn refresh_path_rtt(&mut self, server: Option<std::net::SocketAddrV4>) {
-        let relay = self
-            .status
-            .proxy_addr
-            .parse::<std::net::SocketAddrV4>()
-            .ok();
-        self.path_rtt_ms = 0.0;
-        self.path_rtt_age = None;
-        let (Some(server), Some(relay)) = (server, relay) else {
-            return;
-        };
-        let Some(probe) = lightspeed_client::destination_estimator()
-            .and_then(|estimator| estimator.path_probe(relay, *server.ip()))
-        else {
-            return;
-        };
-        // A stale probe is dropped rather than shown: the relay leg beside it is
-        // instantaneous and swings by tens of milliseconds, so an old path would
-        // read as a contradiction instead of a coincidence.
-        let age = probe.at.elapsed();
-        if age <= PATH_PROBE_MAX_AGE {
-            self.path_rtt_ms = probe.us as f64 / 1000.0;
-            self.path_rtt_age = Some(age);
-        }
-    }
-
     /// What identifies the run the Relayed counters describe: a new relay or a new
     /// game server is a new session, and the row starts counting again.
     fn session_key(&self) -> String {
@@ -2223,22 +2174,6 @@ impl<P: Platform> LightSpeedApp<P> {
             "{}|{}|{}",
             self.status.proxy_addr, self.status.interceptor_server, self.status.redirect_server
         )
-    }
-
-    /// The whole-loop figure, but only when it is fit to show: fresh enough to
-    /// compare with the instantaneous leg, and not below it.
-    fn path_rtt_shown(&self) -> Option<(f64, u64)> {
-        if self.path_rtt_ms <= 0.0 {
-            return None;
-        }
-        if self.path_rtt_ms + PATH_PROBE_LEG_SLACK_MS < self.status.latest_rtt_ms {
-            return None;
-        }
-        let age = self
-            .path_rtt_age
-            .map(|age| age.as_secs())
-            .unwrap_or_default();
-        Some((self.path_rtt_ms, age))
     }
 
     fn poll_relay_health(&mut self) {
@@ -2249,7 +2184,6 @@ impl<P: Platform> LightSpeedApp<P> {
                 health.tunnelling_enabled == Some(false) && health.detected_server.is_some()
             })
             .unwrap_or(false);
-        self.refresh_path_rtt(health.as_ref().and_then(|health| health.detected_server));
         if self.status.interceptor_active || self.status.redirect_active {
             let key = self.session_key();
             let stale = self
@@ -2503,10 +2437,13 @@ impl<P: Platform> LightSpeedApp<P> {
             // The headline is the player's ping, which is the whole loop through
             // the relay when a quiet-flow probe has measured it; the relay leg is
             // only what is left to show when nothing has been attributed yet.
-            let (reading, hint) = match self.path_rtt_shown() {
-                Some((path, _)) => (path, i18n::t("route.path_hint")),
-                None => (self.status.latest_rtt_ms, i18n::t("route.rtt_hint")),
-            };
+            // The headline is the measured client-to-relay round trip. A whole-loop
+            // figure was built on quiet-flow attribution and removed: in live
+            // traffic it produced 0.157 ms against a 234 ms relay leg and then
+            // stopped producing anything at all, so the window shows only what it
+            // can measure.
+            let reading = self.status.latest_rtt_ms;
+            let hint = i18n::t("route.rtt_hint");
             let text = if reading > 0.0 {
                 format!("{reading:>3.0} ms")
             } else {
@@ -2650,10 +2587,6 @@ impl<P: Platform> LightSpeedApp<P> {
         // because the relay leg beside it is instantaneous and swings: a stale
         // probe can legitimately read below the current leg without either
         // number being wrong.
-        if let Some((path, age)) = self.path_rtt_shown() {
-            let value = LedgerValue::Data(format!("{path:.0} ms \u{00b7} {age}s"));
-            self.ledger_row(ui, narrow, &i18n::t("route.path_rtt"), &value);
-        }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
             self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
