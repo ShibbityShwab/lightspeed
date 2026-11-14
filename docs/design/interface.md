@@ -43,6 +43,36 @@ Rules that follow from the contract:
   is dead.
 - A state the engine cannot distinguish must not be invented by the UI.
 
+## Layout spec (decided 2026-11-14)
+
+The window must earn its pixels at every size, and no element may be pushed out of
+view by a size change.
+
+**Breakpoints**
+
+| Width | Layout |
+| --- | --- |
+| < 380 px | single column, labels above values, card full width |
+| 380-619 px | single column, label/value rows side by side |
+| >= 620 px | two columns: status left (~58%), route/config right (~42%) |
+| height < 560 px | short mode: drop the sparkline, collapse the globe to 76 px, keep the ledger and the primary action in the top band |
+
+**Bands, not fillers.** The state rail (state word + metric) is a fixed 34 px band
+and never allocates the remaining height. The primary action is a fixed 48 px
+control directly under it. Only the config region scrolls, and it scrolls
+*below* those two bands, so the action can never be pushed off-screen.
+
+**Minimums.** The window refuses to go below 360x420 (the viewport already
+carries 320x400; raise it), and the content column refuses to go below 320 px
+wide. If the space cannot hold a control, the control moves to the next row
+instead of being clipped.
+
+**Never hidden.** A control that does not fit is a layout bug: it moves, or the
+window enforces a larger minimum. Clipping is not an acceptable answer.
+
+**Proof.** Two captures per change: 435x720 and 720x610. The second one is the
+case that exposed the rail stretching to fill the window.
+
 ## Known issues (audited live, 2026-11-13/14)
 
 Closed on 2026-11-14:
