@@ -4116,7 +4116,16 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        self.config_body(ui, narrow, short);
+                        // Cap and centre the column. `set_max_width` alone left the
+                        // child measuring against an unbounded width inside this
+                        // scroll area, so the ledger lost its label column; setting
+                        // the width explicitly gives the row layout a number to work
+                        // from.
+                        let target = ui.available_width().min(560.0);
+                        ui.vertical_centered(|ui| {
+                            ui.set_width(target);
+                            self.config_body(ui, narrow, short);
+                        });
                     });
             });
 
