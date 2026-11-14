@@ -123,6 +123,95 @@ fn draw_land(painter: &egui::Painter, c: Pos2, r: f32, centre: LatLon) {
     }
 }
 
+/// Draw an equirectangular map of the world with the same markers and route.
+///
+/// The globe answers "where is my relay" but costs a third of the card and needs
+/// the reader to imagine the far hemisphere. A flat map is legible at a glance,
+/// uses the window's width instead of its height, and reuses the same Natural
+/// Earth coastline blob.
+pub fn draw_map(
+    ui: &mut egui::Ui,
+    width: f32,
+    height: f32,
+    markers: &[Marker],
+    route: Option<(LatLon, LatLon)>,
+) {
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(width, height), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    let bg = Color32::from_rgb(0x11, 0x11, 0x18);
+    let grid = Color32::from_rgb(0x22, 0x22, 0x30);
+    let land = Color32::from_rgb(0x4A, 0x4A, 0x72);
+    painter.rect_filled(rect, egui::CornerRadius::same(6), bg);
+
+    // Equirectangular: lon -180..180 across, lat 90..-90 down.
+    let at = |(lat, lon): LatLon| -> Pos2 {
+        Pos2::new(
+            rect.left() + (lon + 180.0) / 360.0 * rect.width(),
+            rect.top() + (90.0 - lat) / 180.0 * rect.height(),
+        )
+    };
+
+    for i in 1..6 {
+        let x = rect.left() + rect.width() * i as f32 / 6.0;
+        painter.line_segment(
+            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+            Stroke::new(1.0, grid),
+        );
+    }
+    for i in 1..3 {
+        let y = rect.top() + rect.height() * i as f32 / 3.0;
+        painter.line_segment(
+            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+            Stroke::new(1.0, grid),
+        );
+    }
+
+    // The same coastline blob the globe walks, bounds-checked the same way.
+    if let Some(polys) = u16_at(LAND, 0) {
+        let stroke = Stroke::new(1.0, land);
+        let mut o = 2usize;
+        for _ in 0..polys {
+            let Some(count) = u16_at(LAND, o) else {
+                break;
+            };
+            o += 2;
+            let mut run: Vec<Pos2> = Vec::with_capacity(count);
+            for _ in 0..count {
+                let (Some(a), Some(b)) = (u16_at(LAND, o), u16_at(LAND, o + 2)) else {
+                    break;
+                };
+                o += 4;
+                run.push(at((a as i16 as f32 / 100.0, b as i16 as f32 / 100.0)));
+            }
+            if run.len() > 1 {
+                painter.add(egui::Shape::line(run, stroke));
+            }
+        }
+    }
+
+    if let Some((from, to)) = route {
+        painter.line_segment(
+            [at(from), at(to)],
+            Stroke::new(1.5, Color32::from_rgb(0x6C, 0x5C, 0xE7)),
+        );
+    }
+
+    for marker in markers {
+        let p = at(marker.at);
+        painter.circle_filled(p, 3.5, marker.colour);
+        if !marker.label.is_empty() {
+            painter.text(
+                p + egui::Vec2::new(6.0, -5.0),
+                egui::Align2::LEFT_BOTTOM,
+                &marker.label,
+                egui::FontId::proportional(10.0),
+                marker.colour,
+            );
+        }
+    }
+}
+
 /// Draw the globe, its markers, and optionally the route between two points.
 pub fn draw(
     ui: &mut egui::Ui,

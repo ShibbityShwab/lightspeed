@@ -2498,13 +2498,10 @@ impl<P: Platform> LightSpeedApp<P> {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.vertical_centered(|ui| {
-                    globe::draw(
-                        ui,
-                        if narrow { GLOBE_SM } else { GLOBE_LG },
-                        centre,
-                        &markers,
-                        route,
-                    );
+                    // A flat map instead of the globe: legible at a glance and it
+                    // spends the card's width rather than its height.
+                    let map_w = ui.available_width().min(430.0);
+                    globe::draw_map(ui, map_w, 132.0, &markers, route);
                 });
                 ui.add_space(S2);
                 self.ledger_rows(ui, narrow, false);
