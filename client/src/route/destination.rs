@@ -144,6 +144,24 @@ impl RelayDestinationEstimator {
         estimate_from(&samples.client_leg_us, tunnelled)
     }
 
+    /// Median end-to-end tunnelled round trip for the `(relay, destination)`
+    /// pair: client to relay to the game server and back. This is the figure a
+    /// player reads as their in-game latency, as opposed to the client-leg RTT
+    /// the window shows from the keepalive echo.
+    ///
+    /// `None` until the pair has [`MIN_DEST_SAMPLES`] samples, so a handful of
+    /// packets cannot present a number as if it were measured.
+    pub fn path_rtt_us(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<(u64, usize)> {
+        let relays = self.lock();
+        let tunnelled = relays.get(&relay)?.tunnelled.get(&destination)?;
+        if tunnelled.len() < MIN_DEST_SAMPLES {
+            return None;
+        }
+        let mut sorted = tunnelled.iter().copied().collect::<Vec<_>>();
+        sorted.sort_unstable();
+        Some((median_sorted(&sorted), tunnelled.len()))
+    }
+
     /// A pooled destination-leg estimate across every measured relay pair.
     ///
     /// Used as a prior for a candidate whose own destination leg is not yet
@@ -554,6 +572,46 @@ mod tests {
         let s = steady.estimate(relay(1), server(1)).unwrap();
         let n = noisy.estimate(relay(1), server(1)).unwrap();
         assert!(s.confidence > n.confidence);
+    }
+
+    #[test]
+    fn the_path_rtt_is_the_end_to_end_median_not_the_client_leg() {
+        let est = RelayDestinationEstimator::new();
+        feed(
+            &est,
+            relay(1),
+            server(1),
+            20_000,
+            60_000,
+            MIN_DEST_SAMPLES + 2,
+        );
+        let (path, samples) = est.path_rtt_us(relay(1), server(1)).expect("measured");
+        assert_eq!(path, 60_000, "the whole client-relay-server round trip");
+        assert!(samples >= MIN_DEST_SAMPLES);
+    }
+
+    #[test]
+    fn the_path_rtt_waits_for_enough_samples() {
+        let est = RelayDestinationEstimator::new();
+        feed(
+            &est,
+            relay(1),
+            server(1),
+            20_000,
+            60_000,
+            MIN_DEST_SAMPLES - 1,
+        );
+        assert_eq!(est.path_rtt_us(relay(1), server(1)), None);
+        assert_eq!(
+            est.path_rtt_us(relay(2), server(1)),
+            None,
+            "unmeasured relay"
+        );
+        assert_eq!(
+            est.path_rtt_us(relay(1), server(9)),
+            None,
+            "unmeasured server"
+        );
     }
 
     #[test]

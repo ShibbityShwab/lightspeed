@@ -1034,6 +1034,9 @@ pub struct LightSpeedApp<P: Platform> {
     /// carried packets but returned nothing. Surfaced in the ledger so the
     /// displayed relay is not mistaken for the path in use.
     direct_fallback: bool,
+    /// Estimated whole-loop RTT to the game server through the relay, in ms;
+    /// 0.0 until the sampler has enough paired round trips for this pair.
+    path_rtt_ms: f64,
 
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
@@ -1265,6 +1268,7 @@ impl<P: Platform> LightSpeedApp<P> {
             server_chosen: Arc::new(AtomicBool::new(false)),
             held_since: None,
             direct_fallback: false,
+            path_rtt_ms: 0.0,
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -2147,6 +2151,29 @@ impl<P: Platform> LightSpeedApp<P> {
     /// a second, and only once the run has been relaying long enough for a
     /// per-second sample to mean something: a single lost datagram is normal on
     /// UDP, a steady share of them is not.
+    /// The whole-loop figure: client to relay to the game server and back.
+    ///
+    /// The keepalive echo measures only the client-to-relay leg, so the headline
+    /// number never matched the game's own ping. The client already pairs live
+    /// tunnelled round trips per (relay, server) for relay ranking; this reads
+    /// that estimator rather than measuring anything new. Zero while either side
+    /// is unknown or short of samples, which keeps the row absent instead of
+    /// showing a guess.
+    fn refresh_path_rtt(&mut self, server: Option<std::net::SocketAddrV4>) {
+        let relay = self
+            .status
+            .proxy_addr
+            .parse::<std::net::SocketAddrV4>()
+            .ok();
+        self.path_rtt_ms = match (server, relay) {
+            (Some(server), Some(relay)) => lightspeed_client::destination_estimator()
+                .and_then(|estimator| estimator.path_rtt_us(relay, *server.ip()))
+                .map(|(micros, _)| micros as f64 / 1000.0)
+                .unwrap_or(0.0),
+            _ => 0.0,
+        };
+    }
+
     fn poll_relay_health(&mut self) {
         self.direct_fallback = lock_or_recover(&self.engine)
             .interceptor_health()
@@ -2542,6 +2569,13 @@ impl<P: Platform> LightSpeedApp<P> {
         // The hero number is the keepalive round trip to the relay node, not the
         // game's own ping, and only a hover said so. Naming it in the card makes
         // the difference legible without pointing at it.
+        // The whole-loop figure, when the sampler has paired enough tunnelled
+        // round trips. A tilde marks it as an estimate: it is a median of
+        // sampled round trips, not a probe of every packet.
+        if self.path_rtt_ms > 0.0 {
+            let value = LedgerValue::Data(format!("~{:.0} ms", self.path_rtt_ms));
+            self.ledger_row(ui, narrow, &i18n::t("route.path_rtt"), &value);
+        }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
             self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);

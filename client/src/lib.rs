@@ -22,6 +22,13 @@ pub use route::relay_choice::{
     rank as rank_relays_for_destination, RelayCandidate, ScoredRelay,
 };
 
+/// The always-on sampler of end-to-end tunnelled round trips, which the window
+/// reads for its whole-loop latency figure. Same rule as above: one accessor,
+/// not the module.
+pub use route::destination::{
+    global as destination_estimator, RelayDestinationEstimator as DestinationEstimator,
+};
+
 pub(crate) mod capture;
 pub(crate) mod cli;
 pub(crate) mod config;
