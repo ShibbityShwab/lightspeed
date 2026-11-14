@@ -5,6 +5,29 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] - 2026-11-14
+
+### Added
+
+- **The window says when a game server rejects the relay.** After three spaced
+  re-tests the watchdog records the server and the Path row reads "Server
+  rejects the relay" instead of "Direct fallback", which read as though the app
+  had broken. Measured basis: the relay carried every datagram (79 relayed, 0
+  dropped) while the server answered one or two in fifty.
+
+### Fixed
+
+- **A transient relay fault no longer costs the rest of the match.** The
+  no-reply watchdog used to take a session direct and never put it back; it now
+  re-tests after 20 s, then 45 s, then 90 s, and stops after the third.
+- **The watchdog judges on a sample that means anything.** It fired after three
+  seconds and two packets, so a healthy session (187 replies for 309 sends) was
+  taken direct three times in a minute on windows of 2, 7 and 3 packets. It now
+  needs 20 intercepted packets and 8 seconds.
+- **One returned datagram is no longer called an injection fault.** A zero
+  injection count needs five returns in the window before the local injector is
+  blamed; anything less reports as too-few-replies.
+
 ## [1.10.1] - 2026-11-13
 
 ### Added
