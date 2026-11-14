@@ -2172,8 +2172,8 @@ impl<P: Platform> LightSpeedApp<P> {
             .ok();
         self.path_rtt_ms = match (server, relay) {
             (Some(server), Some(relay)) => lightspeed_client::destination_estimator()
-                .and_then(|estimator| estimator.path_rtt_us(relay, *server.ip()))
-                .map(|(micros, _)| micros as f64 / 1000.0)
+                .and_then(|estimator| estimator.path_floor_us(relay, *server.ip()))
+                .map(|micros| micros as f64 / 1000.0)
                 .unwrap_or(0.0),
             _ => 0.0,
         };
@@ -2576,6 +2576,13 @@ impl<P: Platform> LightSpeedApp<P> {
         // The hero number is the keepalive round trip to the relay node, not the
         // game's own ping, and only a hover said so. Naming it in the card makes
         // the difference legible without pointing at it.
+        // The whole-loop figure: fastest paired client-relay-server round trip
+        // seen recently. A tilde marks it as an estimate; it can never read
+        // below the relay leg beside it.
+        if self.path_rtt_ms > 0.0 {
+            let value = LedgerValue::Data(format!("~{:.0} ms", self.path_rtt_ms));
+            self.ledger_row(ui, narrow, &i18n::t("route.path_rtt"), &value);
+        }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
             self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
