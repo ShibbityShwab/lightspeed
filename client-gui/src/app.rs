@@ -2392,12 +2392,12 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.set_min_height(hero_h);
                 ui.label(
                     egui::RichText::new(word)
-                        .size(STATE)
+                        .size(if narrow { STATE * 0.82 } else { STATE })
                         .family(semibold())
                         .color(word_color),
                 );
                 if let Some((text, color)) = &metric {
-                    if !narrow {
+                    {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(text.as_str())
@@ -2411,25 +2411,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 }
             },
         );
-        if let Some((text, color)) = &metric {
-            if narrow {
-                // Inside `ui.horizontal`: a bare `with_layout` on the rail's own
-                // vertical ui claims the panel's remaining height, which is what
-                // opened a 200 px void between the state word and the action at
-                // 350x587. The horizontal context fixes the row to its content.
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(text.as_str())
-                                .size(METRIC)
-                                .family(egui::FontFamily::Monospace)
-                                .color(*color),
-                        )
-                        .on_hover_text(i18n::t("route.rtt_hint"));
-                    });
-                });
-            }
-        }
+
         ui.add_space(S1);
         ui.label(egui::RichText::new(sub_line).size(BODY).color(text_2));
     }

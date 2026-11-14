@@ -200,15 +200,10 @@ pub fn draw_map(
     for marker in markers {
         let p = at(marker.at);
         painter.circle_filled(p, 3.5, marker.colour);
-        if !marker.label.is_empty() {
-            painter.text(
-                p + egui::Vec2::new(6.0, -5.0),
-                egui::Align2::LEFT_BOTTOM,
-                &marker.label,
-                egui::FontId::proportional(10.0),
-                marker.colour,
-            );
-        }
+        // No labels on the map. At 320 px they overlapped each other and the
+        // relay name was unreadable; the ledger directly underneath already
+        // names the relay in full, so the map only has to show where it is.
+        let _ = &marker.label;
     }
 }
 
