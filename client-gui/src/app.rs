@@ -2539,6 +2539,13 @@ impl<P: Platform> LightSpeedApp<P> {
     fn ledger_rows(&self, ui: &mut egui::Ui, narrow: bool, short_mode: bool) {
         let relay = self.relay_value();
         self.ledger_row(ui, narrow, &i18n::t("route.relay"), &relay);
+        // The hero number is the keepalive round trip to the relay node, not the
+        // game's own ping, and only a hover said so. Naming it in the card makes
+        // the difference legible without pointing at it.
+        if self.status.connected && self.status.latest_rtt_ms > 0.0 {
+            let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
+            self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
+        }
         if self.direct_fallback {
             let path = if is_holding(self.direct_fallback, self.session_sent()) {
                 LedgerValue::Warn(i18n::t("state.holding"))
