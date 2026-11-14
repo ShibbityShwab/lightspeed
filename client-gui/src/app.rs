@@ -3213,6 +3213,10 @@ impl<P: Platform> LightSpeedApp<P> {
                 sheet_title(ui, &i18n::t("settings.title"));
                 egui::ScrollArea::vertical()
                     .max_height((max_h - 104.0).max(160.0))
+                    // The sheet scrolls by design; a scrollbar that only appears
+                    // on hover left About below the fold with no cue that it was
+                    // there.
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
                         self.settings_body(ui);
                     });
@@ -3260,9 +3264,9 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S3);
 
         // Privacy: anonymous latency telemetry.
-        ui.add_space(S3);
-        hairline(ui);
         ui.add_space(S2);
+        hairline(ui);
+        ui.add_space(S1);
         section_label(ui, &i18n::t("settings.privacy"));
         let changed = ui
             .checkbox(
@@ -3289,9 +3293,9 @@ impl<P: Platform> LightSpeedApp<P> {
         // second look. It is its own section rather than a third checkbox under
         // Privacy, and it sits before Maintenance because it changes what the
         // client does, not how it is maintained.
-        ui.add_space(S3);
-        hairline(ui);
         ui.add_space(S2);
+        hairline(ui);
+        ui.add_space(S1);
         section_label(ui, "Routing");
         let retry = ui
             .checkbox(
@@ -3319,27 +3323,29 @@ impl<P: Platform> LightSpeedApp<P> {
         hairline(ui);
         ui.add_space(S2);
         section_label(ui, &i18n::t("settings.maintenance"));
-        if ui
-            .button(i18n::t("update.sheet_title").as_ref())
-            .on_hover_text(i18n::t("settings.check_updates_hint"))
-            .clicked()
-        {
-            self.start_update_check();
-        }
-        ui.add_space(S1);
-        if ui.button(i18n::t("settings.open_log")).clicked() {
-            self.reveal_log_file();
-        }
-        ui.add_space(S1);
-        if ui
-            .button(i18n::t("settings.remeasure"))
-            .on_hover_text(
-                "Probe every relay again and refresh the numbers the relay picker shows.",
-            )
-            .clicked()
-        {
-            self.start_relay_measurement();
-        }
+        // One wrapped row: three stacked buttons cost 120 px of a 853 px window
+        // and pushed Components and About off the bottom of the sheet.
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button(i18n::t("update.sheet_title").as_ref())
+                .on_hover_text(i18n::t("settings.check_updates_hint"))
+                .clicked()
+            {
+                self.start_update_check();
+            }
+            if ui.button(i18n::t("settings.open_log")).clicked() {
+                self.reveal_log_file();
+            }
+            if ui
+                .button(i18n::t("settings.remeasure"))
+                .on_hover_text(
+                    "Probe every relay again and refresh the numbers the relay picker shows.",
+                )
+                .clicked()
+            {
+                self.start_relay_measurement();
+            }
+        });
         ui.add_space(S1);
         // The capture backend and Npcap now live in the Components block below.
         // Leaving a second, differently-worded line here is how "pcap mode: not
@@ -5259,7 +5265,7 @@ fn sheet_bounds(ctx: &egui::Context) -> (f32, f32) {
     // Leave room for the title and the Close button inside the sheet itself: the
     // old 120 px reserve plus an unscaled body pushed the last rows past the
     // bottom of the window at 320 px wide.
-    let max_h = (screen.height() - 96.0).max(120.0);
+    let max_h = (screen.height() - 24.0).max(160.0);
     (max_w, max_h)
 }
 
