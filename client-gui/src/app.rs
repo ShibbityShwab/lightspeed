@@ -2987,29 +2987,6 @@ impl<P: Platform> LightSpeedApp<P> {
         if changed {
             self.persist_config();
         }
-
-        // Routing behaviour: whether a relay the watchdog abandoned gets a
-        // second look. Off means one missed window keeps the session direct.
-        let retry = ui
-            .checkbox(
-                &mut self.retry_after_fallback,
-                egui::RichText::new("Re-test a relay after falling back")
-                    .size(LABEL)
-                    .family(semibold()),
-            )
-            .on_hover_text(
-                "When on, a relay the watchdog took the session direct from is \
-                 re-tested after 20 s, then 45 s, then 90 s. Off leaves the \
-                 session on the direct path until the next match.",
-            )
-            .changed();
-        if retry {
-            self.retry_enabled.store(
-                self.retry_after_fallback,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            self.persist_config();
-        }
         if open_editor {
             self.game_editor = GameEditorDraft::new_profile();
             self.editor_saved = None;
@@ -3314,6 +3291,29 @@ impl<P: Platform> LightSpeedApp<P> {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .set_telemetry_enabled(self.share_latency_stats);
+        }
+
+        // Routing behaviour: whether a relay the watchdog abandoned gets a
+        // second look. Off means one missed window keeps the session direct.
+        let retry = ui
+            .checkbox(
+                &mut self.retry_after_fallback,
+                egui::RichText::new("Re-test a relay after falling back")
+                    .size(LABEL)
+                    .family(semibold()),
+            )
+            .on_hover_text(
+                "When on, a relay the watchdog took the session direct from is \
+                 re-tested after 20 s, then 45 s, then 90 s. Off leaves the \
+                 session on the direct path until the next match.",
+            )
+            .changed();
+        if retry {
+            self.retry_enabled.store(
+                self.retry_after_fallback,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            self.persist_config();
         }
         ui.add_space(S3);
 
