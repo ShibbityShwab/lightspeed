@@ -3155,24 +3155,6 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
 
         let server_valid = parse_server_addr(&self.server_input).is_some();
-        let manual_button = egui::Button::new(i18n::t("route.start_manual"))
-            .fill(if server_valid { signal_soft } else { bg_3 });
-        if ui.add_enabled(server_valid, manual_button).clicked() {
-            if let Some(server_addr) = parse_server_addr(&self.server_input) {
-                let entry = self.selected_game();
-                let local_port = server_addr.port().max(entry.default_port);
-                if let Some(proxy) = self.selected_proxy_addr() {
-                    lock_or_recover(&self.engine).start_redirect(
-                        server_addr,
-                        local_port,
-                        self.fec_enabled,
-                        4,
-                        entry.display.to_string(),
-                        proxy,
-                    );
-                }
-            }
-        }
         if !server_valid && !self.server_input.is_empty() {
             ui.label(egui::RichText::new(i18n::t("proxies.addr_invalid_hint")).color(warn));
         }
@@ -3661,6 +3643,25 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
+    /// Start the redirect path for the server typed in Manual mode.
+    fn start_manual_redirect(&mut self) {
+        let Some(server_addr) = parse_server_addr(&self.server_input) else {
+            return;
+        };
+        let entry = self.selected_game();
+        let local_port = server_addr.port().max(entry.default_port);
+        if let Some(proxy) = self.selected_proxy_addr() {
+            lock_or_recover(&self.engine).start_redirect(
+                server_addr,
+                local_port,
+                self.fec_enabled,
+                4,
+                entry.display.to_string(),
+                proxy,
+            );
+        }
+    }
+
     /// The relay list: discovered and custom relays, add and remove.
     ///
     /// It lives in Settings rather than in its own modal, so configuration has
@@ -4072,6 +4073,10 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         let has_relay = self.selected_entry().is_some();
         let (action_label, action_ready) =
             primary_action(self.is_admin, boosting, self.status.connected, has_relay);
+        // In Manual mode the action applies the server typed into the form, so it
+        // is only ready once that address parses.
+        let action_ready =
+            action_ready && (!self.game_manual || parse_server_addr(&self.server_input).is_some());
         let action_kind = if boosting {
             ActionKind::Danger
         } else {
@@ -4093,6 +4098,11 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 self.stop_boost();
             } else if !self.is_admin {
                 self.restart_elevated();
+            } else if self.game_manual {
+                // Manual mode's typed server is applied through the redirect path;
+                // it used to have its own Start button inside the form, which read
+                // as a second, redundant optimize control.
+                self.start_manual_redirect();
             } else {
                 self.start_boost();
             }
