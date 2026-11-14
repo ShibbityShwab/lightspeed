@@ -3587,7 +3587,9 @@ impl<P: Platform> LightSpeedApp<P> {
                                 // A fixed column, not `available_width()`: inside the
                                 // scroll area that value is unbounded, and the name
                                 // column grew until the whole sheet slid off-screen.
-                                let name_w = 110.0;
+                                // 96 px, not 110: at the narrow width the node id
+                                // (`relay-ewr-1`) was the element that clipped.
+                                let name_w = 96.0;
                                 ui.add_sized(
                                     [name_w, 18.0],
                                     egui::Label::new(
