@@ -3914,7 +3914,14 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 std::process::exit(0);
             }
             CloseDecision::Hide => {
+                // Testing switch: with LIGHTSPEED_KEEP_VISIBLE set, a close
+                // request is ignored instead of hiding the window to the tray.
+                // The hide is right for players; it costs an automated session
+                // its subject every time a synthesized click lands on the X.
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                if std::env::var_os("LIGHTSPEED_KEEP_VISIBLE").is_some() {
+                    return;
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 return;
             }
@@ -4062,7 +4069,9 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 );
                 ui.add_space(S2);
                 ui.horizontal_wrapped(|ui| {
-                    if self.tray_available() && ui.button(i18n::t("window.hide_to_tray")).clicked()
+                    if self.tray_available()
+                        && std::env::var_os("LIGHTSPEED_KEEP_VISIBLE").is_none()
+                        && ui.button(i18n::t("window.hide_to_tray")).clicked()
                     {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     }
