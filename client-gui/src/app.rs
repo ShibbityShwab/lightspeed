@@ -84,17 +84,6 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// Eight seconds, not three: a live match judged on three-second windows fell
 /// back three times on samples of 2, 7 and 3 packets while the session as a
 /// whole returned 187 replies for 309 sends.
-/// How old a whole-loop probe may be before the window stops showing it.
-/// How old a whole-loop probe may be before the window stops showing it. The
-/// relay leg beside it moves by tens of milliseconds within seconds, so an older
-/// probe can read below the current leg and look like a contradiction.
-
-/// How far below the instantaneous relay leg a probe may sit before it is called
-/// a mis-paired sample. A whole-loop round trip crosses that leg, so anything
-/// meaningfully under it is not a measurement of the path - bad pairings produced
-/// 1 ms and 4 ms against a ~273 ms leg. The slack covers the leg being sampled a
-/// moment apart from the probe.
-
 const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Minimum intercepted packets before the no-reply watchdog may fire.
