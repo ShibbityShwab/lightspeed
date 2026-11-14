@@ -3302,29 +3302,9 @@ impl<P: Platform> LightSpeedApp<P> {
             self.start_relay_measurement();
         }
         ui.add_space(S1);
-        // "pcap mode: not detected" read as broken while WinDivert was happily
-        // relaying. Report the backend that is actually capturing.
-        let capture = if self.status.interceptor_active {
-            i18n::t_with(
-                "settings.capture_active",
-                &[("backend", self.status.interceptor_platform)],
-            )
-        } else {
-            i18n::t_with(
-                "settings.capture_status",
-                &[(
-                    "state",
-                    if self.capture_available {
-                        i18n::t("settings.capture_available")
-                    } else {
-                        i18n::t("settings.capture_missing")
-                    }
-                    .as_ref(),
-                )],
-            )
-        };
-        ui.label(egui::RichText::new(capture).size(CAPTION).color(text_3));
-        ui.add_space(S1);
+        // The capture backend and Npcap now live in the Components block below.
+        // Leaving a second, differently-worded line here is how "pcap mode: not
+        // detected" ended up reading as broken while WinDivert was relaying.
         // The hold is a policy the client applies silently; saying it in the
         // settings gives the wait a reason and a duration.
         ui.label(
@@ -3377,7 +3357,7 @@ impl<P: Platform> LightSpeedApp<P> {
             if self.capture_available {
                 "installed"
             } else {
-                "not installed"
+                "not installed (pcap fallback only)"
             },
         );
         Self::component_row(ui, "Relays", {
