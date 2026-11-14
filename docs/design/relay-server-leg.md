@@ -156,6 +156,72 @@ worth adding so a relay can skip sending to clients that cannot use it.
 - Client handling, UI, ranking, locales: moderate.
 - Unit/rollout work: small but fleet-wide, and the least reversible part.
 
+## Security assessment
+
+Short version: the probes are a weak primitive; the privilege normally needed to
+send them is not. Ship it only with unprivileged ICMP.
+
+### Why the probing itself is low marginal risk
+
+- ICMP echo is 1:1. Request and reply are the same size, so it is not an
+  amplifier; classic reflection needs a spoofed source, which an unprivileged
+  socket cannot set.
+- The relay is **already** a forwarder of client-chosen destinations: that is its
+  function. A fixed-format ICMP echo to an address the session already forwards
+  to is a weaker capability than the arbitrary UDP the relay already sends.
+- `proxy/src/abuse.rs` already exists for exactly this: amplification detection,
+  reflection detection (many unique destinations), connection flooding, private
+  and internal range refusal. A prober must consume those same checks rather than
+  arriving with its own. `proxy/src/budget.rs` already meters egress; probes count
+  against it.
+
+### Why the capability is the real risk
+
+Raw ICMP needs `CAP_NET_RAW`, and that capability also permits **spoofed source
+addresses** - a genuine reflector/amplifier tool. Granting it to a
+network-facing daemon hands a compromised relay precisely the power `abuse.rs`
+exists to prevent. Do not do that to the main process.
+
+Preferred: unprivileged ICMP datagram sockets (`SOCK_DGRAM`, `IPPROTO_ICMP`),
+which cannot spoof. They need `net.ipv4.ping_group_range` to cover the service's
+GID, which is awkward under `DynamicUser`. Fallback if that proves unworkable: a
+separate, tiny helper unit carrying ambient `CAP_NET_RAW` whose only job is to
+send echoes and read replies.
+
+### New trust surface on the client
+
+The client would believe a relay's reported `S`. That is not a new *class* of
+trust - a malicious relay already forwards the player's traffic and can drop or
+alter it - but the client should not accept the figure blindly:
+
+- reject physically impossible values (zero, absurdly large, above a configured
+  ceiling);
+- reject a report where `L + S` is meaningfully below `D`, because a relayed path
+  is never shorter than the direct one it replaces;
+- bind the report to the control-plane session it arrived on, so one relay cannot
+  report for another.
+
+None of that makes a malicious relay safe; it keeps an honest relay's bad sample
+from steering the choice.
+
+### Residual risks, stated plainly
+
+- Relay IPs become a recognisable source of ICMP echo traffic. That is
+  indistinguishable from reconnaissance to a defender, and game operators may
+  treat it as hostile. A per-relay config switch to disable probing is part of
+  the deliverable, not an afterthought.
+- Cloud providers police scanning from their ranges. ICMP echo is usually
+  tolerated, but it is a policy surface this project did not have before.
+- A bug that loops the prober turns the fleet into a scanner. The per-server TTL
+  cache, the global rate cap, and the "only addresses already forwarded to" gate
+  are what bound the blast radius; they are load-bearing, not defensive polish.
+
+### Verdict
+
+Acceptable with unprivileged ICMP and the gates above. Not acceptable if it
+requires `CAP_NET_RAW` on the relay daemon: the privilege is worth more to an
+attacker than the measurement is worth to us.
+
 ## Open questions
 
 1. Is `CAP_NET_RAW` acceptable on the fleet, or is unprivileged ICMP preferred?
