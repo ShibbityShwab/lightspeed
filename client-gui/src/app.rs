@@ -2503,14 +2503,14 @@ impl<P: Platform> LightSpeedApp<P> {
                 [96.0, 16.0],
                 egui::Label::new(egui::RichText::new(label).size(CAPTION).color(text_3)),
             );
-            ui.add_sized(
-                [ui.available_width(), 16.0],
-                egui::Label::new(
-                    egui::RichText::new(value)
-                        .size(CAPTION)
-                        .monospace()
-                        .color(text_1),
-                ),
+            // A plain label, not a full-width sized one: filling the row centres
+            // the value in the leftover width, which reads as a second column
+            // far from the label it belongs to.
+            ui.label(
+                egui::RichText::new(value)
+                    .size(CAPTION)
+                    .monospace()
+                    .color(text_1),
             );
         });
     }
