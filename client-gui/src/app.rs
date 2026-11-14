@@ -3212,7 +3212,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.set_max_width(max_w);
                 sheet_title(ui, &i18n::t("settings.title"));
                 egui::ScrollArea::vertical()
-                    .max_height((max_h - 76.0).max(160.0))
+                    .max_height((max_h - 104.0).max(160.0))
                     .show(ui, |ui| {
                         self.settings_body(ui);
                     });
@@ -3260,6 +3260,9 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S3);
 
         // Privacy: anonymous latency telemetry.
+        ui.add_space(S3);
+        hairline(ui);
+        ui.add_space(S2);
         section_label(ui, &i18n::t("settings.privacy"));
         let changed = ui
             .checkbox(
