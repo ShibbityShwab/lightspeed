@@ -29,6 +29,7 @@ relay_ready_named = "Ретранслятор готов, выбрано: {name}
 game_server = "Игровой сервер"
 relayed = "Передано"
 direct_fallback = "Прямое подключение"
+retry_in = "повтор через {secs} с"
 path = "Маршрут"
 sent_returned = "{sent} отправлено / {returned} получено"
 rtt_hint = "Время до релея и обратно - это не пинг в игре"

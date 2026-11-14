@@ -127,11 +127,7 @@ struct ReplyFallback {
 /// order the attempts are made. After the last one the session stays direct
 /// until the server changes or the run restarts: a relay that failed three
 /// spaced tests is not going to carry this server.
-const RELAY_RETRY_BACKOFF: [Duration; 3] = [
-    Duration::from_secs(20),
-    Duration::from_secs(45),
-    Duration::from_secs(90),
-];
+const RELAY_RETRY_BACKOFF: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(120)];
 
 /// The wait before retry number `retries + 1`, or `None` once they are spent.
 fn retry_delay(retries: u32) -> Option<Duration> {
@@ -230,6 +226,7 @@ fn spawn_relay_reply_watchdog(
     quit: QuitFlag,
     rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>>,
     retry_enabled: Arc<std::sync::atomic::AtomicBool>,
+    retry_at: Arc<Mutex<Option<std::time::Instant>>>,
 ) {
     std::thread::spawn(move || {
         let mut watch: Option<RelayReplyWatch> = None;
@@ -255,6 +252,8 @@ fn spawn_relay_reply_watchdog(
             // history says nothing about it.
             if fallback.as_ref().is_some_and(|f| f.server != server) {
                 fallback = None;
+                // A countdown from the previous server says nothing about this one.
+                *lock_or_recover(&retry_at) = None;
             }
             if health.tunnelling_enabled != Some(true) {
                 watch = None;
@@ -269,6 +268,7 @@ fn spawn_relay_reply_watchdog(
                 }
                 if lock_or_recover(&engine).release_tunnelling() {
                     *lock_or_recover(&rejected) = None;
+                    *lock_or_recover(&retry_at) = None;
                     tracing::info!(
                         server = %abandoned.server,
                         attempt = abandoned.retries + 1,
@@ -328,6 +328,11 @@ fn spawn_relay_reply_watchdog(
                         };
                         *lock_or_recover(&rejected) =
                             retry_delay(retries).is_none().then_some(server);
+                        // Publish the pending retry so the status can say when the
+                        // route flips back instead of flipping wordlessly.
+                        *lock_or_recover(&retry_at) = retry_delay(retries)
+                            .filter(|_| retry_enabled.load(std::sync::atomic::Ordering::Relaxed))
+                            .map(|w| now + w);
                         fallback = Some(ReplyFallback {
                             server,
                             retries,
@@ -984,6 +989,9 @@ pub struct LightSpeedApp<P: Platform> {
     /// failed, so the window can say the server rejects the relay instead of
     /// implying the app itself broke.
     relay_rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>>,
+    /// When the abandoned relay is next re-tested, so the status can name the
+    /// wait instead of flipping between DIRECT and OPTIMIZING with no cue.
+    relay_retry_at: Arc<Mutex<Option<std::time::Instant>>>,
 
     // ── Proxy connection ─────────────────────────────────────────────────
     selected_proxy_idx: usize,
@@ -1220,6 +1228,7 @@ impl<P: Platform> LightSpeedApp<P> {
         i18n::set_language(language.as_deref());
 
         let relay_rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>> = Arc::new(Mutex::new(None));
+        let relay_retry_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
         let retry_enabled = Arc::new(std::sync::atomic::AtomicBool::new(
             saved.retry_after_fallback,
         ));
@@ -1229,6 +1238,7 @@ impl<P: Platform> LightSpeedApp<P> {
             Arc::clone(&quit),
             Arc::clone(&relay_rejected),
             Arc::clone(&retry_enabled),
+            Arc::clone(&relay_retry_at),
         );
         let mut app = Self {
             engine,
@@ -1236,6 +1246,7 @@ impl<P: Platform> LightSpeedApp<P> {
             tray,
             quit,
             relay_rejected,
+            relay_retry_at,
             selected_proxy_idx,
             auto_select,
             relay_race: None,
@@ -2345,7 +2356,7 @@ impl<P: Platform> LightSpeedApp<P> {
             // Naming a relay beside DIRECT would repeat the old lie in a smaller
             // font, so the fallback replaces the relay here.
             let relay = if self.direct_fallback {
-                i18n::t("route.direct_fallback").into_owned()
+                self.direct_fallback_text()
             } else {
                 self.selected_entry()
                     .and_then(|e| e.node_id.as_deref())
@@ -2613,6 +2624,28 @@ impl<P: Platform> LightSpeedApp<P> {
     /// Packets THIS session has pushed through the relay. The relay's own
     /// `/health` counters are lifetime totals for the whole fleet node, not our
     /// session, so they must never be shown as if they were ours.
+    /// The route line while the session is on the direct path: why it is there,
+    /// and - while a re-test is still pending - when it changes. The status used
+    /// to flip between DIRECT and OPTIMIZING every retry with nothing saying why.
+    fn direct_fallback_text(&self) -> String {
+        if self.relay_rejected_now() {
+            return i18n::t("route.server_rejects_relay").into_owned();
+        }
+        let base = i18n::t("route.direct_fallback").into_owned();
+        let Some(due) = *lock_or_recover(&self.relay_retry_at) else {
+            return base;
+        };
+        let secs = due
+            .saturating_duration_since(std::time::Instant::now())
+            .as_secs()
+            .max(1);
+        let secs = secs.to_string();
+        format!(
+            "{base} \u{00b7} {}",
+            i18n::t_with("route.retry_in", &[("secs", secs.as_str())])
+        )
+    }
+
     /// True when the watchdog exhausted its re-tests for the server that is
     /// locked right now: the relay carried the flow, the server did not answer.
     fn relay_rejected_now(&self) -> bool {
@@ -5929,20 +5962,17 @@ mod tests {
     fn an_abandoned_relay_is_retried_a_few_times_then_left_alone() {
         assert_eq!(
             super::retry_delay(0),
-            Some(std::time::Duration::from_secs(20))
+            Some(std::time::Duration::from_secs(30))
         );
         assert_eq!(
             super::retry_delay(1),
-            Some(std::time::Duration::from_secs(45))
+            Some(std::time::Duration::from_secs(120))
         );
         assert_eq!(
             super::retry_delay(2),
-            Some(std::time::Duration::from_secs(90))
-        );
-        assert_eq!(
-            super::retry_delay(3),
             None,
-            "after three spaced tests a relay that keeps failing is left alone"
+            "two spaced tests, then a relay that keeps failing is left alone: \
+             every extra one flipped the status between direct and relayed"
         );
     }
 
