@@ -2744,9 +2744,12 @@ impl<P: Platform> LightSpeedApp<P> {
         ) {
             ui.label(egui::RichText::new(i18n::t(key)).size(BODY).color(text_2));
         }
-        // The front door for process-scoped interception, on the Game row it
-        // takes over whenever a process is picked.
-        self.target_control(ui);
+        // The process front door belongs to Manual mode, or stays while a target
+        // is set so it can be cleared. It used to be drawn on every game state,
+        // which read as an unexplained extra choice under a game already chosen.
+        if self.game_manual || self.target_process.is_some() {
+            self.target_control(ui);
+        }
         if self.game_manual {
             self.manual_section(ui);
         }
