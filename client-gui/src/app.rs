@@ -989,6 +989,10 @@ pub struct LightSpeedApp<P: Platform> {
     /// of a client-leg race.
     relay_legs: Option<RelayLegs>,
 
+    /// The relay the destination-aware chooser picked for the current game
+    /// server, shown in the picker so a manual choice can see what it overrides.
+    destination_winner: Option<SocketAddrV4>,
+
     /// The game server the current relay was chosen for, so a new raid's server
     /// triggers a fresh choice and a repeated tick does not.
     chosen_for_server: Option<Ipv4Addr>,
@@ -1222,6 +1226,7 @@ impl<P: Platform> LightSpeedApp<P> {
             auto_select,
             relay_race: None,
             relay_legs: None,
+            destination_winner: None,
             relay_measurement: None,
             chosen_for_server: None,
             locked_addr: None,
@@ -1577,6 +1582,7 @@ impl<P: Platform> LightSpeedApp<P> {
             return;
         }
         if let Some(addr) = self.choose_relay_for_destination() {
+            self.destination_winner = Some(addr);
             if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
                 if idx != self.selected_proxy_idx {
                     // The same rule as `follow_game_server`: a relay change moves
@@ -2796,9 +2802,13 @@ impl<P: Platform> LightSpeedApp<P> {
                     let picked = !auto && i == self.selected_proxy_idx;
                     // A name alone asks the user to choose blind. The measured
                     // client leg is already in memory for the destination-aware
-                    // chooser, so the picker shows the number it ranks on.
+                    // chooser, so the picker shows the number it ranks on, and
+                    // marks the relay it would pick for this server.
+                    let best = self.destination_winner == Some(entry.addr);
                     let text = match self.leg_ms(entry.addr) {
+                        Some(ms) if best => format!("{}  {ms:>3} ms  best", entry.label),
                         Some(ms) => format!("{}  {ms:>3} ms", entry.label),
+                        None if best => format!("{}  best", entry.label),
                         None => entry.label.clone(),
                     };
                     if ui
