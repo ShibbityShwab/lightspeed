@@ -222,6 +222,61 @@ Acceptable with unprivileged ICMP and the gates above. Not acceptable if it
 requires `CAP_NET_RAW` on the relay daemon: the privilege is worth more to an
 attacker than the measurement is worth to us.
 
+## Alternatives considered
+
+Ranked by risk and effort. None of them yields the exact relayed round trip; they
+yield the signals actually needed to choose a relay and to decide relay-versus-
+direct, which is the product question.
+
+### 1. Return ratio, ranked per relay and server (recommended first)
+
+Does this relay actually carry this server's replies? The relay counts forwards
+and responses per session already (`ClientSession::packets_relayed`, plus the
+first response clears `pending_forward_us`); adding a response counter is a field
+and an increment. Report the ratio per server over the control plane and rank on
+it.
+
+- No new packets, no ICMP, no privilege, no scanning surface.
+- Sound: an aggregate ratio needs no packet attribution, which is the flaw that
+  killed every client-side estimator.
+- It targets the failure actually observed: a relay returning 2 replies for 65
+  forwarded packets is the thing worth demoting.
+- The client already computes the same ratio locally in the no-reply watchdog, so
+  a client-only version needs no protocol change at all.
+
+### 2. Carry the relay's existing forward-to-response sample
+
+The relay already records when it forwarded the packet currently awaiting a
+response and clears it on the first reply, so it has an approximate RTT without
+any new traffic. Report it as an explicitly approximate figure.
+
+- Nearly free; no new packets or privileges.
+- Same attribution weakness as every other pairing: it measures "time since the
+  most recent forward", not a specific round trip. It must be labelled and still
+  pass the geometric floor before it can steer anything.
+
+### 3. Relay probes a fixed operator anchor
+
+The relay pings a known-good host the project controls rather than addresses a
+client names.
+
+- Removes the scanning surface entirely: the target set is fixed.
+- Measures the relay's WAN health, not the path to any particular game server. It
+  pairs well with the region prior but does not replace measurement.
+
+### 4. Per-game protocol correlation
+
+Parse the specific game's sequence numbers to attribute replies exactly.
+
+- The only route to an exact in-game figure from our side.
+- Per-game work, fragile across game updates, and worth it only where a title
+  matters enough to maintain it.
+
+### 5. ICMP to the game server from the relay
+
+The design above. Best information, real privilege and policy cost; blocked on
+Step 0 and on the security assessment, and not the first thing to build.
+
 ## Open questions
 
 1. Is `CAP_NET_RAW` acceptable on the fleet, or is unprivileged ICMP preferred?
