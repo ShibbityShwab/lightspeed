@@ -87,9 +87,14 @@ fn run() -> anyhow::Result<()> {
     // The status window is intentionally small: it shows connection state, the
     // current ping and one action, so a tall window would just be empty. The
     // settings live in their own window (see app.rs `settings_window`).
+    // 440x720 rather than 800: at the taller default the config rows ended two
+    // hundred pixels above the footer and the window read as half empty. The
+    // width cap stops a maximised window from stretching one column of text
+    // across the whole screen.
     let viewport = egui::ViewportBuilder::default()
-        .with_inner_size([440.0, 800.0])
+        .with_inner_size([440.0, 720.0])
         .with_min_inner_size([320.0, 400.0])
+        .with_max_inner_size([760.0, 1200.0])
         .with_resizable(true)
         .with_title("LightSpeed");
     // A failed icon decode must not abort startup.
