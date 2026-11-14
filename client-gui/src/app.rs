@@ -2501,7 +2501,11 @@ impl<P: Platform> LightSpeedApp<P> {
 
     /// One `label  value` row in the Settings components block.
     fn component_row(ui: &mut egui::Ui, label: &str, value: &str) {
-        ui.horizontal(|ui| {
+        // Wrapped, not horizontal: at 320 px a long value such as
+        // "not installed (pcap fallback only)" forced the row wider than the
+        // sheet, and the sheet wider than the window, which clipped the text on
+        // both sides.
+        ui.horizontal_wrapped(|ui| {
             ui.add_sized(
                 [96.0, 16.0],
                 egui::Label::new(egui::RichText::new(label).size(CAPTION).color(text_3)),
