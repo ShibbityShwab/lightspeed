@@ -1271,7 +1271,7 @@ impl<P: Platform> LightSpeedApp<P> {
             is_admin,
             fonts_setup: false,
             header_icon: None,
-            show_settings: false,
+            show_settings: std::env::var_os("LIGHTSPEED_OPEN_SETTINGS").is_some(),
             show_game_editor: false,
             game_editor: GameEditorDraft::new_profile(),
             editor_saved: None,
@@ -2507,18 +2507,13 @@ impl<P: Platform> LightSpeedApp<P> {
         // both sides.
         ui.horizontal_wrapped(|ui| {
             ui.add_sized(
-                [96.0, 16.0],
+                [84.0, 16.0],
                 egui::Label::new(egui::RichText::new(label).size(CAPTION).color(text_3)),
             );
-            // A plain label, not a full-width sized one: filling the row centres
-            // the value in the leftover width, which reads as a second column
-            // far from the label it belongs to.
-            ui.label(
-                egui::RichText::new(value)
-                    .size(CAPTION)
-                    .monospace()
-                    .color(text_1),
-            );
+            // Proportional, not monospace: this block sits inside Settings, whose
+            // every other line is proportional, and the mono column read as a
+            // ledger pasted in from another screen.
+            ui.label(egui::RichText::new(value).size(CAPTION).color(text_2));
         });
     }
 
@@ -3261,7 +3256,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     }
                 }
             });
-        ui.add_space(S3);
+        ui.add_space(S2);
 
         // Privacy: anonymous latency telemetry.
         ui.add_space(S2);
@@ -3317,7 +3312,7 @@ impl<P: Platform> LightSpeedApp<P> {
             );
             self.persist_config();
         }
-        ui.add_space(S3);
+        ui.add_space(S2);
 
         // Maintenance: self-update, the trace log, and the relay link.
         hairline(ui);
@@ -3335,6 +3330,13 @@ impl<P: Platform> LightSpeedApp<P> {
             }
             if ui.button(i18n::t("settings.open_log")).clicked() {
                 self.reveal_log_file();
+            }
+            if ui
+                .button(i18n::t("proxies.refresh"))
+                .on_hover_text("Fetch the latest community relay list from the registry.")
+                .clicked()
+            {
+                self.start_discovery();
             }
             if ui
                 .button(i18n::t("settings.remeasure"))
@@ -3360,9 +3362,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .size(CAPTION)
             .color(text_3),
         );
-        ui.add_space(S3);
-
-        ui.add_space(S3);
+        ui.add_space(S2);
 
         // Components: what the client depends on and what state each is in, so a
         // bug report can answer "is WinDivert there, am I elevated, which build
@@ -3380,37 +3380,39 @@ impl<P: Platform> LightSpeedApp<P> {
         // spacing back before the next section.
         ui.spacing_mut().item_spacing.y = 2.0;
         ui.add_space(S1);
-        Self::component_row(ui, "Version", env!("CARGO_PKG_VERSION"));
-        Self::component_row(
-            ui,
-            "Elevation",
-            if self.is_admin {
-                "administrator"
-            } else {
-                "standard user"
-            },
-        );
-        Self::component_row(
-            ui,
-            "Capture",
-            if self.status.interceptor_active {
-                self.status.interceptor_platform
-            } else {
-                "idle"
-            },
-        );
-        Self::component_row(
-            ui,
-            "Npcap",
-            if self.capture_available {
-                "installed"
-            } else {
-                "not installed (pcap fallback only)"
-            },
-        );
-        Self::component_row(ui, "Relays", {
-            &format!("{} configured", self.proxies.len())
-        });
+        egui::Grid::new("components")
+            .num_columns(2)
+            .spacing([10.0, 0.0])
+            .min_row_height(14.0)
+            .show(ui, |ui| {
+                let admin = if self.is_admin {
+                    "administrator"
+                } else {
+                    "standard user"
+                };
+                let capture = if self.status.interceptor_active {
+                    self.status.interceptor_platform
+                } else {
+                    "idle"
+                };
+                let npcap = if self.capture_available {
+                    "installed"
+                } else {
+                    "not installed (pcap fallback only)"
+                };
+                let relays = format!("{} configured", self.proxies.len());
+                for (label, value) in [
+                    ("Version", env!("CARGO_PKG_VERSION")),
+                    ("Elevation", admin),
+                    ("Capture", capture),
+                    ("Npcap", npcap),
+                    ("Relays", relays.as_str()),
+                ] {
+                    ui.label(egui::RichText::new(label).size(CAPTION).color(text_3));
+                    ui.label(egui::RichText::new(value).size(CAPTION).color(text_2));
+                    ui.end_row();
+                }
+            });
         ui.add_space(S2);
 
         // About: the brand mark and the project links.
