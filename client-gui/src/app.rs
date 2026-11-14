@@ -1254,7 +1254,7 @@ impl<P: Platform> LightSpeedApp<P> {
             auto_started_for_presence: false,
             last_race: None,
             winner_probe: None,
-            show_proxy_manager: false,
+            show_proxy_manager: std::env::var_os("LIGHTSPEED_OPEN_PROXIES").is_some(),
             manager_label_input: String::new(),
             manager_addr_input: String::new(),
             config_error: None,
@@ -3102,13 +3102,16 @@ impl<P: Platform> LightSpeedApp<P> {
         });
         ui.add_space(S2);
 
-        // Save as: append the two fields above as a `[[servers]]` entry.
+        // Save as: the label on its own line, then a field sized to leave the
+        // button room. In one row the field's 160 px plus a label plus the button
+        // overran a 320 px card and the button was clipped at the edge.
+        ui.label(i18n::t("servers.save_as"));
         ui.horizontal(|ui| {
-            ui.label(i18n::t("servers.save_as"));
+            let reserve = 78.0;
             ui.add(
                 egui::TextEdit::singleline(&mut self.save_server_name)
                     .hint_text(i18n::t("servers.save_name_hint"))
-                    .desired_width(160.0),
+                    .desired_width((ui.available_width() - reserve).max(80.0)),
             );
             if ui.button(i18n::t("servers.save")).clicked() {
                 save_server = true;
@@ -3672,7 +3675,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .backdrop_color(scrim)
             .frame(sheet_frame())
             .show(ctx, |ui| {
-                ui.set_max_width(max_w);
+                ui.set_width(max_w);
                 sheet_title(ui, &i18n::t("proxies.title"));
                 egui::ScrollArea::vertical()
                     .max_height(max_h)
@@ -3682,27 +3685,19 @@ impl<P: Platform> LightSpeedApp<P> {
                             // onto its own line for the one relay whose label and
                             // address together overran the sheet. Truncate the name
                             // instead and keep the button where it belongs.
+                            // Two lines per relay: name and delete on the first,
+                            // address and node id on the second. One line needs
+                            // about 390 px and the sheet only has 296, which is why
+                            // the whole manager slid off the window.
                             ui.horizontal(|ui| {
-                                // A fixed column, not `available_width()`: inside the
-                                // scroll area that value is unbounded, and the name
-                                // column grew until the whole sheet slid off-screen.
-                                // 96 px, not 110: at the narrow width the node id
-                                // (`relay-ewr-1`) was the element that clipped.
-                                let name_w = 96.0;
+                                let name_w = (ui.available_width() - 44.0).max(80.0);
                                 ui.add_sized(
                                     [name_w, 18.0],
                                     egui::Label::new(
                                         egui::RichText::new(&entry.label).color(text_1),
                                     )
-                                    .truncate(),
-                                );
-                                ui.monospace(entry.addr.to_string());
-                                ui.label(
-                                    egui::RichText::new(
-                                        entry.node_id.as_deref().unwrap_or("custom"),
-                                    )
-                                    .size(CAPTION)
-                                    .color(text_3),
+                                    .truncate()
+                                    .halign(egui::Align::LEFT),
                                 );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -3711,6 +3706,21 @@ impl<P: Platform> LightSpeedApp<P> {
                                             remove_idx = Some(i);
                                         }
                                     },
+                                );
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(
+                                    egui::RichText::new(entry.addr.to_string())
+                                        .size(CAPTION)
+                                        .monospace()
+                                        .color(text_2),
+                                );
+                                ui.label(
+                                    egui::RichText::new(
+                                        entry.node_id.as_deref().unwrap_or("custom"),
+                                    )
+                                    .size(CAPTION)
+                                    .color(text_3),
                                 );
                             });
                         }
