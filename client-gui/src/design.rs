@@ -22,22 +22,22 @@ use eframe::egui::Color32;
 // ── Planes ───────────────────────────────────────────────────────────────────
 
 /// Deepest plane: sunken fields, plots, and the backdrop behind sheets.
-pub const bg_0: Color32 = Color32::from_rgb(0x07, 0x07, 0x0F);
+pub const bg_0: Color32 = Color32::from_rgb(0x0B, 0x0B, 0x0D);
 /// The window fill - the app's default background.
-pub const bg_1: Color32 = Color32::from_rgb(0x0A, 0x0A, 0x1A);
+pub const bg_1: Color32 = Color32::from_rgb(0x0F, 0x0F, 0x11);
 /// Raised surface: cards, the state rail, sheets.
-pub const bg_2: Color32 = Color32::from_rgb(0x10, 0x10, 0x24);
+pub const bg_2: Color32 = Color32::from_rgb(0x15, 0x15, 0x18);
 /// Hovered / active rows and quiet filled controls.
-pub const bg_3: Color32 = Color32::from_rgb(0x16, 0x16, 0x2E);
+pub const bg_3: Color32 = Color32::from_rgb(0x1B, 0x1B, 0x1F);
 /// Pressed rows, the globe's graticule band, the highest surface.
-pub const bg_4: Color32 = Color32::from_rgb(0x1D, 0x1D, 0x3A);
+pub const bg_4: Color32 = Color32::from_rgb(0x22, 0x22, 0x27);
 
 // ── Hairlines ────────────────────────────────────────────────────────────────
 
 /// Every hairline: card edges, dividers, plot axes.
-pub const border_1: Color32 = Color32::from_rgb(0x23, 0x23, 0x3F);
+pub const border_1: Color32 = Color32::from_rgb(0x25, 0x25, 0x2A);
 /// Hover / focus hairline and the scrollbar thumb.
-pub const border_2: Color32 = Color32::from_rgb(0x2F, 0x2F, 0x52);
+pub const border_2: Color32 = Color32::from_rgb(0x33, 0x33, 0x39);
 
 // ── Ink ──────────────────────────────────────────────────────────────────────
 
@@ -86,8 +86,8 @@ pub const danger_soft: Color32 = Color32::from_rgba_unmultiplied_const(255, 107,
 
 /// Ink placed on `accent`; replaces the raw `Color32::WHITE`.
 pub const on_accent: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
-/// Backdrop behind in-window sheets (`rgba(7, 7, 15, 0.72)`).
-pub const scrim: Color32 = Color32::from_rgba_unmultiplied_const(7, 7, 15, 184);
+/// Backdrop behind in-window sheets (`rgba(11, 11, 13, 0.72)`).
+pub const scrim: Color32 = Color32::from_rgba_unmultiplied_const(11, 11, 13, 184);
 /// The globe's graticule and plot gridlines (`rgba(242, 242, 250, 0.06)`).
 pub const grid: Color32 = Color32::from_rgba_unmultiplied_const(242, 242, 250, 15);
 
@@ -172,13 +172,13 @@ mod tests {
     #[test]
     fn opaque_tokens_match_the_site_hexes() {
         for (token, hex) in [
-            (bg_0, [0x07, 0x07, 0x0F, 0xFF]),
-            (bg_1, [0x0A, 0x0A, 0x1A, 0xFF]),
-            (bg_2, [0x10, 0x10, 0x24, 0xFF]),
-            (bg_3, [0x16, 0x16, 0x2E, 0xFF]),
-            (bg_4, [0x1D, 0x1D, 0x3A, 0xFF]),
-            (border_1, [0x23, 0x23, 0x3F, 0xFF]),
-            (border_2, [0x2F, 0x2F, 0x52, 0xFF]),
+            (bg_0, [0x0B, 0x0B, 0x0D, 0xFF]),
+            (bg_1, [0x0F, 0x0F, 0x11, 0xFF]),
+            (bg_2, [0x15, 0x15, 0x18, 0xFF]),
+            (bg_3, [0x1B, 0x1B, 0x1F, 0xFF]),
+            (bg_4, [0x22, 0x22, 0x27, 0xFF]),
+            (border_1, [0x25, 0x25, 0x2A, 0xFF]),
+            (border_2, [0x33, 0x33, 0x39, 0xFF]),
             (text_1, [0xF2, 0xF2, 0xFA, 0xFF]),
             (text_2, [0xB4, 0xB4, 0xCC, 0xFF]),
             (text_3, [0x8A, 0x8A, 0xA8, 0xFF]),

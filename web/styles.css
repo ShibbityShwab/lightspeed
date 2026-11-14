@@ -9,15 +9,15 @@
 /* --- Design tokens --- */
 :root {
   /* Surfaces */
-  --bg-0: #07070f;
-  --bg-1: #0a0a1a;
-  --bg-2: #101024;
-  --bg-3: #16162e;
-  --bg-4: #1d1d3a;
+  --bg-0: #0b0b0d;
+  --bg-1: #0f0f11;
+  --bg-2: #151518;
+  --bg-3: #1b1b1f;
+  --bg-4: #222227;
 
   /* Borders */
-  --border-1: #23233f;
-  --border-2: #2f2f52;
+  --border-1: #25252a;
+  --border-2: #333339;
 
   /* Text */
   --text-1: #f2f2fa;
