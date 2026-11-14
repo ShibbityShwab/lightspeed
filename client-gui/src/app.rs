@@ -5258,8 +5258,7 @@ fn sheet_frame() -> egui::Frame {
 /// overflows a 320 px window.
 fn sheet_bounds(ctx: &egui::Context) -> (f32, f32) {
     let screen = ctx.content_rect();
-    let max_w =
-        (screen.width() - 24.0 - 2.0 * S4 as f32).min(420.0 - 2.0 * S4 as f32);
+    let max_w = (screen.width() - 24.0 - 2.0 * S4 as f32).min(420.0 - 2.0 * S4 as f32);
     // Leave room for the title and the Close button inside the sheet itself: the
     // old 120 px reserve plus an unscaled body pushed the last rows past the
     // bottom of the window at 320 px wide.
