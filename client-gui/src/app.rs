@@ -1052,6 +1052,9 @@ pub struct LightSpeedApp<P: Platform> {
     path_rtt_ms: f64,
     /// How long ago the probe behind `path_rtt_ms` was taken.
     path_rtt_age: Option<std::time::Duration>,
+    /// Cumulative `(up, down)` counters as they stood when this session started,
+    /// so the Relayed row describes the current session rather than the process.
+    relayed_base: Option<(String, u64, u64)>,
 
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
@@ -1290,6 +1293,7 @@ impl<P: Platform> LightSpeedApp<P> {
             direct_fallback: false,
             path_rtt_ms: 0.0,
             path_rtt_age: None,
+            relayed_base: None,
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -2118,6 +2122,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 tracing::error!("start_interceptor failed: {}", e);
             } else {
                 self.boost_start = Some(std::time::Instant::now());
+                self.relayed_base = None;
 
                 // Hold traffic direct until a relay has been chosen for the game
                 // server. This is the consumer-simple promise: never route a
@@ -2171,6 +2176,7 @@ impl<P: Platform> LightSpeedApp<P> {
         engine.stop_capture();
         engine.stop_redirect();
         self.boost_start = None;
+        self.relayed_base = None;
         self.health_base = None;
         self.relay_health = None;
     }
@@ -2218,6 +2224,15 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
+    /// What identifies the run the Relayed counters describe: a new relay or a new
+    /// game server is a new session, and the row starts counting again.
+    fn session_key(&self) -> String {
+        format!(
+            "{}|{}|{}",
+            self.status.proxy_addr, self.status.interceptor_server, self.status.redirect_server
+        )
+    }
+
     /// The whole-loop figure, but only when it is fit to show: fresh enough to
     /// compare with the instantaneous leg, and not below it.
     fn path_rtt_shown(&self) -> Option<(f64, u64)> {
@@ -2243,6 +2258,26 @@ impl<P: Platform> LightSpeedApp<P> {
             })
             .unwrap_or(false);
         self.refresh_path_rtt(health.as_ref().and_then(|health| health.detected_server));
+        if self.status.interceptor_active || self.status.redirect_active {
+            let key = self.session_key();
+            let stale = self
+                .relayed_base
+                .as_ref()
+                .is_none_or(|(base_key, _, _)| *base_key != key);
+            if stale {
+                if let (Some(sent), Some(returned)) = (
+                    self.session_sent(),
+                    returned_count(
+                        self.status.redirect_active,
+                        self.status.redirect_pkts_in,
+                        self.status.interceptor_active,
+                        self.status.interceptor_from_proxy,
+                    ),
+                ) {
+                    self.relayed_base = Some((key, sent, returned));
+                }
+            }
+        }
         let Some(started) = self.boost_start else {
             return;
         };
@@ -2777,6 +2812,22 @@ impl<P: Platform> LightSpeedApp<P> {
             self.status.interceptor_active,
             self.status.interceptor_from_proxy,
         );
+        // The engine's counters are cumulative for the interceptor, so a relay
+        // switch or a fallback carried the old traffic into the new session's
+        // numbers. The row is about this session, so the delta from where it
+        // started is what it shows.
+        let base = self
+            .relayed_base
+            .as_ref()
+            .filter(|(key, _, _)| *key == self.session_key())
+            .map(|(_, sent, returned)| (*sent, *returned));
+        let (sent, returned) = match (sent, returned) {
+            (Some(sent), Some(returned)) => {
+                let (sent, returned) = session_delta(sent, returned, base);
+                (Some(sent), Some(returned))
+            }
+            other => other,
+        };
         match (sent, returned) {
             (Some(sent), Some(returned)) => {
                 let (text, starving) = relayed_row_text(sent, returned);
@@ -4952,6 +5003,20 @@ fn game_caption(auto: bool, manual: bool, detected: Option<&str>) -> Option<&'st
 /// The row used to count only outbound packets, so a starving relay - the live
 /// ROB RUN run, 54 sent with nothing returned - read as a healthy session. The
 /// second element is true when the session is known to be starving.
+/// Counters shown relative to where this session started.
+///
+/// Saturating, because the engine's counters can restart below the baseline when
+/// the interceptor is rebuilt; a plain subtraction would wrap to billions.
+fn session_delta(sent: u64, returned: u64, base: Option<(u64, u64)>) -> (u64, u64) {
+    match base {
+        Some((base_sent, base_returned)) => (
+            sent.saturating_sub(base_sent),
+            returned.saturating_sub(base_returned),
+        ),
+        None => (sent, returned),
+    }
+}
+
 fn relayed_row_text(sent: u64, returned: u64) -> (String, bool) {
     let text = i18n::t_with(
         "route.sent_returned",
@@ -6001,6 +6066,17 @@ mod tests {
 
         let absent = super::pick_game_entry(true, None, 0);
         assert_eq!(absent.key, super::games()[0].key);
+    }
+
+    #[test]
+    fn the_relayed_row_counts_from_where_the_session_started() {
+        assert_eq!(session_delta(180, 95, Some((100, 50))), (80, 45));
+        assert_eq!(session_delta(180, 95, None), (180, 95));
+        assert_eq!(
+            session_delta(5, 3, Some((100, 50))),
+            (0, 0),
+            "counters that restarted below the baseline must not wrap"
+        );
     }
 
     #[test]
