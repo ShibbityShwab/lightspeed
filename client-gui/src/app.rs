@@ -2418,17 +2418,25 @@ impl<P: Platform> LightSpeedApp<P> {
         // 320px, and the state word must never be occluded (skill: state
         // legibility first).
         let metric = if self.status.connected {
-            let text = if self.status.latest_rtt_ms > 0.0 {
-                format!("{:>3.0} ms", self.status.latest_rtt_ms)
+            // The headline is the player's ping, which is the whole loop through
+            // the relay when a quiet-flow probe has measured it; the relay leg is
+            // only what is left to show when nothing has been attributed yet.
+            let (reading, hint) = if self.path_rtt_ms > 0.0 {
+                (self.path_rtt_ms, i18n::t("route.path_hint"))
+            } else {
+                (self.status.latest_rtt_ms, i18n::t("route.rtt_hint"))
+            };
+            let text = if reading > 0.0 {
+                format!("{reading:>3.0} ms")
             } else {
                 "-- ms".to_string()
             };
-            let color = if self.status.latest_rtt_ms > 0.0 {
-                rtt_colour(self.status.latest_rtt_ms)
+            let color = if reading > 0.0 {
+                rtt_colour(reading)
             } else {
                 text_3
             };
-            Some((text, color))
+            Some((text, color, hint))
         } else {
             None
         };
@@ -2445,7 +2453,7 @@ impl<P: Platform> LightSpeedApp<P> {
                         .family(semibold())
                         .color(word_color),
                 );
-                if let Some((text, color)) = &metric {
+                if let Some((text, color, hint)) = &metric {
                     {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
@@ -2454,7 +2462,7 @@ impl<P: Platform> LightSpeedApp<P> {
                                     .family(egui::FontFamily::Monospace)
                                     .color(*color),
                             )
-                            .on_hover_text(i18n::t("route.rtt_hint"));
+                            .on_hover_text(hint.clone());
                         });
                     }
                 }
