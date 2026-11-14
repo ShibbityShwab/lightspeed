@@ -3337,6 +3337,13 @@ impl<P: Platform> LightSpeedApp<P> {
                 self.reveal_log_file();
             }
             if ui
+                .button(i18n::t("action.manage"))
+                .on_hover_text("Open the relay list: add, remove, or refresh relays.")
+                .clicked()
+            {
+                self.show_proxy_manager = true;
+            }
+            if ui
                 .button(i18n::t("proxies.refresh"))
                 .on_hover_text("Fetch the latest community relay list from the registry.")
                 .clicked()
@@ -3679,6 +3686,9 @@ impl<P: Platform> LightSpeedApp<P> {
                 egui::ScrollArea::vertical()
                     .max_height(max_h)
                     .show(ui, |ui| {
+                        // Relay entries are a dense list, not a form: 4 px between
+                        // their two lines instead of the sheet's 8.
+                        ui.spacing_mut().item_spacing.y = 4.0;
                         for (i, entry) in self.proxies.iter().enumerate() {
                             // The row used to wrap, which pushed the delete button
                             // onto its own line for the one relay whose label and
@@ -3688,40 +3698,49 @@ impl<P: Platform> LightSpeedApp<P> {
                             // address and node id on the second. One line needs
                             // about 390 px and the sheet only has 296, which is why
                             // the whole manager slid off the window.
-                            ui.horizontal(|ui| {
-                                let name_w = (ui.available_width() - 44.0).max(80.0);
-                                ui.add_sized(
-                                    [name_w, 18.0],
-                                    egui::Label::new(
-                                        egui::RichText::new(&entry.label).color(text_1),
-                                    )
-                                    .truncate()
-                                    .halign(egui::Align::LEFT),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui.button("×").clicked() {
-                                            remove_idx = Some(i);
-                                        }
-                                    },
-                                );
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(
-                                    egui::RichText::new(entry.addr.to_string())
+                            // No `with_layout` in this row: inside a horizontal it
+                            // takes the row's remaining height, which inflated every
+                            // relay entry to about 109 px. The name column is sized to
+                            // leave the delete glyph its room instead.
+                            // Fixed 16 px rows: the row's height kept resolving against
+                            // the scroll area rather than its contents, which is why
+                            // spacing changes never moved these entries.
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), 16.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    let name_w = (ui.available_width() - 26.0).max(80.0);
+                                    ui.add_sized(
+                                        [name_w, 16.0],
+                                        egui::Label::new(
+                                            egui::RichText::new(&entry.label).color(text_1),
+                                        )
+                                        .truncate(),
+                                    );
+                                    if ui.add(egui::Button::new("×").frame(false)).clicked() {
+                                        remove_idx = Some(i);
+                                    }
+                                },
+                            );
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), 16.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(entry.addr.to_string())
+                                            .size(CAPTION)
+                                            .monospace()
+                                            .color(text_2),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(
+                                            entry.node_id.as_deref().unwrap_or("custom"),
+                                        )
                                         .size(CAPTION)
-                                        .monospace()
-                                        .color(text_2),
-                                );
-                                ui.label(
-                                    egui::RichText::new(
-                                        entry.node_id.as_deref().unwrap_or("custom"),
-                                    )
-                                    .size(CAPTION)
-                                    .color(text_3),
-                                );
-                            });
+                                        .color(text_3),
+                                    );
+                                },
+                            );
                         }
                         if self.proxies.is_empty() {
                             ui.label(
