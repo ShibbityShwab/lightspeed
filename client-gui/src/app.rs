@@ -2478,7 +2478,12 @@ impl<P: Platform> LightSpeedApp<P> {
                 });
                 ui.add_space(S2);
                 self.ledger_rows(ui, narrow, false);
-                if self.status.connected && !self.status.rtt_history.is_empty() {
+                // A chart of nothing is worse than no chart: while the client is
+                // merely connected, the sparkline draws a flat line across an empty
+                // band and reads as data. It is drawn only while a session is
+                // actually relaying.
+                let relaying = self.status.interceptor_active || self.status.redirect_active;
+                if relaying && !self.status.rtt_history.is_empty() {
                     ui.add_space(S2);
                     sparkline(ui, &self.status.rtt_history);
                 }
