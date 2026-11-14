@@ -246,7 +246,10 @@ mod tests {
             (4, 8, 8, 12, 16)
         );
         assert_eq!((CONTROL_H, ACTION_H, PLOT_H), (40.0, 48.0, 64.0));
-        assert_eq!((GLOBE_XS, GLOBE_SM, GLOBE_LG), (72.0, 104.0, 132.0));
+        // The globe scale was deliberately reduced on 2026-11-14: 132 px was a
+        // third of the card for one marker, and the status rows below it were
+        // pushed into the space it took.
+        assert_eq!((GLOBE_XS, GLOBE_SM, GLOBE_LG), (72.0, 76.0, 92.0));
     }
 
     #[test]
