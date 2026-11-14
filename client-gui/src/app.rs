@@ -225,7 +225,11 @@ fn relay_reply_fault_message(
 /// that thread for seconds, which is exactly when the fallback is needed. This
 /// thread only reads the interceptor counters and flips the tunnelling switch,
 /// both cheap, so it keeps working while the UI thread is busy.
-fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) {
+fn spawn_relay_reply_watchdog(
+    engine: Arc<Mutex<LightSpeedEngine>>,
+    quit: QuitFlag,
+    rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>>,
+) {
     std::thread::spawn(move || {
         let mut watch: Option<RelayReplyWatch> = None;
         let mut fallback: Option<ReplyFallback> = None;
@@ -263,6 +267,7 @@ fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFl
                     continue;
                 }
                 if lock_or_recover(&engine).release_tunnelling() {
+                    *lock_or_recover(&rejected) = None;
                     tracing::info!(
                         server = %abandoned.server,
                         attempt = abandoned.retries + 1,
@@ -315,6 +320,8 @@ fn spawn_relay_reply_watchdog(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFl
                         // branch armed without another field to carry it.
                         let wait =
                             retry_delay(retries).unwrap_or(Duration::from_secs(60 * 60 * 24));
+                        *lock_or_recover(&rejected) =
+                            retry_delay(retries).is_none().then_some(server);
                         fallback = Some(ReplyFallback {
                             server,
                             retries,
@@ -967,6 +974,10 @@ pub struct LightSpeedApp<P: Platform> {
     status: EngineStatus,
     tray: Option<P::Tray>,
     quit: QuitFlag,
+    /// The server the no-reply watchdog gave up on. Three spaced re-tests all
+    /// failed, so the window can say the server rejects the relay instead of
+    /// implying the app itself broke.
+    relay_rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>>,
 
     // ── Proxy connection ─────────────────────────────────────────────────
     selected_proxy_idx: usize,
@@ -1194,12 +1205,19 @@ impl<P: Platform> LightSpeedApp<P> {
         let language = saved.language.clone();
         i18n::set_language(language.as_deref());
 
-        spawn_relay_reply_watchdog(Arc::clone(&engine), Arc::clone(&quit));
+        let relay_rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>> = Arc::new(Mutex::new(None));
+
+        spawn_relay_reply_watchdog(
+            Arc::clone(&engine),
+            Arc::clone(&quit),
+            Arc::clone(&relay_rejected),
+        );
         let mut app = Self {
             engine,
             status,
             tray,
             quit,
+            relay_rejected,
             selected_proxy_idx,
             auto_select,
             relay_race: None,
@@ -2477,6 +2495,8 @@ impl<P: Platform> LightSpeedApp<P> {
         if self.direct_fallback {
             let path = if is_holding(self.direct_fallback, self.session_sent()) {
                 LedgerValue::Warn(i18n::t("state.holding"))
+            } else if self.relay_rejected_now() {
+                LedgerValue::Warn(i18n::t("route.server_rejects_relay"))
             } else {
                 LedgerValue::Warn(i18n::t("route.direct_fallback"))
             };
@@ -2563,6 +2583,21 @@ impl<P: Platform> LightSpeedApp<P> {
     /// Packets THIS session has pushed through the relay. The relay's own
     /// `/health` counters are lifetime totals for the whole fleet node, not our
     /// session, so they must never be shown as if they were ours.
+    /// True when the watchdog exhausted its re-tests for the server that is
+    /// locked right now: the relay carried the flow, the server did not answer.
+    fn relay_rejected_now(&self) -> bool {
+        let rejected = *lock_or_recover(&self.relay_rejected);
+        match (
+            rejected,
+            self.status
+                .interceptor_server
+                .parse::<std::net::SocketAddrV4>(),
+        ) {
+            (Some(rejected), Ok(locked)) => rejected == locked,
+            _ => false,
+        }
+    }
+
     /// Outbound datagrams this session handed to the relay, in whichever mode
     /// is running.
     fn session_sent(&self) -> Option<u64> {
