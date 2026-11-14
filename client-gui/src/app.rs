@@ -4029,36 +4029,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             egui::Stroke::new(3.0, rail_edge),
         );
 
-        // Action bar: one slot, three gate-driven labels.
-        let has_relay = self.selected_entry().is_some();
-        let (action_label, action_ready) =
-            primary_action(self.is_admin, boosting, self.status.connected, has_relay);
-        let action_kind = if boosting {
-            ActionKind::Danger
-        } else {
-            ActionKind::Accent
-        };
-        let action = egui::Panel::top("action_bar")
-            .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
-                left: S4 as i8,
-                right: S4 as i8,
-                top: S2 as i8,
-                bottom: S2 as i8,
-            }))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                action_button(ui, &action_label, action_kind, action_ready)
-            });
-        if action.inner.clicked() && action_ready {
-            if boosting {
-                self.stop_boost();
-            } else if !self.is_admin {
-                self.restart_elevated();
-            } else {
-                self.start_boost();
-            }
-        }
-
         // Route card: fixed at normal height.
         if !short {
             egui::Panel::top("route_card")
@@ -4106,6 +4076,38 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     }
                 });
             });
+
+        // Action bar: one slot, three gate-driven labels. It sits below the
+        // inputs it acts on - the relay and the game are choices, this is their
+        // outcome - and above the footer, where a thumb reaches it on a phone.
+        let has_relay = self.selected_entry().is_some();
+        let (action_label, action_ready) =
+            primary_action(self.is_admin, boosting, self.status.connected, has_relay);
+        let action_kind = if boosting {
+            ActionKind::Danger
+        } else {
+            ActionKind::Accent
+        };
+        let action = egui::Panel::bottom("action_bar")
+            .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
+                left: S4 as i8,
+                right: S4 as i8,
+                top: S2 as i8,
+                bottom: S2 as i8,
+            }))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                action_button(ui, &action_label, action_kind, action_ready)
+            });
+        if action.inner.clicked() && action_ready {
+            if boosting {
+                self.stop_boost();
+            } else if !self.is_admin {
+                self.restart_elevated();
+            } else {
+                self.start_boost();
+            }
+        }
 
         // Config: the only scrolling region.
         egui::CentralPanel::default()
