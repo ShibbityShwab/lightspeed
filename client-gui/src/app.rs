@@ -31,10 +31,7 @@ use eframe::egui;
 use lightspeed_client::interceptor::ProcessTarget;
 use lightspeed_client::profiles::schema::{is_valid_key, parse_port_range, slugify, PortRange};
 use lightspeed_client::profiles::{ProfileStore, UserGameProfile, UserServer};
-use lightspeed_client::{
-    best_relay_for_destination, best_relay_for_destination_at, EngineStatus, LightSpeedEngine,
-    RelayCandidate,
-};
+use lightspeed_client::{EngineStatus, LightSpeedEngine, RelayCandidate};
 use std::net::Ipv4Addr;
 
 // ── Tray state enum ──────────────────────────────────────────────────────────
@@ -1589,15 +1586,32 @@ impl<P: Platform> LightSpeedApp<P> {
             return None;
         }
 
-        let best = match server_location {
-            Some(loc) => best_relay_for_destination_at(server, loc, &candidates)?,
-            None => best_relay_for_destination(server, &candidates)?,
+        // The measured direct ping bounds every relay's destination leg: a
+        // relayed path is never shorter than the direct one it replaces.
+        let direct_us = self.server_ping.map(|(ms, _)| (ms as f64 * 1000.0) as u64);
+        let ranked = match server_location {
+            Some(loc) => {
+                lightspeed_client::rank_relays_at_with_direct(server, loc, &candidates, direct_us)
+            }
+            None => lightspeed_client::rank_relays_with_direct(server, &candidates, direct_us),
         };
+        let floored = ranked
+            .iter()
+            .filter(|scored| {
+                matches!(
+                    scored.dest_source,
+                    lightspeed_client::DestinationLegSource::GeometricFloor
+                )
+            })
+            .count();
+        let best = ranked.into_iter().next()?;
         tracing::info!(
-            "Destination-aware relay choice for {server}: {} ({:?}, total {} ms)",
+            "Destination-aware relay choice for {server}: {} ({:?}, total {} ms) - \
+             {floored} of {} candidates raised to the direct-ping floor",
             best.relay,
             best.dest_source,
-            best.total_leg_us / 1000
+            best.total_leg_us / 1000,
+            candidates.len()
         );
         Some(best.relay)
     }

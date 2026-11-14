@@ -85,6 +85,11 @@ pub struct ScoredRelay {
 pub enum DestLegSource {
     /// Measured for this exact relay and destination.
     Measured,
+    /// Raised to the geometric lower bound implied by the measured direct ping.
+    /// Network round trips obey the triangle inequality, so a relay-to-server leg
+    /// can never be shorter than `direct - client_leg`; a prior that says
+    /// otherwise is provably too optimistic.
+    GeometricFloor,
     /// A coarse region-centroid prior, because this relay has no sample yet.
     RegionPrior,
     /// No measurement and no usable region: the worst case, ranked last.
@@ -140,12 +145,27 @@ fn sort_scored(scored: &mut [ScoredRelay]) {
 /// Deterministic and total: ties break on the relay address so the order is
 /// stable across calls, which is what lets the caller avoid flapping.
 pub fn rank(server: Ipv4Addr, candidates: &[RelayCandidate]) -> Vec<ScoredRelay> {
+    rank_with_direct(server, candidates, None)
+}
+
+/// Rank on the region prior alone, with the measured direct ping folded in.
+///
+/// The coordinate-free sibling of [`rank_at_with_direct`], for when the server's
+/// position is not known: the same floor applies to whatever the region prior
+/// claims.
+pub fn rank_with_direct(
+    server: Ipv4Addr,
+    candidates: &[RelayCandidate],
+    direct_rtt_us: Option<u64>,
+) -> Vec<ScoredRelay> {
     let dest_region = region_for(server);
 
     let mut scored: Vec<ScoredRelay> = candidates
         .iter()
         .filter_map(|c| {
             let (dest_leg_us, dest_source) = dest_leg_for(server, dest_region.as_deref(), c);
+            let (dest_leg_us, dest_source) =
+                apply_floor(dest_leg_us, dest_source, direct_rtt_us, c.client_leg_us);
             score_with(c, dest_leg_us, dest_source)
         })
         .collect();
@@ -181,11 +201,37 @@ pub fn rank_at(
     server_location: (f64, f64),
     candidates: &[RelayCandidate],
 ) -> Vec<ScoredRelay> {
+    rank_at_with_direct(server, server_location, candidates, None)
+}
+
+/// Rank with the measured direct ping to the destination folded in.
+///
+/// `direct_rtt_us` is a correlated measurement (ICMP to the game server, no relay
+/// in the path). Round trips obey the triangle inequality, so for every candidate
+/// `relay_to_server >= direct - client_leg`, and a prior claiming less is provably
+/// too optimistic. Raising it to that bound has a property worth stating: a relay
+/// whose client leg is already at least the direct ping scores a total at least
+/// equal to the direct path, which is the truth - a relay adds a hop, it cannot
+/// remove latency the direct route does not have.
+pub fn rank_at_with_direct(
+    server: Ipv4Addr,
+    server_location: (f64, f64),
+    candidates: &[RelayCandidate],
+    direct_rtt_us: Option<u64>,
+) -> Vec<ScoredRelay> {
     let dest_region = region_for(server);
 
     let mut scored: Vec<ScoredRelay> = candidates
         .iter()
-        .filter_map(|c| score_one_at(server, server_location, dest_region.as_deref(), c))
+        .filter_map(|c| {
+            score_one_at(
+                server,
+                server_location,
+                dest_region.as_deref(),
+                c,
+                direct_rtt_us,
+            )
+        })
         .collect();
 
     sort_scored(&mut scored);
@@ -200,14 +246,44 @@ fn region_for(server: Ipv4Addr) -> Option<String> {
 }
 
 /// Score one candidate against a known destination position.
+/// Raise a destination-leg figure to the triangle-inequality floor when the
+/// measured direct ping proves it too optimistic.
+fn apply_floor(
+    dest_leg_us: u64,
+    source: DestLegSource,
+    direct_rtt_us: Option<u64>,
+    client_leg_us: Option<u64>,
+) -> (u64, DestLegSource) {
+    match (direct_rtt_us, client_leg_us) {
+        (Some(direct), Some(client)) => {
+            let floor = direct.saturating_sub(client);
+            if dest_leg_us < floor {
+                (floor, DestLegSource::GeometricFloor)
+            } else {
+                (dest_leg_us, source)
+            }
+        }
+        _ => (dest_leg_us, source),
+    }
+}
+
 fn score_one_at(
     server: Ipv4Addr,
     server_location: (f64, f64),
     dest_region: Option<&str>,
     candidate: &RelayCandidate,
+    direct_rtt_us: Option<u64>,
 ) -> Option<ScoredRelay> {
-    let (dest_leg_us, dest_source) =
+    let (mut dest_leg_us, mut dest_source) =
         dest_leg_for_at(server, server_location, dest_region, candidate);
+    let (raised, raised_source) = apply_floor(
+        dest_leg_us,
+        dest_source,
+        direct_rtt_us,
+        candidate.client_leg_us,
+    );
+    dest_leg_us = raised;
+    dest_source = raised_source;
     score_with(candidate, dest_leg_us, dest_source)
 }
 
@@ -225,6 +301,9 @@ fn score_with(
 
     let penalty = match dest_source {
         DestLegSource::Measured => 0,
+        // A bound is still not a measurement of this pair, but it is a proof
+        // rather than a guess, so it does not carry the prior's uncertainty.
+        DestLegSource::GeometricFloor => 0,
         DestLegSource::RegionPrior | DestLegSource::Unknown => PRIOR_UNDERTAINTY_US,
     };
 
@@ -519,6 +598,63 @@ mod tests {
 
     /// The measured field case: a US-East server, with LAX far from the server
     /// and EWR in it. The client legs are the Bangkok measurements.
+    #[test]
+    fn a_prior_below_the_geometric_floor_is_raised_to_it() {
+        let server = Ipv4Addr::new(3, 237, 142, 3);
+        install_region(server, "us-east");
+        // 120 ms client leg, 300 ms direct: the relay-to-server leg cannot be
+        // below 180 ms however optimistic the prior is.
+        let candidates = [relay([207, 246, 106, 36], "us-west", 120_000, 10_000)];
+        let ranked = rank_at_with_direct(server, (39.0, -77.5), &candidates, Some(300_000));
+        let best = &ranked[0];
+        assert_eq!(best.dest_source, DestLegSource::GeometricFloor);
+        assert_eq!(best.dest_leg_us, 180_000, "direct minus client leg");
+        assert!(
+            best.total_leg_us >= 300_000,
+            "a relayed path is never faster than the direct path it replaces: {} ",
+            best.total_leg_us
+        );
+    }
+
+    #[test]
+    fn a_leg_above_the_floor_is_left_alone() {
+        let server = Ipv4Addr::new(3, 237, 142, 3);
+        install_region(server, "us-east");
+        // 286 ms client leg against a 300 ms direct ping leaves a 14 ms floor,
+        // which any real relay-to-server leg already exceeds.
+        let candidates = [relay([207, 246, 124, 117], "us-east", 286_000, 31_000)];
+        let ranked = rank_at_with_direct(server, (39.0, -77.5), &candidates, Some(300_000));
+        assert_eq!(
+            ranked[0].dest_source,
+            DestLegSource::RegionPrior,
+            "a prior above the bound is not a floor case"
+        );
+        assert!(ranked[0].dest_leg_us >= 14_000);
+    }
+
+    #[test]
+    fn without_a_direct_measurement_the_ranking_is_unchanged() {
+        let server = Ipv4Addr::new(3, 237, 142, 3);
+        install_region(server, "us-east");
+        let candidates = [relay([207, 246, 106, 36], "us-west", 120_000, 10_000)];
+        let without = rank_at_with_direct(server, (39.0, -77.5), &candidates, None);
+        assert_eq!(
+            without[0].dest_source,
+            DestLegSource::RegionPrior,
+            "no direct ping means no bound to enforce"
+        );
+        let raised = rank_at_with_direct(server, (39.0, -77.5), &candidates, Some(400_000));
+        assert_eq!(
+            raised[0].dest_source,
+            DestLegSource::GeometricFloor,
+            "the same prior is provably too low once the direct ping is known"
+        );
+        assert_eq!(
+            raised[0].dest_leg_us, 280_000,
+            "400 ms direct - 120 ms client"
+        );
+    }
+
     #[test]
     fn the_relay_near_the_server_beats_the_closer_but_distant_one() {
         let server = Ipv4Addr::new(3, 237, 142, 3); // Ashburn, us-east
