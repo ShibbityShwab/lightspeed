@@ -26,7 +26,8 @@ pub use route::relay_choice::{
 /// reads for its whole-loop latency figure. Same rule as above: one accessor,
 /// not the module.
 pub use route::destination::{
-    global as destination_estimator, RelayDestinationEstimator as DestinationEstimator,
+    ensure_global as ensure_destination_estimator, global as destination_estimator,
+    RelayDestinationEstimator as DestinationEstimator,
 };
 
 pub(crate) mod capture;

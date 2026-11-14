@@ -1242,6 +1242,11 @@ impl<P: Platform> LightSpeedApp<P> {
             saved.retry_after_fallback,
         ));
 
+        // The sampler that pairs tunnelled round trips drops every sample while
+        // no estimator is installed, and the only installer was the CLI's probe
+        // path - so in the GUI the whole-loop figure and the measured server legs
+        // for relay ranking were both empty. Install it before traffic can arrive.
+        lightspeed_client::ensure_destination_estimator();
         spawn_relay_reply_watchdog(
             Arc::clone(&engine),
             Arc::clone(&quit),
@@ -2175,12 +2180,14 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     fn poll_relay_health(&mut self) {
-        self.direct_fallback = lock_or_recover(&self.engine)
-            .interceptor_health()
+        let health = lock_or_recover(&self.engine).interceptor_health();
+        self.direct_fallback = health
+            .as_ref()
             .map(|health| {
                 health.tunnelling_enabled == Some(false) && health.detected_server.is_some()
             })
             .unwrap_or(false);
+        self.refresh_path_rtt(health.as_ref().and_then(|health| health.detected_server));
         let Some(started) = self.boost_start else {
             return;
         };
@@ -2569,13 +2576,6 @@ impl<P: Platform> LightSpeedApp<P> {
         // The hero number is the keepalive round trip to the relay node, not the
         // game's own ping, and only a hover said so. Naming it in the card makes
         // the difference legible without pointing at it.
-        // The whole-loop figure, when the sampler has paired enough tunnelled
-        // round trips. A tilde marks it as an estimate: it is a median of
-        // sampled round trips, not a probe of every packet.
-        if self.path_rtt_ms > 0.0 {
-            let value = LedgerValue::Data(format!("~{:.0} ms", self.path_rtt_ms));
-            self.ledger_row(ui, narrow, &i18n::t("route.path_rtt"), &value);
-        }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
             self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
