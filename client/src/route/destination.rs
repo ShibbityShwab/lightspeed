@@ -88,7 +88,16 @@ pub struct RelayDestinationEstimator {
     dest_regions: StdMutex<HashMap<Ipv4Addr, String>>,
     /// Recent quiet-flow probes per (relay, destination): whole-path round trips
     /// the window shows, kept away from the ranking samples.
-    path_probes: StdMutex<HashMap<(SocketAddrV4, Ipv4Addr), VecDeque<u64>>>,
+    path_probes: StdMutex<HashMap<(SocketAddrV4, Ipv4Addr), VecDeque<PathProbe>>>,
+}
+
+/// One attributed whole-path round trip and when it was taken.
+#[derive(Clone, Copy, Debug)]
+pub struct PathProbe {
+    /// Round trip in microseconds.
+    pub us: u64,
+    /// When the probe was recorded.
+    pub at: Instant,
 }
 
 /// How many quiet-flow probes the whole-loop figure remembers per pair.
@@ -185,21 +194,29 @@ impl RelayDestinationEstimator {
         if entry.len() >= PATH_PROBE_WINDOW {
             entry.pop_front();
         }
-        entry.push_back(us);
+        entry.push_back(PathProbe {
+            us,
+            at: Instant::now(),
+        });
     }
 
-    /// The most recent quiet-flow probe, which is the whole-loop round trip the
-    /// player would call their ping. The newest and not the fastest of the
-    /// window: a fast sample taken while the path was briefly better would sit
-    /// below the instantaneous relay leg beside it and read as a contradiction.
-    /// `None` until the flow goes quiet for [`PROBE_QUIET_GAP`] and a reply lands
-    /// inside [`PROBE_WINDOW`].
-    pub fn path_probe_us(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<u64> {
+    /// The newest quiet-flow probe for the pair, with the instant it was taken.
+    ///
+    /// The age matters: the client-to-relay leg beside it is instantaneous and
+    /// swings by tens of milliseconds, so a probe from half a minute ago can
+    /// legitimately sit below the current leg. Showing one without the other's
+    /// vintage reads as a contradiction.
+    pub fn path_probe(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<PathProbe> {
         self.path_probes
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&(relay, destination))
             .and_then(|samples| samples.back().copied())
+    }
+
+    /// The newest quiet-flow probe's value, without its age.
+    pub fn path_probe_us(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<u64> {
+        self.path_probe(relay, destination).map(|probe| probe.us)
     }
 
     /// A pooled destination-leg estimate across every measured relay pair.
@@ -435,6 +452,12 @@ pub fn note_outbound(server: Ipv4Addr) -> bool {
                 relay,
             },
         );
+    } else {
+        // The flow is busy, so any armed probe is invalid: its reply would be
+        // indistinguishable from the replies now arriving. Leaving it in place
+        // let it pair with an unrelated inbound much later, which is how a 4 ms
+        // whole-loop round trip turned up against a 273 ms relay leg.
+        sampler.armed.remove(&server);
     }
     match sampler.last_sample.get(&server) {
         Some(last) if now.saturating_duration_since(*last) < DEST_SAMPLE_INTERVAL => {

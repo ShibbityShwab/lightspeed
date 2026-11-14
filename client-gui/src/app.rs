@@ -84,6 +84,19 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// Eight seconds, not three: a live match judged on three-second windows fell
 /// back three times on samples of 2, 7 and 3 packets while the session as a
 /// whole returned 187 replies for 309 sends.
+/// How old a whole-loop probe may be before the window stops showing it.
+/// How old a whole-loop probe may be before the window stops showing it. The
+/// relay leg beside it moves by tens of milliseconds within seconds, so an older
+/// probe can read below the current leg and look like a contradiction.
+const PATH_PROBE_MAX_AGE: Duration = Duration::from_secs(5);
+
+/// How far below the instantaneous relay leg a probe may sit before it is called
+/// a mis-paired sample. A whole-loop round trip crosses that leg, so anything
+/// meaningfully under it is not a measurement of the path - bad pairings produced
+/// 1 ms and 4 ms against a ~273 ms leg. The slack covers the leg being sampled a
+/// moment apart from the probe.
+const PATH_PROBE_LEG_SLACK_MS: f64 = 15.0;
+
 const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Minimum intercepted packets before the no-reply watchdog may fire.
@@ -1037,6 +1050,8 @@ pub struct LightSpeedApp<P: Platform> {
     /// Estimated whole-loop RTT to the game server through the relay, in ms;
     /// 0.0 until the sampler has enough paired round trips for this pair.
     path_rtt_ms: f64,
+    /// How long ago the probe behind `path_rtt_ms` was taken.
+    path_rtt_age: Option<std::time::Duration>,
 
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
@@ -1274,6 +1289,7 @@ impl<P: Platform> LightSpeedApp<P> {
             held_since: None,
             direct_fallback: false,
             path_rtt_ms: 0.0,
+            path_rtt_age: None,
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -2170,13 +2186,40 @@ impl<P: Platform> LightSpeedApp<P> {
             .proxy_addr
             .parse::<std::net::SocketAddrV4>()
             .ok();
-        self.path_rtt_ms = match (server, relay) {
-            (Some(server), Some(relay)) => lightspeed_client::destination_estimator()
-                .and_then(|estimator| estimator.path_probe_us(relay, *server.ip()))
-                .map(|micros| micros as f64 / 1000.0)
-                .unwrap_or(0.0),
-            _ => 0.0,
+        self.path_rtt_ms = 0.0;
+        self.path_rtt_age = None;
+        let (Some(server), Some(relay)) = (server, relay) else {
+            return;
         };
+        let Some(probe) = lightspeed_client::destination_estimator()
+            .and_then(|estimator| estimator.path_probe(relay, *server.ip()))
+        else {
+            return;
+        };
+        // A stale probe is dropped rather than shown: the relay leg beside it is
+        // instantaneous and swings by tens of milliseconds, so an old path would
+        // read as a contradiction instead of a coincidence.
+        let age = probe.at.elapsed();
+        if age <= PATH_PROBE_MAX_AGE {
+            self.path_rtt_ms = probe.us as f64 / 1000.0;
+            self.path_rtt_age = Some(age);
+        }
+    }
+
+    /// The whole-loop figure, but only when it is fit to show: fresh enough to
+    /// compare with the instantaneous leg, and not below it.
+    fn path_rtt_shown(&self) -> Option<(f64, u64)> {
+        if self.path_rtt_ms <= 0.0 {
+            return None;
+        }
+        if self.path_rtt_ms + PATH_PROBE_LEG_SLACK_MS < self.status.latest_rtt_ms {
+            return None;
+        }
+        let age = self
+            .path_rtt_age
+            .map(|age| age.as_secs())
+            .unwrap_or_default();
+        Some((self.path_rtt_ms, age))
     }
 
     fn poll_relay_health(&mut self) {
@@ -2585,10 +2628,16 @@ impl<P: Platform> LightSpeedApp<P> {
         // game's own ping, and only a hover said so. Naming it in the card makes
         // the difference legible without pointing at it.
         // The whole-loop figure, measured only when the flow went quiet enough
-        // for a reply to be attributable to one send. Absent until such a probe
-        // lands, and never below the relay leg beside it: every reply crosses it.
+        // for a reply to be attributable to one send. It carries its own age,
+        // because the relay leg beside it is instantaneous and swings: a stale
+        // probe can legitimately read below the current leg without either
+        // number being wrong.
         if self.path_rtt_ms > 0.0 {
-            let value = LedgerValue::Data(format!("{:.0} ms", self.path_rtt_ms));
+            let age = self
+                .path_rtt_age
+                .map(|age| age.as_secs())
+                .unwrap_or_default();
+            let value = LedgerValue::Data(format!("{:.0} ms \u{00b7} {}s", self.path_rtt_ms, age));
             self.ledger_row(ui, narrow, &i18n::t("route.path_rtt"), &value);
         }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
