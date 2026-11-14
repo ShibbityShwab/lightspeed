@@ -3208,7 +3208,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.set_max_width(max_w);
                 sheet_title(ui, &i18n::t("settings.title"));
                 egui::ScrollArea::vertical()
-                    .max_height(max_h)
+                    .max_height((max_h - 76.0).max(160.0))
                     .show(ui, |ui| {
                         self.settings_body(ui);
                     });
@@ -5230,7 +5230,10 @@ fn sheet_frame() -> egui::Frame {
 fn sheet_bounds(ctx: &egui::Context) -> (f32, f32) {
     let screen = ctx.content_rect();
     let max_w = (screen.width() - 24.0).min(420.0);
-    let max_h = (screen.height() - 120.0).max(120.0);
+    // Leave room for the title and the Close button inside the sheet itself: the
+    // old 120 px reserve plus an unscaled body pushed the last rows past the
+    // bottom of the window at 320 px wide.
+    let max_h = (screen.height() - 96.0).max(120.0);
     (max_w, max_h)
 }
 

@@ -197,13 +197,17 @@ pub fn draw_map(
         );
     }
 
-    for marker in markers {
+    for (i, marker) in markers.iter().enumerate() {
         let p = at(marker.at);
-        painter.circle_filled(p, 3.5, marker.colour);
-        // No labels on the map. At 320 px they overlapped each other and the
-        // relay name was unreadable; the ledger directly underneath already
-        // names the relay in full, so the map only has to show where it is.
-        let _ = &marker.label;
+        // A white core with a coloured ring reads against the dark land and the
+        // graticule; a flat coloured dot did not at this size.
+        painter.circle_filled(p, 3.5, Color32::WHITE);
+        painter.circle_stroke(p, 5.5, Stroke::new(1.5, marker.colour));
+        // No permanent label at 320 px - they overlapped into noise - but the
+        // name is one hover away, and the ledger under the map spells it out.
+        let hit = egui::Rect::from_center_size(p, egui::Vec2::splat(14.0));
+        ui.interact(hit, egui::Id::new(("map-marker", i)), egui::Sense::hover())
+            .on_hover_text(&marker.label);
     }
 }
 
