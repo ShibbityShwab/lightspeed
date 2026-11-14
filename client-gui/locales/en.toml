@@ -18,6 +18,7 @@
 title = "LightSpeed"
 
 [settings]
+relays = "Relays"
 language = "Language"
 follow_system = "System default"
 title = "Settings"

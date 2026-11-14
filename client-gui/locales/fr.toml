@@ -49,6 +49,7 @@ error = "Erreur"
 idle = "Non optimise"
 
 [settings]
+relays = "Relais"
 language = "Langue"
 follow_system = "Valeur par défaut du système"
 title = "Paramètres"

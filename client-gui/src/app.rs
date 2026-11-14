@@ -1048,7 +1048,6 @@ pub struct LightSpeedApp<P: Platform> {
     last_race: Option<std::time::Instant>,
     /// A pending timed re-measurement of a connected re-race winner.
     winner_probe: Option<WinnerProbe>,
-    show_proxy_manager: bool,
     manager_label_input: String,
     manager_addr_input: String,
     config_error: Option<String>,
@@ -1254,7 +1253,6 @@ impl<P: Platform> LightSpeedApp<P> {
             auto_started_for_presence: false,
             last_race: None,
             winner_probe: None,
-            show_proxy_manager: std::env::var_os("LIGHTSPEED_OPEN_PROXIES").is_some(),
             manager_label_input: String::new(),
             manager_addr_input: String::new(),
             config_error: None,
@@ -2685,13 +2683,6 @@ impl<P: Platform> LightSpeedApp<P> {
                     ui.set_max_width(combo_w);
                     self.boost_server_combo(ui);
                 });
-                if ui
-                    .link(i18n::t("action.manage").as_ref())
-                    .on_hover_text(i18n::t("proxies.manage_hint"))
-                    .clicked()
-                {
-                    self.show_proxy_manager = true;
-                }
                 if self.status.connected
                     && ui
                         .link(i18n::t("action.disconnect").as_ref())
@@ -3319,6 +3310,13 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         ui.add_space(S2);
 
+        // Relays: the list itself, inlined from the old Proxy Manager modal.
+        ui.add_space(S2);
+        hairline(ui);
+        ui.add_space(S1);
+        section_label(ui, &i18n::t("settings.relays"));
+        self.proxy_manager_body(ui);
+
         // Maintenance: self-update, the trace log, and the relay link.
         hairline(ui);
         ui.add_space(S2);
@@ -3335,13 +3333,6 @@ impl<P: Platform> LightSpeedApp<P> {
             }
             if ui.button(i18n::t("settings.open_log")).clicked() {
                 self.reveal_log_file();
-            }
-            if ui
-                .button(i18n::t("action.manage"))
-                .on_hover_text("Open the relay list: add, remove, or refresh relays.")
-                .clicked()
-            {
-                self.show_proxy_manager = true;
             }
             if ui
                 .button(i18n::t("proxies.refresh"))
@@ -3670,131 +3661,83 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// `Proxy Manager`: the discovered and custom relay list, plus add/remove.
-    fn proxy_manager_sheet(&mut self, ctx: &egui::Context) {
-        let (max_w, max_h) = sheet_bounds(ctx);
+    /// The relay list: discovered and custom relays, add and remove.
+    ///
+    /// It lives in Settings rather than in its own modal, so configuration has
+    /// one surface and the main window keeps only the relay picker.
+    fn proxy_manager_body(&mut self, ui: &mut egui::Ui) {
         let mut remove_idx: Option<usize> = None;
         let mut add_addr: Option<SocketAddrV4> = None;
         let mut reset = false;
 
-        let response = egui::Modal::new(egui::Id::unique("proxy_manager_sheet"))
-            .backdrop_color(scrim)
-            .frame(sheet_frame())
-            .show(ctx, |ui| {
-                ui.set_width(max_w);
-                sheet_title(ui, &i18n::t("proxies.title"));
-                egui::ScrollArea::vertical()
-                    .max_height(max_h)
-                    .show(ui, |ui| {
-                        // Relay entries are a dense list, not a form: 4 px between
-                        // their two lines instead of the sheet's 8.
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        for (i, entry) in self.proxies.iter().enumerate() {
-                            // The row used to wrap, which pushed the delete button
-                            // onto its own line for the one relay whose label and
-                            // address together overran the sheet. Truncate the name
-                            // instead and keep the button where it belongs.
-                            // Two lines per relay: name and delete on the first,
-                            // address and node id on the second. One line needs
-                            // about 390 px and the sheet only has 296, which is why
-                            // the whole manager slid off the window.
-                            // No `with_layout` in this row: inside a horizontal it
-                            // takes the row's remaining height, which inflated every
-                            // relay entry to about 109 px. The name column is sized to
-                            // leave the delete glyph its room instead.
-                            // Fixed 16 px rows: the row's height kept resolving against
-                            // the scroll area rather than its contents, which is why
-                            // spacing changes never moved these entries.
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), 16.0),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    let name_w = (ui.available_width() - 26.0).max(80.0);
-                                    ui.add_sized(
-                                        [name_w, 16.0],
-                                        egui::Label::new(
-                                            egui::RichText::new(&entry.label).color(text_1),
-                                        )
-                                        .truncate(),
-                                    );
-                                    if ui.add(egui::Button::new("×").frame(false)).clicked() {
-                                        remove_idx = Some(i);
-                                    }
-                                },
-                            );
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), 16.0),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        egui::RichText::new(entry.addr.to_string())
-                                            .size(CAPTION)
-                                            .monospace()
-                                            .color(text_2),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(
-                                            entry.node_id.as_deref().unwrap_or("custom"),
-                                        )
-                                        .size(CAPTION)
-                                        .color(text_3),
-                                    );
-                                },
-                            );
-                        }
-                        if self.proxies.is_empty() {
-                            ui.label(
-                                egui::RichText::new(
-                                    "No relays yet. Discovery runs automatically; you can \
-                                     also add a custom proxy below.",
-                                )
-                                .size(BODY)
-                                .color(text_2),
-                            );
-                        }
-
-                        ui.add_space(S2);
-                        ui.horizontal(|ui| {
-                            ui.label(i18n::t("proxies.label_field"));
-                            ui.text_edit_singleline(&mut self.manager_label_input);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(i18n::t("proxies.addr_field"));
-                            ui.text_edit_singleline(&mut self.manager_addr_input);
-                        });
-
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button(i18n::t("proxies.add")).clicked()
-                                && self.manager_addr_input.parse::<SocketAddrV4>().is_ok()
-                            {
-                                add_addr = Some(self.manager_addr_input.parse().unwrap());
-                            }
-                            if ui.button(i18n::t("proxies.refresh")).clicked() {
-                                self.start_discovery();
-                            }
-                        });
-
-                        ui.add_space(S2);
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button(i18n::t("proxies.open_config")).clicked() {
-                                paths::open_in_os(&paths::config_dir());
-                            }
-                            if ui.button(i18n::t("proxies.reset_defaults")).clicked() {
-                                reset = true;
-                            }
-                        });
-                        if let Some(err) = &self.config_error {
-                            ui.label(egui::RichText::new(err).color(danger));
-                        }
-                    });
-                ui.add_space(S2);
-                if ui.button(i18n::t("action.close").as_ref()).clicked() {
-                    self.show_proxy_manager = false;
-                }
-            });
-
-        if response.should_close() {
-            self.show_proxy_manager = false;
+        ui.spacing_mut().item_spacing.y = 4.0;
+        for (i, entry) in self.proxies.iter().enumerate() {
+            // Fixed 16 px rows: resolved against the scroll area, each entry used
+            // to be ~109 px and no spacing setting could shrink it.
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 16.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let name_w = (ui.available_width() - 26.0).max(80.0);
+                    ui.add_sized(
+                        [name_w, 16.0],
+                        egui::Label::new(egui::RichText::new(&entry.label).color(text_1))
+                            .truncate(),
+                    );
+                    if ui.add(egui::Button::new("×").frame(false)).clicked() {
+                        remove_idx = Some(i);
+                    }
+                },
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 16.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.label(
+                        egui::RichText::new(entry.addr.to_string())
+                            .size(CAPTION)
+                            .monospace()
+                            .color(text_2),
+                    );
+                    ui.label(
+                        egui::RichText::new(entry.node_id.as_deref().unwrap_or("custom"))
+                            .size(CAPTION)
+                            .color(text_3),
+                    );
+                },
+            );
+        }
+        if self.proxies.is_empty() {
+            ui.label(
+                egui::RichText::new("No relays yet. Discovery runs automatically.")
+                    .size(CAPTION)
+                    .color(text_2),
+            );
+        }
+        ui.add_space(S2);
+        ui.horizontal(|ui| {
+            ui.label(i18n::t("proxies.label_field"));
+            ui.text_edit_singleline(&mut self.manager_label_input);
+        });
+        ui.horizontal(|ui| {
+            ui.label(i18n::t("proxies.addr_field"));
+            ui.text_edit_singleline(&mut self.manager_addr_input);
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(i18n::t("proxies.add")).clicked()
+                && self.manager_addr_input.parse::<SocketAddrV4>().is_ok()
+            {
+                add_addr = Some(self.manager_addr_input.parse().unwrap());
+            }
+            if ui.button(i18n::t("proxies.open_config")).clicked() {
+                paths::open_in_os(&paths::config_dir());
+            }
+            if ui.button(i18n::t("proxies.reset_defaults")).clicked() {
+                reset = true;
+            }
+        });
+        if let Some(err) = &self.config_error {
+            ui.label(egui::RichText::new(err).size(CAPTION).color(danger));
         }
 
         if let Some(idx) = remove_idx {
@@ -3829,7 +3772,6 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// The self-update check result, install handoff, and any failure.
     fn update_sheet(&mut self, ctx: &egui::Context) {
         let (max_w, max_h) = sheet_bounds(ctx);
         let response = egui::Modal::new(egui::Id::unique("update_sheet"))
@@ -4208,9 +4150,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // ── In-window sheets ─────────────────────────────────────────────
         if self.show_settings {
             self.settings_sheet(&ctx);
-        }
-        if self.show_proxy_manager {
-            self.proxy_manager_sheet(&ctx);
         }
         if self.show_update_dialog {
             self.update_sheet(&ctx);

@@ -49,6 +49,7 @@ error = "Ошибка"
 idle = "Не оптимизируется"
 
 [settings]
+relays = "Релеи"
 language = "Язык"
 follow_system = "Системный по умолчанию"
 title = "Настройки"

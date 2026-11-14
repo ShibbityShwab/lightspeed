@@ -49,6 +49,7 @@ error = "错误"
 idle = "未优化"
 
 [settings]
+relays = "Relays"
 language = "语言"
 follow_system = "系统默认"
 title = "设置"

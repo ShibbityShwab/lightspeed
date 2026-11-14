@@ -49,6 +49,7 @@ error = "エラー"
 idle = "最適化していません"
 
 [settings]
+relays = "Relays"
 language = "言語"
 follow_system = "システムの既定"
 title = "設定"
