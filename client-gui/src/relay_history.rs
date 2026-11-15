@@ -122,6 +122,20 @@ impl RelayHistory {
         self.trim();
     }
 
+    /// How many distinct relays are on record as not carrying this server.
+    ///
+    /// The chooser uses this to stop cycling: with eight candidates and two minutes
+    /// of retries each, a server no relay carries costs the better part of a match
+    /// in switching. Three condemnations is the point where the measurements agree
+    /// with each other and further attempts are just motion.
+    pub fn condemned_count(&self, server: Ipv4Addr) -> usize {
+        let suffix = format!("|{server}");
+        self.entries
+            .iter()
+            .filter(|(key, record)| key.ends_with(&suffix) && record.is_starved(now_secs()))
+            .count()
+    }
+
     /// Whether this relay is on record as not carrying this server.
     pub fn is_starved(&self, relay: SocketAddrV4, server: Ipv4Addr) -> bool {
         self.entries
@@ -323,6 +337,27 @@ mod tests {
         assert!(
             plenty.is_starved(now),
             "20% over a large sample is still a verdict"
+        );
+    }
+
+    #[test]
+    fn condemned_relays_are_counted_per_server() {
+        let mut history = RelayHistory::default();
+        let other_relay = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 10), 4434);
+        history.record_failure(relay(), server());
+        assert_eq!(history.condemned_count(server()), 1);
+        history.record_failure(other_relay, server());
+        assert_eq!(history.condemned_count(server()), 2);
+        assert_eq!(
+            history.condemned_count(Ipv4Addr::new(198, 51, 100, 8)),
+            0,
+            "another server's verdicts are not this server's"
+        );
+        history.record(other_relay, server(), 200, 180);
+        assert_eq!(
+            history.condemned_count(server()),
+            1,
+            "a relay that later carries the server stops counting"
         );
     }
 

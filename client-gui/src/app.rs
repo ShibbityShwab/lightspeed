@@ -81,6 +81,11 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// Eight seconds, not three: a live match judged on three-second windows fell
 /// back three times on samples of 2, 7 and 3 packets while the session as a
 /// whole returned 187 replies for 309 sends.
+/// How many distinct relays may fail for one server before the chooser stops
+/// trying. Two minutes of retries each, so three is already several minutes of a
+/// match spent proving what the first two already showed.
+const MAX_RELAYS_TRIED: usize = 3;
+
 /// How old a direct-ping sample may be before the window asks for a fresh one.
 const PING_REFRESH_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -1609,6 +1614,14 @@ impl<P: Platform> LightSpeedApp<P> {
         // measured, not inferred, and re-testing the same relay for the same server
         // every session is what made the window flap. If every candidate is on
         // record, they are still the only option, so the unfiltered list stands.
+        if self.relay_history.condemned_count(server) >= MAX_RELAYS_TRIED {
+            tracing::info!(
+                server = %server,
+                condemned = self.relay_history.condemned_count(server),
+                "Every attempt at this server has failed; not choosing a relay"
+            );
+            return None;
+        }
         let survivors: Vec<RelayCandidate> = candidates
             .iter()
             .filter(|candidate| !self.relay_history.is_starved(candidate.relay, server))
