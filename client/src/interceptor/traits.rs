@@ -239,6 +239,11 @@ pub struct InterceptorCounters {
     /// (intercepted climbing, sent not). A user whose match connects but feels
     /// like packet loss has no other way to tell which relay-side fault this is.
     pub packets_tunnel_sent: AtomicU64,
+    /// Per game destination sent/replied counters, for reply-ratio verdicts.
+    ///
+    /// Bounded: the interceptor carries one match at a time, and a stale entry is
+    /// dropped once the map is full so a long-lived process cannot grow it.
+    pub flows: std::sync::Mutex<std::collections::HashMap<std::net::Ipv4Addr, FlowCounts>>,
     /// Bytes intercepted (outbound).
     pub bytes_intercepted: AtomicU64,
     /// Spoofed inbound packets injected back to the game.
@@ -321,12 +326,53 @@ impl Default for InterceptorCounters {
             bypass_advantage_ms: std::sync::Mutex::new(None),
             packets_seen: AtomicU64::new(0),
             packets_tunnel_sent: AtomicU64::new(0),
+            flows: std::sync::Mutex::new(std::collections::HashMap::new()),
             capture_diagnosis: std::sync::Mutex::new(None),
         }
     }
 }
 
 impl InterceptorCounters {
+    /// Count one game datagram handed to the relay for `server`.
+    pub fn count_sent(&self, server: std::net::Ipv4Addr) {
+        self.with_flow(server, |counts| counts.sent += 1);
+    }
+
+    /// Count one game datagram that came back from the relay for `server`.
+    ///
+    /// Only frames whose tunnel header named a destination count: keepalives and
+    /// undecodable frames are not replies for anyone.
+    pub fn count_reply(&self, server: std::net::Ipv4Addr) {
+        self.with_flow(server, |counts| counts.replied += 1);
+    }
+
+    fn with_flow(&self, server: std::net::Ipv4Addr, update: impl FnOnce(&mut FlowCounts)) {
+        let Ok(mut flows) = self.flows.lock() else {
+            return;
+        };
+        if flows.len() >= MAX_FLOWS && !flows.contains_key(&server) {
+            // Keep the map bounded without guessing which entries matter: a new
+            // match brings its own destination, and the oldest-looking entry is
+            // indistinguishable from the rest without a clock read per packet.
+            flows.clear();
+        }
+        update(flows.entry(server).or_default());
+    }
+
+    /// Per-destination counters, busiest first, capped for display.
+    pub fn flows_snapshot(&self) -> Vec<FlowSnapshot> {
+        let Ok(flows) = self.flows.lock() else {
+            return Vec::new();
+        };
+        let mut rows: Vec<FlowSnapshot> = flows
+            .iter()
+            .map(|(server, counts)| (*server, counts.sent, counts.replied))
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.1));
+        rows.truncate(MAX_FLOW_SNAPSHOT);
+        rows
+    }
+
     /// Take a cheap snapshot for GUI display.
     pub fn snapshot(&self, platform: &'static str) -> InterceptorStats {
         InterceptorStats {
@@ -352,6 +398,7 @@ impl InterceptorCounters {
             bypass_advantage_ms: self.bypass_advantage_ms.lock().ok().and_then(|g| *g),
             packets_seen: self.packets_seen.load(Ordering::Relaxed),
             packets_tunnel_sent: self.packets_tunnel_sent.load(Ordering::Relaxed),
+            flows: self.flows_snapshot(),
             capture_diagnosis: self.capture_diagnosis.lock().ok().and_then(|g| g.clone()),
             // Run-level state, filled in by the handle: the gate lives there, not
             // in the counters.
@@ -361,6 +408,32 @@ impl InterceptorCounters {
     }
 }
 
+/// Destinations tracked before the map is reset. A match uses one; the rest are
+/// leftovers from earlier ones.
+const MAX_FLOWS: usize = 32;
+
+/// Destinations carried in one status snapshot.
+const MAX_FLOW_SNAPSHOT: usize = 8;
+
+/// Counters for one game destination: datagrams handed to the relay for it, and
+/// datagrams that came back for it.
+///
+/// Keyed by the destination inside the tunnel header rather than by whatever the
+/// window happens to display. The relay-wide counters cannot answer "did this
+/// server answer through this relay": a share built from them reached 112% on a
+/// real session, because they also count keepalives and parity frames and are
+/// cumulative across relay switches. These are the numbers a verdict can rest on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FlowCounts {
+    /// Game datagrams sent to the relay for this destination.
+    pub sent: u64,
+    /// Game datagrams received back from the relay for this destination.
+    pub replied: u64,
+}
+
+/// One game destination's counters, as a snapshot sees them.
+pub type FlowSnapshot = (std::net::Ipv4Addr, u64, u64);
+
 /// Cheap snapshot of interceptor state for GUI display.
 #[derive(Clone, Debug, Default)]
 pub struct InterceptorStats {
@@ -369,6 +442,8 @@ pub struct InterceptorStats {
     pub packets_injected: u64,
     pub bytes_injected: u64,
     pub packets_from_proxy: u64,
+    /// Per-game-destination counters: the only trustworthy reply ratio.
+    pub flows: Vec<FlowSnapshot>,
     pub errors: u64,
     /// Payloads forwarded with fragmentation allowed for exceeding the
     /// conservative tunnel payload budget.
@@ -666,6 +741,31 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+
+    #[test]
+    fn flow_counters_stay_with_their_own_server() {
+        let counters = InterceptorCounters::default();
+        let ashburn = std::net::Ipv4Addr::new(5, 8, 93, 212);
+        let amsterdam = std::net::Ipv4Addr::new(91, 199, 82, 67);
+        for _ in 0..10 {
+            counters.count_sent(ashburn);
+            counters.count_reply(ashburn);
+        }
+        counters.count_sent(amsterdam);
+        let flows = counters.flows_snapshot();
+        let by_server = |ip: std::net::Ipv4Addr| {
+            flows
+                .iter()
+                .find(|(addr, _, _)| *addr == ip)
+                .map(|(_, sent, replied)| (*sent, *replied))
+        };
+        assert_eq!(by_server(ashburn), Some((10, 10)));
+        assert_eq!(
+            by_server(amsterdam),
+            Some((1, 0)),
+            "one server's replies must not be credited to another"
+        );
+    }
 
     fn config_for(game_name: &str) -> InterceptorConfig {
         InterceptorConfig {

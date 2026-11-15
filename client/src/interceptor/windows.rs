@@ -1546,6 +1546,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 .is_ok();
                                 if sent {
                                     counters_t.packets_tunnel_sent.fetch_add(1, Ordering::Relaxed);
+                                    counters_t.count_sent(*game_dst.ip());
                                 }
                                 if let Some(pb) = parity.filter(|_| emit_parity) {
                                     let ps = seq.wrapping_add(1);
@@ -1607,6 +1608,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             };
 
                             if !header.is_keepalive() {
+                                counters_t.count_reply(*header.orig_src_addr().ip());
                                 crate::latency::record_inbound(*header.orig_src_addr().ip());
                                 tracing::debug!(
                                     from = %header.orig_src_addr(),

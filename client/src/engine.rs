@@ -158,6 +158,10 @@ pub struct EngineStatus {
     /// relayed. The pair tells a held flow (both zero) from a relay that is not
     /// taking the traffic (intercepted climbing, sent not).
     pub interceptor_tunnel_sent: u64,
+    /// Per game destination (server, sent, replied): the only pair a reply-ratio
+    /// verdict may be built from. The relay-wide counters also count keepalives
+    /// and parity frames and are cumulative across relay switches.
+    pub interceptor_flows: Vec<(std::net::Ipv4Addr, u64, u64)>,
     /// Plain-language explanation when the capture is producing nothing, so the
     /// app can admit it is not working instead of looking healthy.
     pub capture_diagnosis: Option<String>,
@@ -1364,6 +1368,7 @@ impl LightSpeedEngine {
             snap.interceptor_intercepted = ist.packets_intercepted;
             snap.interceptor_seen = ist.packets_seen;
             snap.interceptor_tunnel_sent = ist.packets_tunnel_sent;
+            snap.interceptor_flows = ist.flows.clone();
             snap.capture_diagnosis = ist.capture_diagnosis.clone();
             snap.tunnelling_enabled = ist.tunnelling_enabled;
             snap.bypass_advantage_ms = ist.bypass_advantage_ms;

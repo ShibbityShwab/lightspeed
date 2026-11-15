@@ -1056,7 +1056,7 @@ pub struct LightSpeedApp<P: Platform> {
     /// What each relay has done for each game server, across sessions.
     relay_history: crate::relay_history::RelayHistory,
     /// Counters as of the last poll, so only this interval's deltas are recorded.
-    history_counters: Option<(u64, u64)>,
+    history_counters: Option<(std::net::SocketAddrV4, u64, u64)>,
     /// When the memory was last written, so a chatty session does not rewrite it
     /// every second.
     history_saved_at: Option<std::time::Instant>,
@@ -2372,29 +2372,39 @@ impl<P: Platform> LightSpeedApp<P> {
         else {
             return;
         };
-        let forwarded = self.session_sent().unwrap_or(0);
-        let returned = returned_count(
-            self.status.redirect_active,
-            self.status.redirect_pkts_in,
-            self.status.interceptor_active,
-            self.status.interceptor_from_proxy,
-        )
-        .unwrap_or(0);
-        if let Some((last_forwarded, last_returned)) = self.history_counters {
-            if let Some((forwards, replies)) =
-                history_delta((last_forwarded, last_returned), (forwarded, returned))
-            {
-                self.relay_history.record(relay, server, forwards, replies);
-            }
-            let due = self
-                .history_saved_at
-                .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(30));
-            if due {
-                self.history_saved_at = Some(std::time::Instant::now());
-                let _ = self.relay_history.save(&crate::paths::relay_history_file());
+        // Per-destination counters, not the relay-wide ones: those also count
+        // keepalives and parity frames and are cumulative across relay switches,
+        // which produced a 112% reply share on a live session. A verdict rests on
+        // these numbers, so they have to be the server's own.
+        let Some((_, forwarded, returned)) = self
+            .status
+            .interceptor_flows
+            .iter()
+            .find(|(addr, _, _)| *addr == server)
+            .copied()
+        else {
+            self.history_counters = None;
+            return;
+        };
+        if let Some((last_relay, last_forwarded, last_returned)) = self.history_counters {
+            // A relay switch mid-interval would attribute one relay's traffic to
+            // the next; a fresh baseline costs one interval and cannot lie.
+            if last_relay == relay {
+                if let Some((forwards, replies)) =
+                    history_delta((last_forwarded, last_returned), (forwarded, returned))
+                {
+                    self.relay_history.record(relay, server, forwards, replies);
+                }
+                let due = self
+                    .history_saved_at
+                    .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(30));
+                if due {
+                    self.history_saved_at = Some(std::time::Instant::now());
+                    let _ = self.relay_history.save(&crate::paths::relay_history_file());
+                }
             }
         }
-        self.history_counters = Some((forwarded, returned));
+        self.history_counters = Some((relay, forwarded, returned));
     }
 
     /// Read the measured direct ping to the game server, and start a burst when

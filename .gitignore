@@ -69,3 +69,6 @@ web/placement.json
 
 # Written by the Localization workflow; read as an artifact, not committed.
 localization-report.md
+
+# Scratch cargo target dirs (see MAX_ENTRIES note in relay_history)
+/tc*/
