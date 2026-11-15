@@ -82,7 +82,7 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// back three times on samples of 2, 7 and 3 packets while the session as a
 /// whole returned 187 replies for 309 sends.
 /// How old a direct-ping sample may be before the window asks for a fresh one.
-const PING_REFRESH_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+const PING_REFRESH_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
 const RELAY_REPLY_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -2304,13 +2304,9 @@ impl<P: Platform> LightSpeedApp<P> {
         )
         .unwrap_or(0);
         if let Some((last_forwarded, last_returned)) = self.history_counters {
-            let forwards = forwarded.saturating_sub(last_forwarded);
-            let replies = returned.saturating_sub(last_returned);
-            // Only intervals that actually pushed traffic through the relay count.
-            // While the tunnel is held off after a fallback the reply counter can
-            // still tick from packets already in flight, and recording that pair
-            // wrote a "0 forwards, 1 reply" record that describes nothing.
-            if forwards > 0 {
+            if let Some((forwards, replies)) =
+                history_delta((last_forwarded, last_returned), (forwarded, returned))
+            {
                 self.relay_history.record(relay, server, forwards, replies);
             }
             let due = self
@@ -5061,6 +5057,17 @@ fn routed_count(
 
 /// What this session has received back from the relay, in the same mode the
 /// sent count came from.
+/// This poll's counter deltas, or `None` when the interval forwarded nothing.
+///
+/// The skip is the point: while the tunnel is held off after a fallback the reply
+/// counter still ticks from packets already in flight, and a "0 forwards, N
+/// replies" interval says nothing about whether the relay carries the server.
+fn history_delta(last: (u64, u64), now: (u64, u64)) -> Option<(u64, u64)> {
+    let forwards = now.0.saturating_sub(last.0);
+    let replies = now.1.saturating_sub(last.1);
+    (forwards > 0).then_some((forwards, replies))
+}
+
 fn returned_count(
     redirect_active: bool,
     redirect_pkts_in: u64,
@@ -6191,6 +6198,21 @@ mod tests {
             super::session_delta(5, 3, Some((100, 50))),
             (0, 0),
             "counters that restarted below the baseline must not wrap"
+        );
+    }
+
+    #[test]
+    fn an_interval_that_forwarded_nothing_records_nothing() {
+        assert_eq!(super::history_delta((100, 40), (100, 41)), None);
+        assert_eq!(
+            super::history_delta((100, 40), (130, 44)),
+            Some((30, 4)),
+            "deltas, not totals: the engine counters are cumulative"
+        );
+        assert_eq!(
+            super::history_delta((100, 40), (5, 3)),
+            None,
+            "counters that restarted produce no forwards, so the interval is skipped rather than recorded as a wraparound"
         );
     }
 
