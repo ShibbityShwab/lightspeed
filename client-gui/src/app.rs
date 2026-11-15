@@ -2306,7 +2306,13 @@ impl<P: Platform> LightSpeedApp<P> {
         if let Some((last_forwarded, last_returned)) = self.history_counters {
             let forwards = forwarded.saturating_sub(last_forwarded);
             let replies = returned.saturating_sub(last_returned);
-            self.relay_history.record(relay, server, forwards, replies);
+            // Only intervals that actually pushed traffic through the relay count.
+            // While the tunnel is held off after a fallback the reply counter can
+            // still tick from packets already in flight, and recording that pair
+            // wrote a "0 forwards, 1 reply" record that describes nothing.
+            if forwards > 0 {
+                self.relay_history.record(relay, server, forwards, replies);
+            }
             let due = self
                 .history_saved_at
                 .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(30));
