@@ -96,6 +96,21 @@ impl RelayHistory {
         self.trim();
     }
 
+    /// Record the watchdog's verdict for the pair.
+    ///
+    /// The no-reply watchdog is the validated instrument: it fires only after its
+    /// own settle window and floor, and the GUI records this once both re-tests
+    /// have failed for the same server. Duplicating its threshold here meant a
+    /// live case it condemned (21 forwards, 2 replies, 10%) fell below this
+    /// module's own floor and was not remembered at all.
+    pub fn record_failure(&mut self, relay: SocketAddrV4, server: Ipv4Addr) {
+        let entry = self.entries.entry(key(relay, server)).or_default();
+        entry.forwards = entry.forwards.max(MIN_FORWARDS);
+        entry.replies = 0;
+        entry.observed_at = now_secs();
+        self.trim();
+    }
+
     /// Whether this relay is on record as not carrying this server.
     pub fn is_starved(&self, relay: SocketAddrV4, server: Ipv4Addr) -> bool {
         self.entries
@@ -241,6 +256,34 @@ mod tests {
             ..stale
         };
         assert!(fresh.is_starved(now));
+    }
+
+    #[test]
+    fn the_watchdogs_verdict_is_remembered_even_on_thin_traffic() {
+        let mut history = RelayHistory::default();
+        // The live case: 21 forwards and 2 replies, under this module's own floor.
+        history.record(relay(), server(), 21, 2);
+        assert!(
+            !history.is_starved(relay(), server()),
+            "thin by volume alone"
+        );
+        history.record_failure(relay(), server());
+        assert!(
+            history.is_starved(relay(), server()),
+            "a verdict from the watchdog is evidence in its own right"
+        );
+    }
+
+    #[test]
+    fn a_later_healthy_session_redeems_a_recorded_failure() {
+        let mut history = RelayHistory::default();
+        history.record_failure(relay(), server());
+        assert!(history.is_starved(relay(), server()));
+        history.record(relay(), server(), 200, 160);
+        assert!(
+            !history.is_starved(relay(), server()),
+            "the verdict must be redeemable by real traffic, not permanent"
+        );
     }
 
     #[test]

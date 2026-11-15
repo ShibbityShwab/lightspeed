@@ -1055,6 +1055,8 @@ pub struct LightSpeedApp<P: Platform> {
     /// When the memory was last written, so a chatty session does not rewrite it
     /// every second.
     history_saved_at: Option<std::time::Instant>,
+    /// The (relay, server) whose watchdog verdict was already written this session.
+    verdict_recorded: Option<String>,
 
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
@@ -1300,6 +1302,7 @@ impl<P: Platform> LightSpeedApp<P> {
             ),
             history_counters: None,
             history_saved_at: None,
+            verdict_recorded: None,
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -2273,6 +2276,47 @@ impl<P: Platform> LightSpeedApp<P> {
     /// is recorded as deltas between polls because the engine's counters are
     /// cumulative, and persisted so a relay that failed is not chosen again after
     /// a restart.
+    /// Remember the watchdog's exhaustion verdict for this relay and server.
+    ///
+    /// Once both re-tests have failed for the same server the relay has been
+    /// condemned on more evidence than this module's own share floor requires, so
+    /// the verdict is recorded directly. Recorded once per session per pair so a
+    /// long hold does not rewrite the file every second.
+    fn record_watchdog_verdict(&mut self) {
+        if !self.relay_rejected_now() {
+            return;
+        }
+        let Some(relay) = self
+            .status
+            .proxy_addr
+            .parse::<std::net::SocketAddrV4>()
+            .ok()
+        else {
+            return;
+        };
+        let Some(server) = self
+            .status
+            .interceptor_server
+            .split(':')
+            .next()
+            .and_then(|ip| ip.parse::<std::net::Ipv4Addr>().ok())
+        else {
+            return;
+        };
+        let key = format!("{relay}|{server}");
+        if self.verdict_recorded.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        self.verdict_recorded = Some(key);
+        self.relay_history.record_failure(relay, server);
+        let _ = self.relay_history.save(&crate::paths::relay_history_file());
+        tracing::info!(
+            relay = %relay,
+            server = %server,
+            "Recorded the watchdog verdict: this relay does not carry this server"
+        );
+    }
+
     fn record_relay_history(&mut self) {
         if !(self.status.interceptor_active || self.status.redirect_active) {
             self.history_counters = None;
@@ -2365,6 +2409,7 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         self.log_latency_comparison();
         self.record_relay_history();
+        self.record_watchdog_verdict();
         if self.status.interceptor_active || self.status.redirect_active {
             let key = self.session_key();
             let stale = self
