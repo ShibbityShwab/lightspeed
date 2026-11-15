@@ -46,10 +46,53 @@ use tokio::sync::oneshot;
 
 use crate::capture::tcp::TcpTerminatorStats;
 use crate::games::TransportProto;
+use crate::interceptor::traits::FlowCounts;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Live-stat counters shared with the engine snapshot
 // ─────────────────────────────────────────────────────────────────────────────
+
+impl WinDivertStats {
+    /// Count one game datagram handed to the relay for `server`.
+    pub fn count_sent(&self, server: Ipv4Addr) {
+        self.with_flow(server, |counts| counts.sent += 1);
+    }
+
+    /// Count one game datagram that came back from the relay for `server`.
+    pub fn count_reply(&self, server: Ipv4Addr) {
+        self.with_flow(server, |counts| counts.replied += 1);
+    }
+
+    fn with_flow(&self, server: Ipv4Addr, update: impl FnOnce(&mut FlowCounts)) {
+        let Ok(mut flows) = self.flows.lock() else {
+            return;
+        };
+        if flows.len() >= MAX_FLOWS && !flows.contains_key(&server) {
+            flows.clear();
+        }
+        update(flows.entry(server).or_default());
+    }
+
+    /// Per-destination counters, busiest first, capped for display.
+    pub fn flows_snapshot(&self) -> Vec<(Ipv4Addr, u64, u64)> {
+        let Ok(flows) = self.flows.lock() else {
+            return Vec::new();
+        };
+        let mut rows: Vec<(Ipv4Addr, u64, u64)> = flows
+            .iter()
+            .map(|(server, counts)| (*server, counts.sent, counts.replied))
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.1));
+        rows.truncate(MAX_FLOW_SNAPSHOT);
+        rows
+    }
+}
+
+/// Destinations tracked before the map is reset. A match uses one.
+const MAX_FLOWS: usize = 32;
+
+/// Destinations carried in one status snapshot.
+const MAX_FLOW_SNAPSHOT: usize = 8;
 
 /// Shared atomic counters filled by the WinDivert redirect task.
 #[derive(Debug, Default)]
@@ -60,6 +103,10 @@ pub struct WinDivertStats {
     pub bytes_intercepted: AtomicU64,
     /// Proxy responses received.
     pub packets_from_proxy: AtomicU64,
+    /// Per game destination (sent, replied): the only pair a reply-ratio verdict
+    /// may rest on. The relay-wide counters above also count keepalives and are
+    /// not attributable to one server.
+    pub flows: std::sync::Mutex<std::collections::HashMap<Ipv4Addr, FlowCounts>>,
     /// Spoofed packets injected back to the game.
     pub packets_injected: AtomicU64,
     /// Bytes injected back to the game.
@@ -964,7 +1011,9 @@ mod inner {
                                 .with_session_token(crate::session::session_token());
                                 let pkt_bytes = hdr.encode_with_payload(&payload);
                                 crate::latency::record_outbound(*game_dst.ip());
-                                let _ = tunnel_socket.send_to(&pkt_bytes, proxy_addr).await;
+                                if tunnel_socket.send_to(&pkt_bytes, proxy_addr).await.is_ok() {
+                                    stats.count_sent(*game_dst.ip());
+                                }
                             }
 
                             tracing::trace!(
@@ -1092,6 +1141,7 @@ mod inner {
 
                     if !header.is_keepalive() {
                         crate::latency::record_inbound(*header.orig_src_addr().ip());
+                        stats.count_reply(*header.orig_src_addr().ip());
                     }
 
                     // Handle keepalive echo

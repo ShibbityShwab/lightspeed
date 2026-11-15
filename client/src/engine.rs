@@ -1352,6 +1352,7 @@ impl LightSpeedEngine {
                     snap.windivert_from_proxy = s.packets_from_proxy.load(Ordering::Relaxed);
                     snap.windivert_injected = s.packets_injected.load(Ordering::Relaxed);
                     snap.windivert_errors = s.errors.load(Ordering::Relaxed);
+                    snap.interceptor_flows = s.flows_snapshot();
                     // Update display string from auto-detected server address.
                     if let Ok(ds) = s.detected_server.lock() {
                         if let Some(addr) = *ds {
@@ -1368,7 +1369,11 @@ impl LightSpeedEngine {
             snap.interceptor_intercepted = ist.packets_intercepted;
             snap.interceptor_seen = ist.packets_seen;
             snap.interceptor_tunnel_sent = ist.packets_tunnel_sent;
-            snap.interceptor_flows = ist.flows.clone();
+            // The redirect path fills the same field; do not clobber it with this
+            // path's empty map when only one of the two is running.
+            if !ist.flows.is_empty() {
+                snap.interceptor_flows = ist.flows.clone();
+            }
             snap.capture_diagnosis = ist.capture_diagnosis.clone();
             snap.tunnelling_enabled = ist.tunnelling_enabled;
             snap.bypass_advantage_ms = ist.bypass_advantage_ms;

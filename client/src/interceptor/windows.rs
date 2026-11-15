@@ -1583,6 +1583,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                         counters_t
                                             .packets_tunnel_sent
                                             .fetch_add(1, Ordering::Relaxed);
+                                        // Per destination as well: this branch sends to
+                                        // one or more relays, and the reply ratio has
+                                        // to see every transmission the reply could
+                                        // have come back from.
+                                        counters_t.count_sent(*game_dst.ip());
                                     }
                                 }
                             }
