@@ -1048,6 +1048,13 @@ pub struct LightSpeedApp<P: Platform> {
     /// When the latency comparison was last logged, so the trace carries a
     /// periodic record of what each path is doing without flooding it.
     compared_at: Option<std::time::Instant>,
+    /// What each relay has done for each game server, across sessions.
+    relay_history: crate::relay_history::RelayHistory,
+    /// Counters as of the last poll, so only this interval's deltas are recorded.
+    history_counters: Option<(u64, u64)>,
+    /// When the memory was last written, so a chatty session does not rewrite it
+    /// every second.
+    history_saved_at: Option<std::time::Instant>,
 
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
@@ -1288,6 +1295,11 @@ impl<P: Platform> LightSpeedApp<P> {
             server_ping: None,
             ping_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             compared_at: None,
+            relay_history: crate::relay_history::RelayHistory::load(
+                &crate::paths::relay_history_file(),
+            ),
+            history_counters: None,
+            history_saved_at: None,
             last_presence_check: None,
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -1588,6 +1600,30 @@ impl<P: Platform> LightSpeedApp<P> {
 
         if candidates.is_empty() {
             return None;
+        }
+
+        // A relay on record as not carrying this server is skipped: that ratio was
+        // measured, not inferred, and re-testing the same relay for the same server
+        // every session is what made the window flap. If every candidate is on
+        // record, they are still the only option, so the unfiltered list stands.
+        let survivors: Vec<RelayCandidate> = candidates
+            .iter()
+            .filter(|candidate| !self.relay_history.is_starved(candidate.relay, server))
+            .cloned()
+            .collect();
+        let skipped = candidates.len() - survivors.len();
+        let candidates = if survivors.is_empty() {
+            candidates
+        } else {
+            survivors
+        };
+        if skipped > 0 {
+            tracing::info!(
+                server = %server,
+                skipped,
+                remaining = candidates.len(),
+                "Relays on record as not carrying this server were skipped"
+            );
         }
 
         // The measured direct ping bounds every relay's destination leg: a
@@ -2229,6 +2265,59 @@ impl<P: Platform> LightSpeedApp<P> {
         );
     }
 
+    /// Remember what the current relay is doing for the game server.
+    ///
+    /// This is the one quality signal the client can measure exactly: an aggregate
+    /// ratio of replies to forwards needs no per-packet attribution, which is the
+    /// flaw that made every latency estimator here produce impossible numbers. It
+    /// is recorded as deltas between polls because the engine's counters are
+    /// cumulative, and persisted so a relay that failed is not chosen again after
+    /// a restart.
+    fn record_relay_history(&mut self) {
+        if !(self.status.interceptor_active || self.status.redirect_active) {
+            self.history_counters = None;
+            return;
+        }
+        let Some(relay) = self
+            .status
+            .proxy_addr
+            .parse::<std::net::SocketAddrV4>()
+            .ok()
+        else {
+            return;
+        };
+        let Some(server) = self
+            .status
+            .interceptor_server
+            .split(':')
+            .next()
+            .and_then(|ip| ip.parse::<std::net::Ipv4Addr>().ok())
+        else {
+            return;
+        };
+        let forwarded = self.session_sent().unwrap_or(0);
+        let returned = returned_count(
+            self.status.redirect_active,
+            self.status.redirect_pkts_in,
+            self.status.interceptor_active,
+            self.status.interceptor_from_proxy,
+        )
+        .unwrap_or(0);
+        if let Some((last_forwarded, last_returned)) = self.history_counters {
+            let forwards = forwarded.saturating_sub(last_forwarded);
+            let replies = returned.saturating_sub(last_returned);
+            self.relay_history.record(relay, server, forwards, replies);
+            let due = self
+                .history_saved_at
+                .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(30));
+            if due {
+                self.history_saved_at = Some(std::time::Instant::now());
+                let _ = self.relay_history.save(&crate::paths::relay_history_file());
+            }
+        }
+        self.history_counters = Some((forwarded, returned));
+    }
+
     /// Read the measured direct ping to the game server, and start a burst when
     /// the figure is missing or old.
     ///
@@ -2273,6 +2362,7 @@ impl<P: Platform> LightSpeedApp<P> {
             self.refresh_server_ping(*server.ip());
         }
         self.log_latency_comparison();
+        self.record_relay_history();
         if self.status.interceptor_active || self.status.redirect_active {
             let key = self.session_key();
             let stale = self

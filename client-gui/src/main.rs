@@ -18,6 +18,7 @@ mod paths;
 mod platform;
 mod processes;
 mod race_watch;
+mod relay_history;
 mod self_update;
 mod single_instance;
 mod update;

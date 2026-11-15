@@ -21,6 +21,12 @@ pub fn log_file() -> PathBuf {
 }
 
 /// `gui-crash.log`: panic/fatal records written by [`crate::crash`].
+/// `relay-history.json`: what each relay did for each game server, across
+/// sessions. Machine state, not user configuration.
+pub fn relay_history_file() -> PathBuf {
+    data_dir().join("relay-history.json")
+}
+
 pub fn crash_log() -> PathBuf {
     data_dir().join("gui-crash.log")
 }
