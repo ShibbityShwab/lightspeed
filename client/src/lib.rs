@@ -32,6 +32,15 @@ pub use route::destination::{
     RelayDestinationEstimator as DestinationEstimator,
 };
 
+/// The relay the data plane is currently sending to.
+///
+/// Distinct from whatever the window displays: the keepalive's relay and the
+/// interceptor's relay are set at different moments, so a reading keyed on the
+/// display value can attribute one relay's traffic to another.
+pub fn current_relay() -> Option<std::net::SocketAddrV4> {
+    crate::session::current_proxy()
+}
+
 pub(crate) mod capture;
 pub(crate) mod cli;
 pub(crate) mod config;

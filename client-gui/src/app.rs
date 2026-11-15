@@ -2322,12 +2322,16 @@ impl<P: Platform> LightSpeedApp<P> {
             self.history_counters = None;
             return;
         }
-        let Some(relay) = self
-            .status
-            .proxy_addr
-            .parse::<std::net::SocketAddrV4>()
-            .ok()
-        else {
+        // The interceptor's relay, not the one the window shows: those are set at
+        // different moments, and keying on the wrong one attributed EWR's traffic
+        // to LAX - LAX's record for one server jumped from 55 to 592 forwards
+        // while EWR was carrying it.
+        let Some(relay) = lightspeed_client::current_relay().or_else(|| {
+            self.status
+                .proxy_addr
+                .parse::<std::net::SocketAddrV4>()
+                .ok()
+        }) else {
             return;
         };
         let Some(server) = self
