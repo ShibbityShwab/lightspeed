@@ -2299,12 +2299,12 @@ impl<P: Platform> LightSpeedApp<P> {
         if !self.relay_rejected_now() {
             return;
         }
-        let Some(relay) = self
-            .status
-            .proxy_addr
-            .parse::<std::net::SocketAddrV4>()
-            .ok()
-        else {
+        let Some(relay) = lightspeed_client::current_relay().or_else(|| {
+            self.status
+                .proxy_addr
+                .parse::<std::net::SocketAddrV4>()
+                .ok()
+        }) else {
             return;
         };
         let Some(server) = self
@@ -2318,6 +2318,22 @@ impl<P: Platform> LightSpeedApp<P> {
         };
         let key = format!("{relay}|{server}");
         if self.verdict_recorded.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        // A window that starved while the session as a whole was returning
+        // normally is noise, not a verdict. MAD was condemned on such a window for
+        // a server it was answering 112% of the traffic for.
+        if self
+            .relay_history
+            .carries(relay, server, crate::relay_history::now_secs())
+        {
+            self.verdict_recorded = Some(key);
+            tracing::info!(
+                relay = %relay,
+                server = %server,
+                "Watchdog fired but the measured ratio says this relay carries the \
+                 server; no verdict recorded"
+            );
             return;
         }
         self.verdict_recorded = Some(key);

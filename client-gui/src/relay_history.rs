@@ -26,6 +26,10 @@ pub const STARVED_SHARE: f64 = 0.25;
 /// twenty packets and seen one reply is a quiet match, not a broken relay.
 pub const MIN_FORWARDS: u64 = 40;
 
+/// How recent a measurement has to be to outrank a watchdog window verdict. The
+/// recorder writes every 30 s, so two minutes is recent by construction.
+const CORROBORATION_WINDOW: Duration = Duration::from_secs(120);
+
 /// How long a verdict is remembered. A relay's route to a server is stable for
 /// hours, not days, and a stale verdict must not outlive the conditions.
 pub const VERDICT_TTL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -83,7 +87,7 @@ fn key(relay: SocketAddrV4, server: Ipv4Addr) -> String {
     format!("{}|{}", relay, server)
 }
 
-fn now_secs() -> u64 {
+pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -120,6 +124,24 @@ impl RelayHistory {
         entry.replies = 0;
         entry.observed_at = now_secs();
         self.trim();
+    }
+
+    /// Whether the measured record for this pair says, within the last two
+    /// minutes, that the relay is carrying the server.
+    ///
+    /// The watchdog judges short windows, and a short window starves on sparse
+    /// traffic that a longer measurement shows returning normally. When that
+    /// longer measurement is fresh it outranks the window: MAD was recorded as a
+    /// failed relay for a server it was in fact returning 112% of the traffic for,
+    /// and the exclusion that followed cost a relay that worked.
+    pub fn carries(&self, relay: SocketAddrV4, server: Ipv4Addr, now: u64) -> bool {
+        self.entries
+            .get(&format!("{relay}|{server}"))
+            .is_some_and(|record| {
+                record.forwards >= MIN_FORWARDS
+                    && record.answered_share() >= STARVED_SHARE
+                    && now.saturating_sub(record.observed_at) <= CORROBORATION_WINDOW.as_secs()
+            })
     }
 
     /// How many distinct relays are on record as not carrying this server.
@@ -337,6 +359,26 @@ mod tests {
         assert!(
             plenty.is_starved(now),
             "20% over a large sample is still a verdict"
+        );
+    }
+
+    #[test]
+    fn fresh_measurement_outranks_a_short_window() {
+        let mut history = RelayHistory::default();
+        let now = now_secs();
+        assert!(
+            !history.carries(relay(), server(), now),
+            "nothing measured yet"
+        );
+        history.record(relay(), server(), 200, 160);
+        assert!(
+            history.carries(relay(), server(), now),
+            "80% answered is a relay that carries the server"
+        );
+        history.record_failure(relay(), server());
+        assert!(
+            !history.carries(relay(), server(), now),
+            "a failure verdict replaces the measurement"
         );
     }
 
