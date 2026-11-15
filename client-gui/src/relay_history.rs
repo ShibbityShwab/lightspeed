@@ -55,9 +55,20 @@ impl Record {
 
     /// Whether this record is damning: enough traffic to judge, and too few
     /// replies for the relay to be considered to be carrying the server.
+    ///
+    /// Thin evidence has to clear a stricter bar. A record at the floor with a
+    /// share a hair under a quarter is a quiet stretch, not a verdict: live traffic
+    /// produced 41 forwards and 10 replies (24.4%) and condemned a relay on it.
+    /// Below twice the floor the share must be half as bad, which is the difference
+    /// between "this relay is dropping the server" and "this server was quiet".
     pub fn is_starved(&self, now: u64) -> bool {
+        let share_bar = if self.forwards < MIN_FORWARDS * 2 {
+            STARVED_SHARE / 2.0
+        } else {
+            STARVED_SHARE
+        };
         self.forwards >= MIN_FORWARDS
-            && self.answered_share() < STARVED_SHARE
+            && self.answered_share() < share_bar
             && now.saturating_sub(self.observed_at) <= VERDICT_TTL.as_secs()
     }
 }
@@ -283,6 +294,35 @@ mod tests {
         assert!(
             !history.is_starved(relay(), server()),
             "the verdict must be redeemable by real traffic, not permanent"
+        );
+    }
+
+    #[test]
+    fn thin_evidence_needs_a_wider_margin() {
+        let now = now_secs();
+        let marginal = Record {
+            forwards: MIN_FORWARDS + 1,
+            replies: (MIN_FORWARDS + 1) / 5,
+            observed_at: now,
+        };
+        assert!(
+            !marginal.is_starved(now),
+            "24% on thin traffic is a quiet stretch, not a verdict"
+        );
+        let damning = Record {
+            forwards: MIN_FORWARDS + 1,
+            replies: (MIN_FORWARDS + 1) / 20,
+            observed_at: now,
+        };
+        assert!(damning.is_starved(now));
+        let plenty = Record {
+            forwards: MIN_FORWARDS * 10,
+            replies: MIN_FORWARDS * 2,
+            observed_at: now,
+        };
+        assert!(
+            plenty.is_starved(now),
+            "20% over a large sample is still a verdict"
         );
     }
 
