@@ -67,9 +67,20 @@ pub const RELAYED_RING_CAPACITY: usize = 256;
 /// How long a shadow-direct sample waits for the server's reply before it is
 /// discarded, so a stale timestamp cannot pair with a much later packet.
 pub const SHADOW_DIRECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A shadow sample below this fraction of the measured ICMP RTT to the same
+/// server is a pairing error, not a fast path. On a streaming flow the "next"
+/// inbound datagram is usually not the reply, so a sample can land an
+/// inter-packet gap after the outbound: live traffic produced 6.4 ms against an
+/// ICMP RTT of 299 ms, which no un-relayed round trip can be.
+const SHADOW_MIN_FRACTION_OF_ICMP: f32 = 0.5;
+
+/// Samples needed on both sides before the windows may be compared at all. One
+/// sample each is enough to compare two wrong numbers.
+const MIN_COMPARABLE_SAMPLES: usize = 8;
 /// Minimum interval between shadow-direct samples for the same server. At most
 /// one of the game's own packets per server per interval is timed directly.
-pub const SHADOW_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
+pub const SHADOW_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 /// How long a stored shadow-direct median remains reportable.
 pub const SHADOW_DIRECT_TTL: Duration = Duration::from_secs(300);
 /// Rolling window capacity for shadow-direct application RTT samples.
@@ -599,6 +610,17 @@ impl LatencyTracker {
         if !rtt_ms.is_finite() || rtt_ms <= 0.0 {
             return;
         }
+        // Faster than the direct path can be is a pairing error, not a path: the
+        // "next" inbound on a streaming flow is usually not the reply.
+        if let Some(icmp_p50) = inner
+            .direct_history
+            .get(&server)
+            .and_then(|history| history.back().copied())
+        {
+            if (rtt_ms as f32) < icmp_p50 * SHADOW_MIN_FRACTION_OF_ICMP {
+                return;
+            }
+        }
         if inner.shadow_server != Some(server) {
             inner.shadow.clear();
             inner.shadow_server = Some(server);
@@ -661,6 +683,11 @@ impl LatencyTracker {
         }
         let measured_at = inner.shadow_measured_at?;
         if now.saturating_duration_since(measured_at) >= SHADOW_DIRECT_TTL {
+            return None;
+        }
+        if inner.shadow.len() < MIN_COMPARABLE_SAMPLES
+            || inner.relayed.len() < MIN_COMPARABLE_SAMPLES
+        {
             return None;
         }
         Some(LikeForLike {
@@ -1360,14 +1387,17 @@ mod tests {
             "a second sample inside the interval must be refused"
         );
 
-        clock.advance(Duration::from_secs(29));
+        clock.advance(SHADOW_SAMPLE_INTERVAL - Duration::from_secs(1));
         assert!(
             !t.record_shadow_outbound(SERVER),
             "still inside the interval"
         );
 
         clock.advance(Duration::from_secs(1));
-        assert!(t.record_shadow_outbound(SERVER), "due again at 30s");
+        assert!(
+            t.record_shadow_outbound(SERVER),
+            "due again at the interval"
+        );
 
         assert!(
             t.record_shadow_outbound(OTHER_SERVER),
@@ -1543,20 +1573,56 @@ mod tests {
     }
 
     #[test]
+    fn a_shadow_sample_faster_than_the_direct_path_is_discarded() {
+        // Live case: a 6.4 ms "round trip" to a server whose ICMP RTT is 299 ms.
+        // On a streaming flow the next inbound datagram is usually not the reply,
+        // so the pairing times one inter-packet gap. That must never reach the
+        // window, where it would claim direct beats the relay by 290 ms.
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(
+            Arc::new(ScriptedProber::new(vec![
+                Some(299.0),
+                Some(299.0),
+                Some(299.0),
+            ])),
+            clock.clone(),
+        );
+        assert_eq!(t.run_direct_burst(SERVER), Some(299.0));
+
+        assert!(t.record_shadow_outbound(SERVER));
+        clock.advance(Duration::from_millis(6));
+        t.record_shadow_inbound(SERVER);
+        assert_eq!(
+            t.shadow_direct_samples(),
+            0,
+            "6 ms against a 299 ms path is a pairing error, not a sample"
+        );
+
+        // A plausible one still lands.
+        clock.advance(SHADOW_SAMPLE_INTERVAL);
+        assert!(t.record_shadow_outbound(SERVER));
+        clock.advance(Duration::from_millis(300));
+        t.record_shadow_inbound(SERVER);
+        assert_eq!(t.shadow_direct_samples(), 1);
+    }
+
+    #[test]
     fn like_for_like_pairs_same_server_shadow_and_relayed_windows() {
         let clock = Arc::new(TestClock::new());
         let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
 
-        paired_windows(&t, &clock, SERVER, 40, 80);
-        clock.advance(Duration::from_secs(30));
-        paired_windows(&t, &clock, SERVER, 50, 100);
+        // A comparison needs a real window on both sides, not one sample.
+        for i in 0..MIN_COMPARABLE_SAMPLES {
+            paired_windows(&t, &clock, SERVER, 40 + i as u64, 80 + i as u64);
+            clock.advance(Duration::from_secs(6));
+        }
 
         let paired = t
             .like_for_like()
             .expect("same-server shadow and relayed windows must pair");
         assert_eq!(paired.server, SERVER);
-        assert_eq!(paired.relay_samples, 2);
-        assert_eq!(paired.shadow_samples, 2);
+        assert_eq!(paired.relay_samples, MIN_COMPARABLE_SAMPLES as u32);
+        assert_eq!(paired.shadow_samples, MIN_COMPARABLE_SAMPLES as u32);
         assert!(
             paired.direct_app_p50_ms > paired.relay_app_p50_ms,
             "the shadow-direct median must describe the slower direct path here"
@@ -1604,7 +1670,10 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
 
-        paired_windows(&t, &clock, SERVER, 40, 80);
+        for i in 0..MIN_COMPARABLE_SAMPLES {
+            paired_windows(&t, &clock, SERVER, 40 + i as u64, 80 + i as u64);
+            clock.advance(Duration::from_secs(6));
+        }
         assert!(
             t.like_for_like().is_some(),
             "a fresh pair must be usable before it goes stale"

@@ -2301,9 +2301,19 @@ impl<P: Platform> LightSpeedApp<P> {
             direct_ms = self.server_ping.map(|(ms, _)| ms),
             direct_jitter_ms = server.map(lightspeed_client::latency::direct_jitter),
             shadow_jitter_ms = lightspeed_client::latency::shadow_direct_jitter_ms(),
+            shadow_samples = lightspeed_client::latency::shadow_direct_samples(),
+            shadow_app_ms = lightspeed_client::latency::shadow_direct_p50_ms(),
+            relay_samples = lightspeed_client::latency::relayed_samples(),
+            relay_app_ms = lightspeed_client::latency::relayed_p50_ms(),
             relay_ms = self.status.latest_rtt_ms,
             relay_spread_ms = relay_spread,
             relayed_jitter_ms = lightspeed_client::latency::relayed_jitter_ms(),
+            like_for_like = ?lightspeed_client::latency::like_for_like().map(|c| (
+                c.direct_app_p50_ms,
+                c.relay_app_p50_ms,
+                c.shadow_samples,
+                c.relay_samples,
+            )),
             relay = %self.status.proxy_addr,
             "Latency comparison"
         );
