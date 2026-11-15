@@ -38,6 +38,11 @@ pub struct InterceptorHealth {
     /// with `packets_from_proxy` also rising is an injection fault.
     pub errors: u64,
     pub tunnelling_enabled: Option<bool>,
+    /// This server's own sent/replied counters, when the interceptor has seen
+    /// traffic for it. The window counters above are relay-wide; this pair is the
+    /// only one that can say whether *this* server is being carried, which is why
+    /// a healthy share here outranks a thin window.
+    pub flow: Option<(u64, u64)>,
 }
 
 /// Snapshot of tunnel state - cheap to clone, safe to share.
@@ -976,6 +981,13 @@ impl LightSpeedEngine {
                 last_error: stats.last_error,
                 errors: stats.errors,
                 tunnelling_enabled: stats.tunnelling_enabled,
+                flow: stats.detected_server.and_then(|server| {
+                    stats
+                        .flows
+                        .iter()
+                        .find(|(addr, _, _)| *addr == *server.ip())
+                        .map(|(_, sent, replied)| (*sent, *replied))
+                }),
             }
         })
     }

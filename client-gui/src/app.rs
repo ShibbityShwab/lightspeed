@@ -110,6 +110,10 @@ struct RelayReplyWatch {
     baseline_intercepted: u64,
     baseline_injected: u64,
     baseline_from_proxy: u64,
+    /// This server's own counters when the watch started, so the corroboration
+    /// covers the same window the relay-wide counters do.
+    baseline_flow_sent: u64,
+    baseline_flow_replied: u64,
     started: std::time::Instant,
 }
 
@@ -177,12 +181,24 @@ fn relay_reply_fault(
     intercepted_since: u64,
     injected_since: u64,
     from_proxy_since: u64,
+    flow: Option<(u64, u64)>,
 ) -> Option<RelayReplyFault> {
     if elapsed < RELAY_REPLY_TIMEOUT
         || intercepted_since < RELAY_REPLY_MIN_INTERCEPTED
         || injected_since.saturating_mul(4) >= intercepted_since
     {
         return None;
+    }
+    // The window counts every destination the interceptor carries; the flow pair
+    // counts this server alone. When the server's own share is healthy, the
+    // window is seeing other traffic (or a mid-session relay switch) and dropping
+    // to direct would abandon a relay that is working. Live evidence: a window
+    // read 152 intercepted / 16 returned while the server's own counters were
+    // 528 sent / 520 replied - 98.5%.
+    if let Some((sent, replied)) = flow {
+        if sent >= RELAY_REPLY_MIN_INTERCEPTED && replied.saturating_mul(4) >= sent {
+            return None;
+        }
     }
     if from_proxy_since == 0 {
         Some(RelayReplyFault::NoReplyFromRelay)
@@ -302,6 +318,8 @@ fn spawn_relay_reply_watchdog(
                     baseline_intercepted: health.packets_intercepted,
                     baseline_injected: health.packets_injected,
                     baseline_from_proxy: health.packets_from_proxy,
+                    baseline_flow_sent: health.flow.map(|(sent, _)| sent).unwrap_or(0),
+                    baseline_flow_replied: health.flow.map(|(_, replied)| replied).unwrap_or(0),
                     started: now,
                 },
             };
@@ -314,11 +332,21 @@ fn spawn_relay_reply_watchdog(
             let from_proxy_since = health
                 .packets_from_proxy
                 .saturating_sub(current.baseline_from_proxy);
+            let (flow_sent, flow_replied) = health
+                .flow
+                .map(|(sent, replied)| {
+                    (
+                        sent.saturating_sub(current.baseline_flow_sent),
+                        replied.saturating_sub(current.baseline_flow_replied),
+                    )
+                })
+                .unwrap_or((0, 0));
             let fault = relay_reply_fault(
                 now.duration_since(current.started),
                 intercepted_since,
                 injected_since,
                 from_proxy_since,
+                Some((flow_sent, flow_replied)),
             );
             match fault {
                 Some(fault) => {
@@ -5747,19 +5775,50 @@ mod tests {
                 RELAY_REPLY_TIMEOUT - std::time::Duration::from_millis(1),
                 100,
                 0,
-                0
+                0,
+                None
             ),
             None
         );
         assert_eq!(
-            relay_reply_fault(RELAY_REPLY_TIMEOUT, RELAY_REPLY_MIN_INTERCEPTED - 1, 0, 0),
+            relay_reply_fault(
+                RELAY_REPLY_TIMEOUT,
+                RELAY_REPLY_MIN_INTERCEPTED - 1,
+                0,
+                0,
+                None
+            ),
             None
         );
         // A quarter back is not enough; a relay returning a trickle must not
         // keep a starving session on the tunnel.
-        assert_eq!(relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 25, 25), None);
         assert_eq!(
-            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 24, 24),
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 25, 25, None),
+            None
+        );
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 24, 24, None),
+            Some(RelayReplyFault::TooFewReplies)
+        );
+    }
+
+    #[test]
+    fn a_healthy_server_share_outranks_a_starving_window() {
+        // The live case: the relay-wide window read 152 intercepted against 16
+        // returned, while this server's own counters were 528 sent and 520
+        // replied - 98.5%. Falling back would have abandoned a working relay.
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 152, 16, 16, Some((528, 520))),
+            None
+        );
+        // A thin flow cannot vouch for the relay: it has not measured enough.
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 152, 16, 16, Some((5, 5))),
+            Some(RelayReplyFault::TooFewReplies)
+        );
+        // A server whose own counters are poor is still a fault.
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 152, 16, 16, Some((400, 20))),
             Some(RelayReplyFault::TooFewReplies)
         );
     }
@@ -5770,11 +5829,11 @@ mod tests {
         // is the relay fleet, while a relay that answered and produced nothing
         // on screen is ours. The counters distinguish them, so the log must too.
         assert_eq!(
-            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 0, 0),
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 0, 0, None),
             Some(RelayReplyFault::NoReplyFromRelay)
         );
         assert_eq!(
-            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 0, 9),
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 0, 9, None),
             Some(RelayReplyFault::InjectionFailed)
         );
         let message = relay_reply_fault_message(
@@ -6319,12 +6378,12 @@ mod tests {
         // The live failure: 7 packets, 1 reply, called starving while the
         // session's own total was 187 replies for 309 sends.
         assert_eq!(
-            super::relay_reply_fault(super::RELAY_REPLY_TIMEOUT, 7, 0, 1),
+            super::relay_reply_fault(super::RELAY_REPLY_TIMEOUT, 7, 0, 1, None),
             None,
             "a seven-packet window is too small to judge"
         );
         assert_eq!(
-            super::relay_reply_fault(super::RELAY_REPLY_TIMEOUT, 40, 0, 0),
+            super::relay_reply_fault(super::RELAY_REPLY_TIMEOUT, 40, 0, 0, None),
             Some(super::RelayReplyFault::NoReplyFromRelay),
             "a real sample with no replies at all is still a fallback"
         );
@@ -6334,12 +6393,12 @@ mod tests {
     fn one_returned_datagram_is_not_an_injection_fault() {
         let elapsed = super::RELAY_REPLY_TIMEOUT;
         assert_eq!(
-            super::relay_reply_fault(elapsed, 60, 0, 1),
+            super::relay_reply_fault(elapsed, 60, 0, 1, None),
             Some(super::RelayReplyFault::TooFewReplies),
             "a single reply is a quiet relay, not a broken injector"
         );
         assert_eq!(
-            super::relay_reply_fault(elapsed, 600, 0, 40),
+            super::relay_reply_fault(elapsed, 600, 0, 40, None),
             Some(super::RelayReplyFault::InjectionFailed),
             "a run of returns with zero injections is the injector"
         );
