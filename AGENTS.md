@@ -54,9 +54,10 @@ the final answer. A teammate's summary is a claim, not evidence.
   POSIX-only script as a workaround. `git` runs directly.
 - Use DSH tools: `read`/`write`/`edit` for files, `grep`/`glob` for discovery,
   `pwsh` for commands. No `cat`/`sed`/`find`/`findstr`.
-- Rust toolchain 1.100.0 is installed. `python`/`python3` are Store stubs; `py`
-  is missing. Localization and `tools/*.py` need a real CPython — a documented
-  prerequisite, not an assumption to fake.
+- Rust toolchain 1.100.0 is installed. CPython 3.12 is installed (user PATH;
+  a shell started before the install needs a restart to see `py`). The Store
+  aliases `python`/`python3` are not interpreters — use `py -3` or
+  `scripts/Localization.ps1`.
 - Linux relay scripts (`infra/scripts/*.sh`) and macOS packaging are
   remote/CI work. Say so; do not port them to the desktop.
 - Details, gates and GUI quirks: skill `lightspeed-windows`.

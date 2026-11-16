@@ -55,15 +55,21 @@ with DSH emitting the removal notice; all relative links in changed docs resolve
 Full audit: `docs/agent-system-audit-2026-11-16.md`.
 
 **Not run:** `cargo audit` / `cargo deny` (not installed on this host; the script
-reports them SKIPPED, CI's security workflow owns them), the GUI crate gates
-(`-SkipGui`; no GUI source changed) and the localization gates (need CPython,
-which this host does not have). Two pre-existing `unused dependency` manifest
+reports them SKIPPED, CI's security workflow owns them) and the GUI crate gates
+(`-SkipGui`; no GUI source changed). Two pre-existing `unused dependency` manifest
 warnings remain in `client/Cargo.toml` (`rcgen`, `windivert`) — untouched by this
 change.
 
+**Localization, after CPython 3.12.10 was installed (same day):**
+`scripts/Localization.ps1 -Check` -> catalog up to date (403 keys), 8 locale
+pages up to date, 48 localized docs carry the banner, translations in step with
+English. The bash-to-Python port is therefore executed and green on Windows, not
+just structurally ported.
+
 **Open:** Team mode is per-session and must be enabled by the owner (model &
-reasoning menu -> Use Agent Teams); CPython install is an owner decision; the
-ported localization scripts have not been executed here.
+reasoning menu -> Use Agent Teams); the ported localization scripts are now
+executed here, but `tools/e2e_test.py` and `tools/load_test.py` still need a live
+relay to be exercised.
 
 ### 2026-11-14 - WF-057 interface design: the state contract, then the layout
 

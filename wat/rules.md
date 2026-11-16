@@ -117,9 +117,10 @@ The development host is Windows. Agents must not need a POSIX emulation layer.
   do not port it to the desktop or pretend it ran.
 - PowerShell 5.1 has no `??`, no ternary, no `ProcessStartInfo.ArgumentList`;
   prefer cmdlets, `-ErrorAction`, and `$LASTEXITCODE` checks.
-- Never use `python`, `python3` or `py` as if they exist: this host has the
-  Microsoft Store stubs only (`python` exits 9009). Localization tooling that
-  needs CPython is a documented prerequisite, not a silent assumption.
+- CPython 3.12 is installed at `%LOCALAPPDATA%\Programs\Python\Python312` and
+  `py` is on the user PATH; a shell started before the install needs a restart
+  to see it. Use `py -3` or `scripts/Localization.ps1`. The Store aliases
+  `python`/`python3` are stubs (exit 9009) and are never the interpreter.
 - `cmd`/batch files must keep CRLF (`.gitattributes` enforces it); everything
   else is LF in the worktree.
 

@@ -34,16 +34,16 @@ it; do not substitute a POSIX habit.
 | `git` | Installed (`C:\Program Files\Git\cmd\git.exe`) |
 | `node` | Installed |
 | `gh`, `winget` | Installed |
-| `python` / `python3` | **Microsoft Store stubs only** — `python -c ...` exits 9009 |
-| `py` | Missing (no `C:\Windows\py.exe`) |
+| `python` / `python3` | **Microsoft Store stubs** — `python -c ...` exits 9009 |
+| `py` / `python` (real) | **CPython 3.12.10 installed** at `%LOCALAPPDATA%\Programs\Python\Python312`; `py` is on the user PATH, so a shell started before 2026-11-16 needs a restart to see it |
 | `pnpm`, `docker`, `choco`, `scoop` | Missing |
 
 Consequences:
 
-- The localization pipeline (`scripts/`), `tools/e2e_test.py`, `tools/load_test.py`
-  and `scripts/sync-wiki.py` need a real CPython 3.8+. That is a documented
-  prerequisite (`winget install Python.Python.3.12`, then use `py -3`), not
-  something to fake. Without it, say the step cannot run here.
+- Localization and `tools/*.py` run with `py -3 ...` or
+  `scripts/Localization.ps1` (which resolves the interpreter). If `py` is not
+  found, pass `-Python` the full path; the Store aliases are still not real
+  interpreters.
 - Relay operations (`infra/scripts/*.sh`) are Linux artifacts. They run on the
   relay hosts and in CI, never on this desktop.
 

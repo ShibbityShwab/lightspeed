@@ -247,3 +247,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Migrate-PhaseLog.ps1 -
 The tool prints block counts, dropped duplicate line ranges, month assignment and
 the files it writes. It refuses to run once the log contains a `## History`
 section.
+
+---
+
+## Addendum (same day): CPython installed, localization gates run
+
+The owner approved installing CPython, so the one residual risk that could be
+closed on this host was closed and exercised:
+
+```powershell
+winget install --id Python.Python.3.12 --exact --source winget `
+  --accept-package-agreements --accept-source-agreements --disable-interactivity
+# -> Python 3.12.10 at %LOCALAPPDATA%\Programs\Python\Python312
+
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Localization.ps1 -Check
+```
+
+Result: `catalog up to date (403 keys)`; `8 locale page(s) up to date`;
+`48 localized page(s) checked`; `localization is in step with English`;
+exit 0.
+
+This matters beyond the install itself: it is the **first execution** of the
+ported `.py` entry points and the PowerShell runner. The port was structural
+(embedded Python bodies moved verbatim), and it produced byte-identical checks
+to the bash pipeline — so the bash dependency is gone in practice, not only on
+paper. A shell started before the install finds `py` on PATH only after a
+restart; `scripts/Localization.ps1 -Python <full path>` is the fallback.
+
+Residual risk 2 above is therefore resolved for this host. The Store aliases
+`python`/`python3` still exit 9009 and are documented as non-interpreters.

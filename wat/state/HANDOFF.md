@@ -43,11 +43,14 @@ the eight community relays are sponsor-funded (decision 2026-09-13).
 
 1. **Shell is Windows PowerShell 5.1.** `pwsh` is not installed. No Git Bash, no
    WSL, no `bash script.sh`. `git` runs directly.
-2. **Python is absent.** `python`/`python3` are Microsoft Store stubs (exit 9009),
-   `py` is missing. Localization scripts and `tools/*.py` need a real CPython —
-   a documented prerequisite, not a silent assumption.
+2. **CPython 3.12 is installed** at `%LOCALAPPDATA%\Programs\Python\Python312`
+   (per-user, PATH updated). A shell started before 2026-11-16 does not see it;
+   restart the shell or pass `-Python` the full path. The Microsoft Store
+   aliases `python`/`python3` are still stubs (exit 9009).
 3. **Rust is installed** (1.100.0, matching `rust-toolchain.toml`); `cargo fmt`,
-   clippy and tests run locally. The localization workflow cannot.
+   clippy and tests run locally, and the localization gates now run too
+   (`scripts/Localization.ps1 -Check` passed: 403 catalog keys, 8 locale pages,
+   48 localized docs).
 4. **Elevation does not propagate into the agent shell.** A medium-integrity
    shell cannot stop an elevated GUI, and a running GUI locks its own exe. Use
    `scripts/dev-gui.ps1 -Elevate`, stop from the tray, verify installs by size
