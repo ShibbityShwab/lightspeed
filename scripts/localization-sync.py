@@ -21,6 +21,13 @@ translation - one character, not a token ending in a digit, because a translator
 reliably renumbers anything that looks like a number - and are verified after:
 a dropped placeholder would silently remove a link or a command from a page.
 
+Docs are translated with their markdown code held out of the translator: fenced
+blocks and inline code spans become `[[n]]` tokens (the public service converts
+backticks to typographic quotes, which used to corrupt every fence and make
+`code_commands` reject the result), the prose is translated, and the code is put
+back byte-for-byte. A source that already contains the token form is reported
+rather than risk mis-restoring it.
+
 The translator is a free, account-less public service, because ``[COST_STUB]``
 rules out a paid API and an account-bound key in a CI secret is one more thing
 that silently expires. Public instances come and go (one measured here answered
@@ -92,6 +99,10 @@ FENCE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
 EXECUTABLE = re.compile(r"^[./]?[a-z][a-z0-9_.+-]*$")
 
 SKIP_SHORTER_THAN = 3
+
+# Attempts per changed page: the public translator occasionally drops a
+# placeholder, and that is random rather than a property of the copy.
+TRANSLATE_ATTEMPTS = 3
 
 
 class Translator:
@@ -171,6 +182,92 @@ def code_commands(text: str) -> list[str]:
     return out
 
 
+# Fenced blocks first, then inline spans, then any stray backtick. The
+# translator (a public Google/LibreTranslate-style text endpoint) turns backticks
+# into typographic quotes, so code must never reach it.
+MARKDOWN_CODE = re.compile(r"```[a-zA-Z]*\n.*?```|`[^`\n]*`|`", re.DOTALL)
+# Restore token. Alphanumeric gibberish: probed against the live endpoint for
+# de/ja/ru, it survives translation unchanged, unlike private-use characters
+# (dropped inline), `[[n]]` (the ru pass ate one closing bracket next to a
+# parenthesis) and `%%n%%` (dropped by the service).
+MARKDOWN_TOKEN = re.compile(r"ZXQ(\d+)QXZ")
+
+
+def protect_markdown(text: str) -> tuple[str, list[str]] | None:
+    """Hold every fenced block and inline code span out of the translator.
+
+    Returns `(masked_text, slots)`, or `None` when the source already contains a
+    token-like `[[n]]` sequence: restoring would be ambiguous, so the caller
+    reports the doc instead of risking a swap between a real token and the text.
+    """
+    if MARKDOWN_TOKEN.search(text):
+        return None  # ambiguous with the tokens this function introduces
+    slots: list[str] = []
+
+    def swap(match: re.Match[str]) -> str:
+        slots.append(match.group(0))
+        return f"ZXQ{len(slots) - 1}QXZ"
+
+    return MARKDOWN_CODE.sub(swap, text), slots
+
+
+def restore_markdown(text: str, slots: list[str]) -> str | None:
+    """Put the held-out code back; `None` if any token was dropped or duplicated."""
+    found: dict[int, int] = {}
+
+    def swap(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        found[index] = found.get(index, 0) + 1
+        return slots[index] if index < len(slots) else match.group(0)
+
+    restored = MARKDOWN_TOKEN.sub(swap, text)
+    if sorted(found) != list(range(len(slots))) or any(n != 1 for n in found.values()):
+        return None
+    return restored
+
+
+def translate_markdown_unitwise(translator: Translator, text: str, target: str) -> str | None:
+    """Translate one prose paragraph at a time, keeping fenced blocks verbatim.
+
+    Fallback for a page the whole-document call cannot round-trip: a public
+    translator occasionally drops a token inside a large input, and a smaller
+    input shrinks the chance to zero in practice. Paragraph boundaries are blank
+    lines outside a fence, so a fence is never split.
+    """
+    out: list[str] = []
+    prose: list[str] = []
+
+    def flush() -> bool:
+        if not prose:
+            return True
+        chunk = "".join(prose)
+        prose.clear()
+        if not chunk.strip():
+            out.append(chunk)
+            return True
+        translated = translate_value(translator, chunk, target, markdown=True)
+        if translated is None:
+            return False
+        out.append(translated)
+        return True
+
+    in_fence = False
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            if not flush():
+                return None
+            in_fence = not in_fence
+            prose.append(line)
+            continue
+        prose.append(line)
+        if not in_fence and not line.strip():
+            if not flush():
+                return None
+    if not flush():
+        return None
+    return "".join(out)
+
+
 def protect(text: str) -> tuple[str, list[str]]:
     slots: list[str] = []
 
@@ -198,14 +295,23 @@ def restore(text: str, slots: list[str]) -> str | None:
     return "".join(out)
 
 
-def translate_value(translator: Translator, text: str, target: str) -> str | None:
-    protected, slots = protect(text)
+def translate_value(
+    translator: Translator, text: str, target: str, markdown: bool = False
+) -> str | None:
+    if markdown:
+        protected_md = protect_markdown(text)
+        if protected_md is None:
+            print("  source contains a token-like ZXQnQXZ sequence", file=sys.stderr)
+            return None
+        protected, slots = protected_md
+    else:
+        protected, slots = protect(text)
     try:
         translated = translator.translate(protected, target)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as error:
         print(f"  translation unavailable for {target}: {error}", file=sys.stderr)
         return None
-    restored = restore(translated, slots)
+    restored = restore_markdown(translated, slots) if markdown else restore(translated, slots)
     if restored is None:
         print(f"  placeholder lost in {target}: {translated[:80]!r}", file=sys.stderr)
     return restored
@@ -328,14 +434,25 @@ def sync_docs(
         if not same_body and not args.retranslate:
             report.append(f"{path.name}: source changed")
             continue
-        result = translate_value(translator, english_text, tag)
+        # A token the service drops is random, not a property of the page, so a
+        # bounded retry is the honest response; a page reported afterwards is one
+        # that failed every attempt.
+        result = None
+        for attempt in range(1, TRANSLATE_ATTEMPTS + 1):
+            result = translate_value(translator, english_text, tag, markdown=True)
+            if result is not None:
+                break
+            print(f"  retrying {path.name} ({attempt}/{TRANSLATE_ATTEMPTS})", file=sys.stderr)
+        if result is None:
+            print(f"  translating {path.name} one paragraph at a time", file=sys.stderr)
+            result = translate_markdown_unitwise(translator, english_text, tag)
         if result is None:
             report.append(f"{path.name}: translation unavailable, left as it was")
             continue
         if sorted(code_commands(result)) != sorted(code_commands(english_text)):
             report.append(f"{path.name}: translation altered a command, left as it was")
             continue
-        if not result.lstrip().startswith("# "):
+        if WARNING not in result:
             result = insert_banner(result, banner_for(tag, base))
         path.write_text(result, encoding="utf-8")
         docs_state[path.name] = current
