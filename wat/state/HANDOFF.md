@@ -66,18 +66,19 @@ the eight community relays are sponsor-funded (decision 2026-09-13).
    Existing worktrees may still be CRLF until re-checkout; single-line edit
    anchors and the DSH edit tool work either way.
 
-## Verified state at this handoff (2026-11-16, WF-066)
+## Verified state at this handoff (2026-11-16, after WF-067)
 
-- Branch `master` at `bc6177d` (WF-066 `76fb04b` + the cross-server ping-keying
-  fix). Working tree clean; CI green on both commits (14/14 jobs, including
-  `QUIC Integration Tests` and `Infra Script Tests`).
-- Lead gate: fmt/clippy clean; workspace **1,508 passed / 0 failed / 6 ignored**
-  across 29 suites; GUI **181/0/1**; WinDivert feature **1,261/0/4**; QUIC lib
-  **857/0/1**.
+- Branch `master` based on `9276a7e` (WF-066 + the ALPN handoff prep); the
+  WF-067 round is the next commit (see the top of `wat/state/current-phase.md`).
+- Lead gate on the WF-067 tree: fmt/clippy clean (only the two pre-existing
+  manifest warnings); workspace **1,557/0/6**; GUI **181/0/1**; WinDivert
+  **1,261/0/4**; the CI `QUIC Integration Tests` command **25 targets,
+  1,492/0/2**; client quic lib **640/0/1**; proxy quic lib **158/0/0**;
+  localization checks green.
 - Product: 1.10.3 released; master carries unreleased work - relay-watchdog fix,
   fallback state contract, validated server-leg signal + honest route surface,
   canonical whole-path ranking key, app-telemetry publication gate, monitor
-  instrument fixes.
+  instrument fixes, and the versioned-ALPN control plane (stages A/B/F/C/D).
 - Live validation on the owner's ROB RUN: quiet-flow v1 falsified for chatty
   games (2 accepted samples / 17 min), shadow sampler 0.49% acceptance, route
   surface honest (prior/bound states), 0 watchdog fallbacks, 0 relay changes.
@@ -87,37 +88,37 @@ the eight community relays are sponsor-funded (decision 2026-09-13).
   in the 2026-11-16 decision entry. Team instances are **session-scoped**: a new
   session starts with the same policy but fresh instances.
 
-## Next session: ALPN client-first (WF-067)
+## Current workstream: WF-067 landed, owner gates next
 
-Read `docs/quic-alpn-rollout.md` first (why it is a defect §1, the versioned
-identifier §2, the compatibility matrix §3, stages §4, exact changes §5, tests
-§6, observability §7, owner gates §11, tasks §13). The control plane currently
-sets no ALPN on either side; the plan is `lightspeed-control/1`, client offers it
-and retries once with an empty list on alert 120, relay gains
-`[network] control_alpn = "off" | "required"` (default off), then canary/fleet
-flips.
+Read `docs/quic-alpn-rollout.md` (its header is now current: stages 1/2 are
+implemented, unreleased) and the newest entry in
+`wat/state/current-phase.md`. The control plane negotiates
+`lightspeed-control/1`; the client offers it and falls back once to an empty
+offer on alert 120, remembering the answer per relay; the relay has
+`[network] control_alpn = "off" | "required"` (default off) with startup,
+`/health` and `/metrics` observability and a five-row compatibility matrix.
 
-Board: task-26 (protocol + client offer/fallback/observability) and task-27
-(relay mode + matrix tests) are **ready** and can run in parallel; task-30 (user
-docs) is blocked on task-26; task-28 (interop test in CI) and task-29 (manual
-two-relay evidence) are blocked on 26+27; task-4 (operator procedure) is blocked
-on task-27. **Writing the code/tests/docs needs no owner approval** (§11) - only
-the stage-1 client release and each per-relay `required` flip are owner gates.
-Suggested shape: two `rust-dev` instances for 26/27, then `infra-dev` for 28,
-`qa-engineer` for 29, `interface-designer` for 30; Lead integrates, re-gates,
-pushes, records state. The POSIX relay smoke script cannot run on this Windows
-host - CI is the verifier.
+**Nothing ALPN-related is released and no relay config was touched.** The next
+steps are owner decisions, not code: (1) release the accumulated unreleased work
+including the stage-1 client build; (2) per-relay `required` flips, each gated on
+the §7.4 clean window (>=200 accepted control handshakes, M1 = 0); (3) the public
+#140/#147 replies describing the client-first order. The code-free deliverable
+that remains is the relay operator procedure (board task-6: `docs/deploy-proxy.md`
++`docs/community-network.md`, no production config edits in that task). The
+POSIX relay smoke script cannot run on this Windows host - CI is its verifier.
+Team boards are **session-scoped**: a new session starts with an empty board, so
+recreate tasks from the plan rather than expecting the previous ids.
 
 **Do not ask for a Discord webhook.** The owner does not use Discord; monitor
 alerts surface as scheduled-workflow failures/logs (decided 2026-11-16).
 
 ## What still needs to happen (ranked)
 
-1. **ALPN stages A/B/F** (board 26/27/30), then 28/29, then task-4 procedure.
-   Owner gates remain the stage-1 release and per-relay flips.
-2. **Owner decisions**: stage-1 release; each `required` relay flip; public
-   #140/#147 replies describing the client-first order; the release decision for
-   the accumulated unreleased work.
+1. **ALPN owner gates**: release the accumulated unreleased work including the
+   stage-1 client build; each `required` relay flip on its §7.4 clean window; the
+   public #140/#147 replies. Then board task-6 (relay operator procedure).
+2. **Owner decisions**: those three ALPN gates, plus the release decision for
+   everything else that is unreleased.
 3. **Small cleanups**: translation debt 7x8, `docs/architecture.md` selector
    one-liner, `pooled_estimate` test-only, and the recorded ICMP-blocked-server
    watchdog behaviour if it recurs.
