@@ -11,6 +11,29 @@
 
 ## Recent entries
 
+### 2026-11-16 - Live ROB RUN check: the new verdict format is confirmed on a real session
+
+**Agent:** lead (verifying `908b3ac` on the owner's live game)
+
+The owner was in ROB RUN (Kefir, Steam, Easy Anti-Cheat) for the whole check. The
+debug GUI built from `908b3ac` auto-detected `robrun`, connected (LAX/EWR/FRA
+auto relays), intercepted, and moved the Relayed counters (`71 up · 2 down` ->
+`155 up · 25 down`). The no-reply watchdog fired twice on the real session with
+the new log shape: `errors=0 last_error=none` and a data-reply-only
+`from_relay=` count, first live proof of the changed fields and counter.
+Screenshots `wat/evidence/2026-11-16/live-gui-*.png`; log lines and analysis in
+the "Live ROB RUN check" section of `wf167-diagnosability.md`.
+
+The fallback-to-direct seen on those relays is pre-existing: the same verdicts
+run through the 11-13..11-15 sections of the same trace log, and the
+`TooFewReplies` decision does not read the reply count.
+
+**Open:** forcing the error-6 branch live does not work by design — `sc stop
+WinDivert` parks the driver in STOP_PENDING under an open handle, so a live
+invalid handle needs an external invalidation (driver update/EDR). That branch
+stays covered by the unit test and mutation check, not by a live run. The
+WinDivert service was restored and a fresh GUI is optimizing ROB RUN again.
+
 ### 2026-11-16 - WF-060: a dead data plane is visible now, and QUIC alert 120 explains itself
 
 **Agent:** lead (RustDev + QAEngineer contracts; single-threaded)
