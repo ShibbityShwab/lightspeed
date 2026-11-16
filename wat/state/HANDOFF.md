@@ -66,61 +66,66 @@ the eight community relays are sponsor-funded (decision 2026-09-13).
    Existing worktrees may still be CRLF until re-checkout; single-line edit
    anchors and the DSH edit tool work either way.
 
-## Verified state at this handoff (2026-11-16, after WF-067)
+## Verified state at this handoff (2026-11-16, after the WF-067 rollout)
 
-- Branch `master` based on `9276a7e` (WF-066 + the ALPN handoff prep); the
-  WF-067 round is the next commit (see the top of `wat/state/current-phase.md`).
-- Lead gate on the WF-067 tree: fmt/clippy clean (only the two pre-existing
-  manifest warnings); workspace **1,557/0/6**; GUI **181/0/1**; WinDivert
-  **1,261/0/4**; the CI `QUIC Integration Tests` command **1,493/0/2**; client
-  quic lib **640/0/1**; proxy quic lib **159/0/0**; localization checks green.
-- CI run `43875765733` on `88efac2` is green: every job passed, including
-  `QUIC Integration Tests` and `Proxy QUIC Smoke`; `Security Audit` and
-  `Docker` are green on the same head.
-- Product: 1.10.3 released; master carries unreleased work - relay-watchdog fix,
-  fallback state contract, validated server-leg signal + honest route surface,
-  canonical whole-path ranking key, app-telemetry publication gate, monitor
-  instrument fixes, and the versioned-ALPN control plane (stages A/B/F/C/D).
-- Live validation on the owner's ROB RUN: quiet-flow v1 falsified for chatty
-  games (2 accepted samples / 17 min), shadow sampler 0.49% acceptance, route
-  surface honest (prior/bound states), 0 watchdog fallbacks, 0 relay changes.
-- Agent layer: durable-owner policy is in `wat/team-mode.md` Step 2 (reuse an idle
-  persona instance; spawn only for parallel same-persona work, contaminated
-  context, or an unusable instance). The active roster and retired instances are
-  in the 2026-11-16 decision entry. Team instances are **session-scoped**: a new
-  session starts with the same policy but fresh instances.
+- **1.11.0 is released and live.** `v1.11.0` is the latest GitHub release
+  (2026-11-16, 39 cargo-dist assets, body = `CHANGELOG.md`). All eight community
+  relays run 1.11.0 with `[network] control_alpn = "required"` and are healthy;
+  a 1.11.0 client negotiates `lightspeed-control/1`, a pre-1.11.0 client is
+  rejected with alert 120 (owner-accepted traffic impact).
+- **The release was published manually.** The Release workflow failed at
+  "Create GitHub Release" with `HTTP 403: Resource not accessible by
+  integration`; artifacts came from its own green build jobs and packaging
+  manifests were bumped by hand. Board task-9 fixes the pipeline.
+- **The §7.4 clean window was measured and failed before the flip** (M1 66 -> 520
+  in 120 s on the canary, zero accepted handshakes); the fleet flip proceeded on
+  the owner's explicit traffic-impact authorization and the deviation is recorded
+  in the plan header, the state entry and the decision log.
+- Lead gate on the code (unchanged since `2de1665`): fmt/clippy clean (only the
+  two pre-existing manifest warnings); workspace **1,557/0/6**; GUI **181/0/1**;
+  WinDivert **1,261/0/4**; CI `QUIC Integration Tests` command **1,493/0/2**;
+  client quic lib **640/0/1**; proxy quic lib **159/0/0**; localization checks
+  green. CI run `43880379231` on `2de1665` is green on every job.
+- Agent layer: durable-owner policy is in `wat/team-mode.md` Step 2. Team
+  instances are **session-scoped**: a new session starts with the same policy but
+  fresh instances (and a fresh, empty board).
 
-## Current workstream: WF-067 landed, owner gates next
+## Current workstream: 1.11.0 is live; watch the drain, fix the release pipeline
 
-Read `docs/quic-alpn-rollout.md` (its header is now current: stages 1/2 are
-implemented, unreleased) and the newest entry in
+Read `docs/quic-alpn-rollout.md` (its header now records the rollout, the measured
+§7.4 fail and the owner authorization) and the newest entry in
 `wat/state/current-phase.md`. The control plane negotiates
-`lightspeed-control/1`; the client offers it and falls back once to an empty
-offer on alert 120, remembering the answer per relay; the relay has
-`[network] control_alpn = "off" | "required"` (default off) with startup,
-`/health` and `/metrics` observability and a five-row compatibility matrix.
+`lightspeed-control/1` end to end; the fleet is `required`; the flip tool is
+`infra/scripts/relay-control-alpn.sh` with a `Deploy Proxy` dispatch path and a
+hermetic self-test in `Infra Script Tests`.
 
-**Nothing ALPN-related is released and no relay config was touched.** The next
-steps are owner decisions, not code: (1) release the accumulated unreleased work
-including the stage-1 client build; (2) per-relay `required` flips, each gated on
-the §7.4 clean window (>=200 accepted control handshakes, M1 = 0); (3) the public
-#140/#147 replies describing the client-first order. The code-free deliverable
-that remains is the relay operator procedure (board task-6: `docs/deploy-proxy.md`
-+`docs/community-network.md`, no production config edits in that task). The
-POSIX relay smoke script cannot run on this Windows host - CI is its verifier.
-Team boards are **session-scoped**: a new session starts with an empty board, so
-recreate tasks from the plan rather than expecting the previous ids.
+**What is left is monitoring and pipeline repair, not rollout code:**
+1. Watch `lightspeed_control_handshakes_total{outcome="rejected_no_application_protocol"}`
+   per relay; it is the meter of pre-1.11.0 clients. The real §7.4-style clean
+   window is now "M1 stops increasing over a window with >=200 accepted
+   handshakes" (board task-10).
+2. Fix the Release workflow publish path (403 on `POST /releases` from
+   `GITHUB_TOKEN`, plus the skipped choco/winget publish) before the next tag -
+   board task-9. Until then a tag needs the manual publish procedure recorded in
+   the 2026-11-16 decision entry.
+3. Owner decision: the public #140/#147 replies describing the client-first order.
+4. Later: the §5 retirement decision (client stops falling back / relay drops
+   `/1`) once M1 is flat.
+
+Per-relay rollback stays one command (`--mode off` + restart, no client change).
+The POSIX relay smoke script also cannot run on this Windows host - CI verifies
+it. Team boards are **session-scoped**: recreate tasks from the plan rather than
+expecting the previous ids.
 
 **Do not ask for a Discord webhook.** The owner does not use Discord; monitor
 alerts surface as scheduled-workflow failures/logs (decided 2026-11-16).
 
 ## What still needs to happen (ranked)
 
-1. **ALPN owner gates**: release the accumulated unreleased work including the
-   stage-1 client build; each `required` relay flip on its §7.4 clean window; the
-   public #140/#147 replies. Then board task-6 (relay operator procedure).
-2. **Owner decisions**: those three ALPN gates, plus the release decision for
-   everything else that is unreleased.
+1. **Post-rollout**: watch M1 drain (task-10); fix the Release workflow publish
+   path (task-9); owner decision on the public #140/#147 replies.
+2. **Owner decisions**: the public #140/#147 replies, and later the §5 retirement
+   of the empty-offer fallback.
 3. **Small cleanups**: translation debt 7x8, `docs/architecture.md` selector
    one-liner, `pooled_estimate` test-only, and the recorded ICMP-blocked-server
    watchdog behaviour if it recurs.
