@@ -88,7 +88,7 @@ use super::order::{effective_seeds, Decision, ServerTracker, TrackerConfig};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::recovery::RecvBackoff;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use super::teardown::{recv_should_break, TeardownAck};
+use super::teardown::{recv_should_break, TeardownAck, ERROR_INVALID_HANDLE};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::traits::{InterceptorCounters, PlatformTeardown, Route};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -1162,6 +1162,21 @@ impl TrafficInterceptor for WinDivertInterceptor {
                         Err(e) => {
                             let raw = e.raw_os_error().unwrap_or(0);
                             if recv_should_break(running_ic.load(Ordering::Relaxed), raw) {
+                                // A permanently dead handle breaks here, not after
+                                // the retry budget: record why, and mark the run
+                                // failed so the status stops reporting an active
+                                // interceptor while nothing is intercepting.
+                                if raw == ERROR_INVALID_HANDLE {
+                                    let msg = format!(
+                                        "WinDivert receive handle is invalid (os error {raw}); \
+                                         interception stopped"
+                                    );
+                                    tracing::error!("{msg}");
+                                    if let Ok(mut g) = counters_ic.last_error.lock() {
+                                        *g = Some(msg);
+                                    }
+                                    counters_ic.run_failed.store(true, Ordering::Relaxed);
+                                }
                                 break;
                             }
                             counters_ic.errors.fetch_add(1, Ordering::Relaxed);
@@ -1184,6 +1199,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     if let Ok(mut g) = counters_ic.last_error.lock() {
                                         *g = Some(msg);
                                     }
+                                    counters_ic.run_failed.store(true, Ordering::Relaxed);
                                     break;
                                 }
                             }
@@ -1625,6 +1641,12 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             if header.is_keepalive() {
                                 continue; // keepalive echo - RTT measured by keepalive task
                             }
+
+                            // Count only what a working injector is expected to
+                            // deliver. The no-reply watchdog reads this counter,
+                            // so keepalive echoes and undecodable frames cannot
+                            // read as a local injection fault.
+                            counters_t.packets_reply_data.fetch_add(1, Ordering::Relaxed);
 
                             if header.has_tcp() {
                                 let Some(term) = tcp_terminator.as_mut() else { continue; };

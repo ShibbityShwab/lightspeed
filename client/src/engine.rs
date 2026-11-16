@@ -28,10 +28,12 @@ pub struct InterceptorHealth {
     pub detected_server: Option<std::net::SocketAddrV4>,
     pub packets_intercepted: u64,
     pub packets_injected: u64,
-    /// Datagrams received from a known relay. Read beside `packets_injected`
-    /// so a relay that returned nothing can be told apart from a client that
-    /// received replies and failed to inject them.
-    pub packets_from_proxy: u64,
+    /// Decoded, non-keepalive game-data replies received from a known relay.
+    /// Read beside `packets_injected` so a relay that returned nothing can be
+    /// told apart from a client that received replies and failed to inject
+    /// them. Keepalive echoes are excluded: counting them would report a local
+    /// injection fault for a relay that only answered our own probes.
+    pub packets_reply_data: u64,
     /// The interceptor's last recorded error, when it has one.
     pub last_error: Option<String>,
     /// Interceptor errors, including failed WinDivert sends. A rising count
@@ -149,7 +151,9 @@ pub struct EngineStatus {
     pub interceptor_server: String,
     /// Packets intercepted outbound (Game → Proxy).
     pub interceptor_intercepted: u64,
-    /// Proxy responses received.
+    /// Proxy datagrams received, including keepalive echoes and frames that
+    /// failed to decode. Diagnostic display value; the reply-ratio verdict uses
+    /// [`InterceptorHealth::packets_reply_data`] instead.
     pub interceptor_from_proxy: u64,
     /// Packets injected inbound (Proxy → Game).
     pub interceptor_injected: u64,
@@ -977,7 +981,7 @@ impl LightSpeedEngine {
                 detected_server: stats.detected_server,
                 packets_intercepted: stats.packets_intercepted,
                 packets_injected: stats.packets_injected,
-                packets_from_proxy: stats.packets_from_proxy,
+                packets_reply_data: stats.packets_reply_data,
                 last_error: stats.last_error,
                 errors: stats.errors,
                 tunnelling_enabled: stats.tunnelling_enabled,
@@ -1392,6 +1396,12 @@ impl LightSpeedEngine {
             snap.interceptor_from_proxy = ist.packets_from_proxy;
             snap.interceptor_injected = ist.packets_injected;
             snap.interceptor_errors = ist.errors;
+            // The fatal receive failure is recorded on the counters; copying it
+            // here is what turns a tracing-only line into visible state. The
+            // control plane still looks connected after the data plane dies, so
+            // the tray and the restart prompt can only see it through this
+            // field.
+            snap.interceptor_error = ist.last_error.clone();
             snap.interceptor_payloads_over_budget = ist.payloads_over_budget;
             snap.bypass_allowed = ist.bypass_allowed;
             snap.bypass_refused = ist.bypass_refused;
@@ -1803,6 +1813,54 @@ mod tests {
             engine.snapshot().bypass_evaluations,
             3,
             "the engine snapshot must surface the interceptor's steady-state count"
+        );
+    }
+
+    #[test]
+    fn snapshot_surfaces_a_fatal_interceptor_error_and_stops_reporting_active() {
+        // The field failure this pins (issue #167): the WinDivert receive loop
+        // died on "Invalid handle (os error 6)". The error was recorded on the
+        // counters and logged, but the status snapshot never copied it and the
+        // handle still existed, so the app kept showing an active interceptor
+        // and the user had no restart prompt. Both signals must reach the
+        // snapshot.
+        let mut engine = test_engine();
+        let handle = MockInterceptor::new()
+            .start(InterceptorConfig {
+                game_name: "TestGame".into(),
+                dynamic_server: false,
+                transport: TransportProto::Udp,
+                capture_tcp_ports: None,
+                process_names: vec!["TestGame.exe".to_string()],
+                process_target: Some(ProcessTarget::by_name("TestGame.exe")),
+                port_range: (27015, 27017),
+                initial_routes: Vec::new(),
+                proxy_addr: std::net::SocketAddrV4::new(
+                    std::net::Ipv4Addr::new(127, 0, 0, 1),
+                    4434,
+                ),
+                fec_enabled: false,
+                fec_k: 4,
+                adaptive_fec: crate::tunnel::adaptive::AdaptiveConfig::default(),
+                bypass: Default::default(),
+            })
+            .expect("mock interceptor starts");
+        const FATAL: &str =
+            "WinDivert receive handle is invalid (os error 6); interception stopped";
+        *handle.counters.last_error.lock().expect("last_error lock") = Some(FATAL.to_string());
+        handle.counters.run_failed.store(true, Ordering::Relaxed);
+        engine.interceptor_handle = Some(handle);
+
+        let snap = engine.snapshot();
+
+        assert_eq!(
+            snap.interceptor_error.as_deref(),
+            Some(FATAL),
+            "a fatal receive failure must reach the status, not just the log"
+        );
+        assert!(
+            !snap.interceptor_active,
+            "a dead data plane must not report as an active interceptor"
         );
     }
 

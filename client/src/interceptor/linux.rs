@@ -507,6 +507,12 @@ impl TrafficInterceptor for NftablesInterceptor {
                             continue;
                         }
 
+                        // Data replies only: the no-reply watchdog reads this,
+                        // so keepalive echoes cannot read as an injection fault.
+                        counters_loop
+                            .packets_reply_data
+                            .fetch_add(1, Ordering::Relaxed);
+
                         crate::latency::record_inbound(*header.orig_src_addr().ip());
 
                         let Some(dest) = game_src else { continue };

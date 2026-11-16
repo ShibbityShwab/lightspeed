@@ -413,7 +413,7 @@ mod inner {
     use crate::capture::tcp::{send_tcp_segment, TcpTerminator};
     use crate::interceptor::order::{Decision, ServerTracker, TrackerConfig};
     use crate::interceptor::recovery::RecvBackoff;
-    use crate::interceptor::teardown::{recv_should_break, TeardownAck};
+    use crate::interceptor::teardown::{recv_should_break, TeardownAck, ERROR_INVALID_HANDLE};
     use crate::interceptor::windivert_handle::{is_fwp_in_use, OwnedHandle};
     use lightspeed_protocol::{
         build_fec_data_packet, build_fec_parity_packet, decode_fec_payload, decode_tcp_payload,
@@ -785,6 +785,19 @@ mod inner {
                     Err(e) => {
                         let raw = e.raw_os_error().unwrap_or(0);
                         if recv_should_break(running_ic.load(Ordering::Relaxed), raw) {
+                            // A permanently dead handle breaks on the first
+                            // failure; record it instead of ending silently.
+                            if raw == ERROR_INVALID_HANDLE {
+                                let msg = format!(
+                                    "WinDivert receive handle is invalid (os error {raw}); \
+                                     interception stopped"
+                                );
+                                tracing::error!("{msg}");
+                                stats_ic.errors.fetch_add(1, Ordering::Relaxed);
+                                if let Ok(mut guard) = stats_ic.last_error.lock() {
+                                    *guard = Some(msg);
+                                }
+                            }
                             break;
                         }
                         stats_ic.errors.fetch_add(1, Ordering::Relaxed);

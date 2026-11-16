@@ -95,7 +95,41 @@ mod inner {
         transport.mtu_discovery_config(Some(mtu_discovery));
         client_config.transport_config(Arc::new(transport));
 
+        // One line a packet capture can be compared against. This client offers
+        // no ALPN by design, which is what makes a strict QUIC peer answer the
+        // handshake with alert 120; `handshake_failure` explains that outcome.
+        debug!("QUIC control-plane TLS offer: ALPN=[] SNI=lightspeed-proxy TLSv1.3");
+
         Ok(client_config)
+    }
+
+    /// Explain a failed QUIC handshake in the terms the reader needs.
+    ///
+    /// quinn renders a peer-sent `CONNECTION_CLOSE` as "aborted by peer: the
+    /// cryptographic handshake failed: error 120: peer doesn't support any known
+    /// protocol", which reads like a local TLS fault. It is not one: alert 120
+    /// (`no_application_protocol`) is what an RFC 9001 §8.1 conforming server
+    /// sends when the ClientHello carries no ALPN, and the relay built from this
+    /// repository never sets ALPN, so it *cannot* send this alert. The responder
+    /// on the path is therefore not this relay: it is a QUIC-intercepting
+    /// middlebox (VPN/AV/ISP) or a foreign endpoint. Turning that into a verdict
+    /// separates "our relay is broken" from "your path is intercepting QUIC"
+    /// in one run, instead of leaving the reader on rustls's wording (#140/#147).
+    fn handshake_failure(addr: SocketAddr, err: &quinn::ConnectionError) -> String {
+        let quinn::ConnectionError::ConnectionClosed(close) = err else {
+            return err.to_string();
+        };
+        // 0x78 is `AlertDescription::NoApplicationProtocol`, carried as QUIC
+        // crypto error 0x100 + 0x78 (displayed as "error 120").
+        if close.error_code != quinn::TransportErrorCode::crypto(0x78) {
+            return err.to_string();
+        }
+        format!(
+            "{err}: the responder at {addr} closed the QUIC handshake with TLS alert 120 \
+             (no_application_protocol). A LightSpeed relay does not require ALPN and cannot \
+             send this alert, so the responder is not this relay: suspect a \
+             QUIC-intercepting VPN/AV/ISP on this path (see #140)."
+        )
     }
 
     /// QUIC control plane client (real implementation).
@@ -171,7 +205,7 @@ mod inner {
                 .connect(addr, "lightspeed-proxy")
                 .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?
                 .await
-                .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+                .map_err(|e| QuicError::ConnectionFailed(handshake_failure(addr, &e)))?;
 
             info!("QUIC connection established to {}", addr);
 
@@ -421,6 +455,60 @@ mod inner {
         /// `Connection::closed()` against the keepalive ping.
         pub fn connection(&self) -> Option<&quinn::Connection> {
             self.connection.as_ref()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::handshake_failure;
+        use std::net::SocketAddr;
+
+        fn connection_closed(
+            code: quinn::TransportErrorCode,
+            reason: &'static [u8],
+        ) -> quinn::ConnectionError {
+            quinn::ConnectionError::ConnectionClosed(quinn::ConnectionClose {
+                error_code: code,
+                frame_type: None,
+                reason: bytes::Bytes::from_static(reason),
+            })
+        }
+
+        #[test]
+        fn alert_120_is_explained_as_a_peer_that_cannot_be_our_relay() {
+            // The reporter's exact failure (#140/#147): the peer closed with
+            // rustls's no_application_protocol alert. Our relay cannot send it,
+            // so the message must say the responder is not the relay instead of
+            // repeating a rustls string a user cannot act on.
+            let addr: SocketAddr = "203.0.113.10:4433".parse().expect("addr");
+            let err = connection_closed(
+                quinn::TransportErrorCode::crypto(0x78),
+                b"peer doesn't support any known protocol",
+            );
+
+            let message = handshake_failure(addr, &err);
+
+            assert!(message.contains("not this relay"), "{message}");
+            assert!(message.contains("no_application_protocol"), "{message}");
+            assert!(message.contains("203.0.113.10:4433"), "{message}");
+        }
+
+        #[test]
+        fn other_handshake_failures_keep_the_raw_error() {
+            // Only alert 120 carries this diagnosis. A bad certificate, a
+            // timeout or any transport error must keep its own wording.
+            let addr: SocketAddr = "203.0.113.10:4433".parse().expect("addr");
+            let certificate =
+                connection_closed(quinn::TransportErrorCode::crypto(0x2a), b"bad certificate");
+            assert_eq!(
+                handshake_failure(addr, &certificate),
+                certificate.to_string(),
+                "a certificate alert is not the no-ALPN diagnosis"
+            );
+            assert_eq!(
+                handshake_failure(addr, &quinn::ConnectionError::TimedOut),
+                quinn::ConnectionError::TimedOut.to_string()
+            );
         }
     }
 }

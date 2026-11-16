@@ -250,10 +250,25 @@ pub struct InterceptorCounters {
     pub packets_injected: AtomicU64,
     /// Bytes injected (inbound).
     pub bytes_injected: AtomicU64,
-    /// Proxy responses received.
+    /// Proxy responses received, including keepalive echoes and frames that
+    /// failed to decode. Diagnostic total; not a verdict input.
     pub packets_from_proxy: AtomicU64,
+    /// Proxy game-data replies: decoded, non-keepalive datagrams.
+    ///
+    /// This, not [`Self::packets_from_proxy`], is what the no-reply watchdog
+    /// compares against `packets_injected`. Keepalive echoes and undecodable
+    /// frames never reach the injector, so counting them as returns would
+    /// report a local injection fault for a relay that only echoed our probes.
+    pub packets_reply_data: AtomicU64,
     /// Errors (intercept or inject failures).
     pub errors: AtomicU64,
+    /// Set once the platform receive loop died on a permanent error.
+    ///
+    /// The handle object still exists in that case (the shutdown channel was
+    /// never sent), so [`InterceptorHandle::is_active`] cannot infer liveness
+    /// from the channel alone; this flag is what stops a dead data plane from
+    /// reporting as active while the control plane still looks connected.
+    pub run_failed: AtomicBool,
     /// Game payloads forwarded with fragmentation allowed because they
     /// exceeded the conservative tunnel payload budget.
     pub payloads_over_budget: AtomicU64,
@@ -309,7 +324,9 @@ impl Default for InterceptorCounters {
             packets_injected: AtomicU64::new(0),
             bytes_injected: AtomicU64::new(0),
             packets_from_proxy: AtomicU64::new(0),
+            packets_reply_data: AtomicU64::new(0),
             errors: AtomicU64::new(0),
+            run_failed: AtomicBool::new(false),
             payloads_over_budget: AtomicU64::new(0),
             adaptive_parity_ratio_bp: AtomicU64::new(0),
             bypass_allowed: AtomicU64::new(0),
@@ -381,6 +398,7 @@ impl InterceptorCounters {
             packets_injected: self.packets_injected.load(Ordering::Relaxed),
             bytes_injected: self.bytes_injected.load(Ordering::Relaxed),
             packets_from_proxy: self.packets_from_proxy.load(Ordering::Relaxed),
+            packets_reply_data: self.packets_reply_data.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             payloads_over_budget: self.payloads_over_budget.load(Ordering::Relaxed),
             adaptive_parity_ratio_bp: self.adaptive_parity_ratio_bp.load(Ordering::Relaxed),
@@ -442,6 +460,9 @@ pub struct InterceptorStats {
     pub packets_injected: u64,
     pub bytes_injected: u64,
     pub packets_from_proxy: u64,
+    /// Decoded, non-keepalive replies: the datagrams a working injector is
+    /// expected to deliver, and the only return count a fault verdict may use.
+    pub packets_reply_data: u64,
     /// Per-game-destination counters: the only trustworthy reply ratio.
     pub flows: Vec<FlowSnapshot>,
     pub errors: u64,
@@ -656,9 +677,14 @@ impl InterceptorHandle {
         }
     }
 
-    /// Whether the shutdown signal has NOT been sent yet.
+    /// Whether this run is still intercepting.
+    ///
+    /// `false` once the shutdown signal has been sent, and also once the
+    /// platform receive loop reported a permanent failure. The handle object
+    /// outlives a dead data plane in that second case, so a caller cannot
+    /// treat "the handle still exists" as healthy.
     pub fn is_active(&self) -> bool {
-        self.shutdown_tx.is_some()
+        self.shutdown_tx.is_some() && !self.counters.run_failed.load(Ordering::Relaxed)
     }
 }
 
@@ -817,6 +843,22 @@ mod tests {
         let mut handle = handle_with(None);
         assert!(handle.stop_and_wait(Duration::from_millis(50)));
         assert!(!handle.is_active());
+    }
+
+    #[test]
+    fn is_active_reports_false_after_a_fatal_platform_failure() {
+        // The failure the field report showed: the receive loop died on an
+        // invalid handle, the handle object stayed alive, and the status kept
+        // reporting an active interceptor while nothing was intercepting.
+        let handle = handle_with(None);
+        assert!(handle.is_active(), "a fresh run is active");
+
+        handle.counters.run_failed.store(true, Ordering::Relaxed);
+
+        assert!(
+            !handle.is_active(),
+            "a dead receive loop must not read as an active interceptor"
+        );
     }
 
     #[test]

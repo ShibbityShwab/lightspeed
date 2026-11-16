@@ -109,7 +109,11 @@ struct RelayReplyWatch {
     server: std::net::SocketAddrV4,
     baseline_intercepted: u64,
     baseline_injected: u64,
-    baseline_from_proxy: u64,
+    /// Decoded, non-keepalive data replies when the watch started. Keepalive
+    /// echoes are excluded upstream: they never reach the injector, so counting
+    /// them would report the local path as broken for a relay that only echoed
+    /// our own probes.
+    baseline_reply_data: u64,
     /// This server's own counters when the watch started, so the corroboration
     /// covers the same window the relay-wide counters do.
     baseline_flow_sent: u64,
@@ -175,7 +179,10 @@ enum RelayReplyFault {
 ///
 /// `from_proxy_since` separates a silent relay from a broken local injection
 /// path. Both are reported as a fallback, but only the first is the relay's
-/// fault, and a user asking which side failed needs the log to say so.
+/// fault, and a user asking which side failed needs the log to say so. It
+/// counts decoded, non-keepalive data replies: keepalive echoes and undecodable
+/// frames never reach the injector, so counting them would blame the local path
+/// for a relay that only echoed our own probes.
 fn relay_reply_fault(
     elapsed: Duration,
     intercepted_since: u64,
@@ -226,7 +233,9 @@ fn relay_reply_fault_message(
     match fault {
         RelayReplyFault::NoReplyFromRelay => format!(
             "Relay return path is starving the session; switching it direct \
-             (intercepted={intercepted_since} injected={injected_since} from_relay=0)"
+             (intercepted={intercepted_since} injected={injected_since} from_relay=0 \
+             errors={errors} last_error={})",
+            last_error.unwrap_or("none")
         ),
         RelayReplyFault::InjectionFailed => format!(
             "The relay returned {from_proxy_since} datagram(s) and none could be injected, \
@@ -237,7 +246,9 @@ fn relay_reply_fault_message(
         ),
         RelayReplyFault::TooFewReplies => format!(
             "Relay return path is starving the session; switching it direct \
-             (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since})"
+             (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since} \
+             errors={errors} last_error={})",
+            last_error.unwrap_or("none")
         ),
     }
 }
@@ -317,7 +328,7 @@ fn spawn_relay_reply_watchdog(
                     server,
                     baseline_intercepted: health.packets_intercepted,
                     baseline_injected: health.packets_injected,
-                    baseline_from_proxy: health.packets_from_proxy,
+                    baseline_reply_data: health.packets_reply_data,
                     baseline_flow_sent: health.flow.map(|(sent, _)| sent).unwrap_or(0),
                     baseline_flow_replied: health.flow.map(|(_, replied)| replied).unwrap_or(0),
                     started: now,
@@ -330,8 +341,8 @@ fn spawn_relay_reply_watchdog(
                 .packets_injected
                 .saturating_sub(current.baseline_injected);
             let from_proxy_since = health
-                .packets_from_proxy
-                .saturating_sub(current.baseline_from_proxy);
+                .packets_reply_data
+                .saturating_sub(current.baseline_reply_data);
             let (flow_sent, flow_replied) = health
                 .flow
                 .map(|(sent, replied)| {
@@ -5862,6 +5873,31 @@ mod tests {
             relay_reply_fault_message(RelayReplyFault::NoReplyFromRelay, 100, 0, 0, 0, None);
         assert!(silent.contains("from_relay=0"), "{silent}");
         assert!(!silent.contains("local injection"), "{silent}");
+        assert!(silent.contains("errors=0"), "{silent}");
+        assert!(silent.contains("last_error=none"), "{silent}");
+    }
+
+    #[test]
+    fn every_starvation_verdict_carries_the_error_fields() {
+        // A fallback is the moment a user asks "which side failed". Only the
+        // injection-failure arm carried the error counters and the last fatal
+        // message, so the other two verdicts left that question unanswerable -
+        // including the WinDivert invalid-handle case that killed the data
+        // plane in issue #167.
+        let message = relay_reply_fault_message(
+            RelayReplyFault::TooFewReplies,
+            152,
+            16,
+            16,
+            3,
+            Some("WinDivert receive handle is invalid (os error 6); interception stopped"),
+        );
+        assert!(message.contains("errors=3"), "{message}");
+        assert!(message.contains("os error 6"), "{message}");
+        assert!(
+            !message.contains("last_error=none"),
+            "a recorded error must not print as none: {message}"
+        );
     }
 
     #[test]

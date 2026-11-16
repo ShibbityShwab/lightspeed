@@ -255,3 +255,28 @@ Required before merge:
 - Not verified here: the reporters' networks (no pcap from them), the relay
   fleet (no access), PR #173's screenshots (not produced), and the GUI gates on
   the PR branch (blocked until it is updated).
+
+## 7. Status update (2026-11-16, same day)
+
+The ranked tasks 2 and 3 above were picked up in a follow-up round (WF-060,
+commit message "fix(client): surface a dead data plane and explain QUIC alert
+120"). Evidence: `wat/evidence/2026-11-16/wf167-diagnosability.md`.
+
+- **Task 3 (interceptor error visibility) — done.** `EngineStatus.interceptor_error`
+  now carries `InterceptorStats.last_error`, `InterceptorHandle::is_active()` turns
+  false when the receive loop dies (`run_failed`), `ERROR_INVALID_HANDLE` is
+  terminal instead of exhausting the retry budget, and the no-reply watchdog
+  reads a new data-reply-only counter so keepalive echoes cannot be misreported
+  as a local injection fault. All three watchdog verdicts now print `errors=` and
+  `last_error=`. Gates: 1,449 workspace / 155 GUI / 1,201 WinDivert-feature / 827
+  QUIC-feature tests passed, 0 failed; fmt and both clippy runs clean.
+- **Task 2, diagnostic half — done.** A peer `CONNECTION_CLOSE` with crypto alert
+  120 now produces the verdict that the responder cannot be a LightSpeed relay
+  and is likely a QUIC-intercepting VPN/AV/ISP, instead of leaving the reader on
+  rustls's wording. The client's `ALPN=[]` offer is logged once for comparison
+  with a capture.
+- **Still open.** The ALPN migration itself is wire-breaking: it needs the
+  client-with-fallback release first, then relays, and an owner decision. Closing
+  #59 / folding #147, `relay-fra`, and the public issue replies stay owner-gated
+  or open. The live invalid-handle path is not yet reproduced end to end (it needs
+  an external WinDivert handle invalidation during a real session).

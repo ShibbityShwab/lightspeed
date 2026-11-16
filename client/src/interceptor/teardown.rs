@@ -26,6 +26,15 @@ pub const ERROR_NO_DATA: i32 = 232;
 /// `GetLastError()` value for aborted or cancelled I/O (995).
 const ERROR_OPERATION_ABORTED: i32 = 995;
 
+/// `GetLastError()` value returned for a handle the driver no longer knows (6).
+///
+/// `WinDivertRecv` cannot recover from this one: the driver handle was unloaded
+/// or invalidated externally (driver restart, service stop, an EDR filter
+/// conflict), so every retry fails the same way. Burning the retry budget on it
+/// delays the only message that tells the user to restart interception and
+/// buries it among retry warnings.
+pub const ERROR_INVALID_HANDLE: i32 = 6;
+
 /// Upper bound on a single `recv_timeout` slice inside [`TeardownAck::wait`].
 ///
 /// Clamping keeps `wait` free of the `Instant + Duration` overflow panic for
@@ -39,7 +48,8 @@ const MAX_WAIT_CHUNK: Duration = Duration::from_secs(24 * 60 * 60);
 ///
 /// - `running` is `false` (the caller asked it to stop), or
 /// - the OS error is [`ERROR_NO_DATA`] (WinDivert's shutdown sentinel), or
-/// - the OS error is `ERROR_OPERATION_ABORTED` (995, aborted I/O).
+/// - the OS error is `ERROR_OPERATION_ABORTED` (995, aborted I/O), or
+/// - the OS error is [`ERROR_INVALID_HANDLE`] (6, a handle that cannot recover).
 ///
 /// Any other error while `running` is `true` (a receive timeout, a short
 /// buffer, ...) is transient from the loop's point of view: it must not break,
@@ -48,7 +58,9 @@ pub const fn recv_should_break(running: bool, raw_os_error: i32) -> bool {
     if !running {
         return true;
     }
-    raw_os_error == ERROR_NO_DATA || raw_os_error == ERROR_OPERATION_ABORTED
+    raw_os_error == ERROR_NO_DATA
+        || raw_os_error == ERROR_OPERATION_ABORTED
+        || raw_os_error == ERROR_INVALID_HANDLE
 }
 
 /// Bounded acknowledgement that every owner thread released its handle.
@@ -139,6 +151,13 @@ mod tests {
     #[test]
     fn recv_should_break_on_operation_aborted() {
         assert!(recv_should_break(true, 995));
+    }
+
+    #[test]
+    fn recv_should_break_on_invalid_handle() {
+        // A dead handle cannot be revived by the retry budget, and waiting it
+        // out delays the one message that says interception stopped.
+        assert!(recv_should_break(true, ERROR_INVALID_HANDLE));
     }
 
     #[test]
