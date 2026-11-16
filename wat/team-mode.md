@@ -78,9 +78,9 @@ Rules that follow from the implementation:
 
 | Tool | Use it for |
 |---|---|
-| `subagent` | Start a fresh teammate: `name` (slug), `description`, `prompt`, optional provider/model/reasoning effort |
+| `subagent` | Start a fresh teammate: `name` (slug), `description`, `prompt`, optional provider/model/reasoning effort. Prefer resuming an idle instance of the persona (Step 2); spawn only when that is not possible |
 | `subagent_fork` | Start a teammate that inherits this conversation's completed turns |
-| `send_message` | Tell a named agent something; the only way to make an idle agent act |
+| `send_message` | Tell a named agent something; the only way to make an idle agent act - and therefore the way a durable teammate is resumed for its next task |
 | `list_agents` | Discover the tree and the exact names to assign or message |
 | `wait_agent` | Wait for the caller's next inbox input (a message or completion), not for task changes |
 | `interrupt_agent` | Stop a descendant's turn — **disabled in the built-in configs**; assume it is unavailable |
@@ -113,13 +113,33 @@ One task per deliverable, not per persona. Each task carries:
 
 Sequence the work with dependencies instead of telling agents to "wait".
 
-### Step 2 — Lead spawns one teammate per task
+### Step 2 - Lead gives each task one durable owner
 
-Use the envelope in section 5, then the persona's **Delegation brief** from
-`wat/personas/<slug>.md`, then the task id and acceptance criteria.
+A teammate is a **persona instance, not a task**. Keep one live instance per
+persona across rounds and reuse it: reassign the new task to it (or leave it
+unowned and send the task id) and `send_message` the idle agent with the state
+delta, the new task id and its acceptance criteria. Spawning is the exception,
+not the default:
 
-Start independent tasks in the same step when they do not share write scopes;
-they run concurrently. Do not spawn two agents on overlapping scopes.
+- spawn when two ready tasks need the same persona **in parallel** (the second
+  instance takes the `-2` suffix and later reuses that suffix);
+- spawn when the existing instance's context is contaminated - an implementer
+  must never verify its own patch, and QA must be a different agent from the
+  author;
+- spawn when the instance is unusable (crashed context, wrong persona, or so
+  stale that re-briefing costs more than a fresh start).
+
+Why: names are stable unique handles, so a fresh spawn per task burns a suffix
+for no benefit and every new agent re-reads the repo from zero; a resumed agent
+keeps its knowledge of the code it already changed. Task changes never wake an
+idle agent - always `send_message` after claiming or reassigning. A resumed agent
+must still re-read `wat/state/current-phase.md`, its task, and the files it will
+touch: its own memory is context, not evidence.
+
+Use the envelope in section 5, the persona's **Delegation brief** from
+`wat/personas/<slug>.md`, and the task id + acceptance criteria when you wake or
+spawn. Start independent tasks in the same step when they do not share write
+scopes; they run concurrently. Do not give two agents overlapping scopes.
 
 ### Step 3 — Assign or let them claim
 

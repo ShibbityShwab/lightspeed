@@ -63,6 +63,12 @@ jobs:
         # Exits non-zero (and posts the evidence to Discord when the
         # webhook is set) if any detector fires.
         #
+        # Deliberately NOT passed --no-probe: the live /health probe is what
+        # lets relay_unreachable_streak tell "the collector cannot see a
+        # healthy relay" (this job's blind spot, fired) apart from "the relay
+        # is down" (relay_health_failed, the other instrument). With
+        # --no-probe the streak detector judges history alone.
+        #
         # --max-staleness is set explicitly because the collector's SLOT is
         # hourly but GitHub throttles scheduled workflows on this repo, so the
         # real cadence is ~3.5-6h (measured 2026-10-02: pages.yml schedule gaps

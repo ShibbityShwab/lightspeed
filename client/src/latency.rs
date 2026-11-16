@@ -598,6 +598,11 @@ pub struct ValidatedPathSample {
 /// in a 10-minute match means the design is not viable", so the accepted and
 /// rejected totals are published here instead of being inferred from an absence
 /// of log lines. Every accepted sample and every rejection is also traced.
+///
+/// The totals are finalized when they are observed: [`LatencyTracker::probe_counters`]
+/// sweeps probes that have waited longer than [`PROBE_WINDOW`] and counts them
+/// as `rejected_timeout` first, so a probe whose server or session goes quiet
+/// for good is still counted even though no later traffic arrives to notice it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProbeCounters {
     /// Samples that passed every validity rule and entered the relayed window.
@@ -859,6 +864,30 @@ impl LatencyTracker {
         }
     }
 
+    /// Finalize every armed probe older than [`PROBE_WINDOW`] as a timeout.
+    ///
+    /// [`Self::expire_armed`] only finalizes the one server whose write path has
+    /// just run, so a probe whose server goes quiet for good - or whose session
+    /// ends before any later inbound/send - would never be counted. The counters
+    /// are therefore swept when they are observed: this keeps the falsifier's
+    /// rejected-reason totals complete without a background thread and without
+    /// depending on more traffic. Removing the probe is what makes the count
+    /// exactly-once: a repeated observation, a later reply, or the per-server
+    /// expire path above all find nothing left to count.
+    fn expire_all_armed(inner: &mut Inner, now: Instant) {
+        let expired: Vec<(Ipv4Addr, ArmedProbe)> = inner
+            .armed
+            .iter()
+            .filter(|(_, armed)| now.saturating_duration_since(armed.sent_at) > PROBE_WINDOW)
+            .map(|(server, armed)| (*server, *armed))
+            .collect();
+        for (server, armed) in expired {
+            inner.armed.remove(&server);
+            let elapsed = now.saturating_duration_since(armed.sent_at);
+            inner.reject_probe(server, armed.relay, elapsed, ProbeRejection::Timeout);
+        }
+    }
+
     /// Record a relayed response for `server`.
     ///
     /// A response becomes a whole-path sample only when it can be attributed to
@@ -994,8 +1023,21 @@ impl LatencyTracker {
     }
 
     /// Snapshot of the quiet-flow probe counters.
+    ///
+    /// **Semantics change (task-22):** this observation finalizes expired
+    /// probes first. Every probe that has waited longer than [`PROBE_WINDOW`] is
+    /// counted as `rejected_timeout` here, so the totals are complete even when
+    /// the server or the session went quiet and no later inbound/send would
+    /// have noticed the expiry. The sweep removes each finalized probe, so the
+    /// counters advance on the first read and repeated reads are idempotent; a
+    /// reply that arrives after the sweep cannot be counted a second time.
+    /// Runs under the existing tracker lock and touches only the armed map
+    /// (normally at most one entry per server), so it is cheap and lock-safe.
     pub fn probe_counters(&self) -> ProbeCounters {
-        self.lock().probe_counters
+        let now = self.clock.now();
+        let mut inner = self.lock();
+        Self::expire_all_armed(&mut inner, now);
+        inner.probe_counters
     }
 
     /// Jitter of the direct (ICMP) burst medians for `server`.
@@ -1620,6 +1662,12 @@ pub fn record_client_relay_rtt(relay: SocketAddrV4, rtt_ms: f32) {
 /// These are the v1 falsifier's instrument: a 10-minute live match must produce
 /// at least 8 accepted samples per (relay, server), and the rejection reasons
 /// explain any shortfall.
+///
+/// **Semantics change (task-22):** reading the counters finalizes expired
+/// probes. A probe armed more than [`PROBE_WINDOW`] ago is counted as
+/// `rejected_timeout` on this call, so the totals are complete even for a
+/// server or session that went quiet with no later traffic. Repeated reads are
+/// idempotent, and a reply arriving after the observation is not counted again.
 pub fn probe_counters() -> ProbeCounters {
     global().map_or_else(ProbeCounters::default, |tracker| tracker.probe_counters())
 }
@@ -2224,6 +2272,94 @@ mod tests {
         assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
         assert_eq!(t.probe_counters().rejected_timeout, 1);
         assert_eq!(t.relayed_samples(), 0);
+    }
+
+    #[test]
+    fn an_unanswered_probe_is_counted_when_the_counters_are_read() {
+        // WF-065 QA finding F4: the old accounting needed a later inbound or a
+        // later send for the same server. If the flow stops for good (session
+        // ends, server goes quiet) the expired probe was never counted, so the
+        // rejection totals - the falsifier's instrument - under-reported. The
+        // observation itself must finalize it.
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        // Nothing armed: time alone rejects nothing.
+        clock.advance(PROBE_WINDOW * 2);
+        assert_eq!(
+            t.probe_counters(),
+            ProbeCounters::default(),
+            "an observation with no armed probe counts nothing"
+        );
+
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(PROBE_WINDOW + Duration::from_millis(1));
+
+        // No inbound, no further outbound: only the read can finalize it.
+        let first = t.probe_counters();
+        assert_eq!(
+            first.rejected_timeout, 1,
+            "an unanswered probe is a timeout at observation time"
+        );
+        assert_eq!(first.accepted, 0);
+        assert_eq!(first.resolved(), 1);
+
+        // ... and exactly once.
+        assert_eq!(
+            t.probe_counters().rejected_timeout,
+            1,
+            "a repeated observation must not count the same timeout twice"
+        );
+    }
+
+    #[test]
+    fn every_expired_armed_probe_is_swept_once() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        t.note_outbound_from(OTHER_SERVER, Some(relay(2)));
+        clock.advance(PROBE_WINDOW + Duration::from_millis(1));
+
+        assert_eq!(
+            t.probe_counters().rejected_timeout,
+            2,
+            "the sweep covers every server, not only the one being written"
+        );
+        assert_eq!(
+            t.probe_counters().rejected_timeout,
+            2,
+            "a second observation must not count them again"
+        );
+    }
+
+    #[test]
+    fn a_reply_after_the_sweep_is_not_counted_twice() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 50.0);
+
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(PROBE_WINDOW + Duration::from_millis(1));
+        assert_eq!(
+            t.probe_counters().rejected_timeout,
+            1,
+            "the observation finalized the probe as a timeout"
+        );
+
+        // The late reply now finds the probe already accounted for: no sample
+        // and no second timeout entry.
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
+        assert_eq!(t.relayed_samples(), 0);
+        assert_eq!(
+            t.probe_counters().rejected_timeout,
+            1,
+            "the late reply must not be counted again"
+        );
+        assert_eq!(t.probe_counters().rejected(), 1);
     }
 
     #[test]

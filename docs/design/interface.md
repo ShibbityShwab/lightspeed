@@ -52,15 +52,18 @@ The relayed path has two halves and the client only measures one of them. The
 relay-to-game-server leg and, in the same breath, how the relay choice obtained
 it. There is exactly one driving fact: the ranking row for **the relay in use**
 (never the staged winner), plus the v1 estimator's published measurement when one
-exists. The window does not derive the leg from the geo table or from the
-choice's total a second time.
+exists. The bounded state has a second, earlier driver: the same triangle floor,
+stated from a fresh direct ping once it lands rather than waiting for the next
+ranking (`RELAY_RECHECK_INTERVAL` = 600 s, longer than most matches). The window
+does not derive the leg from the geo table or from the choice's total a second
+time, and it never re-ranks from the surface.
 
 | State | What the window must say | Driving fact (single source) |
 | --- | --- | --- |
 | Server leg measured | `measured {ms} ms · n={n}` (with `· last {secs}s` once the estimator reports a sample age) | the v1 quiet-flow estimator published an estimate for `(relay in use, game server)`: `destination_estimator().estimate()` - the same "publishable or None" gate the ranking's `Measured` source uses |
-| Server leg bounded | `at least {ms} ms · triangle bound` | the ranking row for the relay in use has `dest_source = GeometricFloor`: `direct - client leg` is a proof of a lower bound, not a measurement |
+| Server leg bounded | `at least {ms} ms · triangle bound` | **(i)** the ranking row for the relay in use has `dest_source = GeometricFloor` - the ranking itself proved `direct - client leg`; **or (ii)** before a re-ranking, a fresh direct ping (≤ `SERVER_PING_FRESH_SECS`) plus the relay's measured one-RTT client leg make the same triangle floor `L3d − L1` provable and stronger than the prior (and when `L1 ≥ L3d`, prove the relay cannot beat direct at all). Both drivers are the same provable verdict, never a measurement; (ii) re-ranks nothing and changes no relay |
 | Server leg not measured | `not measured · prior ~{ms} ms ±{unc} ms` | the ranking row for the relay in use has `dest_source = RegionPrior`; `{unc}` is `PRIOR_UNCERTAINTY_US` (25 ms), the same charge the ranking added to the whole-path total |
-| Server leg unknown | `not measured · no region prior` | the ranking row is `Unknown`, or the estimator says `Measured` but publishes nothing the surface can show |
+| Server leg unknown | `not measured · no region prior` | the ranking row is `Unknown` (no provable floor either), or the estimator says `Measured` but publishes nothing the surface can show |
 | Relay cannot beat direct | caption: `This relay cannot be faster than direct for this server` | `L1 >= L3d`: the keepalive's one-RTT client leg against a fresh ICMP direct ping. A triangle-inequality proof from two measurements the client owns |
 
 Rules for these states:
@@ -82,8 +85,14 @@ Rules for these states:
   (`better than direct by N ms` / `not better than direct`) so the claim is
   auditable in the log, not asserted on an estimate.
 - Direct-ping freshness is one rule (`SERVER_PING_FRESH_SECS`, 60 s) shared by
-  the header's metric, the ranking's triangle floor and this verdict. A stale
-  ping may not floor a candidate, decide a verdict, or be displayed as current.
+  the header's metric, the ranking's triangle floor, the early bound and this
+  verdict. A stale ping may not floor a candidate, decide a verdict, or be
+  displayed as current.
+- The early (pre-ranking) bound is **not a second ranking rule**: it is
+  `L3d − L1` from the same two inputs the ranking's `apply_floor` consumes, it
+  only renders when it is stronger than the row it replaces, it re-ranks
+  nothing, moves no relay, and it disappears back to the prior state if the ping
+  goes stale. The relay choice is unchanged by it.
 
 ### Relay-choice inputs (changed 2026-11-16, task-14)
 

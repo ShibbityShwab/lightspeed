@@ -24,6 +24,14 @@
 #       dictionary state that the `country` label is a client OS locale
 #       country, not location, and that the stats branch persists no
 #       per-game dimension
+#   (s) signed sums (`saved_ms_sum`, `saved_app_ms_sum`) are not monotone
+#       counters: a decrease is a negative-saving window (book the negative
+#       difference, no reset); only a detected relay restart books the
+#       current value
+#   (t) metric-name consistency: the collector and network-stats read the
+#       `lightspeed_telemetry_saved_app_negative_count` family the relay
+#       actually emits, not the dead `..._saved_app_ms_negative_count` name,
+#       and the fixtures emit the real family so a drift fails (o)/(q)
 #
 # No network: the fake registry points health/metrics URLs at file://
 # fixtures, which curl reads locally.
@@ -208,7 +216,7 @@ assert_jq "$H" '.snapshots[2].per_relay["relay-a"].reset_metrics | index("drops_
 assert_jq "$H" '.snapshots[2].per_relay["relay-a"].reset_metrics | index("fec_parity_received") != null' "(c) decreased parity counter flagged"
 assert_jq "$H" '.snapshots[2].interval.fec_parity_received == 10' "(c) parity reset delta equals current value"
 assert_jq "$H" '.snapshots[2].totals.packets_relayed == 180' "(c) totals add reset deltas"
-assert_jq "$H" '(.snapshots[2].totals as $n | .snapshots[1].totals as $p | [ ($n | keys_unsorted[]) as $k | ($n[$k] >= $p[$k]) ] | all)' "(c) totals never regress across every counter"
+assert_jq "$H" '(.snapshots[2].totals as $n | .snapshots[1].totals as $p | [ ($n | keys_unsorted[]) as $k | select($k != "saved_ms_sum" and $k != "saved_app_ms_sum") | ($n[$k] >= $p[$k]) ] | all)' "(c) monotone totals never regress (signed savings sums are excluded by design)"
 
 # ── (d) 360-snapshot cap trims the oldest ────────────────────
 CAP="$TMP/cap-history.json"
@@ -443,7 +451,7 @@ write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 append_metrics_file "$TMP" a \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 250.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 10' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 2'
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 2'
 run_collect "$APPQ_H" "$REG_A"
 assert_rc0 $? "(o) saved-app first run exits 0"
 assert_jq "$APPQ_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_app_ms_sum == 250' "(o) saved_app sum parsed"
@@ -456,7 +464,7 @@ write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
 append_metrics_file "$TMP" a \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 400.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 16' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 5'
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 5'
 run_collect "$APPQ_H" "$REG_A"
 assert_rc0 $? "(o) saved-app second run exits 0"
 assert_jq "$APPQ_H" '.snapshots[-1].interval.saved_app_ms_sum == 150' "(o) saved_app sum delta"
@@ -492,19 +500,19 @@ write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
 append_metrics_file "$TMP" a \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 100.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 4' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 1' \
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 1' \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="FR"} 60.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 2' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 1' \
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 1' \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="US"} 30.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 3' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 2' \
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 2' \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="JP"} -10.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 3' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 2' \
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 2' \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 10.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 1' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 0'
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 0'
 run_collect "$SRC_H" "$REG_A"
 assert_rc0 $? "(q) per-source first run exits 0"
 assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_sum == 160' "(q) eu sums DE+FR"
@@ -523,19 +531,19 @@ write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
 append_metrics_file "$TMP" a \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 250.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 8' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 2' \
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 2' \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="FR"} 60.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 2' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 1' \
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="FR"} 1' \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="US"} 30.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 3' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 2' \
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="US"} 2' \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="JP"} -10.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 3' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 2' \
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="JP"} 2' \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 10.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 1' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 0'
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="ZZ"} 0'
 run_collect "$SRC_H" "$REG_A"
 assert_rc0 $? "(q) per-source second run exits 0"
 assert_jq "$SRC_H" '.snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_sum == 310 and .snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_count == 10' "(q) sources track the cumulative scrape, not a delta"
@@ -549,11 +557,11 @@ write_relay_fixture "$TMP" b 50 0 2
 append_metrics_file "$TMP" a \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 80.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 4' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 1'
+	'lightspeed_telemetry_saved_app_negative_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 1'
 append_metrics_file "$TMP" b \
 	'lightspeed_telemetry_saved_app_ms_sum{region="us-east",node_id="relay-b",game="cs2",country="US"} 40.0' \
 	'lightspeed_telemetry_saved_app_ms_count{region="us-east",node_id="relay-b",game="cs2",country="US"} 4' \
-	'lightspeed_telemetry_saved_app_ms_negative_count{region="us-east",node_id="relay-b",game="cs2",country="US"} 2'
+	'lightspeed_telemetry_saved_app_negative_count{region="us-east",node_id="relay-b",game="cs2",country="US"} 2'
 run_collect "$SRC_GF_H" "$REG_AB"
 assert_rc0 $? "(q) source carry baseline exits 0"
 assert_jq "$SRC_GF_H" '.snapshots[-1].per_relay["relay-b"].sources.na.saved_app_ms_sum == 40' "(q) relay-b source map retained"
@@ -591,6 +599,89 @@ if grep -Fq "No game dimension is persisted" "$COLLECT" 2>/dev/null; then
 	PASS=$((PASS + 1))
 else
 	printf '  FAIL: %s no longer documents that the stats branch persists no game dimension\n' "$COLLECT" >&2
+	FAILURES=$((FAILURES + 1))
+fi
+
+# ── (s) signed sums: a decrease is data, not a restart ───────
+# `saved_ms_sum` and `saved_app_ms_sum` accumulate a SIGNED saving: clients
+# reporting the relay slower than direct make the cumulative DECREASE. The old
+# rule booked any decrease as a relay restart and added the whole current
+# value, so the 2026-11-16 relay-fra alert window booked -225.2ms where the
+# true cumulative change was -141.3ms (a 60% inflation). Signed sums are now
+# differenced (negative allowed) and only a detected restart - a monotone
+# probe counter went backwards - books their current value.
+SGN_H="$TMP/history-signed.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+append_metrics_file "$TMP" a \
+	'lightspeed_telemetry_saved_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 500.0' \
+	'lightspeed_telemetry_saved_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 10' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 1000.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 100'
+run_collect "$SGN_H" "$REG_A"
+assert_rc0 $? "(s) signed-sum baseline run exits 0"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].cumulative.saved_ms_sum == 500' "(s) signed sum parsed as a cumulative"
+assert_jq "$SGN_H" '.snapshots[-1].interval.saved_ms_sum == 500' "(s) first snapshot seeds the signed sum"
+
+# Monotone counters GROW while the signed sums FALL: a negative-saving window.
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
+append_metrics_file "$TMP" a \
+	'lightspeed_telemetry_saved_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 300.0' \
+	'lightspeed_telemetry_saved_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 15' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 700.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 160'
+run_collect "$SGN_H" "$REG_A"
+assert_rc0 $? "(s) negative-window run exits 0"
+assert_jq "$SGN_H" '.snapshots[-1].interval.saved_ms_sum == -200' "(s) a signed decrease is the negative difference (-200), not a restart booking"
+assert_jq "$SGN_H" '.snapshots[-1].interval.saved_app_ms_sum == -300' "(s) the app-level signed decrease is booked (-300)"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].reset == false' "(s) a signed decrease does not mark the relay reset"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].reset_metrics | index("saved_ms_sum") == null' "(s) the signed sum is not in reset_metrics"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].lifetime.saved_ms_sum == 300' "(s) lifetime accumulates the negative delta (500 - 200)"
+assert_jq "$SGN_H" '.snapshots[-1].totals.saved_ms_sum == 300' "(s) signed totals are the net accumulated saving (they may decrease)"
+
+# A real restart: monotone counters fall, so the new process's signed
+# cumulative is the delta - not a negative difference against the old process.
+write_fixture "$TMP" 40 2 300 1 1 1 0 100 3 0 10
+append_metrics_file "$TMP" a \
+	'lightspeed_telemetry_saved_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 60.0' \
+	'lightspeed_telemetry_saved_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 4' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 90.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 9'
+run_collect "$SGN_H" "$REG_A"
+assert_rc0 $? "(s) restart run exits 0"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].reset == true' "(s) a monotone decrease still marks the relay reset"
+assert_jq "$SGN_H" '.snapshots[-1].interval.saved_ms_sum == 60' "(s) restart books the new process's signed cumulative (60)"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].lifetime.saved_ms_sum == 360' "(s) lifetime survives the restart (300 + 60)"
+
+# ── (t) metric-name consistency: the relay's real family name ──
+# The relay emits `lightspeed_telemetry_saved_app_negative_count` (no `ms`);
+# see proxy/src/metrics.rs. The scripts match a family by exact name, so a
+# one-token drift silently files every negative observation as 0 - that is how
+# negative_saving_spike, the site's negative share and the recommender's
+# negative gate died for months. The (o)/(q) fixtures now emit the REAL family,
+# so a drift back fails those value assertions; this pins the name as well.
+REAL_FAMILY="lightspeed_telemetry_saved_app_negative_count"
+DEAD_FAMILY="lightspeed_telemetry_saved_app_ms_negative_count"
+for metric_script in "$COLLECT" "$SCRIPT_DIR/network-stats.sh"; do
+	if grep -Fq "$REAL_FAMILY" "$metric_script" 2>/dev/null; then
+		PASS=$((PASS + 1))
+	else
+		printf '  FAIL: %s does not read the emitted family "%s"\n' "$metric_script" "$REAL_FAMILY" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
+	if grep -Fq "$DEAD_FAMILY" "$metric_script" 2>/dev/null; then
+		printf '  FAIL: %s still reads the dead family name "%s"\n' "$metric_script" "$DEAD_FAMILY" >&2
+		FAILURES=$((FAILURES + 1))
+	else
+		PASS=$((PASS + 1))
+	fi
+done
+fixture_real="$(grep -Fc "$REAL_FAMILY{" "$BASH_SOURCE" 2>/dev/null || true)"
+fixture_dead="$(grep -Fc "$DEAD_FAMILY{" "$BASH_SOURCE" 2>/dev/null || true)"
+if [ "${fixture_real:-0}" -ge 10 ] && [ "${fixture_dead:-0}" -eq 0 ]; then
+	PASS=$((PASS + 1))
+else
+	printf '  FAIL: fixtures must emit the real negative-count family (%s real lines, %s dead-name lines)\n' \
+		"${fixture_real:-0}" "${fixture_dead:-0}" >&2
 	FAILURES=$((FAILURES + 1))
 fi
 

@@ -17,14 +17,27 @@
 #   * Always exits 0; one unreachable relay never aborts the run.
 #   * Only bash + curl + jq are used.
 #
-# Reset rule: for each relay + cumulative metric, if current >= previous
-# then delta = current - previous (reset=false); otherwise delta =
-# current with a reset flag for that metric (the relay restarted). A
-# relay absent from the current scrape is carried forward from the prior
+# Reset rule — two classes of metric
+# ──────────────────────────────────
+# Monotone counters: if current >= previous then delta = current - previous
+# (reset=false); otherwise delta = current with a reset flag for that metric
+# (the relay restarted).
+#
+# Signed sums: `saved_ms_sum` and `saved_app_ms_sum` accumulate a SIGNED
+# saving, so a decrease is normal client data (clients reported the relay
+# slower than direct), not a relay restart. They are differenced as
+# current - previous even when negative; only a detected restart (one of the
+# RESTART_PROBES counters went backwards) books the current value. Booking a
+# signed decrease as a restart inflates the window: on 2026-11-16 it booked
+# -104.2 and -121.0 where the true increments were -124.5 and -16.8, a ~60%
+# inflation that fired a false `saved_regression` alert (relay-fra task-3).
+#
+# A relay absent from the current scrape is carried forward from the prior
 # snapshot (same lifetime, zero delta, reachable=false). Per-relay
-# lifetime.* is the reset-safe accumulator and totals.* is the sum of
-# those accumulators, so the published fleet total always reconciles with
-# the per-relay lifetimes.
+# lifetime.* is the reset-safe accumulator and totals.* is the sum of those
+# accumulators, so the published fleet total always reconciles with the
+# per-relay lifetimes. For the two signed sums `totals.*` may decrease: that
+# is the net accumulated saving, not a lost counter.
 #
 # Non-counter fields: `active_sessions` is a gauge and `version` is a
 # label. They are recorded per relay but excluded from delta/totals,
@@ -90,6 +103,23 @@ REGIONS_PATH="${LIGHTSPEED_REGIONS_PATH:-$REPO_ROOT/infra/geo/regions.json}"
 # Cumulative counters tracked for reset-safe deltas. Keep this list in
 # sync with RELAY_JQ's `cumulative` object.
 COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","sessions_created","direct_ms_sum","direct_ms_count","relayed_ms_sum","relayed_ms_count","saved_ms_sum","saved_ms_count","direct_app_ms_sum","direct_app_ms_count","saved_app_ms_sum","saved_app_ms_count","saved_app_ms_negative_count","route_reports","route_samples","route_rtt_p50_ms_sum","route_rtt_p50_ms_count","route_rtt_p95_ms_sum","route_rtt_p95_ms_count","route_rtt_p99_ms_sum","route_rtt_p99_ms_count","route_jitter_ms_sum","route_jitter_ms_count","route_lost","route_recovered","route_dedup_saved","route_rejected"]'
+
+# Metrics whose value is a SIGNED accumulator, not a monotone counter. A
+# decrease is data, not a relay restart: `saved_ms_sum` and
+# `saved_app_ms_sum` go down whenever a client reports the relay slower than
+# direct. They are delta'd as current - previous (negative allowed), and only
+# a detected restart books the current value. Keep this list in sync with the
+# signed fields in RELAY_JQ's `cumulative` object.
+SIGNED_COUNTERS='["saved_ms_sum","saved_app_ms_sum"]'
+
+# Monotone counters used to detect a relay restart for the signed sums above.
+# `packets_relayed`, `bytes_relayed` and `sessions_created` only ever grow
+# within one relay process, so any decrease means a new process is
+# accumulating and the signed cumulative restarted at zero. Residual
+# limitation (documented, not guessed at): if the new process already exceeds
+# every old counter by scrape time the restart is invisible here and its
+# signed growth is indistinguishable from a continuing process.
+RESTART_PROBES='["packets_relayed","bytes_relayed","sessions_created"]'
 
 # ── Always write valid JSON; never fail the caller ───────────
 write_json() {
@@ -191,7 +221,7 @@ def source_cells($m; $countries):
   | (reduce labeled_rows($m; "lightspeed_telemetry_saved_app_ms_count")[] as $r
      ({}; .[$r.country].saved_app_ms_count =
             (((.[$r.country].saved_app_ms_count) // 0) + $r.v))) as $counts
-  | (reduce labeled_rows($m; "lightspeed_telemetry_saved_app_ms_negative_count")[] as $r
+  | (reduce labeled_rows($m; "lightspeed_telemetry_saved_app_negative_count")[] as $r
      ({}; .[$r.country].saved_app_ms_negative_count =
             (((.[$r.country].saved_app_ms_negative_count) // 0) + $r.v))) as $negs
   | ([ ($sums | keys), ($counts | keys), ($negs | keys) ] | add // []) as $cs
@@ -246,7 +276,10 @@ def source_cells($m; $countries):
       direct_app_ms_count: sum_family($m; "lightspeed_telemetry_direct_app_ms_count"),
       saved_app_ms_sum: sum_family($m; "lightspeed_telemetry_saved_app_ms_sum"),
       saved_app_ms_count: sum_family($m; "lightspeed_telemetry_saved_app_ms_count"),
-      saved_app_ms_negative_count: sum_family($m; "lightspeed_telemetry_saved_app_ms_negative_count"),
+      # The relay exports this family WITHOUT `ms` in the negative counter
+      # (proxy/src/metrics.rs): reading the misspelled name filed every
+      # negative-saving observation as 0 for months (dead `negative_saving_spike`).
+      saved_app_ms_negative_count: sum_family($m; "lightspeed_telemetry_saved_app_negative_count"),
       relayed_ms_sum: sum_family($m; "lightspeed_telemetry_relayed_ms_sum"),
       relayed_ms_count: sum_family($m; "lightspeed_telemetry_relayed_ms_count"),
       saved_ms_sum: sum_family($m; "lightspeed_telemetry_saved_ms_sum"),
@@ -278,11 +311,19 @@ def source_cells($m; $countries):
 # ── Delta engine: prev history + current scrape -> bounded document ──
 DELTA_JQ='
 def n: (tonumber? // 0);
-# Reset-safe delta for one counter: monotonic growth -> difference;
+def is_signed($k): (($signed // []) | index($k)) != null;
+# Reset-safe delta for one counter: monotone growth -> difference;
 # a backward counter (relay restarted) -> the new cumulative, because
 # the lifetime up to the reset already lives in prev_lifetime.
-def delta_of($cv; $pv; $reach):
-  if $reach then (if $cv >= $pv then $cv - $pv else $cv end) else 0 end;
+# A signed sum is differenced even when it DECREASES (a negative saving is
+# data, not a restart); only a detected restart books its current value.
+def delta_of($cv; $pv; $reach; $signedk; $restart):
+  if $reach then
+    (if $signedk
+     then (if $restart then $cv else $cv - $pv end)
+     else (if $cv >= $pv then $cv - $pv else $cv end)
+     end)
+  else 0 end;
 # First time a relay is seen, its lifetime is its current cumulative
 # (the lifetime up to that point). If an older snapshot predates the
 # lifetime field, seed from its cumulative instead of dropping history.
@@ -300,13 +341,26 @@ def prev_life($pr; $k):
     | (.cumulative // {}) as $cc
     | (($prevrelay[$id]) // null) as $pr
     | (($pr.cumulative) // {}) as $pc
+    # Restart signal for the signed sums: a new relay (no previous row) or a
+    # monotone probe counter that went backwards. A signed-sum decrease alone
+    # is NOT a restart (that was the 2026-11-16 mis-booking).
+    | (if $pr == null then true
+       else ([ $restart_probes[] as $rp
+               | ($cc[$rp] // 0 | n) as $rcv
+               | (if ($pc | type) == "object" then ($pc[$rp] // 0 | n) else 0 end) as $rpv
+               | select($rcv < $rpv) ] | length) > 0
+       end) as $restart
     | (reduce $counters[] as $k (
          {cum:{}, delta:{}, lifetime:{}, reset_metrics:[]};
          ($cc[$k] // 0 | n) as $cv
          | (if ($pc | type) == "object" then ($pc[$k] // 0 | n) else 0 end) as $pv
          | (if $reach then $cv else $pv end) as $effc
-         | delta_of($cv; $pv; $reach) as $d
-         | (if $reach and ($pr == null or $cv < $pv) then true else false end) as $rst
+         | delta_of($cv; $pv; $reach; is_signed($k); $restart) as $d
+         # reset_metrics keeps its "a counter went backwards" meaning: signed
+         # sums are excluded because their decreases are data (only a real
+         # restart, visible on the monotone counters, marks the relay reset).
+         | (if $reach and (is_signed($k) | not) and ($pr == null or $cv < $pv)
+            then true else false end) as $rst
          | .cum[$k] = $effc
          | .delta[$k] = $d
          | .lifetime[$k] = (prev_life($pr; $k) + $d)
@@ -492,6 +546,8 @@ result="$(jq -c \
 	--slurpfile prevf "$ctmp/prev.json" \
 	--slurpfile curf "$ctmp/current.json" \
 	--argjson counters "$COUNTERS" \
+	--argjson signed "$SIGNED_COUNTERS" \
+	--argjson restart_probes "$RESTART_PROBES" \
 	--argjson max "$MAX_SNAPSHOTS" \
 	--argjson now "$NOW" \
 	"${DPROLOGUE}${DELTA_JQ}" <<<'null' 2>/dev/null || true)"

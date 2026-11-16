@@ -57,6 +57,19 @@
 #                                 and relay-bom-1 ~1.6M). Traffic
 #                                 distribution, not a failure: reported and
 #                                 posted, but never fails the run.
+#   (j) relay_unreachable_streak  a registry relay is unreachable to the
+#                                 COLLECTOR (or missing from its snapshots)
+#                                 for a sustained streak, while its live
+#                                 /health probe answers - a collector blind
+#                                 spot, not a dead relay. Live 2026-10-27..
+#                                 11-12: relay-fra was reachable:false in 65
+#                                 consecutive snapshots (~16 days) and no
+#                                 monitor run failed, because every
+#                                 history-only detector skips an unreachable
+#                                 relay and the live health gate passed.
+#                                 Severity warning, but it fails the run: a
+#                                 blind collector silently invalidates every
+#                                 per-relay baseline.
 #
 # The window is sustained (default 3 snapshots), never a single
 # snapshot, so a legitimately idle relay is not mistaken for an outage.
@@ -94,7 +107,15 @@ HISTORY_OVERRIDE=""
 AUTH_MIN=100       # window auth_rejections floor for a spike
 AUTH_FACTOR=3      # window auth must be this multiple of the baseline
 SESSION_FLAT_MAX=0 # sessions_created growth still considered "flat"
-MIN_SAVED_SAMPLES=5
+# A 5-report ICMP window is noise: relay-fra has ~101 lifetime paired ICMP
+# reports across 58 days, so 5 samples is ~5% of its whole record and moves
+# with one client's 15-minute flush. The 2026-11-16 "-45ms over 5 samples"
+# alert came from exactly that, with the baseline drawn across a relay
+# restart (the real baseline was 2 samples, below this gate's old floor).
+# 20 is the floor where a per-relay ICMP window mean is worth alerting on;
+# the much denser weighted app-level metric must also agree directionally
+# before saved_regression fires (see the detector block).
+MIN_SAVED_SAMPLES=20
 SAVED_REGRESSION=0.5
 NEG_SHARE_MAX=0.5
 NEG_MIN=5
@@ -131,6 +152,19 @@ ABUSE_SHARE=0.9  # abuse_blocked / packets_dropped floor
 # must hold, and the window must be sustained (W >= 2).
 SKEW_MIN=1000   # top relay's window packets_relayed floor, per HOUR of window
 SKEW_SHARE=0.5  # top relay's share of the fleet's window relayed packets
+
+# relay_unreachable_streak: a registry relay the COLLECTOR cannot see any
+# more. The collector is scheduled hourly but GitHub throttles it to
+# ~3.5-6h, so one missed scrape is noise; require 3 consecutive snapshots AND
+# >= 6h elapsed from the first missed snapshot before calling it a blind spot.
+# The detector is suppressed when the live /health probe for that relay
+# already fails (relay_health_failed is the honest signal then). It exists
+# because live 2026-10-27..11-12 let relay-fra sit `reachable:false` in 65
+# consecutive snapshots (~16 days) with no monitor failure: every
+# history-only detector skips an unreachable relay, so a blind collector
+# looked exactly like a quiet fleet.
+UNREACHABLE_MIN_SNAPSHOTS=3
+UNREACHABLE_MIN_SECS=21600
 
 # Traffic-distribution detectors: reported and alerted, but not build-failing.
 # idle_relay names a relay that was UP but had a quiet window - its own
@@ -270,6 +304,16 @@ case "$WINDOW" in '' | *[!0-9]*) WINDOW=3 ;; esac
 case "$BASELINE" in '' | *[!0-9]*) BASELINE=5 ;; esac
 case "$TIMEOUT" in '' | *[!0-9]*) TIMEOUT=5 ;; esac
 
+# Live probe vs history-only mode. The unreachable-streak detector suppresses
+# itself when the LIVE /health probe already fails for that relay (then
+# relay_health_failed is the honest signal); in --no-probe mode health is
+# unknown and the history streak is all the monitor can judge.
+if [ "$NO_PROBE" = true ]; then
+	LIVE_PROBE=false
+else
+	LIVE_PROBE=true
+fi
+
 # ── Resolve inventory through the shared resolver ────────────
 if [ -n "$REGISTRY_OVERRIDE" ]; then
 	export LIGHTSPEED_REGISTRY_PATH="$REGISTRY_OVERRIDE"
@@ -350,6 +394,11 @@ def vcmp($a; $b):
   | if $x[0] != $y[0] then ($x[0] - $y[0])
     elif $x[1] != $y[1] then ($x[1] - $y[1])
     else ($x[2] - $y[2]) end;
+# jq`s `//` treats false like null, so a failed probe read with `// true`
+# would silently become "healthy". Be explicit: absent -> true (unknown is
+# never flagged), present -> its boolean value.
+def probe_ok($probe; $id):
+  (if $probe[$id] == null then true else $probe[$id] end);
 
 ($hist[0]) as $hist
 | (($hist.snapshots // []) | if type == "array" then map(select(type == "object")) else [] end) as $snaps
@@ -489,6 +538,14 @@ def vcmp($a; $b):
         - ($base[0] | rel_life(.; $id; "saved_ms_sum"))) as $bs
      | (($base[-1] | rel_life(.; $id; "saved_ms_count"))
         - ($base[0] | rel_life(.; $id; "saved_ms_count"))) as $bc
+     # Pair-weighted app-level companion: 50-200x denser than the ICMP path.
+     # A saved regression must be visible in BOTH metrics, or it is not
+     # reported (the ICMP path alone is too sparse: ~101 paired reports for
+     # relay-fra over 58 days).
+     | (($win[-1] | rel_life(.; $id; "saved_app_ms_sum"))
+        - ($wstart | rel_life(.; $id; "saved_app_ms_sum"))) as $was
+     | (($base[-1] | rel_life(.; $id; "saved_app_ms_sum"))
+        - ($base[0] | rel_life(.; $id; "saved_app_ms_sum"))) as $bas
      | (($win[-1] | rel_life(.; $id; "saved_app_ms_negative_count"))
         - ($wstart | rel_life(.; $id; "saved_app_ms_negative_count"))) as $wn
      | (($win[-1] | rel_life(.; $id; "saved_app_ms_count"))
@@ -497,18 +554,34 @@ def vcmp($a; $b):
         - ($base[0] | rel_life(.; $id; "saved_app_ms_negative_count"))) as $bn
      | (($base[-1] | rel_life(.; $id; "saved_app_ms_count"))
         - ($base[0] | rel_life(.; $id; "saved_app_ms_count"))) as $ba
+     # A baseline drawn across a relay restart is not a baseline: the
+     # 2026-11-16 alert`s 5 baseline "samples" were a lifetime accumulator
+     # bridging two processes (2 real samples). Same for the window.
+     | ([ $base[] | ((((.per_relay // {})[$id] // {}).reset) // false) ] | any) as $base_reset
+     | ([ $win[] | ((((.per_relay // {})[$id] // {}).reset) // false) ] | any) as $win_reset
      | (if $wc > 0 then ($ws / $wc) else null end) as $wavg
      | (if $bc > 0 then ($bs / $bc) else null end) as $bavg
+     | (if $wa > 0 then ($was / $wa) else null end) as $wavg_app
+     | (if $ba > 0 then ($bas / $ba) else null end) as $bavg_app
      | (if $wa > 0 then ($wn / $wa) else null end) as $wneg
      | (if $ba > 0 then ($bn / $ba) else null end) as $bneg
      | ( if ($wc >= $min_saved and $bc >= $min_saved
              and $bavg != null and $bavg > 0 and $wavg != null
-             and $wavg < ($bavg * (1 - $saved_reg)))
+             and $wavg < ($bavg * (1 - $saved_reg))
+             and ($base_reset | not) and ($win_reset | not)
+             and $wa >= $min_saved and $ba >= $min_saved
+             and $wavg_app != null and $bavg_app != null
+             and $wavg_app < $bavg_app)
          then { type: "saved_regression", severity: "warning", relay: $id,
                 saved_ms_avg: $wavg, baseline_saved_ms_avg: $bavg,
+                app_saved_ms_avg: $wavg_app, baseline_app_saved_ms_avg: $bavg_app,
                 window_samples: $wc, baseline_samples: $bc,
+                app_window_samples: $wa, app_baseline_samples: $ba,
                 message: ($id + ": ping-saved " + one($wavg) + "ms vs baseline "
-                          + one($bavg) + "ms over " + ($wc | tostring) + " samples") }
+                          + one($bavg) + "ms over " + ($wc | tostring) + " samples"
+                          + " (weighted app-level " + one($wavg_app) + "ms vs "
+                          + one($bavg_app) + "ms over " + ($wa | tostring)
+                          + " paired observations; both windows restart-free)") }
          else empty end ),
        ( if ($wneg != null and $wneg >= $neg_share and $wn >= $neg_min
              and ($bneg == null or $wneg > $bneg))
@@ -595,6 +668,49 @@ def vcmp($a; $b):
                             + "other detector is describing frozen data") }
            else empty end)
         else empty end) ]) as $staleFlags
+# Collector blind spot: a registry relay that the history has not seen as
+# reachable for a sustained streak. Walk the snapshots backwards and count the
+# trailing run of "not reachable" (an absent per_relay row counts as not
+# reachable). A live /health probe that already fails means the relay itself is
+# the problem, so relay_health_failed carries it and this detector stays quiet;
+# in --no-probe mode health is unknown and the history streak is the judgement.
+| ([ $regids[] as $id
+     | (reduce (($snaps | reverse)[]) as $s ({n: 0, first_t: null, stop: false};
+          if .stop then .
+          else ((((($s.per_relay // {})[$id] // {}).reachable // false) as $r
+                 | if $r then (.stop = true)
+                   else ((.n += 1) | (.first_t = ($s.t // null)))
+                   end))
+          end)) as $streak
+     | ($streak.n | n) as $un
+     | (($snaps[-1].t // 0) | n) as $newest
+     | (if $streak.first_t == null then 0
+        else ($newest - ($streak.first_t | n)) end) as $span
+     # A relay the history has NEVER seen reachable (a brand-new registry
+     # entry, or a pruned history) is not a dropped connection: skip it rather
+     # than alert on the absence of a baseline that never existed.
+     | select($un < $N)
+     | select($un >= $unreachable_min and $span >= $unreachable_secs)
+     # A frozen collector is handled by stale_history; the last snapshot of a
+     # stopped collector only describes frozen data, so do not double-report
+     # the reachability state here.
+     | select($max_stale <= 0 or (($now - $newest) <= $max_stale))
+     | select(($live_probe | not) or probe_ok($probe; $id))
+     | { type: "relay_unreachable_streak", severity: "warning", relay: $id,
+         snapshots: $un, span_secs: $span, first_snapshot_t: $streak.first_t,
+         newest_snapshot_t: $newest,
+         live_health_ok: (if $live_probe then
+                            (if $probe[$id] == null then null else $probe[$id] end)
+                          else null end),
+         message: ($id + ": unreachable (or absent) to the collector for "
+                   + ($un | tostring) + " consecutive snapshot(s) spanning "
+                   + (((($span / 360) | round) / 10) | tostring) + "h"
+                   + (if ($live_probe and probe_ok($probe; $id))
+                      then ", while the live /health probe answers - the collector cannot see this relay"
+                      else " (live probe unavailable: history-only mode)" end)
+                   + "; every history-only detector silently skips an "
+                   + "unreachable relay, and its per-relay baselines are stale") }
+   ]) as $streakFlags
 | ([ $ids[] as $id
      | select(($regids | length) > 0 and (($regids | index($id)) == null))
      | { type: "relay_missing_from_registry", severity: "critical", relay: $id,
@@ -606,7 +722,7 @@ def vcmp($a; $b):
          message: ($id + ": /health probe failed") }
    ]) as $healthFlags
 | ($zeroFlags + $idleFlags + $authFlags + $verFlags + $relFlags + $savedFlags + $abuseFlags
-   + $skewFlags + $staleFlags + $missingFlags + $healthFlags) as $flags
+   + $skewFlags + $staleFlags + $streakFlags + $missingFlags + $healthFlags) as $flags
 | {
     window: $W,
     baseline: $B,
@@ -635,6 +751,9 @@ result="$(jq -c \
 	--argjson abuse_share "$ABUSE_SHARE" \
 	--argjson skew_min "$SKEW_MIN" \
 	--argjson skew_share "$SKEW_SHARE" \
+	--argjson unreachable_min "$UNREACHABLE_MIN_SNAPSHOTS" \
+	--argjson unreachable_secs "$UNREACHABLE_MIN_SECS" \
+	--argjson live_probe "$LIVE_PROBE" \
 	--argjson max_stale "$MAX_STALENESS" \
 	--arg expect "$EXPECT_VERSION" \
 	--argjson now "$NOW_EPOCH" \
@@ -703,10 +822,13 @@ fi
 # how a monitor stops being read.
 #
 # Deliberately still fatal, warning severity included: stale_history (the
-# collector stopped), saved_regression and negative_saving_spike (a performance
-# regression), version_lag (a relay left behind), plus the critical outage
-# signatures zero_relay, fleet_idle, release_lag, relay_health_failed,
-# relay_missing_from_registry and auth_spike_no_sessions.
+# collector stopped), relay_unreachable_streak (the collector cannot see a
+# relay that still answers /health, so every baseline for it is stale),
+# saved_regression and negative_saving_spike (a performance regression;
+# saved_regression now requires the weighted app-level metric to agree and a
+# restart-free baseline before it fires), version_lag (a relay left behind),
+# plus the critical outage signatures zero_relay, fleet_idle, release_lag,
+# relay_health_failed, relay_missing_from_registry and auth_spike_no_sessions.
 #
 # Set LIGHTSPEED_ANOMALY_STRICT=1 to fail on any anomaly.
 if [ "$anomaly_count" -gt 0 ]; then

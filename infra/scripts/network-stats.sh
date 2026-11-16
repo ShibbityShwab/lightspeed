@@ -83,7 +83,10 @@ TELEM_JQ='def fam($name; $mode):
 {
   saved_app_ms_sum: fam("lightspeed_telemetry_saved_app_ms_sum"; "sum"),
   saved_app_ms_count: fam("lightspeed_telemetry_saved_app_ms_count"; "sum"),
-  saved_app_ms_negative_count: fam("lightspeed_telemetry_saved_app_ms_negative_count"; "sum"),
+  # The relay exports this family WITHOUT `ms` in the negative counter name
+  # (proxy/src/metrics.rs). The old `..._saved_app_ms_negative_count` spelling
+  # matched nothing, so the published negative share was permanently 0.
+  saved_app_ms_negative_count: fam("lightspeed_telemetry_saved_app_negative_count"; "sum"),
   saved_ms_sum: fam("lightspeed_telemetry_saved_ms_sum"; "sum"),
   saved_ms_count: fam("lightspeed_telemetry_saved_ms_count"; "sum"),
   model_r_squared: fam("lightspeed_model_r_squared"; "max"),

@@ -2,6 +2,9 @@
 //!
 //! Manages proxy selection, health monitoring, and failover.
 //! Routes can be selected via:
+//! - **Destination-aware**: the canonical whole-path ranking
+//!   ([`relay_choice`]), which is what "destination" means for both the CLI and
+//!   the GUI
 //! - **Nearest**: Simple geographic/latency-based selection
 //! - **ML**: AI-powered route prediction using linfa
 //! - **Multipath**: Send on multiple paths, use fastest arrival (planned - engine not yet implemented)

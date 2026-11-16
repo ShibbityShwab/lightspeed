@@ -11,11 +11,14 @@
 #   (a) zero_relay                  relay up but relayed 0 over the window
 #   (b) auth_spike_no_sessions      auth_rejections climb, sessions flat
 #   (c) version_lag                 relay behind the fleet majority
-#   (d) saved_regression            ping-saved drops vs own baseline
+#   (d) saved_regression            ping-saved drops vs own baseline, in BOTH
+#                                   the sparse ICMP and dense app-level metrics
 #   (d) negative_saving_spike       negative saving share spikes
 #   (e) relay_missing_from_registry
 #   (e) relay_health_failed
 #   (i) load_skew                  one relay dominates fleet traffic
+#   (j) relay_unreachable_streak   collector blind to a relay whose live
+#                                   /health still answers
 #
 # False-positive guards:
 #   * a single zero snapshot is not enough (sustained window required)
@@ -23,13 +26,18 @@
 #   * a newer canary is not "behind"
 #   * an evenly spread fleet raises no load_skew
 #   * --no-probe uses history reachability and never flags an unscraped relay
+#   * saved_regression needs >= 20 paired ICMP reports, a restart-free
+#     baseline and agreement from the weighted app-level metric
+#   * an unreachable streak under 3 snapshots / 6h is a missed scrape, and a
+#     dead relay is relay_health_failed, not a collector blind spot
 #
-# No network: no probe unless --probe is passed; DISCORD_WEBHOOK is
-# cleared so nothing is posted. curl is never used by the monitor here.
+# No network: almost every case runs with --no-probe. The two live-probe cases
+# point the registry health_url at a local file:// URL, so curl runs but only
+# reads a file; DISCORD_WEBHOOK is cleared so nothing is posted.
 #
 # Usage: bash infra/scripts/test_health_anomaly.sh
 # Exits 0 and prints "health-anomaly: all assertions passed" on success.
-# Requires: bash, jq.
+# Requires: bash, curl, jq.
 # ──────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -103,6 +111,32 @@ mkrelay() {
                    saved_app_ms_negative_count:$an, saved_app_ms_count:$ac}}'
 }
 
+# mkrelay_saved <id> <version> <packets> <sessions> <icmp_sum> <icmp_count> \
+#              <app_sum> <app_count>
+# A relay row carrying BOTH saved metrics, so a regression fixture can make the
+# dense weighted app-level series agree (or not) with the sparse ICMP one.
+mkrelay_saved() {
+	jq -cn --arg id "$1" --arg ver "$2" \
+		--argjson p "$3" --argjson s "$4" \
+		--argjson ss "$5" --argjson sc "$6" \
+		--argjson as "$7" --argjson ac "$8" '
+        {node_id:$id, reachable:true, version:$ver, active_sessions:0,
+         lifetime:{packets_relayed:$p, sessions_created:$s,
+                   drops_auth_rejected:0,
+                   saved_ms_sum:$ss, saved_ms_count:$sc,
+                   saved_app_ms_sum:$as, saved_app_ms_count:$ac,
+                   saved_app_ms_negative_count:0}}'
+}
+
+# with_reset <relay-json> -> marks the relay row as a collector reset (one
+# relay process ended and a new one started), so a baseline or window can be
+# tested for bridging a restart.
+with_reset() { printf '%s' "$1" | jq -c '. + {reset:true}'; }
+
+# with_unreachable <relay-json> -> the carried-forward row the collector writes
+# when it cannot scrape a relay: same counters, reachable:false.
+with_unreachable() { printf '%s' "$1" | jq -c '. + {reachable:false}'; }
+
 # mksnap <t> <relay-json>...
 mksnap() {
 	local t="$1"
@@ -137,6 +171,23 @@ mkreg() {
 		'{registry:({schema_version:1,nodes:$nodes}|tojson),signature:"test"}' >"$out"
 }
 
+# mkreg_ok <out> <id>...  -> like mkreg, but every health_url points at a
+# local file that exists, so a LIVE probe (curl file://...) succeeds without
+# using the network.
+mkreg_ok() {
+	local out="$1"
+	shift
+	printf 'ok\n' >"$TMP/probe-ok"
+	local nodes="[]"
+	local id
+	for id in "$@"; do
+		nodes="$(printf '%s' "$nodes" | jq -c --arg id "$id" --arg url "file://$TMP/probe-ok" \
+			'. + [{node_id:$id,region:"r",data_addr:"127.0.0.1:4434",health_url:$url,metrics_url:""}]')"
+	done
+	jq -cn --argjson nodes "$nodes" \
+		'{registry:({schema_version:1,nodes:$nodes}|tojson),signature:"test"}' >"$out"
+}
+
 # ── Standard healthy peers b, c, d (used by almost every fixture) ──
 STD_VER="1.6.11"
 std_b() { mkrelay relay-b true "$STD_VER" "$(($1 * 50))" "$(($1))" "$(($1 * 2))" "$(($1 * 20))" "$(($1 * 4))" 0 "$(($1 * 3))"; }
@@ -150,6 +201,45 @@ emit8() {
 	local i
 	for i in 0 1 2 3 4 5 6 7; do
 		snaps+=("$(mksnap "$((1000 + i * 100))" "$($afn "$i")" "$(std_b "$i")" "$(std_c "$i")" "$(std_d "$i")")")
+	done
+	build_history "$out" "${snaps[@]}"
+}
+
+# emit8_reset_at <out> <relay-a-function> <snapshot-index>
+# Eight snapshots where relay-a's row at <snapshot-index> is marked reset (a
+# collector-visible relay restart), so a baseline/window that bridges it can be
+# tested. Every other relay stays healthy.
+emit8_reset_at() {
+	local out="$1" afn="$2" at="$3"
+	local snaps=()
+	local i r
+	for i in 0 1 2 3 4 5 6 7; do
+		r="$($afn "$i")"
+		[ "$i" -eq "$at" ] && r="$(with_reset "$r")"
+		snaps+=("$(mksnap "$((1000 + i * 100))" "$r" "$(std_b "$i")" "$(std_c "$i")" "$(std_d "$i")")")
+	done
+	build_history "$out" "${snaps[@]}"
+}
+
+# emit_streak <out> <relay-a-function> <first> <last> <step> <mode>
+# Eight snapshots, <step> seconds apart; relay-a is unavailable in snapshots
+# <first>..<last>. mode "down" writes the collector's carried-forward row
+# (reachable:false); mode "absent" omits the row entirely. Both are the same
+# collector blindness and must trip the streak detector.
+emit_streak() {
+	local out="$1" afn="$2" first="$3" last="$4" step="$5" mode="$6"
+	local snaps=()
+	local i r
+	for i in 0 1 2 3 4 5 6 7; do
+		r="$($afn "$i")"
+		if [ "$i" -ge "$first" ] && [ "$i" -le "$last" ]; then
+			if [ "$mode" = "absent" ]; then
+				snaps+=("$(mksnap "$((1000 + i * step))" "$(std_b "$i")" "$(std_c "$i")" "$(std_d "$i")")")
+				continue
+			fi
+			r="$(with_unreachable "$r")"
+		fi
+		snaps+=("$(mksnap "$((1000 + i * step))" "$r" "$(std_b "$i")" "$(std_c "$i")" "$(std_d "$i")")")
 	done
 	build_history "$out" "${snaps[@]}"
 }
@@ -173,44 +263,58 @@ a_authspike() {
 a_lag() { mkrelay relay-a true "1.6.3" "$(($1 * 100))" "$(($1))" "$(($1 * 2))" "$(($1 * 20))" "$(($1 * 4))" 0 "$(($1 * 3))"; }
 # Newer than the fleet: must NOT be flagged as behind.
 a_canary() { mkrelay relay-a true "1.7.0" "$(($1 * 100))" "$(($1))" "$(($1 * 2))" "$(($1 * 20))" "$(($1 * 4))" 0 "$(($1 * 3))"; }
-# Ping-saved collapses in the window (10ms -> 1ms).
+# Ping-saved regresses in the window AND the dense weighted app-level metric
+# agrees: baseline 10ms ICMP / 40ms app, window 2.5ms ICMP / 4ms app. The
+# detector must fire on the double signal with >= MIN_SAVED_SAMPLES (20)
+# paired reports in the window (s5..s7: +20 reports over wstart=s4) and a
+# restart-free 5-snapshot baseline (s0..s4: +40 reports).
 a_savedreg() {
-	local ss sc
+	local ss sc as ac
 	case "$1" in
-	0)
-		ss=0
-		sc=0
-		;;
-	1)
-		ss=100
-		sc=10
-		;;
-	2)
-		ss=200
-		sc=20
-		;;
-	3)
-		ss=300
-		sc=30
-		;;
-	4)
-		ss=500
-		sc=50
-		;;
-	5)
-		ss=500
-		sc=50
-		;;
-	6)
-		ss=502
-		sc=52
-		;;
-	7)
-		ss=505
-		sc=55
-		;;
+	0) ss=0;   sc=0;   as=0     ac=0 ;;
+	1) ss=100; sc=10;  as=4000  ac=100 ;;
+	2) ss=200; sc=20;  as=8000  ac=200 ;;
+	3) ss=300; sc=30;  as=12000 ac=300 ;;
+	4) ss=400; sc=40;  as=16000 ac=400 ;;
+	5) ss=410; sc=45;  as=16200 ac=425 ;;
+	6) ss=430; sc=50;  as=16300 ac=450 ;;
+	7) ss=450; sc=60;  as=16400 ac=500 ;;
 	esac
-	mkrelay relay-a true "$STD_VER" "$(($1 * 100))" "$(($1))" "$(($1 * 2))" "$ss" "$sc" 0 0
+	mkrelay_saved relay-a "$STD_VER" "$(($1 * 100))" "$(($1))" "$ss" "$sc" "$as" "$ac"
+}
+# Same ICMP regression, but the dense app-level metric IMPROVES (40ms -> 80ms
+# mean): the two instruments disagree, so saved_regression must stay quiet.
+a_savedreg_appflat() {
+	local ss sc as ac
+	case "$1" in
+	0) ss=0;   sc=0;   as=0     ac=0 ;;
+	1) ss=100; sc=10;  as=4000  ac=100 ;;
+	2) ss=200; sc=20;  as=8000  ac=200 ;;
+	3) ss=300; sc=30;  as=12000 ac=300 ;;
+	4) ss=400; sc=40;  as=16000 ac=400 ;;
+	5) ss=410; sc=45;  as=17000 ac=425 ;;
+	6) ss=430; sc=50;  as=20000 ac=450 ;;
+	7) ss=450; sc=60;  as=24000 ac=500 ;;
+	esac
+	mkrelay_saved relay-a "$STD_VER" "$(($1 * 100))" "$(($1))" "$ss" "$sc" "$as" "$ac"
+}
+# Same shape but below the 20-sample floor: 8 baseline and 6 window paired
+# ICMP reports. The old 5-sample floor fired on a window this thin (5 reports
+# is ~5% of relay-fra's whole 58-day record); the 20-sample floor must suppress
+# it even though the dense app-level metric would agree.
+a_savedreg_thin() {
+	local ss sc as ac
+	case "$1" in
+	0) ss=0;   sc=0;  as=0     ac=0 ;;
+	1) ss=100; sc=2;  as=4000  ac=100 ;;
+	2) ss=200; sc=4;  as=8000  ac=200 ;;
+	3) ss=300; sc=6;  as=12000 ac=300 ;;
+	4) ss=400; sc=8;  as=16000 ac=400 ;;
+	5) ss=410; sc=10; as=16200 ac=425 ;;
+	6) ss=430; sc=12; as=16300 ac=450 ;;
+	7) ss=450; sc=14; as=16400 ac=500 ;;
+	esac
+	mkrelay_saved relay-a "$STD_VER" "$(($1 * 100))" "$(($1))" "$ss" "$sc" "$as" "$ac"
 }
 # Negative-saving share spikes in the window (0/0 -> 8/10).
 a_negshare() {
@@ -296,6 +400,18 @@ run_anomaly() {
 	shift 2
 	OUT="$(LIGHTSPEED_NODES='' LIGHTSPEED_REGISTRY_PATH="$reg" DISCORD_WEBHOOK='' \
 		bash "$ANOMALY" --history "$hist" --registry "$reg" --no-probe "$@" 2>&1)"
+	RC=$?
+}
+
+# run_anomaly_live <history> <registry> [extra args...]
+# Same as run_anomaly WITHOUT --no-probe: the monitor curls each registry
+# health_url. The test registries point those at file:// URLs, so curl runs but
+# touches no network.
+run_anomaly_live() {
+	local hist="$1" reg="$2"
+	shift 2
+	OUT="$(LIGHTSPEED_NODES='' LIGHTSPEED_REGISTRY_PATH="$reg" DISCORD_WEBHOOK='' \
+		bash "$ANOMALY" --history "$hist" --registry "$reg" --timeout 2 "$@" 2>&1)"
 	RC=$?
 }
 
@@ -438,7 +554,35 @@ run_anomaly "$H_REGRESS" "$REG4"
 assert_rc 1 "(d) regression run exits 1"
 assert_out "saved_regression" "(d) fires saved regression"
 assert_out "relay-a" "(d) names the relay"
+assert_out "weighted app-level" "(d) carries the app-level agreement"
 assert_not_out "negative_saving" "(d) regression is not a negative share"
+
+# Guard (A3): the sparse ICMP metric collapses but the dense weighted
+# app-level metric moves the other way. Two instruments disagreeing is not a
+# regression; the 2026-11-16 alert quoted a statistic that no dense metric saw.
+H_APPFLAT="$TMP/regress-appflat.json"
+emit8 "$H_APPFLAT" a_savedreg_appflat
+run_anomaly "$H_APPFLAT" "$REG4"
+assert_rc 0 "(d guard) ICMP-only regression exits 0"
+assert_not_out "saved_regression" "(d guard) the weighted app metric must agree"
+
+# Guard (A3): a baseline that bridges a relay restart is not a baseline. The
+# 2026-11-16 alert's 5 baseline "samples" were a lifetime accumulator spanning
+# two processes (2 real samples), below the current 20-sample floor.
+H_RST="$TMP/regress-reset.json"
+emit8_reset_at "$H_RST" a_savedreg 2
+run_anomaly "$H_RST" "$REG4"
+assert_rc 0 "(d guard) restart-bridged baseline exits 0"
+assert_not_out "saved_regression" "(d guard) a baseline across a reset is not a baseline"
+
+# Guard (A3): below MIN_SAVED_SAMPLES (20) paired ICMP reports is noise, even
+# when the shape looks like a collapse. 5 reports is ~5% of one relay's whole
+# 58-day ICMP record.
+H_THIN="$TMP/regress-thin.json"
+emit8 "$H_THIN" a_savedreg_thin
+run_anomaly "$H_THIN" "$REG4"
+assert_rc 0 "(d guard) under-20-sample window exits 0"
+assert_not_out "saved_regression" "(d guard) the sample floor suppresses noise"
 
 H_NEG="$TMP/neg.json"
 emit8 "$H_NEG" a_negshare
@@ -634,6 +778,79 @@ run_anomaly "$H_BALANCED" "$REG4"
 assert_rc 0 "(i guard) a balanced fleet exits 0"
 assert_not_out "load_skew" "(i guard) no load_skew when traffic is evenly spread"
 assert_out "no anomalies" "(i guard) the balanced fleet reports no anomalies"
+
+# ══════════════════════════════════════════════════════════════
+# (j) relay unreachable streak: the collector's blind spot
+# ══════════════════════════════════════════════════════════════
+# A registry whose live /health probes all answer (file:// URLs, so curl runs
+# but uses no network), for the cases that need to isolate the streak detector
+# from relay_health_failed.
+REG4_OK="$TMP/registry-4-ok.json"
+mkreg_ok "$REG4_OK" relay-a relay-b relay-c relay-d
+
+# Live 2026-10-27..11-12: relay-fra was reachable:false in 65 consecutive
+# collector snapshots (~16 days) while its live /health passed, and no monitor
+# run failed - every history-only detector silently skips an unreachable relay.
+# The collector cadence is throttled to ~3.5-6h, so 3 snapshots 13,000s apart
+# span 10.8h of guaranteed blindness and must fire.
+H_STREAK="$TMP/streak.json"
+emit_streak "$H_STREAK" a_healthy 4 7 13000 down
+run_anomaly "$H_STREAK" "$REG4"
+assert_rc 1 "(j) an unreachable streak exits 1"
+assert_out "relay_unreachable_streak" "(j) fires the streak detector"
+assert_out "consecutive snapshot(s)" "(j) names the streak length"
+assert_out "relay-a" "(j) names the relay"
+assert_out "[warning]" "(j) is a warning, not critical"
+
+# Guard: two snapshots / under six hours is one missed scrape (GitHub throttles
+# the collector cron to ~3.5-6h), not a blind spot. Probes answer so the only
+# possible anomaly is the streak; quiet means quiet.
+H_SHORT="$TMP/streak-short.json"
+emit_streak "$H_SHORT" a_healthy 6 7 13000 down
+run_anomaly_live "$H_SHORT" "$REG4_OK"
+assert_rc 0 "(j guard) a short streak exits 0"
+assert_not_out "relay_unreachable_streak" "(j guard) two snapshots is not sustained"
+
+# Guard: a relay that came back is not a current blind spot, even though its
+# older snapshots were unreachable.
+H_RECOVERED="$TMP/streak-recovered.json"
+emit_streak "$H_RECOVERED" a_healthy 2 4 13000 down
+run_anomaly "$H_RECOVERED" "$REG4"
+assert_rc 0 "(j guard) a recovered relay exits 0"
+assert_not_out "relay_unreachable_streak" "(j guard) only the TRAILING streak counts"
+
+# The collector dropping a relay from its snapshots is the same blindness as
+# writing reachable:false (it happens when an older history is pruned or a
+# relay is removed from the resolved inventory).
+H_ABSENT="$TMP/streak-absent.json"
+emit_streak "$H_ABSENT" a_healthy 4 7 13000 absent
+run_anomaly "$H_ABSENT" "$REG4"
+assert_rc 1 "(j) absent history rows exit 1"
+assert_out "relay_unreachable_streak" "(j) absent rows count as unreachable"
+
+# Guard: a relay the history has NEVER seen reachable (a brand-new registry
+# entry, or a pruned history) has no baseline to be stale - silent.
+H_NEVER="$TMP/streak-never-seen.json"
+emit_streak "$H_NEVER" a_healthy 0 7 13000 absent
+run_anomaly "$H_NEVER" "$REG4"
+assert_rc 0 "(j guard) a never-seen relay exits 0"
+assert_not_out "relay_unreachable_streak" "(j guard) no baseline means no blind spot"
+
+# Live-probe semantics. When /health for the relay already fails, the relay is
+# the problem: relay_health_failed (critical) carries it and the streak stays
+# quiet, so one incident is not reported twice.
+run_anomaly_live "$H_STREAK" "$REG4"
+assert_rc 1 "(j) a genuinely dead relay still fails the run"
+assert_out "relay_health_failed" "(j) a dead relay is a health failure"
+assert_not_out "relay_unreachable_streak" "(j) streak stays quiet when /health already fails"
+
+# ... and when /health answers, the COLLECTOR is the problem: the streak fires.
+# The registry health URLs are file:// URLs, so this needs no network.
+run_anomaly_live "$H_STREAK" "$REG4_OK"
+assert_rc 1 "(j) a live relay missing from the collector exits 1"
+assert_out "relay_unreachable_streak" "(j) fires while the live /health probe answers"
+assert_out "while the live /health probe answers" "(j) says the relay itself is alive"
+assert_not_out "relay_health_failed" "(j) no health failure for a live relay"
 
 # ══════════════════════════════════════════════════════════════
 # --json output contract

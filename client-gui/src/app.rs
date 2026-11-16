@@ -417,6 +417,47 @@ fn relay_reply_fault_message(
     }
 }
 
+/// The shadow-direct sampler's counters as one judged window sees them.
+///
+/// The four rejection reasons exist only as `debug!` lines inside the engine and
+/// the shipped GUI file sink is INFO, so a live run could not tell an
+/// ICMP-blocked path (`no_icmp_floor`) from a pairing artefact (`behind_floor`,
+/// `timeout`, `relay`) apart: task-21 observed 1 accepted / 204 rejected in
+/// 17 minutes with no reason breakdown in the shipped log. This is the
+/// operator-facing form of the same counters, carried by the per-window INFO
+/// line. Grouping them also keeps [`relay_reply_window_message`] within
+/// clippy's argument limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ShadowWindowCounters {
+    /// Samples that passed every validity rule.
+    accepted: u64,
+    /// Total rejected by any rule (the four fields below sum to it).
+    rejected: u64,
+    /// No fresh measured ICMP median existed for the server.
+    no_icmp_floor: u64,
+    /// Faster than the direct path can physically be.
+    behind_floor: u64,
+    /// The reply did not arrive inside the sampler's window.
+    timeout: u64,
+    /// The relay was unknown or changed between send and reply.
+    stale_relay: u64,
+}
+
+impl ShadowWindowCounters {
+    /// Read the process-wide sampler counters into the line's grouped form.
+    fn read() -> Self {
+        let counters = lightspeed_client::latency::shadow_counters();
+        Self {
+            accepted: counters.accepted,
+            rejected: counters.rejected(),
+            no_icmp_floor: counters.rejected_no_icmp_floor,
+            behind_floor: counters.rejected_behind_floor,
+            timeout: counters.rejected_timeout,
+            stale_relay: counters.rejected_stale_relay,
+        }
+    }
+}
+
 /// The trace line for every judged return-path window, healthy or not.
 ///
 /// The fault lines above only exist when the watchdog acts, so a run that
@@ -431,19 +472,21 @@ fn relay_reply_fault_message(
 /// window that carried no traffic at all prints `n/a` and is never judged in
 /// practice.
 ///
-/// The last four fields are the engine's validated-sample counters: the
-/// quiet-flow probe and the shadow-direct app-RTT sampler
-/// (`latency::probe_counters` / `latency::shadow_counters`). They are here
-/// because each sampler's own accepted/rejected lines are `debug!` and the
-/// shipped GUI file sink is INFO, so without this line the falsifiers (accepted
-/// samples per match, and *why* samples were rejected) would be unmeasurable in
-/// a released build.
+/// The sampler fields are the engine's validated-sample counters: the
+/// quiet-flow probe (`latency::probe_counters`) and the shadow-direct app-RTT
+/// sampler (`latency::shadow_counters`). They are here because each sampler's
+/// own accepted/rejected lines are `debug!` and the shipped GUI file sink is
+/// INFO, so without this line the falsifiers (accepted samples per match, and
+/// *why* samples were rejected) would be unmeasurable in a released build. The
+/// shadow rejection is broken down by reason because the reason is the whole
+/// diagnosis: `no_icmp=204` is an ICMP-blocked path, `floor=204` is a pairing
+/// artefact, `timeout=204` is a lost reply and `relay=204` a path that changed.
 fn relay_reply_window_message(
     intercepted: u64,
     injected: u64,
     from_relay: u64,
     probe: (u64, u64),
-    shadow: (u64, u64),
+    shadow: ShadowWindowCounters,
     streak: &ReplyFaultStreak,
     window: Option<RelayReplyFault>,
 ) -> String {
@@ -459,13 +502,18 @@ fn relay_reply_window_message(
         Some(RelayReplyFault::TooFewReplies) => "too_few_replies",
     };
     let (probe_accepted, probe_rejected) = probe;
-    let (shadow_accepted, shadow_rejected) = shadow;
     format!(
         "Relay reply window judged: intercepted={intercepted} injected={injected} \
          from_relay={from_relay} share={share} streak={} verdict={verdict} \
          probe_accepted={probe_accepted} probe_rejected={probe_rejected} \
-         shadow_accepted={shadow_accepted} shadow_rejected={shadow_rejected}",
-        streak.count
+         shadow_accepted={} shadow_rejected={}(no_icmp={},floor={},timeout={},relay={})",
+        streak.count,
+        shadow.accepted,
+        shadow.rejected,
+        shadow.no_icmp_floor,
+        shadow.behind_floor,
+        shadow.timeout,
+        shadow.stale_relay,
     )
 }
 
@@ -619,9 +667,11 @@ fn spawn_relay_reply_watchdog(
             // watchdog looked at this window and what it saw, instead of an
             // absence of WARN lines standing in for a verdict. The quiet-flow
             // probe counters ride along because their own trace is debug-level
-            // and the shipped file sink is INFO (QA finding: F1 unmeasurable).
+            // and the shipped file sink is INFO (QA finding: F1 unmeasurable);
+            // the shadow sampler's rejection reasons ride along for the same
+            // reason (task-21: 1 accepted / 204 rejected, reason unobservable).
             let probe = lightspeed_client::latency::probe_counters();
-            let shadow = lightspeed_client::latency::shadow_counters();
+            let shadow = ShadowWindowCounters::read();
             tracing::info!(
                 server = %server,
                 "{}",
@@ -630,7 +680,7 @@ fn spawn_relay_reply_watchdog(
                     injected_since,
                     from_proxy_since,
                     (probe.accepted, probe.rejected()),
-                    (shadow.accepted, shadow.rejected()),
+                    shadow,
                     &current.streak,
                     window,
                 )
@@ -3421,7 +3471,12 @@ impl<P: Platform> LightSpeedApp<P> {
         let relay = self.selected_entry()?.addr;
         let scored = scored_for_relay(&ranking.scored, relay);
         let measured = measured_server_leg(relay, server);
-        match server_leg_state(scored, measured) {
+        // The ping may have landed after the choice: state the triangle floor it
+        // proves now rather than leaving the row on the prior until the 600 s
+        // re-rank. Same verdict, same inputs the ranking would use - no re-rank.
+        let early_floor_us =
+            early_triangle_floor(self.server_ping, self.ranked_client_leg_us(relay));
+        match server_leg_state(scored, measured, early_floor_us) {
             ServerLegState::Measured(measured) => {
                 let ms = format!("{:.0}", measured.dest_leg_us as f64 / 1000.0);
                 let samples = measured.samples.to_string();
@@ -5596,28 +5651,66 @@ fn measured_server_leg(relay: SocketAddrV4, server: Ipv4Addr) -> Option<Measured
 /// 1. a published estimator measurement (the only thing that may be called
 ///    measured), else
 /// 2. the ranking's own row for that relay: the triangle floor (a proof, so
-///    "at least"), the geometric prior, or nothing.
+///    "at least"), the geometric prior, or nothing, unless
+/// 3. a fresh direct ping already proves a stronger triangle floor than the
+///    ranking row carries (`early_floor_us`). The ranking only re-runs every
+///    `RELAY_RECHECK_INTERVAL` (600 s, longer than most matches), so without this
+///    the row would sit on the prior for up to ten minutes after the ping that
+///    makes the bound provable landed. This is the same verdict the next ranking
+///    reaches, from measurements already in hand: it re-ranks nothing, changes no
+///    relay, and never claims a measurement.
 fn server_leg_state(
     scored: Option<&lightspeed_client::ScoredRelay>,
     measured: Option<MeasuredServerLeg>,
+    early_floor_us: Option<u64>,
 ) -> ServerLegState {
     use lightspeed_client::DestinationLegSource;
     if let Some(measured) = measured {
         return ServerLegState::Measured(measured);
     }
     let Some(scored) = scored else {
-        return ServerLegState::Unknown;
+        return match early_floor_us {
+            Some(floor_us) => ServerLegState::Bounded { floor_us },
+            None => ServerLegState::Unknown,
+        };
     };
     match scored.dest_source {
         DestinationLegSource::Measured => ServerLegState::Unknown,
         DestinationLegSource::GeometricFloor => ServerLegState::Bounded {
             floor_us: scored.dest_leg_us,
         },
-        DestinationLegSource::RegionPrior => ServerLegState::Prior {
-            prior_us: scored.dest_leg_us,
+        DestinationLegSource::RegionPrior => match early_floor_us {
+            // A proof stronger than the estimate is shown as the proof; the
+            // estimate is never dressed up as one.
+            Some(floor_us) if floor_us > scored.dest_leg_us => ServerLegState::Bounded { floor_us },
+            _ => ServerLegState::Prior {
+                prior_us: scored.dest_leg_us,
+            },
         },
-        DestinationLegSource::Unknown => ServerLegState::Unknown,
+        DestinationLegSource::Unknown => match early_floor_us {
+            Some(floor_us) => ServerLegState::Bounded { floor_us },
+            None => ServerLegState::Unknown,
+        },
     }
+}
+
+/// The triangle-inequality floor a fresh direct ping proves for the relay in
+/// use: `direct - client leg`, microseconds.
+///
+/// This is the same arithmetic `relay_choice::apply_floor` performs at the next
+/// ranking. The route surface may state it earlier because it is a proof from
+/// two measurements the client already owns - a fresh ICMP ping and the relay's
+/// measured one-RTT client leg - not a new choice: nothing here re-ranks, moves
+/// the session, or claims to have measured the server leg. `None` until both
+/// inputs are present and the ping is fresh ([`SERVER_PING_FRESH_SECS`]); a stale
+/// ping must never manufacture a bound.
+fn early_triangle_floor(
+    direct_ping: Option<(f32, u64)>,
+    client_leg_us: Option<u64>,
+) -> Option<u64> {
+    let direct = fresh_direct_us(direct_ping)?;
+    let client = client_leg_us?;
+    Some(direct.saturating_sub(client))
 }
 
 /// The scored row for `relay` in a ranking, if the relay was a candidate at all.
@@ -6899,7 +6992,15 @@ mod tests {
         let mut streak = ReplyFaultStreak::default();
         let healthy = relay_reply_fault(RELAY_REPLY_TIMEOUT, 54, 13, 13, None);
         assert_eq!(streak.observe(healthy), None);
-        let line = relay_reply_window_message(54, 13, 13, (7, 41), (3, 9), &streak, healthy);
+        let line = relay_reply_window_message(
+            54,
+            13,
+            13,
+            (7, 41),
+            shadow_window(3, 0, 7, 1, 1),
+            &streak,
+            healthy,
+        );
         for field in [
             "intercepted=54",
             "injected=13",
@@ -6914,21 +7015,56 @@ mod tests {
             "probe_accepted=7",
             "probe_rejected=41",
             "shadow_accepted=3",
-            "shadow_rejected=9",
+            // The rejection reasons are the diagnosis: ICMP-blocked
+            // (`no_icmp`), impossible-fast pairing (`floor`), lost reply
+            // (`timeout`), changed path (`relay`). Task-21 had 204 rejections
+            // with no way to tell which.
+            "shadow_rejected=9(no_icmp=0,floor=7,timeout=1,relay=1)",
         ] {
             assert!(line.contains(field), "missing {field} in {line}");
         }
+        // A window with no shadow rejections still carries the (empty)
+        // breakdown, so an operator can tell "no rejections" from "field absent".
+        let no_rejections = relay_reply_window_message(
+            12,
+            1,
+            9,
+            (0, 0),
+            shadow_window(0, 0, 0, 0, 0),
+            &streak,
+            None,
+        );
+        assert!(
+            no_rejections.contains("shadow_rejected=0(no_icmp=0,floor=0,timeout=0,relay=0)"),
+            "{no_rejections}"
+        );
         // A faulting window names its verdict and the streak it advances; the
         // second one is the window the fallback fires on.
         let mut streak = ReplyFaultStreak::default();
         let fault = relay_reply_fault(RELAY_REPLY_TIMEOUT, 60, 0, 0, None);
         assert_eq!(streak.observe(fault), None);
-        let first = relay_reply_window_message(60, 0, 0, (7, 42), (3, 9), &streak, fault);
+        let first = relay_reply_window_message(
+            60,
+            0,
+            0,
+            (7, 42),
+            shadow_window(3, 0, 7, 1, 1),
+            &streak,
+            fault,
+        );
         assert!(first.contains("streak=1"), "{first}");
         assert!(first.contains("verdict=no_reply_from_relay"), "{first}");
         assert!(first.contains("share=0.0%"), "{first}");
         assert!(streak.observe(fault).is_some());
-        let second = relay_reply_window_message(60, 0, 0, (7, 42), (3, 9), &streak, fault);
+        let second = relay_reply_window_message(
+            60,
+            0,
+            0,
+            (7, 42),
+            shadow_window(3, 0, 7, 1, 1),
+            &streak,
+            fault,
+        );
         assert!(second.contains("streak=2"), "{second}");
         // Every window verdict has a stable name in the trace.
         for (window, verdict) in [
@@ -6942,7 +7078,15 @@ mod tests {
             ),
             (None, "verdict=healthy"),
         ] {
-            let line = relay_reply_window_message(12, 1, 9, (0, 0), (0, 0), &streak, window);
+            let line = relay_reply_window_message(
+                12,
+                1,
+                9,
+                (0, 0),
+                shadow_window(0, 0, 0, 0, 0),
+                &streak,
+                window,
+            );
             assert!(line.contains(verdict), "missing {verdict} in {line}");
         }
     }
@@ -7050,15 +7194,15 @@ mod tests {
     }
     use super::{
         apply_discovery_result, apply_target_choice, close_decision, compare_to_direct,
-        direct_claim_label, draft_reasons, fresh_direct_us, game_editor_body, game_pick_rows,
-        games, pair_relay_legs, picker_status, primary_action, process_picker, proxy_index_for,
-        ranking_state_label, relay_cannot_beat_direct, relay_health_verdict, same_relay_endpoint,
-        save_user_profiles, scored_for_relay, server_from_fields, server_leg_state,
-        should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
-        target_summary, validate_draft, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
-        MeasuredServerLeg, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
-        RelayHealthVerdict, ServerLegState, TargetRowAction, PRIOR_UNCERTAINTY_US,
-        SERVER_PING_FRESH_SECS,
+        direct_claim_label, draft_reasons, early_triangle_floor, fresh_direct_us, game_editor_body,
+        game_pick_rows, games, pair_relay_legs, picker_status, primary_action, process_picker,
+        proxy_index_for, ranking_state_label, relay_cannot_beat_direct, relay_health_verdict,
+        same_relay_endpoint, save_user_profiles, scored_for_relay, server_from_fields,
+        server_leg_state, should_apply_race, should_race, switch_is_safe, target_for_pick,
+        target_front_door, target_summary, validate_draft, CloseDecision, EditorActions,
+        GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState,
+        ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ShadowWindowCounters,
+        TargetRowAction, PRIOR_UNCERTAINTY_US, SERVER_PING_FRESH_SECS,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -7295,6 +7439,26 @@ mod tests {
         }
     }
 
+    /// The shadow sampler's counters as one judged window reads them; `rejected`
+    /// is the sum of the four reasons, exactly as `ShadowCounters::rejected()`
+    /// defines it.
+    fn shadow_window(
+        accepted: u64,
+        no_icmp: u64,
+        behind: u64,
+        timeout: u64,
+        relay: u64,
+    ) -> ShadowWindowCounters {
+        ShadowWindowCounters {
+            accepted,
+            rejected: no_icmp + behind + timeout + relay,
+            no_icmp_floor: no_icmp,
+            behind_floor: behind,
+            timeout,
+            stale_relay: relay,
+        }
+    }
+
     // The ranking-order tests that used to live here were moved to the engine
     // suite when the interim re-rank was removed (task-17): the order is
     // `client/src/route/relay_choice.rs`'s, so its regression tests live beside
@@ -7340,30 +7504,104 @@ mod tests {
         };
 
         assert_eq!(
-            server_leg_state(Some(&measured), Some(published)),
+            server_leg_state(Some(&measured), Some(published), None),
             ServerLegState::Measured(published)
         );
         assert_eq!(
-            server_leg_state(Some(&prior), None),
+            server_leg_state(Some(&prior), None, None),
             ServerLegState::Prior { prior_us: 40_000 },
             "an estimate the ranking did not measure is stated as the prior it is"
         );
         assert_eq!(
-            server_leg_state(Some(&floored), None),
+            server_leg_state(Some(&floored), None, None),
             ServerLegState::Bounded { floor_us: 63_300 },
             "a triangle bound is a proof of a lower bound, not a measurement"
         );
         assert_eq!(
-            server_leg_state(Some(&unknown), None),
+            server_leg_state(Some(&unknown), None, None),
             ServerLegState::Unknown
         );
-        assert_eq!(server_leg_state(None, None), ServerLegState::Unknown);
+        assert_eq!(server_leg_state(None, None, None), ServerLegState::Unknown);
         // The ranking row says measured but no published estimate survives: say
         // nothing the estimator cannot back up.
         assert_eq!(
-            server_leg_state(Some(&measured), None),
+            server_leg_state(Some(&measured), None, None),
             ServerLegState::Unknown
         );
+    }
+
+    #[test]
+    fn a_fresh_direct_ping_bounds_the_prior_before_the_next_ranking() {
+        // The live task-21 shape: the initial choice was RegionPrior(~41 ms) and
+        // the ping landed seconds later (direct 279 ms - 219 ms client leg = a
+        // 60 ms floor), but the ranking only re-runs every 600 s, so the bound
+        // was not shown for 9 m 58 s. The surface now states the same bound as
+        // soon as the ping is fresh: no re-rank, no relay change, no measured
+        // claim.
+        use lightspeed_client::DestinationLegSource;
+        let prior = scored_relay(
+            [10, 0, 0, 2],
+            219_000,
+            41_000,
+            DestinationLegSource::RegionPrior,
+            0,
+        );
+        assert_eq!(
+            server_leg_state(Some(&prior), None, Some(60_000)),
+            ServerLegState::Bounded { floor_us: 60_000 },
+            "a provable floor above the prior is shown as the bound, early"
+        );
+        // A floor at or below the prior proves nothing the prior does not claim.
+        assert_eq!(
+            server_leg_state(Some(&prior), None, Some(30_000)),
+            ServerLegState::Prior { prior_us: 41_000 }
+        );
+        assert_eq!(
+            server_leg_state(Some(&prior), None, Some(41_000)),
+            ServerLegState::Prior { prior_us: 41_000 },
+            "an equal floor is not a stronger statement"
+        );
+        // No fresh ping => the prior state, unchanged.
+        assert_eq!(
+            server_leg_state(Some(&prior), None, None),
+            ServerLegState::Prior { prior_us: 41_000 }
+        );
+        // A candidate with no prior at all still gets the provable bound.
+        let unknown = scored_relay([10, 0, 0, 4], 219_000, 0, DestinationLegSource::Unknown, 0);
+        assert_eq!(
+            server_leg_state(Some(&unknown), None, Some(60_000)),
+            ServerLegState::Bounded { floor_us: 60_000 }
+        );
+        // A published measurement always outranks a proof.
+        let published = MeasuredServerLeg {
+            dest_leg_us: 51_000,
+            samples: 12,
+            age: Some(Duration::from_secs(3)),
+        };
+        assert_eq!(
+            server_leg_state(Some(&prior), Some(published), Some(60_000)),
+            ServerLegState::Measured(published)
+        );
+    }
+
+    #[test]
+    fn the_early_bound_needs_a_fresh_ping_and_a_measured_client_leg() {
+        // 279.474 ms direct - 219.170 ms client leg = 60.304 ms floor: the same
+        // arithmetic `relay_choice::apply_floor` performs at the next ranking.
+        assert_eq!(
+            early_triangle_floor(Some((279.474, 12)), Some(219_170)),
+            Some(60_304)
+        );
+        // A stale ping must not manufacture a bound (one freshness rule, shared
+        // with the ranking's floor and the header metric).
+        assert_eq!(
+            early_triangle_floor(Some((279.474, SERVER_PING_FRESH_SECS + 1)), Some(219_170)),
+            None
+        );
+        assert_eq!(early_triangle_floor(None, Some(219_170)), None);
+        // No measured client leg: nothing to subtract, so no proof.
+        assert_eq!(early_triangle_floor(Some((279.474, 12)), None), None);
+        assert_eq!(early_triangle_floor(Some((0.0, 1)), Some(219_170)), None);
     }
 
     #[test]
