@@ -102,23 +102,53 @@ const RELAY_REPLY_MIN_INTERCEPTED: u64 = 20;
 /// Returned datagrams a window needs before a zero injection count is called a
 /// local fault rather than a quiet relay.
 const RELAY_REPLY_MIN_RETURNED: u64 = 5;
-/// Tracks whether the current relay has brought a data packet back for the
-/// current server. The interceptor counters are cumulative, so the baseline is
-/// re-taken whenever the server changes.
+
+/// Denominator of the return share that counts as a working return path: one
+/// reply in eight.
+///
+/// Game UDP traffic is asymmetric. A live healthy relay returned 13 datagrams
+/// for 54 intercepted (24.1%) while the relayed path was 150 ms faster than
+/// direct, and the old quarter-share bar called it starved and dropped the
+/// session to the slower path. One reply in eight is the floor, not a target:
+/// above it the return path works, and only below it can a window say otherwise.
+///
+/// The value lives in `crate::relay_history` because the history's "carrying"
+/// bar and this watchdog's fault floor are one fact; the history's docs carry
+/// the full reasoning.
+const RELAY_REPLY_SHARE_DENOMINATOR: u64 = crate::relay_history::RETURN_SHARE_DENOMINATOR;
+
+/// Consecutive judged windows without a working return path before the relay is
+/// condemned.
+///
+/// One window is a sample, not evidence: a loading screen, a relay restart or a
+/// router stall can starve eight seconds on a relay that works. The verdict
+/// needs the same fault twice in a row, and each window is judged on its own
+/// counters so the second one is new evidence.
+const RELAY_REPLY_STREAK: u32 = 2;
+
+/// One window of evidence about the current relay and game server.
+///
+/// The interceptor counters are cumulative, so a window starts from a baseline.
+/// It is judged only once it has run for [`RELAY_REPLY_TIMEOUT`] and carried
+/// enough traffic to mean anything; the baseline is then re-taken, so the next
+/// judgement is independent evidence rather than the same counters re-read.
 struct RelayReplyWatch {
     server: std::net::SocketAddrV4,
+    /// When the current window started.
+    window_started: std::time::Instant,
     baseline_intercepted: u64,
     baseline_injected: u64,
-    /// Decoded, non-keepalive data replies when the watch started. Keepalive
+    /// Decoded, non-keepalive data replies when the window started. Keepalive
     /// echoes are excluded upstream: they never reach the injector, so counting
     /// them would report the local path as broken for a relay that only echoed
     /// our own probes.
     baseline_reply_data: u64,
-    /// This server's own counters when the watch started, so the corroboration
+    /// This server's own counters when the window started, so the corroboration
     /// covers the same window the relay-wide counters do.
     baseline_flow_sent: u64,
     baseline_flow_replied: u64,
-    started: std::time::Instant,
+    /// Consecutive judged windows that showed no working return path.
+    streak: ReplyFaultStreak,
 }
 
 /// A server this watchdog took direct, and when it may try the relay again.
@@ -130,10 +160,46 @@ struct RelayReplyWatch {
 #[derive(Clone, Copy, Debug)]
 struct ReplyFallback {
     server: std::net::SocketAddrV4,
+    /// The relay this chain abandoned. A re-test releases the tunnel for the
+    /// interceptor that is already running, so it measures whatever relay that
+    /// interceptor carries; once the session is on another relay the chain is
+    /// dropped rather than re-pointed, because re-pointing restarts interception
+    /// under the player.
+    relay: Option<std::net::SocketAddrV4>,
+    /// Whether every window in the chain so far returned zero datagrams from the
+    /// relay. A low return share never sets this, and only a confirmed
+    /// zero-return chain may be remembered as a relay failure.
+    zero_return: bool,
     /// Retries already made for this server.
     retries: u32,
     /// Earliest moment for the next one.
     due: std::time::Instant,
+}
+
+/// A server the watchdog gave up on for a relay, as the window reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RelayRejection {
+    /// The game server whose traffic the relay did not return.
+    server: std::net::SocketAddrV4,
+    /// The relay the chain abandoned, when it was known at the time.
+    relay: Option<std::net::SocketAddrV4>,
+    /// Whether every window of the chain returned zero datagrams from the relay.
+    /// Only a confirmed zero-return chain is remembered as a failure; a chain
+    /// that did see replies is a low share, which is normal for game UDP.
+    zero_return: bool,
+}
+
+/// The relay the watchdog is re-testing for a server, or waiting to re-test.
+///
+/// Published so the window can refuse to move the live session onto another
+/// relay while the re-test runs: a background re-rank under a fallback is how a
+/// relay re-test turned into LAX -> EWR -> FRA hopping on a live run. `None`
+/// means no chain is open for any server, and background switches are allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RetestTarget {
+    server: std::net::SocketAddrV4,
+    /// The relay being re-tested, when it was known.
+    relay: Option<std::net::SocketAddrV4>,
 }
 
 /// How long the watchdog waits before re-testing a relay it abandoned, in the
@@ -170,12 +236,89 @@ enum RelayReplyFault {
     TooFewReplies,
 }
 
-/// Whether the no-reply watchdog should send this session direct, and why.
+/// Consecutive judged windows that said the return path is not working.
 ///
-/// A relay that returns a few packets can still be starving the session: the
-/// game needs a meaningful share of its traffic back, not just one reply. If
-/// less than a quarter of the outbound packets come back after the settle
-/// window, the relay is not carrying this server and the session goes direct.
+/// The live false positive that dropped a relay 150 ms faster than direct was a
+/// single 8 s window at a 24.1% return share. A relay is only condemned once the
+/// same fault holds for [`RELAY_REPLY_STREAK`] windows in a row; any healthy or
+/// inconclusive window clears the streak.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ReplyFaultStreak {
+    count: u32,
+    last: Option<RelayReplyFault>,
+}
+
+impl ReplyFaultStreak {
+    /// Fold in one judged window and return the fault once the streak is long
+    /// enough to act on.
+    fn observe(&mut self, window: Option<RelayReplyFault>) -> Option<RelayReplyFault> {
+        match window {
+            None => {
+                self.count = 0;
+                self.last = None;
+                None
+            }
+            Some(fault) => {
+                if self.last == Some(fault) {
+                    self.count = self.count.saturating_add(1);
+                } else {
+                    self.count = 1;
+                    self.last = Some(fault);
+                }
+                (self.count >= RELAY_REPLY_STREAK).then_some(fault)
+            }
+        }
+    }
+}
+
+/// Whether a pending re-test still points at the relay the chain abandoned.
+///
+/// The re-test releases the tunnel of the interceptor that is already running,
+/// so it measures whatever relay that interceptor carries. If the session was
+/// moved - the user picked a relay, the app reconnected - the chain no longer
+/// describes a re-test of the abandoned relay: re-enabling it would either test
+/// a relay that was never condemned or move the session back (restarting
+/// interception mid-session). An unknown relay on either side keeps the chain:
+/// the release at worst proves a working relay, and dropping it would leave a
+/// session direct with no way back.
+fn retest_is_about(
+    abandoned: Option<std::net::SocketAddrV4>,
+    current: Option<std::net::SocketAddrV4>,
+) -> bool {
+    match (abandoned, current) {
+        (Some(abandoned), Some(current)) => abandoned == current,
+        _ => true,
+    }
+}
+
+/// Whether a background relay change may move the live session onto `target`.
+///
+/// A watchdog fallback opens a re-test of one relay. Moving the session
+/// underneath it would test a different relay, restart interception under the
+/// player and reproduce the mid-session hopping the owner reported, so while the
+/// chain is open for the locked server only the relay being re-tested is legal.
+/// The chain is per server, so the game server changing closes it; a user pick
+/// is not a background change and never asks this question.
+fn relay_switch_allowed(
+    chain: Option<RetestTarget>,
+    locked_server: Option<std::net::Ipv4Addr>,
+    target: std::net::SocketAddrV4,
+) -> bool {
+    match chain {
+        Some(chain) if Some(*chain.server.ip()) == locked_server => chain.relay == Some(target),
+        _ => true,
+    }
+}
+
+/// What one judged window says about the return path, if anything.
+///
+/// The return path works when at least one datagram in eight comes back and is
+/// injected. That is the rule, not a share target: game UDP is asymmetric - a
+/// live healthy relay returned 13 for 54 intercepted (24.1%) while 150 ms faster
+/// than the direct path - so a share above the floor is normal and not a fault.
+/// A window below it only contributes to [`ReplyFaultStreak`]; one window never
+/// condemns a relay. `None` also covers a window that carried too little traffic
+/// to judge (the caller does not observe those at all).
 ///
 /// `from_proxy_since` separates a silent relay from a broken local injection
 /// path. Both are reported as a fallback, but only the first is the relay's
@@ -192,7 +335,9 @@ fn relay_reply_fault(
 ) -> Option<RelayReplyFault> {
     if elapsed < RELAY_REPLY_TIMEOUT
         || intercepted_since < RELAY_REPLY_MIN_INTERCEPTED
-        || injected_since.saturating_mul(4) >= intercepted_since
+        // One reply in eight coming back and reaching the game means the return
+        // path works. A higher share is not required to keep a relay.
+        || injected_since.saturating_mul(RELAY_REPLY_SHARE_DENOMINATOR) >= intercepted_since
     {
         return None;
     }
@@ -203,7 +348,9 @@ fn relay_reply_fault(
     // read 152 intercepted / 16 returned while the server's own counters were
     // 528 sent / 520 replied - 98.5%.
     if let Some((sent, replied)) = flow {
-        if sent >= RELAY_REPLY_MIN_INTERCEPTED && replied.saturating_mul(4) >= sent {
+        if sent >= RELAY_REPLY_MIN_INTERCEPTED
+            && replied.saturating_mul(RELAY_REPLY_SHARE_DENOMINATOR) >= sent
+        {
             return None;
         }
     }
@@ -218,6 +365,17 @@ fn relay_reply_fault(
     } else {
         Some(RelayReplyFault::TooFewReplies)
     }
+}
+
+/// Whether one window belongs to a confirmed zero-return chain.
+///
+/// Such a chain is the only evidence that may be remembered as a relay failure.
+/// It requires the relay to have returned nothing at all AND the client to have
+/// injected nothing: a `TooFewReplies` window (normal asymmetric game traffic),
+/// or any window that injected even one datagram, can never make a relay look
+/// dead.
+fn zero_return_window(fault: RelayReplyFault, from_proxy_since: u64, injected_since: u64) -> bool {
+    fault == RelayReplyFault::NoReplyFromRelay && from_proxy_since == 0 && injected_since == 0
 }
 
 /// The trace line for a fault. Kept beside the decision so the wording cannot
@@ -259,12 +417,19 @@ fn relay_reply_fault_message(
 /// that thread for seconds, which is exactly when the fallback is needed. This
 /// thread only reads the interceptor counters and flips the tunnelling switch,
 /// both cheap, so it keeps working while the UI thread is busy.
+///
+/// It is also the only owner of the fallback chain. `retest` publishes which
+/// relay it is re-testing, so the window does not move the session out from
+/// under the re-test; `rejected` carries the chain's verdict, including whether
+/// it was a confirmed zero-return chain, so the history is written from proof
+/// rather than from one low window.
 fn spawn_relay_reply_watchdog(
     engine: Arc<Mutex<LightSpeedEngine>>,
     quit: QuitFlag,
-    rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>>,
+    rejected: Arc<Mutex<Option<RelayRejection>>>,
     retry_enabled: Arc<std::sync::atomic::AtomicBool>,
     retry_at: Arc<Mutex<Option<std::time::Instant>>>,
+    retest: Arc<Mutex<Option<RetestTarget>>>,
 ) {
     std::thread::spawn(move || {
         let mut watch: Option<RelayReplyWatch> = None;
@@ -278,11 +443,13 @@ fn spawn_relay_reply_watchdog(
             let Some(health) = health else {
                 watch = None;
                 fallback = None;
+                *lock_or_recover(&retest) = None;
                 continue;
             };
             let Some(server) = health.detected_server else {
                 watch = None;
                 fallback = None;
+                *lock_or_recover(&retest) = None;
                 continue;
             };
             let now = std::time::Instant::now();
@@ -292,6 +459,27 @@ fn spawn_relay_reply_watchdog(
                 fallback = None;
                 // A countdown from the previous server says nothing about this one.
                 *lock_or_recover(&retry_at) = None;
+                *lock_or_recover(&retest) = None;
+            }
+            // A chain is about one relay. If the session has been moved off it
+            // (a user pick, a reconnect), the chain is stale: re-enabling the
+            // tunnel would test a relay that was never condemned, and moving the
+            // session back would restart interception mid-session.
+            if let Some(chain) = fallback {
+                if chain.server == server
+                    && !retest_is_about(chain.relay, lightspeed_client::current_relay())
+                {
+                    tracing::info!(
+                        server = %server,
+                        relay = ?chain.relay,
+                        "Dropped a stale relay re-test: the session is no longer on the relay it abandoned"
+                    );
+                    watch = None;
+                    fallback = None;
+                    *lock_or_recover(&retry_at) = None;
+                    *lock_or_recover(&retest) = None;
+                    *lock_or_recover(&rejected) = None;
+                }
             }
             if health.tunnelling_enabled != Some(true) {
                 watch = None;
@@ -322,21 +510,30 @@ fn spawn_relay_reply_watchdog(
                 }
                 continue;
             }
-            let current = match watch.take() {
+            let mut current = match watch.take() {
                 Some(watch) if watch.server == server => watch,
                 _ => RelayReplyWatch {
                     server,
+                    window_started: now,
                     baseline_intercepted: health.packets_intercepted,
                     baseline_injected: health.packets_injected,
                     baseline_reply_data: health.packets_reply_data,
                     baseline_flow_sent: health.flow.map(|(sent, _)| sent).unwrap_or(0),
                     baseline_flow_replied: health.flow.map(|(_, replied)| replied).unwrap_or(0),
-                    started: now,
+                    streak: ReplyFaultStreak::default(),
                 },
             };
+            let elapsed = now.duration_since(current.window_started);
             let intercepted_since = health
                 .packets_intercepted
                 .saturating_sub(current.baseline_intercepted);
+            // Too short, or too little traffic to judge: keep the window open and
+            // accumulating. Judging it would turn a sparse match into a false
+            // positive, and observing it would reset a real streak.
+            if elapsed < RELAY_REPLY_TIMEOUT || intercepted_since < RELAY_REPLY_MIN_INTERCEPTED {
+                watch = Some(current);
+                continue;
+            }
             let injected_since = health
                 .packets_injected
                 .saturating_sub(current.baseline_injected);
@@ -352,58 +549,101 @@ fn spawn_relay_reply_watchdog(
                     )
                 })
                 .unwrap_or((0, 0));
-            let fault = relay_reply_fault(
-                now.duration_since(current.started),
+            let window = relay_reply_fault(
+                elapsed,
                 intercepted_since,
                 injected_since,
                 from_proxy_since,
                 Some((flow_sent, flow_replied)),
             );
-            match fault {
-                Some(fault) => {
-                    let retries = fallback
-                        .as_ref()
-                        .filter(|f| f.server == server)
-                        .map(|f| f.retries)
-                        .unwrap_or(0);
-                    if lock_or_recover(&engine).hold_tunnelling() {
-                        // A day out is "never" for a match; it keeps the retry
-                        // branch armed without another field to carry it.
-                        let wait = if retry_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-                            retry_delay(retries).unwrap_or(Duration::from_secs(60 * 60 * 24))
-                        } else {
-                            // Retries switched off: this is the last word, so the
-                            // server is recorded as rejecting the relay straight away.
-                            Duration::from_secs(60 * 60 * 24)
-                        };
-                        *lock_or_recover(&rejected) =
-                            retry_delay(retries).is_none().then_some(server);
-                        // Publish the pending retry so the status can say when the
-                        // route flips back instead of flipping wordlessly.
-                        *lock_or_recover(&retry_at) = retry_delay(retries)
-                            .filter(|_| retry_enabled.load(std::sync::atomic::Ordering::Relaxed))
-                            .map(|w| now + w);
-                        fallback = Some(ReplyFallback {
-                            server,
-                            retries,
-                            due: now + wait,
-                        });
-                        tracing::warn!(
-                            server = %current.server,
-                            fault = ?fault,
-                            "{}",
-                            relay_reply_fault_message(
-                                fault,
-                                intercepted_since,
-                                injected_since,
-                                from_proxy_since,
-                                health.errors,
-                                health.last_error.as_deref(),
-                            )
-                        );
-                    }
+            let fault = current.streak.observe(window);
+            // Each judgement starts a fresh window: the next verdict must be new
+            // evidence, not the same counters re-read half a second later.
+            current.window_started = now;
+            current.baseline_intercepted = health.packets_intercepted;
+            current.baseline_injected = health.packets_injected;
+            current.baseline_reply_data = health.packets_reply_data;
+            current.baseline_flow_sent = health.flow.map(|(sent, _)| sent).unwrap_or(0);
+            current.baseline_flow_replied = health.flow.map(|(_, replied)| replied).unwrap_or(0);
+            let Some(fault) = fault else {
+                // The return path works. A chain that was open is over: the relay
+                // carries the server again, and keeping the leash would spend an
+                // old retry budget on a fault that has not happened.
+                if fallback.is_some() {
+                    fallback = None;
+                    *lock_or_recover(&retry_at) = None;
+                    *lock_or_recover(&retest) = None;
+                    tracing::info!(
+                        server = %server,
+                        "The relay is returning this server's traffic again; the fallback chain is closed"
+                    );
                 }
-                None => watch = Some(current),
+                watch = Some(current);
+                continue;
+            };
+            let retries = fallback
+                .as_ref()
+                .filter(|f| f.server == server)
+                .map(|f| f.retries)
+                .unwrap_or(0);
+            // Only a chain in which every window returned nothing at all is a
+            // confirmed zero-return chain, and only that may become a history
+            // verdict. A low share (TooFewReplies), or any window with an
+            // injection, never qualifies.
+            let zero_return = fallback
+                .as_ref()
+                .filter(|f| f.server == server)
+                .map(|f| f.zero_return)
+                .unwrap_or(true)
+                && zero_return_window(fault, from_proxy_since, injected_since);
+            if lock_or_recover(&engine).hold_tunnelling() {
+                // A day out is "never" for a match; it keeps the retry branch
+                // armed without another field to carry it.
+                let wait = if retry_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                    retry_delay(retries).unwrap_or(Duration::from_secs(60 * 60 * 24))
+                } else {
+                    // Retries switched off: this is the last word, so the server
+                    // is recorded as rejecting the relay straight away.
+                    Duration::from_secs(60 * 60 * 24)
+                };
+                let abandoned_relay = lightspeed_client::current_relay();
+                *lock_or_recover(&rejected) =
+                    retry_delay(retries).is_none().then_some(RelayRejection {
+                        server,
+                        relay: abandoned_relay,
+                        zero_return,
+                    });
+                // Publish the pending retry so the status can say when the
+                // route flips back instead of flipping wordlessly.
+                *lock_or_recover(&retry_at) = retry_delay(retries)
+                    .filter(|_| retry_enabled.load(std::sync::atomic::Ordering::Relaxed))
+                    .map(|w| now + w);
+                // Publish the chain so the window keeps the session on the relay
+                // being re-tested instead of re-ranking the route underneath it.
+                *lock_or_recover(&retest) = Some(RetestTarget {
+                    server,
+                    relay: abandoned_relay,
+                });
+                fallback = Some(ReplyFallback {
+                    server,
+                    relay: abandoned_relay,
+                    zero_return,
+                    retries,
+                    due: now + wait,
+                });
+                tracing::warn!(
+                    server = %current.server,
+                    fault = ?fault,
+                    "{}",
+                    relay_reply_fault_message(
+                        fault,
+                        intercepted_since,
+                        injected_since,
+                        from_proxy_since,
+                        health.errors,
+                        health.last_error.as_deref(),
+                    )
+                );
             }
         }
     });
@@ -1038,10 +1278,14 @@ pub struct LightSpeedApp<P: Platform> {
     /// The server the no-reply watchdog gave up on. Three spaced re-tests all
     /// failed, so the window can say the server rejects the relay instead of
     /// implying the app itself broke.
-    relay_rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>>,
+    relay_rejected: Arc<Mutex<Option<RelayRejection>>>,
     /// When the abandoned relay is next re-tested, so the status can name the
     /// wait instead of flipping between DIRECT and OPTIMIZING with no cue.
     relay_retry_at: Arc<Mutex<Option<std::time::Instant>>>,
+    /// The relay the watchdog is re-testing for a server, published so a
+    /// background re-rank does not move the session to another relay under the
+    /// re-test. `None` while no chain is open.
+    relay_retest: Arc<Mutex<Option<RetestTarget>>>,
 
     // ── Proxy connection ─────────────────────────────────────────────────
     selected_proxy_idx: usize,
@@ -1300,8 +1544,9 @@ impl<P: Platform> LightSpeedApp<P> {
         let language = saved.language.clone();
         i18n::set_language(language.as_deref());
 
-        let relay_rejected: Arc<Mutex<Option<std::net::SocketAddrV4>>> = Arc::new(Mutex::new(None));
+        let relay_rejected: Arc<Mutex<Option<RelayRejection>>> = Arc::new(Mutex::new(None));
         let relay_retry_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
+        let relay_retest: Arc<Mutex<Option<RetestTarget>>> = Arc::new(Mutex::new(None));
         let retry_enabled = Arc::new(std::sync::atomic::AtomicBool::new(
             saved.retry_after_fallback,
         ));
@@ -1317,6 +1562,7 @@ impl<P: Platform> LightSpeedApp<P> {
             Arc::clone(&relay_rejected),
             Arc::clone(&retry_enabled),
             Arc::clone(&relay_retry_at),
+            Arc::clone(&relay_retest),
         );
         let mut app = Self {
             engine,
@@ -1325,6 +1571,7 @@ impl<P: Platform> LightSpeedApp<P> {
             quit,
             relay_rejected,
             relay_retry_at,
+            relay_retest,
             selected_proxy_idx,
             auto_select,
             relay_race: None,
@@ -1753,6 +2000,25 @@ impl<P: Platform> LightSpeedApp<P> {
             self.destination_winner = Some(addr);
             if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
                 if idx != self.selected_proxy_idx {
+                    // A relay the watchdog is re-testing must not be swapped
+                    // underneath the re-test: that turns one relay's re-test into
+                    // a mid-session hop to another relay (and restarts
+                    // interception under the player). The chain is per server and
+                    // closes when the relay carries the server again or the game
+                    // server changes, so normal re-ranking resumes after it.
+                    if !relay_switch_allowed(self.watchdog_chain(), self.game_server_addr(), addr) {
+                        let current = self
+                            .proxies
+                            .get(self.selected_proxy_idx)
+                            .map(|entry| entry.addr)
+                            .unwrap_or(addr);
+                        tracing::info!(
+                            "Keeping the live session on {current}; the no-reply watchdog is \
+                             re-testing it for this server ({addr} is the destination choice \
+                             for the next session)"
+                        );
+                        return;
+                    }
                     // The same rule as `follow_game_server`: a relay change moves
                     // the data plane, so it is only safe while tunnelling is
                     // withheld. A re-measurement during a live match records the
@@ -2047,6 +2313,16 @@ impl<P: Platform> LightSpeedApp<P> {
             );
             return;
         }
+        // A re-test owns the route while it runs: switching to the re-race
+        // winner would restart interception under the watchdog's re-test and
+        // turn it into a mid-session hop. The winner applies next session.
+        if !relay_switch_allowed(self.watchdog_chain(), self.game_server_addr(), addr) {
+            tracing::info!(
+                "Keeping the current relay: the no-reply watchdog is re-testing it for this \
+                 server; re-race winner {addr} applies next session"
+            );
+            return;
+        }
         let Some(idx) = proxy_index_for(&self.proxies, addr) else {
             tracing::warn!("Re-race winner {addr} is not in the proxy list; ignoring it");
             return;
@@ -2330,43 +2606,45 @@ impl<P: Platform> LightSpeedApp<P> {
         );
     }
 
-    /// Remember what the current relay is doing for the game server.
-    ///
-    /// This is the one quality signal the client can measure exactly: an aggregate
-    /// ratio of replies to forwards needs no per-packet attribution, which is the
-    /// flaw that made every latency estimator here produce impossible numbers. It
-    /// is recorded as deltas between polls because the engine's counters are
-    /// cumulative, and persisted so a relay that failed is not chosen again after
-    /// a restart.
     /// Remember the watchdog's exhaustion verdict for this relay and server.
     ///
-    /// Once both re-tests have failed for the same server the relay has been
-    /// condemned on more evidence than this module's own share floor requires, so
-    /// the verdict is recorded directly. Recorded once per session per pair so a
-    /// long hold does not rewrite the file every second.
+    /// Once the re-tests are spent the relay has failed this server on more
+    /// evidence than one window: a chain of consecutive windows with no working
+    /// return path. Even then only a *confirmed zero-return chain* is written.
+    /// A chain that saw replies is a low share, which is normal for asymmetric
+    /// game UDP and must not exclude a working relay for the verdict's six-hour
+    /// lifetime. Recorded once per session per pair so a long hold does not
+    /// rewrite the file every second.
     fn record_watchdog_verdict(&mut self) {
-        if !self.relay_rejected_now() {
-            return;
-        }
-        let Some(relay) = lightspeed_client::current_relay().or_else(|| {
-            self.status
-                .proxy_addr
-                .parse::<std::net::SocketAddrV4>()
-                .ok()
-        }) else {
+        let Some(rejection) = self.relay_rejection_now() else {
             return;
         };
-        let Some(server) = self
-            .status
-            .interceptor_server
-            .split(':')
-            .next()
-            .and_then(|ip| ip.parse::<std::net::Ipv4Addr>().ok())
-        else {
+        let server = *rejection.server.ip();
+        let Some(relay) = rejection.relay.or_else(|| {
+            lightspeed_client::current_relay().or_else(|| {
+                self.status
+                    .proxy_addr
+                    .parse::<std::net::SocketAddrV4>()
+                    .ok()
+            })
+        }) else {
             return;
         };
         let key = format!("{relay}|{server}");
         if self.verdict_recorded.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        // A chain that returned any datagram at all was not an absent return
+        // path: it is a low share, and a low share is not a relay verdict. This
+        // is the guard that stops one 24.1% window excluding a working relay.
+        if !rejection.zero_return {
+            self.verdict_recorded = Some(key);
+            tracing::info!(
+                relay = %relay,
+                server = %server,
+                "Watchdog gave up on this relay, but the chain saw replies; it is a \
+                 low return share, not a relay failure - no verdict recorded"
+            );
             return;
         }
         // A window that starved while the session as a whole was returning
@@ -3029,6 +3307,11 @@ impl<P: Platform> LightSpeedApp<P> {
     /// True when the watchdog exhausted its re-tests for the server that is
     /// locked right now: the relay carried the flow, the server did not answer.
     fn relay_rejected_now(&self) -> bool {
+        self.relay_rejection_now().is_some()
+    }
+
+    /// The watchdog's exhaustion verdict, when it belongs to the locked server.
+    fn relay_rejection_now(&self) -> Option<RelayRejection> {
         let rejected = *lock_or_recover(&self.relay_rejected);
         match (
             rejected,
@@ -3036,9 +3319,14 @@ impl<P: Platform> LightSpeedApp<P> {
                 .interceptor_server
                 .parse::<std::net::SocketAddrV4>(),
         ) {
-            (Some(rejected), Ok(locked)) => rejected == locked,
-            _ => false,
+            (Some(rejection), Ok(locked)) if rejection.server == locked => Some(rejection),
+            _ => None,
         }
+    }
+
+    /// The relay the no-reply watchdog is re-testing for a server, if any.
+    fn watchdog_chain(&self) -> Option<RetestTarget> {
+        *lock_or_recover(&self.relay_retest)
     }
 
     /// Outbound datagrams this session handed to the relay, in whichever mode
@@ -5785,8 +6073,9 @@ fn group_digits(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        lock_or_recover, relay_reply_fault, relay_reply_fault_message, RelayReplyFault,
-        RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_TIMEOUT,
+        lock_or_recover, relay_reply_fault, relay_reply_fault_message, relay_switch_allowed,
+        retest_is_about, RelayReplyFault, ReplyFaultStreak, RetestTarget,
+        RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_STREAK, RELAY_REPLY_TIMEOUT,
     };
 
     #[test]
@@ -5811,15 +6100,272 @@ mod tests {
             ),
             None
         );
-        // A quarter back is not enough; a relay returning a trickle must not
-        // keep a starving session on the tunnel.
+        // One reply in eight is the floor: above it the return path works and no
+        // higher share is required. Below it a window may contribute to a fault,
+        // but only through the streak.
+        assert_eq!(
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 13, 13, None),
+            None,
+            "13 replies in 100 forwarded is above the one-in-eight floor"
+        );
         assert_eq!(
             relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 25, 25, None),
             None
         );
         assert_eq!(
-            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 24, 24, None),
-            Some(RelayReplyFault::TooFewReplies)
+            relay_reply_fault(RELAY_REPLY_TIMEOUT, 100, 12, 12, None),
+            Some(RelayReplyFault::TooFewReplies),
+            "just under the floor is the only share that can feed a fault"
+        );
+    }
+
+    #[test]
+    fn the_live_24_percent_window_is_healthy_on_every_reading() {
+        // Run B, 2026-11-16: intercepted=54 injected=13 from_relay=13 - a 24.1%
+        // return share on a relay measured 150 ms FASTER than the direct path.
+        // The old quarter-share bar dropped the session to direct on this window.
+        let window = relay_reply_fault(RELAY_REPLY_TIMEOUT, 54, 13, 13, Some((54, 13)));
+        assert_eq!(
+            window, None,
+            "every reply that came back was injected; the return path works"
+        );
+        let mut streak = ReplyFaultStreak::default();
+        assert_eq!(streak.observe(window), None);
+    }
+
+    #[test]
+    fn a_repeated_24_percent_share_never_condemns_the_relay() {
+        // Requirement: the live 24.1% case must produce no fault on every window,
+        // however many windows the fallback logic reads.
+        let mut streak = ReplyFaultStreak::default();
+        for _ in 0..RELAY_REPLY_STREAK * 3 {
+            let window = relay_reply_fault(RELAY_REPLY_TIMEOUT, 54, 13, 13, None);
+            assert_eq!(
+                streak.observe(window),
+                None,
+                "a low-but-working share must never become a fault"
+            );
+        }
+    }
+
+    #[test]
+    fn the_live_run_windows_replay_through_the_new_criterion() {
+        // The unit-level harness for the live evidence in
+        // `wat/evidence/2026-11-16/relay-hopping/`: every counter window from the
+        // 2026-11-16 ROB RUN trace, passed through the pure decision. Run with
+        // `--nocapture` to read it as a trace.
+        struct Run {
+            label: &'static str,
+            intercepted: u64,
+            injected: u64,
+            from_relay: u64,
+            windows: u32,
+            expected: Option<RelayReplyFault>,
+        }
+        let runs = [
+            Run {
+                // Run A, 08:20:47: LAX carried 68 outbound for 91.199.82.166 and
+                // returned nothing. Now needs the streak before it may fall back.
+                label: "Run A LAX 08:20:47 (relay 207.246.106.36, server 91.199.82.166)",
+                intercepted: 68,
+                injected: 0,
+                from_relay: 0,
+                windows: RELAY_REPLY_STREAK,
+                expected: Some(RelayReplyFault::NoReplyFromRelay),
+            },
+            Run {
+                label: "Run A LAX retry 08:21:26 (attempt 1)",
+                intercepted: 96,
+                injected: 0,
+                from_relay: 0,
+                windows: RELAY_REPLY_STREAK,
+                expected: Some(RelayReplyFault::NoReplyFromRelay),
+            },
+            Run {
+                // Run B, 08:24:16: the damning case - a 150 ms-faster relay at a
+                // 24.1% return share, dropped by the old quarter-share bar.
+                label: "Run B EWR 08:24:16 (relay 207.246.124.117, server 3.237.212.91)",
+                intercepted: 54,
+                injected: 13,
+                from_relay: 13,
+                windows: RELAY_REPLY_STREAK * 3,
+                expected: None,
+            },
+            Run {
+                // Earlier run, 07:31:29: 73/12/12 = 16.4%, also called starved by
+                // the old bar (12*4 = 48 < 73).
+                label: "Earlier run LAX 07:31:29 (73 intercepted, 12 injected, 12 returned)",
+                intercepted: 73,
+                injected: 12,
+                from_relay: 12,
+                windows: RELAY_REPLY_STREAK * 3,
+                expected: None,
+            },
+        ];
+        for run in runs {
+            let mut streak = ReplyFaultStreak::default();
+            let mut verdict = None;
+            for _ in 0..run.windows {
+                let window = relay_reply_fault(
+                    RELAY_REPLY_TIMEOUT,
+                    run.intercepted,
+                    run.injected,
+                    run.from_relay,
+                    None,
+                );
+                verdict = streak.observe(window);
+            }
+            println!(
+                "{}: intercepted={} injected={} from_relay={} -> {:?}",
+                run.label, run.intercepted, run.injected, run.from_relay, verdict
+            );
+            assert_eq!(verdict, run.expected, "{}", run.label);
+        }
+    }
+
+    #[test]
+    fn a_zero_return_window_condemns_only_after_the_streak() {
+        let zero = relay_reply_fault(RELAY_REPLY_TIMEOUT, 68, 0, 0, None);
+        assert_eq!(zero, Some(RelayReplyFault::NoReplyFromRelay));
+        let mut streak = ReplyFaultStreak::default();
+        assert_eq!(
+            streak.observe(zero),
+            None,
+            "one 8 s window of no return path is not evidence enough"
+        );
+        assert_eq!(
+            streak.observe(zero),
+            Some(RelayReplyFault::NoReplyFromRelay),
+            "the configured streak of consecutive zero-return windows"
+        );
+        // A healthy window in between proves the absence was not sustained.
+        let mut streak = ReplyFaultStreak::default();
+        assert_eq!(streak.observe(zero), None);
+        assert_eq!(streak.observe(None), None);
+        assert_eq!(
+            streak.observe(zero),
+            None,
+            "the streak restarted, so this is the first window again"
+        );
+        assert_eq!(
+            streak.observe(zero),
+            Some(RelayReplyFault::NoReplyFromRelay)
+        );
+    }
+
+    #[test]
+    fn a_broken_injector_is_still_detected_after_the_streak() {
+        // from_relay >= 5 with injected == 0 is the local path, not the relay.
+        let window = relay_reply_fault(RELAY_REPLY_TIMEOUT, 600, 0, 40, None);
+        assert_eq!(window, Some(RelayReplyFault::InjectionFailed));
+        let mut streak = ReplyFaultStreak::default();
+        assert_eq!(streak.observe(window), None);
+        assert_eq!(
+            streak.observe(window),
+            Some(RelayReplyFault::InjectionFailed),
+            "a sustained injection fault is still a fallback"
+        );
+    }
+
+    #[test]
+    fn different_faults_do_not_share_a_streak() {
+        let mut streak = ReplyFaultStreak::default();
+        let no_reply = relay_reply_fault(RELAY_REPLY_TIMEOUT, 60, 0, 0, None);
+        let injector = relay_reply_fault(RELAY_REPLY_TIMEOUT, 600, 0, 40, None);
+        assert_eq!(streak.observe(no_reply), None);
+        assert_eq!(
+            streak.observe(injector),
+            None,
+            "a different fault restarts the count; the absence must be sustained"
+        );
+        assert_eq!(
+            streak.observe(injector),
+            Some(RelayReplyFault::InjectionFailed)
+        );
+    }
+
+    #[test]
+    fn only_a_zero_return_window_confirms_a_chain() {
+        assert!(super::zero_return_window(
+            RelayReplyFault::NoReplyFromRelay,
+            0,
+            0
+        ));
+        assert!(
+            !super::zero_return_window(RelayReplyFault::TooFewReplies, 0, 0),
+            "a low share is not an absent return path"
+        );
+        assert!(
+            !super::zero_return_window(RelayReplyFault::NoReplyFromRelay, 3, 0),
+            "a datagram came back, so the window is not zero-return"
+        );
+        assert!(
+            !super::zero_return_window(RelayReplyFault::NoReplyFromRelay, 0, 2),
+            "an injection rules a window out of a zero-return chain"
+        );
+        assert!(!super::zero_return_window(
+            RelayReplyFault::InjectionFailed,
+            40,
+            0
+        ));
+    }
+
+    #[test]
+    fn a_re_test_stays_on_the_relay_it_was_abandoned_on() {
+        let abandoned = addr("207.246.106.36:4434");
+        let other = addr("207.246.124.117:4434");
+        assert!(
+            retest_is_about(Some(abandoned), Some(abandoned)),
+            "the relay that was condemned is the relay the re-test measures"
+        );
+        assert!(
+            !retest_is_about(Some(abandoned), Some(other)),
+            "a re-test must not silently test another relay"
+        );
+        assert!(
+            retest_is_about(Some(abandoned), None),
+            "an unknown interceptor relay keeps the only way back"
+        );
+        assert!(
+            retest_is_about(None, Some(other)),
+            "an unknown abandoned relay cannot be proven different"
+        );
+    }
+
+    #[test]
+    fn a_background_rank_never_moves_the_session_under_a_re_test() {
+        let server = addr("91.199.82.166:36704");
+        let locked = Some(*server.ip());
+        let abandoned = addr("207.246.106.36:4434");
+        let other = addr("207.246.124.117:4434");
+        let chain = Some(RetestTarget {
+            server,
+            relay: Some(abandoned),
+        });
+        assert!(
+            !relay_switch_allowed(chain, locked, other),
+            "a re-test owns the route; a re-rank must not hop mid-session"
+        );
+        assert!(
+            relay_switch_allowed(chain, locked, abandoned),
+            "only the relay under test is legal while the chain is open"
+        );
+        let new_server = addr("198.51.100.7:36704");
+        assert!(
+            relay_switch_allowed(chain, Some(*new_server.ip()), other),
+            "the chain is per server: a new game server may be ranked"
+        );
+        assert!(
+            relay_switch_allowed(None, locked, other),
+            "with no chain open, background selection is unchanged"
+        );
+        let unproven = Some(RetestTarget {
+            server,
+            relay: None,
+        });
+        assert!(
+            !relay_switch_allowed(unproven, locked, other),
+            "a chain with no known relay still owns the route"
         );
     }
 

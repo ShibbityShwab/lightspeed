@@ -1,4 +1,11 @@
-# Interface design: LightSpeed desktop client
+# Interface design
+
+> **Pending update (2026-11-16):** the relay-fallback states gained two fields the
+> inventory below does not name yet — a *re-test pending* state (the session is
+> direct while the same relay is re-tested, `retry_in` counts down) and a
+> *relay recovered* transition that closes the chain. The design follow-up is
+> board task-11 (interface-designer); this note exists so the next reader knows
+> the inventory is one state short until that task lands.: LightSpeed desktop client
 
 This is the working method and the state contract for `client-gui`. It exists because the
 GUI's worst bugs have been **state bugs**, not pixel bugs: a window that said `OPTIMIZING`

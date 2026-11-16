@@ -11,16 +11,36 @@
 //! and across restarts. It answers the question the relay chooser actually faces -
 //! "has this relay ever carried this server's traffic?" - without inventing a
 //! latency figure nobody can measure.
+//!
+//! Two kinds of knowledge live here, and they are not interchangeable:
+//!
+//! - **A measurement**, accumulated from the interceptor's own per-server
+//!   counters. It can say a relay carries the server (enough traffic, at least one
+//!   reply in eight). It cannot condemn a relay: game UDP traffic is asymmetric,
+//!   and a working relay measured a 24.1% return share on a live run.
+//! - **A verdict**, written only after the no-reply watchdog spent its re-tests on
+//!   a confirmed zero-return chain. That one may exclude the relay for
+//!   [`VERDICT_TTL`].
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Share of replies to forwards below which a relay is called starved. The
-/// no-reply watchdog uses the same quarter: a relay returning fewer than a
-/// quarter of the traffic it carried is not carrying it at all.
-pub const STARVED_SHARE: f64 = 0.25;
+/// Denominator of the return share that counts as a working return path: one
+/// datagram in eight.
+///
+/// Game UDP traffic is asymmetric - the client sends far more than the server
+/// returns - so the question is not "which relay returns the most" but "does
+/// anything come back at all". A live healthy relay returned 13 datagrams for 54
+/// intercepted (24.1%) while the relayed path was 150 ms faster than direct, and
+/// the old quarter-share bar called it starved. The no-reply watchdog's fault
+/// floor and this module's "carries" bar are the same fact, so they share this
+/// one constant and can never disagree about what "carrying" means.
+pub const RETURN_SHARE_DENOMINATOR: u64 = 8;
+
+/// The same floor as a fraction, for the share arithmetic below.
+const CARRIES_SHARE: f64 = 1.0 / RETURN_SHARE_DENOMINATOR as f64;
 
 /// Forwards needed before the share means anything. A session that has pushed
 /// twenty packets and seen one reply is a quiet match, not a broken relay.
@@ -38,7 +58,8 @@ pub const VERDICT_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 /// cannot grow this file without limit.
 pub const MAX_ENTRIES: usize = 256;
 
-/// One (relay, server) record: the counters as last observed.
+/// One (relay, server) record: the counters as last observed, and whether the
+/// watchdog recorded a verdict against the relay.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Record {
     /// Packets this client pushed through the relay for the server.
@@ -47,6 +68,10 @@ pub struct Record {
     pub replies: u64,
     /// Unix seconds when the counters were last observed.
     pub observed_at: u64,
+    /// Set only by [`RelayHistory::record_failure`]: a confirmed zero-return
+    /// chain. A measured ratio never sets it - a low share is evidence about a
+    /// window, not a verdict about the relay.
+    pub failed: bool,
 }
 
 impl Record {
@@ -57,23 +82,22 @@ impl Record {
         (self.replies as f64 / self.forwards as f64).clamp(0.0, 1.0)
     }
 
-    /// Whether this record is damning: enough traffic to judge, and too few
-    /// replies for the relay to be considered to be carrying the server.
+    /// Whether this record's own counters show the relay carrying the server:
+    /// enough traffic to judge, and at least one reply in eight coming back.
+    pub fn carries(&self) -> bool {
+        self.forwards >= MIN_FORWARDS && self.answered_share() >= CARRIES_SHARE
+    }
+
+    /// Whether the watchdog recorded this relay as not carrying this server, and
+    /// the verdict is still recent.
     ///
-    /// Thin evidence has to clear a stricter bar. A record at the floor with a
-    /// share a hair under a quarter is a quiet stretch, not a verdict: live traffic
-    /// produced 41 forwards and 10 replies (24.4%) and condemned a relay on it.
-    /// Below twice the floor the share must be half as bad, which is the difference
-    /// between "this relay is dropping the server" and "this server was quiet".
+    /// No share is compared here on purpose. The share already decided the
+    /// watchdog's window; what is remembered is its verdict, and only a chain
+    /// that returned nothing at all produces one. Deriving a second verdict from
+    /// the raw ratio is how one low-share window excluded a healthy relay for
+    /// six hours on a live run.
     pub fn is_starved(&self, now: u64) -> bool {
-        let share_bar = if self.forwards < MIN_FORWARDS * 2 {
-            STARVED_SHARE / 2.0
-        } else {
-            STARVED_SHARE
-        };
-        self.forwards >= MIN_FORWARDS
-            && self.answered_share() < share_bar
-            && now.saturating_sub(self.observed_at) <= VERDICT_TTL.as_secs()
+        self.failed && now.saturating_sub(self.observed_at) <= VERDICT_TTL.as_secs()
     }
 }
 
@@ -100,6 +124,10 @@ impl RelayHistory {
     /// Deltas, not totals: the engine's counters are cumulative for the
     /// interceptor, so adding totals would weight old traffic as though it were
     /// happening now, and a relay that failed once would stay failed forever.
+    ///
+    /// A measurement can only redeem a recorded verdict, never create one: real
+    /// traffic that demonstrably comes back clears `failed`. A low share on
+    /// either side changes nothing but the record's numbers.
     pub fn record(&mut self, relay: SocketAddrV4, server: Ipv4Addr, forwards: u64, replies: u64) {
         if forwards == 0 && replies == 0 {
             return;
@@ -108,21 +136,24 @@ impl RelayHistory {
         entry.forwards = entry.forwards.saturating_add(forwards);
         entry.replies = entry.replies.saturating_add(replies);
         entry.observed_at = now_secs();
+        if entry.carries() {
+            entry.failed = false;
+        }
         self.trim();
     }
 
-    /// Record the watchdog's verdict for the pair.
+    /// Record the watchdog's verdict for the pair: a confirmed zero-return chain.
     ///
-    /// The no-reply watchdog is the validated instrument: it fires only after its
-    /// own settle window and floor, and the GUI records this once both re-tests
-    /// have failed for the same server. Duplicating its threshold here meant a
-    /// live case it condemned (21 forwards, 2 replies, 10%) fell below this
-    /// module's own floor and was not remembered at all.
+    /// This is the only way a relay is remembered as not carrying a server. The
+    /// caller writes it once the watchdog has spent its re-tests and only when
+    /// every window of that chain saw `from_relay == 0` and `injected == 0`; a
+    /// low ratio, or a window with any injection, is not a verdict.
     pub fn record_failure(&mut self, relay: SocketAddrV4, server: Ipv4Addr) {
         let entry = self.entries.entry(key(relay, server)).or_default();
         entry.forwards = entry.forwards.max(MIN_FORWARDS);
         entry.replies = 0;
         entry.observed_at = now_secs();
+        entry.failed = true;
         self.trim();
     }
 
@@ -138,8 +169,7 @@ impl RelayHistory {
         self.entries
             .get(&format!("{relay}|{server}"))
             .is_some_and(|record| {
-                record.forwards >= MIN_FORWARDS
-                    && record.answered_share() >= STARVED_SHARE
+                record.carries()
                     && now.saturating_sub(record.observed_at) <= CORROBORATION_WINDOW.as_secs()
             })
     }
@@ -191,7 +221,9 @@ impl RelayHistory {
     /// Load from `path`, treating a missing or unreadable file as empty.
     ///
     /// Never fails the caller: this is a convenience memory, and a corrupt file
-    /// must not stop the client from starting.
+    /// must not stop the client from starting. A record written before the
+    /// `failed` flag existed loads as a measurement only, so a verdict derived by
+    /// the old buggy criterion is dropped instead of excluding a working relay.
     pub fn load(path: &Path) -> Self {
         let Ok(text) = std::fs::read_to_string(path) else {
             return Self::default();
@@ -209,6 +241,10 @@ impl RelayHistory {
                         forwards: number("forwards"),
                         replies: number("replies"),
                         observed_at: number("observed_at"),
+                        failed: record
+                            .get("failed")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
                     },
                 );
             }
@@ -231,6 +267,7 @@ impl RelayHistory {
                         "forwards": record.forwards,
                         "replies": record.replies,
                         "observed_at": record.observed_at,
+                        "failed": record.failed,
                     }),
                 )
             })
@@ -253,11 +290,41 @@ mod tests {
     }
 
     #[test]
-    fn a_relay_returning_few_replies_is_marked_starved() {
+    fn a_measured_share_never_condemns_a_relay() {
         let mut history = RelayHistory::default();
-        // 100 forwarded, 2 answered: the LAX case, live.
+        // The live EWR record: 93 forwards, 11 replies (11.8%) accumulated over a
+        // session whose windows were returning 24.1%. Deriving a verdict from
+        // that ratio excluded a working relay for six hours.
+        history.record(relay(), server(), 93, 11);
+        assert!(
+            !history.is_starved(relay(), server()),
+            "a measured share is evidence about a window, not a verdict about the relay"
+        );
+        let mut history = RelayHistory::default();
+        // The healthy live window: 13 replies for 54 forwards (24.1%) while the
+        // relayed path was 150 ms faster than direct.
+        history.record(relay(), server(), 54, 13);
+        assert!(!history.is_starved(relay(), server()));
+        let mut history = RelayHistory::default();
+        // Even a nearly silent measurement cannot condemn on its own: only the
+        // watchdog's confirmed zero-return chain may.
         history.record(relay(), server(), 100, 2);
-        assert!(history.is_starved(relay(), server()));
+        assert!(!history.is_starved(relay(), server()));
+    }
+
+    #[test]
+    fn a_confirmed_zero_return_chain_is_a_verdict() {
+        let mut history = RelayHistory::default();
+        history.record(relay(), server(), 179, 0);
+        assert!(
+            !history.is_starved(relay(), server()),
+            "a zero-return window is not a confirmed chain until the watchdog says so"
+        );
+        history.record_failure(relay(), server());
+        assert!(
+            history.is_starved(relay(), server()),
+            "the confirmed chain is the one verdict this module may store"
+        );
     }
 
     #[test]
@@ -284,8 +351,13 @@ mod tests {
         assert_eq!(record.forwards, 60);
         assert_eq!(record.replies, 2);
         assert!(
+            !history.is_starved(relay(), server()),
+            "accumulating a low share still may not condemn"
+        );
+        history.record_failure(relay(), server());
+        assert!(
             history.is_starved(relay(), server()),
-            "the verdict needs the accumulated total, not one poll"
+            "the watchdog verdict uses the accumulated record, not one poll"
         );
     }
 
@@ -294,8 +366,9 @@ mod tests {
         let now = now_secs();
         let stale = Record {
             forwards: 100,
-            replies: 1,
+            replies: 0,
             observed_at: now - VERDICT_TTL.as_secs() - 1,
+            failed: true,
         };
         assert!(!stale.is_starved(now), "an expired verdict is no verdict");
         let fresh = Record {
@@ -310,10 +383,7 @@ mod tests {
         let mut history = RelayHistory::default();
         // The live case: 21 forwards and 2 replies, under this module's own floor.
         history.record(relay(), server(), 21, 2);
-        assert!(
-            !history.is_starved(relay(), server()),
-            "thin by volume alone"
-        );
+        assert!(!history.is_starved(relay(), server()));
         history.record_failure(relay(), server());
         assert!(
             history.is_starved(relay(), server()),
@@ -334,32 +404,21 @@ mod tests {
     }
 
     #[test]
-    fn thin_evidence_needs_a_wider_margin() {
+    fn a_24_percent_return_share_carries_the_server() {
         let now = now_secs();
-        let marginal = Record {
-            forwards: MIN_FORWARDS + 1,
-            replies: (MIN_FORWARDS + 1) / 5,
-            observed_at: now,
-        };
+        let mut history = RelayHistory::default();
+        // The live healthy window against the old 25% bar: 13/54 = 24.1%.
+        history.record(relay(), server(), 54, 13);
         assert!(
-            !marginal.is_starved(now),
-            "24% on thin traffic is a quiet stretch, not a verdict"
+            history.carries(relay(), server(), now),
+            "one reply in eight is the floor; a quarter is not"
         );
-        let damning = Record {
-            forwards: MIN_FORWARDS + 1,
-            replies: (MIN_FORWARDS + 1) / 20,
-            observed_at: now,
-        };
-        assert!(damning.is_starved(now));
-        let plenty = Record {
-            forwards: MIN_FORWARDS * 10,
-            replies: MIN_FORWARDS * 2,
-            observed_at: now,
-        };
-        assert!(
-            plenty.is_starved(now),
-            "20% over a large sample is still a verdict"
-        );
+        let mut history = RelayHistory::default();
+        // The accumulated live EWR record (93/11 = 11.8%) is below the floor and
+        // cannot vouch for the relay, but it still does not condemn it.
+        history.record(relay(), server(), 93, 11);
+        assert!(!history.carries(relay(), server(), now));
+        assert!(!history.is_starved(relay(), server()));
     }
 
     #[test]
@@ -406,7 +465,7 @@ mod tests {
     #[test]
     fn a_relays_record_does_not_leak_to_another_server() {
         let mut history = RelayHistory::default();
-        history.record(relay(), server(), 100, 1);
+        history.record_failure(relay(), server());
         assert!(history.is_starved(relay(), server()));
         assert!(
             !history.is_starved(relay(), Ipv4Addr::new(198, 51, 100, 8)),
@@ -419,10 +478,40 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ls-relay-history-{}", std::process::id()));
         let path = dir.join("relay-history.json");
         let mut history = RelayHistory::default();
-        history.record(relay(), server(), 100, 3);
+        history.record_failure(relay(), server());
         history.save(&path).expect("saved");
         let loaded = RelayHistory::load(&path);
-        assert!(loaded.is_starved(relay(), server()), "verdict survived");
+        assert!(
+            loaded.is_starved(relay(), server()),
+            "verdict survived the disk"
+        );
+        assert!(
+            !loaded.carries(relay(), server(), now_secs()),
+            "a verdict is not a measurement that carries the server"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pre_verdict_file_loads_as_measurement_only() {
+        // The live relay-history.json from the bug: a zero-return record written
+        // before the `failed` flag existed. Loading it must not keep excluding a
+        // relay on a criterion the fix removed.
+        let dir = std::env::temp_dir().join(format!("ls-relay-history-old-{}", std::process::id()));
+        let path = dir.join("relay-history.json");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let document = format!(
+            "{{\"entries\":{{\"{}|{}\":{{\"forwards\":179,\"replies\":0,\"observed_at\":{}}}}}}}",
+            relay(),
+            server(),
+            now_secs()
+        );
+        std::fs::write(&path, document).expect("write");
+        let loaded = RelayHistory::load(&path);
+        assert!(
+            !loaded.is_starved(relay(), server()),
+            "a legacy derived verdict is dropped; only an explicit chain may exclude"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

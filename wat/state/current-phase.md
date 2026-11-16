@@ -11,6 +11,53 @@
 
 ## Recent entries
 
+### 2026-11-16 - WF-062: the relay watchdog stopped abandoning healthy relays (owner report: "jumps around to different relay")
+
+**Agent:** lead + `interface-designer` (fix, task-9) + `qa-engineer` (independent verification + live run, task-10)
+
+Owner report: the app jumps between relays and picks a sub-optimal one while
+idling on the same server. Live-reproduced on ROB RUN (the owner's game):
+
+- **The damning window:** on EWR the relayed path was **150 ms faster than
+  direct** (`relay_app_ms` 107 vs `shadow_app_ms` 257) and the relay was
+  returning and injecting replies (13 of 54 intercepted = **24.07%**), but the
+  watchdog required a quarter of the traffic back in one 8 s window and took the
+  session DIRECT - the slow path the owner was feeling.
+- **The hopping:** an earlier run selected LAX -> EWR -> FRA -> LAX, each with
+  `Restarted interception on the new relay`, after watchdog verdicts were written
+  into `relay-history` (`594/0`, `545/0`), which then excluded working relays for
+  six hours. The relay side was checked and was not at fault (response listener
+  forwards server replies; the fixed live run returned 5,147 of them).
+
+**Fix (task-9):** one shared floor `RETURN_SHARE_DENOMINATOR = 8` is the only
+definition of "the return path works" (watchdog and history cannot drift); a
+fallback needs the same fault over two consecutive non-overlapping judged
+windows; retries re-test the SAME relay through `RetestTarget` +
+`relay_switch_allowed` (no re-rank, no interception restart); relay-history
+records a verdict only for a confirmed zero-return chain, and legacy records load
+measurement-only so the poisoned entries stopped excluding working relays.
+
+**Verified (independent, task-10):** gates green (workspace 1,449 / 0, GUI 166 /
+0; re-run after a package clean); mutations - denominator 8->4 fails 5 GUI tests
+including the live 24.07% replay, streak 2->1 fails 3, forcing the switch guard
+fails 1; live ROB RUN run 4 m 29 s: **0** starvation fallbacks, **1** relay
+selection / **1** restart total (the startup choice), return share **53.4%**
+(`relay-history` 9,816/5,147), `relay_samples` 0 -> 256. Lead re-gate on the
+final tree: fmt clean, workspace clippy clean, 1,449 workspace / 166 GUI / 1,201
+WinDivert-feature / 827 QUIC-lib passed, 0 failed. Evidence
+`wat/evidence/2026-11-16/relay-hopping/` (lead-diagnosis.md, designer.md,
+qa-live/qa.md, GUI trace before/after, screenshot).
+
+**Open:** the exact 24.07% window was not re-observed live (unit replay +
+mutation cover it); the same-relay re-test was not exercised live (no fallback
+fired); judged-healthy windows are silent (F1 -> board task-11, together with the
+state-contract inventory and the overclaiming "relay is not dropping your
+traffic" wording). The destination-leg estimator is still empty for asymmetric
+games, so relay ranking rests on `RegionPrior` -> board task-12. Low findings F2
+(`retry_after_fallback=false` chain blocks re-rank while direct), F3 (unknown
+locked server allows a background switch) and the 58 stale host firewall rules
+from force-killed test instances are noted in the QA report, not fixed here.
+
 ### 2026-11-16 - WF-061 team round: independent QA of the #167 fix, an ALPN rollout plan, and a relay-fra correction
 
 **Agent:** lead + `qa-engineer` + `net-eng` + `infra-dev` (Agent Teams: three board tasks, all completed, then Lead integration)
