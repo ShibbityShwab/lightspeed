@@ -238,7 +238,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::latency::{Clock, IcmpProber, LatencyTracker};
+    use crate::latency::{Clock, IcmpProber, LatencyTracker, SHADOW_SAMPLE_INTERVAL};
     use std::net::SocketAddr;
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
@@ -606,19 +606,19 @@ mod tests {
         run_once!();
         assert!(wait_for(|| echo.count() >= 1, Duration::from_secs(2)));
 
-        // t=29s does not,
-        clock.advance(Duration::from_secs(29));
+        // One second before the interval does not,
+        clock.advance(SHADOW_SAMPLE_INTERVAL - Duration::from_secs(1));
         run_once!();
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(echo.count(), 1, "still inside the sampling interval");
 
-        // t=30s claims again,
+        // the interval boundary claims again,
         clock.advance(Duration::from_secs(1));
         run_once!();
         assert!(wait_for(|| echo.count() >= 2, Duration::from_secs(2)));
 
         // and the next interval behaves the same.
-        clock.advance(Duration::from_secs(29));
+        clock.advance(SHADOW_SAMPLE_INTERVAL - Duration::from_secs(1));
         run_once!();
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(echo.count(), 2);

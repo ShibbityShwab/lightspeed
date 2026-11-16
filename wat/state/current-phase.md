@@ -11,6 +11,32 @@
 
 ## Recent entries
 
+### 2026-11-16 - Follow-up to WF-058: master's red CI was a stale Linux-only test, not the migration
+
+**Agent:** lead (RustDev contract; test-only change)
+
+The push of the migration exposed a red `CI` on master, but the failure predates
+it: run `43681822261` on `4378df1` ("stop the shadow sampler reporting an
+inter-packet gap as an RTT") failed the same test. That commit changed
+`SHADOW_SAMPLE_INTERVAL` from 30 s to 5 s and updated the tests in
+`client/src/latency.rs`, but missed
+`shadow_gate_claims_one_copy_per_server_per_interval` in
+`client/src/interceptor/shadow_probe.rs`, which still advanced 29 s and expected
+no new sample. That module is `#[cfg(target_os = "linux")]`, so the Windows dev
+host never compiles or runs it: the local suite stayed green while Linux CI went
+red.
+
+**Fix:** the test now derives both boundaries from `SHADOW_SAMPLE_INTERVAL`
+(`interval - 1 s` must not claim, `+1 s` must claim), the pattern `latency.rs`
+already uses. No production code changed.
+
+**Verified:** `cargo fmt --all --check` clean. The test cannot run on this host
+(Linux-only module), so CI is the verifier. Separately, local `cargo test`
+currently fails 10 unrelated temp-dir tests with `Access is denied`: a test
+binary under `target\` cannot create directories in `%TEMP%` on this host, while
+the same binary copied to `%TEMP%` succeeds. That is a host sandbox interaction,
+recorded in the `lightspeed-windows` skill, not a code failure.
+
 ### 2026-11-16 - WF-058: the repo is now DeepSeek-Harness-native, and the personas run on Team mode
 
 **Agent:** lead (Architect, RustDev, QAEngineer and DevOps contracts applied; no product code touched)

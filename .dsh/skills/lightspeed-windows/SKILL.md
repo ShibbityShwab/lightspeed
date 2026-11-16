@@ -78,6 +78,16 @@ it builds.
 - Launch a GUI build with `Start-Process` and keep the handle; do not leave
   console windows behind.
 
+## Sandbox quirk (2026-11-16, danger-full-access policy)
+
+A test binary that lives under the workspace (`target\...`) can be denied when it
+creates files outside it: `cargo test` panicked with `Access is denied` on
+`create_dir_all(%TEMP%\...)`, while the **same binary copied to `%TEMP%`
+succeeded**. This is a host sandbox interaction, not a code failure. Workarounds
+that stay Windows-native: run the suite from CI, or build with
+`$env:CARGO_TARGET_DIR` outside the workspace so the test binaries are too.
+Verify a suspected failure this way before blaming the code.
+
 ## Evidence
 
 Screenshots, command transcripts and benchmark tables go to
