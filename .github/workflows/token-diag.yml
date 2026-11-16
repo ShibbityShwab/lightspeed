@@ -1,0 +1,18 @@
+name: Token diag
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe contents:write on this token
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -x
+          gh api /repos/$GITHUB_REPOSITORY/actions/permissions/workflow
+          # harmless write probe 1: create a throwaway branch ref
+          gh api -X POST /repos/$GITHUB_REPOSITORY/git/refs -f ref=refs/heads/diag-token-probe -f sha="$GITHUB_SHA" 2>&1 | head -5
+          # write probe 2: create a draft release on the existing tag
+          gh api -X POST /repos/$GITHUB_REPOSITORY/releases -f tag_name=v1.11.0 -f name="diag-probe" -f draft=true 2>&1 | head -20
