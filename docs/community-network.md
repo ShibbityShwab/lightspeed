@@ -189,6 +189,78 @@ The signing logic (`sign_registry` / `verify_registry`) lives in
 `client/src/registry.rs`. The optional dynamic registry Worker is in
 `infra/registry/`.
 
+### Versioned ALPN on the control plane
+
+1.11.0 adds a versioned ALPN name (`lightspeed-control/1`) to the QUIC control
+plane. A relay keeps its old behaviour by default:
+
+```toml
+[network]
+control_alpn = "off"        # default; identical to every pre-1.11.0 relay
+```
+
+- `"off"`: no ALPN is advertised, ALPN-less clients complete the handshake. This
+  is byte-for-byte the old behaviour, so **updating a relay to the 1.11.0 build is
+  inert** and can be done at any time.
+- `"required"`: the relay advertises `lightspeed-control/1` and rejects clients
+  that do not offer it (TLS alert 120, `no_application_protocol`). Enabling it is
+  one line plus a restart; rolling back is the same line plus a restart.
+
+**The client must ship first.** A 1.11.0 client offers `lightspeed-control/1` and,
+on alert 120, retries once with an empty offer, so it still registers against an
+older relay (one extra handshake per process and relay). A pre-1.11.0 client
+never offers ALPN and cannot recover from a `required` relay: it keeps retrying
+the control plane and never registers until it updates or switches relay. So do
+**not** set `required` before 1.11.0 clients are in the field.
+
+**Blast radius.** A flip affects that relay's pre-ALPN clients only; they cannot
+register there (they can still use another relay or the direct path). Peers on the
+path that strip or do not carry ALPN (QUIC-intercepting middleboxes) fail either
+way — see [troubleshooting.md](troubleshooting.md#quic-control-plane-fails-with-error-120--no_application_protocol).
+
+**Per-relay approval.** Every relay is flipped separately: the project owner
+approves each fleet relay, a community operator decides for their own relay, and
+the first canary must pass the gate below before any other relay is touched.
+
+#### Flipping one relay
+
+The project ships the tool; do not hand-edit a live config:
+
+```bash
+# read-only plan: reads /health and changes nothing
+./infra/scripts/relay-control-alpn.sh --node <node-id|region|ip> --mode required --dry-run
+
+# flip exactly one relay (timestamped backup, atomic edit, --check, restart,
+# bounded /health gate; restores the backup and restarts on any failure)
+./infra/scripts/relay-control-alpn.sh --node <node-id|region|ip> --mode required
+
+# verify
+curl -s http://<relay>:8080/health | jq .control_alpn
+curl -s http://<relay>:8080/metrics | grep lightspeed_control_handshakes_total
+```
+
+A relay whose build predates the stage-2 relay release has no `control_alpn` field
+in `/health`; the script refuses it and tells you to deploy the 1.11.0 relay
+build first (otherwise the config key would be inert and unprovable). The full
+procedure, including the GitHub Actions dispatch form, is in
+[deploy-proxy.md](deploy-proxy.md#flipping-the-control-plane-alpn-versioned-control-plane);
+the plan and compatibility matrix are in
+[quic-alpn-rollout.md](quic-alpn-rollout.md).
+
+#### Canary gate (plan §7.4)
+
+After flipping one relay to `required`, watch it before touching another:
+
+- **Metric:** `M1 = lightspeed_control_handshakes_total{outcome="rejected_no_application_protocol"}`.
+  It is a count of protocol outcomes, not a latency.
+- **Window:** at least **200 accepted control handshakes**
+  (`negotiated_v1` + `no_alpn` on the same metric family) on that relay's busiest
+  hour, so the sample covers the population that can break.
+- **Pass:** `M1 == 0` across the window and no new `rejected_other` errors.
+- **Fail:** any non-zero `M1`: roll the relay back with `--mode off`, then either
+  wait for the remaining pre-ALPN clients to update or take the explicit decision
+  to accept breaking them. Rollback needs no client change.
+
 ---
 
 ## Current status & known gaps

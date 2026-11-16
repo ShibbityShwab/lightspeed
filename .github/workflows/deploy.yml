@@ -19,6 +19,28 @@ on:
       - 'infra/scripts/relay-updater.sh'
       - 'infra/scripts/lib-nodes.sh'
   workflow_dispatch:
+    # A dispatch with control_alpn_node set runs ONLY the single-relay
+    # control_alpn flip job, never a fleet deploy; a dispatch without it is a
+    # normal deploy. Push events never flip, and a flip never redeploys.
+    inputs:
+      control_alpn_node:
+        description: 'Relay node id, region, or IP to flip. Leave empty for a normal deploy dispatch.'
+        required: false
+        default: ''
+        type: string
+      control_alpn_mode:
+        description: 'Target [network] control_alpn mode for the named relay.'
+        required: false
+        default: 'off'
+        type: choice
+        options:
+          - off
+          - required
+      control_alpn_confirm:
+        description: 'Must type exactly: flip <node> <mode> (fails closed otherwise).'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: deploy-production
@@ -27,6 +49,9 @@ concurrency:
 jobs:
   deploy:
     name: Build & Deploy
+    # A normal push or a dispatch without a node; a flip dispatch must not
+    # redeploy the fleet, so it skips this job entirely.
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.control_alpn_node == '' }}
     runs-on: ubuntu-latest
     
     steps:
@@ -52,3 +77,44 @@ jobs:
         run: |
           chmod +x infra/scripts/deploy.sh
           ./infra/scripts/deploy.sh
+
+  control-alpn-flip:
+    name: control_alpn flip
+    # Single relay, dispatch only, and mutually exclusive with the deploy job:
+    # a normal dispatch/push never changes a relay config, and a flip dispatch
+    # never redeploys the fleet.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.control_alpn_node != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      # The confirm string is the zero-cost guard against a stray dispatch:
+      # the operator has to type the exact node and mode they mean.
+      - name: Validate the flip confirmation
+        env:
+          NODE: ${{ inputs.control_alpn_node }}
+          MODE: ${{ inputs.control_alpn_mode }}
+          CONFIRM: ${{ inputs.control_alpn_confirm }}
+        run: |
+          expected="flip ${NODE} ${MODE}"
+          if [ "${CONFIRM}" != "${expected}" ]; then
+            echo "::error::control_alpn_confirm must be exactly '${expected}' (got '${CONFIRM}')"
+            exit 1
+          fi
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/lightspeed_deploy
+          chmod 600 ~/.ssh/lightspeed_deploy
+
+      - name: Flip one relay's control_alpn
+        env:
+          NODE: ${{ inputs.control_alpn_node }}
+          MODE: ${{ inputs.control_alpn_mode }}
+        run: |
+          chmod +x infra/scripts/relay-control-alpn.sh
+          ./infra/scripts/relay-control-alpn.sh --node "${NODE}" --mode "${MODE}"

@@ -273,3 +273,100 @@ systemctl restart lightspeed-proxy
 ```
 
 The installer's layout/rollback logic is covered by `infra/scripts/test_relay_install.sh`, which runs it against a fixture root with `systemctl`, `curl`, and `file` stubbed out.
+
+### Flipping the control-plane ALPN (versioned control plane)
+
+LightSpeed 1.11.0 adds a versioned ALPN name to the QUIC control plane
+(`lightspeed-control/1`). The relay's policy is one config key:
+
+```toml
+[network]
+control_alpn = "off"        # default; byte-for-byte the pre-1.11.0 behaviour
+```
+
+`"off"` sends no ALPN and accepts the ALPN-less handshake every older client
+makes. `"required"` advertises `lightspeed-control/1` and **rejects** clients
+that do not offer it (TLS alert 120, `no_application_protocol`). The background,
+the compatibility matrix and the rollout plan are in
+[quic-alpn-rollout.md](quic-alpn-rollout.md).
+
+**Order matters: client first.** A current client (1.11.0+) offers
+`lightspeed-control/1` first and, only on alert 120, retries once with an empty
+offer — so it still registers against an old relay (one extra handshake per
+process and relay). A pre-1.11.0 client never offers ALPN and cannot recover
+from a `required` relay: it keeps retrying the control plane, never registers,
+and cannot relay game traffic through that relay until it updates or switches
+relay. Therefore:
+
+- **Updating a relay to the stage-2 build is inert.** `control_alpn` defaults to
+  `"off"`, which is exactly today's behaviour. Update relays at any time.
+- **Enabling ALPN is one line and one restart.** `required` is the only
+  behavioural change, and it is gated per relay on its owner's approval plus the
+  canary window below.
+- **Rollback is the same line and a restart.** `"off"` restores the previous
+  behaviour immediately; clients reconnect on their supervisor's normal backoff
+  (250 ms to 5 s). No client release is needed for a relay rollback.
+- **Blast radius of a flip is that relay's pre-ALPN clients only.** Peers on the
+  path that do not carry ALPN (QUIC-intercepting middleboxes) fail either way;
+  see the alert-120 entry in [troubleshooting.md](troubleshooting.md).
+
+#### The flip command
+
+```bash
+# 1. Plan the change (read-only: reads /health, changes nothing)
+./infra/scripts/relay-control-alpn.sh --node relay-lax --mode required --dry-run
+
+# 2. Flip the canary relay (one relay, over SSH)
+./infra/scripts/relay-control-alpn.sh --node relay-lax --mode required
+
+# 3. Verify from the outside
+curl -s http://<relay>:8080/health | jq .control_alpn      # -> "required"
+curl -s http://<relay>:8080/metrics | grep lightspeed_control_handshakes_total
+```
+
+`--node` accepts a node id, region, or IP from the signed registry
+(`web/registry.json`); `--ip` overrides the resolved address for a relay that is
+not in the registry. `--config` overrides the relay config path (default
+`/etc/lightspeed/proxy.toml`).
+
+The script is fail-closed and rolls back by itself:
+
+- It reads the relay's `/health` **before** changing anything. A build without
+  the `control_alpn` field is refused with "deploy the stage-2 build first" —
+  otherwise the key would be inert and the flip unprovable.
+- It keeps a timestamped backup next to the config
+  (`proxy.toml.bak.YYYYMMDDTHHMMSSZ`), writes the edit atomically, checks that
+  exactly one active key remains under `[network]`, and runs the deployed
+  binary's `--check --config` over SSH **before** restarting.
+- After the restart it polls `/health` (default 30 s) until it reports the new
+  mode. On a failed `--check`, a failed restart, or a health poll that never sees
+  the new mode, it restores the backup, restarts the service, proves the previous
+  mode is back, and exits non-zero with the evidence.
+- Requesting the mode already in effect reports and exits 0 without touching the
+  config or restarting the service.
+
+The same flip can be dispatched from GitHub Actions ("Deploy Proxy" →
+Run workflow): set `control_alpn_node` and `control_alpn_mode`, and type
+`control_alpn_confirm` as exactly `flip <node> <mode>`. A dispatch with a node
+runs only the single-relay flip job and never redeploys the fleet; a dispatch
+without a node is a normal deploy.
+
+#### Canary gate (plan §7.4)
+
+A relay flipped to `required` is watched before the next relay is touched:
+
+- **Metric:** `M1 = lightspeed_control_handshakes_total{outcome="rejected_no_application_protocol"}`
+  on that relay. It is a **count**, not a latency; every pre-ALPN client that
+  still exists increments it once when it tries to connect.
+- **Window:** at least **200 accepted control handshakes** on the busiest hour of
+  that relay's day (`negotiated_v1` + `no_alpn` from the same metric family), so
+  "clean" is a meaningful sample of the population that can break.
+- **Pass:** `M1 == 0` across the window, and no new `rejected_other` class of
+  handshake errors.
+- **Fail:** any non-zero `M1`. Then `outcome="no_alpn"` counts tell you how many
+  pre-ALPN clients remain: roll that relay back (`--mode off`) and wait, or take
+  the owner decision to accept breaking them. Per-relay rollback is one command
+  and does not need a client release.
+
+Only after the canary's clean window may the remaining relays be flipped, one at
+a time, each with its own approval and its own window.

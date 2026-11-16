@@ -155,6 +155,15 @@ jobs:
       - name: Anomaly detector self-test
         run: bash infra/scripts/test_health_anomaly.sh
 
+      # The WF-067 control_alpn flip tooling (infra/scripts/relay-control-alpn.sh)
+      # is the fleet-rollout path for the versioned ALPN, and it is mostly
+      # fail-closed/rollback branches that no local run reaches. Its offline
+      # suite drives the real script with ssh/curl/systemctl/proxy stubs against
+      # a temp config (no network, no relay), so a broken rollback is caught here
+      # rather than on a live relay.
+      - name: Relay control_alpn flip self-test
+        run: bash infra/scripts/test_relay_control_alpn.sh
+
   localization-checks:
     name: Localization Checks
     runs-on: ubuntu-latest
