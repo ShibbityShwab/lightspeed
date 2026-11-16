@@ -276,7 +276,27 @@ commit message "fix(client): surface a dead data plane and explain QUIC alert
   rustls's wording. The client's `ALPN=[]` offer is logged once for comparison
   with a capture.
 - **Still open.** The ALPN migration itself is wire-breaking: it needs the
-  client-with-fallback release first, then relays, and an owner decision. Closing
-  #59 / folding #147, `relay-fra`, and the public issue replies stay owner-gated
-  or open. The live invalid-handle path is not yet reproduced end to end (it needs
-  an external WinDivert handle invalidation during a real session).
+  client-with-fallback release first, then relays, and an owner decision.
+  `relay-fra` and the PR #173 follow-up are open. The live invalid-handle path is
+  not yet reproduced end to end (it needs an external WinDivert handle
+  invalidation during a real session).
+
+### Issue hygiene executed (2026-11-16, owner-approved)
+
+- **#59 closed as completed** — root causes fixed in `6bf0f67`, shipped in
+  v1.6.10, reporter's own confirmation in-thread
+  ([comment](https://github.com/ShibbityShwab/lightspeed/issues/59#issuecomment-6910464263)).
+- **#147 closed as a duplicate of #140** with the diagnosis folded there
+  ([comment](https://github.com/ShibbityShwab/lightspeed/issues/147#issuecomment-6910462616),
+  [duplicate label](https://github.com/ShibbityShwab/lightspeed/issues/147)); one
+  thread per subject now.
+- **#167 got the fix summary and the discriminating retest ask**
+  ([comment](https://github.com/ShibbityShwab/lightspeed/issues/167#issuecomment-6910461743)).
+- **#140 got the corrected alert-120 explanation, the capture ask and the staged
+  ALPN plan** ([comment](https://github.com/ShibbityShwab/lightspeed/issues/140#issuecomment-6910462192)).
+- **Game requests labelled** (`game-profile` on #148/#153/#166/#168 — the old
+  template's wrong label is why they arrived unlabelled); **#148 and #153 moved
+  to `blocked`** with the missing fact named (#148's screenshots show a loopback
+  UDP row and a TCP-only listing, so the measured remote port is genuinely
+  missing), and **#168 got its second ask** for the measured endpoint.
+- Open backlog: 8 issues -> 6. Still open: the game requests above, #140, #167.

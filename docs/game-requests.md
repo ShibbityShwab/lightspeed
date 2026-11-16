@@ -45,10 +45,10 @@ Datagram Relay (see below).
 
 | Game | Issue / discussion | State | Missing |
 |---|---|---|---|
-| Aion 2 | #148 | under evaluation | gameplay UDP port (process `AION2.exe` known) |
-| Black Desert Online | #153 | under evaluation | gameplay UDP port (process `BlackDesert64.exe` known) |
+| Aion 2 | #148 | blocked | gameplay UDP port measured in a match (the posted `netstat` shows only a loopback UDP row and a TCP listing) |
+| Black Desert Online | #153 | blocked | gameplay UDP port; asked twice, the form's range fields were regions |
 | EA Sports FC 27 | #166 | near-ready | confirmation that `21006-21039` is gameplay (not EA app control traffic); matchmade servers likely (mark dynamic) |
-| Delta Force | #168, discussion #63 | under evaluation | which ports carry gameplay; matchmade behaviour |
+| Delta Force | #168, discussion #63 | under evaluation | measured remote UDP endpoint; second ask posted 2026-11-16 |
 | Battlefield 6 | discussion #63, #172 | under evaluation | port range and matchmaking behaviour |
 | Deadlock | discussion #142 | blocked | SDR: if gameplay uses Steam Datagram Relay, a profile cannot help |
 | Warface | discussion #63 | under evaluation | port range and matchmaking behaviour |
