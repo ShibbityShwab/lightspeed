@@ -299,4 +299,8 @@ commit message "fix(client): surface a dead data plane and explain QUIC alert
   to `blocked`** with the missing fact named (#148's screenshots show a loopback
   UDP row and a TCP-only listing, so the measured remote port is genuinely
   missing), and **#168 got its second ask** for the measured endpoint.
+- **PR #173 got its review-to-merge message** — rebase on master (its only CI
+  failure was the `a2f7315` shadow-gate bug), real-window screenshots, one source
+  for the 420/1400 bounds, and qualify the mixed-DPI monitor claim
+  ([comment](https://github.com/ShibbityShwab/lightspeed/pull/173#issuecomment-6910494754)).
 - Open backlog: 8 issues -> 6. Still open: the game requests above, #140, #167.

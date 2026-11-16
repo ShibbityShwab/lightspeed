@@ -25,7 +25,9 @@ Labels: `game-profile` on all four remaining game requests (the old template's
 missing label is why they arrived unlabelled), #148 and #153 moved to `blocked`
 with the missing fact named, #168 given its second ask. Docs updated:
 `docs/github-feedback-audit-2026-11-16.md` (issue-hygiene section with links) and
-`docs/game-requests.md` (request table now says blocked/under evaluation).
+`docs/game-requests.md` (request table now says blocked/under evaluation). PR #173
+was also sent its review-to-merge message (rebase on master, real-window
+screenshots, deduplicate the 420/1400 bounds, qualify the mixed-DPI claim).
 
 **Verified:** `gh api` readback — #59 `closed/completed`; #147 `closed/duplicate`
 with the `duplicate` label; #148/#153 `blocked,game-profile`; #166/#168
