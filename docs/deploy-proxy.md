@@ -276,6 +276,12 @@ The installer's layout/rollback logic is covered by `infra/scripts/test_relay_in
 
 ### Flipping the control-plane ALPN (versioned control plane)
 
+> **Fleet status (2026-11-16):** the project's eight community relays run 1.11.0
+> and are all set to `control_alpn = "required"`. A client older than 1.11.0
+> cannot register there and must update; a 1.11.0 client negotiates
+> `lightspeed-control/1` on the first attempt. Self-hosted relays keep the
+> default `"off"` unless their operator opts in using this procedure.
+
 LightSpeed 1.11.0 adds a versioned ALPN name to the QUIC control plane
 (`lightspeed-control/1`). The relay's policy is one config key:
 

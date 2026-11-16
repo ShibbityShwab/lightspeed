@@ -1,17 +1,30 @@
 # Versioned ALPN for the QUIC control plane — rollout plan
 
-> **Status: stages 1 and 2 implemented, unreleased.** On 2026-11-16 the client
-> (offer + one-shot empty-offer fallback + per-relay memory + observability),
-> the relay (`[network] control_alpn = "off" | "required"` + handshake
-> observability), the user docs, the cross-crate interop test and the manual
-> two-relay check all landed in the working tree (WF-067); §1 describes the
-> **pre-implementation** state at `787a8b8` and is kept as the diagnosis.
-> **Stages 1 and later in §4 remain owner-gated**: the stage-1 *release* puts the
-> ALPN extension on the wire in a released client, and every per-relay
-> `required` flip is a separate decision. Implementation status per §13 task is
-> at the end of §13. Evidence for the plan's claims:
-> `wat/evidence/2026-11-16/alpn/` (gitignored, on the machine that produced this
-> plan); evidence for the implementation: `wat/evidence/2026-11-16/wf067-*/`.
+> **Status: ROLLED OUT — 1.11.0 released and the fleet flipped on 2026-11-16.**
+> The stage-1 client (offer + one-shot empty-offer fallback + per-relay memory +
+> observability) shipped in 1.11.0, the stage-2 relay build was deployed fleet
+> wide (inert, `always off`), one canary relay was flipped to `required` and
+> verified with a live 1.11.0 client and the official 1.10.3 client (the latter
+> fails with alert 120 as designed), and then the remaining seven relays were
+> flipped one at a time, each health-gated by the flip tool. All eight community
+> relays report `control_alpn=required` on 1.11.0.
+>
+> **The §7.4 gate was measured and FAILED — and the flip proceeded anyway, on an
+> explicit owner decision.** The owner's instruction was: *"You are in charge of
+> project do your due diligence and it is fine to impact traffic for a novel
+> update"* (2026-11-16). The canary window could not reach n>=200 accepted
+> handshakes before the flip (the fleet is small), and M1 started incrementing in
+> the first minute (`rejected_no_application_protocol` on relay-fra went 66 ->
+> 520 in 120 s), proving pre-1.11.0 clients were in the field. That is the
+> documented Fail branch: wait, roll back, or accept breaking them. The owner
+> authorization was taken as the accept decision; the measured impact is recorded
+> in `wat/evidence/2026-11-16/wf067-rollout/` and the §13 status below.
+> Per-relay rollback remains one command (`--mode off` + restart) with no client
+> change, and `rejected_other` stayed 0 on every relay.
+>
+> §1 describes the **pre-implementation** state at `787a8b8` and is kept as the
+> diagnosis. Evidence for the plan's claims: `wat/evidence/2026-11-16/alpn/`;
+> evidence for the implementation and rollout: `wat/evidence/2026-11-16/wf067-*/`.
 > Diagnosis background:
 > [`docs/github-feedback-audit-2026-11-16.md`](github-feedback-audit-2026-11-16.md)
 > §3 (`#140`/`#147`).
@@ -728,16 +741,21 @@ test to exist); D depends on A and B; E depends on B; F depends on the final
 wording chosen in A. No task edits relay production config; stage 3/4 flips are
 owner-gated operations, not code changes.
 
-**Implementation status (2026-11-16, WF-067).** A - done (`protocol/` constant +
-client offer/fallback/memory/observability, unit + mutation checked); B - done
-(relay `control_alpn`, rejection warn + counters, `/health`, five §6.3 matrix
-tests, smoke-script mode assertion); C - done (cross-crate
+**Implementation and rollout status (2026-11-16, WF-067).** A - shipped in
+1.11.0 (`protocol/` constant + client offer/fallback/memory/observability, unit +
+mutation checked); B - shipped in 1.11.0 and deployed fleet-wide (relay
+`control_alpn`, rejection warn + counters, `/health`, five §6.3 matrix tests,
+smoke-script mode assertion); C - done (cross-crate
 `proxy/tests/integration_alpn.rs` in the `QUIC Integration Tests` job, plus the
 `control_reconnect` harness fix that job exposed); D - done (all four §6.5
 observations, including the official v1.10.3 client against a `required` relay);
-F - done (four user docs, alert-120 now means middlebox **or** version skew);
-E - open. Nothing is released and no relay is configured `required`: the
-stage-1 release and every per-relay flip remain owner decisions (§11).
+E - done (the flip tool `infra/scripts/relay-control-alpn.sh`, its hermetic
+self-test, the `Deploy Proxy` dispatch path and the operator procedure in
+`docs/deploy-proxy.md`/`docs/community-network.md`); F - done (four user docs,
+alert-120 now means middlebox **or** version skew). **Stage 1 was released as
+1.11.0 and all eight relays were flipped to `required` on 2026-11-16 under the
+owner traffic-impact authorization; §7.4 failed by measurement and that is
+recorded in the status block at the top of this document.**
 
 ---
 

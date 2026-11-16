@@ -191,6 +191,10 @@ The signing logic (`sign_registry` / `verify_registry`) lives in
 
 ### Versioned ALPN on the control plane
 
+> **Fleet status (2026-11-16):** the eight community relays run 1.11.0 and are all
+> at `control_alpn = "required"`; pre-1.11.0 clients must update to register
+> there. Self-hosted relays are unaffected unless their operator opts in.
+
 1.11.0 adds a versioned ALPN name (`lightspeed-control/1`) to the QUIC control
 plane. A relay keeps its old behaviour by default:
 
