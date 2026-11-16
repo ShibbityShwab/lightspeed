@@ -75,11 +75,13 @@ the failing job's log is in the CI run `43854061475`. That run confirmed both ne
 gates work before the fix: `QUIC Integration Tests` **success** (16 formerly-dead
 tests running) and `Infra Script Tests` **success** (the locale doc-guard).
 
-**Open:** the new `QUIC Integration Tests` job's first CI run and
-`Infra Script Tests` (with the new doc-guard) are verified only after the push;
-the live in-match path for both samplers is unverified (no game running);
-task-20 F4 (lazy timeout accounting); `route/selector.rs::compare_candidates` is
-a second pre-existing ranking to reconcile or retire; translation debt 7x8.
+**Open:** the live in-match path for both samplers is unverified (no game
+running); task-20 F4 (lazy timeout accounting); `route/selector.rs::compare_candidates`
+is a second pre-existing ranking to reconcile or retire; translation debt 7x8.
+CI verification is complete: run `43854981269` on `8b48805` is green with
+`QUIC Integration Tests` **success** (the six formerly-dead suites) and
+`Infra Script Tests` **success** (the locale doc-guard); the first WF-065 push
+(`c61c88c`) was red on the Windows GUI job and its fix is recorded above.
 
 ### 2026-11-16 - WF-064: a real server-leg signal, an honest route surface, and the v2 NO-GO
 
