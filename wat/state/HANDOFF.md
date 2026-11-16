@@ -72,9 +72,11 @@ the eight community relays are sponsor-funded (decision 2026-09-13).
   WF-067 round is the next commit (see the top of `wat/state/current-phase.md`).
 - Lead gate on the WF-067 tree: fmt/clippy clean (only the two pre-existing
   manifest warnings); workspace **1,557/0/6**; GUI **181/0/1**; WinDivert
-  **1,261/0/4**; the CI `QUIC Integration Tests` command **25 targets,
-  1,492/0/2**; client quic lib **640/0/1**; proxy quic lib **158/0/0**;
-  localization checks green.
+  **1,261/0/4**; the CI `QUIC Integration Tests` command **1,493/0/2**; client
+  quic lib **640/0/1**; proxy quic lib **159/0/0**; localization checks green.
+- CI run `43875765733` on `88efac2` is green: every job passed, including
+  `QUIC Integration Tests` and `Proxy QUIC Smoke`; `Security Audit` and
+  `Docker` are green on the same head.
 - Product: 1.10.3 released; master carries unreleased work - relay-watchdog fix,
   fallback state contract, validated server-leg signal + honest route surface,
   canonical whole-path ranking key, app-telemetry publication gate, monitor
