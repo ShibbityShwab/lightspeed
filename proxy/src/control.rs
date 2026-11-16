@@ -170,6 +170,17 @@ mod inner {
         )
     }
 
+    /// Serialises first-boot TLS generation.
+    ///
+    /// The check-then-generate path below is not re-entrant: two concurrent
+    /// callers can both see the files missing, generate different pairs and then
+    /// interleave the two writes, leaving one generation's certificate beside
+    /// another's key (rustls reports `KeyMismatch`). Production calls it once at
+    /// startup, but the proxy's unit tests legitimately bind several control
+    /// servers at the same time - which is how this was found by CI's
+    /// `QUIC Integration Tests` job on 2026-11-16.
+    static TLS_CERT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Load a persistent self-signed certificate, or generate + store one on
     /// first boot. A stable certificate is required for client trust-on-first-
     /// use pinning: a fresh per-boot cert would change the fingerprint on every
@@ -178,7 +189,19 @@ mod inner {
         Vec<rustls::pki_types::CertificateDer<'static>>,
         rustls::pki_types::PrivateKeyDer<'static>,
     )> {
-        let dir = tls_dir();
+        ensure_cert_in(&tls_dir())
+    }
+
+    /// The load-or-generate body for one TLS directory, serialised process-wide.
+    fn ensure_cert_in(
+        dir: &std::path::Path,
+    ) -> anyhow::Result<(
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    )> {
+        let _guard = TLS_CERT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cert_path = dir.join("cert.der");
         let key_path = dir.join("key.der");
 
@@ -196,7 +219,7 @@ mod inner {
         let key_der = rustls::pki_types::PrivateKeyDer::try_from(key_pair.serialize_der())
             .map_err(|e| anyhow::anyhow!("Failed to serialize private key: {}", e))?;
 
-        std::fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(dir)?;
         std::fs::write(&cert_path, cert_der.as_ref())?;
         std::fs::write(&key_path, key_der.secret_der())?;
 
@@ -1096,6 +1119,65 @@ mod inner {
                 std::fs::create_dir_all(&dir).expect("create TLS temp dir");
                 std::env::set_var("LIGHTSPEED_TLS_DIR", &dir);
             });
+        }
+
+        /// Regression (CI `QUIC Integration Tests`, 2026-11-16): the parallel
+        /// matrix tests bind several control servers at once, so more than one
+        /// caller reached the check-then-generate path with an empty TLS
+        /// directory. Two callers could each generate a pair and interleave the
+        /// writes, leaving one certificate beside another's key and failing the
+        /// bind with `KeyMismatch`. Every caller on an empty directory must
+        /// observe the single generated pair.
+        ///
+        /// The barrier makes the race window as wide as it gets; the assertion is
+        /// on the invariant (one pair), not on timing, so it is not flaky once
+        /// the serialisation exists.
+        #[test]
+        fn concurrent_first_boot_generation_returns_one_matching_pair() {
+            let dir = std::env::temp_dir().join(format!(
+                "lightspeed-control-tls-race-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create the race dir");
+
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let mut threads = Vec::new();
+            for _ in 0..8 {
+                let dir = dir.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                threads.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    ensure_cert_in(&dir).expect("load or generate the certificate")
+                }));
+            }
+            let pairs: Vec<_> = threads
+                .into_iter()
+                .map(|thread| thread.join().expect("join the generation thread"))
+                .collect();
+
+            let first_cert = pairs[0].0[0].as_ref().to_vec();
+            let first_key = pairs[0].1.secret_der().to_vec();
+            for (certs, key) in &pairs {
+                assert_eq!(
+                    certs[0].as_ref(),
+                    first_cert.as_slice(),
+                    "every concurrent caller must see the one generated certificate"
+                );
+                assert_eq!(
+                    key.secret_der(),
+                    first_key.as_slice(),
+                    "every concurrent caller must see the one generated key"
+                );
+                // The pair must actually be usable, which is what KeyMismatch
+                // rejected when the writes interleaved.
+                rustls::ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_single_cert(certs.clone(), key.clone_key())
+                    .expect("the returned certificate and key must match");
+            }
+
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         /// A relay serving on loopback with one ALPN policy.
