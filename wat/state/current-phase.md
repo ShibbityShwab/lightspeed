@@ -31,7 +31,9 @@ red.
 already uses. No production code changed.
 
 **Verified:** `cargo fmt --all --check` clean. The test cannot run on this host
-(Linux-only module), so CI is the verifier. Separately, local `cargo test`
+(Linux-only module), so CI is the verifier: run `43801922521` on `a2f7315` is
+**green**, including the three jobs that were red (`Check & Test`,
+`Feature Matrix (ml)`, `Code Coverage`). Separately, local `cargo test`
 currently fails 10 unrelated temp-dir tests with `Access is denied`: a test
 binary under `target\` cannot create directories in `%TEMP%` on this host, while
 the same binary copied to `%TEMP%` succeeds. That is a host sandbox interaction,
