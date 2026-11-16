@@ -28,14 +28,14 @@ on:
         required: false
         default: ''
         type: string
+      # A string, not a choice: the dispatch API rejected the choice default
+      # ("Provided value 'off' ... not in the list of allowed values"), and the
+      # script validates off|required itself, so the typed enum buys nothing.
       control_alpn_mode:
-        description: 'Target [network] control_alpn mode for the named relay.'
+        description: 'Target [network] control_alpn mode: off or required.'
         required: false
         default: 'off'
-        type: choice
-        options:
-          - off
-          - required
+        type: string
       control_alpn_confirm:
         description: 'Must type exactly: flip <node> <mode> (fails closed otherwise).'
         required: false
@@ -51,7 +51,7 @@ jobs:
     name: Build & Deploy
     # A normal push or a dispatch without a node; a flip dispatch must not
     # redeploy the fleet, so it skips this job entirely.
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.control_alpn_node == '' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.control_alpn_node }}
     runs-on: ubuntu-latest
     
     steps:
@@ -83,7 +83,7 @@ jobs:
     # Single relay, dispatch only, and mutually exclusive with the deploy job:
     # a normal dispatch/push never changes a relay config, and a flip dispatch
     # never redeploys the fleet.
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.control_alpn_node != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.control_alpn_node != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
