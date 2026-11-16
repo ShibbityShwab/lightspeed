@@ -115,6 +115,25 @@ paying extra latency. This is an `infra-dev`/`net-eng` task, not a monitor bug:
 check the relay's own health, its egress path and whether it should be drained.
 The alert fires twice a day on the schedule and is in the Discord channel.
 
+**Correction (2026-11-16, same day, WF-061 `infra-dev` investigation): this
+finding was wrong on the substance — do not drain.** The alert reproduces
+exactly, but the -45 ms is a delta-rule artifact, not the relay's health:
+`saved_ms_sum` is a signed accumulator and `collect-metrics.sh` books any
+decrease as a relay restart (booked window -225.2 ms against a true cumulative
+change of -141.3 ms), and the baseline's five "samples" bridge a restart (real
+baseline: 2 samples, below the detector's own `bc>=5` gate). The alert is
+self-silencing, not recurring, and `negative_saving_spike` is dead because the
+scripts read `lightspeed_telemetry_saved_app_ms_negative_count` while the relay
+exports `..._saved_app_negative_count` (an extra `ms`; the CI fixtures share the
+typo). relay-fra itself is healthy: `/health` 200 in 0.39 s, v1.10.3,
+39.6 h uptime, and positive app-level saving (+50.5 ms over 122 pairs in the
+alert window, +32.3 ms over 409 live; the recommender lists it as necessary).
+The real residual signal is per-game, not per-relay (`fortnite/US` negative on
+both fra and ewr-1). The "in the Discord channel" claim was also wrong:
+`DISCORD_WEBHOOK` does not exist in the repository secrets, so these alerts were
+never delivered. Evidence: `wat/evidence/2026-11-16/relay-fra/report.md`;
+follow-ups: board task-7 (instrument fixes) and task-8 (per-game signal).
+
 ### F7 — Issue hygiene (recommended, owner action)
 
 - **Close #59.** It was fixed in `6bf0f67`, shipped in v1.6.10; the thread has
@@ -276,10 +295,12 @@ commit message "fix(client): surface a dead data plane and explain QUIC alert
   rustls's wording. The client's `ALPN=[]` offer is logged once for comparison
   with a capture.
 - **Still open.** The ALPN migration itself is wire-breaking: it needs the
-  client-with-fallback release first, then relays, and an owner decision.
-  `relay-fra` and the PR #173 follow-up are open. The live invalid-handle path is
-  not yet reproduced end to end (it needs an external WinDivert handle
-  invalidation during a real session).
+  client-with-fallback release first, then relays, and an owner decision (the
+  decision-ready plan is now `docs/quic-alpn-rollout.md`). `relay-fra`'s
+  instrument fixes (board task-7) and its per-game signal (task-8), and the PR
+  #173 follow-up are open. The live invalid-handle path is not yet reproduced end
+  to end (it needs an external WinDivert handle invalidation during a real
+  session).
 
 ### Issue hygiene executed (2026-11-16, owner-approved)
 

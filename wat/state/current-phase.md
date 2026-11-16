@@ -11,6 +11,54 @@
 
 ## Recent entries
 
+### 2026-11-16 - WF-061 team round: independent QA of the #167 fix, an ALPN rollout plan, and a relay-fra correction
+
+**Agent:** lead + `qa-engineer` + `net-eng` + `infra-dev` (Agent Teams: three board tasks, all completed, then Lead integration)
+
+First properly boarded Team-mode round (WF-060 was single-persona). Three
+independent tasks ran concurrently; the Lead gated the final tree and integrated.
+
+- **task-1 `qa-engineer` - independent verification of `908b3ac`: PASS 6/6.**
+  It re-read the diff, re-ran the full gate twice with identical counts,
+  re-derived all six mutation checks itself (each FAIL then PASS, restore
+  byte-identical to HEAD blobs), confirmed the quoted live trace lines exist
+  verbatim, and caught three evidence-doc nits plus two Low product notes
+  (fatal-handle arm does not increment `errors`; "decoded" wording overstates the
+  reply counter). Evidence `wat/evidence/2026-11-16/qa/qa-report.md`; Low findings
+  filed as board task-6.
+- **task-2 `net-eng` - `docs/quic-alpn-rollout.md` (790 lines): decision-ready
+  plan.** Versioned identifier `lightspeed-control/1` in `protocol/`; the client
+  offers it and falls back once to an empty list on `crypto(0x78)`; the relay gets
+  `[network] control_alpn = "off" | "required"` with no new port; the interop
+  matrix, proven from the vendored rustls branches, shows rows B and C are the
+  same alert in opposite directions, so the client-with-fallback must ship first;
+  stages 0-5 with gates/rollback, three-tier tests, observability and a canary
+  gate (n>=200 handshakes, zero `rejected_no_application_protocol`), six
+  falsifiers, owner gate. No code changed.
+- **task-3 `infra-dev` - relay-fra: FIX THE INSTRUMENT, DO NOT DRAIN.** The alert
+  reproduces exactly but is a delta-rule artifact (`saved_ms_sum` is signed; a
+  decrease was booked as a restart, 60% inflation; the baseline bridged a
+  restart), `negative_saving_spike` is dead from a metric-name typo shared by
+  scripts and fixtures, and relay-fra is healthy with positive app-level saving.
+  The real residual signal is per-game (`fortnite/US` negative on fra and ewr-1).
+  `DISCORD_WEBHOOK` does not exist, so the alerts were never delivered. Evidence
+  `wat/evidence/2026-11-16/relay-fra/report.md`; audit F6 corrected; board
+  task-7/8 filed.
+
+**Verified:** the Lead re-ran the gate on the final tree after every teammate
+finished: fmt clean; workspace clippy `--all-targets --all-features` exit 0;
+**1,449** workspace tests across 29 suites, **155** GUI, **1,201**
+WinDivert-feature and **827** QUIC-lib passed, 0 failed - identical to the QA run
+(the only tree addition is the ALPN doc). Evidence
+`wat/evidence/2026-11-16/lead-gate.log`; team reports in the same folder.
+
+**Open:** owner gates - approve the ALPN client-first order (stage 1) and each
+relay flip separately; create the `DISCORD_WEBHOOK` secret. Agent work queued on
+the board: task-4 (relay ALPN operator procedure), task-5 (CI never runs the
+quic-gated integration suites), task-6 (QA parity fixes), task-7 (monitor
+instrument), task-8 (per-game signal). The live error-6 path still needs an
+external WinDivert handle invalidation.
+
 ### 2026-11-16 - Issue hygiene: the backlog now says what it means
 
 **Agent:** lead (GitHub maintainer actions, owner-approved)
