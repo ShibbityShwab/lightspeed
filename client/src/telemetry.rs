@@ -193,37 +193,46 @@ impl TelemetryCollector {
     /// stats-branch points are on the old scale. The wire field is unchanged
     /// (`Option<f32>`, same valid range), so no protocol or relay change is
     /// involved.
+    ///
+    /// # `direct_app_p50_ms` / `saved_app` are a validated pair or they are absent
+    ///
+    /// `direct_app_p50_ms` comes only from [`crate::latency::app_saving_report`],
+    /// i.e. from a shadow-direct window whose samples passed the direct-path
+    /// physical floor, with a validated quiet-flow relayed window for the same
+    /// server. A direct-app median alone is never published: the relay books
+    /// `saved_app = direct_app_p50_ms - relayed_p50_ms`, so a lone (or stale,
+    /// or floorless) direct-app value would be read as a measured path saving.
+    /// The live defect this gates is the 0.4248 ms sample recorded against a
+    /// 283.47 ms direct path before any ICMP floor existed (task-10 session).
+    /// This is the client half of task-13's relayed-side decision: both terms
+    /// are now physically validated, and an unvalidated pair is omitted rather
+    /// than relabelled.
     async fn build_report(&self, game_id: u8, country: &str) -> Option<TelemetryReport> {
         let (direct_p50_ms, relayed_p50_ms) = crate::latency::peek_report_values();
-        let direct_app_p50_ms = crate::latency::shadow_direct_p50_ms();
-        let saved_app_pairs = crate::latency::saved_app_pairs();
-        self.build_report_with_latency(
-            game_id,
-            country,
-            direct_p50_ms,
-            relayed_p50_ms,
-            direct_app_p50_ms,
-            saved_app_pairs,
-        )
-        .await
+        let app_saving = crate::latency::app_saving_report();
+        self.build_report_with_latency(game_id, country, direct_p50_ms, relayed_p50_ms, app_saving)
+            .await
     }
 
     /// Build a report from explicit latency values. Split out so field
     /// propagation is testable without installing the process-wide tracker.
+    ///
+    /// `app_saving` is the whole validated app-level pair or `None`; an
+    /// unvalidated pair cannot be represented, so `direct_app_p50_ms` and
+    /// `saved_app_pairs` can never be published on their own.
     async fn build_report_with_latency(
         &self,
         game_id: u8,
         country: &str,
         direct_p50_ms: Option<f32>,
         relayed_p50_ms: Option<f32>,
-        direct_app_p50_ms: Option<f32>,
-        saved_app_pairs: u32,
+        app_saving: Option<crate::latency::AppSavingReport>,
     ) -> Option<TelemetryReport> {
         let inner = self.inner.lock().await;
         if inner.samples.is_empty()
             && direct_p50_ms.is_none()
             && relayed_p50_ms.is_none()
-            && direct_app_p50_ms.is_none()
+            && app_saving.is_none()
         {
             return None;
         }
@@ -256,6 +265,15 @@ impl TelemetryCollector {
             .snapshot_observations();
 
         let model_fit = crate::ml::collector::latest_model_fit();
+
+        // Publish the app-level pair only as a whole. The relay weights
+        // `saved_app` by these two fields, so neither may travel alone: a
+        // direct-app median with no paired observations behind it, or a pair
+        // count with no median, would be read as a measured path saving.
+        let (direct_app_p50_ms, saved_app_pairs) = match app_saving {
+            Some(app) => (Some(app.direct_app_p50_ms), app.pairs),
+            None => (None, 0),
+        };
 
         Some(TelemetryReport {
             game_id,

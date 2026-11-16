@@ -1315,8 +1315,13 @@ impl ProxyMetrics {
         // ── Client telemetry (aggregated, k-anonymized) ─────────
         // HELP/TYPE headers are emitted unconditionally so the family is
         // discoverable before the k-anonymity floor is reached.
+        // The `country` label on every family below is the client OS locale
+        // country, not location: a locale is not a place, so these cells must
+        // never be read as where clients are. Families whose HELP names the
+        // label carry that caveat so a scraper/dashboard cannot silently turn
+        // a locale into a geographic claim.
         out.push_str(
-            "# HELP lightspeed_telemetry_reports_total Anonymous opt-in client telemetry reports, aggregated by game and country\n",
+            "# HELP lightspeed_telemetry_reports_total Anonymous opt-in client telemetry reports, aggregated by game and by the client OS locale country, not location\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_reports_total counter\n");
         out.push_str(
@@ -1384,7 +1389,7 @@ impl ProxyMetrics {
         );
         out.push_str("# TYPE lightspeed_telemetry_saved_app_negative_count counter\n");
         out.push_str(
-            "# HELP lightspeed_telemetry_rejected_total Telemetry reports dropped because the per-(game,country) cell cap was reached\n",
+            "# HELP lightspeed_telemetry_rejected_total Telemetry reports dropped because the per-(game, country) cell cap was reached; country is the client OS locale country, not location\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_rejected_total counter\n");
 
@@ -1540,7 +1545,7 @@ impl ProxyMetrics {
         // HELP/TYPE headers are emitted unconditionally so the family is
         // discoverable before the k-anonymity floor is reached.
         out.push_str(
-            "# HELP lightspeed_telemetry_route_reports_total Anonymous opt-in client per-route-leg observations, aggregated by relay, game, and country\n",
+            "# HELP lightspeed_telemetry_route_reports_total Anonymous opt-in client per-route-leg observations, aggregated by relay, game, and country; country is the client OS locale country, not location\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_route_reports_total counter\n");
         out.push_str(
@@ -1580,7 +1585,7 @@ impl ProxyMetrics {
         );
         out.push_str("# TYPE lightspeed_telemetry_route_dedup_saved_total counter\n");
         out.push_str(
-            "# HELP lightspeed_telemetry_route_rejected_total Route-leg observations dropped because the per-(relay,game,country) cell cap was reached\n",
+            "# HELP lightspeed_telemetry_route_rejected_total Route-leg observations dropped because the per-(relay, game, country) cell cap was reached; country is the client OS locale country, not location\n",
         );
         out.push_str("# TYPE lightspeed_telemetry_route_rejected_total counter\n");
 
@@ -2419,6 +2424,33 @@ mod tests {
             !output.contains("lightspeed_telemetry_saved_app_ms_sum{"),
             "a cell below the k-anonymity floor must not emit saved-app series"
         );
+    }
+
+    /// Given: a freshly rendered exposition. When: the HELP lines for the
+    /// families whose labels name `game` and `country` are read. Then: each
+    /// one says the country label is a client OS locale country, not location,
+    /// so neither a scraper nor a dashboard can read the cell as geography.
+    #[test]
+    fn telemetry_help_says_country_is_a_locale_not_location() {
+        let m = ProxyMetrics::new();
+        let output = m.to_prometheus("test", "test-node");
+        let caveat = "client OS locale country, not location";
+        for family in [
+            "lightspeed_telemetry_reports_total",
+            "lightspeed_telemetry_route_reports_total",
+            "lightspeed_telemetry_rejected_total",
+            "lightspeed_telemetry_route_rejected_total",
+        ] {
+            let prefix = format!("# HELP {family} ");
+            let help = output
+                .lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing HELP for {family}:\n{output}"));
+            assert!(
+                help.contains(caveat),
+                "HELP for {family} must carry `{caveat}` so the country label is not read as geography: {help}"
+            );
+        }
     }
 
     /// Given: one cell that sees far more distinct source IPs than the floor.

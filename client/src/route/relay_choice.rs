@@ -29,10 +29,29 @@
 //! locked out for lacking evidence, which is the failure the library's own docs
 //! call out.
 //!
-//! Jitter is scored alongside latency because the owner's goal is "lowest
-//! latency possible and the most stable connection", and on a mobile link the
-//! spread is what makes a match feel bad even when the median is acceptable. A
-//! relay whose samples disagree strongly is penalised rather than trusted.
+//! That total is the only ranking key ([`sort_scored`]). The destination leg is a
+//! validity/uncertainty term inside it - a prior is charged
+//! [`PRIOR_UNDERTAINTY_US`], a measurement or the triangle bound is not - and not
+//! a key of its own. Ordering by the destination leg first (the previous
+//! `dest_leg / 50 ms` bucket) can put a relay whose own estimated whole path is
+//! 368.9 ms above one at 283.5 ms merely because its leg landed in a lower
+//! bucket; `docs/server-leg-signal.md` §4.3 has the counterfactual arithmetic.
+//!
+//! Jitter is the tie-break, not a weighted term. It used to be worth twice its
+//! value in the score, which on the field session added 176 ms to the Los Angeles
+//! relay (88 ms of mobile-link spread) and is what actually produced the New
+//! Jersey pick - the spread, not the destination leg. A steadier relay should win
+//! only when the whole-path estimates are exactly equal, so that is what the key
+//! does.
+//!
+//! What the ranking can and cannot do is part of being honest. With a measured
+//! leg, or the triangle bound derived from a measured direct ping, the
+//! destination side moves the order; with only the country-level prior every US
+//! address resolves to one point, so two coasts are 4.2 ms apart in the prior
+//! while their real relay-to-server legs differ by 63 ms, and the client leg
+//! decides. That is the measurement gap
+//! `docs/server-leg-signal.md` §4.4 quantifies - the fix is a real L2 signal or a
+//! precise server position, not another sort key.
 //!
 //! # Scope
 //!
@@ -71,8 +90,14 @@ pub struct RelayCandidate {
 pub struct ScoredRelay {
     pub relay: SocketAddrV4,
     /// Estimated total round trip `client -> relay -> server`, microseconds.
+    ///
+    /// The only ranking key: client leg plus destination leg plus that estimate's
+    /// own uncertainty (see [`sort_scored`]).
     pub total_leg_us: u64,
-    /// Estimated relay-to-server leg, microseconds. Ranked first.
+    /// Estimated relay-to-server leg, microseconds.
+    ///
+    /// A validity/uncertainty term inside [`ScoredRelay::total_leg_us`], not a
+    /// ranking key of its own.
     pub dest_leg_us: u64,
     /// How the second leg was obtained, for the log line and for tests.
     pub dest_source: DestLegSource,
@@ -104,32 +129,33 @@ pub enum DestLegSource {
 /// beat a measured relay in the wrong one, but not by an unbounded amount.
 pub const PRIOR_UNDERTAINTY_US: u64 = 25_000;
 
-/// How much a microsecond of jitter is worth against a microsecond of latency.
+/// Sort by the whole-path total, then by jitter, then by address.
 ///
-/// Weighted above 1 because a stable path is the owner's stated goal and,
-/// on a mobile link, 20 ms of swing hurts more than 20 ms of median.
-pub const JITTER_WEIGHT: u64 = 2;
-
-/// Sort by the server-side leg first, then by total path and jitter.
+/// [`ScoredRelay::total_leg_us`] is the quantity the chooser minimises: the
+/// client leg plus the destination-leg estimate plus that estimate's own
+/// uncertainty. Comparing it first is what makes the destination leg a
+/// validity/uncertainty term rather than an overriding key - the previous
+/// `dest_leg_us / 50_000` bucket could rank a relay whose estimated whole path is
+/// 368.9 ms above one at 283.5 ms
+/// (`tests::the_whole_path_total_outranks_the_destination_bucket`).
 ///
-/// A relay near the game server must win even when the client leg to it is
-/// longer: a relay on the wrong side of the world can be rejected by the
-/// server's region check, and its server-side latency is the part that cannot
-/// be recovered. Fifty-millisecond buckets keep small estimate differences from
-/// flapping the choice between two relays on the same side.
+/// Jitter only separates exact ties, and the relay address separates the
+/// remaining ones, so the order is total and deterministic: two equal candidates
+/// cannot swap between calls, which is what keeps a live session from flapping.
+/// The previous key added `2 x jitter` to the score; that was a proxy for the
+/// destination leg, not the destination leg, and on the field session it added
+/// 176 ms to the Los Angeles relay from mobile-link spread alone.
+///
+/// The old doc justified the bucket with a possible server-side region check ("a
+/// relay on the wrong side of the world can be rejected"). The ranking has no
+/// evidence about any such check; if one is ever observed it belongs in candidate
+/// selection as a validity filter, not as an ordering key that overrides the
+/// estimate.
 fn sort_scored(scored: &mut [ScoredRelay]) {
     scored.sort_by(|a, b| {
-        a.dest_leg_us
-            .saturating_div(50_000)
-            .cmp(&b.dest_leg_us.saturating_div(50_000))
-            .then_with(|| {
-                a.total_leg_us
-                    .saturating_add(a.jitter_us.saturating_mul(JITTER_WEIGHT))
-                    .cmp(
-                        &b.total_leg_us
-                            .saturating_add(b.jitter_us.saturating_mul(JITTER_WEIGHT)),
-                    )
-            })
+        a.total_leg_us
+            .cmp(&b.total_leg_us)
+            .then_with(|| a.jitter_us.cmp(&b.jitter_us))
             .then_with(|| a.relay.cmp(&b.relay))
     });
 }
@@ -142,8 +168,9 @@ fn sort_scored(scored: &mut [ScoredRelay]) {
 /// and `us-west` into one `na` centroid and cannot separate two relays on
 /// opposite sides of the continent.
 ///
-/// Deterministic and total: ties break on the relay address so the order is
-/// stable across calls, which is what lets the caller avoid flapping.
+/// Deterministic and total: ties break on jitter and then on the relay address,
+/// so the order is stable across calls, which is what lets the caller avoid
+/// flapping.
 pub fn rank(server: Ipv4Addr, candidates: &[RelayCandidate]) -> Vec<ScoredRelay> {
     rank_with_direct(server, candidates, None)
 }
@@ -493,17 +520,20 @@ mod tests {
 
     #[test]
     fn a_known_server_position_picks_the_relay_in_its_own_region() {
-        // The field case, end to end, with the relay coordinates from the
-        // operator's own catalog and a US country centroid for an Ashburn
-        // server. The client legs are the measurements from that session.
+        // The field case with the server's actual position: Ashburn, Virginia.
+        // The client legs are the one-RTT measurements from that session
+        // (`docs/server-leg-signal.md` §4.3). The destination leg is what decides
+        // it - Los Angeles is 73.0 ms from Ashburn while New Jersey is 10.0 ms,
+        // which is more than the 41.8 ms by which the client leg favours LAX - so
+        // the relay near the game server wins on the whole path even though it is
+        // the further relay for the player.
         //
-        // This is the test that fails without the fix: with only the coarse
-        // region prior, Kansas sits nearer California and the Los Angeles relay
-        // scores better (281 vs 327 ms), reproducing the wrong pick the race
-        // made. The real positions invert it, because the whole point is the
-        // relay-to-server leg, which the client-leg race never looked at.
+        // This is a destination-leg win: it needs either a precise server
+        // position (what `route::server_location` resolves) or a measured L2.
+        // With only a country centroid the prior cannot tell the coasts apart;
+        // see `the_country_centroid_prior_cannot_separate_the_coasts`.
         let server = Ipv4Addr::new(3, 237, 142, 3);
-        let us = (39.83, -98.58); // the offline country database's US centroid
+        let ashburn = (39.0, -77.5);
 
         let candidates = [
             RelayCandidate {
@@ -522,15 +552,21 @@ mod tests {
             },
         ];
 
-        let ranked = rank_at(server, us, &candidates);
+        let ranked = rank_at(server, ashburn, &candidates);
         assert_eq!(ranked.len(), 2);
         assert_eq!(
             ranked[0].relay.ip(),
             &Ipv4Addr::new(207, 246, 124, 117),
-            "a US centroid plus exact relay positions must choose New Jersey for \
-             an Ashburn server, not the Los Angeles relay that wins the \
-             client-leg race"
+            "with a precise server position the 63 ms destination-leg advantage \
+             outweighs the 41.8 ms client-leg advantage of the Los Angeles relay"
         );
+        assert_eq!(ranked[1].dest_leg_us, 73_021, "LAX to Ashburn");
+        assert_eq!(
+            ranked[0].dest_leg_us, 10_000,
+            "EWR to Ashburn, intra-region"
+        );
+        assert_eq!(ranked[0].total_leg_us, 321_000);
+        assert_eq!(ranked[1].total_leg_us, 342_221);
     }
 
     #[test]
@@ -655,45 +691,199 @@ mod tests {
         );
     }
 
+    /// The rank-harness counterfactual (`docs/server-leg-signal.md` §4.3): with
+    /// one-RTT client legs and the live direct ping, the destination-leg bucket
+    /// used to put EWR first even though its own estimated whole path is 85 ms
+    /// longer than LAX's.
     #[test]
-    fn the_relay_near_the_server_beats_the_closer_but_distant_one() {
-        let server = Ipv4Addr::new(3, 237, 142, 3); // Ashburn, us-east
-        install_region(server, "us-east");
+    fn the_whole_path_total_outranks_the_destination_bucket() {
+        // The live ROB RUN server, and the DB-IP point every US address
+        // resolves to - the prior's own input.
+        let server = Ipv4Addr::new(91, 199, 82, 166);
+        let us_point = (37.09, -95.71);
+        // The same session's measured direct ICMP ping (5 bursts, median
+        // 283.47 ms) and the one-RTT client legs from §4.3.
+        let direct_us = 283_474;
         let candidates = [
-            relay([207, 246, 106, 36], "us-west", 244_200, 88_000),
-            relay([207, 246, 124, 117], "us-east", 286_000, 31_000),
+            relay_node([207, 246, 106, 36], "relay-lax-1", 220_170),
+            relay_node([207, 246, 124, 117], "relay-ewr-1", 305_840),
         ];
-        let ranked = rank(server, &candidates);
-        assert_eq!(ranked.len(), 2, "both candidates must be scoreable");
-        assert_eq!(
-            ranked[0].dest_source,
-            DestLegSource::RegionPrior,
-            "the destination leg must come from the region prior, not the \
-             unknown fallback, or this test proves nothing"
+
+        let ranked = rank_at_with_direct(server, us_point, &candidates, Some(direct_us));
+
+        assert_eq!(ranked.len(), 2);
+        let lax = &ranked[0];
+        let ewr = &ranked[1];
+        // LAX's prior (41.2 ms) is below `direct - client_leg` (63.3 ms), so the
+        // triangle bound raises it and the whole path equals the direct ping
+        // exactly: a relay cannot be faster than the path it replaces.
+        assert_eq!(lax.relay.ip(), &Ipv4Addr::new(207, 246, 106, 36));
+        assert_eq!(lax.dest_source, DestLegSource::GeometricFloor);
+        assert_eq!(lax.dest_leg_us, 63_304, "direct minus the LAX client leg");
+        assert_eq!(lax.total_leg_us, direct_us);
+        // EWR's prior is above its floor (its client leg alone already exceeds
+        // the direct ping), so it keeps the prior and its uncertainty charge.
+        assert_eq!(ewr.relay.ip(), &Ipv4Addr::new(207, 246, 124, 117));
+        assert_eq!(ewr.dest_source, DestLegSource::RegionPrior);
+        assert_eq!(ewr.dest_leg_us, 38_042);
+        assert_eq!(ewr.total_leg_us, 368_882);
+        // The regression is the key order, not a tie: EWR's destination leg
+        // falls in bucket 0 and LAX's floored leg in bucket 1.
+        assert!(
+            ewr.dest_leg_us / 50_000 < lax.dest_leg_us / 50_000,
+            "the old key ranked on this bucket before the whole path"
         );
-        assert_eq!(
-            ranked[0].relay.ip(),
-            &Ipv4Addr::new(207, 246, 124, 117),
-            "the relay in the server's own region must win: the destination leg \
-             is what the race ignored"
+        // No candidate may be presented as better than the direct path it
+        // replaces: the floor makes every total at least the measured direct one.
+        assert!(
+            ranked.iter().all(|scored| scored.total_leg_us >= direct_us),
+            "a relayed estimate below the direct ping is not a possible path: {:?}",
+            ranked
+                .iter()
+                .map(|scored| scored.total_leg_us)
+                .collect::<Vec<_>>()
         );
     }
 
+    /// A candidate row with its total composed exactly as the ranking composes
+    /// it, so a comparator test cannot drift from `score_with`'s penalty rule.
+    fn scored_from(
+        candidate: &RelayCandidate,
+        dest_leg_us: u64,
+        source: DestLegSource,
+    ) -> ScoredRelay {
+        score_with(candidate, dest_leg_us, source).expect("a candidate with a client leg scores")
+    }
+
     #[test]
-    fn jitter_is_weighted_against_latency() {
-        // Two relays, one 20 ms faster but 60 ms swingier. With jitter weighted
-        // at 2x, the stable one must win: the owner asked for stability too.
+    fn a_measured_destination_leg_is_compared_on_the_whole_path() {
+        // The destination leg is a validity/uncertainty term, not the key: a
+        // measured 50 ms leg (bucket 1) beats a prior 40 ms leg (bucket 0) once
+        // the prior's 25 ms uncertainty is charged, because 150 < 165 ms.
+        let measured = relay([10, 0, 0, 1], "us-east", 100_000, 0);
+        let prior = relay([10, 0, 0, 2], "us-east", 100_000, 0);
+        let measured_row = scored_from(&measured, 50_000, DestLegSource::Measured);
+        let prior_row = scored_from(&prior, 40_000, DestLegSource::RegionPrior);
+        assert_eq!(measured_row.total_leg_us, 150_000);
+        assert_eq!(prior_row.total_leg_us, 165_000);
+        assert!(
+            prior_row.dest_leg_us < measured_row.dest_leg_us,
+            "the prior's destination leg is the smaller one, and that used to be the key"
+        );
+        let mut ranked = vec![prior_row, measured_row.clone()];
+        sort_scored(&mut ranked);
+        assert_eq!(ranked[0], measured_row, "the smaller whole path wins");
+
+        // The same comparison the other way: the prior only wins when its whole
+        // path really is shorter, not because its leg is smaller.
+        let worse_measurement = scored_from(&measured, 200_000, DestLegSource::Measured);
+        let prior_row = scored_from(&prior, 40_000, DestLegSource::RegionPrior);
+        let mut ranked = vec![worse_measurement, prior_row.clone()];
+        sort_scored(&mut ranked);
+        assert_eq!(ranked[0], prior_row);
+    }
+
+    #[test]
+    fn the_country_centroid_prior_cannot_separate_the_coasts() {
+        // The honest limitation the whole-path key makes visible. The GUI's
+        // offline country database resolves every US address to one point, so the
+        // prior it feeds is the same for a US-East and a US-West server. For the
+        // field case (an Ashburn server, client legs from §4.3) that puts LAX's
+        // destination leg at 37.1 ms and EWR's at 41.3 ms - 4.2 ms apart, while
+        // the relay-to-server legs really differ by 63.0 ms
+        // (`a_known_server_position_picks_the_relay_in_its_own_region`). The
+        // prior's 4.2 ms cannot outweigh a 41.8 ms client-leg difference, so the
+        // client leg decides: LAX, the relay the field evidence says is on the
+        // wrong coast.
+        //
+        // That is not a ranking defect to hide behind a weighted jitter term or a
+        // destination bucket - the estimate really is that compressed. It is the
+        // measurement gap `docs/server-leg-signal.md` §4.4 quantifies: the fix is
+        // a real L2 signal (v1/v2) or a precise server position, not a different
+        // sort key.
         let server = Ipv4Addr::new(3, 237, 142, 3);
         install_region(server, "us-east");
+        let us_centroid = (39.83, -98.58); // the `na` region centroid
+
         let candidates = [
-            relay([10, 0, 0, 1], "us-east", 200_000, 60_000),
-            relay([10, 0, 0, 2], "us-east", 220_000, 5_000),
+            relay_node([207, 246, 106, 36], "relay-lax-1", 244_200),
+            relay_node([207, 246, 124, 117], "relay-ewr-1", 286_000),
         ];
-        let ranked = rank(server, &candidates);
+
+        let ranked = rank_at(server, us_centroid, &candidates);
+        let lax = &ranked[0];
+        let ewr = &ranked[1];
+        assert_eq!(lax.relay.ip(), &Ipv4Addr::new(207, 246, 106, 36));
+        assert_eq!(lax.dest_leg_us, 37_138);
+        assert_eq!(ewr.dest_leg_us, 41_326);
+        assert!(
+            ewr.dest_leg_us - lax.dest_leg_us < 5_000,
+            "the country point separates the coasts by {} us, far below the \
+             41.8 ms client-leg difference",
+            ewr.dest_leg_us - lax.dest_leg_us
+        );
+        assert_eq!(lax.total_leg_us, 306_338);
+        assert_eq!(ewr.total_leg_us, 352_326);
+    }
+
+    #[test]
+    fn ties_are_deterministic_and_jitter_breaks_an_exact_total_tie() {
+        // Equal whole paths: the steadier relay wins, and the same inputs always
+        // produce the same order so a live session cannot flap between them.
+        let row = |ip: [u8; 4], jitter_us: u64| {
+            scored_from(
+                &relay(ip, "us-east", 100_000, jitter_us),
+                50_000,
+                DestLegSource::Measured,
+            )
+        };
+        let mut ranked = vec![row([10, 0, 0, 2], 9_000), row([10, 0, 0, 1], 5_000)];
+        sort_scored(&mut ranked);
         assert_eq!(
             ranked[0].relay.ip(),
-            &Ipv4Addr::new(10, 0, 0, 2),
-            "the stable relay must win once its jitter advantage is counted"
+            &Ipv4Addr::new(10, 0, 0, 1),
+            "equal totals: the steadier relay wins"
+        );
+        let first = ranked.clone();
+        sort_scored(&mut ranked);
+        assert_eq!(ranked, first, "the same inputs must produce the same order");
+        // Equal totals and equal jitter: the address decides, so the order is
+        // total and a sort can never swap two equal candidates between calls.
+        let mut tied = vec![row([10, 0, 0, 2], 5_000), row([10, 0, 0, 1], 5_000)];
+        sort_scored(&mut tied);
+        assert_eq!(tied[0].relay.ip(), &Ipv4Addr::new(10, 0, 0, 1));
+    }
+
+    #[test]
+    fn jitter_only_breaks_an_exact_tie_never_a_larger_total() {
+        // The key used to add `2 x jitter` to the score. On the field session
+        // that added 176 ms to the Los Angeles relay (88 ms of spread) and is
+        // what actually produced the New Jersey pick: a mobile link's width, not
+        // the destination leg. The whole-path total is the estimate, so a
+        // swingier relay with the shorter estimate must still win.
+        let swingy = scored_from(
+            &relay([10, 0, 0, 1], "us-east", 100_000, 60_000),
+            50_000,
+            DestLegSource::Measured,
+        );
+        let steady = scored_from(
+            &relay([10, 0, 0, 2], "us-east", 130_000, 5_000),
+            50_000,
+            DestLegSource::Measured,
+        );
+        assert_eq!(swingy.total_leg_us, 150_000);
+        assert_eq!(steady.total_leg_us, 180_000);
+        // What the removed weighting would have done: steady 180 + 10 beats
+        // swingy 150 + 120, inverting the order the estimate supports.
+        assert!(
+            steady.total_leg_us + 2 * steady.jitter_us < swingy.total_leg_us + 2 * swingy.jitter_us,
+            "the weighted score did favour the steadier relay here"
+        );
+        let mut ranked = vec![steady, swingy.clone()];
+        sort_scored(&mut ranked);
+        assert_eq!(
+            ranked[0], swingy,
+            "the smaller whole path wins even when the relay is the swingier one"
         );
     }
 

@@ -20,6 +20,10 @@
 #   (p) route attribution stays per relay; totals equal the per-relay sum
 #   (q) per-source saved-app retention coarsens the client country label
 #       to a region and passes the map through the delta engine untouched
+#   (r) attribution wording guard: the collector header and the data
+#       dictionary state that the `country` label is a client OS locale
+#       country, not location, and that the stats branch persists no
+#       per-game dimension
 #
 # No network: the fake registry points health/metrics URLs at file://
 # fixtures, which curl reads locally.
@@ -558,6 +562,37 @@ assert_rc0 $? "(q) source carry run exits 0"
 assert_jq "$SRC_GF_H" '.snapshots[-1].per_relay["relay-b"].reachable == false' "(q) absent relay is unreachable"
 assert_jq "$SRC_GF_H" '.snapshots[-1].per_relay["relay-b"].sources.na.saved_app_ms_sum == 40 and .snapshots[-1].per_relay["relay-b"].sources.na.saved_app_ms_count == 4' "(q) absent relay keeps its per-source map"
 assert_jq "$SRC_GF_H" '.snapshots[-1].per_relay["relay-a"].sources.eu.saved_app_ms_sum == 80' "(q) reachable relay keeps its own source map"
+
+# ── (r) attribution wording guard: locale is not location ────
+# `sources` is keyed by a locale-derived region, and the stats branch
+# persists no per-game dimension. The collector header and the data
+# dictionary must keep saying so, in the same exact caveat phrase the relay's
+# metric HELP uses (that side is gated by
+# telemetry_help_says_country_is_a_locale_not_location in proxy/src/metrics.rs);
+# if the wording is dropped, the published history silently turns a locale
+# into geography, so it is gated here too.
+DOC_WORDING="client OS locale country, not location"
+DATA_DICTIONARY="$SCRIPT_DIR/../../docs/data-dictionary.md"
+for guard_file in "$COLLECT" "$DATA_DICTIONARY"; do
+	if grep -Fq "$DOC_WORDING" "$guard_file" 2>/dev/null; then
+		PASS=$((PASS + 1))
+	else
+		printf '  FAIL: %s no longer states "%s"\n' "$guard_file" "$DOC_WORDING" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
+done
+if grep -Fq "No per-game history in the published snapshot" "$DATA_DICTIONARY" 2>/dev/null; then
+	PASS=$((PASS + 1))
+else
+	printf '  FAIL: %s no longer documents the missing per-game history\n' "$DATA_DICTIONARY" >&2
+	FAILURES=$((FAILURES + 1))
+fi
+if grep -Fq "No game dimension is persisted" "$COLLECT" 2>/dev/null; then
+	PASS=$((PASS + 1))
+else
+	printf '  FAIL: %s no longer documents that the stats branch persists no game dimension\n' "$COLLECT" >&2
+	FAILURES=$((FAILURES + 1))
+fi
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

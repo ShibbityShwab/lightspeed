@@ -5,11 +5,71 @@
 
 ## Current state
 
-**Workflow:** WF-064 (server-leg signal v1, honest route surface, v2 NO-GO, per-game verdict - this entry); WF-063 fallback state contract and WF-062 relay-watchdog fix are the current product changes, unreleased
-**Agent:** lead + `rust-dev` + `interface-designer` + `infra-dev` + `net-eng` + `qa-engineer` (Agent Teams; five board tasks, all completed)
-**Status:** 1.10.3 is the latest release (2026-11-14): server ping in the route card, bounded relay re-tests, session-scoped Relayed counters, the retuned no-reply watchdog, destination-aware relay choice, ARC Raiders TCP control-plane support and the TCP-connection ownership fix; 1.10.0 added Jedi Outcast and Tibia. Master is CI-green after the 2026-11-16 shadow-gate test fix. Open GitHub feedback is triaged in `docs/github-feedback-audit-2026-11-16.md` (backlog 6 issues after the 2026-11-16 hygiene round), 10 discussions, 1 community PR whose CI was unblocked. WF-062 stopped the relay watchdog abandoning healthy relays and hopping mid-session; WF-063 added the fallback state contract and a trace per judged window; WF-064 makes the relay-to-server leg measurable (validated quiet-flow RTT), reports it honestly on the route surface, measures the client leg as one RTT, and ranks on the whole path - with the v2 fleet probe at NO-GO pending fixed gates. The ALPN migration is the next owner-gated step. The agent layer (WF-058) is DSH-native with Team-mode personas.
+**Workflow:** WF-065 (canonical ranking key, validated app telemetry, locale-honest labels, CI quic suites - this entry); WF-064 server-leg signal is the previous round, both unreleased
+**Agent:** lead + `rust-dev` (task-17) + `rust-dev` (task-18) + `infra-dev` (task-19) + `infra-dev` (task-5) + `qa-engineer` (task-20)
+**Status:** 1.10.3 is the latest release (2026-11-14): server ping in the route card, bounded relay re-tests, session-scoped Relayed counters, the retuned no-reply watchdog, destination-aware relay choice, ARC Raiders TCP control-plane support and the TCP-connection ownership fix; 1.10.0 added Jedi Outcast and Tibia. Master is CI-green after the 2026-11-16 shadow-gate test fix. Open GitHub feedback is triaged in `docs/github-feedback-audit-2026-11-16.md` (backlog 6 issues after the 2026-11-16 hygiene round), 10 discussions, 1 community PR whose CI was unblocked. WF-062 stopped the relay watchdog abandoning healthy relays; WF-063 added the fallback state contract; WF-064 made the relay-to-server leg measurable (validated quiet-flow RTT) and the route surface honest; WF-065 makes the whole-path ranking key canonical in the engine, validates the direct-app estimator and gates app-level telemetry publication, labels the telemetry locale truthfully, and makes CI run the quic-gated integration suites. The ALPN migration is the next owner-gated step. The agent layer (WF-058) is DSH-native with Team-mode personas.
 
 ## Recent entries
+
+### 2026-11-16 - WF-065: canonical ranking key, validated app telemetry, locale honesty, CI that runs the quic suites
+
+**Agent:** lead + `rust-dev` (task-17) + `rust-dev` (task-18) + `infra-dev` (task-19) + `infra-dev` (task-5) + `qa-engineer` (task-20 independent verification)
+
+Four parallel deliverables, then independent QA, then the Lead re-gated the
+integrated tree.
+
+- **task-17 `rust-dev` - canonical whole-path ranking key.** `sort_scored` is now
+  `(total_leg_us, jitter_us, relay)`; `JITTER_WEIGHT` and the GUI's interim
+  `whole_path_cmp`/`whole_path_order` are deleted (GUI consumes engine order).
+  Counterfactual pinned by
+  `the_whole_path_total_outranks_the_destination_bucket` (EWR 368,882 us cannot
+  outrank LAX 283,474 us); route suite 13 -> 16, GUI 178 -> 175. Named
+  consequence: with only the country-centroid prior the ranking cannot separate
+  the US coasts (LAX 37.1 vs EWR 41.3 ms vs a true 63 ms), so the client leg
+  decides - the argument for a measured L2, documented in
+  `docs/server-leg-signal.md` §4.3.
+- **task-18 `rust-dev` - the other half of app telemetry.** A shadow-direct
+  sample now needs the relay unchanged, a fresh measured ICMP median, the
+  absolute 1.0 ms floor AND `>= 0.5x ICMP`; rejections are counted and nothing is
+  clamped. `app_saving_report()` is the single publication gate, so an
+  unvalidated pair is unrepresentable: the report omits `direct_app_p50_ms` and
+  sends `saved_app_pairs = 0`, and the relay stops advancing
+  `lightspeed_telemetry_direct_app_ms_*` / `saved_app_ms_*` while unvalidated.
+  The live defect (0.4248 ms accepted against a 284.42 ms ICMP path) is pinned by
+  `a_shadow_sample_attempted_before_any_icmp_floor_is_not_accepted`.
+- **task-19 `infra-dev` - locale is not location.** Metric HELP, the data
+  dictionary and the collector header now say **client OS locale country, not
+  location** (text only; series, labels and values unchanged); a CI doc-guard
+  greps the exact phrase so it cannot regress. **No per-game dimension was added**
+  to the public snapshot (decision + revisit condition in the decision log);
+  `web/app.js` copy is proposed, not applied.
+- **task-5 `infra-dev` - CI now runs the quic-gated integration suites.** New
+  `QUIC Integration Tests` job runs
+  `cargo test -p lightspeed-client -p lightspeed-proxy --features quic --tests
+  --no-fail-fast`; local run 1,471 passed / 0 failed / 2 ignored over 24 targets,
+  and the six formerly-dead suites are 16 tests, all passing. No existing gate
+  weakened; first CI run is the final verification.
+- **task-20 `qa-engineer` - independent verification.** PASS criteria 1-3, 5;
+  criterion 4 PARTIAL (no game running -> live INCONCLUSIVE, not fabricated).
+  4/4 mutations re-derived and restored byte-identically; grep proved the interim
+  GUI re-rank is gone from code/tests/docs (only a decision-log past-tense
+  mention). Low findings: shadow rejection counters debug-only and the
+  data-dictionary paired-publication rows - **both fixed by the Lead** (the
+  per-window INFO line now also carries `shadow_accepted`/`shadow_rejected`);
+  F4 lazy timeout accounting and the out-of-scope second ranking in
+  `route/selector.rs::compare_candidates` are recorded as open.
+
+**Verified:** Lead gate on the integrated tree - fmt clean; workspace clippy
+clean; **1,516** workspace tests across 29 suites, **175** GUI, **1,269**
+WinDivert-feature and **861** QUIC-lib passed, 0 failed. QA gate additionally:
+the task-5 quic integration command 1,471 / 0 / 2. Evidence
+`wat/evidence/2026-11-16/{engine-rank-key,shadow-estimator,infra-cell-labels,ci-quic-suites,wf065-qa}/`.
+
+**Open:** the new `QUIC Integration Tests` job's first CI run and
+`Infra Script Tests` (with the new doc-guard) are verified only after the push;
+the live in-match path for both samplers is unverified (no game running);
+task-20 F4 (lazy timeout accounting); `route/selector.rs::compare_candidates` is
+a second pre-existing ranking to reconcile or retire; translation debt 7x8.
 
 ### 2026-11-16 - WF-064: a real server-leg signal, an honest route surface, and the v2 NO-GO
 

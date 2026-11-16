@@ -29,8 +29,42 @@
 # Non-counter fields: `active_sessions` is a gauge and `version` is a
 # label. They are recorded per relay but excluded from delta/totals,
 # because differencing a gauge is meaningless. The per-relay `geo`
-# region-pair map, `geo_capped`, and `geo_unmapped_cells` are cumulative
-# snapshot metadata and are likewise passed through untouched.
+# region-pair map, the locale-derived `sources` map, `geo_capped`,
+# `geo_unmapped_cells` and `sources_unmapped` are cumulative snapshot
+# metadata and are likewise passed through untouched.
+#
+# Label semantics — read before interpreting `sources`
+# ────────────────────────────────────────────────────
+# `per_relay.<id>.sources.<region>` holds the signed app-level saving
+# summed per coarse world region, derived from the client-reported
+# `client_country` label through the local `infra/geo/regions.json`
+# catalog. That label is the **client OS locale country, not location**
+# (`protocol/src/telemetry.rs:77-79`): an `en-US` locale is
+# reported by a client sitting near Frankfurt as readily as by one in the
+# US, and this collector cannot tell them apart. Read the keys as
+# "reported locale region", never as a geography of where clients are.
+# The relay's k-anonymity floor (>= 3 distinct source IPs per
+# (game, country) cell) has already been applied before export, and a
+# country with no catalog entry is counted in `sources_unmapped`, never
+# invented into a region. Unlike `sources`, the `geo` map IS geographic:
+# its src/dst countries are resolved by the relay from session addresses
+# (`lightspeed_geo_sessions_total`), not from the locale label.
+#
+# No game dimension is persisted (per-game data is live-scrape only)
+# ────────────────────────────────────────────────────────────────────
+# The relay emits `lightspeed_telemetry_*{game=...,country=...}`, but this
+# snapshot folds the country dimension only. There is deliberately NO
+# per-game history in the stats branch, so a per-game regression cannot be
+# investigated after the fact. Per-game figures can only be reproduced
+# from a live `/metrics` scrape, and only while the relay process that
+# produced them is still running (the counters reset on restart). Adding a
+# `game` dimension here would change a public data schema and its privacy
+# surface for a signal that is currently estimator-suspect; the revisit
+# condition is a validated quiet-flow L3 in a release plus an artifact-free
+# re-measurement of the per-game signal.
+#
+# See `docs/data-dictionary.md` ("Label semantics" and "No per-game history in
+# the published snapshot") for the consumer-side statement of the same limits.
 #
 # Requires: bash, curl, jq
 # ──────────────────────────────────────────────────────────────
@@ -146,6 +180,10 @@ def labeled_rows($m; $name):
         | { country: $l.country, v: $v }
       ) catch null)
    | map(select(. != null)));
+# source_cells: the `country` label on the saved-app families is the client
+# OS locale country, not location (see the file header). It is coarsened to a
+# coarse world region before anything is retained, and there is no `game`
+# dimension here on purpose (per-game data is live-scrape only).
 def source_cells($m; $countries):
   (reduce labeled_rows($m; "lightspeed_telemetry_saved_app_ms_sum")[] as $r
      ({}; .[$r.country].saved_app_ms_sum =

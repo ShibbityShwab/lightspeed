@@ -99,10 +99,9 @@ Rules for these states:
   `client_leg + dest_leg + prior uncertainty` (the total the ranking already
   builds), with jitter only as a tie-break and the address as the final key.
   The destination leg is therefore a validity/uncertainty term, not an overriding
-  50 ms bucket. This is an **interim GUI re-rank** of the engine's scored list
-  (`client-gui/src/app.rs::whole_path_order`); task-17 canonicalises the same key
-  inside `client/src/route/relay_choice.rs` and the interim re-rank is then
-  removed.
+  50 ms bucket. Since WF-065 task-17 this key lives in the engine
+  (`client/src/route/relay_choice.rs::sort_scored`) and the GUI consumes that
+  order directly; the interim GUI re-rank is gone.
 - **Trace line carries the provenance.** `Destination-aware relay choice for
   {server}: {relay} ({state}, total {n} ms{claim}) - {k} of {n} candidates raised
   to the direct-ping floor`, where `{state}` is `Measured(n=..)`,
@@ -220,9 +219,9 @@ Open:
 - The seven new `route.server_leg*` / `route.cannot_beat_direct` catalog strings
   ship as English in all nine locales (documented untranslated fallback, decided
   2026-11-16). Translation debt, not a design decision.
-- The GUI's whole-path re-rank is interim: the engine's own sort still buckets
-  the destination leg first. Task-17 canonicalises the key and removes the
-  duplicate rule.
+- The whole-path ranking key is canonical in the engine since WF-065 task-17
+  (`sort_scored`: total, jitter tie-break, address last); the GUI consumes that
+  order and has no comparator of its own.
 
 ## Verification protocol
 

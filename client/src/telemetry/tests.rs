@@ -126,16 +126,26 @@ async fn test_fec_counters_reset_after_build() {
     assert_eq!(collector.fec_losses.load(Ordering::Relaxed), 0);
 }
 
-/// Given: explicit latency values including a direct application RTT. When: a
-/// report is built. Then: the direct-app value is carried through and survives
-/// validation and the JSON round trip.
+/// Given: a validated app-level pair (the shadow-direct window and the
+/// quiet-flow relayed window both passed their physical checks). When: a report
+/// is built. Then: the pair is carried through and survives validation and the
+/// JSON round trip.
 #[tokio::test]
 async fn build_report_carries_direct_app_p50() {
     let collector = TelemetryCollector::new();
     collector.record_rtt(30.0).await;
 
     let report = collector
-        .build_report_with_latency(1, "TH", None, Some(31.0), Some(47.5), 9)
+        .build_report_with_latency(
+            1,
+            "TH",
+            None,
+            Some(31.0),
+            Some(crate::latency::AppSavingReport {
+                direct_app_p50_ms: 47.5,
+                pairs: 9,
+            }),
+        )
         .await
         .expect("report");
 
@@ -150,18 +160,35 @@ async fn build_report_carries_direct_app_p50() {
     assert_eq!(decoded.saved_app_pairs, 9);
 }
 
-/// Given: no RTT ring samples at all. When: a direct application RTT is
-/// present. Then: a report is still produced.
+/// Given: a report with ordinary RTT samples but no validated app-level pair -
+/// the live state whenever the shadow-direct window was rejected (for example
+/// no ICMP floor yet) or no relayed window exists. When: a report is built.
+/// Then: the report is still produced, but it carries neither
+/// `direct_app_p50_ms` nor `saved_app_pairs`, so the relay cannot book a
+/// `saved_app` the client could not physically validate.
+///
+/// This replaces `direct_app_alone_produces_a_report`, which asserted the
+/// defect: a lone unvalidated direct-app median being published. That value is
+/// exactly what made the live task-10 session's `saved_app` negative by
+/// construction (0.4248 ms against a 283.47 ms direct path).
 #[tokio::test]
-async fn direct_app_alone_produces_a_report() {
+async fn an_unvalidated_app_pair_is_omitted_from_the_report() {
     let collector = TelemetryCollector::new();
-    let report = collector
-        .build_report_with_latency(1, "US", None, None, Some(20.0), 0)
-        .await
-        .expect("a direct-app sample must produce a report with no RTT ring samples");
+    collector.record_rtt(30.0).await;
 
-    assert_eq!(report.direct_app_p50_ms, Some(20.0));
-    assert_eq!(report.saved_app_pairs, 0);
+    let report = collector
+        .build_report_with_latency(1, "US", None, None, None)
+        .await
+        .expect("ordinary RTT samples still produce a report");
+
+    assert_eq!(
+        report.direct_app_p50_ms, None,
+        "an unvalidated app-level pair must be omitted as a whole"
+    );
+    assert_eq!(
+        report.saved_app_pairs, 0,
+        "no paired observations may be published without a validated median"
+    );
     assert!(report.validate().is_ok());
 }
 
@@ -285,7 +312,7 @@ async fn build_report_carries_model_fit() {
     collector.record_rtt(30.0).await;
 
     let report = collector
-        .build_report_with_latency(1, "TH", None, Some(31.0), None, 0)
+        .build_report_with_latency(1, "TH", None, Some(31.0), None)
         .await
         .expect("report");
 

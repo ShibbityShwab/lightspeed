@@ -73,8 +73,11 @@ Path: `client-gui/src/app.rs::choose_relay_for_destination` →
   (`client-gui/src/geo.rs`, country level) → `round_trip_us = km × 20 µs,
   floor 10 ms`. Prior candidates are charged `PRIOR_UNDERTAINTY_US = 25 ms`.
   Every US address resolves to one point (37.09, −95.71).
-- **Ranking key**: `dest_leg_us / 50_000` bucket first, then
-  `client_leg + dest_leg + penalty + 2 × jitter`, then address.
+- **Ranking key (at the time of these measurements)**: `dest_leg_us / 50_000`
+  bucket first, then `client_leg + dest_leg + penalty + 2 × jitter`, then
+  address. **Changed in WF-065 task-17:** the engine now compares the whole-path
+  total (`total_leg_us`), jitter only as a tie-break, address last; the bucket and
+  the `2 × jitter` term are gone (see §4.3 item 2).
 - **Floor**: when the server's direct ICMP ping exists at choice time,
   `apply_floor` raises a destination leg below `direct − client_leg`.
 - `client/src/route/server_location.rs` contains a *precise* coordinate resolver
@@ -243,6 +246,18 @@ arithmetic (`scripts/rank_harness.py`, `scripts/client_leg_bias.py`):
 Both counterfactual tables are arithmetic on measured inputs, not a live run;
 the concurrent tree edits mean the GUI call sites may move.
 
+**Status (WF-065 task-17, 2026-11-16): fixed.** The engine's `sort_scored` now
+compares the whole-path total with jitter as a tie-break only, the
+`dest_leg/50 ms` bucket and the `2 × jitter` term are deleted, and the GUI's
+interim duplicate comparator is removed - the counterfactual above is pinned by
+`route::relay_choice::tests::the_whole_path_total_outranks_the_destination_bucket`.
+No other scoring semantics remain. Consequence to keep in mind when reading §4.4:
+with only a country-centroid prior the ranking can no longer separate the US
+coasts (LAX 37.1 ms vs EWR 41.3 ms prior, 4.2 ms apart, while the true difference
+for an Ashburn server is 63 ms), so the client leg decides. That is the honest
+outcome of removing the bucket, and it is the strongest argument for the
+measured L2 signals in §5.
+
 ### 4.4 Option C — how wrong is the geometric prior?
 
 `scripts/rank_harness.py` mirrors the code's own formula (README gives the
@@ -286,7 +301,7 @@ server from a US-West one sitting behind the same anycast/CDN address.
 |---|---|---|---|---|
 | **A. relay `/metrics` lag** | none of L1/L2/L3 — one-sided lag, relay-wide | mean/histogram of a one-sided gap | 82,676–5,458,276 lifetime; 0–23 per 52 s; 315 snapshots / 57.8 d | **reject as server leg**; keep as relay health signal |
 | **B. shadow vs relayed app RTT as-is** | attempted L3/L3d, both biased | latest-send pairing; single shadow sample | 25 pairs live (100 % below L1), 1 shadow sample | **reject as implemented**; salvage via D1 |
-| **C. geometric prior fallback** | none (distance model) | haversine to country point, ±25 ms, 50 ms bucket | 1 server, 8 relays; error −11.7…+48.3 ms | **keep as fallback**; surface uncertainty; never present as measurement |
+| **C. geometric prior fallback** | none (distance model) | haversine to country point, ±25 ms uncertainty inside the whole-path total | 1 server, 8 relays; error −11.7…+48.3 ms | **keep as fallback**; surface uncertainty; never present as measurement |
 | **D1. quiet-flow tunnelled RTT** | L3 (then L2 by subtraction) | attributed quiet-flow samples, median | unknown until instrumented (falsifier) | **recommended v1** |
 | **D2. relay-vantage destination probe** | L2 directly (relay→server ICMP RTT) | per-relay ICMP echo burst, per requesting client | unknown until built (falsifier) | **recommended v2** for candidate ranking |
 

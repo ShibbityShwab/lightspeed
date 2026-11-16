@@ -431,17 +431,21 @@ fn relay_reply_fault_message(
 /// window that carried no traffic at all prints `n/a` and is never judged in
 /// practice.
 ///
-/// The last two fields are the engine's validated quiet-flow probe counters
-/// (`latency::probe_counters`). They are here because the probe's own accepted/
-/// rejected lines are `debug!` and the shipped GUI file sink is INFO, so without
-/// this line the F1 falsifier (accepted samples per match, and *why* replies were
-/// rejected) would be unmeasurable in a released build.
+/// The last four fields are the engine's validated-sample counters: the
+/// quiet-flow probe and the shadow-direct app-RTT sampler
+/// (`latency::probe_counters` / `latency::shadow_counters`). They are here
+/// because each sampler's own accepted/rejected lines are `debug!` and the
+/// shipped GUI file sink is INFO, so without this line the falsifiers (accepted
+/// samples per match, and *why* samples were rejected) would be unmeasurable in
+/// a released build.
 fn relay_reply_window_message(
     intercepted: u64,
     injected: u64,
     from_relay: u64,
     probe_accepted: u64,
     probe_rejected: u64,
+    shadow_accepted: u64,
+    shadow_rejected: u64,
     streak: &ReplyFaultStreak,
     window: Option<RelayReplyFault>,
 ) -> String {
@@ -459,7 +463,8 @@ fn relay_reply_window_message(
     format!(
         "Relay reply window judged: intercepted={intercepted} injected={injected} \
          from_relay={from_relay} share={share} streak={} verdict={verdict} \
-         probe_accepted={probe_accepted} probe_rejected={probe_rejected}",
+         probe_accepted={probe_accepted} probe_rejected={probe_rejected} \
+         shadow_accepted={shadow_accepted} shadow_rejected={shadow_rejected}",
         streak.count
     )
 }
@@ -616,6 +621,7 @@ fn spawn_relay_reply_watchdog(
             // probe counters ride along because their own trace is debug-level
             // and the shipped file sink is INFO (QA finding: F1 unmeasurable).
             let probe = lightspeed_client::latency::probe_counters();
+            let shadow = lightspeed_client::latency::shadow_counters();
             tracing::info!(
                 server = %server,
                 "{}",
@@ -625,6 +631,8 @@ fn spawn_relay_reply_watchdog(
                     from_proxy_since,
                     probe.accepted,
                     probe.rejected(),
+                    shadow.accepted,
+                    shadow.rejected(),
                     &current.streak,
                     window,
                 )
@@ -751,7 +759,7 @@ type RelayLegs = Vec<(SocketAddrV4, Option<discovery::RelaySample>)>;
 struct RouteRanking {
     /// The game server the ranking is for.
     server: Ipv4Addr,
-    /// Every candidate, best first under [`whole_path_cmp`].
+    /// Every candidate, best first in the engine's whole-path order.
     scored: Vec<lightspeed_client::ScoredRelay>,
 }
 
@@ -2063,7 +2071,7 @@ impl<P: Platform> LightSpeedApp<P> {
         // stale ping describes a path the client is no longer measuring, and
         // flooring a candidate against it would invent a bound.
         let direct_us = fresh_direct_us(self.server_ping);
-        let mut ranked = match server_location {
+        let ranked = match server_location {
             Some(loc) => {
                 lightspeed_client::rank_relays_at_with_direct(server, loc, &candidates, direct_us)
             }
@@ -2078,16 +2086,12 @@ impl<P: Platform> LightSpeedApp<P> {
                 )
             })
             .count();
-        // Interim whole-path re-rank. The engine sorts the destination leg into
-        // 50 ms buckets *before* it compares whole-path totals, so it can put a
-        // relay whose estimated total is 368.9 ms above one at 283.5 ms merely
-        // because its destination leg fell in a lower bucket - the EWR/LAX
-        // counterfactual in
-        // `wat/evidence/2026-11-16/server-leg-signal/rank-harness.out`. Ranking
-        // on the whole-path total is the honest key; task-17 canonicalises the
-        // same rule inside `client/src/route/relay_choice.rs` and this re-rank
-        // then goes away. See `whole_path_cmp` for the exact ordering.
-        whole_path_order(&mut ranked);
+        // The engine's order IS the product's order: `rank_relays_*` compares the
+        // whole-path total (client leg + destination leg + the prior's
+        // uncertainty), with jitter only as a tie-break, so there is no second
+        // ranking rule here to drift from it. The counterfactual that used to
+        // need an interim re-rank lives in the engine suite as
+        // `relay_choice::tests::the_whole_path_total_outranks_the_destination_bucket`.
         let best = ranked.first().cloned()?;
         let state = ranking_state_label(best.dest_source, best.relay, server);
         let claim = direct_claim_label(direct_us, best.total_leg_us);
@@ -5503,34 +5507,6 @@ fn same_relay_endpoint(a: SocketAddrV4, b: SocketAddrV4) -> bool {
     a.ip() == b.ip()
 }
 
-/// Order two scored relays by the whole path, not by the destination leg alone.
-///
-/// The comparison key is `total_leg_us`, which the ranking builds from the client
-/// leg plus the destination leg plus the destination leg's own uncertainty
-/// (`PRIOR_UNCERTAINTY_US` for a prior, nothing for a measurement or the
-/// triangle bound). That makes the destination leg a validity/uncertainty term
-/// inside one whole-path number rather than an overriding bucket: the EWR case
-/// in `rank-harness.out` has total 368.9 ms against LAX's 283.5 ms and must rank
-/// second, though its prior sits in a lower 50 ms bucket.
-///
-/// Jitter only separates exactly equal totals, so a steadier relay wins a
-/// genuine tie; the relay address is the final key so the order is total and
-/// deterministic across calls (no flapping from an unstable sort).
-fn whole_path_cmp(
-    a: &lightspeed_client::ScoredRelay,
-    b: &lightspeed_client::ScoredRelay,
-) -> std::cmp::Ordering {
-    a.total_leg_us
-        .cmp(&b.total_leg_us)
-        .then_with(|| a.jitter_us.cmp(&b.jitter_us))
-        .then_with(|| a.relay.cmp(&b.relay))
-}
-
-/// Sort scored relays best first under [`whole_path_cmp`].
-fn whole_path_order(scored: &mut [lightspeed_client::ScoredRelay]) {
-    scored.sort_by(whole_path_cmp);
-}
-
 /// The direct-ping measurement in microseconds, only while it is fresh enough to
 /// be treated as evidence about the path.
 ///
@@ -6925,7 +6901,7 @@ mod tests {
         let mut streak = ReplyFaultStreak::default();
         let healthy = relay_reply_fault(RELAY_REPLY_TIMEOUT, 54, 13, 13, None);
         assert_eq!(streak.observe(healthy), None);
-        let line = relay_reply_window_message(54, 13, 13, 7, 41, &streak, healthy);
+        let line = relay_reply_window_message(54, 13, 13, 7, 41, 3, 9, &streak, healthy);
         for field in [
             "intercepted=54",
             "injected=13",
@@ -6933,11 +6909,14 @@ mod tests {
             "share=24.1%",
             "streak=0",
             "verdict=healthy",
-            // The engine probe counters ride on this INFO line because the
-            // probe's own accepted/rejected trace is debug-level and the shipped
-            // file sink is INFO; without them F1 is unmeasurable in release.
+            // The engine samplers' counters ride on this INFO line because
+            // their own accepted/rejected traces are debug-level and the
+            // shipped file sink is INFO; without them the falsifiers are
+            // unmeasurable in release.
             "probe_accepted=7",
             "probe_rejected=41",
+            "shadow_accepted=3",
+            "shadow_rejected=9",
         ] {
             assert!(line.contains(field), "missing {field} in {line}");
         }
@@ -6946,12 +6925,12 @@ mod tests {
         let mut streak = ReplyFaultStreak::default();
         let fault = relay_reply_fault(RELAY_REPLY_TIMEOUT, 60, 0, 0, None);
         assert_eq!(streak.observe(fault), None);
-        let first = relay_reply_window_message(60, 0, 0, 7, 42, &streak, fault);
+        let first = relay_reply_window_message(60, 0, 0, 7, 42, 3, 9, &streak, fault);
         assert!(first.contains("streak=1"), "{first}");
         assert!(first.contains("verdict=no_reply_from_relay"), "{first}");
         assert!(first.contains("share=0.0%"), "{first}");
         assert!(streak.observe(fault).is_some());
-        let second = relay_reply_window_message(60, 0, 0, 7, 42, &streak, fault);
+        let second = relay_reply_window_message(60, 0, 0, 7, 42, 3, 9, &streak, fault);
         assert!(second.contains("streak=2"), "{second}");
         // Every window verdict has a stable name in the trace.
         for (window, verdict) in [
@@ -6965,7 +6944,7 @@ mod tests {
             ),
             (None, "verdict=healthy"),
         ] {
-            let line = relay_reply_window_message(12, 1, 9, 0, 0, &streak, window);
+            let line = relay_reply_window_message(12, 1, 9, 0, 0, 0, 0, &streak, window);
             assert!(line.contains(verdict), "missing {verdict} in {line}");
         }
     }
@@ -7078,10 +7057,10 @@ mod tests {
         ranking_state_label, relay_cannot_beat_direct, relay_health_verdict, same_relay_endpoint,
         save_user_profiles, scored_for_relay, server_from_fields, server_leg_state,
         should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
-        target_summary, validate_draft, whole_path_order, CloseDecision, EditorActions,
-        GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState,
-        ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, TargetRowAction,
-        PRIOR_UNCERTAINTY_US, SERVER_PING_FRESH_SECS,
+        target_summary, validate_draft, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
+        MeasuredServerLeg, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
+        RelayHealthVerdict, ServerLegState, TargetRowAction, PRIOR_UNCERTAINTY_US,
+        SERVER_PING_FRESH_SECS,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -7318,98 +7297,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_whole_path_total_outranks_the_destination_bucket() {
-        // The rank-harness counterfactual with one-RTT legs and the live direct
-        // ping (283.47 ms): EWR's prior lands in destination bucket 0 while LAX is
-        // floored to 63.3 ms (bucket 1), so the engine's bucket-first key ranks
-        // EWR (total 368.9 ms) above LAX (total 283.5 ms). The whole path says the
-        // opposite, and the GUI must choose LAX.
-        use lightspeed_client::DestinationLegSource;
-        let lax = scored_relay(
-            [207, 246, 106, 36],
-            220_170,
-            63_300,
-            DestinationLegSource::GeometricFloor,
-            17_150,
-        );
-        let ewr = scored_relay(
-            [207, 246, 124, 117],
-            305_840,
-            38_000,
-            DestinationLegSource::RegionPrior,
-            6_160,
-        );
-        assert_eq!(lax.total_leg_us, 283_470);
-        assert_eq!(ewr.total_leg_us, 368_840);
-        // The defect is the key order, not a tie: the destination buckets differ.
-        assert!(ewr.dest_leg_us / 50_000 < lax.dest_leg_us / 50_000);
-        let mut ranked = vec![ewr.clone(), lax.clone()];
-        whole_path_order(&mut ranked);
-        assert_eq!(ranked[0], lax, "the smaller whole path must win");
-        assert_eq!(ranked[1], ewr);
-    }
-
-    #[test]
-    fn a_destination_leg_in_a_lower_bucket_cannot_outrank_the_whole_path() {
-        // The destination leg is a validity/uncertainty term, not the primary
-        // key: a measured 50 ms leg (bucket 1) whose whole path is 150 ms must
-        // beat a prior 40 ms leg (bucket 0) whose whole path is 165 ms once the
-        // prior's own uncertainty is charged.
-        use lightspeed_client::DestinationLegSource;
-        let measured = scored_relay(
-            [10, 0, 0, 1],
-            100_000,
-            50_000,
-            DestinationLegSource::Measured,
-            2_000,
-        );
-        let prior = scored_relay(
-            [10, 0, 0, 2],
-            100_000,
-            40_000,
-            DestinationLegSource::RegionPrior,
-            2_000,
-        );
-        assert_eq!(measured.total_leg_us, 150_000);
-        assert_eq!(prior.total_leg_us, 165_000);
-        assert!(
-            prior.dest_leg_us < measured.dest_leg_us,
-            "the prior's destination leg is the smaller one"
-        );
-        let mut ranked = vec![prior, measured.clone()];
-        whole_path_order(&mut ranked);
-        assert_eq!(ranked[0], measured);
-    }
-
-    #[test]
-    fn the_order_is_total_deterministic_and_jitter_breaks_a_genuine_tie() {
-        use lightspeed_client::DestinationLegSource;
-        let tie = |ip: [u8; 4], jitter_us: u64| {
-            scored_relay(
-                ip,
-                100_000,
-                50_000,
-                DestinationLegSource::Measured,
-                jitter_us,
-            )
-        };
-        let mut ranked = vec![tie([10, 0, 0, 2], 9_000), tie([10, 0, 0, 1], 5_000)];
-        whole_path_order(&mut ranked);
-        assert_eq!(
-            ranked[0].relay.ip(),
-            &std::net::Ipv4Addr::new(10, 0, 0, 1),
-            "equal totals: the steadier relay wins"
-        );
-        let first = ranked.clone();
-        whole_path_order(&mut ranked);
-        assert_eq!(ranked, first, "the same inputs must produce the same order");
-        // Equal totals and equal jitter: the address decides, so the order is
-        // total and a sort can never swap two equal candidates between calls.
-        let mut tied = vec![tie([10, 0, 0, 2], 5_000), tie([10, 0, 0, 1], 5_000)];
-        whole_path_order(&mut tied);
-        assert_eq!(tied[0].relay.ip(), &std::net::Ipv4Addr::new(10, 0, 0, 1));
-    }
+    // The ranking-order tests that used to live here were moved to the engine
+    // suite when the interim re-rank was removed (task-17): the order is
+    // `client/src/route/relay_choice.rs`'s, so its regression tests live beside
+    // it - `the_whole_path_total_outranks_the_destination_bucket`,
+    // `a_measured_destination_leg_is_compared_on_the_whole_path` and
+    // `ties_are_deterministic_and_jitter_breaks_an_exact_total_tie`.
 
     #[test]
     fn the_server_leg_state_says_how_the_leg_was_obtained() {

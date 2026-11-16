@@ -38,6 +38,32 @@
 //! directly comparable, unlike the ICMP-based `direct_p50_ms`, which stays as
 //! the estimate.
 //!
+//! ## A shadow-direct sample is validated against the measured direct path
+//!
+//! On a streaming flow the next inbound datagram is usually not the reply to
+//! the re-injected packet, so the gap it times is an inter-packet interval, not
+//! a round trip. The sampler therefore accepts a sample only when all of these
+//! hold, and stores nothing otherwise (a rejection is counted and traced, never
+//! clamped):
+//!
+//! * the relay is unchanged between the arming send and the reply (an unknown
+//!   relay at either end cannot prove that, so it is a rejection too),
+//! * a fresh measured ICMP median exists for the same server: without a
+//!   measured direct path there is no physical floor to validate the game-packet
+//!   round trip against, and
+//! * the sample is at least [`MIN_PLAUSIBLE_DIRECT_MS`] (a public-internet
+//!   round trip cannot be sub-millisecond) and at least
+//!   `SHADOW_MIN_FRACTION_OF_ICMP` of that ICMP median.
+//!
+//! The first rule matters because of the live defect this validation exists for:
+//! on the task-10 ROB RUN session the very first shadow sample was **0.4248 ms**
+//! against a direct ICMP RTT of **283.47 ms** (0.15 %) and it was accepted
+//! before any ICMP history existed, because the fraction rule simply did not run
+//! for the first sample. A collapsed `direct_app_p50_ms` makes
+//! `saved_app = direct - relayed` negative by construction, so it must never
+//! reach the window, and the window's median must never be published without a
+//! validated relayed term beside it (see [`LatencyTracker::app_saving_report`]).
+//!
 //! ## Measurement vs. reporting
 //!
 //! Local measurement is **independent of telemetry reporting**. Installing the
@@ -102,6 +128,15 @@ pub const SHADOW_DIRECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// inter-packet gap after the outbound: live traffic produced 6.4 ms against an
 /// ICMP RTT of 299 ms, which no un-relayed round trip can be.
 const SHADOW_MIN_FRACTION_OF_ICMP: f32 = 0.5;
+
+/// Absolute floor for a shadow-direct sample: a round trip to a public game
+/// server over the internet cannot be faster than this, the same physical
+/// argument as [`MIN_PLAUSIBLE_DIRECT_MS`]. A sub-millisecond "reply" was
+/// answered locally (or is another datagram of the flow, not the reply), and
+/// must never be stored, reported or clamped. This floor needs no ICMP history,
+/// so it also covers the live defect where the very first sample was 0.4248 ms
+/// against a 283.47 ms direct path.
+const SHADOW_MIN_PLAUSIBLE_MS: f32 = MIN_PLAUSIBLE_DIRECT_MS;
 
 /// Samples needed on both sides before the windows may be compared at all. One
 /// sample each is enough to compare two wrong numbers.
@@ -367,13 +402,15 @@ struct Inner {
     /// `--diagnose`'s exact-payload window. Never reported as game latency.
     diagnostic: Vec<f32>,
     diagnostic_server: Option<Ipv4Addr>,
-    shadow_pending: HashMap<Ipv4Addr, Instant>,
+    shadow_pending: HashMap<Ipv4Addr, ShadowPending>,
     shadow_last: HashMap<Ipv4Addr, Instant>,
     shadow: Vec<f32>,
     shadow_server: Option<Ipv4Addr>,
     shadow_measured_at: Option<Instant>,
     shadow_attempts: u32,
     shadow_replies: u32,
+    /// Rejection counters for the shadow-direct sampler.
+    shadow_counters: ShadowCounters,
 }
 
 impl Inner {
@@ -465,6 +502,25 @@ impl Inner {
             "Quiet-flow tunnelled RTT rejected"
         );
     }
+
+    /// Count one rejected shadow-direct sample and trace why. Never stores or
+    /// clamps a value.
+    fn reject_shadow(
+        &mut self,
+        server: Ipv4Addr,
+        elapsed: Duration,
+        icmp_floor_ms: Option<f32>,
+        reason: ShadowRejection,
+    ) {
+        reason.count(&mut self.shadow_counters);
+        debug!(
+            server = %server,
+            rtt_ms = elapsed.as_secs_f64() * 1000.0,
+            icmp_floor_ms = ?icmp_floor_ms,
+            reason = reason.as_str(),
+            "Shadow-direct application RTT rejected"
+        );
+    }
 }
 
 /// A same-server, fresh shadow-direct and relayed window, ready for a
@@ -493,6 +549,27 @@ pub struct LikeForLike {
     pub shadow_samples: u32,
     /// Relayed samples in the current window.
     pub relay_samples: u32,
+}
+
+/// A physically validated app-level saving pair, ready to be published in one
+/// telemetry report.
+///
+/// The relay exports `saved_app = direct_app_p50_ms - relayed_p50_ms` from a
+/// report, so that subtraction is only a measurement when **both** terms are
+/// validated windows for the same server measured now. A shadow window alone
+/// (the live 0.4248 ms case) or a relayed window alone can never produce this
+/// value; while either term is missing, stale or unvalidated the report must
+/// omit the app-level pair rather than publish a number that reads as a path
+/// saving. The relayed window itself is fed only by the validated quiet-flow
+/// probe (see the module docs), so this type is the single publication gate for
+/// `direct_app_p50_ms` / `saved_app_pairs`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AppSavingReport {
+    /// Validated direct application p50 (ms), from the shadow window.
+    pub direct_app_p50_ms: f32,
+    /// Paired observations behind the pair: the smaller of the two windows,
+    /// which is what the relay weights the saving by.
+    pub pairs: u32,
 }
 
 /// An accepted, physically validated whole-path tunnelled round trip.
@@ -589,6 +666,98 @@ impl ProbeRejection {
             Self::Stale => "stale",
         }
     }
+}
+
+/// Counters for the shadow-direct application RTT sampler.
+///
+/// On a streaming flow the next inbound datagram usually answers something
+/// other than the re-injected packet, so a sample is accepted only when it
+/// passes the validity rules documented on the module and
+/// [`LatencyTracker::record_shadow_inbound`]. The counters make the shortfall
+/// visible instead of leaving an empty window unexplained: the live defect was
+/// a single accepted sample with no ICMP floor, followed by no accepted sample
+/// for the rest of the session, which could not be told apart from "the sampler
+/// never ran".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShadowCounters {
+    /// Samples that passed every validity rule and entered the window.
+    pub accepted: u64,
+    /// Samples rejected because no fresh measured ICMP median exists yet for
+    /// the server: without a measured direct path there is no physical floor to
+    /// validate a game-packet round trip against.
+    pub rejected_no_icmp_floor: u64,
+    /// Samples faster than the direct path can physically be: below
+    /// [`MIN_PLAUSIBLE_DIRECT_MS`], or below
+    /// `SHADOW_MIN_FRACTION_OF_ICMP` of the measured ICMP p50.
+    pub rejected_behind_floor: u64,
+    /// Samples whose reply never arrived inside [`SHADOW_DIRECT_TIMEOUT`].
+    pub rejected_timeout: u64,
+    /// Samples whose relay was unknown or changed between the arming send and
+    /// the reply, so the pairing with the relayed path would mix two paths.
+    pub rejected_stale_relay: u64,
+}
+
+impl ShadowCounters {
+    /// Total samples rejected by any rule.
+    pub fn rejected(&self) -> u64 {
+        self.rejected_no_icmp_floor
+            .saturating_add(self.rejected_behind_floor)
+            .saturating_add(self.rejected_timeout)
+            .saturating_add(self.rejected_stale_relay)
+    }
+
+    /// Accepted plus rejected: every claimed sample that resolved to a verdict.
+    pub fn resolved(&self) -> u64 {
+        self.accepted.saturating_add(self.rejected())
+    }
+}
+
+/// Why a shadow-direct reply could not become a validated sample.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShadowRejection {
+    /// No fresh measured ICMP median exists for the server.
+    NoIcmpFloor,
+    /// The sample is faster than the direct path can physically be.
+    BehindFloor,
+    /// The reply did not arrive inside [`SHADOW_DIRECT_TIMEOUT`].
+    Timeout,
+    /// The relay was unknown or changed between send and reply.
+    StaleRelay,
+}
+
+impl ShadowRejection {
+    /// The counter this rejection increments.
+    fn count(self, counters: &mut ShadowCounters) {
+        let slot = match self {
+            Self::NoIcmpFloor => &mut counters.rejected_no_icmp_floor,
+            Self::BehindFloor => &mut counters.rejected_behind_floor,
+            Self::Timeout => &mut counters.rejected_timeout,
+            Self::StaleRelay => &mut counters.rejected_stale_relay,
+        };
+        *slot = slot.saturating_add(1);
+    }
+
+    /// The stable name used in the trace line.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NoIcmpFloor => "no_icmp_floor",
+            Self::BehindFloor => "behind_floor",
+            Self::Timeout => "timeout",
+            Self::StaleRelay => "stale_relay",
+        }
+    }
+}
+
+/// One re-injected game packet that the server's reply could pair with, and the
+/// relay in use when it was sent.
+#[derive(Debug, Clone, Copy)]
+struct ShadowPending {
+    /// When the sampled packet was re-injected onto the direct path.
+    sent_at: Instant,
+    /// The relay in use at that instant (`None` when no relay is known, which
+    /// cannot be shown to be unchanged and so fails validation unless the reply
+    /// also sees no relay).
+    relay: Option<SocketAddrV4>,
 }
 
 /// One send that a single inbound packet could be attributed to.
@@ -938,56 +1107,114 @@ impl LatencyTracker {
         self.lock().client_relay_p50_at(relay, now)
     }
 
-    /// Claim the shadow-direct sampling slot for `server`. Returns `true` when
-    /// a sample is due: the caller must re-inject the game's own packet
-    /// unchanged onto the direct path. At most one sample per server per
-    /// [`SHADOW_SAMPLE_INTERVAL`]. Uses its own map, so it never touches the
-    /// relayed `pending` entry.
+    /// Claim the shadow-direct sampling slot for `server`, capturing the relay
+    /// in use at this instant. Returns `true` when a sample is due: the caller
+    /// must re-inject the game's own packet unchanged onto the direct path. At
+    /// most one sample per server per [`SHADOW_SAMPLE_INTERVAL`]. Uses its own
+    /// map, so it never touches the relayed probe's `armed` entry.
     pub fn record_shadow_outbound(&self, server: Ipv4Addr) -> bool {
+        self.record_shadow_outbound_from(server, crate::session::current_proxy())
+    }
+
+    /// [`LatencyTracker::record_shadow_outbound`] with the relay supplied, so
+    /// tests do not depend on the process-wide current-relay state.
+    fn record_shadow_outbound_from(&self, server: Ipv4Addr, relay: Option<SocketAddrV4>) -> bool {
         let now = self.clock.now();
         let mut inner = self.lock();
-        if let Some(sent_at) = inner.shadow_pending.get(&server).copied() {
-            if now.saturating_duration_since(sent_at) >= SHADOW_DIRECT_TIMEOUT {
+        if let Some(pending) = inner.shadow_pending.get(&server).copied() {
+            if now.saturating_duration_since(pending.sent_at) >= SHADOW_DIRECT_TIMEOUT {
                 inner.shadow_pending.remove(&server);
+                let elapsed = now.saturating_duration_since(pending.sent_at);
+                inner.reject_shadow(server, elapsed, None, ShadowRejection::Timeout);
             }
         }
         match inner.shadow_last.get(&server) {
             Some(last) if now.saturating_duration_since(*last) < SHADOW_SAMPLE_INTERVAL => false,
             _ => {
                 inner.shadow_last.insert(server, now);
-                inner.shadow_pending.insert(server, now);
+                inner.shadow_pending.insert(
+                    server,
+                    ShadowPending {
+                        sent_at: now,
+                        relay,
+                    },
+                );
                 inner.shadow_attempts = inner.shadow_attempts.saturating_add(1);
                 true
             }
         }
     }
 
-    /// Record the server's reply to a shadow-direct sample. Pairs only with a
-    /// pending sample inside [`SHADOW_DIRECT_TIMEOUT`]; anything older is
-    /// discarded rather than measured.
+    /// Record the server's reply to a shadow-direct sample.
+    ///
+    /// A reply becomes a sample only when it can be physically validated
+    /// against the direct path:
+    ///
+    /// * it pairs with a pending sample inside [`SHADOW_DIRECT_TIMEOUT`],
+    /// * the relay is unchanged between the arming send and the reply (an
+    ///   unknown relay at either end cannot show that, so it is a rejection too),
+    /// * a fresh measured ICMP median exists for the server, and
+    /// * the round trip is at least [`MIN_PLAUSIBLE_DIRECT_MS`] and at least
+    ///   `SHADOW_MIN_FRACTION_OF_ICMP` of that median.
+    ///
+    /// Every failure is counted ([`ShadowCounters`]) and traced and stores
+    /// nothing; nothing is clamped. Only accepted samples enter the window that
+    /// [`LatencyTracker::shadow_direct_p50_ms`] and
+    /// [`LatencyTracker::like_for_like`] report, so a collapsed pairing can no
+    /// longer become a direct-app median.
     pub fn record_shadow_inbound(&self, server: Ipv4Addr) {
+        self.record_shadow_inbound_from(server, crate::session::current_proxy());
+    }
+
+    /// [`LatencyTracker::record_shadow_inbound`] with the relay supplied, so
+    /// tests do not depend on the process-wide current-relay state.
+    fn record_shadow_inbound_from(&self, server: Ipv4Addr, relay_now: Option<SocketAddrV4>) {
         let now = self.clock.now();
         let mut inner = self.lock();
-        let Some(sent_at) = inner.shadow_pending.remove(&server) else {
+        let Some(pending) = inner.shadow_pending.remove(&server) else {
+            // No pending re-injected sample: this inbound cannot be attributed
+            // to one, so there is no verdict and no counter.
             return;
         };
-        if now.saturating_duration_since(sent_at) >= SHADOW_DIRECT_TIMEOUT {
+        let elapsed = now.saturating_duration_since(pending.sent_at);
+        if elapsed >= SHADOW_DIRECT_TIMEOUT {
+            inner.reject_shadow(server, elapsed, None, ShadowRejection::Timeout);
             return;
         }
-        let rtt_ms = now.saturating_duration_since(sent_at).as_secs_f64() * 1000.0;
-        if !rtt_ms.is_finite() || rtt_ms <= 0.0 {
+        if pending.relay != relay_now {
+            // A relay switch during the sample would make the direct window and
+            // the relayed window it is compared with describe two different
+            // paths; reject rather than mix them.
+            inner.reject_shadow(server, elapsed, None, ShadowRejection::StaleRelay);
             return;
         }
-        // Faster than the direct path can be is a pairing error, not a path: the
-        // "next" inbound on a streaming flow is usually not the reply.
-        if let Some(icmp_p50) = inner
-            .direct_history
-            .get(&server)
-            .and_then(|history| history.back().copied())
-        {
-            if (rtt_ms as f32) < icmp_p50 * SHADOW_MIN_FRACTION_OF_ICMP {
-                return;
-            }
+        let Some(icmp_p50) = inner.fresh_direct(server, now) else {
+            // Without a measured direct path there is no physical floor. This is
+            // the live defect: the first sample (0.4248 ms against 283.47 ms)
+            // was accepted here because the fraction check silently did not run.
+            inner.reject_shadow(server, elapsed, None, ShadowRejection::NoIcmpFloor);
+            return;
+        };
+        let rtt = (elapsed.as_secs_f64() * 1000.0) as f32;
+        if !rtt.is_finite() || rtt < SHADOW_MIN_PLAUSIBLE_MS {
+            inner.reject_shadow(
+                server,
+                elapsed,
+                Some(icmp_p50),
+                ShadowRejection::BehindFloor,
+            );
+            return;
+        }
+        // Faster than the direct path can be is a pairing error, not a fast
+        // path: the "next" inbound on a streaming flow is usually not the reply.
+        if rtt < icmp_p50 * SHADOW_MIN_FRACTION_OF_ICMP {
+            inner.reject_shadow(
+                server,
+                elapsed,
+                Some(icmp_p50),
+                ShadowRejection::BehindFloor,
+            );
+            return;
         }
         if inner.shadow_server != Some(server) {
             inner.shadow.clear();
@@ -998,13 +1225,27 @@ impl LatencyTracker {
         if inner.shadow.len() >= SHADOW_RING_CAPACITY {
             inner.shadow.remove(0);
         }
-        inner.shadow.push(rtt_ms as f32);
+        inner.shadow.push(rtt);
         inner.shadow_measured_at = Some(now);
         inner.shadow_replies = inner.shadow_replies.saturating_add(1);
+        inner.shadow_counters.accepted = inner.shadow_counters.accepted.saturating_add(1);
+        debug!(
+            server = %server,
+            rtt_ms = rtt,
+            icmp_floor_ms = icmp_p50,
+            samples = inner.shadow.len(),
+            "Shadow-direct application RTT accepted"
+        );
     }
 
     /// Median direct application RTT, only while the shadow window was
     /// measured within [`SHADOW_DIRECT_TTL`].
+    ///
+    /// Only physically validated samples enter the window, so a value returned
+    /// here already passed the direct-path floor. It is still **not** a saving:
+    /// a report may publish it only through
+    /// [`LatencyTracker::app_saving_report`], which additionally requires a
+    /// validated relayed window for the same server.
     pub fn shadow_direct_p50_ms(&self) -> Option<f32> {
         let now = self.clock.now();
         let inner = self.lock();
@@ -1013,6 +1254,11 @@ impl LatencyTracker {
             return None;
         }
         inner.shadow_median()
+    }
+
+    /// Snapshot of the shadow-direct sampler counters.
+    pub fn shadow_counters(&self) -> ShadowCounters {
+        self.lock().shadow_counters
     }
 
     /// Median of the current relayed window, if any.
@@ -1113,22 +1359,53 @@ impl LatencyTracker {
         inner.shadow_measured_at = None;
     }
 
-    /// Number of paired direct-application and relayed samples behind the
-    /// report values: the smaller of the two windows when they belong to the
-    /// same server and the direct-app median is fresh, else zero.
-    pub fn saved_app_pairs(&self) -> u32 {
+    /// A validated app-level saving pair for the next telemetry report, or
+    /// `None` while either term is unvalidated.
+    ///
+    /// The relay books `saved_app = direct_app_p50_ms - relayed_p50_ms` from a
+    /// report, so that subtraction is only a measurement when both terms are
+    /// validated windows for the same server measured now: the shadow window
+    /// holds only physically validated samples (see
+    /// [`LatencyTracker::record_shadow_inbound`]) and the relayed window only
+    /// validated quiet-flow samples (see the module docs). Anything else - no
+    /// relayed window yet, a server change, a stale shadow window, an emptied
+    /// window - returns `None`, and the report must omit `direct_app_p50_ms` /
+    /// `saved_app_pairs` rather than publish a number that reads as a path
+    /// saving.
+    pub fn app_saving_report(&self) -> Option<AppSavingReport> {
         let now = self.clock.now();
         let inner = self.lock();
-        if inner.relayed_server.is_none() || inner.shadow_server != inner.relayed_server {
-            return 0;
+        let server = inner.relayed_server?;
+        if inner.shadow_server != Some(server) {
+            return None;
         }
-        let Some(measured_at) = inner.shadow_measured_at else {
-            return 0;
-        };
+        let measured_at = inner.shadow_measured_at?;
         if now.saturating_duration_since(measured_at) >= SHADOW_DIRECT_TTL {
-            return 0;
+            return None;
         }
-        inner.shadow.len().min(inner.relayed.len()) as u32
+        if inner.relayed.is_empty() {
+            // The relayed window drains after every successful report, so a
+            // direct-app median measured before that drain has no partner and
+            // must not be published alone.
+            return None;
+        }
+        let direct_app_p50_ms = inner.shadow_median()?;
+        let pairs = inner.shadow.len().min(inner.relayed.len()) as u32;
+        if pairs == 0 {
+            return None;
+        }
+        Some(AppSavingReport {
+            direct_app_p50_ms,
+            pairs,
+        })
+    }
+
+    /// Number of paired direct-application and relayed samples behind the
+    /// report values: the smaller of the two validated windows when they belong
+    /// to the same server and the shadow median is fresh, else zero. Zero means
+    /// the report must not publish an app-level pair.
+    pub fn saved_app_pairs(&self) -> u32 {
+        self.app_saving_report().map_or(0, |app| app.pairs)
     }
 
     /// Take the values for one telemetry report. The direct median is reported
@@ -1261,6 +1538,12 @@ pub fn record_shadow_outbound(server: Ipv4Addr) -> bool {
 
 /// Shadow-direct hook: record the server's reply to a sampled packet. Gated on
 /// local measurement, not on telemetry.
+///
+/// The reply is accepted only when it can be physically validated against the
+/// measured direct path (relay unchanged, a fresh ICMP median exists, and the
+/// round trip is at least [`MIN_PLAUSIBLE_DIRECT_MS`] and
+/// `SHADOW_MIN_FRACTION_OF_ICMP` of that median); everything else is counted
+/// in [`ShadowCounters`] and stored nowhere.
 pub fn record_shadow_inbound(server: Ipv4Addr) {
     if !is_measuring() {
         return;
@@ -1270,11 +1553,11 @@ pub fn record_shadow_inbound(server: Ipv4Addr) {
     }
 }
 
-/// Median direct application RTT for the next telemetry report; `None` when no
-/// fresh shadow sample exists.
+/// Median direct application RTT, if a **validated** shadow window exists.
 ///
-/// Reads local measurement only. Whether a report is allowed to use it is
-/// decided by the reporting gate in `telemetry::TelemetryCollector::flush`.
+/// Reads local measurement only. This value is not a saving: whether a report
+/// may publish it (together with the relayed term) is decided by
+/// [`app_saving_report`] and applied in `telemetry::TelemetryCollector::build_report`.
 pub fn shadow_direct_p50_ms() -> Option<f32> {
     global().and_then(|tracker| tracker.shadow_direct_p50_ms())
 }
@@ -1339,6 +1622,17 @@ pub fn record_client_relay_rtt(relay: SocketAddrV4, rtt_ms: f32) {
 /// explain any shortfall.
 pub fn probe_counters() -> ProbeCounters {
     global().map_or_else(ProbeCounters::default, |tracker| tracker.probe_counters())
+}
+
+/// Current shadow-direct sampler counters, or all-zero when no tracker is
+/// installed.
+///
+/// These explain why an app-level window is empty or why a sample was not
+/// accepted: `rejected_no_icmp_floor` above zero with `accepted == 0` is the
+/// live defect's signature (a sample attempted before the first direct burst
+/// finished).
+pub fn shadow_counters() -> ShadowCounters {
+    global().map_or_else(ShadowCounters::default, |tracker| tracker.shadow_counters())
 }
 
 /// Median client->relay RTT (ms) for `relay`, or `None` when no keepalive
@@ -1409,6 +1703,17 @@ pub fn saved_app_pairs() -> u32 {
     global().map_or(0, |tracker| tracker.saved_app_pairs())
 }
 
+/// A physically validated app-level saving pair for the next telemetry report,
+/// or `None` while either term is unvalidated.
+///
+/// This is **the** publication gate for `direct_app_p50_ms` / `saved_app_pairs`:
+/// the report must publish the app-level pair only when this returns `Some`,
+/// and otherwise omit both fields so the relay cannot book a `saved_app` the
+/// client could not validate.
+pub fn app_saving_report() -> Option<AppSavingReport> {
+    global().and_then(|tracker| tracker.app_saving_report())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1442,26 +1747,26 @@ mod tests {
 
     struct TestClock {
         base: Instant,
-        offset_ms: AtomicU64,
+        offset_us: AtomicU64,
     }
 
     impl TestClock {
         fn new() -> Self {
             Self {
                 base: Instant::now(),
-                offset_ms: AtomicU64::new(0),
+                offset_us: AtomicU64::new(0),
             }
         }
 
         fn advance(&self, duration: Duration) {
-            self.offset_ms
-                .fetch_add(duration.as_millis() as u64, Ordering::Relaxed);
+            self.offset_us
+                .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
         }
     }
 
     impl Clock for TestClock {
         fn now(&self) -> Instant {
-            self.base + Duration::from_millis(self.offset_ms.load(Ordering::Relaxed))
+            self.base + Duration::from_micros(self.offset_us.load(Ordering::Relaxed))
         }
     }
 
@@ -1509,6 +1814,45 @@ mod tests {
 
     const SERVER: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 7);
     const OTHER_SERVER: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 9);
+
+    /// A tracker with a fresh measured direct (ICMP) median for every named
+    /// server. The shadow sampler validates a game-packet round trip against
+    /// that floor, so every test that expects an accepted shadow sample must
+    /// establish one first.
+    fn tracker_with_direct_floors(
+        clock: &Arc<TestClock>,
+        floors: &[(Ipv4Addr, f32)],
+    ) -> LatencyTracker {
+        let mut replies = Vec::new();
+        for (_, floor_ms) in floors {
+            // One burst makes DIRECT_PROBE_COUNT probe calls for the server.
+            replies.extend((0..DIRECT_PROBE_COUNT).map(|_| Some(*floor_ms)));
+        }
+        let t = tracker(Arc::new(ScriptedProber::new(replies)), clock.clone());
+        for (server, floor_ms) in floors {
+            assert_eq!(t.run_direct_burst(*server), Some(*floor_ms));
+        }
+        t
+    }
+
+    /// [`tracker_with_direct_floors`] for the one server most shadow tests use.
+    fn tracker_with_direct_floor(clock: &Arc<TestClock>, floor_ms: f32) -> LatencyTracker {
+        tracker_with_direct_floors(clock, &[(SERVER, floor_ms)])
+    }
+
+    /// Re-inject one shadow sample for `server` after `rtt` and record its
+    /// reply. Returns whether the sampling slot was claimed.
+    fn sample_shadow(
+        t: &LatencyTracker,
+        clock: &TestClock,
+        server: Ipv4Addr,
+        rtt: Duration,
+    ) -> bool {
+        let claimed = t.record_shadow_outbound(server);
+        clock.advance(rtt);
+        t.record_shadow_inbound(server);
+        claimed
+    }
 
     /// One accepted quiet-flow sample: refresh the keepalive floor, wait out the
     /// quiet gap, arm a send, let `rtt_ms` pass, then record the reply. Returns
@@ -2154,9 +2498,142 @@ mod tests {
     }
 
     #[test]
-    fn shadow_sampling_does_not_disturb_the_validated_window() {
+    fn a_shadow_sample_attempted_before_any_icmp_floor_is_not_accepted() {
+        // Live defect (task-10 ROB RUN session, 2026-11-16T08:44:56Z): the
+        // sampler accepted 0.4248 ms against a direct ICMP RTT of 283.47 ms
+        // because its only sanity filter is the `0.5 x ICMP` fraction, and no
+        // burst had finished yet, so the first sample had no floor to check.
+        // A collapsed median makes `saved_app = direct_app - relayed` negative
+        // by construction, so a sample that cannot be physically validated
+        // must never enter the window.
         let clock = Arc::new(TestClock::new());
         let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        assert!(t.record_shadow_outbound(SERVER));
+        clock.advance(Duration::from_millis(300));
+        t.record_shadow_inbound(SERVER);
+
+        assert_eq!(
+            t.shadow_direct_samples(),
+            0,
+            "a shadow sample with no measured ICMP floor cannot be validated"
+        );
+        assert_eq!(
+            t.shadow_direct_p50_ms(),
+            None,
+            "no unvalidated app RTT may be reported"
+        );
+        assert_eq!(
+            t.shadow_counters(),
+            ShadowCounters {
+                rejected_no_icmp_floor: 1,
+                ..ShadowCounters::default()
+            },
+            "the floorless sample must be counted by reason, not silently dropped"
+        );
+    }
+
+    #[test]
+    fn a_shadow_sample_inside_the_physical_floor_is_accepted() {
+        // The positive path: a direct path measured at 100 ms makes a
+        // game-packet round trip of 120 ms plausible, so it enters the window.
+        let clock = Arc::new(TestClock::new());
+        let t = tracker_with_direct_floor(&clock, 100.0);
+
+        assert!(sample_shadow(
+            &t,
+            &clock,
+            SERVER,
+            Duration::from_millis(120)
+        ));
+        assert_eq!(t.shadow_direct_p50_ms(), Some(120.0));
+        assert_eq!(
+            t.shadow_counters(),
+            ShadowCounters {
+                accepted: 1,
+                ..ShadowCounters::default()
+            }
+        );
+    }
+
+    #[test]
+    fn the_live_collapsed_sample_is_rejected_once_the_icmp_floor_exists() {
+        // The same live sample (0.4248 ms) arriving after the 283.47 ms direct
+        // burst completed: the absolute floor and the ICMP-relative rule both
+        // reject it, and nothing is stored or clamped.
+        let clock = Arc::new(TestClock::new());
+        let t = tracker_with_direct_floor(&clock, 283.47);
+
+        assert!(sample_shadow(
+            &t,
+            &clock,
+            SERVER,
+            Duration::from_micros(425)
+        ));
+        assert_eq!(t.shadow_direct_samples(), 0);
+        assert_eq!(t.shadow_direct_p50_ms(), None);
+        assert_eq!(
+            t.shadow_counters().rejected_behind_floor,
+            1,
+            "a sub-millisecond pairing error is behind the direct-path floor"
+        );
+        assert_eq!(t.shadow_counters().accepted, 0);
+    }
+
+    #[test]
+    fn a_sub_millisecond_sample_is_rejected_even_with_a_tiny_icmp_floor() {
+        // The absolute floor stands on its own: with a 1.0 ms direct path the
+        // ICMP-relative rule would accept a 0.8 ms sample, but no round trip to
+        // a public game server over the internet can be that fast.
+        let clock = Arc::new(TestClock::new());
+        let t = tracker_with_direct_floor(&clock, 1.0);
+
+        assert!(sample_shadow(
+            &t,
+            &clock,
+            SERVER,
+            Duration::from_micros(800)
+        ));
+        assert_eq!(
+            t.shadow_direct_samples(),
+            0,
+            "a sub-millisecond sample was answered locally, not by the server"
+        );
+        assert_eq!(t.shadow_counters().rejected_behind_floor, 1);
+    }
+
+    #[test]
+    fn a_shadow_sample_with_a_changed_relay_is_rejected() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker_with_direct_floor(&clock, 100.0);
+
+        assert!(t.record_shadow_outbound_from(SERVER, Some(relay(1))));
+        clock.advance(Duration::from_millis(120));
+        t.record_shadow_inbound_from(SERVER, Some(relay(2)));
+
+        assert_eq!(
+            t.shadow_direct_samples(),
+            0,
+            "a sample spanning a relay switch would mix two paths"
+        );
+        assert_eq!(t.shadow_counters().rejected_stale_relay, 1);
+
+        // A sample whose relay is unknown at both ends is not a change: it can
+        // still be measured locally, it just cannot become a relayed-path pair.
+        clock.advance(SHADOW_SAMPLE_INTERVAL);
+        assert!(sample_shadow(
+            &t,
+            &clock,
+            SERVER,
+            Duration::from_millis(120)
+        ));
+        assert_eq!(t.shadow_direct_samples(), 1);
+    }
+
+    #[test]
+    fn shadow_sampling_does_not_disturb_the_validated_window() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker_with_direct_floor(&clock, 10.0);
 
         t.record_client_relay_rtt(relay(1), 10.0);
         clock.advance(PROBE_QUIET_GAP);
@@ -2180,12 +2657,15 @@ mod tests {
     #[test]
     fn shadow_median_selects_the_middle_sample() {
         let clock = Arc::new(TestClock::new());
-        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        let t = tracker_with_direct_floor(&clock, 10.0);
 
         for rtt_ms in [10u64, 30, 20] {
-            assert!(t.record_shadow_outbound(SERVER));
-            clock.advance(Duration::from_millis(rtt_ms));
-            t.record_shadow_inbound(SERVER);
+            assert!(sample_shadow(
+                &t,
+                &clock,
+                SERVER,
+                Duration::from_millis(rtt_ms)
+            ));
             clock.advance(Duration::from_secs(30));
         }
 
@@ -2206,12 +2686,17 @@ mod tests {
             None,
             "a reply past the timeout must not pair with the sample"
         );
+        assert_eq!(
+            t.shadow_counters().rejected_timeout,
+            1,
+            "a sample that never got a timely reply is a counted timeout"
+        );
     }
 
     #[test]
     fn shadow_stale_pending_is_cleared_for_the_next_sample() {
         let clock = Arc::new(TestClock::new());
-        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        let t = tracker_with_direct_floor(&clock, 10.0);
 
         assert!(t.record_shadow_outbound(SERVER));
         clock.advance(SHADOW_SAMPLE_INTERVAL + SHADOW_DIRECT_TIMEOUT + Duration::from_millis(1));
@@ -2219,6 +2704,11 @@ mod tests {
         assert!(
             t.record_shadow_outbound(SERVER),
             "the stale pending must not block the next sample"
+        );
+        assert_eq!(
+            t.shadow_counters().rejected_timeout,
+            1,
+            "the expired pending is counted once, not silently replaced"
         );
         clock.advance(Duration::from_millis(40));
         t.record_shadow_inbound(SERVER);
@@ -2229,11 +2719,9 @@ mod tests {
     #[test]
     fn shadow_median_expires_after_ttl() {
         let clock = Arc::new(TestClock::new());
-        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        let t = tracker_with_direct_floor(&clock, 10.0);
 
-        assert!(t.record_shadow_outbound(SERVER));
-        clock.advance(Duration::from_millis(15));
-        t.record_shadow_inbound(SERVER);
+        assert!(sample_shadow(&t, &clock, SERVER, Duration::from_millis(15)));
         assert_eq!(t.shadow_direct_p50_ms(), Some(15.0));
 
         clock.advance(SHADOW_DIRECT_TTL);
@@ -2252,17 +2740,114 @@ mod tests {
         );
         t.record_shadow_inbound(SERVER);
         assert_eq!(t.shadow_direct_p50_ms(), None);
+        assert_eq!(
+            t.shadow_counters(),
+            ShadowCounters::default(),
+            "an inbound with no pending sample is unattributable, not a rejection"
+        );
+    }
+
+    #[test]
+    fn an_unvalidated_shadow_window_is_not_published() {
+        // The live-defect shape: a relayed window exists, but every shadow
+        // attempt was rejected (here: no ICMP floor yet). The app-level pair
+        // must stay absent, so the relay has nothing to subtract.
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        for _ in 0..4 {
+            accept_sample(&t, &clock, SERVER, relay(1), 10.0, 25);
+        }
+        assert!(sample_shadow(
+            &t,
+            &clock,
+            SERVER,
+            Duration::from_millis(300)
+        ));
+        assert_eq!(t.shadow_counters().accepted, 0);
+        assert_eq!(t.shadow_counters().rejected_no_icmp_floor, 1);
+
+        assert_eq!(
+            t.app_saving_report(),
+            None,
+            "an unvalidated shadow term must not be published"
+        );
+        assert_eq!(t.saved_app_pairs(), 0);
+        assert_eq!(t.shadow_direct_p50_ms(), None);
+    }
+
+    #[test]
+    fn an_app_pair_without_a_relayed_window_is_not_published() {
+        // A validated direct-app median on its own is still not a saving:
+        // without the validated relayed term the report must omit the app pair,
+        // or the relay would subtract whatever relayed figure it happens to
+        // have and book a saving the client could not measure.
+        let clock = Arc::new(TestClock::new());
+        let t = tracker_with_direct_floor(&clock, 40.0);
+        assert!(sample_shadow(&t, &clock, SERVER, Duration::from_millis(80)));
+        assert_eq!(t.shadow_direct_p50_ms(), Some(80.0));
+        assert_eq!(t.relayed_p50_ms(), None);
+
+        assert_eq!(
+            t.app_saving_report(),
+            None,
+            "a direct-app median alone must never be published as an app pair"
+        );
+        assert_eq!(t.saved_app_pairs(), 0);
+    }
+
+    #[test]
+    fn a_validated_app_pair_is_published_with_its_pair_count() {
+        let clock = Arc::new(TestClock::new());
+        // Direct path 40 ms, shadow samples 80 ms: validated.
+        let t = tracker_with_direct_floor(&clock, 40.0);
+        for _ in 0..3 {
+            assert!(sample_shadow(&t, &clock, SERVER, Duration::from_millis(80)));
+            clock.advance(Duration::from_secs(6));
+        }
+        for _ in 0..4 {
+            accept_sample(&t, &clock, SERVER, relay(1), 10.0, 25);
+        }
+
+        assert_eq!(
+            t.app_saving_report(),
+            Some(AppSavingReport {
+                direct_app_p50_ms: 80.0,
+                pairs: 3,
+            }),
+            "both valid terms publish together, weighted by the smaller window"
+        );
+        assert_eq!(t.saved_app_pairs(), 3);
+    }
+
+    #[test]
+    fn a_stale_shadow_window_is_not_published() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker_with_direct_floor(&clock, 40.0);
+        assert!(sample_shadow(&t, &clock, SERVER, Duration::from_millis(80)));
+        accept_sample(&t, &clock, SERVER, relay(1), 10.0, 25);
+        assert!(t.app_saving_report().is_some());
+
+        clock.advance(SHADOW_DIRECT_TTL);
+        assert_eq!(
+            t.app_saving_report(),
+            None,
+            "a stale shadow median must fail the publication gate"
+        );
+        assert_eq!(t.saved_app_pairs(), 0);
     }
 
     #[test]
     fn paired_sample_count_matches_samples_and_drains_on_commit() {
         let clock = Arc::new(TestClock::new());
-        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        let t = tracker_with_direct_floors(&clock, &[(SERVER, 10.0), (OTHER_SERVER, 10.0)]);
 
         for rtt_ms in [10u64, 20, 30] {
-            assert!(t.record_shadow_outbound(SERVER));
-            clock.advance(Duration::from_millis(rtt_ms));
-            t.record_shadow_inbound(SERVER);
+            assert!(sample_shadow(
+                &t,
+                &clock,
+                SERVER,
+                Duration::from_millis(rtt_ms)
+            ));
             clock.advance(Duration::from_secs(30));
         }
         for _ in 0..4 {
@@ -2274,18 +2859,19 @@ mod tests {
             "the pair count is the smaller of the two single-server windows"
         );
 
-        assert!(t.record_shadow_outbound(OTHER_SERVER));
-        clock.advance(Duration::from_millis(40));
-        t.record_shadow_inbound(OTHER_SERVER);
+        assert!(sample_shadow(
+            &t,
+            &clock,
+            OTHER_SERVER,
+            Duration::from_millis(40)
+        ));
         assert_eq!(
             t.saved_app_pairs(),
             0,
             "direct-app and relayed windows from different servers are not pairs"
         );
 
-        assert!(t.record_shadow_outbound(SERVER));
-        clock.advance(Duration::from_millis(10));
-        t.record_shadow_inbound(SERVER);
+        assert!(sample_shadow(&t, &clock, SERVER, Duration::from_millis(10)));
         assert_eq!(
             t.saved_app_pairs(),
             1,
@@ -2327,15 +2913,7 @@ mod tests {
         // so the pairing times one inter-packet gap. That must never reach the
         // window, where it would claim direct beats the relay by 290 ms.
         let clock = Arc::new(TestClock::new());
-        let t = tracker(
-            Arc::new(ScriptedProber::new(vec![
-                Some(299.0),
-                Some(299.0),
-                Some(299.0),
-            ])),
-            clock.clone(),
-        );
-        assert_eq!(t.run_direct_burst(SERVER), Some(299.0));
+        let t = tracker_with_direct_floor(&clock, 299.0);
 
         assert!(t.record_shadow_outbound(SERVER));
         clock.advance(Duration::from_millis(6));
@@ -2345,19 +2923,24 @@ mod tests {
             0,
             "6 ms against a 299 ms path is a pairing error, not a sample"
         );
+        assert_eq!(t.shadow_counters().rejected_behind_floor, 1);
 
         // A plausible one still lands.
         clock.advance(SHADOW_SAMPLE_INTERVAL);
-        assert!(t.record_shadow_outbound(SERVER));
-        clock.advance(Duration::from_millis(300));
-        t.record_shadow_inbound(SERVER);
+        assert!(sample_shadow(
+            &t,
+            &clock,
+            SERVER,
+            Duration::from_millis(300)
+        ));
         assert_eq!(t.shadow_direct_samples(), 1);
+        assert_eq!(t.shadow_counters().accepted, 1);
     }
 
     #[test]
     fn like_for_like_pairs_same_server_shadow_and_relayed_windows() {
         let clock = Arc::new(TestClock::new());
-        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        let t = tracker_with_direct_floor(&clock, 40.0);
 
         // A comparison needs a real window on both sides, not one sample.
         for i in 0..MIN_COMPARABLE_SAMPLES {
@@ -2380,15 +2963,17 @@ mod tests {
     #[test]
     fn like_for_like_rejects_a_single_server_pairing() {
         let clock = Arc::new(TestClock::new());
-        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        let t = tracker_with_direct_floors(&clock, &[(SERVER, 40.0), (OTHER_SERVER, 40.0)]);
 
-        t.note_outbound(SERVER);
-        clock.advance(Duration::from_millis(30));
-        t.record_inbound(SERVER);
-
-        assert!(t.record_shadow_outbound(OTHER_SERVER));
-        clock.advance(Duration::from_millis(90));
-        t.record_shadow_inbound(OTHER_SERVER);
+        // A valid relayed window for SERVER...
+        accept_sample(&t, &clock, SERVER, relay(1), 10.0, 60);
+        // ...and a shadow window for a different server.
+        assert!(sample_shadow(
+            &t,
+            &clock,
+            OTHER_SERVER,
+            Duration::from_millis(90)
+        ));
 
         assert_eq!(
             t.like_for_like(),
@@ -2400,11 +2985,9 @@ mod tests {
     #[test]
     fn like_for_like_is_none_without_a_relayed_window() {
         let clock = Arc::new(TestClock::new());
-        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        let t = tracker_with_direct_floor(&clock, 40.0);
 
-        assert!(t.record_shadow_outbound(SERVER));
-        clock.advance(Duration::from_millis(90));
-        t.record_shadow_inbound(SERVER);
+        assert!(sample_shadow(&t, &clock, SERVER, Duration::from_millis(90)));
 
         assert_eq!(
             t.like_for_like(),
@@ -2416,7 +2999,7 @@ mod tests {
     #[test]
     fn like_for_like_is_none_when_the_shadow_window_is_stale() {
         let clock = Arc::new(TestClock::new());
-        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        let t = tracker_with_direct_floor(&clock, 40.0);
 
         for i in 0..MIN_COMPARABLE_SAMPLES {
             paired_windows(&t, &clock, SERVER, 40 + i as u64, 80 + i as u64);

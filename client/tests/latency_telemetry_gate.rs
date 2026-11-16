@@ -13,7 +13,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use lightspeed_client::latency::{self, Clock, IcmpProber, LatencyTracker, DIRECT_PROBE_COUNT};
+use lightspeed_client::latency::{
+    self, Clock, IcmpProber, LatencyTracker, DIRECT_PROBE_COUNT, MIN_DIRECT_SAMPLES,
+    SHADOW_SAMPLE_INTERVAL,
+};
 use lightspeed_client::telemetry::{self, FlushOutcome, TelemetryCollector};
 
 struct ScriptedProber {
@@ -78,7 +81,13 @@ const DIRECT_SERVER: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 8);
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn measurement_runs_with_telemetry_disabled() {
     let clock = Arc::new(ManualClock::new());
-    let prober = Arc::new(ScriptedProber::new(vec![Some(50.0); DIRECT_PROBE_COUNT]));
+    // Five replies for the DIRECT_SERVER burst and three more for the SERVER
+    // direct burst that seeds the shadow sampler's physical floor below.
+    let prober = Arc::new(ScriptedProber::new(vec![
+        Some(50.0);
+        DIRECT_PROBE_COUNT
+            + MIN_DIRECT_SAMPLES
+    ]));
     let tracker = Arc::new(LatencyTracker::new(prober, clock.clone()));
     latency::install_global(Arc::clone(&tracker));
     telemetry::set_enabled(false);
@@ -122,7 +131,14 @@ async fn measurement_runs_with_telemetry_disabled() {
         "the hook still measured and counted the rejection without telemetry"
     );
 
-    // Shadow direct: the sampler must still claim a slot and record.
+    // Shadow direct: the sampler must still claim a slot and measure without
+    // telemetry - but a game-packet round trip is only accepted once the direct
+    // path is measured, because it is physically validated against the ICMP
+    // floor. A first sample with no ICMP median is rejected and counted, never
+    // stored. This is the defect task-18 removes: on the task-10 live session
+    // the first sample (0.4248 ms against a 283.47 ms direct path) was accepted
+    // because the old code only checked the fraction when an ICMP median
+    // already existed, and the first sample is exactly when it does not.
     assert!(
         latency::record_shadow_outbound(SERVER),
         "shadow sampling must be due without telemetry"
@@ -130,9 +146,35 @@ async fn measurement_runs_with_telemetry_disabled() {
     clock.advance(Duration::from_millis(15));
     latency::record_shadow_inbound(SERVER);
     assert_eq!(
+        tracker.shadow_direct_samples(),
+        0,
+        "a shadow sample without a measured ICMP floor must not be accepted"
+    );
+    assert_eq!(
+        tracker.shadow_counters().rejected_no_icmp_floor,
+        1,
+        "the floorless sample must be counted, not silently dropped"
+    );
+
+    // Seed the measured direct path for SERVER (the scripted prober still has
+    // three replies), then the same shadow sampler records a physically
+    // plausible sample with telemetry off.
+    assert_eq!(
+        tracker.run_direct_burst(SERVER),
+        Some(50.0),
+        "the scripted direct path must measure"
+    );
+    clock.advance(SHADOW_SAMPLE_INTERVAL);
+    assert!(
+        latency::record_shadow_outbound(SERVER),
+        "shadow sampling must still be due without telemetry"
+    );
+    clock.advance(Duration::from_millis(60));
+    latency::record_shadow_inbound(SERVER);
+    assert_eq!(
         tracker.shadow_direct_p50_ms(),
-        Some(15.0),
-        "shadow direct measurement must run without telemetry"
+        Some(60.0),
+        "validated shadow direct measurement must run without telemetry"
     );
 
     assert!(

@@ -224,10 +224,10 @@ pub struct RelaySample {
 
 /// How many times each relay is probed before its leg is written up.
 ///
-/// Five, not one, because a single probe cannot see spread and the ranking weighs
-/// it twice (`JITTER_WEIGHT` in `relay_choice`). Five still leaves three probes in
-/// the middle once the fastest and slowest are held out, so one spike cannot
-/// decide the relay. The cost is bounded: once per relay per
+/// Five, not one, because a single probe cannot see spread, and the ranking uses
+/// that spread to break a tie between equal whole-path estimates. Five still
+/// leaves three probes in the middle once the fastest and slowest are held out,
+/// so one spike cannot decide the relay. The cost is bounded: once per relay per
 /// `RELAY_RECHECK_INTERVAL`, never per packet.
 pub const RELAY_PROBES: usize = 5;
 

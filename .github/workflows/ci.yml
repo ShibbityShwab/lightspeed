@@ -38,6 +38,34 @@ jobs:
       - name: Test
         run: cargo test --workspace --exclude lightspeed-gui
 
+  # Six integration suites are gated with `#![cfg(feature = "quic")]`:
+  # proxy/tests/integration_control.rs, proxy/tests/phase0_integration.rs,
+  # client/tests/control_reconnect.rs, client/tests/phase0_reconnect.rs,
+  # client/tests/quic_telemetry_capability.rs, client/tests/register_destination.rs.
+  # Both crates default to no features, so the `Test` step in Check & Test
+  # compiles those whole bodies to zero tests, and the Feature Matrix passes
+  # `--lib`, which excludes every `tests/` target - so before this job no CI run
+  # executed any of them (a cross-crate control-plane test placed in
+  # `proxy/tests/` would have run nowhere). The job is kept separate from
+  # Check & Test so it can't hide behind, or be hidden by, that job's status.
+  quic-integration-tests:
+    name: QUIC Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+      - uses: Swatinem/rust-cache@v2
+
+      # The evidence this gate is worth is the per-suite line: each of the six
+      # suites must print `test result: ok. N passed` with N > 0. `--no-fail-fast`
+      # changes reporting only (every test binary still runs to completion); a
+      # failure still fails the job, and no existing gate is modified.
+      - name: QUIC-gated integration suites
+        run: cargo test -p lightspeed-client -p lightspeed-proxy --features quic --tests --no-fail-fast
+
   proxy-quic-smoke:
     name: Proxy QUIC Smoke
     runs-on: ubuntu-latest

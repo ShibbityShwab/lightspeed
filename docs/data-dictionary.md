@@ -1,6 +1,6 @@
 # Data Dictionary
 
-> Last updated: 2026-09-25
+> Last updated: 2026-11-16
 
 This document lists every field LightSpeed's telemetry wire report can carry, its
 type, granularity, purpose, aggregation key, suppression rule, retention, and
@@ -32,7 +32,7 @@ rounded to one decimal place in milliseconds.
 | Field | Type | Granularity | Purpose | Aggregation key | Suppression | Retention | Transport |
 |-------|------|-------------|---------|-----------------|-------------|-----------|-----------|
 | `game_id` | `u8` | Per game profile | Bucket metrics per game type | Part of `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `client_country` | `String` (2-char ISO 3166-1 alpha-2, or `""`) | Per client, from OS locale | Coarse region context; **never derived from IP** | Part of `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `client_country` | `String` (2-char ISO 3166-1 alpha-2, or `""`) | Per client, from OS locale | Coarse **locale** context only: the **client OS locale country, not location**; **never derived from IP** (see [Label semantics](#label-semantics-a-locale-is-not-a-location)) | Part of `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `p50_ms` | `f32` | Per client report | Median RTT to the relay | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `p95_ms` | `f32` | Per client report | 95th-percentile RTT | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `p99_ms` | `f32` | Per client report | 99th-percentile RTT | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
@@ -41,9 +41,9 @@ rounded to one decimal place in milliseconds.
 | `fec_recoveries` | `u32` | Per client report | Packets recovered by FEC during the session segment | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `fec_losses` | `u32` | Per client report | FEC blocks where recovery was not possible | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `direct_p50_ms` | `Option<f32>` | Per client report | Median direct (un-relayed) RTT to the game server, from an ICMP probe. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `relayed_p50_ms` | `Option<f32>` | Per client report | Median tunnelled round trip through the relay. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `direct_app_p50_ms` | `Option<f32>` | Per client report | Median direct application RTT, measured by timing a sample of the game's own packets on the un-relayed path. Omitted when absent | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
-| `saved_app_pairs` | `u32` (defaults to 1; max 100,000) | Per client report | Count of paired direct-application and relayed samples behind `direct_app_p50_ms` / `relayed_p50_ms`. Aggregate and non-identifying, like `sample_count`. Weights the saved-app sample counter, signed sum, and negative counter so a report covering several pairs counts as several samples. Legacy reports default to 1 | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `relayed_p50_ms` | `Option<f32>` | Per client report | Median whole-path tunnelled round trip (client -> relay -> server -> relay -> client) from **validated quiet-flow samples**; the old busy-flow pairing was invalid and is no longer published. Omitted when no validated sample exists | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `direct_app_p50_ms` | `Option<f32>` | Per client report | Median direct application RTT, measured by timing a sample of the game's own packets on the un-relayed path. **Published only together with a validated `relayed_p50_ms`**: if either term fails validation the pair is omitted and `saved_app_pairs` is 0, so the relay books no `saved_app` sample | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+| `saved_app_pairs` | `u32` (defaults to 1; max 100,000) | Per client report | Count of paired direct-application and relayed samples behind `direct_app_p50_ms` / `relayed_p50_ms`. Only sent with a **validated** pair (see the row above); 0/omitted otherwise. Aggregate and non-identifying, like `sample_count`. Weights the saved-app sample counter, signed sum, and negative counter so a report covering several pairs counts as several samples. Legacy reports default to 1 | `(game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `client_version` | `String` (SemVer, max 32 chars) | Per client | Compatibility tracking only. **Not aggregated or used by the relay; being coarsened** | None (not aggregated) | n/a | Not retained as an aggregate | Plaintext HTTP POST |
 | `route_legs` | `Vec<PathObservation>` (max 8) | Per relay leg | Opt-in multipath quality reporting. Empty vector is valid | `(normalized relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 
@@ -60,6 +60,32 @@ rounded to one decimal place in milliseconds.
 | `lost` | `u32` | Per relay leg | Packets observed lost on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `recovered` | `u32` | Per relay leg | Packets recovered by FEC on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
 | `dedup_saved` | `u32` | Per relay leg | Duplicate packets suppressed by the dedup window on this leg | `(relay, game_id, country)` | Cell withheld until >= 3 distinct source IPs | Relay memory; exported to `/metrics` | Plaintext HTTP POST |
+
+---
+
+## Label semantics: a locale is not a location
+
+`client_country`, and therefore the `country` label on every
+`lightspeed_telemetry_*{game,country}` Prometheus family, is the **client OS locale country, not location**
+(`protocol/src/telemetry.rs:77-79`). The relay never derives it from the client
+IP, and the collector coarsens it to a world region before anything is retained.
+
+A locale is not a place. Live fleet evidence (2026-11-16): the `fortnite/US`
+cell on `relay-fra` reports a 45.7 ms client-to-relay leg, while a real
+US-East-to-Frankfurt round trip is >= 100 ms (the repo's own distance model
+prices New York-Frankfurt at about 124 ms). Those clients are physically near
+Frankfurt; only their OS locale is US. Consequences:
+
+- `per_relay.<id>.sources.<region>` in the published history is a **reported
+  locale region**, not a geography of where players are. Do not read it as
+  "players in region X", and do not rank or size relays from it as if it were
+  a location.
+- A country with no catalog entry is counted in `sources_unmapped`, never
+  invented into a region, and the relay's k-anonymity floor (>= 3 distinct
+  source IPs per `(game, country)` cell) was already applied before export.
+- The `geo` map is different and **is** geographic: the
+  `lightspeed_geo_sessions_total` source and destination countries are resolved
+  by the relay from session addresses, not from the locale label.
 
 ---
 
@@ -99,10 +125,12 @@ Prometheus output into the bounded `web/network-history.json` history. For the
 saved-app families it keeps two views of the same already-exported data:
 
 - the collapsed per-relay totals, as before; and
-- `per_relay.<id>.sources.<region>`, the same signed saving summed by the
-  client's coarse world region. The two-letter `client_country` label is mapped
-  through `infra/geo/regions.json` before anything is retained, so a country is
-  never published, only a region. A country with no catalog entry is counted in
+- `per_relay.<id>.sources.<region>`, the same signed saving summed by a coarse
+  world region **derived from the client OS locale country** (a locale, not a
+  location - see [Label semantics](#label-semantics-a-locale-is-not-a-location)).
+  The two-letter `client_country` label is mapped through
+  `infra/geo/regions.json` before anything is retained, so a country is never
+  published, only a region. A country with no catalog entry is counted in
   `sources_unmapped`, never invented into a region.
 
 This adds no collection and no wire field: it only re-aggregates series the
@@ -127,6 +155,23 @@ sample count, not a k-anonymity guarantee; the k floor is the distinct-source
 rule above. See the recommender's `source_quality` block and
 `min_measured_samples`.
 
+### No per-game history in the published snapshot
+
+The stats-branch snapshot aggregates the saved-app families by the
+locale-derived region only: it has **no `game` dimension**. A per-game table
+(for example the `fortnite/US` cells in the 2026-11-16 per-game investigation)
+can therefore only be reproduced from a live `/metrics` scrape of
+`lightspeed_telemetry_saved_app_ms_*{game="...",country="..."}`, and only while
+the relay process that produced those counters is still running, because the
+counters reset on relay restart. No historical per-game record exists, so a
+per-game regression cannot be investigated after the fact.
+
+Adding a `game` dimension to the snapshot would change a public data schema and
+its privacy surface for a signal that is currently estimator-suspect, so it was
+deliberately not done (2026-11-16, board task-19). Revisit condition: after the
+validated quiet-flow L3 lands in a release and the per-game signal is
+re-measured artifact-free.
+
 ---
 
 ## Explicitly NOT collected
@@ -142,6 +187,11 @@ never appear in the serialized JSON.
 - **Raw timestamps** (only aggregated latency statistics are sent)
 - **IP address** (the relay sees the client source IP at transport, but it is
   not part of the report)
+- **IP-derived location** for telemetry cells: `client_country` is the client
+  OS locale country, not a location, and the relay never maps a report to an
+  IP country (see [Label semantics](#label-semantics-a-locale-is-not-a-location)).
+  The separate session-geo aggregate is resolved from session addresses at the
+  relay and exports only coarse region pairs.
 - **Hostname, username, or device fingerprint**
 - **User / account identity**
 - **Game account data or player names**
