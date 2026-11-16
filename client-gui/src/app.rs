@@ -5295,8 +5295,21 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 // what is drawn, so nothing is hidden and nothing is left empty.
                 // The 8 px deadband keeps a one-pixel text re-wrap from becoming a
                 // resize loop.
+                //
+                // The growth stops at the bottom of the screen. Past it, the pinned
+                // action bar and footer were drawn off-screen - in Manual mode, the
+                // tallest form, that hid the only button that applies the typed
+                // server. Capped, this region scrolls instead, as the shell intends.
                 let chrome = (viewport.height() - out.inner_rect.height()).max(0.0);
-                let needed = (chrome + out.content_size.y + 2.0).clamp(420.0, 1400.0);
+                let (monitor_height, window_top) = ctx.input(|i| {
+                    let viewport_info = i.viewport();
+                    (
+                        viewport_info.monitor_size.map(|size| size.y),
+                        viewport_info.inner_rect.map(|rect| rect.top()),
+                    )
+                });
+                let limit = window_height_limit(monitor_height, window_top);
+                let needed = (chrome + out.content_size.y + 2.0).clamp(MIN_WINDOW_HEIGHT, limit);
                 if (needed - viewport.height()).abs() > 8.0 {
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
                         320.0, needed,
@@ -5887,6 +5900,40 @@ pub enum CloseDecision {
     /// Quit was requested, or the window closed with no tray to recover from:
     /// tear the engine down and exit.
     Exit,
+}
+
+/// The shortest the auto-sized status window gets (`main.rs`'s minimum).
+const MIN_WINDOW_HEIGHT: f32 = 420.0;
+
+/// The tallest the auto-sized status window gets on a screen big enough to hold
+/// it (`main.rs`'s maximum).
+const MAX_WINDOW_HEIGHT: f32 = 1400.0;
+
+/// Points kept free below the window for a taskbar or dock. The monitor size is
+/// the whole screen, not the work area, so this is an allowance, not a reading.
+const SCREEN_BOTTOM_RESERVE: f32 = 72.0;
+
+/// Points assumed above the client area when the window position is unknown
+/// (Wayland) or not on the reported monitor: a title bar on a window at the top.
+const TITLE_BAR_ALLOWANCE: f32 = 40.0;
+
+/// The tallest the status window may auto-size to, in points.
+///
+/// `monitor_height` is the current monitor's full height and `window_top` the
+/// top of the window's client area, both as egui reports them. The window must
+/// end above the taskbar or dock, or the pinned action bar below the scroll
+/// region is drawn off-screen. A position outside `0..monitor_height` belongs to
+/// another monitor's coordinates, so it is ignored and the window is assumed to
+/// sit at the top. Never below the window's minimum height; with no monitor
+/// reading, the fixed maximum.
+fn window_height_limit(monitor_height: Option<f32>, window_top: Option<f32>) -> f32 {
+    let Some(monitor_height) = monitor_height.filter(|h| *h > 0.0) else {
+        return MAX_WINDOW_HEIGHT;
+    };
+    let top = window_top
+        .filter(|top| (0.0..monitor_height).contains(top))
+        .unwrap_or(TITLE_BAR_ALLOWANCE);
+    (monitor_height - SCREEN_BOTTOM_RESERVE - top).clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT)
 }
 
 /// Whether discovery should start a latency race instead of connecting to the
@@ -7299,10 +7346,11 @@ mod tests {
         refreshed_server_ping, relay_cannot_beat_direct, relay_health_verdict, same_relay_endpoint,
         save_user_profiles, scored_for_relay, server_from_fields, server_leg_state,
         should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
-        target_summary, validate_draft, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
-        MeasuredServerLeg, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
-        RelayHealthVerdict, ServerLegState, ServerPing, ShadowWindowCounters, TargetRowAction,
-        PRIOR_UNCERTAINTY_US, SERVER_PING_FRESH_SECS,
+        target_summary, validate_draft, window_height_limit, CloseDecision, EditorActions,
+        GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState,
+        ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ServerPing,
+        ShadowWindowCounters, TargetRowAction, MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT,
+        PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE, SERVER_PING_FRESH_SECS, TITLE_BAR_ALLOWANCE,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -7487,6 +7535,48 @@ mod tests {
                 entry.key
             );
         }
+    }
+
+    #[test]
+    fn the_window_never_auto_sizes_past_the_bottom_of_the_screen() {
+        // 2560x1440 at 125%: 1152 pt tall. The Manual form needed more than
+        // that, and the old fixed 1400 pt cap put the action bar under the
+        // taskbar. The window must now end above the taskbar allowance.
+        let limit = window_height_limit(Some(1152.0), Some(31.0));
+        assert_eq!(limit, 1152.0 - SCREEN_BOTTOM_RESERVE - 31.0);
+        assert!(31.0 + limit <= 1152.0 - 48.0, "clears a 48 pt taskbar");
+
+        // A window placed lower on the screen gets less room.
+        assert!(window_height_limit(Some(1152.0), Some(300.0)) < limit);
+
+        // Position unknown (Wayland) or in another monitor's coordinates:
+        // assume a title bar at the top of this monitor.
+        let assumed = 1152.0 - SCREEN_BOTTOM_RESERVE - TITLE_BAR_ALLOWANCE;
+        assert_eq!(window_height_limit(Some(1152.0), None), assumed);
+        assert_eq!(window_height_limit(Some(1152.0), Some(-900.0)), assumed);
+        assert_eq!(window_height_limit(Some(1152.0), Some(1500.0)), assumed);
+    }
+
+    #[test]
+    fn the_window_height_limit_keeps_the_fixed_bounds() {
+        // A tall monitor still stops at the fixed maximum.
+        assert_eq!(
+            window_height_limit(Some(2160.0), Some(31.0)),
+            MAX_WINDOW_HEIGHT
+        );
+        // No monitor reading: the fixed maximum, as before.
+        assert_eq!(window_height_limit(None, Some(31.0)), MAX_WINDOW_HEIGHT);
+        assert_eq!(window_height_limit(Some(0.0), None), MAX_WINDOW_HEIGHT);
+        // A tiny screen or a window parked near the bottom never shrinks the
+        // window below its minimum; the scroll region absorbs the rest.
+        assert_eq!(
+            window_height_limit(Some(480.0), Some(31.0)),
+            MIN_WINDOW_HEIGHT
+        );
+        assert_eq!(
+            window_height_limit(Some(1152.0), Some(1000.0)),
+            MIN_WINDOW_HEIGHT
+        );
     }
 
     #[test]
