@@ -5,6 +5,105 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-11-16
+
+### Added
+
+- **Versioned ALPN on the QUIC control plane.** Clients now offer the application
+  protocol name `lightspeed-control/1` on the control-plane handshake and, only when
+  a relay answers with TLS alert 120 (`no_application_protocol`), retry once with an
+  empty offer and remember that answer per relay for the rest of the process. An
+  older relay therefore costs one extra handshake per relay per launch, not one per
+  reconnect, and still registers. Relays gain
+  `[network] control_alpn = "off" | "required"` (default `"off"`, which is the
+  previous behaviour byte for byte). A `required`
+  relay advertises the name and refuses any client that does not negotiate it: do not
+  enable it before a client with the empty-offer fallback is in the field, because
+  pre-ALPN clients have no recovery path. The relay's startup line, `GET /health`
+  (new `control_alpn` field) and
+  `lightspeed_control_handshakes_total{outcome=...}` report the mode and the
+  accepted-handshake split, and `--test-control` prints the negotiated protocol.
+- **An honest `Server leg` row, and a "cannot be faster than direct" verdict.** The
+  route surface states how the server leg was obtained instead of showing a guess as
+  a measurement: `measured N ms · n=...` (with the age of the reading),
+  `at least N ms · triangle bound`, `not measured · prior ~N ms ±M ms`, or
+  `not measured · no region prior`. The client-leg figure is now a one-RTT
+  measurement instead of a two-RTT HTTP wall time, and when the measured numbers
+  prove it, the window says "This relay cannot be faster than direct for this
+  server" instead of implying the relay is helping.
+- **One whole-path relay ranking for engine, GUI and CLI.** The destination-aware
+  relay order is now the engine's single key (total path time, jitter as the
+  tie-break) on every surface; the interim GUI comparator and the CLI's separate
+  destination ranking are gone, so the CLI and the window pick the same winner. A
+  relay can also no longer be scored faster than the direct path it replaces: a
+  region prior below the triangle-inequality floor is raised to the bound it is known
+  to be at.
+- **One relay-reply judgement line per window.** Every judged window writes one log
+  line with the intercepted/injected/from-relay counts, the return share, the streak
+  and the verdict, plus both samplers' accept/reject counters (`probe_*`,
+  `shadow_*`), so a log alone shows why a relay was kept or taken direct.
+
+### Changed
+
+- **The relay watchdog no longer abandons a healthy relay.** A fallback now needs the
+  same fault over two consecutive judged windows - one low-return window is a
+  sample, not a verdict - a retry re-tests the same relay instead of re-ranking in
+  the background and restarting interception, and the relay history records a
+  verdict only for a confirmed zero-return chain. Legacy history entries load as
+  measurement-only, so relays that were previously excluded for hours are selectable
+  again.
+- **The direct-ping measurement is keyed to the server it measured.** A ping taken
+  for a different server is now treated as "not measured" everywhere it is consumed
+  (ranking floor, `Server leg` bound, header metric, choice trace), so a newly
+  locked server cannot inherit the previous server's evidence.
+- **The QUIC alert-120 diagnosis names both causes.** Instead of claiming the
+  responder cannot be a LightSpeed relay, the client now says that either a
+  QUIC-intercepting middlebox on the path or a relay on a different ALPN revision
+  (version skew) can send alert 120, and that the one-shot empty-offer retry also
+  failed, so the two cannot be separated from the handshake alone (#140).
+- **App-level saving telemetry is published only when validated.** A shadow direct
+  sample must have the relay unchanged and a fresh ICMP median, and pass both the
+  absolute floor and the `>= 0.5x ICMP` check; an unvalidated pair cannot be
+  published, so the relay stops booking `direct_app`/`saved_app` for it. A shadow
+  sample below half the server's ICMP median (an inter-packet gap, not a reply) is
+  discarded, and both windows need eight samples. Historical saved figures are not
+  comparable with the new ones, and a lower sample count is not a regression.
+
+### Fixed
+
+- **The app no longer jumps between relays, and no longer takes a healthy relay
+  direct.** The owner-reported hopping came from the watchdog requiring a quarter of
+  a relay's traffic back inside one 8 s window: on a live ROB RUN session it forced
+  DIRECT while the relay was returning 13 of 54 datagrams (24.07%). With the rule
+  above, a 4 m 29 s live run showed 0 starvation fallbacks, 1 relay selection and 1
+  restart total, a 53.4% return share, and the relay kept.
+- **A dead interceptor is visible instead of reported as active (#167).** The engine
+  copies the interceptor's last error into the status snapshot and marks the run
+  failed when the receive loop dies, `ERROR_INVALID_HANDLE` is terminal instead of
+  consuming the retry budget, the no-reply watchdog counts decoded data replies only
+  (a relay that merely echoes keepalives can no longer be blamed as a local
+  injection fault), and every fallback verdict carries `errors=` and
+  `last_error=`.
+- **Monitor instrument: correct restart detection, a dead alert revived, and a new
+  unreachable-relay detector (operator-facing).** Signed sums are differenced so a
+  decrease is not booked as a restart, the scripts read the emitted
+  `lightspeed_telemetry_saved_app_negative_count` name (the old name exists on zero
+  relays, which is why that alert never fired), `saved_regression` needs 20 weighted
+  samples and dual-metric agreement and rejects restart-bridged spans, and a new
+  `relay_unreachable_streak` detector covers the multi-week blind spot. Replayed
+  over 316 real snapshots, the old rule fires 4 times and the new one 0.
+- **Public telemetry says locale, not location.** The metric HELP text, the data
+  dictionary and the collector header now say the country is the client OS locale
+  country, not a location (series, labels and values unchanged).
+
+### Community
+
+- @Kianmhz opened PR #173, a documented scroll shell for the GUI; the shadow-sampling
+  test that was its only CI failure is fixed in this release, so the branch can be
+  rebased for review.
+- The reporters behind #140/#147 (QUIC alert 120) and #167 (Roblox relay starvation) -
+  their logs drove the diagnoses and fixes above.
+
 ## [1.10.3] - 2026-11-14
 
 ### Added
