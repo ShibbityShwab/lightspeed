@@ -1,0 +1,37 @@
+# Repository text normalisation.
+#
+# Windows checkouts used to come back CRLF because the host had
+# core.autocrlf=true and no attributes file. That silently broke
+# exact-text edits, `grep`-style searches for `\n`, and any tool that
+# compares checked-out bytes to repository bytes: the "LF will be
+# replaced by CRLF" warning was the only symptom.
+#
+# Pin LF for text in both the index and the worktree so a clone behaves
+# the same on Windows, macOS and Linux.
+* text=auto eol=lf
+
+# cmd.exe is the one consumer that still wants CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary artifacts must never be normalised.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.gz binary
+*.exe binary
+*.dll binary
+*.lib binary
+*.pdb binary
+*.rlib binary
+
+# Generated evidence and local tool state are never committed.
+wat/evidence/** -text

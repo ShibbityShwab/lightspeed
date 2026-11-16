@@ -378,7 +378,7 @@ Definition of done for the implementation phase, straight from the skill, expres
       outside genuine data; no new font family.
 - [ ] **Screenshots captured and LOOKED AT** at **default width (440)** *and* **320px** for each of
       the four states (not boosted, connected, boosting, game pick), before the next change.
-- [ ] **Evidence saved** under `.omo/evidence/gui-ux/` with descriptive names, paths named in the
+- [ ] **Evidence saved** under `wat/evidence/gui-ux/` with descriptive names, paths named in the
       report and in the commit message.
 - [ ] **320px check:** no clipped text, no horizontal scroll, ledger rows stacked, controls
       full-width.

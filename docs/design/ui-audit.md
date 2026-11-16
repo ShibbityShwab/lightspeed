@@ -24,7 +24,7 @@ the globe with the LAX relay marked active and still draws the previous session'
 sparkline even though `Relay —` is blank (app.rs:1324-1326), so the card claims live data
 that is not live. Below that: the Boost Server card (auto-select combo + Manage), the Game
 card, and a collapsed `More`. There is no visible way to quit or hide from the window itself
-(see problem 10). Evidence: `.omo/evidence/gui-ux/sprint-a-disconnected.png`.
+(see problem 10). Evidence: `wat/evidence/gui-ux/sprint-a-disconnected.png`.
 
 **Connected (CONNECTED).** The banner reads `CONNECTED` in accent purple - not in the
 success green the site reserves for a healthy signal (`theme::ACCENT`, app.rs:1155) -
@@ -35,13 +35,13 @@ by the banner. The Connection card then shows the globe with the active relay hi
 `Relay  207.246.106.36:4434` in monospace, `Relayed  <packets> packets | <n> sessions` (both
 monospace, app.rs:1342-1345) and a 64 px RTT plot (app.rs:1349-1372). A player reads: purple
 word, orange millisecond count, purple button, globe. Evidence:
-`.omo/evidence/gui-ux/sprint-a-connected.png`.
+`wat/evidence/gui-ux/sprint-a-connected.png`.
 
 **Boosting / reachable.** Not captured: reaching `BOOSTING` requires elevation. The binary
 launched from this shell runs unelevated, the app therefore never offers the boost action, and
 `Capture backend (pcap mode): not detected` is reported in the Advanced card; a manual boost
 attempt from the Advanced form did not start (the form is shown in
-`.omo/evidence/gui-ux/sprint-a-advanced-panel.png`). From the source, the state is designed as:
+`wat/evidence/gui-ux/sprint-a-advanced-panel.png`). From the source, the state is designed as:
 headline `BOOSTING` in success green (app.rs:1153), sub-line `<Game> - <rtt> ms` (app.rs:1164-1167),
 and the primary button swaps to `■  STOP BOOST` filled with the danger token (app.rs:1216,
 1784-1815 `primary_button`). The reachable/unboosted variant of this axis is the captured
@@ -57,7 +57,7 @@ pair (app.rs:773-786), a `Game:` combo (default `Fortnite`), and the `Reliabilit
 recover lost packets (+25% data)` checkbox (app.rs:810-828) whose entire explanation lives in a
 hover tooltip. Nothing here is state-coloured: the card is visually identical whether a game is
 detected, is not, or is irrelevant. Evidence:
-`.omo/evidence/gui-ux/sprint-a-game-section.png` (also visible in the tall settings capture).
+`wat/evidence/gui-ux/sprint-a-game-section.png` (also visible in the tall settings capture).
 
 **Narrow ~320 px.** The window's hard minimum is 320x400 (`main.rs`, `with_min_inner_size`), and
 the layout narrows by swapping the globe to 104 px and tightening margins (`narrow` flag on
@@ -66,41 +66,41 @@ breaks: the GAME card's "No game running - select your game and click Boost" is 
 mid-word at the right edge instead of wrapping, "Reliability Shield - recover lost packets
 (+25% data" loses its closing text, and the Boost Server row wraps `Manage` onto a second line
 under the combo. The state banner and the primary button survive the narrow case intact.
-Evidence: `.omo/evidence/gui-ux/sprint-a-narrow-320.png`.
+Evidence: `wat/evidence/gui-ux/sprint-a-narrow-320.png`.
 
 ## Screenshots
 
 Fresh - captured in this session (2026-10-04) from the locally built debug binary on `master`
-@ `4e0ebb7`, saved under `.omo/evidence/gui-ux/`:
+@ `4e0ebb7`, saved under `wat/evidence/gui-ux/`:
 
 | Path | What it shows |
 |---|---|
-| `.omo/evidence/gui-ux/sprint-a-connected.png` | Default width (~425 px client). `CONNECTED` banner, `Not boosting - 289 ms`, purple `RESTART AS ADMINISTRATOR`, Connection card with globe, relay address, relayed counters, RTT plot, Boost Server combo, Game card. |
-| `.omo/evidence/gui-ux/sprint-a-disconnected.png` | Default width, after "Disconnect from relay". `OFFLINE` / "No boost server", same purple CTA, Connection card showing `Relay —` while still drawing the stale RTT curve and the LAX-active globe marker. |
-| `.omo/evidence/gui-ux/sprint-a-game-section.png` | Default width, config column scrolled onto the GAME card: "No game running - select your game and click Boost" + Rescan, `Game: Fortnite`, Reliability Shield checkbox, collapsed `More`. |
-| `.omo/evidence/gui-ux/sprint-a-settings-bottom.png` | Default width, `More` expanded: ADVANCED, PRIVACY cards revealed inside the "More" disclosure. |
-| `.omo/evidence/gui-ux/sprint-a-advanced-panel.png` | Window widened to ~599 px, Advanced form open: the off-token dark inset frame, hint-only Server field, clipped "Custom Port Range" text, disabled `▶ Start Boost (manual)`, `Capture backend (pcap mode): not detected`. |
-| `.omo/evidence/gui-ux/sprint-a-narrow-320.png` | ~320 px client width, CONNECTED: globe shrunk to 104 px, `Manage` wrapped under the combo, GAME/Reliability Shield text clipped at the right edge. |
+| `wat/evidence/gui-ux/sprint-a-connected.png` | Default width (~425 px client). `CONNECTED` banner, `Not boosting - 289 ms`, purple `RESTART AS ADMINISTRATOR`, Connection card with globe, relay address, relayed counters, RTT plot, Boost Server combo, Game card. |
+| `wat/evidence/gui-ux/sprint-a-disconnected.png` | Default width, after "Disconnect from relay". `OFFLINE` / "No boost server", same purple CTA, Connection card showing `Relay —` while still drawing the stale RTT curve and the LAX-active globe marker. |
+| `wat/evidence/gui-ux/sprint-a-game-section.png` | Default width, config column scrolled onto the GAME card: "No game running - select your game and click Boost" + Rescan, `Game: Fortnite`, Reliability Shield checkbox, collapsed `More`. |
+| `wat/evidence/gui-ux/sprint-a-settings-bottom.png` | Default width, `More` expanded: ADVANCED, PRIVACY cards revealed inside the "More" disclosure. |
+| `wat/evidence/gui-ux/sprint-a-advanced-panel.png` | Window widened to ~599 px, Advanced form open: the off-token dark inset frame, hint-only Server field, clipped "Custom Port Range" text, disabled `▶ Start Boost (manual)`, `Capture backend (pcap mode): not detected`. |
+| `wat/evidence/gui-ux/sprint-a-narrow-320.png` | ~320 px client width, CONNECTED: globe shrunk to 104 px, `Manage` wrapped under the combo, GAME/Reliability Shield text clipped at the right edge. |
 
 Prior-session captures (Oct 2-3, 2026; **not** refreshed by this audit - listed because they are
 the only evidence for those moments, and they show an older palette in several cases):
 
 | Path | What it shows |
 |---|---|
-| `.omo/evidence/gui-ux/01-titlebar-runtime-icon-OK.png` | Title-bar runtime icon after the icon fix. |
-| `.omo/evidence/gui-ux/02-taskbar-GENERIC-icon-BUG.png` | The generic taskbar icon bug. |
-| `.omo/evidence/gui-ux/03-exe-icon-after-fix.png`, `04-exe-icon-final.png` | Exe-level icon verification. |
-| `.omo/evidence/gui-ux/05-after-layout-refresh.png` | Window after the layout refresh. |
-| `.omo/evidence/gui-ux/11-split-status-window.png` | Older split status/settings window (settings as a separate window). |
-| `.omo/evidence/gui-ux/12-installed-taskbar-icon.png`, `13-tray-icon-area.png`, `14-taskbar-full.png`, `14-tray-icon-fixed.png` | Installed-build taskbar/tray icon checks. |
-| `.omo/evidence/gui-ux/20-themed-single-window.png` | First single-window themed build. |
-| `.omo/evidence/gui-ux/21-themed-primary-fixed.png` | Connected state with the older amber "Relayed" values. |
-| `.omo/evidence/gui-ux/22-globe-with-geo.png` | Connected state with the geolocated globe. |
-| `.omo/evidence/gui-ux/30-reordered-default.png` | Reordered default window (a stray Bulk CMD window overlaps the capture). |
-| `.omo/evidence/gui-ux/31-narrow-320.png`, `41-narrow-320.png` | Earlier 320 px narrow captures. |
-| `.omo/evidence/gui-ux/32-installed-reordered.png`, `50-installed-final.png` | Installed build, reordered/final layout. |
-| `.omo/evidence/gui-ux/40-globe-land-merged.png` | Globe land-merge iteration. |
-| `.omo/evidence/gui-ux/baseline-titlebar.png`, `baseline-taskbar.png`, `baseline-taskbar-buttons.png`, `baseline-taskbar-zoom.png` | Pre-fix baselines. |
+| `wat/evidence/gui-ux/01-titlebar-runtime-icon-OK.png` | Title-bar runtime icon after the icon fix. |
+| `wat/evidence/gui-ux/02-taskbar-GENERIC-icon-BUG.png` | The generic taskbar icon bug. |
+| `wat/evidence/gui-ux/03-exe-icon-after-fix.png`, `04-exe-icon-final.png` | Exe-level icon verification. |
+| `wat/evidence/gui-ux/05-after-layout-refresh.png` | Window after the layout refresh. |
+| `wat/evidence/gui-ux/11-split-status-window.png` | Older split status/settings window (settings as a separate window). |
+| `wat/evidence/gui-ux/12-installed-taskbar-icon.png`, `13-tray-icon-area.png`, `14-taskbar-full.png`, `14-tray-icon-fixed.png` | Installed-build taskbar/tray icon checks. |
+| `wat/evidence/gui-ux/20-themed-single-window.png` | First single-window themed build. |
+| `wat/evidence/gui-ux/21-themed-primary-fixed.png` | Connected state with the older amber "Relayed" values. |
+| `wat/evidence/gui-ux/22-globe-with-geo.png` | Connected state with the geolocated globe. |
+| `wat/evidence/gui-ux/30-reordered-default.png` | Reordered default window (a stray Bulk CMD window overlaps the capture). |
+| `wat/evidence/gui-ux/31-narrow-320.png`, `41-narrow-320.png` | Earlier 320 px narrow captures. |
+| `wat/evidence/gui-ux/32-installed-reordered.png`, `50-installed-final.png` | Installed build, reordered/final layout. |
+| `wat/evidence/gui-ux/40-globe-land-merged.png` | Globe land-merge iteration. |
+| `wat/evidence/gui-ux/baseline-titlebar.png`, `baseline-taskbar.png`, `baseline-taskbar-buttons.png`, `baseline-taskbar-zoom.png` | Pre-fix baselines. |
 
 ## Inline color literals
 
@@ -198,7 +198,7 @@ and every transition uses egui's default timing.
    container for Boost Server, Game, Advanced, Privacy, Maintenance, About *and* the Connection
    panel - same `SURFACE` fill, same `BORDER` hairline, same `R_CARD` 10, same `S3` margin. A
    load-bearing status panel and a footnote sit at identical weight.
-   Evidence: `.omo/evidence/gui-ux/sprint-a-settings-bottom.png` (six cards, one silhouette);
+   Evidence: `wat/evidence/gui-ux/sprint-a-settings-bottom.png` (six cards, one silhouette);
    app.rs:1784-1802.
    Anti-slop trait: *identical rounded cards for every content type, one border-radius for all
    hierarchy.*
@@ -206,7 +206,7 @@ and every transition uses egui's default timing.
 2. **ALL-CAPS eyebrow above every section.** `title.to_uppercase()` in `theme::card`
    (app.rs:1793) stamps `CONNECTION`, `BOOST SERVER`, `GAME`, `ADVANCED`, `PRIVACY`,
    `MAINTENANCE`, `ABOUT` in the same 11 px dim semibold.
-   Evidence: `.omo/evidence/gui-ux/sprint-a-connected.png`; app.rs:1792-1797.
+   Evidence: `wat/evidence/gui-ux/sprint-a-connected.png`; app.rs:1792-1797.
    Anti-slop trait: *ALL-CAPS eyebrow labels above every section.*
 
 3. **Templated string formulas.** Readouts are built as "WORD - fragment" with a spaced dash
@@ -214,7 +214,7 @@ and every transition uses egui's default timing.
    `"Reliability Shield - recover lost packets (+25% data)"` app.rs:811,
    `"Advanced - set server manually"` app.rs:838-840), and machine-ish facts are joined by a
    separator rule (`Relayed <n> packets | <n> sessions`, app.rs:1342-1346).
-   Evidence: `.omo/evidence/gui-ux/sprint-a-connected.png`; app.rs:811, 838-840, 1164-1171, 1342-1346.
+   Evidence: `wat/evidence/gui-ux/sprint-a-connected.png`; app.rs:811, 838-840, 1164-1171, 1342-1346.
    Anti-slop trait: *titles built as "WORD - fragment" with a spaced dash; meta strings joined
    with middle dots (here, a pipe/rule).*
 
@@ -223,7 +223,7 @@ and every transition uses egui's default timing.
    (app.rs:1342-1344) which are plain numbers - while `HEADING 20` is defined and used zero
    times and `EMPHASIS 15`/`CAPTION 11` appear once each. The product's proof numbers therefore
    have exactly the weight of their labels.
-   Evidence: `.omo/evidence/gui-ux/sprint-a-connected.png`; app.rs:1342-1345, 1642-1647, and the
+   Evidence: `wat/evidence/gui-ux/sprint-a-connected.png`; app.rs:1342-1345, 1642-1647, and the
    `HEADING` reference sweep (0 hits).
    Anti-slop trait: *monospace used for small labels as a costume rather than for data.*
 
@@ -232,7 +232,7 @@ and every transition uses egui's default timing.
    header); both combos render default dropdown chrome (app.rs:735, 800); the RTT `Plot` keeps
    egui_plot's default grid/frame (app.rs:1349-1372); the window itself is the OS default title
    bar. Next to the themed cards this reads as "default egui with colours changed".
-   Evidence: `.omo/evidence/gui-ux/sprint-a-connected.png`, `.omo/evidence/gui-ux/sprint-a-narrow-320.png`.
+   Evidence: `wat/evidence/gui-ux/sprint-a-connected.png`, `wat/evidence/gui-ux/sprint-a-narrow-320.png`.
    Anti-slop trait: *egui-specific tell: leaving default widget chrome wherever custom chrome
    already exists.*
 
@@ -243,7 +243,7 @@ and every transition uses egui's default timing.
    Meanwhile the site's `--bg-0`, `--bg-4`, `--border-2`, `--text-2`, `--accent-strong`,
    `--accent-deep`, `--accent-text`, `--accent-soft`, `--accent-line`, `--info` and all four
    `*-soft` tints have no app counterpart.
-   Evidence: app.rs:749, 856, 898, 903, 914, 916, 936, 1470; `.omo/evidence/gui-ux/sprint-a-advanced-panel.png`
+   Evidence: app.rs:749, 856, 898, 903, 914, 916, 936, 1470; `wat/evidence/gui-ux/sprint-a-advanced-panel.png`
    (the off-token dark inset).
    Anti-slop trait: no listed tell - violates the skill's tokens-only / site-is-canonical
    policy and the mandate that every colour comes from a token.
@@ -254,8 +254,8 @@ and every transition uses egui's default timing.
    (app.rs:1255) - text that duplicates the button's own hover text. The one glance that should
    answer "am I boosted / am I safe" instead lands on an elevation prompt that never changes,
    and the actual `BOOST MY GAME` label is unreachable unelevated.
-   Evidence: `.omo/evidence/gui-ux/sprint-a-connected.png` vs
-   `.omo/evidence/gui-ux/sprint-a-disconnected.png` (identical primary row); app.rs:1215-1240, 1255.
+   Evidence: `wat/evidence/gui-ux/sprint-a-connected.png` vs
+   `wat/evidence/gui-ux/sprint-a-disconnected.png` (identical primary row); app.rs:1215-1240, 1255.
    Anti-slop trait: no listed tell - violates the doctrine's "state legibility" priority and
    "spend boldness in one place / exactly one primary action".
 
@@ -264,7 +264,7 @@ and every transition uses egui's default timing.
    (guarded only by `!rtt_history.is_empty()`, app.rs:1349) and still highlights LAX as the
    active node on the globe (app.rs:1290-1305), so the card contradicts the `OFFLINE` banner two
    rows above it.
-   Evidence: `.omo/evidence/gui-ux/sprint-a-disconnected.png`; app.rs:1290-1305, 1324-1372.
+   Evidence: `wat/evidence/gui-ux/sprint-a-disconnected.png`; app.rs:1290-1305, 1324-1372.
    Anti-slop trait: no listed tell - violates "glanceable truth" (the primary visual job) and
    the accessibility floor of never letting colour/graphics state contradict the text state.
 
@@ -274,7 +274,7 @@ and every transition uses egui's default timing.
    expanding `More` reveals Advanced, then Privacy, then Maintenance, then About), so telemetry
    opt-out, update check, relay disconnect and the app's identity are four levels down the column
    while ~400 px of the window sits empty.
-   Evidence: `.omo/evidence/gui-ux/sprint-a-settings-bottom.png`, `.omo/evidence/gui-ux/sprint-a-connected.png`
+   Evidence: `wat/evidence/gui-ux/sprint-a-settings-bottom.png`, `wat/evidence/gui-ux/sprint-a-connected.png`
    (the same window with `More` collapsed); app.rs:832-1035.
    Anti-slop trait: no listed tell - violates the doctrine's hierarchy/restraint ("cut any
    decoration that does not serve glanceable truth") and the "no dead ends" intent of the
@@ -287,8 +287,8 @@ and every transition uses egui's default timing.
     window heights, leaving the tray controls reachable only via the tray icon. At the 320 px
     minimum the GAME card and Reliability Shield lines are clipped mid-sentence instead of
     wrapping (app.rs:773-786, 810-828).
-    Evidence: `.omo/evidence/gui-ux/sprint-a-connected.png` and
-    `.omo/evidence/gui-ux/sprint-a-narrow-320.png` (no footer anywhere; clipped copy);
+    Evidence: `wat/evidence/gui-ux/sprint-a-connected.png` and
+    `wat/evidence/gui-ux/sprint-a-narrow-320.png` (no footer anywhere; clipped copy);
     app.rs:1381-1404.
     Anti-slop trait: no listed tell - violates the skill's hard constraints ("must work at
     320 px minimum"; the tray and boost flow are load-bearing).

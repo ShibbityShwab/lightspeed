@@ -23,6 +23,7 @@ Welcome to the LightSpeed documentation wiki - synced from the [source repo](htt
 | [Deploy Proxy](deploy-proxy) | Self-host a proxy on any VPS |
 | [Community Relay Network](community-network) | Run + publish a relay for others |
 | [Troubleshooting](troubleshooting) | Diagnose and fix issues |
+| [Agent Operations](agent-operations) | How AI agents drive this repo (DeepSeek Harness, personas, team mode) |
 
 ## 🏗️ Architecture & Protocol
 
@@ -38,3 +39,5 @@ Welcome to the LightSpeed documentation wiki - synced from the [source repo](htt
 |----------|-------------|
 | [Glossary](glossary) | Terminology definitions |
 | [Privacy](privacy) | Privacy policy and telemetry |
+| [Agent-System Audit](agent-system-audit-2026-11-16) | The 2026-11-16 DeepSeek Harness migration record |
+| [Contributing](../CONTRIBUTING.md) | Build, test, and submit changes on Windows, macOS or Linux |

@@ -1,0 +1,85 @@
+{
+  "$schema": "./personas.schema.json",
+  "version": 1,
+  "updated": "2026-11-16",
+  "lead": {
+    "slug": "lead",
+    "display": "Lead",
+    "owns": "planning, the shared task board, integration, final verification, state updates",
+    "note": "The root agent's name is `lead` in DSH. It is not a persona file: the Lead does not delegate the final answer."
+  },
+  "personas": [
+    {
+      "slug": "architect",
+      "display": "Architect",
+      "file": "architect.md",
+      "owns": ["docs/design/", "docs/architecture.md", "docs/protocol.md", "wat/state/decisions/"],
+      "when_to_use": "A design question, a protocol change, a trade-off that will bind later work, or a prior decision being superseded.",
+      "pairs_with": ["rust-dev", "net-eng", "sec-ops"]
+    },
+    {
+      "slug": "rust-dev",
+      "display": "RustDev",
+      "file": "rust-dev.md",
+      "owns": ["client/", "proxy/", "protocol/"],
+      "when_to_use": "Engine, relay or wire-type code: a fix with a reproduction, a feature after its decision, a performance change.",
+      "pairs_with": ["qa-engineer", "net-eng"]
+    },
+    {
+      "slug": "infra-dev",
+      "display": "InfraDev",
+      "file": "infra-dev.md",
+      "owns": ["infra/"],
+      "when_to_use": "Relay fleet operations, Terraform, monitoring collectors, node provisioning, anything that could bill the owner.",
+      "pairs_with": ["dev-ops", "sec-ops"]
+    },
+    {
+      "slug": "net-eng",
+      "display": "NetEng",
+      "file": "net-eng.md",
+      "owns": ["docs/fleet-load-rebalancing.md", "docs/bufferbloat.md", "client/src/route/"],
+      "when_to_use": "Latency/jitter/loss measurement design, relay ranking, FEC schemes, relay placement.",
+      "pairs_with": ["rust-dev", "qa-engineer"]
+    },
+    {
+      "slug": "qa-engineer",
+      "display": "QAEngineer",
+      "file": "qa-engineer.md",
+      "owns": ["tools/", "wat/evidence/"],
+      "when_to_use": "Reproducing a report, verifying a fix, writing the test that would catch it, benchmark methodology, game compatibility.",
+      "pairs_with": ["everyone (verifies)"]
+    },
+    {
+      "slug": "sec-ops",
+      "display": "SecOps",
+      "file": "sec-ops.md",
+      "owns": ["proxy/", "deny.toml", "SECURITY.md"],
+      "when_to_use": "Threat review, advisory triage, auth/rate-limit/anti-abuse work, a new dependency, anything that logs or stores user data.",
+      "pairs_with": ["rust-dev", "dev-ops"]
+    },
+    {
+      "slug": "dev-ops",
+      "display": "DevOps",
+      "file": "dev-ops.md",
+      "owns": [".github/workflows/", "dist/", "packaging/"],
+      "when_to_use": "CI gates, release automation, packaging channels, workflow permissions, a red pipeline.",
+      "pairs_with": ["infra-dev", "qa-engineer"]
+    },
+    {
+      "slug": "interface-designer",
+      "display": "InterfaceDesigner",
+      "file": "interface-designer.md",
+      "owns": ["client-gui/src/app.rs", "docs/design/"],
+      "when_to_use": "Any client-gui surface, the state contract, wording, layout, screenshot-verified UX.",
+      "pairs_with": ["rust-dev"]
+    }
+  ],
+  "task_conventions": {
+    "subject": "[<slug>] <imperative title>",
+    "owner": "<slug>",
+    "write_scopes": "workspace-relative paths from the persona `owns` list",
+    "evidence": "wat/evidence/<YYYY-MM-DD>/<task-id>-<slug>.<ext>",
+    "dependencies": "use blocked_by when one task consumes another's output",
+    "naming": "subagent name == persona slug; second instance appends -2"
+  }
+}

@@ -62,7 +62,13 @@ web/network-history.json
 # Relay placement recommendation (infra/scripts/recommend-regions.sh; persisted on the stats branch)
 web/placement.json
 
-# AI assistant generated artifacts
+# Agent evidence (screenshots, transcripts, benchmark tables). Written by every
+# persona, named in the state entry, never committed: it is large, machine-local
+# and reproducible from the commands the entry records.
+wat/evidence/
+
+# Retired harness state. Kept ignored so an old checkout cannot re-add it; the
+# supported harness is DeepSeek Harness, whose state lives in %USERPROFILE%\.dsh.
 .omo/
 .cortexkit/
 .playwright-mcp/

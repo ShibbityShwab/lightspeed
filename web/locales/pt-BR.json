@@ -1,6 +1,6 @@
 {
   "generated_from": "web/index.html",
-  "note": "Brazilian Portuguese seed translation (unreviewed, machine-assisted). Keys are positional and must match web/locales/en.json; regenerate keys with scripts/extract-web-strings.sh and re-translate any key whose English string changed. Untranslated keys intentionally fall back to English: game names, port ranges, anti-cheat identifiers, and machine-readable values.",
+  "note": "Brazilian Portuguese seed translation (unreviewed, machine-assisted). Keys are positional and must match web/locales/en.json; regenerate keys with scripts/extract_web_strings.py and re-translate any key whose English string changed. Untranslated keys intentionally fall back to English: game names, port ranges, anti-cheat identifiers, and machine-readable values.",
   "strings": {
     "attr.04f96b51ee": "Copiar comando Chocolatey",
     "attr.0bfd32e756": "Copiar comando scoop install",

@@ -1,136 +1,100 @@
-# Handoff: LightSpeed, 2026-10-04
+# Handoff: LightSpeed, 2026-11-16
 
-Brief for the incoming agent. Start at `wat/state/current-phase.md` (canonical
-phase log, WF-050 is this entry), then `wat/rules.md` (the $0-cost rule is the
-one that binds hardest) and `wat/archive/agents.md` (personas).
+Brief for the incoming session. Start at `wat/state/current-phase.md` (live
+state), then `wat/rules.md` (the `$0` cost rule and the Windows shell rule bind
+hardest), then `wat/README.md` (the map).
 
-Repo: `ShibbityShwab/lightspeed`, branch `master`, HEAD `22c9623`. Worktree
-clean, everything pushed, CI green for every recent commit.
+Repo: `ShibbityShwab/lightspeed`, branch `master`.
 
 ## What this project is
 
 A zero-cost global network optimizer for multiplayer games, run through a
-Workflows/Agents/Tools autonomy engine (`wat/`). Crates:
+Workflows/Agents/Tools autonomy system (`wat/`) on **DeepSeek Harness**. Crates:
 
 - `client/` — core engine: pcap/WinDivert capture, QUIC control plane, FEC
   tunnel, latency probing, per-game process detection.
-- `client-gui/` — egui Windows app (the active workstream this week).
-- `proxy/` — the relay fleet.
+- `client-gui/` — egui Windows tray app (the active product surface).
+- `proxy/` — the relay fleet binary.
 - `protocol/` — shared wire types.
-- `infra/scripts/` — monitoring collectors (health, anomaly detection, stats).
-- `web/` — the GitHub Pages site, fed by the collectors.
-- `dist/` — Scoop / Chocolatey / winget packaging.
-- `.github/workflows/` — CI, Docker, Security Audit, Deploy, health monitors.
+- `infra/` — Terraform, Docker, relay scripts, monitoring collectors.
+- `web/` — GitHub Pages site, locales generated from the English source.
+- `dist/`, `packaging/` — Scoop / Chocolatey / winget / MSI.
+- `.github/workflows/` — CI, Docker, security audit, deploy, health monitors.
 
-Cost rule (`wat/rules.md`): total ongoing infrastructure cost must stay exactly
-$0.00 — Always Free tiers only.
+Cost rule (`wat/rules.md`): the **owner's** ongoing spend stays exactly `$0.00`;
+the eight community relays are sponsor-funded (decision 2026-09-13).
 
-## Where the GUI landed this week (all merged, all CI-green)
+## Agent setup (2026-11-16 migration)
 
-`b32975d..22c9623`, in order:
+- Harness is DeepSeek Harness only. opencode/OmO artefacts are gone; do not
+  reintroduce harness-specific state directories.
+- Procedures are **project skills** in `.dsh/skills/`: `lightspeed-wat`,
+  `lightspeed-team`, `lightspeed-windows`, `lightspeed-verify`. They are
+  discovered automatically; load one instead of re-deriving a procedure.
+- Personas are **delegation contracts** in `wat/personas/` (eight of them). Team
+  work uses Agent Teams; the contract is `wat/team-mode.md`.
+- State is split: `current-phase.md` is the small hot file; history lives in
+  `phases/<YYYY-MM>.md`; decisions live in `decisions/<YYYY-MM>.md`.
+- The old `wat/archive/agents.md` was deleted because on Windows it matched the
+  `AGENTS.md` instruction loader and was injected into every session. Never name
+  a descriptive document `agents.md`.
 
-- Route globe with **offline** IP geolocation (no external API; a generated
-  country/range table), near-hemisphere-only drawing, route arc.
-- 320px-minimum window support; the status column reordered so the state banner
-  is the first thing read.
-- Inter + JetBrains Mono bundled from `client-gui/assets/fonts/` (SIL OFL 1.1;
-  the user's condition was "as long as licenses allow it").
-- Boost-server pill cluster + checkbox replaced by one dropdown whose selected
-  text is the real state — "Auto (fastest)" when auto, the relay name when
-  pinned. Auto was already the default on first install; the UI hid it.
-- About card (logo, version, GitHub/Website/Releases links, "Star it on
-  GitHub"), replacing the in-app brand row that duplicated the OS title bar.
-- Admin handling fixed (`0b59cce`): `is_admin` now reads the process token via
-  locally-declared advapi32 FFI instead of `net session` (which fails when the
-  Server service is stopped — a false "not admin"); `relaunch_as_admin` no
-  longer exits the process when already elevated.
-- `scripts/dev-gui.ps1 [-Elevate]` — run the debug build directly, no install.
-  Refuses to start a second instance (the app's single-instance mutex is shared
-  across every build, so a stray instance silently wins).
-- `scripts/install-gui.ps1` — installs by content: copies, then compares sizes
-  and exits non-zero on mismatch. `Copy-Item -Force` over a running exe
-  "succeeds" silently; trusting its exit code caused two false "installed"
-  reports (`c5794d2`).
-- Bug round `22c9623`, three reachable panics, all mutation-tested:
-  1. `client/src/capture/windivert_redirect.rs::parse_ipv4_udp` accepted IHL<5
-     (RFC 791 min is 5 words). A malformed datagram then parsed ports out of
-     the IP header and routed on garbage. **Network input** — the serious one.
-  2. `client-gui/src/globe.rs::draw_land` indexed the embedded land blob
-     unchecked inside the paint loop; a truncated blob panics the window.
-  3. `client-gui/src/geo.rs::locate` indexed `COUNTRIES[c as usize]` with a
-     table-generated u8; `.get(..)?` now.
+## Windows host facts (hard-won, do not re-learn)
 
-## Verified state (2026-10-04)
+1. **Shell is Windows PowerShell 5.1.** `pwsh` is not installed. No Git Bash, no
+   WSL, no `bash script.sh`. `git` runs directly.
+2. **Python is absent.** `python`/`python3` are Microsoft Store stubs (exit 9009),
+   `py` is missing. Localization scripts and `tools/*.py` need a real CPython —
+   a documented prerequisite, not a silent assumption.
+3. **Rust is installed** (1.100.0, matching `rust-toolchain.toml`); `cargo fmt`,
+   clippy and tests run locally. The localization workflow cannot.
+4. **Elevation does not propagate into the agent shell.** A medium-integrity
+   shell cannot stop an elevated GUI, and a running GUI locks its own exe. Use
+   `scripts/dev-gui.ps1 -Elevate`, stop from the tray, verify installs by size
+   (`scripts/install-gui.ps1`).
+5. **Single-instance mutex is shared across builds.** A stray `target/debug`
+   instance silently wins. Check `Get-Process lightspeed-gui` first.
+6. **egui popups are invisible to accessibility tooling.** Verify collapsed
+   controls by selected text and a screenshot.
+7. **PS 5.1 gotchas:** a single `PSCustomObject` has no reliable `.Count` — wrap
+   in `@()`; `Select-Object -First N` terminates a long pipeline early; no `??`,
+   no ternary, no `ProcessStartInfo.ArgumentList`.
+8. **Line endings.** `.gitattributes` pins LF for text and CRLF for `.cmd`/`.bat`.
+   Existing worktrees may still be CRLF until re-checkout; single-line edit
+   anchors and the DSH edit tool work either way.
 
-- CI: `push success` for every one of `561203c..22c9623`. Gotcha: querying
-  `gh run list --commit <SHORT_SHA>` returns nothing — the API `head_sha`
-  filter needs the full SHA; short SHAs match zero runs even when green.
-- Scheduled workflows green: Health Monitor, Health Anomaly Monitor, Deploy
-  Pages (Oct 3).
-- Tests: GUI 74 pass / 0 fail; client 387 pass with `windivert-redirect`
-  feature (feature-gated code compiles to nothing without it — always run the
-  feature when testing that module); whole workspace green.
-- Gates before every push, in order: `cargo fmt --all --check`, clippy with
-  `-Dwarnings` (CI sets `RUSTFLAGS: -Dwarnings`), then the crate's FULL suite
-  (never a module filter — a filtered green says nothing about the rest).
-- Fleet: 8/8 relays on v1.6.14, healthy, traffic flowing (WF-049 verified the
-  earlier traffic stop cleared).
-- Release v1.6.14 published. Scoop current. **Chocolatey stuck at 1.6.3** —
-  package built and correct, push command in `dist/chocolatey/README.md`,
-  blocked on the owner's API key. **winget PR #445619 open**, blocked on the
-  owner's CLA.
+## Verified state at this handoff
 
-## Pain points (hard-won, do not re-learn these)
-
-1. **Elevation split.** This agent's shell is medium-integrity even when the
-   OmO terminal runs as admin — elevation does not propagate into the
-   command-runner. Consequences: cannot stop the elevated GUI (taskkill fails
-   with "Could not stop process"); the running GUI locks its own exe (build
-   fails `Access is denied (os error 5)`); Program Files installs need a UAC
-   prompt and the user may never see one. For dev, use `dev-gui.ps1 -Elevate`
-   and stop the app from its tray; for installs, `install-gui.ps1` run
-   elevated, and verify by size, not exit code.
-2. **Windows host quirks.** `python`/`python3` are Microsoft Store stubs that
-   exit 49 — use the JS kernel/Bun or `node` for scripting. No `jq`. Files
-   check out CRLF; an edit matched against `\n` will miss (the "LF will be
-   replaced by CRLF" git warning is normal here). Cargo needs the winlibs
-   mingw64 toolchain on PATH. In Git Bash, `taskkill` needs `//IM`. Launch the
-   GUI with `nohup ... &`, never `Start-Process` from a script that should not
-   spawn console windows. The LSP daemon times out under load — use
-   `cargo check` directly.
-3. **Verify artifacts, not proxies.** This session's failures were all one
-   mode: trusting an exit code or a summary. The install "succeeded" while the
-   file sizes differed; a suite read "ok, 0 passed". Read pass counts, compare
-   file bytes, screenshot the UI, and mutation-test fixes (revert the fix,
-   confirm the test fails) before claiming a bug is fixed.
-4. **Single-instance mutex is shared across all builds.** A stray
-   `target/debug` instance silently wins over an installed launch. Check
-   `tasklist` before launching anything; `dev-gui.ps1` guards this.
-5. **egui popups are invisible to the accessibility tree.** Dropdown options
-   cannot be read via AX; use screenshots for visual state. Verify a collapsed
-   control by its selected text, not the popup.
-6. **Remote-write policy.** Routine commits/pushes to master are authorized
-   (standing grant); Conventional Commits; each push gated by the checks above.
-   Owner-gated actions to surface as ONE crisp question: Chocolatey API key,
-   winget CLA, product calls.
+This session changed agent infrastructure, not product code. `tools/Check-LightSpeed.ps1
+-SkipGui -SkipBuild` passed: fmt clean; workspace clippy (`--all-targets
+--all-features --exclude lightspeed-gui`) clean; `cargo test --workspace --all
+--exclude lightspeed-gui` **1,444 passed / 0 failed / 6 ignored across 29
+suites**. `cargo audit` and `cargo deny` are not installed here and were reported
+as skipped (CI owns them); the GUI gates were skipped because no GUI source
+changed; the localization gates need CPython. Product state remains what the
+newest phase entries describe: 1.8.4 shipped, the ARC Raiders transport split
+implemented, the live join through it still the open proof. Packaging: Chocolatey
+pushed and awaiting moderation, winget pending.
 
 ## What still needs to happen (ranked)
 
-1. ~~Rebuild + reinstall the GUI.~~ **Done 2026-10-04** - Program Files re-synced to
-   master (bug-fix build verified by size).
-2. **Owner-gated channels:** Chocolatey pushed (moderation pending, normal);
-   winget PR #445619 is CLA-signed and in the winget-pkgs moderation queue
-   (2026-10-02) - both are waits, not actions.
-3. ~~GUI auto-update.~~ **Done 2026-10-04** (`1d518cb`, WF-051) - receipt-less
-   installs now check via the GitHub releases API and install in place
-   (download, verify sha256 before elevating, elevated tar-based swap, size
-   check, relaunch).
-4. ~~Mutex-poisoning hardening.~~ **Done 2026-10-04** (`8726d1f`, WF-052) - all 22
-   lock sites in the GUI and engine recover a poisoned lock via `into_inner()`
-   instead of panicking, with mutation-checked tests that poison a lock and
-   assert the next read still works.
-5. **Product calls (owner):** #137 (Minecraft support request), #59 (the
-   Windows/Fortnite thread).
-6. **Keep the WAT state current.** Every round ends by updating
-   `wat/state/current-phase.md` and `wat/state/decisions.md` - that is how the
-   next agent resumes without re-deriving context.
+1. **Re-run the full gate after any code change** — the migration touched docs,
+   state and scripts, not product code.
+2. **Localization port** — the `.sh` wrappers are now `.py` entry points plus a
+   PowerShell runner; proving them on this host needs CPython installed (owner
+   decision) or CI.
+3. **Owner-gated channels** — Chocolatey moderation, winget PR, product calls
+   (#137 Minecraft, #59 Fortnite). Surface as one crisp question.
+4. **Keep the state protocol** — one dated entry per round, decisions in
+   `decisions/<YYYY-MM>.md`, history moved to `phases/` rather than deleted.
+
+## Pain points
+
+- **Verify artefacts, not proxies.** Exit codes and summaries lied here before:
+  an install "succeeded" while file sizes differed; a suite read "ok, 0 passed".
+  Read pass counts, compare bytes, screenshot the UI, mutation-test fixes.
+- **Remote-write policy.** Routine commits/pushes to master are authorized
+  (standing grant), Conventional Commits, each push gated by the checks above.
+  Do not commit or push without the gate passing.
+- **Owner gates** are the only things that should block; everything else is a
+  task, not a question.

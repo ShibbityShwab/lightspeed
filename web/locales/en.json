@@ -389,7 +389,7 @@
     "idx.ff3bd7d341": "XOR-based Forward Error Correction recovers a lost packet from parity without a retransmit round trip. It adapts to measured loss: near-zero overhead on a clean line, up to 25% at the default block size while packets are actually dropping.",
     "idx.ff74faad44": "Live route"
   },
-  "note": "Source locale. Keys are content-addressed; regenerate with scripts/extract-web-strings.sh",
+  "note": "Source locale. Keys are content-addressed; regenerate with scripts/extract_web_strings.py",
   "skipped_elements": [
     "code",
     "pre",

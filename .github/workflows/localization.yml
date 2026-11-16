@@ -25,7 +25,7 @@ jobs:
           ref: ${{ github.event.inputs.branch || github.ref_name }}
 
       - name: Translate, rebuild and check
-        run: bash scripts/localization-update.sh
+        run: python scripts/localization_update.py
 
       - name: Commit the translated catalogs and pages
         run: |

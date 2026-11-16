@@ -132,10 +132,10 @@ jobs:
       # which is how a page shipped with relative asset URLs that 404 from
       # /<tag>/ and with tag fragments left in its text.
       - name: Catalog matches the source page
-        run: bash scripts/extract-web-strings.sh --check
+        run: python scripts/extract_web_strings.py --check
 
       - name: Generated locale pages are current
-        run: bash scripts/generate-web-locales.sh --check
+        run: python scripts/generate_web_locales.py --check
 
       # Every translated doc must carry the unreviewed-translation warning: a
       # reader landing straight on docs/faq.ja.md from a search result otherwise

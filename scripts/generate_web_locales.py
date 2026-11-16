@@ -1,42 +1,21 @@
-#!/usr/bin/env bash
-# Generate per-locale website pages from web/index.html plus the locale catalogs.
-#
-# The site has no build step: `web/**` is published verbatim by the Pages
-# workflow, so localization has to produce real files rather than resolve strings
-# at request time. Each locale gets `web/<tag>/index.html`, rewritten from the
-# English source by replacing the exact text the extractor recorded.
-#
-# Replacement is positional and verified: the generator re-extracts the source,
-# then requires every catalog key to be known before writing, so a catalog that
-# has drifted from web/index.html fails here instead of shipping a half-English
-# page.
-#
-# Usage: generate-web-locales.sh [--check]
-#   (no args)  write web/<tag>/index.html for every locale that has a catalog
-#   --check    fail if generated pages are missing or stale
-set -euo pipefail
+#!/usr/bin/env python3
+"""Generate per-locale website pages from web/index.html plus the locale catalogs (`--check` to verify only)."""
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+import pathlib
+import sys
 
-CHECK=0
-if [[ "${1:-}" == "--check" ]]; then
-  CHECK=1
-fi
 
-PY=""
-for candidate in python3 py python; do
-  if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
-    PY="$candidate"
-    break
-  fi
-done
-if [[ -z "$PY" ]]; then
-  echo "no Python 3.8+ interpreter found (tried python3, py, python)" >&2
-  exit 1
-fi
+def _normalise_argv() -> None:
+    """Accept ``--check`` or the legacy ``<0|1> <root>`` positional form."""
+    if len(sys.argv) >= 3 and sys.argv[1] in ("0", "1"):
+        return
+    check = 1 if "--check" in sys.argv[1:] else 0
+    root = pathlib.Path(__file__).resolve().parent.parent
+    sys.argv = [sys.argv[0], str(check), str(root)]
 
-"$PY" - "$CHECK" "$ROOT" <<'PY'
+
+_normalise_argv()
+
 import hashlib
 import html
 import json
@@ -139,7 +118,7 @@ PLACEHOLDER = re.compile(r"\{(\d+)\}")
 def content_key(kind, tag, value):
     """The key for a string, derived from the string rather than its position.
 
-    Mirrors `scripts/extract-web-strings.sh`; the two must agree exactly, which
+    Mirrors `scripts/extract_web_strings.py`; the two must agree exactly, which
     the parity checks below enforce.
     """
     digest = hashlib.sha1(
@@ -202,7 +181,7 @@ blocks_documented = {k for k in english["strings"] if k.startswith("blk.")}
 if block_known != blocks_documented:
     sys.exit(
         "the English catalog's block keys do not match web/index.html; re-run "
-        f"scripts/extract-web-strings.sh (missing={sorted(blocks_documented - block_known)[:5]} "
+        f"scripts/extract_web_strings.py (missing={sorted(blocks_documented - block_known)[:5]} "
         f"extra={sorted(block_known - blocks_documented)[:5]})"
     )
 documented = {k for k in english["strings"] if k.startswith("idx.")}
@@ -211,7 +190,7 @@ if known != documented:
     extra = sorted(known - documented)
     sys.exit(
         "the English catalog does not match web/index.html; re-run "
-        f"scripts/extract-web-strings.sh (missing={missing[:5]} extra={extra[:5]})"
+        f"scripts/extract_web_strings.py (missing={missing[:5]} extra={extra[:5]})"
     )
 
 attr_pattern = re.compile(r'(?P<attr>aria-label|placeholder|title|alt)\s*=\s*"(?P<value>[^"]{3,})"', re.IGNORECASE)
@@ -227,7 +206,7 @@ attr_known = {key for key, _m, _v in attr_units}
 if attr_known != attr_documented:
     sys.exit(
         "the English catalog's attribute keys do not match web/index.html; re-run "
-        f"scripts/extract-web-strings.sh (missing={sorted(attr_documented - attr_known)[:5]})"
+        f"scripts/extract_web_strings.py (missing={sorted(attr_documented - attr_known)[:5]})"
     )
 
 def render_block(match, translated, inner_translation):
@@ -611,9 +590,9 @@ for info in locale_registry:
     target = root / "web" / tag / "index.html"
     if check:
         if not target.exists():
-            sys.exit(f"{target} is missing; run scripts/generate-web-locales.sh")
+            sys.exit(f"{target} is missing; run scripts/generate_web_locales.py")
         if target.read_text(encoding="utf-8") != target_html:
-            sys.exit(f"{target} is stale; re-run scripts/generate-web-locales.sh")
+            sys.exit(f"{target} is stale; re-run scripts/generate_web_locales.py")
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(target_html, encoding="utf-8")
@@ -626,9 +605,9 @@ english_target = root / "web" / "index.en.html"
 english_html = render_english(source)
 if check:
     if not english_target.exists():
-        sys.exit(f"{english_target} is missing; run scripts/generate-web-locales.sh")
+        sys.exit(f"{english_target} is missing; run scripts/generate_web_locales.py")
     if english_target.read_text(encoding="utf-8") != english_html:
-        sys.exit(f"{english_target} is stale; re-run scripts/generate-web-locales.sh")
+        sys.exit(f"{english_target} is stale; re-run scripts/generate_web_locales.py")
 else:
     # newline="" keeps the generated page on the source's own LF endings: this
     # file is compared byte-for-byte by --check, and write_text would otherwise
@@ -640,7 +619,7 @@ sitemap_target = root / "web" / "sitemap.xml"
 sitemap = sitemap_xml()
 if check:
     if sitemap_target.read_text(encoding="utf-8") != sitemap:
-        sys.exit(f"{sitemap_target} is stale; re-run scripts/generate-web-locales.sh")
+        sys.exit(f"{sitemap_target} is stale; re-run scripts/generate_web_locales.py")
 else:
     sitemap_target.write_text(sitemap, encoding="utf-8", newline="")
     written.append(str(sitemap_target.relative_to(root)))
@@ -650,4 +629,3 @@ if check:
 else:
     for path in written:
         print(f"wrote {path}")
-PY

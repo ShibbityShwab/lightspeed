@@ -158,7 +158,7 @@ jobs:
           fi
 
       - name: Promote the English page build
-        # scripts/generate-web-locales.sh emits web/index.en.html, the English
+        # scripts/generate_web_locales.py emits web/index.en.html, the English
         # source plus its hreflang alternate set and language switcher. English
         # is the extractor's source of truth, so that build cannot be the file
         # the keys point at; it is promoted here instead, at deploy time.
@@ -166,7 +166,7 @@ jobs:
           if [ -f web/index.en.html ]; then
             cp web/index.en.html web/index.html
           else
-            echo "::error::web/index.en.html is missing; run scripts/generate-web-locales.sh"
+            echo "::error::web/index.en.html is missing; run python scripts/generate_web_locales.py"
             exit 1
           fi
 

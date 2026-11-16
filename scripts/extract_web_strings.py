@@ -1,43 +1,21 @@
-#!/usr/bin/env bash
-# Extract the website's visible copy into a keyed catalog.
-#
-# The site is hand-written static HTML with no build step, so localization is
-# done by generating per-locale pages from the English source rather than by
-# editing every string in place. Keys are positional (`idx.NNN`) because the
-# HTML has no stable ids on most text nodes; that makes the catalog immune to
-# reordering prose within a page but sensitive to inserting new text nodes,
-# which is why the generator verifies the key count against the source before
-# writing anything.
-#
-# Usage: extract-web-strings.sh [--check]
-#   (no args)  write web/locales/en.json and a key list
-#   --check    fail if web/locales/en.json is out of date with web/index.html
-set -euo pipefail
+#!/usr/bin/env python3
+"""Extract the website visible copy into a keyed catalog (`--check` to verify only)."""
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+import pathlib
+import sys
 
-CHECK=0
-if [[ "${1:-}" == "--check" ]]; then
-  CHECK=1
-fi
 
-# CI is Linux (python3); this host is Windows, where python3 is the Microsoft
-# Store stub while the real interpreter answers to `py`. Resolve once so the
-# same script runs on both instead of failing on whichever name is absent.
-PY=""
-for candidate in python3 py python; do
-  if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
-    PY="$candidate"
-    break
-  fi
-done
-if [[ -z "$PY" ]]; then
-  echo "no Python 3.8+ interpreter found (tried python3, py, python)" >&2
-  exit 1
-fi
+def _normalise_argv() -> None:
+    """Accept ``--check`` or the legacy ``<0|1> <root>`` positional form."""
+    if len(sys.argv) >= 3 and sys.argv[1] in ("0", "1"):
+        return
+    check = 1 if "--check" in sys.argv[1:] else 0
+    root = pathlib.Path(__file__).resolve().parent.parent
+    sys.argv = [sys.argv[0], str(check), str(root)]
 
-"$PY" - "$CHECK" "$ROOT" <<'PY'
+
+_normalise_argv()
+
 import html
 import hashlib
 import json
@@ -258,7 +236,7 @@ catalog.update(blocks)
 
 payload = {
     "generated_from": "web/index.html",
-    "note": "Source locale. Keys are content-addressed; regenerate with scripts/extract-web-strings.sh",
+    "note": "Source locale. Keys are content-addressed; regenerate with scripts/extract_web_strings.py",
     "strings": catalog,
     "markup": markup,
     "block_placeholders": True,
@@ -269,7 +247,7 @@ rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "
 
 if check:
     if not out_path.exists():
-        sys.exit(f"{out_path} is missing; run scripts/extract-web-strings.sh")
+        sys.exit(f"{out_path} is missing; run scripts/extract_web_strings.py")
     if out_path.read_text(encoding="utf-8") != rendered:
         sys.exit(f"{out_path} is out of date with web/index.html; re-run the extractor")
     print(f"web catalog up to date ({len(catalog)} keys)")
@@ -278,4 +256,3 @@ if check:
 out_path.parent.mkdir(parents=True, exist_ok=True)
 out_path.write_text(rendered, encoding="utf-8")
 print(f"wrote {out_path} with {len(catalog)} keys")
-PY

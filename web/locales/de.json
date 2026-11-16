@@ -1,6 +1,6 @@
 {
   "generated_from": "web/index.html",
-  "note": "German seed translation. Keys are positional and must match web/locales/en.json; regenerate keys with scripts/extract-web-strings.sh and re-translate any key whose English string changed. Untranslated keys intentionally fall back to English: game names, port ranges, anti-cheat identifiers (EasyAntiCheat, BattlEye, Vanguard, Warden), and machine-readable values. This file is UNREVIEWED machine-assisted translation.",
+  "note": "German seed translation. Keys are positional and must match web/locales/en.json; regenerate keys with scripts/extract_web_strings.py and re-translate any key whose English string changed. Untranslated keys intentionally fall back to English: game names, port ranges, anti-cheat identifiers (EasyAntiCheat, BattlEye, Vanguard, Warden), and machine-readable values. This file is UNREVIEWED machine-assisted translation.",
   "strings": {
     "attr.04f96b51ee": "Chocolatey-Befehl kopieren",
     "attr.0bfd32e756": "scoop install-Befehl kopieren",
