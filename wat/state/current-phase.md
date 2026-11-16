@@ -5,11 +5,55 @@
 
 ## Current state
 
-**Workflow:** WF-059 (GitHub feedback audit, this entry); product work continues under WF-057 and PR #173
-**Agent:** lead + net-eng + rust-dev + interface-designer (Team mode, three board tasks)
-**Status:** 1.10.3 is the latest release (2026-11-14): server ping in the route card, bounded relay re-tests, session-scoped Relayed counters, the retuned no-reply watchdog, destination-aware relay choice, ARC Raiders TCP control-plane support and the TCP-connection ownership fix; 1.10.0 added Jedi Outcast and Tibia. Master is CI-green after the 2026-11-16 shadow-gate test fix. Open GitHub feedback is triaged in `docs/github-feedback-audit-2026-11-16.md`: 8 issues (2 bug threads, 5 game requests, 1 fixed-but-open), 10 discussions, 1 community PR whose CI was unblocked. The agent layer (WF-058) is DSH-native with Team-mode personas.
+**Workflow:** WF-060 (the WF-059 audit's #167 and QUIC follow-ups, this entry); WF-059 closed, product work continues under WF-057 and PR #173
+**Agent:** lead (RustDev + QAEngineer contracts; single-threaded)
+**Status:** 1.10.3 is the latest release (2026-11-14): server ping in the route card, bounded relay re-tests, session-scoped Relayed counters, the retuned no-reply watchdog, destination-aware relay choice, ARC Raiders TCP control-plane support and the TCP-connection ownership fix; 1.10.0 added Jedi Outcast and Tibia. Master is CI-green after the 2026-11-16 shadow-gate test fix. Open GitHub feedback is triaged in `docs/github-feedback-audit-2026-11-16.md`: 8 issues (2 bug threads, 5 game requests, 1 fixed-but-open), 10 discussions, 1 community PR whose CI was unblocked. WF-060 now surfaces a dead data plane in the status (#167) and turns QUIC alert 120 into a verdict (#140/#147); the ALPN migration is the next owner-gated step. The agent layer (WF-058) is DSH-native with Team-mode personas.
 
 ## Recent entries
+
+### 2026-11-16 - WF-060: a dead data plane is visible now, and QUIC alert 120 explains itself
+
+**Agent:** lead (RustDev + QAEngineer contracts; single-threaded)
+
+Picked up the WF-059 audit's two highest-value follow-ups after that session was
+disposed mid-turn. Nothing was lost: the tree was clean at `174b1f3` and its CI
+run was green; only the in-flight turn died (the owner's "start tackling"
+message had landed in the finished `net-eng` subagent session, whose abort in
+turn started the parent turn that was then disposed).
+
+What changed (issue #167):
+
+- `EngineStatus.interceptor_error` is now filled from
+  `InterceptorStats.last_error`, so the tray's Error state and the restart signal
+  exist; `InterceptorHandle::is_active()` also stops reporting an active
+  interceptor once the receive loop dies (new `run_failed` flag).
+- `ERROR_INVALID_HANDLE` (os error 6) is terminal in the WinDivert receive loop
+  instead of consuming the retry budget; both WinDivert backends record a message
+  saying interception stopped.
+- the no-reply watchdog baselines a new data-reply-only counter
+  (`packets_reply_data`), so keepalive echoes and undecodable frames cannot be
+  reported as a local injection fault; all three fallback verdicts carry
+  `errors=` and `last_error=`.
+- QUIC (#140/#147): a peer `CONNECTION_CLOSE` with crypto alert 120 now prints a
+  verdict that the responder cannot be a LightSpeed relay (this repo never sets
+  ALPN) and is likely a QUIC-intercepting middlebox; the client logs its
+  `ALPN=[]` offer once for capture comparison. The ALPN migration itself is
+  wire-breaking and stays owner-gated.
+
+**Verified:** `908b3ac` pushed; CI run `43820738304` is **green** (all jobs,
+including Feature Matrix (quic), Check & Test and Windows GUI Build). Local gate
+on the same tree: fmt clean; workspace clippy `--all-targets --all-features`
+clean; 1,449 workspace tests across 29 suites, 155 GUI, 1,201
+WinDivert-feature and 827 QUIC-feature passed, 0 failed. Failing-before and
+mutation evidence: `wat/evidence/2026-11-16/wf167-diagnosability.md`.
+
+**Open:** the live invalid-handle path is not reproduced end to end (needs an
+external WinDivert-handle invalidation during a real match; the owner's Roblox
+session had ended before the fix existed). The ALPN rollout needs an owner
+release plan (client-with-empty-ALPN-fallback first, then relays). Public issue
+replies (#167 diagnosis, #140 verdict, closing #59, folding #147) are
+owner-gated. Linux and macOS receive loops do not set `run_failed` yet; #167 is
+WinDivert-specific but the liveness fix deserves the same treatment there.
 
 ### 2026-11-16 - WF-059: GitHub feedback audit - two process bugs, one real fleet signal, one community PR
 
