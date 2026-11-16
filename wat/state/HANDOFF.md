@@ -66,30 +66,66 @@ the eight community relays are sponsor-funded (decision 2026-09-13).
    Existing worktrees may still be CRLF until re-checkout; single-line edit
    anchors and the DSH edit tool work either way.
 
-## Verified state at this handoff
+## Verified state at this handoff (2026-11-16, WF-066)
 
-This session changed agent infrastructure, not product code. `tools/Check-LightSpeed.ps1
--SkipGui -SkipBuild` passed: fmt clean; workspace clippy (`--all-targets
---all-features --exclude lightspeed-gui`) clean; `cargo test --workspace --all
---exclude lightspeed-gui` **1,444 passed / 0 failed / 6 ignored across 29
-suites**. `cargo audit` and `cargo deny` are not installed here and were reported
-as skipped (CI owns them); the GUI gates were skipped because no GUI source
-changed; the localization gates need CPython. Product state remains what the
-newest phase entries describe: 1.8.4 shipped, the ARC Raiders transport split
-implemented, the live join through it still the open proof. Packaging: Chocolatey
-pushed and awaiting moderation, winget pending.
+- Branch `master` at `bc6177d` (WF-066 `76fb04b` + the cross-server ping-keying
+  fix). Working tree clean; CI green on both commits (14/14 jobs, including
+  `QUIC Integration Tests` and `Infra Script Tests`).
+- Lead gate: fmt/clippy clean; workspace **1,508 passed / 0 failed / 6 ignored**
+  across 29 suites; GUI **181/0/1**; WinDivert feature **1,261/0/4**; QUIC lib
+  **857/0/1**.
+- Product: 1.10.3 released; master carries unreleased work - relay-watchdog fix,
+  fallback state contract, validated server-leg signal + honest route surface,
+  canonical whole-path ranking key, app-telemetry publication gate, monitor
+  instrument fixes.
+- Live validation on the owner's ROB RUN: quiet-flow v1 falsified for chatty
+  games (2 accepted samples / 17 min), shadow sampler 0.49% acceptance, route
+  surface honest (prior/bound states), 0 watchdog fallbacks, 0 relay changes.
+- Agent layer: durable-owner policy is in `wat/team-mode.md` Step 2 (reuse an idle
+  persona instance; spawn only for parallel same-persona work, contaminated
+  context, or an unusable instance). The active roster and retired instances are
+  in the 2026-11-16 decision entry. Team instances are **session-scoped**: a new
+  session starts with the same policy but fresh instances.
+
+## Next session: ALPN client-first (WF-067)
+
+Read `docs/quic-alpn-rollout.md` first (why it is a defect §1, the versioned
+identifier §2, the compatibility matrix §3, stages §4, exact changes §5, tests
+§6, observability §7, owner gates §11, tasks §13). The control plane currently
+sets no ALPN on either side; the plan is `lightspeed-control/1`, client offers it
+and retries once with an empty list on alert 120, relay gains
+`[network] control_alpn = "off" | "required"` (default off), then canary/fleet
+flips.
+
+Board: task-26 (protocol + client offer/fallback/observability) and task-27
+(relay mode + matrix tests) are **ready** and can run in parallel; task-30 (user
+docs) is blocked on task-26; task-28 (interop test in CI) and task-29 (manual
+two-relay evidence) are blocked on 26+27; task-4 (operator procedure) is blocked
+on task-27. **Writing the code/tests/docs needs no owner approval** (§11) - only
+the stage-1 client release and each per-relay `required` flip are owner gates.
+Suggested shape: two `rust-dev` instances for 26/27, then `infra-dev` for 28,
+`qa-engineer` for 29, `interface-designer` for 30; Lead integrates, re-gates,
+pushes, records state. The POSIX relay smoke script cannot run on this Windows
+host - CI is the verifier.
+
+**Do not ask for a Discord webhook.** The owner does not use Discord; monitor
+alerts surface as scheduled-workflow failures/logs (decided 2026-11-16).
 
 ## What still needs to happen (ranked)
 
-1. **Re-run the full gate after any code change** — the migration touched docs,
-   state and scripts, not product code.
-2. **Localization port** — the `.sh` wrappers are now `.py` entry points plus a
-   PowerShell runner; proving them on this host needs CPython installed (owner
-   decision) or CI.
-3. **Owner-gated channels** — Chocolatey moderation, winget PR, product calls
-   (#137 Minecraft, #59 Fortnite). Surface as one crisp question.
-4. **Keep the state protocol** — one dated entry per round, decisions in
-   `decisions/<YYYY-MM>.md`, history moved to `phases/` rather than deleted.
+1. **ALPN stages A/B/F** (board 26/27/30), then 28/29, then task-4 procedure.
+   Owner gates remain the stage-1 release and per-relay flips.
+2. **Owner decisions**: stage-1 release; each `required` relay flip; public
+   #140/#147 replies describing the client-first order; the release decision for
+   the accumulated unreleased work.
+3. **Small cleanups**: translation debt 7x8, `docs/architecture.md` selector
+   one-liner, `pooled_estimate` test-only, and the recorded ICMP-blocked-server
+   watchdog behaviour if it recurs.
+4. **v2 relay-vantage probe**: NO-GO until its fixed gates G1-G5 are measured
+   with fleet access (`docs/relay-server-leg-probe.md`).
+5. **Keep the state protocol** - one dated entry per round, decisions in
+   `decisions/<YYYY-MM>.md`, history moved to `phases/` rather than deleted, and
+   the durable-owner team policy in `wat/team-mode.md` Step 2.
 
 ## Pain points
 
