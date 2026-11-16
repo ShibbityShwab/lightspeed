@@ -274,7 +274,7 @@ call. Marking is off by default.
 
 ## Control Plane Protocol (QUIC)
 
-The control plane uses binary-encoded messages over QUIC (feature-gated behind `quic`):
+The control plane uses binary-encoded messages over QUIC (feature-gated behind `quic`). The QUIC handshake negotiates the versioned application protocol name `lightspeed-control/1`: a future control-plane revision adds a new name (`lightspeed-control/2`, ...) while `/1` stays supported, and this ALPN version is independent of the data-plane `PROTOCOL_VERSION` in the tunnel header.
 
 ### Message Types
 

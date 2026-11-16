@@ -1,10 +1,18 @@
 # Versioned ALPN for the QUIC control plane — rollout plan
 
-> **Status: plan only.** No production code and no wire change have been made for
-> this document. Stages 1 and later in §4 are **owner-gated** because they change
-> the TLS ClientHello on a released binary or the handshake policy of a relay.
-> Evidence for every claim here: `wat/evidence/2026-11-16/alpn/` (gitignored, on
-> the machine that produced this plan). Diagnosis background:
+> **Status: stages 1 and 2 implemented, unreleased.** On 2026-11-16 the client
+> (offer + one-shot empty-offer fallback + per-relay memory + observability),
+> the relay (`[network] control_alpn = "off" | "required"` + handshake
+> observability), the user docs, the cross-crate interop test and the manual
+> two-relay check all landed in the working tree (WF-067); §1 describes the
+> **pre-implementation** state at `787a8b8` and is kept as the diagnosis.
+> **Stages 1 and later in §4 remain owner-gated**: the stage-1 *release* puts the
+> ALPN extension on the wire in a released client, and every per-relay
+> `required` flip is a separate decision. Implementation status per §13 task is
+> at the end of §13. Evidence for the plan's claims:
+> `wat/evidence/2026-11-16/alpn/` (gitignored, on the machine that produced this
+> plan); evidence for the implementation: `wat/evidence/2026-11-16/wf067-*/`.
+> Diagnosis background:
 > [`docs/github-feedback-audit-2026-11-16.md`](github-feedback-audit-2026-11-16.md)
 > §3 (`#140`/`#147`).
 
@@ -344,8 +352,15 @@ At HEAD these execute tier 1 (paths in
 | `Check & Test` (`ci.yml:38-39`) | `cargo test --workspace` (default features) | the non-`quic` build still compiles once the ALPN code is gated |
 | `Proxy QUIC Smoke` (`ci.yml:41-58`) | [`infra/scripts/test_proxy_quic_smoke.sh`](../infra/scripts/test_proxy_quic_smoke.sh) | **extend it**: the release binary's startup line must contain `alpn=off` (and later `alpn=required`), so the shipped artifact proves its own mode — this is the only gate that exercises the release binary, not the test build |
 
-**Gap this plan must close (its own task, §13 task C).** Every quic-gated
-integration test file in the workspace is dead weight in CI today:
+**Gap this plan had to close (its own task, §13 task C) — closed 2026-11-16.**
+The `QUIC Integration Tests` job (`ci.yml`, added in WF-065) runs
+`cargo test -p lightspeed-client -p lightspeed-proxy --features quic --tests
+--no-fail-fast`, and `proxy/tests/integration_alpn.rs` (WF-067) proves the
+§3 rows C→C′, D and B across a real process boundary inside it. It also caught
+a pre-existing harness assumption: `client/tests/control_reconnect.rs` counted
+a rejected fallback probe as a connection, so its reconnect test was fixed to
+count handshake-completed connections. When this plan was written, every
+quic-gated integration test file in the workspace was dead weight in CI:
 
 - `Cargo.lock`/manifests: `default = []` for both `lightspeed-client` and
   `lightspeed-proxy`.
@@ -414,11 +429,13 @@ quic_port = 14433
 quic_port = 15433
 '@ | Set-Content client-b.toml
 
-$env:RUST_LOG = "lightspeed_client=debug,rustls=debug,quinn=info"
+# Debug detail comes from --verbose: both binaries hard-code the tracing filter
+# from the flag and never read RUST_LOG (measured 2026-11-16, stage D). Without
+# it the offer/fallback DEBUG lines are absent and only the INFO outcome shows.
 # 1) new client vs OLD relay: must succeed on attempt 2 and log the fallback once.
-target\release\lightspeed.exe --test-control --proxy 127.0.0.1:14434 --config client-a.toml
+target\release\lightspeed.exe --test-control --verbose --proxy 127.0.0.1:14434 --config client-a.toml
 # 2) new client vs NEW relay: must succeed on attempt 1 with ALPN negotiated.
-target\release\lightspeed.exe --test-control --proxy 127.0.0.1:15434 --config client-b.toml
+target\release\lightspeed.exe --test-control --verbose --proxy 127.0.0.1:15434 --config client-b.toml
 # 3) relay self-check, both modes (the health port is the one bound above):
 curl.exe -s http://127.0.0.1:18080/health    # relay A -> control_alpn: "off"
 curl.exe -s http://127.0.0.1:19080/health    # relay B -> control_alpn: "required"
@@ -440,10 +457,15 @@ Expected, recorded as the acceptance of the check:
    plus a non-zero `lightspeed_control_handshakes_total{outcome="rejected..."}`.
    This is the population that stage 3 breaks; step 4 is how a canary measures it.
 
-**What is not verified by this plan:** no build, no run, and no interop test was
-executed while writing it. The matrix in §3 is proven from the vendored rustls
-sources (transcripts in `wat/evidence/2026-11-16/alpn/rustls-alpn-negotiation.txt`),
-not from a live handshake.
+**What the plan itself did not verify:** no build, no run, and no interop test was
+executed while writing it; the matrix in §3 was proven from the vendored rustls
+sources (transcripts in `wat/evidence/2026-11-16/alpn/rustls-alpn-negotiation.txt`).
+The live check was executed later, in stage D (2026-11-16): all four §6.5
+observations passed on this Windows host against the new builds and the official
+v1.10.3 client (which fails against a `required` relay with alert 120 and the
+relay logs/counts the rejection). Evidence:
+`wat/evidence/2026-11-16/wf067-d-interop/`. Still unverified: WAN/middlebox
+paths, IPv6, and the §7.4 canary window (owner-gated, not run).
 
 ---
 
@@ -463,7 +485,7 @@ not from a live handshake.
 | Event | Level | Exact fields / text |
 |---|---|---|
 | startup | `info` | existing `QUIC control plane listening on <addr> (node=..., auth=..., alpn=off)` or `alpn=required (lightspeed-control/1)` |
-| handshake rejected | `warn` | `remote=<ip:port> error=<quinn error> reason=no_application_protocol` (or `reason=other`) |
+| handshake rejected | `warn` | `remote=<ip:port> error=<quinn error> reason="no_application_protocol"` (or `reason="other"`; tracing renders the field value quoted) |
 | per-connection outcome | counter | `lightspeed_control_handshakes_total{outcome=…}` on `GET /metrics`, with `outcome` ∈ `negotiated_v1`, `no_alpn`, `rejected_no_application_protocol`, `rejected_other` |
 | mode | JSON | `control_alpn` field in `GET /health` |
 
@@ -705,6 +727,17 @@ Dependencies: A and B can run in parallel; C depends on A and B (it needs the
 test to exist); D depends on A and B; E depends on B; F depends on the final
 wording chosen in A. No task edits relay production config; stage 3/4 flips are
 owner-gated operations, not code changes.
+
+**Implementation status (2026-11-16, WF-067).** A - done (`protocol/` constant +
+client offer/fallback/memory/observability, unit + mutation checked); B - done
+(relay `control_alpn`, rejection warn + counters, `/health`, five §6.3 matrix
+tests, smoke-script mode assertion); C - done (cross-crate
+`proxy/tests/integration_alpn.rs` in the `QUIC Integration Tests` job, plus the
+`control_reconnect` harness fix that job exposed); D - done (all four §6.5
+observations, including the official v1.10.3 client against a `required` relay);
+F - done (four user docs, alert-120 now means middlebox **or** version skew);
+E - open. Nothing is released and no relay is configured `required`: the
+stage-1 release and every per-relay flip remain owner decisions (§11).
 
 ---
 

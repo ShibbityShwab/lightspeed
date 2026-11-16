@@ -301,7 +301,13 @@ commit message "fix(client): surface a dead data plane and explain QUIC alert
   120 now produces the verdict that the responder cannot be a LightSpeed relay
   and is likely a QUIC-intercepting VPN/AV/ISP, instead of leaving the reader on
   rustls's wording. The client's `ALPN=[]` offer is logged once for comparison
-  with a capture.
+  with a capture. **Correction (2026-11-16, WF-067):** that verdict and the
+  `ALPN=[]` log line are superseded once relays can require ALPN. The client now
+  offers `lightspeed-control/1` and falls back once to an empty offer, logs the
+  actual offer and the negotiated `alpn=<name>|none`, and a 120 after the retry
+  names **both** causes (intercepting middlebox **or** ALPN version skew) without
+  claiming the responder is not a relay. See `docs/quic-alpn-rollout.md` and the
+  alert-120 entry in `docs/troubleshooting.md`.
 - **Still open.** The ALPN migration itself is wire-breaking: it needs the
   client-with-fallback release first, then relays, and an owner decision (the
   decision-ready plan is now `docs/quic-alpn-rollout.md`). `relay-fra`'s

@@ -32,6 +32,7 @@ Welcome to the LightSpeed documentation wiki - synced from the [source repo](htt
 |----------|-------------|
 | [Architecture](architecture) | System design and data flow |
 | [Protocol](protocol) | Wire protocol specification |
+| [QUIC ALPN Rollout](quic-alpn-rollout) | Versioned control-plane ALPN: compatibility matrix and staged rollout plan |
 | [Security Audit](security-audit-mvp) | MVP security review |
 
 ## 📋 Reference

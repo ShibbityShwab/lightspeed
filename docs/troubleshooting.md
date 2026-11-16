@@ -97,6 +97,56 @@ If unreachable:
 - Check firewall allows UDP 4434 and TCP 8080
 - Check the proxy logs: `journalctl -u lightspeed-proxy --tail 50`
 
+### QUIC control plane fails with `error 120` / `no_application_protocol`
+
+The client could not complete the QUIC control-plane handshake with a relay. When the
+one-shot empty-offer retry has also failed, the log ends with this verdict (quoted
+verbatim from the client; `{err}` is the underlying QUIC error and `{addr}` the
+responder address):
+
+```text
+{err}: the responder at {addr} closed the QUIC handshake with TLS alert 120 (no_application_protocol), and the empty-offer retry also failed. The client cannot tell these two causes apart from the handshake alone: (1) a QUIC-intercepting middlebox on this path (VPN/AV/ISP) that does not carry the ALPN extension (see #140); or (2) a LightSpeed relay on a different ALPN revision -- version skew, where the relay requires an ALPN name this client does not offer.
+```
+
+**What the client already did.** Current clients always offer the versioned ALPN name
+`lightspeed-control/1`. If the relay answers with TLS alert 120, the client retries
+**once** with an empty ALPN offer and then remembers that relay's answer for the rest
+of the process, so in normal client operation the doomed extra handshake happens at
+most once per relay per launch. A successful fallback is normal against a relay that
+has not been upgraded (the relay default is `[network] control_alpn = "off"`): the
+`QUIC connection established` line shows `alpn=none`, and registration proceeds.
+
+**What the final failure means.** The empty-offer retry failed too, so there are
+exactly two possibilities and the handshake alone cannot tell them apart:
+
+1. **A QUIC-intercepting middlebox on your path** - a VPN, antivirus/firewall with
+   HTTPS/QUIC inspection, or ISP equipment that does not carry the ALPN extension
+   ([#140](https://github.com/ShibbityShwab/lightspeed/issues/140)). If every relay
+   fails on one network but the same relays work on another, the path is the common
+   factor.
+2. **Version skew** - the relay requires an ALPN revision this client does not offer
+   (for example a relay set to `control_alpn = "required"` and running a protocol
+   revision newer than this client). This fails loudly by design, never as a silent
+   downgrade: a current client against a relay on `lightspeed-control/1` negotiates,
+   and a relay requiring anything this client does not offer rejects it with 120.
+
+**How to narrow it down:**
+
+- Run `lightspeed-client --test-control --proxy <relay-ip>` to see which stage that
+  relay is at. The `alpn=` value on the connected line and in the final summary is the
+  negotiated application protocol: `lightspeed-control/1` means the relay accepted the
+  versioned offer, `none` means it accepted an empty offer after the fallback (an older
+  relay), and a run that fails with this section's verdict is the case above.
+- If every relay fails on this network but the same relays work elsewhere, suspect the
+  middlebox: disable the VPN or the security product's HTTPS/QUIC inspection and retry,
+  then attach a UDP 4433 capture to #140.
+- If only one relay fails, compare that relay's ALPN mode with your client build: the
+  relay's startup line and the `control_alpn` field on its `GET /health` report the
+  configured mode (see [CLI Reference](CLI-REFERENCE.md#proxy-configuration)). If you
+  operate that relay, `control_alpn = "off"` restores the previous behaviour for older
+  clients; the operator procedure and the client-first ordering rule are in
+  [Deploy Proxy](deploy-proxy.md) and the [ALPN rollout plan](quic-alpn-rollout.md).
+
 ### Game disconnects when interceptor starts
 
 The interceptor seizes packets before the game can receive responses, and the inject path fails.

@@ -241,6 +241,7 @@ The proxy reads `proxy.toml`. Its ports are configurable via a `[network]` secti
 data_port    = 4434    # UDP + TCP data plane
 control_port = 4433    # QUIC control plane
 health_port  = 8080    # HTTP health/metrics
+control_alpn = "off"   # QUIC ALPN policy: "off" (default) or "required"
 
 # TCP tunnel (client→proxy over TCP)
 tcp_enabled = true
@@ -249,7 +250,24 @@ tcp_max_connections = 256
 
 > On the **proxy** side the QUIC control-plane port is `[network] control_port`. On the **client** side the matching setting is `[proxy] quic_port`. Both default to 4433 and must agree.
 
-See [Deploy Proxy](deploy-proxy.md) for the full reference.
+`control_alpn` selects the ALPN policy of the relay's QUIC control endpoint:
+
+| Value | Meaning |
+|-------|---------|
+| `"off"` (default) | Serve no ALPN: clients that offer no ALPN handshake normally, and a client that offers one is rejected with TLS alert 120 (a current client then retries once with an empty offer and registers). This is the pre-rollout behaviour byte for byte. |
+| `"required"` | Advertise `lightspeed-control/1` and reject any client that does not negotiate it. Only enable this after clients that offer the name are in the field: pre-ALPN clients have no fallback and stay cut off from that relay until they update. |
+
+An unknown value is a startup error that names the two allowed values and does not
+silently pick one. The relay's startup line (`QUIC control plane listening on ...
+alpn=off` or `alpn=required (lightspeed-control/1)`) and the `control_alpn` field on
+`GET /health` report the mode actually in force.
+
+There is no client-side knob: every current client offers `lightspeed-control/1` first
+and, only when the relay answers with TLS alert 120, retries once with an empty offer
+and remembers that relay's answer for the rest of the process. See the
+[ALPN rollout plan](quic-alpn-rollout.md) for the compatibility matrix and the
+client-first order, and [Deploy Proxy](deploy-proxy.md) for the full relay reference
+and the operator procedure.
 
 ## See Also
 
