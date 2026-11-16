@@ -77,7 +77,7 @@ pub(crate) mod warp;
 pub mod test_support {
     pub use crate::quic::{
         is_supervised, register_session, register_session_with_destination, report_destination,
-        stop_supervisor,
+        stop_supervisor, ControlClient,
     };
     pub use crate::session::{path_token, session_token};
 

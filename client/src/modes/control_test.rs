@@ -31,12 +31,20 @@ pub async fn run_control_test(
         .await
         .map_err(|e| anyhow::anyhow!("QUIC connect failed: {}", e))?;
 
+    // The negotiated application protocol is the one-line proof of the relay's
+    // rollout stage: `none` is a pre-ALPN relay, `lightspeed-control/1` is an
+    // upgraded one (docs/quic-alpn-rollout.md §6.5).
+    let negotiated_alpn = client
+        .negotiated_alpn()
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .unwrap_or_else(|| "none".to_string());
     info!(
-        "   ✓ Connected! session={:?} token={:?} node={:?} region={:?}",
+        "   ✓ Connected! session={:?} token={:?} node={:?} region={:?} alpn={}",
         client.session_id(),
         client.session_token(),
         client.node_id(),
         client.region(),
+        negotiated_alpn,
     );
 
     // Ping test (5 pings)
@@ -80,7 +88,10 @@ pub async fn run_control_test(
         .map_err(|e| anyhow::anyhow!("Disconnect failed: {}", e))?;
     info!("   ✓ Disconnected");
 
-    info!("🧪 QUIC control plane test complete");
+    info!(
+        "🧪 QUIC control plane test complete (alpn={})",
+        negotiated_alpn
+    );
     if rtts.len() == 5 {
         info!("   ✅ Control plane is working!");
     } else {

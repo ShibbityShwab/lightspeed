@@ -58,6 +58,11 @@ libc = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"
+# The cross-crate ALPN interop test (tests/integration_alpn.rs) drives the real
+# client offer/fallback path against a real ControlServer; see
+# docs/quic-alpn-rollout.md §6.4 tier 2. No cycle: lightspeed-client does not
+# depend on lightspeed-proxy.
+lightspeed-client = { path = "../client", features = ["quic"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]

@@ -33,6 +33,9 @@ pub struct HealthResponse {
     pub uptime_secs: u64,
     pub region: String,
     pub node_id: String,
+    /// Configured QUIC control-plane ALPN policy: `"off"` or `"required"`.
+    /// A monitor reads the mode here instead of parsing the startup log.
+    pub control_alpn: &'static str,
     pub packets_relayed: u64,
     pub packets_dropped: u64,
     pub drops_malformed: u64,
@@ -223,6 +226,7 @@ pub async fn run_health_server(
                         uptime_secs: start_time.elapsed().as_secs(),
                         region: region.clone(),
                         node_id: node_id.clone(),
+                        control_alpn: metrics.control_alpn().as_str(),
                         packets_relayed: metrics.packets_relayed.load(Ordering::Relaxed),
                         packets_dropped: metrics.packets_dropped.load(Ordering::Relaxed),
                         drops_malformed: metrics.drops_malformed.load(Ordering::Relaxed),
@@ -308,6 +312,7 @@ mod tests {
             uptime_secs: 0,
             region: "test-region".to_string(),
             node_id: "test-node".to_string(),
+            control_alpn: "off",
             packets_relayed: 0,
             packets_dropped: 0,
             drops_malformed: 0,
@@ -400,6 +405,7 @@ mod tests {
             uptime_secs: 0,
             region: "us-west".to_string(),
             node_id: "local-test".to_string(),
+            control_alpn: "required",
             packets_relayed: 0,
             packets_dropped: 28,
             drops_malformed: 1,
@@ -429,12 +435,28 @@ mod tests {
             "drops_session_setup",
             "drops_relay_send_errors",
             "drops_egress_budget",
+            "control_alpn",
         ] {
             assert!(
                 json.contains(&format!("\"{key}\"")),
                 "missing {key}: {json}"
             );
         }
+    }
+
+    /// The relay's ALPN mode must be readable as data, not only as a log line:
+    /// an operator or monitor decides "stage 2 vs stage 3" from this field
+    /// (docs/quic-alpn-rollout.md §7.2/§7.3).
+    #[test]
+    fn health_reports_the_control_alpn_mode() {
+        let mut response = sample_response();
+        assert_eq!(response.control_alpn, "off");
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"control_alpn\":\"off\""), "{json}");
+
+        response.control_alpn = crate::config::ControlAlpn::Required.as_str();
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"control_alpn\":\"required\""), "{json}");
     }
 
     #[test]
@@ -446,6 +468,7 @@ mod tests {
             uptime_secs: 0,
             region: "test".to_string(),
             node_id: "test".to_string(),
+            control_alpn: "off",
             packets_relayed: 0,
             packets_dropped: 0,
             drops_malformed: 0,

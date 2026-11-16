@@ -3092,6 +3092,7 @@ dependencies = [
  "clap",
  "criterion",
  "libc",
+ "lightspeed-client",
  "lightspeed-protocol",
  "maxminddb",
  "quinn",

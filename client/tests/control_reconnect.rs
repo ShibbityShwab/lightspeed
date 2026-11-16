@@ -91,14 +91,24 @@ impl TestServer {
         let accept_registrations = Arc::clone(&registrations);
         let accept_tokens = Arc::clone(&tokens);
         tokio::spawn(async move {
-            let mut connection_index = 0usize;
+            // Index completed handshakes, not accept() calls. Since the ALPN
+            // rollout (stage A) a new client offers `lightspeed-control/1` first,
+            // and a relay built before the rollout -- this test server's rustls
+            // config has no `alpn_protocols` -- answers with TLS alert 120, so
+            // the client retries once with an empty offer
+            // (docs/quic-alpn-rollout.md §3 row C -> C'). That rejected
+            // handshake arrives as an `Incoming` but is not a connection: if it
+            // consumed index 0, `close_first_after_ack` would stop closing the
+            // first established connection and the reconnect this test is about
+            // would never happen.
+            let served = Arc::new(AtomicUsize::new(0));
             while let Some(incoming) = accept_endpoint.accept().await {
-                let index = connection_index;
-                connection_index += 1;
                 let registrations = Arc::clone(&accept_registrations);
                 let tokens = Arc::clone(&accept_tokens);
+                let served = Arc::clone(&served);
                 tokio::spawn(async move {
                     if let Ok(connection) = incoming.await {
+                        let index = served.fetch_add(1, Ordering::SeqCst);
                         serve_connection(
                             connection,
                             index,

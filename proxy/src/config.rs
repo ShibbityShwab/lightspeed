@@ -62,6 +62,84 @@ pub struct NetworkConfig {
     /// TCP read timeout in seconds (idle connections are closed).
     #[serde(default = "default_tcp_read_timeout")]
     pub tcp_read_timeout_secs: u64,
+
+    /// QUIC control-plane ALPN policy: "off" (default) or "required".
+    ///
+    /// An unknown value fails config loading at startup with a message naming
+    /// the two allowed values; there is no silent fallback.
+    #[serde(default)]
+    pub control_alpn: ControlAlpn,
+}
+
+/// QUIC control-plane ALPN policy.
+///
+/// This is the one knob that decides whether the relay's control endpoint
+/// advertises a versioned application protocol. It has no "optional" state on
+/// purpose: one quinn endpoint uses one rustls `ServerConfig`, and a non-empty
+/// ALPN list makes the relay reject ALPN-less clients (TLS alert 120). Serving
+/// both policies at once would need a second endpoint on a second port, which
+/// the ALPN rollout plan defers.
+///
+/// - `Off` (default): today's behaviour, byte for byte. `alpn_protocols` stays
+///   empty, so ALPN-less clients are accepted and clients that *do* offer ALPN
+///   are rejected.
+/// - `Required`: advertise `lightspeed-control/1` and reject any client that
+///   does not negotiate it.
+///
+/// Only switch a relay to `Required` after the client that offers the name and
+/// falls back to an empty list is in the field (see
+/// `docs/quic-alpn-rollout.md` §3): the reverse order breaks every installed
+/// client of that relay with no recovery path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ControlAlpn {
+    /// No ALPN on the control plane (pre-rollout behaviour).
+    #[default]
+    Off,
+    /// Require `lightspeed-control/1` on every control handshake.
+    Required,
+}
+
+impl ControlAlpn {
+    /// The value as written in `[network] control_alpn`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Required => "required",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ControlAlpn {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ControlAlpnVisitor;
+
+        impl serde::de::Visitor<'_> for ControlAlpnVisitor {
+            type Value = ControlAlpn;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("\"off\" or \"required\"")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "off" => Ok(ControlAlpn::Off),
+                    "required" => Ok(ControlAlpn::Required),
+                    other => Err(E::custom(format!(
+                        "invalid [network] control_alpn value {other:?}: allowed values are \"off\" and \"required\""
+                    ))),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(ControlAlpnVisitor)
+    }
 }
 
 /// Server identity and general settings.
@@ -311,6 +389,7 @@ impl Default for NetworkConfig {
             tcp_enabled: true,
             tcp_max_connections: default_tcp_max_connections(),
             tcp_read_timeout_secs: default_tcp_read_timeout(),
+            control_alpn: ControlAlpn::Off,
         }
     }
 }
@@ -482,6 +561,64 @@ mmdb_path = "/tmp/custom.mmdb"
 
         let empty: ProxyConfig = toml::from_str("").unwrap();
         assert!(!empty.budget.enabled);
+    }
+
+    #[test]
+    fn test_control_alpn_defaults_to_off() {
+        assert_eq!(NetworkConfig::default().control_alpn, ControlAlpn::Off);
+        assert_eq!(
+            ProxyConfig::default().network.control_alpn,
+            ControlAlpn::Off
+        );
+
+        let empty: ProxyConfig = toml::from_str("").unwrap();
+        assert_eq!(empty.network.control_alpn, ControlAlpn::Off);
+        assert_eq!(empty.network.control_alpn.as_str(), "off");
+    }
+
+    #[test]
+    fn test_parse_control_alpn_modes() {
+        let off: ProxyConfig = toml::from_str(
+            r#"
+[network]
+control_alpn = "off"
+"#,
+        )
+        .unwrap();
+        assert_eq!(off.network.control_alpn, ControlAlpn::Off);
+
+        let required: ProxyConfig = toml::from_str(
+            r#"
+[network]
+control_alpn = "required"
+"#,
+        )
+        .unwrap();
+        assert_eq!(required.network.control_alpn, ControlAlpn::Required);
+        assert_eq!(required.network.control_alpn.as_str(), "required");
+    }
+
+    #[test]
+    fn test_control_alpn_rejects_an_unknown_value_naming_the_allowed_ones() {
+        // A typo must fail config loading at startup, not silently pick a mode:
+        // the difference between the two modes is "accepts old clients" vs
+        // "rejects them".
+        let error = toml::from_str::<ProxyConfig>(
+            r#"
+[network]
+control_alpn = "optional"
+"#,
+        )
+        .expect_err("an unknown control_alpn value must be a config error");
+        let message = error.to_string();
+        assert!(
+            message.contains("optional"),
+            "the error must name the rejected value: {message}"
+        );
+        assert!(
+            message.contains("allowed values are \"off\" and \"required\""),
+            "the error must name both allowed values: {message}"
+        );
     }
 
     #[test]

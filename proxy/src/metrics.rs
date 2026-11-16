@@ -11,6 +11,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use crate::config::ControlAlpn;
 use crate::geo::GeoSide;
 
 /// Latency histogram bucket boundaries (microseconds).
@@ -400,6 +401,47 @@ pub enum DropReason {
     EgressBudget,
 }
 
+/// Outcome of one QUIC control-plane handshake.
+///
+/// Partitioned so the four counters always sum to the number of accepted plus
+/// rejected control handshakes observed since process start, and exported as
+/// `lightspeed_control_handshakes_total{outcome=...}`. Every variant is exported
+/// even at zero, so a canary can read `rejected_no_application_protocol == 0`
+/// as "clean window" instead of "series absent".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlHandshakeOutcome {
+    /// The handshake agreed on a control ALPN this build offers (revision 1).
+    NegotiatedV1,
+    /// The handshake completed with no ALPN: the relay is in `off` mode and the
+    /// client offered none (pre-rollout pairing).
+    NoAlpn,
+    /// The handshake failed with TLS alert 120 (`no_application_protocol`).
+    /// This is the pre-ALPN-client breakage signal a canary watches.
+    RejectedNoApplicationProtocol,
+    /// The handshake failed for any other reason (timeout, transport error, ...).
+    RejectedOther,
+}
+
+impl ControlHandshakeOutcome {
+    /// Every outcome, in export order.
+    pub const ALL: [Self; 4] = [
+        Self::NegotiatedV1,
+        Self::NoAlpn,
+        Self::RejectedNoApplicationProtocol,
+        Self::RejectedOther,
+    ];
+
+    /// The `outcome` label value for this variant.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NegotiatedV1 => "negotiated_v1",
+            Self::NoAlpn => "no_alpn",
+            Self::RejectedNoApplicationProtocol => "rejected_no_application_protocol",
+            Self::RejectedOther => "rejected_other",
+        }
+    }
+}
+
 /// Proxy metrics collector.
 /// A client's self-reported trained route model quality, used for the
 /// website "trained on" hero. `trained_at == 0` means the client never
@@ -478,6 +520,20 @@ pub struct ProxyMetrics {
     pub sessions_created: AtomicU64,
     /// Total sessions expired (lifetime).
     pub sessions_expired: AtomicU64,
+
+    // ── QUIC control-plane handshake outcomes (ALPN rollout) ─────
+    /// Control handshakes that negotiated `lightspeed-control/1`.
+    pub control_handshakes_negotiated_v1: AtomicU64,
+    /// Control handshakes that completed with no ALPN (relay `off` mode).
+    pub control_handshakes_no_alpn: AtomicU64,
+    /// Control handshakes rejected with TLS alert 120
+    /// (`no_application_protocol`).
+    pub control_handshakes_rejected_no_application_protocol: AtomicU64,
+    /// Control handshakes rejected for any other reason.
+    pub control_handshakes_rejected_other: AtomicU64,
+    /// Configured `[network] control_alpn` policy, published once at startup so
+    /// `/health` can report the mode it is served with.
+    control_alpn: std::sync::OnceLock<ControlAlpn>,
 
     // ── Inbound batch metrics (recvmmsg effectiveness) ───────────
     /// Number of inbound receive syscalls (batches).  On Linux with recvmmsg
@@ -560,6 +616,11 @@ impl ProxyMetrics {
             egress_budget_soft_events: AtomicU64::new(0),
             sessions_created: AtomicU64::new(0),
             sessions_expired: AtomicU64::new(0),
+            control_handshakes_negotiated_v1: AtomicU64::new(0),
+            control_handshakes_no_alpn: AtomicU64::new(0),
+            control_handshakes_rejected_no_application_protocol: AtomicU64::new(0),
+            control_handshakes_rejected_other: AtomicU64::new(0),
+            control_alpn: std::sync::OnceLock::new(),
             inbound_batches_total: AtomicU64::new(0),
             inbound_packets_received: AtomicU64::new(0),
             socket_opts_applied: AtomicU64::new(0),
@@ -919,6 +980,54 @@ impl ProxyMetrics {
         self.sessions_expired.fetch_add(count, Ordering::Relaxed);
     }
 
+    /// Count one QUIC control-plane handshake outcome.
+    ///
+    /// Exactly one counter moves per accepted or rejected control handshake, so
+    /// the four `lightspeed_control_handshakes_total` series partition the
+    /// handshakes this process observed.
+    pub fn record_control_handshake(&self, outcome: ControlHandshakeOutcome) {
+        let counter = match outcome {
+            ControlHandshakeOutcome::NegotiatedV1 => &self.control_handshakes_negotiated_v1,
+            ControlHandshakeOutcome::NoAlpn => &self.control_handshakes_no_alpn,
+            ControlHandshakeOutcome::RejectedNoApplicationProtocol => {
+                &self.control_handshakes_rejected_no_application_protocol
+            }
+            ControlHandshakeOutcome::RejectedOther => &self.control_handshakes_rejected_other,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Current count for one control-handshake outcome.
+    pub fn control_handshake_count(&self, outcome: ControlHandshakeOutcome) -> u64 {
+        match outcome {
+            ControlHandshakeOutcome::NegotiatedV1 => self
+                .control_handshakes_negotiated_v1
+                .load(Ordering::Relaxed),
+            ControlHandshakeOutcome::NoAlpn => {
+                self.control_handshakes_no_alpn.load(Ordering::Relaxed)
+            }
+            ControlHandshakeOutcome::RejectedNoApplicationProtocol => self
+                .control_handshakes_rejected_no_application_protocol
+                .load(Ordering::Relaxed),
+            ControlHandshakeOutcome::RejectedOther => self
+                .control_handshakes_rejected_other
+                .load(Ordering::Relaxed),
+        }
+    }
+
+    /// Publish the configured `[network] control_alpn` policy for `/health`.
+    ///
+    /// The mode is a startup fact that never changes for the life of the
+    /// process, so the first publication wins and later calls are ignored.
+    pub fn set_control_alpn(&self, mode: ControlAlpn) {
+        let _ = self.control_alpn.set(mode);
+    }
+
+    /// The configured control-plane ALPN policy; `off` until published.
+    pub fn control_alpn(&self) -> ControlAlpn {
+        self.control_alpn.get().copied().unwrap_or_default()
+    }
+
     /// Publish the current egress budget state.
     ///
     /// `soft_first` is true only on the evaluation that first crosses the soft
@@ -1259,6 +1368,25 @@ impl ProxyMetrics {
             labels,
             self.sessions_expired.load(Ordering::Relaxed)
         ));
+
+        // ── QUIC control-plane handshake outcomes ───────────────
+        //
+        // All four series are emitted from process start, including at zero:
+        // the stage-3 gate in docs/quic-alpn-rollout.md §7.4 reads
+        // `rejected_no_application_protocol == 0` as a pass, which is only
+        // decidable if the series exists before the first rejection.
+        out.push_str(
+            "# HELP lightspeed_control_handshakes_total QUIC control-plane handshake outcomes by outcome (negotiated_v1, no_alpn, rejected_no_application_protocol, rejected_other); rejected_no_application_protocol (TLS alert 120) is the pre-ALPN client breakage signal\n",
+        );
+        out.push_str("# TYPE lightspeed_control_handshakes_total counter\n");
+        for outcome in ControlHandshakeOutcome::ALL {
+            out.push_str(&format!(
+                "lightspeed_control_handshakes_total{{{},outcome=\"{}\"}} {}\n",
+                labels,
+                outcome.as_str(),
+                self.control_handshake_count(outcome)
+            ));
+        }
 
         // ── Inbound batch metrics ───────────────────────────────
         out.push_str(
@@ -2726,5 +2854,72 @@ mod tests {
         assert!(output.contains(
             "lightspeed_model_trained_at{region=\"test\",node_id=\"test-node\"} 1700000500"
         ));
+    }
+
+    /// Given: a fresh process. When: metrics are rendered. Then: all four
+    /// control-handshake outcome series exist at zero, so the stage-3 canary
+    /// gate (docs/quic-alpn-rollout.md §7.4) can read "no rejection yet" from
+    /// the series rather than from its absence.
+    #[test]
+    fn control_handshake_outcomes_are_exported_at_zero() {
+        let m = ProxyMetrics::new();
+        let output = m.to_prometheus("us-west", "relay-1");
+
+        assert!(output.contains("# TYPE lightspeed_control_handshakes_total counter"));
+        for outcome in ControlHandshakeOutcome::ALL {
+            assert!(
+                output.contains(&format!(
+                    "lightspeed_control_handshakes_total{{region=\"us-west\",node_id=\"relay-1\",outcome=\"{}\"}} 0",
+                    outcome.as_str()
+                )),
+                "missing zero series for {}: {output}",
+                outcome.as_str()
+            );
+        }
+    }
+
+    /// Given: one handshake of each kind. When: metrics are rendered. Then:
+    /// each outcome maps to its own series and nothing else moves.
+    #[test]
+    fn control_handshake_outcomes_count_each_class_separately() {
+        let m = ProxyMetrics::new();
+        for outcome in ControlHandshakeOutcome::ALL {
+            m.record_control_handshake(outcome);
+        }
+        m.record_control_handshake(ControlHandshakeOutcome::NegotiatedV1);
+
+        let output = m.to_prometheus("us-west", "relay-1");
+        for (outcome, expected) in [
+            (ControlHandshakeOutcome::NegotiatedV1, 2),
+            (ControlHandshakeOutcome::NoAlpn, 1),
+            (ControlHandshakeOutcome::RejectedNoApplicationProtocol, 1),
+            (ControlHandshakeOutcome::RejectedOther, 1),
+        ] {
+            assert!(
+                output.contains(&format!(
+                    "lightspeed_control_handshakes_total{{region=\"us-west\",node_id=\"relay-1\",outcome=\"{}\"}} {expected}",
+                    outcome.as_str()
+                )),
+                "wrong count for {}: {output}",
+                outcome.as_str()
+            );
+            assert_eq!(m.control_handshake_count(outcome), expected);
+        }
+    }
+
+    /// The `/health` field is served from this handle, so the configured mode
+    /// must be readable here before any handshake happens.
+    #[test]
+    fn control_alpn_mode_is_published_for_health() {
+        let m = ProxyMetrics::new();
+        assert_eq!(m.control_alpn(), ControlAlpn::Off, "off is the default");
+
+        m.set_control_alpn(ControlAlpn::Required);
+        assert_eq!(m.control_alpn(), ControlAlpn::Required);
+
+        // A second publication (a rebuild of the server state in the same
+        // process) must not rewrite the policy /health is reporting.
+        m.set_control_alpn(ControlAlpn::Off);
+        assert_eq!(m.control_alpn(), ControlAlpn::Required);
     }
 }

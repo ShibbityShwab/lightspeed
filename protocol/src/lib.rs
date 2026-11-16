@@ -44,7 +44,10 @@ pub use fec::{
     FecHeader, FecStats, DEFAULT_BLOCK_SIZE, FEC_HEADER_SIZE, FEC_MAX_PAYLOAD, MAX_BLOCK_SIZE,
 };
 
-pub use control::{caps, disconnect_reason, game_id, ControlDecodeError, ControlMessage};
+pub use control::{
+    caps, disconnect_reason, game_id, quic_control_alpn, ControlDecodeError, ControlMessage,
+    QUIC_CONTROL_ALPN_V1,
+};
 pub use telemetry::TelemetryReport;
 
 #[cfg(test)]

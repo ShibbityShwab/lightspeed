@@ -45,11 +45,12 @@ mod pinning;
 #[cfg(feature = "quic")]
 mod inner {
     use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use quinn::crypto::rustls::QuicClientConfig;
-    use tracing::{debug, info};
+    use tracing::{debug, info, warn};
 
     use lightspeed_protocol::control::ControlMessage;
     use lightspeed_protocol::PROTOCOL_VERSION;
@@ -61,19 +62,102 @@ mod inner {
     /// exchange must not be able to stall pings or the reconnection loop.
     const ROTATE_TIMEOUT: Duration = Duration::from_secs(5);
 
+    /// Process-lifetime memory of how one relay answered the versioned ALPN
+    /// offer.
+    ///
+    /// `docs/quic-alpn-rollout.md` §3 row C: a relay built before the ALPN
+    /// rollout rejects the versioned offer with alert 120; row C' is the same
+    /// client retrying once with an empty list. The supervisor owns one of
+    /// these per relay, so the doomed first attempt happens once per
+    /// (process, relay) pair instead of on every reconnect (§9), and a relay
+    /// upgrade is picked up on the next process start -- the right freshness
+    /// for a capability bit (§5.2). No global, no on-disk cache.
+    #[derive(Debug, Default)]
+    pub(super) struct AlpnMemory {
+        /// Set once this relay closed a handshake with alert 120.
+        empty_offer_only: AtomicBool,
+    }
+
+    impl AlpnMemory {
+        /// The ALPN list to offer this relay on the next attempt.
+        pub(super) fn offer(&self) -> Vec<Vec<u8>> {
+            if self.needs_empty_offer() {
+                Vec::new()
+            } else {
+                lightspeed_protocol::quic_control_alpn()
+            }
+        }
+
+        /// Remember that this relay rejected the versioned offer with alert 120.
+        pub(super) fn record_alert_120(&self) {
+            self.empty_offer_only.store(true, Ordering::Release);
+        }
+
+        /// Whether this relay is known to reject the versioned offer.
+        pub(super) fn needs_empty_offer(&self) -> bool {
+            self.empty_offer_only.load(Ordering::Acquire)
+        }
+    }
+
+    /// Render an ALPN offer for the debug line, e.g. `["lightspeed-control/1"]`.
+    fn alpn_offer_list(alpn: &[Vec<u8>]) -> String {
+        let names: Vec<String> = alpn
+            .iter()
+            .map(|name| format!("{:?}", String::from_utf8_lossy(name)))
+            .collect();
+        format!("[{}]", names.join(", "))
+    }
+
+    /// Render a negotiated protocol for the info line: the name, or `none`.
+    fn alpn_name(alpn: Option<&[u8]>) -> String {
+        match alpn {
+            Some(name) => String::from_utf8_lossy(name).into_owned(),
+            None => "none".to_string(),
+        }
+    }
+
+    /// The application protocol negotiated on an established connection.
+    ///
+    /// `None` means the handshake completed without ALPN, which is proof the
+    /// relay predates the rollout. The handshake data is present once a
+    /// connection is established; a downcast miss can only mean a non-rustls
+    /// QUIC backend, so it is reported as no negotiation rather than guessed.
+    fn negotiated_alpn(conn: &quinn::Connection) -> Option<Vec<u8>> {
+        conn.handshake_data()
+            .and_then(|data| data.downcast::<quinn::crypto::rustls::HandshakeData>().ok())
+            .and_then(|data| data.protocol)
+    }
+
     /// Build a quinn client config that pins the proxy's self-signed
-    /// certificate (trust-on-first-use) and verifies the TLS signature.
-    fn build_client_config(addr: SocketAddr) -> Result<quinn::ClientConfig, QuicError> {
+    /// certificate (trust-on-first-use), verifies the TLS signature, and offers
+    /// `alpn`.
+    ///
+    /// `alpn` is empty for a relay that answered alert 120 earlier in this
+    /// process, and otherwise the versioned control-plane list: an empty list
+    /// sends no ALPN extension at all, which is what a pre-rollout client did.
+    fn build_client_config(
+        addr: SocketAddr,
+        alpn: Vec<Vec<u8>>,
+    ) -> Result<quinn::ClientConfig, QuicError> {
         // quinn pulls rustls with its aws-lc-rs default while this crate (and
         // the pinning verifier) uses ring, so a workspace build has two
         // providers compiled in and `ClientConfig::builder()` panics on
         // auto-detection. Pin ring as the process-wide provider, exactly as the
         // proxy does for its server config.
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let crypto = rustls::ClientConfig::builder()
+        let mut crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(super::pinning::TofuVerifier::new(addr)))
             .with_no_client_auth();
+        // The ALPN extension is the whole wire-visible change of the
+        // client-first rollout (docs/quic-alpn-rollout.md §2, §5.2). It must be
+        // set before the config is converted for QUIC.
+        crypto.alpn_protocols = alpn;
+        // One line a packet capture can be compared against (§7.1).
+        debug!(
+            "QUIC control-plane TLS offer: alpn={} sni=lightspeed-proxy tls=1.3",
+            alpn_offer_list(&crypto.alpn_protocols)
+        );
 
         let quic_crypto =
             QuicClientConfig::try_from(crypto).map_err(|e| QuicError::Tls(e.to_string()))?;
@@ -95,12 +179,34 @@ mod inner {
         transport.mtu_discovery_config(Some(mtu_discovery));
         client_config.transport_config(Arc::new(transport));
 
-        // One line a packet capture can be compared against. This client offers
-        // no ALPN by design, which is what makes a strict QUIC peer answer the
-        // handshake with alert 120; `handshake_failure` explains that outcome.
-        debug!("QUIC control-plane TLS offer: ALPN=[] SNI=lightspeed-proxy TLSv1.3");
-
         Ok(client_config)
+    }
+
+    /// Whether a failed handshake is the peer's alert 120
+    /// (`no_application_protocol`, RFC 9001 §8.1).
+    ///
+    /// The one classifier both the fallback decision and
+    /// [`handshake_failure`]'s verdict read, so the retry condition and the
+    /// explanation cannot drift apart.
+    fn is_alert_120(err: &quinn::ConnectionError) -> bool {
+        // 0x78 is `AlertDescription::NoApplicationProtocol`, carried as QUIC
+        // crypto error 0x100 + 0x78 (rendered as "error 120").
+        matches!(
+            err,
+            quinn::ConnectionError::ConnectionClosed(close)
+                if close.error_code == quinn::TransportErrorCode::crypto(0x78)
+        )
+    }
+
+    /// Whether a failed handshake justifies the one empty-offer retry.
+    ///
+    /// Exactly one case does: a relay that rejected the versioned offer with
+    /// alert 120, which is what a relay built before the ALPN rollout does
+    /// (docs/quic-alpn-rollout.md §3 row C). A timeout, a different alert or an
+    /// application close must not retry, so a middlebox that swallows the offer
+    /// cannot double the wait (§5.2).
+    fn should_retry_with_empty_alpn(err: &quinn::ConnectionError) -> bool {
+        is_alert_120(err)
     }
 
     /// Explain a failed QUIC handshake in the terms the reader needs.
@@ -108,27 +214,24 @@ mod inner {
     /// quinn renders a peer-sent `CONNECTION_CLOSE` as "aborted by peer: the
     /// cryptographic handshake failed: error 120: peer doesn't support any known
     /// protocol", which reads like a local TLS fault. It is not one: alert 120
-    /// (`no_application_protocol`) is what an RFC 9001 §8.1 conforming server
-    /// sends when the ClientHello carries no ALPN, and the relay built from this
-    /// repository never sets ALPN, so it *cannot* send this alert. The responder
-    /// on the path is therefore not this relay: it is a QUIC-intercepting
-    /// middlebox (VPN/AV/ISP) or a foreign endpoint. Turning that into a verdict
-    /// separates "our relay is broken" from "your path is intercepting QUIC"
-    /// in one run, instead of leaving the reader on rustls's wording (#140/#147).
+    /// (`no_application_protocol`) is what an RFC 9001 §8.1 conforming peer
+    /// sends when the two ends cannot agree on an ALPN. Once relays can require
+    /// ALPN there are two causes the client cannot separate from the handshake
+    /// alone, so the verdict names both instead of claiming the responder
+    /// cannot be a relay. This is only reached with alert 120 after the
+    /// empty-offer attempt has already failed, so it says so (#140/#147).
     fn handshake_failure(addr: SocketAddr, err: &quinn::ConnectionError) -> String {
-        let quinn::ConnectionError::ConnectionClosed(close) = err else {
-            return err.to_string();
-        };
-        // 0x78 is `AlertDescription::NoApplicationProtocol`, carried as QUIC
-        // crypto error 0x100 + 0x78 (displayed as "error 120").
-        if close.error_code != quinn::TransportErrorCode::crypto(0x78) {
+        if !is_alert_120(err) {
             return err.to_string();
         }
         format!(
             "{err}: the responder at {addr} closed the QUIC handshake with TLS alert 120 \
-             (no_application_protocol). A LightSpeed relay does not require ALPN and cannot \
-             send this alert, so the responder is not this relay: suspect a \
-             QUIC-intercepting VPN/AV/ISP on this path (see #140)."
+             (no_application_protocol), and the empty-offer retry also failed. The client \
+             cannot tell these two causes apart from the handshake alone: (1) a \
+             QUIC-intercepting middlebox on this path (VPN/AV/ISP) that does not carry the \
+             ALPN extension (see #140); or (2) a LightSpeed relay on a different ALPN \
+             revision -- version skew, where the relay requires an ALPN name this client \
+             does not offer."
         )
     }
 
@@ -153,6 +256,11 @@ mod inner {
         /// Region of the registered destination, as resolved by the relay's
         /// MMDB on the most recent registration ack.
         dest_region: Option<String>,
+        /// Application protocol negotiated on the live control connection.
+        ///
+        /// `None` on a live connection means the relay accepted an ALPN-less
+        /// handshake, i.e. it has not been upgraded to `lightspeed-control/1`.
+        negotiated_alpn: Option<Vec<u8>>,
     }
 
     impl ControlClient {
@@ -174,6 +282,7 @@ mod inner {
                 region: None,
                 telemetry_quic: false,
                 dest_region: None,
+                negotiated_alpn: None,
             })
         }
 
@@ -189,25 +298,91 @@ mod inner {
         }
 
         /// Connect and register, reporting the destination to the relay.
+        ///
+        /// Outside the per-relay supervisor (for example `--test-control`) there
+        /// is no earlier answer to consult, so a fresh memory makes the first
+        /// attempt the full offer -- the correct default.
         pub async fn connect_with_destination(
             &mut self,
             addr: SocketAddr,
             game: u8,
             destination: Option<Ipv4Addr>,
         ) -> Result<(), QuicError> {
+            let memory = AlpnMemory::default();
+            self.connect_with_relay_memory(addr, game, destination, &memory)
+                .await
+        }
+
+        /// Connect and register, consulting this relay's ALPN answer memory.
+        ///
+        /// At most two handshake attempts: the offer from `alpn_memory`, then --
+        /// only when the relay rejected it with alert 120 -- one retry with an
+        /// empty offer (docs/quic-alpn-rollout.md §5.2). The alert is recorded
+        /// in `alpn_memory`, so a later reconnect to the same relay in this
+        /// process goes straight to the empty offer (§9). Nothing else retries.
+        pub(super) async fn connect_with_relay_memory(
+            &mut self,
+            addr: SocketAddr,
+            game: u8,
+            destination: Option<Ipv4Addr>,
+            alpn_memory: &AlpnMemory,
+        ) -> Result<(), QuicError> {
             info!("Connecting QUIC control plane to {}", addr);
 
-            self.endpoint
-                .set_default_client_config(build_client_config(addr)?);
+            let mut offer = alpn_memory.offer();
+            if offer.is_empty() && alpn_memory.needs_empty_offer() {
+                debug!(
+                    relay = %addr,
+                    "relay answered the ALPN offer with alert 120 earlier in this process; \
+                     offering an empty list"
+                );
+            }
 
-            let conn = self
-                .endpoint
-                .connect(addr, "lightspeed-proxy")
-                .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?
-                .await
-                .map_err(|e| QuicError::ConnectionFailed(handshake_failure(addr, &e)))?;
+            loop {
+                self.endpoint
+                    .set_default_client_config(build_client_config(addr, offer.clone())?);
+                let connecting = self
+                    .endpoint
+                    .connect(addr, "lightspeed-proxy")
+                    .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+                match connecting.await {
+                    Ok(conn) => {
+                        return self
+                            .register_on_connection(conn, addr, game, destination)
+                            .await;
+                    }
+                    Err(err) => {
+                        // Exactly one retry, and only for alert 120: an empty
+                        // offer is never retried again.
+                        if offer.is_empty() || !should_retry_with_empty_alpn(&err) {
+                            return Err(QuicError::ConnectionFailed(handshake_failure(addr, &err)));
+                        }
+                        warn!(
+                            relay = %addr,
+                            "relay rejected the ALPN offer with alert 120 \
+                             (no_application_protocol); retrying with an empty offer"
+                        );
+                        alpn_memory.record_alert_120();
+                        offer.clear();
+                    }
+                }
+            }
+        }
 
-            info!("QUIC connection established to {}", addr);
+        /// Register this session on an established control connection.
+        async fn register_on_connection(
+            &mut self,
+            conn: quinn::Connection,
+            addr: SocketAddr,
+            game: u8,
+            destination: Option<Ipv4Addr>,
+        ) -> Result<(), QuicError> {
+            let alpn = negotiated_alpn(&conn);
+            info!(
+                relay = %addr,
+                alpn = %alpn_name(alpn.as_deref()),
+                "QUIC connection established"
+            );
 
             // Open a bidirectional stream for registration
             let (mut send, mut recv) = conn
@@ -278,6 +453,7 @@ mod inner {
             send.finish()
                 .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
 
+            self.negotiated_alpn = alpn;
             self.connection = Some(conn);
             self.remote_addr = Some(addr);
             Ok(())
@@ -404,6 +580,7 @@ mod inner {
             self.node_id = None;
             self.region = None;
             self.dest_region = None;
+            self.negotiated_alpn = None;
             Ok(())
         }
 
@@ -446,6 +623,16 @@ mod inner {
             self.telemetry_quic
         }
 
+        /// The application protocol negotiated on the live control connection.
+        ///
+        /// `Some(b"lightspeed-control/1")` proves the relay has the ALPN
+        /// rollout; `None` on a live connection proves it has not (an
+        /// ALPN-less handshake was accepted). This is the value `--test-control`
+        /// prints and the interop test asserts.
+        pub fn negotiated_alpn(&self) -> Option<&[u8]> {
+            self.negotiated_alpn.as_deref()
+        }
+
         /// Get the remote proxy address.
         pub fn remote_addr(&self) -> Option<SocketAddr> {
             self.remote_addr
@@ -460,7 +647,7 @@ mod inner {
 
     #[cfg(test)]
     mod tests {
-        use super::handshake_failure;
+        use super::{handshake_failure, should_retry_with_empty_alpn, AlpnMemory};
         use std::net::SocketAddr;
 
         fn connection_closed(
@@ -474,29 +661,137 @@ mod inner {
             })
         }
 
-        #[test]
-        fn alert_120_is_explained_as_a_peer_that_cannot_be_our_relay() {
-            // The reporter's exact failure (#140/#147): the peer closed with
-            // rustls's no_application_protocol alert. Our relay cannot send it,
-            // so the message must say the responder is not the relay instead of
-            // repeating a rustls string a user cannot act on.
-            let addr: SocketAddr = "203.0.113.10:4433".parse().expect("addr");
-            let err = connection_closed(
+        fn alert_120() -> quinn::ConnectionError {
+            connection_closed(
                 quinn::TransportErrorCode::crypto(0x78),
                 b"peer doesn't support any known protocol",
-            );
+            )
+        }
 
-            let message = handshake_failure(addr, &err);
+        fn application_closed() -> quinn::ConnectionError {
+            quinn::ConnectionError::ApplicationClosed(quinn::ApplicationClose {
+                error_code: 0u32.into(),
+                reason: bytes::Bytes::from_static(b"bye"),
+            })
+        }
 
-            assert!(message.contains("not this relay"), "{message}");
+        // Updated with the rollout: the old test asserted the responder could
+        // not be a relay. Once relays can require ALPN that claim is false, so
+        // the same case now asserts the verdict names the ALPN disagreement
+        // without pretending to know which side caused it.
+        #[test]
+        fn alert_120_is_explained_as_a_peer_that_cannot_be_our_relay() {
+            let addr: SocketAddr = "203.0.113.10:4433".parse().expect("addr");
+            let message = handshake_failure(addr, &alert_120());
+
             assert!(message.contains("no_application_protocol"), "{message}");
             assert!(message.contains("203.0.113.10:4433"), "{message}");
+            assert!(
+                !message.contains("not this relay"),
+                "the rollout makes the old 'not this relay' claim false: {message}"
+            );
+        }
+
+        #[test]
+        fn alert_120_selects_the_empty_list_retry() {
+            // Row C of docs/quic-alpn-rollout.md §3: a relay built before the
+            // rollout answers the versioned offer with alert 120. That is the
+            // only failure that earns row C' -- one retry with an empty list.
+            assert!(
+                should_retry_with_empty_alpn(&alert_120()),
+                "alert 120 must select the empty-offer retry"
+            );
+        }
+
+        #[test]
+        fn a_certificate_alert_does_not_retry() {
+            // A bad certificate is a real TLS fault and the empty list cannot
+            // fix it.
+            let certificate =
+                connection_closed(quinn::TransportErrorCode::crypto(0x2a), b"bad certificate");
+            assert!(
+                !should_retry_with_empty_alpn(&certificate),
+                "a certificate alert must not retry"
+            );
+        }
+
+        #[test]
+        fn a_timeout_does_not_retry() {
+            // A middlebox that swallows the offering ClientHello must not double
+            // the wait (§5.2).
+            assert!(
+                !should_retry_with_empty_alpn(&quinn::ConnectionError::TimedOut),
+                "a timeout must not retry"
+            );
+        }
+
+        #[test]
+        fn an_application_close_does_not_retry() {
+            assert!(
+                !should_retry_with_empty_alpn(&application_closed()),
+                "an application close must not retry"
+            );
+        }
+
+        #[test]
+        fn the_120_verdict_names_version_skew_after_the_rollout() {
+            // §7.1 and falsifier F6 (§12): the verdict must name both causes
+            // (middlebox or ALPN revision skew), carry the address, and say the
+            // empty-offer retry failed, never claim the responder is not a relay.
+            let addr: SocketAddr = "203.0.113.10:4433".parse().expect("addr");
+            let message = handshake_failure(addr, &alert_120());
+
+            assert!(
+                message.contains("203.0.113.10:4433"),
+                "the verdict must name the address: {message}"
+            );
+            assert!(
+                message.contains("no_application_protocol"),
+                "the verdict must name the alert: {message}"
+            );
+            assert!(
+                message.contains("middlebox"),
+                "the verdict must name a QUIC-intercepting middlebox: {message}"
+            );
+            assert!(
+                message.contains("version skew") && message.contains("ALPN revision"),
+                "the verdict must name version skew: {message}"
+            );
+            assert!(
+                message.contains("empty-offer retry also failed"),
+                "the verdict must say the empty-offer retry already failed: {message}"
+            );
+            assert!(
+                message.contains("cannot tell these two causes apart"),
+                "the client cannot distinguish the causes, and must say so: {message}"
+            );
+        }
+
+        #[test]
+        fn a_relays_alert_120_answer_is_remembered_for_the_process() {
+            // §9: the doomed attempt happens once per (process, relay). A relay
+            // that answered 120 is offered the empty list from then on, so a
+            // reconnect does not repeat the failing handshake.
+            let memory = AlpnMemory::default();
+            assert!(!memory.needs_empty_offer());
+            assert_eq!(
+                memory.offer(),
+                vec![lightspeed_protocol::QUIC_CONTROL_ALPN_V1.to_vec()],
+                "an unknown relay gets the versioned offer"
+            );
+
+            memory.record_alert_120();
+            assert!(memory.needs_empty_offer());
+            assert!(
+                memory.offer().is_empty(),
+                "a relay that answered alert 120 is offered the empty list"
+            );
         }
 
         #[test]
         fn other_handshake_failures_keep_the_raw_error() {
             // Only alert 120 carries this diagnosis. A bad certificate, a
-            // timeout or any transport error must keep its own wording.
+            // timeout, or an application close must keep its own wording.
             let addr: SocketAddr = "203.0.113.10:4433".parse().expect("addr");
             let certificate =
                 connection_closed(quinn::TransportErrorCode::crypto(0x2a), b"bad certificate");
@@ -508,6 +803,12 @@ mod inner {
             assert_eq!(
                 handshake_failure(addr, &quinn::ConnectionError::TimedOut),
                 quinn::ConnectionError::TimedOut.to_string()
+            );
+            let closed = application_closed();
+            assert_eq!(
+                handshake_failure(addr, &closed),
+                closed.to_string(),
+                "an application close is not the no-ALPN diagnosis"
             );
         }
     }
@@ -585,6 +886,12 @@ mod inner {
             false
         }
 
+        /// No control connection exists without the `quic` feature, so no
+        /// application protocol can be negotiated.
+        pub fn negotiated_alpn(&self) -> Option<&[u8]> {
+            None
+        }
+
         pub fn remote_addr(&self) -> Option<SocketAddr> {
             self.remote_addr
         }
@@ -609,7 +916,7 @@ mod supervisor {
 
     use lightspeed_protocol::control::ControlMessage;
 
-    use super::inner::ControlClient;
+    use super::inner::{AlpnMemory, ControlClient};
     use crate::error::QuicError;
 
     pub(super) const PING_INTERVAL: Duration = Duration::from_secs(15);
@@ -655,6 +962,9 @@ mod supervisor {
         initial_rx: watch::Receiver<Initial>,
         stop_tx: watch::Sender<bool>,
         destination: Arc<Mutex<Option<Ipv4Addr>>>,
+        /// This relay's process-lifetime ALPN answer, kept here so a supervisor
+        /// replacement (a newly learned destination) does not forget it.
+        alpn_memory: Arc<AlpnMemory>,
         control_port: u16,
         _join: JoinHandle<()>,
     }
@@ -666,6 +976,7 @@ mod supervisor {
         current_token: Arc<AtomicU32>,
         target: Arc<Mutex<Option<ControlTarget>>>,
         destination: Arc<Mutex<Option<Ipv4Addr>>>,
+        alpn_memory: Arc<AlpnMemory>,
     }
 
     static REGISTRY: OnceLock<Mutex<HashMap<SocketAddrV4, Entry>>> = OnceLock::new();
@@ -741,10 +1052,18 @@ mod supervisor {
                 }
             }
         }
-        if let Some(entry) = registry.remove(&data_addr) {
-            entry.handle.stopped.store(true, Ordering::Release);
-            let _ = entry.stop_tx.send(true);
-        }
+        // One replacement point: retire the old supervisor and keep its relay's
+        // ALPN answer. The answer is a capability of the relay, not of the task,
+        // so a destination change must not pay the fallback handshake again
+        // (docs/quic-alpn-rollout.md §9).
+        let alpn_memory = match registry.remove(&data_addr) {
+            Some(entry) => {
+                entry.handle.stopped.store(true, Ordering::Release);
+                let _ = entry.stop_tx.send(true);
+                entry.alpn_memory
+            }
+            None => Arc::new(AlpnMemory::default()),
+        };
 
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let stopped = Arc::new(AtomicBool::new(false));
@@ -767,6 +1086,7 @@ mod supervisor {
             current_token,
             target,
             destination: Arc::clone(&destination),
+            alpn_memory: Arc::clone(&alpn_memory),
         };
         let join = tokio::spawn(supervisor_loop(context, control_port, initial_tx, stop_rx));
 
@@ -777,6 +1097,7 @@ mod supervisor {
                 initial_rx: initial_rx.clone(),
                 stop_tx,
                 destination,
+                alpn_memory,
                 control_port,
                 _join: join,
             },
@@ -888,6 +1209,7 @@ mod supervisor {
             current_token,
             target,
             destination,
+            alpn_memory,
         } = context;
         let control_addr = SocketAddr::V4(SocketAddrV4::new(*data_addr.ip(), control_port));
         let mut backoff = Backoff::new();
@@ -901,7 +1223,7 @@ mod supervisor {
             let destination = *destination
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match connect_and_register(control_addr, destination).await {
+            match connect_and_register(control_addr, destination, &alpn_memory).await {
                 Ok(client) => {
                     let token = client.session_token().unwrap_or(0);
                     let live = client.connection().cloned();
@@ -1064,16 +1386,26 @@ mod supervisor {
     async fn connect_and_register(
         control_addr: SocketAddr,
         destination: Option<Ipv4Addr>,
+        alpn_memory: &AlpnMemory,
     ) -> Result<ControlClient, QuicError> {
         let mut client = ControlClient::new()?;
         client
-            .connect_with_destination(
+            .connect_with_relay_memory(
                 control_addr,
                 lightspeed_protocol::game_id::UNKNOWN,
                 destination,
+                alpn_memory,
             )
             .await?;
         Ok(client)
+    }
+
+    /// The relay's process-lifetime ALPN answer, for tests and diagnostics.
+    #[cfg(test)]
+    pub(super) fn supervised_alpn_memory(data_addr: SocketAddrV4) -> Option<Arc<AlpnMemory>> {
+        lock_registry()
+            .get(&data_addr)
+            .map(|entry| Arc::clone(&entry.alpn_memory))
     }
 
     #[derive(PartialEq, Eq)]
@@ -1362,10 +1694,11 @@ async fn register_session_with_destination_inner(
 mod supervisor_tests {
     use super::supervisor::{
         ensure_registration, ensure_registration_with_destination, is_supervised,
-        report_destination, send_telemetry, stop_supervisor, supervisor_handle, Backoff,
-        MAX_BACKOFF, MIN_BACKOFF,
+        report_destination, send_telemetry, stop_supervisor, supervised_alpn_memory,
+        supervisor_handle, Backoff, MAX_BACKOFF, MIN_BACKOFF,
     };
     use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
@@ -1514,5 +1847,32 @@ mod supervisor_tests {
 
         assert!(stop_supervisor(relay));
         crate::session::set_current_proxy(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+    }
+
+    /// Given: a relay that answered the versioned ALPN offer with alert 120.
+    /// When: a newly learned destination replaces its supervisor. Then: the
+    /// answer survives the replacement, so the reconnect goes straight to the
+    /// empty offer instead of repeating the doomed handshake
+    /// (docs/quic-alpn-rollout.md §9).
+    #[tokio::test]
+    async fn a_replaced_supervisor_keeps_the_relays_alpn_answer() {
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42106);
+        let _ = stop_supervisor(addr);
+        ensure_registration(addr, 59995);
+        let memory = supervised_alpn_memory(addr).expect("supervisor registered");
+        assert!(!memory.needs_empty_offer(), "a relay starts unanswered");
+        memory.record_alert_120();
+
+        ensure_registration_with_destination(addr, 59995, Some(Ipv4Addr::new(9, 9, 9, 9)));
+        let carried = supervised_alpn_memory(addr).expect("supervisor registered");
+        assert!(
+            carried.needs_empty_offer(),
+            "the relay's ALPN answer must survive a supervisor replacement"
+        );
+        assert!(
+            Arc::ptr_eq(&memory, &carried),
+            "the process-lifetime memory is reused across replacements, not rebuilt"
+        );
+        assert!(stop_supervisor(addr));
     }
 }

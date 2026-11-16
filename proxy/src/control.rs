@@ -24,11 +24,12 @@ mod inner {
     use lightspeed_protocol::control::{caps, disconnect_reason, ControlMessage};
     use lightspeed_protocol::telemetry::MAX_TELEMETRY_BODY;
     use lightspeed_protocol::PROTOCOL_VERSION;
+    use lightspeed_protocol::{quic_control_alpn, QUIC_CONTROL_ALPN_V1};
 
     use crate::auth::{Authenticator, EXPLICIT_REVOKE_GRACE, TRANSPORT_REVOKE_GRACE};
-    use crate::config::ProxyConfig;
+    use crate::config::{ControlAlpn, ProxyConfig};
     use crate::geo::{self, GeoResolver};
-    use crate::metrics::ProxyMetrics;
+    use crate::metrics::{ControlHandshakeOutcome, ProxyMetrics};
 
     // ── Types ───────────────────────────────────────────────────────
 
@@ -124,6 +125,10 @@ mod inner {
             metrics: Arc<ProxyMetrics>,
             geo: Option<Arc<dyn GeoResolver>>,
         ) -> Self {
+            // Publish the startup-time policy on the shared metrics handle: the
+            // `/health` endpoint is served from that handle and must report the
+            // control-plane ALPN mode without a second copy of `ProxyConfig`.
+            metrics.set_control_alpn(config.network.control_alpn);
             Self {
                 sessions: RwLock::new(HashMap::new()),
                 connections: RwLock::new(HashMap::new()),
@@ -250,16 +255,27 @@ mod inner {
     }
 
     /// Build a quinn `ServerConfig` with a self-signed certificate.
-    fn build_server_config() -> anyhow::Result<quinn::ServerConfig> {
+    ///
+    /// `mode` is the control-plane ALPN policy and the only difference the
+    /// matrix tests vary:
+    /// - [`ControlAlpn::Off`] leaves `alpn_protocols` empty, which is the
+    ///   pre-rollout behaviour byte for byte: ALPN-less clients complete the
+    ///   handshake and clients that offer ALPN are rejected with alert 120.
+    /// - [`ControlAlpn::Required`] advertises this build's control ALPN, so the
+    ///   handshake only completes when the client offers the same name.
+    fn build_server_config(mode: ControlAlpn) -> anyhow::Result<quinn::ServerConfig> {
         // quinn pulls rustls with its aws-lc-rs default while this crate selects
         // ring, so two providers are compiled in and `ServerConfig::builder()`
         // panics on auto-detection. Pin ring as the process-wide provider.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let (certs, key) = load_or_generate_cert()?;
 
-        let rustls_config = rustls::ServerConfig::builder()
+        let mut rustls_config = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(certs, key)?;
+        if mode == ControlAlpn::Required {
+            rustls_config.alpn_protocols = quic_control_alpn();
+        }
 
         let quic_crypto = QuicServerConfig::try_from(rustls_config)?;
         let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_crypto));
@@ -286,6 +302,99 @@ mod inner {
         }
     }
 
+    /// TLS alert `no_application_protocol` (RFC 9001 §8.1; QUIC error 0x0178).
+    const ALERT_NO_APPLICATION_PROTOCOL: u8 = 0x78;
+
+    /// Why a QUIC control handshake did not complete.
+    ///
+    /// Distinct from a connection error after a successful handshake: a
+    /// rejection is a client that never got a session, which is exactly the
+    /// population `control_alpn = "required"` breaks for pre-ALPN clients.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum HandshakeRejection {
+        /// TLS alert 120: no application protocol could be agreed (the client
+        /// offered no ALPN, or a revision the relay does not speak).
+        NoApplicationProtocol,
+        /// Any other handshake failure (timeout, transport error, ...).
+        Other,
+    }
+
+    impl HandshakeRejection {
+        /// Classify a failed `Incoming` handshake.
+        ///
+        /// The alert reaches the accepting side as a
+        /// [`quinn::ConnectionError::TransportError`] carrying the crypto code;
+        /// [`quinn::ConnectionError::ConnectionClosed`] is accepted too so a
+        /// peer-sent alert classifies the same way instead of falling into
+        /// `other`.
+        fn classify(error: &quinn::ConnectionError) -> Self {
+            let code = match error {
+                quinn::ConnectionError::TransportError(error) => Some(error.code),
+                quinn::ConnectionError::ConnectionClosed(close) => Some(close.error_code),
+                _ => None,
+            };
+            if code
+                == Some(quinn::TransportErrorCode::crypto(
+                    ALERT_NO_APPLICATION_PROTOCOL,
+                ))
+            {
+                Self::NoApplicationProtocol
+            } else {
+                Self::Other
+            }
+        }
+
+        /// The metric outcome this rejection counts as.
+        fn outcome(self) -> ControlHandshakeOutcome {
+            match self {
+                Self::NoApplicationProtocol => {
+                    ControlHandshakeOutcome::RejectedNoApplicationProtocol
+                }
+                Self::Other => ControlHandshakeOutcome::RejectedOther,
+            }
+        }
+
+        /// The `reason=` log value.
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::NoApplicationProtocol => "no_application_protocol",
+                Self::Other => "other",
+            }
+        }
+    }
+
+    /// Startup label for the control-plane ALPN policy.
+    ///
+    /// `off` and `required (<name>)` are the only two states an operator can
+    /// see; they are the same two values `/health` reports as data.
+    fn alpn_startup_label(mode: ControlAlpn) -> String {
+        match mode {
+            ControlAlpn::Off => "off".to_string(),
+            ControlAlpn::Required => {
+                format!(
+                    "required ({})",
+                    String::from_utf8_lossy(QUIC_CONTROL_ALPN_V1)
+                )
+            }
+        }
+    }
+
+    /// The control-plane ALPN this connection negotiated, if any.
+    ///
+    /// `None` is a completed handshake without ALPN (relay `off` + ALPN-less
+    /// client), which is counted separately from a negotiation so the relay
+    /// can report its client population split.
+    fn negotiated_control_alpn(conn: &quinn::Connection) -> Option<Vec<u8>> {
+        let protocol = conn
+            .handshake_data()?
+            .downcast::<quinn::crypto::rustls::HandshakeData>()
+            .ok()?
+            .protocol?;
+        quic_control_alpn()
+            .into_iter()
+            .find(|offered| offered == &protocol)
+    }
+
     // ── Server ──────────────────────────────────────────────────────
 
     /// A bound QUIC control-plane endpoint.
@@ -300,17 +409,21 @@ mod inner {
     impl ControlServer {
         /// Bind the QUIC control endpoint on `bind_addr`.
         pub fn bind(bind_addr: SocketAddr, state: Arc<ControlState>) -> anyhow::Result<Self> {
-            let server_config = build_server_config()?;
+            let alpn = state.config.network.control_alpn;
+            let server_config = build_server_config(alpn)?;
             let endpoint = quinn::Endpoint::server(server_config, bind_addr)?;
+            // The single operator self-check for the ALPN stage: "off" is stage 2,
+            // "required (<name>)" is stage 3/4 (docs/quic-alpn-rollout.md §7.3).
             info!(
-                "QUIC control plane listening on {} (node={}, auth={})",
+                "QUIC control plane listening on {} (node={}, auth={}, alpn={})",
                 endpoint.local_addr()?,
                 state.config.server.node_id,
                 if state.config.security.require_auth {
                     "enforced"
                 } else {
                     "disabled"
-                }
+                },
+                alpn_startup_label(alpn),
             );
             Ok(Self { endpoint, state })
         }
@@ -339,8 +452,25 @@ mod inner {
                         let state = Arc::clone(&self.state);
                         let semaphore = Arc::clone(&semaphore);
                         tokio::spawn(async move {
-                            let Ok(conn) = incoming.await else {
-                                return;
+                            let peer = incoming.remote_address();
+                            let conn = match incoming.await {
+                                Ok(conn) => conn,
+                                Err(error) => {
+                                    // A rejected handshake used to be silent. The
+                                    // split is what a canary watches: alert 120 is a
+                                    // pre-ALPN client cut off by `required` mode.
+                                    let rejection = HandshakeRejection::classify(&error);
+                                    state
+                                        .metrics
+                                        .record_control_handshake(rejection.outcome());
+                                    warn!(
+                                        remote = %peer,
+                                        error = %error,
+                                        reason = rejection.as_str(),
+                                        "QUIC control handshake rejected"
+                                    );
+                                    return;
+                                }
                             };
                             let Ok(permit) = semaphore.clone().try_acquire_owned() else {
                                 conn.close(0u32.into(), b"at capacity");
@@ -349,7 +479,6 @@ mod inner {
                             let remote = conn.remote_address();
                             let conn_id = conn.stable_id();
                             state.connections.write().await.insert(conn_id, conn.clone());
-                            info!("QUIC connection from {}", remote);
                             if let Err(e) = handle_connection(conn, Arc::clone(&state)).await {
                                 warn!("Client {} connection error: {}", remote, e);
                             }
@@ -429,11 +558,32 @@ mod inner {
     }
 
     /// Handle a single client QUIC connection.
+    ///
+    /// The handshake already completed here, so this is the one place the
+    /// negotiated ALPN is read and counted: `negotiated_v1` and `no_alpn` are
+    /// the relay's client-population split, and the value is attached to the
+    /// per-connection log so a capture can be matched to a mode.
     async fn handle_connection(
         conn: quinn::Connection,
         state: Arc<ControlState>,
     ) -> anyhow::Result<()> {
         let remote = conn.remote_address();
+        let negotiated = negotiated_control_alpn(&conn);
+        state
+            .metrics
+            .record_control_handshake(if negotiated.is_some() {
+                ControlHandshakeOutcome::NegotiatedV1
+            } else {
+                ControlHandshakeOutcome::NoAlpn
+            });
+        info!(
+            "QUIC connection from {} (alpn={})",
+            remote,
+            negotiated
+                .as_deref()
+                .map(|protocol| String::from_utf8_lossy(protocol).into_owned())
+                .unwrap_or_else(|| "none".to_string())
+        );
         let issued_token: ConnectionToken = Arc::new(tokio::sync::Mutex::new(None));
 
         // Accept bidirectional streams from the client
@@ -919,6 +1069,343 @@ mod inner {
                 held,
                 Instant::now()
             ));
+        }
+
+        // ── §6.3 ALPN matrix: the five rows that decide the rollout order ──
+        //
+        // Each test binds a real `ControlServer` on 127.0.0.1:0 and drives a
+        // real quinn client. `alpn_protocols` is the only variable, so a
+        // failure names the handshake policy rather than test scaffolding. The
+        // rows and their meaning are in docs/quic-alpn-rollout.md §3/§6.3.
+
+        use crate::config::ControlAlpn;
+
+        use std::sync::Once;
+
+        /// Serializes TLS-dir setup across the parallel matrix tests, the same
+        /// way the integration suites do: the first bind generates the
+        /// self-signed pair, later binds read it.
+        static TLS_ONCE: Once = Once::new();
+
+        fn isolate_tls_dir() {
+            TLS_ONCE.call_once(|| {
+                let dir = std::env::temp_dir().join(format!(
+                    "lightspeed-control-alpn-tls-{}",
+                    std::process::id()
+                ));
+                std::fs::create_dir_all(&dir).expect("create TLS temp dir");
+                std::env::set_var("LIGHTSPEED_TLS_DIR", &dir);
+            });
+        }
+
+        /// A relay serving on loopback with one ALPN policy.
+        struct TestRelay {
+            addr: SocketAddr,
+            metrics: Arc<ProxyMetrics>,
+            shutdown_tx: tokio::sync::watch::Sender<bool>,
+            handle: tokio::task::JoinHandle<()>,
+        }
+
+        impl TestRelay {
+            async fn start(mode: ControlAlpn) -> Self {
+                isolate_tls_dir();
+                let mut config = ProxyConfig::default();
+                config.network.control_alpn = mode;
+                let metrics = Arc::new(ProxyMetrics::new());
+                let state = Arc::new(ControlState::new(
+                    config,
+                    Arc::new(RwLock::new(Authenticator::new(true))),
+                    Arc::clone(&metrics),
+                    None,
+                ));
+                let server = ControlServer::bind("127.0.0.1:0".parse().expect("bind addr"), state)
+                    .expect("bind the control server");
+                let addr = server.local_addr().expect("bound control address");
+                let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+                let handle = tokio::spawn(server.run(shutdown_rx));
+                Self {
+                    addr,
+                    metrics,
+                    shutdown_tx,
+                    handle,
+                }
+            }
+
+            async fn shutdown(self) {
+                let _ = self.shutdown_tx.send(true);
+                let _ = tokio::time::timeout(Duration::from_secs(5), self.handle).await;
+            }
+        }
+
+        /// Accepts the relay's self-signed certificate. The certificate is not
+        /// what these tests are about; the ALPN offer is.
+        #[derive(Debug)]
+        struct SkipVerify;
+
+        impl rustls::client::danger::ServerCertVerifier for SkipVerify {
+            fn verify_server_cert(
+                &self,
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &[rustls::pki_types::CertificateDer<'_>],
+                _: &rustls::pki_types::ServerName<'_>,
+                _: &[u8],
+                _: rustls::pki_types::UnixTime,
+            ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+
+            fn verify_tls12_signature(
+                &self,
+                _: &[u8],
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+
+            fn verify_tls13_signature(
+                &self,
+                _: &[u8],
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+
+            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                rustls::crypto::ring::default_provider()
+                    .signature_verification_algorithms
+                    .supported_schemes()
+            }
+        }
+
+        /// A QUIC client endpoint that accepts the relay certificate; `alpn` is
+        /// the only variable between matrix rows.
+        fn client_endpoint(alpn: Vec<Vec<u8>>) -> quinn::Endpoint {
+            let mut crypto = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(SkipVerify))
+                .with_no_client_auth();
+            crypto.alpn_protocols = alpn;
+            let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+                .expect("QUIC client crypto");
+            let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().expect("client addr"))
+                .expect("client endpoint");
+            endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(quic_crypto)));
+            endpoint
+        }
+
+        async fn connect(
+            endpoint: &quinn::Endpoint,
+            addr: SocketAddr,
+        ) -> Result<quinn::Connection, quinn::ConnectionError> {
+            endpoint
+                .connect(addr, "lightspeed-proxy")
+                .expect("start the QUIC handshake")
+                .await
+        }
+
+        /// The ALPN the connection negotiated, read from the rustls handshake
+        /// data on either side.
+        fn negotiated(conn: &quinn::Connection) -> Option<Vec<u8>> {
+            conn.handshake_data()
+                .expect("a completed handshake has handshake data")
+                .downcast::<quinn::crypto::rustls::HandshakeData>()
+                .expect("rustls handshake data")
+                .protocol
+        }
+
+        /// Assert the peer closed the handshake with TLS alert 120
+        /// (`no_application_protocol`). The accepting side reports it as a
+        /// transport error; a peer that received the alert reports it as a
+        /// connection close. Both shapes mean the same alert.
+        fn assert_alert_120(error: &quinn::ConnectionError) {
+            let code = match error {
+                quinn::ConnectionError::TransportError(error) => error.code,
+                quinn::ConnectionError::ConnectionClosed(close) => close.error_code,
+                other => panic!("expected an ALPN handshake failure, got {other:?}"),
+            };
+            assert_eq!(
+                code,
+                quinn::TransportErrorCode::crypto(0x78),
+                "expected TLS alert 120 (no_application_protocol), got {error:?}"
+            );
+        }
+
+        /// Register over the established connection and return the response.
+        async fn register_over_connection(conn: &quinn::Connection) -> ControlMessage {
+            let (mut send, mut recv) = conn.open_bi().await.expect("open a control stream");
+            ControlMessage::Register {
+                protocol_version: PROTOCOL_VERSION,
+                game: 0,
+                data_port: 0,
+                destination: None,
+            }
+            .write_to(&mut send)
+            .await
+            .expect("write Register");
+            let response = ControlMessage::read_from(&mut recv)
+                .await
+                .expect("read the control response")
+                .expect("a control response");
+            send.finish().expect("finish the control stream");
+            response
+        }
+
+        /// Wait (bounded) for an accept task to count its handshake outcome.
+        async fn wait_for_outcome(metrics: &ProxyMetrics, outcome: ControlHandshakeOutcome) -> u64 {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let count = metrics.control_handshake_count(outcome);
+                if count > 0 {
+                    return count;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for the {} counter",
+                    outcome.as_str()
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+
+        // Row A: today's client against today's relay — no ALPN, handshake
+        // completes, Register is answered. This is the behaviour `off` must
+        // preserve byte for byte.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn an_off_relay_accepts_an_alpn_less_client() {
+            let relay = TestRelay::start(ControlAlpn::Off).await;
+            let endpoint = client_endpoint(Vec::new());
+            let conn = connect(&endpoint, relay.addr)
+                .await
+                .expect("row A: an off relay must accept an ALPN-less client");
+            assert_eq!(
+                negotiated(&conn),
+                None,
+                "row A: no ALPN is negotiated when both sides offer none"
+            );
+            match register_over_connection(&conn).await {
+                ControlMessage::RegisterAck { .. } => {}
+                other => panic!("row A: expected a RegisterAck, got {other:?}"),
+            }
+            assert_eq!(
+                relay.metrics.control_alpn(),
+                ControlAlpn::Off,
+                "the /health data source must report the mode the relay serves"
+            );
+            wait_for_outcome(&relay.metrics, ControlHandshakeOutcome::NoAlpn).await;
+            assert_eq!(
+                relay
+                    .metrics
+                    .control_handshake_count(ControlHandshakeOutcome::NegotiatedV1),
+                0,
+                "row A: no handshake may be counted as negotiated"
+            );
+            conn.close(0u32.into(), b"row A done");
+            drop(endpoint);
+            relay.shutdown().await;
+        }
+
+        // Row C: the new client against an old relay. The relay rejects the
+        // offer with alert 120 — the exact failure the client's empty-list
+        // fallback exists for. If this ever succeeds, rustls' strict-QUIC
+        // branch is not what §3 says and the client fallback is dead code.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn an_off_relay_rejects_an_alpn_offering_client_with_120() {
+            let relay = TestRelay::start(ControlAlpn::Off).await;
+            let endpoint = client_endpoint(quic_control_alpn());
+            let error = match connect(&endpoint, relay.addr).await {
+                Ok(_) => panic!("row C: an off relay must reject a client that offers ALPN"),
+                Err(error) => error,
+            };
+            assert_alert_120(&error);
+            wait_for_outcome(
+                &relay.metrics,
+                ControlHandshakeOutcome::RejectedNoApplicationProtocol,
+            )
+            .await;
+            drop(endpoint);
+            relay.shutdown().await;
+        }
+
+        // Row D: the new client against a required relay — the shared name is
+        // negotiated and Register is answered.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_required_relay_negotiates_the_shared_name() {
+            let relay = TestRelay::start(ControlAlpn::Required).await;
+            let endpoint = client_endpoint(quic_control_alpn());
+            let conn = connect(&endpoint, relay.addr)
+                .await
+                .expect("row D: a required relay must accept a client that offers the shared name");
+            assert_eq!(
+                negotiated(&conn),
+                Some(QUIC_CONTROL_ALPN_V1.to_vec()),
+                "row D: the negotiated protocol must be the shared control ALPN"
+            );
+            match register_over_connection(&conn).await {
+                ControlMessage::RegisterAck { .. } => {}
+                other => panic!("row D: expected a RegisterAck, got {other:?}"),
+            }
+            assert_eq!(
+                relay.metrics.control_alpn(),
+                ControlAlpn::Required,
+                "the /health data source must report the configured mode"
+            );
+            wait_for_outcome(&relay.metrics, ControlHandshakeOutcome::NegotiatedV1).await;
+            conn.close(0u32.into(), b"row D done");
+            drop(endpoint);
+            relay.shutdown().await;
+        }
+
+        // Row B: a pre-ALPN client against a required relay. This is why the
+        // client build has to ship first: the client cannot recover, it can
+        // only be updated.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_required_relay_rejects_an_alpn_less_client_with_120() {
+            let relay = TestRelay::start(ControlAlpn::Required).await;
+            let endpoint = client_endpoint(Vec::new());
+            let error = match connect(&endpoint, relay.addr).await {
+                Ok(_) => panic!("row B: a required relay must reject an ALPN-less client"),
+                Err(error) => error,
+            };
+            assert_alert_120(&error);
+            wait_for_outcome(
+                &relay.metrics,
+                ControlHandshakeOutcome::RejectedNoApplicationProtocol,
+            )
+            .await;
+            drop(endpoint);
+            relay.shutdown().await;
+        }
+
+        // Row E: version skew stays loud. A client that offers only revision 2
+        // against a revision-1 relay gets alert 120; the relay never silently
+        // downgrades to an ALPN-less session.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_required_relay_rejects_a_different_revision_with_120() {
+            let relay = TestRelay::start(ControlAlpn::Required).await;
+            let endpoint = client_endpoint(vec![b"lightspeed-control/2".to_vec()]);
+            let error = match connect(&endpoint, relay.addr).await {
+                Ok(_) => panic!("row E: a required relay must reject an unknown revision"),
+                Err(error) => error,
+            };
+            assert_alert_120(&error);
+            wait_for_outcome(
+                &relay.metrics,
+                ControlHandshakeOutcome::RejectedNoApplicationProtocol,
+            )
+            .await;
+            assert_eq!(
+                relay
+                    .metrics
+                    .control_handshake_count(ControlHandshakeOutcome::NegotiatedV1),
+                0,
+                "row E: a failed revision negotiation must not be counted as negotiated"
+            );
+            drop(endpoint);
+            relay.shutdown().await;
         }
     }
 }

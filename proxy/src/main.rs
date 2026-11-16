@@ -355,6 +355,13 @@ async fn main() -> anyhow::Result<()> {
         config.rate_limit.clone(),
     )));
     let metrics = Arc::new(metrics::ProxyMetrics::new());
+    // Publish the configured control-plane ALPN mode for GET /health here, in
+    // every build. The QUIC control plane also publishes it when its
+    // ControlState is constructed, but a build without the `quic` feature has
+    // no ControlState, and /health must still report the configured mode rather
+    // than a silent default (docs/quic-alpn-rollout.md §5.3, §7.2). OnceLock:
+    // the first publish wins and both sites pass the same configured value.
+    metrics.set_control_alpn(config.network.control_alpn);
     let budget_guard = if config.budget.enabled {
         let guard = Arc::new(budget::BudgetGuard::new(config.budget.clone()));
         if guard.is_enabled() {

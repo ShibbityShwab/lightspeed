@@ -152,6 +152,32 @@ pub mod caps {
     pub const TCP_TUNNEL: u8 = 0b0000_0001;
 }
 
+// ── QUIC control-plane ALPN ─────────────────────────────────────────
+
+/// Application protocol name for the QUIC control plane, revision 1.
+///
+/// Versioned wire identifier: a future revision adds a new name
+/// (`lightspeed-control/2`) and keeps `/1` offered while relays in the field
+/// still speak it; `/1` is never renamed. The version is independent of the
+/// data-plane [`crate::PROTOCOL_VERSION`]: the control plane and the data plane
+/// evolve on separate schedules, so a TLS-only change does not force a header
+/// bump.
+///
+/// Both the client and the relay read this one constant, so the two ends of
+/// the handshake cannot drift.
+pub const QUIC_CONTROL_ALPN_V1: &[u8] = b"lightspeed-control/1";
+
+/// Every ALPN identifier this build offers on the QUIC control plane, most
+/// preferred first.
+///
+/// The return shape is exactly what a rustls `ClientConfig`/`ServerConfig`
+/// `alpn_protocols` field takes, so the client offer and the relay's
+/// `required` mode are built from the same list. An empty list means "no ALPN
+/// extension at all", which is the pre-rollout behaviour.
+pub fn quic_control_alpn() -> Vec<Vec<u8>> {
+    vec![QUIC_CONTROL_ALPN_V1.to_vec()]
+}
+
 // ── Control message enum ────────────────────────────────────────────
 
 /// A control-plane message exchanged over QUIC.
@@ -1091,6 +1117,39 @@ mod tests {
         for (index, &(key, id)) in game_id::GAME_IDS.iter().take(9).enumerate() {
             assert_eq!(id, (index as u8) + 1);
             assert_eq!(key, legacy[index].0);
+        }
+    }
+
+    #[test]
+    fn control_alpn_name_is_stable() {
+        // A rename is a wire break with no compile error on either side: the
+        // client offer and the relay's required list are separate builds, so
+        // only this byte-for-byte assertion keeps them in step.
+        assert_eq!(QUIC_CONTROL_ALPN_V1, b"lightspeed-control/1");
+        assert_eq!(
+            quic_control_alpn(),
+            vec![b"lightspeed-control/1".to_vec()],
+            "the offer is the versioned name, most preferred first"
+        );
+    }
+
+    #[test]
+    fn control_alpn_name_is_rfc7301_conformant() {
+        // RFC 7301 §3.1: ProtocolName is opaque<1..2^8-1>.
+        let offer = quic_control_alpn();
+        let names = std::iter::once(QUIC_CONTROL_ALPN_V1).chain(offer.iter().map(Vec::as_slice));
+        for name in names {
+            assert!(!name.is_empty(), "an ALPN name must not be empty");
+            assert!(name.len() <= 255, "an ALPN name is at most 255 bytes");
+            assert!(
+                name.iter()
+                    .all(|byte| byte.is_ascii_graphic() || *byte == b' '),
+                "the name must be printable ASCII, got {name:?}"
+            );
+            assert!(
+                name.iter().all(|byte| *byte != 0),
+                "the name must not contain a NUL"
+            );
         }
     }
 }
