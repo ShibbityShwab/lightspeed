@@ -78,11 +78,19 @@ If a game uses UDP for gameplay and TCP only for login or patching, LightSpeed c
 
 The following titles have been requested by the community and are under evaluation:
 
+- Aion 2
 - Battlefield 6
-- Warface
+- Black Desert Online
 - Delta Force
+- EA Sports FC 27
+- Warface
 
-These are requests only. No support is promised, and no port ranges or anti-cheat compatibility claims are made for them at this time. If and when a profile ships, it will appear in the game list above.
+Separately, **Deadlock** is requested but is on Valve's Steam Datagram Relay:
+if its gameplay runs over SDR, a relay profile cannot improve it, because the
+game already routes through Valve's own network. The request stays tracked, not
+promised.
+
+These are requests only. No support is promised, and no port ranges or anti-cheat compatibility claims are made for them at this time. If and when a profile ships, it will appear in the game list above. The intake checklist and the current per-game status are in [`docs/game-requests.md`](game-requests.md).
 
 ---
 
@@ -113,9 +121,12 @@ LightSpeed uses standard OS-level network drivers (WinDivert, nftables, pfctl). 
 
 To request official support for a game not listed above:
 
-1. [Open a GitHub issue](https://github.com/ShibbityShwab/lightspeed/issues/new?template=game_request.md)
-2. Include the game name, default UDP port range, and anti-cheat system
-3. If known, include the process name (Windows) or binary name (Linux/macOS)
+1. [Open a game request](https://github.com/ShibbityShwab/lightspeed/issues/new?template=game_request.md)
+2. Include the game name, the **gameplay UDP port range you observed in-game**, the process name (Windows) or binary name (Linux/macOS), and the anti-cheat system
+3. Say whether match servers are assigned per match (matchmade) or fixed
+4. The full checklist, including how to measure the port and when a profile cannot help (TCP-only, Steam Datagram Relay), is in [`docs/game-requests.md`](game-requests.md)
+
+While you wait, **Target a process** in the app relays any process's UDP traffic without a profile, so a missing entry does not block you today.
 
 ---
 

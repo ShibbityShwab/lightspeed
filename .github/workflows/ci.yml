@@ -121,6 +121,12 @@ jobs:
       - name: Geo catalog self-test
         run: bash infra/scripts/test_geo_catalogs.sh
 
+      # The anomaly monitor's own self-test (674 lines, 100+ assertions) only
+      # ran inside the scheduled workflow, so a PR could change the detector or
+      # its severity gate and the first execution was the live schedule.
+      - name: Anomaly detector self-test
+        run: bash infra/scripts/test_health_anomaly.sh
+
   localization-checks:
     name: Localization Checks
     runs-on: ubuntu-latest

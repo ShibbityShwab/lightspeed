@@ -5,11 +5,63 @@
 
 ## Current state
 
-**Workflow:** WF-058 (agent infrastructure, this entry); product work continues under WF-056/WF-057
-**Agent:** lead, with the Architect/RustDev/QAEngineer/DevOps persona contracts (no product code changed)
-**Status:** The agent layer is DeepSeek-Harness-native as of 2026-11-16: `AGENTS.md` rewritten, four project skills under `.dsh/skills/`, eight persona contracts under `wat/personas/`, the Team-mode contract in `wat/team-mode.md`, the hot state file reduced from 322 KB to 4.6 KB, decisions split into monthly logs, and the localization pipeline moved off bash. Product state is unchanged: 1.8.4 (`59f20c8`) shipped the server-leg relay ranking, the return-path watchdog and three rustls/webpki advisory fixes; the ARC Raiders transport split is implemented (`dfa1413`) and the live join through it remains the open proof. The 2026-11-14 interface-design entry (WF-057) is still the active product plan.
+**Workflow:** WF-059 (GitHub feedback audit, this entry); product work continues under WF-057 and PR #173
+**Agent:** lead + net-eng + rust-dev + interface-designer (Team mode, three board tasks)
+**Status:** 1.10.3 is the latest release (2026-11-14): server ping in the route card, bounded relay re-tests, session-scoped Relayed counters, the retuned no-reply watchdog, destination-aware relay choice, ARC Raiders TCP control-plane support and the TCP-connection ownership fix; 1.10.0 added Jedi Outcast and Tibia. Master is CI-green after the 2026-11-16 shadow-gate test fix. Open GitHub feedback is triaged in `docs/github-feedback-audit-2026-11-16.md`: 8 issues (2 bug threads, 5 game requests, 1 fixed-but-open), 10 discussions, 1 community PR whose CI was unblocked. The agent layer (WF-058) is DSH-native with Team-mode personas.
 
 ## Recent entries
+
+### 2026-11-16 - WF-059: GitHub feedback audit - two process bugs, one real fleet signal, one community PR
+
+**Agent:** lead, with `net-eng`, `rust-dev` and `interface-designer` in Team mode (three board tasks, all completed)
+
+Inventory at 1.10.3: 8 open issues, 10 discussions, 1 open PR. The audit found
+and fixed five process defects:
+
+- **Game requests were unlabeled**: the issue template named `game-request`, a
+  label that does not exist, so GitHub silently dropped it on every request. It
+  now uses `game-profile`.
+- **The request form did not ask for the two deciding facts** (gameplay UDP port
+  measured in-game, matchmade vs fixed servers), which is why #148/#153/#168
+  each needed rounds of "what port?". The template asks now, and the maintainer
+  checklist with per-game status and the SDR policy is the new
+  `docs/game-requests.md`.
+- **The request list in `docs/supported-games.md` was stale** (3 of 7) and said
+  nothing about Steam Datagram Relay; both fixed.
+- **The anomaly detector's 674-line self-test never ran on PRs**; it is now part
+  of CI's Infra Script Tests.
+- **A duplicate severity-gate comment** in `health-anomaly.sh` claimed only
+  critical anomalies fail the run, contradicting the tested policy from
+  `e07774b`. Comment corrected, no behaviour change.
+
+Reported-bug verdicts (full report: `docs/github-feedback-audit-2026-11-16.md`):
+
+- **#140/#147 QUIC error 120**: the peer sent the alert; a repository-built relay
+  cannot, because neither side sets ALPN (zero occurrences in tree and history).
+  Almost certainly a QUIC-terminating middlebox on the reporter's path. Latent
+  defect: a control plane with no ALPN is non-conforming; staged ALPN rollout
+  recommended, starting with a `crypto(120)` verdict in
+  `client/src/quic/mod.rs::connect_with_destination`.
+- **#167 Roblox starvation**: the reported line only exists in v1.8.4; 1.10.2
+  retuned the watchdog (20 packets / 8 s) and split the fault variants.
+  `injected=0` has seven benign causes. Real bug on master:
+  `client/src/engine.rs:1394` never copies `ist.last_error` into
+  `snap.interceptor_error`, and `is_active()` still reports true after the recv
+  thread dies, so a dead WinDivert handle is invisible.
+- **#173 PR**: real defect, correct approach (documented scroll shell), but needs
+  CI (the branch is 4 commits behind and fails only on the shadow-gate bug fixed
+  in `a2f7315`), real-window screenshots, deduplicated 420/1400 bounds, and a
+  corrected multi-monitor claim.
+
+**Verified:** `cargo fmt --all --check` clean; the shell change is a comment and
+the workflow change is exercised by this commit's CI; the monitor's red runs
+were read from `43790512557`/`43765890171` and are a real `relay-fra`
+`saved_regression` (-45 ms vs +4.1 ms baseline).
+
+**Open:** `relay-fra` needs draining or fixing (infra); the QUIC ALPN migration
+is wire-visible and needs its own release plan; the `interceptor_error` one-line
+fix and the `is_active()`/error-6 changes on #167; PR #173 needs a branch update
+and screenshots; close #59 (fixed in 1.6.10) and consolidate #147 into #140.
 
 ### 2026-11-16 - Follow-up to WF-058: master's red CI was a stale Linux-only test, not the migration
 

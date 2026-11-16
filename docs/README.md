@@ -23,6 +23,7 @@ Welcome to the LightSpeed documentation wiki - synced from the [source repo](htt
 | [Deploy Proxy](deploy-proxy) | Self-host a proxy on any VPS |
 | [Community Relay Network](community-network) | Run + publish a relay for others |
 | [Troubleshooting](troubleshooting) | Diagnose and fix issues |
+| [Game Requests](game-requests) | How a game request becomes a profile (or an honest "cannot") |
 | [Agent Operations](agent-operations) | How AI agents drive this repo (DeepSeek Harness, personas, team mode) |
 
 ## 🏗️ Architecture & Protocol
@@ -40,4 +41,5 @@ Welcome to the LightSpeed documentation wiki - synced from the [source repo](htt
 | [Glossary](glossary) | Terminology definitions |
 | [Privacy](privacy) | Privacy policy and telemetry |
 | [Agent-System Audit](agent-system-audit-2026-11-16) | The 2026-11-16 DeepSeek Harness migration record |
+| [GitHub Feedback Audit](github-feedback-audit-2026-11-16) | Triage of the open issues, discussions and PR at 1.10.3 |
 | [Contributing](../CONTRIBUTING.md) | Build, test, and submit changes on Windows, macOS or Linux |

@@ -696,19 +696,19 @@ $(printf '%s' "$result" | jq -r '.anomalies[] | "[" + .severity + "] " + .type +
 fi
 
 # ── Severity gate ────────────────────────────────────────────
-# Every anomaly alerts (it is printed and posted to Discord), but only a
-# CRITICAL one fails the run. A relay having a quiet window is a true
-# observation - the idle_relay message says so itself ("traffic
-# distribution, not a failure") - and treating it as a build failure made
-# every scheduled run red on a fleet that was entirely healthy, which is
-# how a monitor stops being read. critical remains an outage signature:
-# zero_relay (clients failing to register), fleet_idle, release_lag,
-# relay_health_failed, relay_missing_from_registry, auth_spike_no_sessions.
+# Every anomaly alerts: it is printed and posted to Discord. The run fails only
+# when a detector outside NON_FATAL_TYPES fires. The three traffic-distribution
+# detectors - idle_relay, abuse_flood, load_skew - describe a quiet or skewed
+# fleet, not an outage, and failing every scheduled run on a healthy fleet is
+# how a monitor stops being read.
 #
-# Set LIGHTSPEED_ANOMALY_STRICT=1 to restore fail-on-any-anomaly.
-# ── Severity gate ────────────────────────────────────────────
-# See NON_FATAL_TYPES above: a run fails only when a detector other than the
-# two traffic-distribution ones fired.
+# Deliberately still fatal, warning severity included: stale_history (the
+# collector stopped), saved_regression and negative_saving_spike (a performance
+# regression), version_lag (a relay left behind), plus the critical outage
+# signatures zero_relay, fleet_idle, release_lag, relay_health_failed,
+# relay_missing_from_registry and auth_spike_no_sessions.
+#
+# Set LIGHTSPEED_ANOMALY_STRICT=1 to fail on any anomaly.
 if [ "$anomaly_count" -gt 0 ]; then
 	if [ "$fatal_count" -eq 0 ] && [ "${LIGHTSPEED_ANOMALY_STRICT:-0}" != "1" ]; then
 		exit 0
