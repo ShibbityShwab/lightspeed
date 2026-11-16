@@ -442,10 +442,8 @@ fn relay_reply_window_message(
     intercepted: u64,
     injected: u64,
     from_relay: u64,
-    probe_accepted: u64,
-    probe_rejected: u64,
-    shadow_accepted: u64,
-    shadow_rejected: u64,
+    probe: (u64, u64),
+    shadow: (u64, u64),
     streak: &ReplyFaultStreak,
     window: Option<RelayReplyFault>,
 ) -> String {
@@ -460,6 +458,8 @@ fn relay_reply_window_message(
         Some(RelayReplyFault::InjectionFailed) => "injection_failed",
         Some(RelayReplyFault::TooFewReplies) => "too_few_replies",
     };
+    let (probe_accepted, probe_rejected) = probe;
+    let (shadow_accepted, shadow_rejected) = shadow;
     format!(
         "Relay reply window judged: intercepted={intercepted} injected={injected} \
          from_relay={from_relay} share={share} streak={} verdict={verdict} \
@@ -629,10 +629,8 @@ fn spawn_relay_reply_watchdog(
                     intercepted_since,
                     injected_since,
                     from_proxy_since,
-                    probe.accepted,
-                    probe.rejected(),
-                    shadow.accepted,
-                    shadow.rejected(),
+                    (probe.accepted, probe.rejected()),
+                    (shadow.accepted, shadow.rejected()),
                     &current.streak,
                     window,
                 )
@@ -6901,7 +6899,7 @@ mod tests {
         let mut streak = ReplyFaultStreak::default();
         let healthy = relay_reply_fault(RELAY_REPLY_TIMEOUT, 54, 13, 13, None);
         assert_eq!(streak.observe(healthy), None);
-        let line = relay_reply_window_message(54, 13, 13, 7, 41, 3, 9, &streak, healthy);
+        let line = relay_reply_window_message(54, 13, 13, (7, 41), (3, 9), &streak, healthy);
         for field in [
             "intercepted=54",
             "injected=13",
@@ -6925,12 +6923,12 @@ mod tests {
         let mut streak = ReplyFaultStreak::default();
         let fault = relay_reply_fault(RELAY_REPLY_TIMEOUT, 60, 0, 0, None);
         assert_eq!(streak.observe(fault), None);
-        let first = relay_reply_window_message(60, 0, 0, 7, 42, 3, 9, &streak, fault);
+        let first = relay_reply_window_message(60, 0, 0, (7, 42), (3, 9), &streak, fault);
         assert!(first.contains("streak=1"), "{first}");
         assert!(first.contains("verdict=no_reply_from_relay"), "{first}");
         assert!(first.contains("share=0.0%"), "{first}");
         assert!(streak.observe(fault).is_some());
-        let second = relay_reply_window_message(60, 0, 0, 7, 42, 3, 9, &streak, fault);
+        let second = relay_reply_window_message(60, 0, 0, (7, 42), (3, 9), &streak, fault);
         assert!(second.contains("streak=2"), "{second}");
         // Every window verdict has a stable name in the trace.
         for (window, verdict) in [
@@ -6944,7 +6942,7 @@ mod tests {
             ),
             (None, "verdict=healthy"),
         ] {
-            let line = relay_reply_window_message(12, 1, 9, 0, 0, 0, 0, &streak, window);
+            let line = relay_reply_window_message(12, 1, 9, (0, 0), (0, 0), &streak, window);
             assert!(line.contains(verdict), "missing {verdict} in {line}");
         }
     }

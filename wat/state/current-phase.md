@@ -65,6 +65,16 @@ WinDivert-feature and **861** QUIC-lib passed, 0 failed. QA gate additionally:
 the task-5 quic integration command 1,471 / 0 / 2. Evidence
 `wat/evidence/2026-11-16/{engine-rank-key,shadow-estimator,infra-cell-labels,ci-quic-suites,wf065-qa}/`.
 
+**CI follow-up (same round):** the first push (`c61c88c`) had a red Windows GUI
+job: the Lead's shadow-counter addition pushed `relay_reply_window_message` to
+9 arguments and CI's `-D warnings` rejects `clippy::too_many_arguments`, which a
+local clippy run only warns about. Fixed structurally by grouping the sampler
+counters into tuple arguments (7 params, no lint suppression), verified with
+`RUSTFLAGS=-Dwarnings cargo clippy -p lightspeed-gui --all-targets`, and re-gated;
+the failing job's log is in the CI run `43854061475`. That run confirmed both new
+gates work before the fix: `QUIC Integration Tests` **success** (16 formerly-dead
+tests running) and `Infra Script Tests` **success** (the locale doc-guard).
+
 **Open:** the new `QUIC Integration Tests` job's first CI run and
 `Infra Script Tests` (with the new doc-guard) are verified only after the push;
 the live in-match path for both samplers is unverified (no game running);
