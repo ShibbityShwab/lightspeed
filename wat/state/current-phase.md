@@ -21,7 +21,18 @@
 - **task-23 `rust-dev` - the CLI's second ranking is retired:** the CLI's default `destination` strategy (`selector.rs`) had its own ordering and could disagree with the canonical key (failing-before: old rule picked EU, canonical picks US). `DestinationAwareSelector` is now a thin adapter over `relay_choice::rank`; ~515 lines and five constants removed; Nearest/Ml untouched; `pooled_estimate` is now test-only.
 - **task-24 `interface-designer` - two live findings fixed:** the per-window INFO line now carries the shadow rejection breakdown (`shadow_rejected=204(no_icmp=0,floor=204,timeout=0,relay=0)`), and the `Server leg` row states the triangle bound as soon as a fresh direct ping proves it, instead of waiting up to 600 s for the next re-race (same sentence/catalog key, no re-rank, no relay change; `docs/design/interface.md` driving fact updated). Live trace proves the early-bound state existed for 57 s; the screenshot of that interval was a capture miss and is reported as such.
 - **task-7 `infra-dev` - monitor instrument:** signed sums are differenced correctly (restart detection from forward-only probes), the scripts read the emitted `lightspeed_telemetry_saved_app_negative_count` (fixtures updated; the old name exists on 0 relays), `saved_regression` needs >=20 weighted samples AND dual-metric agreement and rejects restart-bridged spans, and a new `relay_unreachable_streak` detector covers the ~16-day blind spot (relay-fra 65 snapshots / 389.8 h historically). Real-data replay on 316 snapshots: old rule fires 4 times, new rule 0.
-- **New live finding boarded as task-25:** a relay choice for a *new* game server consumed the *previous* server's fresh direct ping as its floor (`follow_game_server` runs before `poll_relay_health` refreshes `server_ping`); the fix keys the ping to its server and returns None otherwise. Not fixed in this round.
+- **New live finding (task-25, fixed in the same round):** a relay choice for a
+  *new* game server consumed the *previous* server's fresh direct ping as its
+  floor (`follow_game_server` runs before `poll_relay_health` refreshes
+  `server_ping`). The direct ping is now a `ServerPing { server, ms, age_secs }`
+  record keyed to the server it measured; every consumer (ranking floor input,
+  choice-trace comparison, `Server leg` bound, header metric, `Server ping` row,
+  latency trace) passes `None` for a foreign ping - never the previous server's
+  value. Contract documented in `docs/design/interface.md`; +4 tests and a
+  mutation that reproduces the old leak; GUI 177 -> 181. The server-change line
+  was not captured live (no rotation in the 15-min watch) - reported as
+  unverified, with the pre-fix bug and the matching-server control both shown in
+  the trace.
 
 **Verified:** Lead gate on the integrated tree - fmt clean; workspace clippy clean; **1,508** workspace tests across 29 suites, **177** GUI, **1,261** WinDivert-feature and **857** QUIC-lib passed, 0 failed (the drop from WF-065's counts is the 8 retired selector tests plus net test-suite arithmetic). Evidence `wat/evidence/2026-11-16/{wf066-live,latency-timeout-accounting,ranking-reconciliation,infra-monitor-fixes}/`.
 

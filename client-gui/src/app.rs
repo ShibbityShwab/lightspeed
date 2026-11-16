@@ -824,6 +824,27 @@ struct MeasuredServerLeg {
     age: Option<Duration>,
 }
 
+/// The measured direct (ICMP) ping, and the game server it was measured for.
+///
+/// A ping is evidence about exactly one server's path. Storing the value without
+/// its server let a relay choice for a new game server consume the previous
+/// server's fresh ping as this server's triangle floor: `follow_game_server`
+/// runs before `poll_relay_health` refreshes this record, so a choice for the new
+/// server could read the old server's sample (observed live, task-24: a choice
+/// for `91.199.82.221` carried `direct 281` from `91.199.82.162`). Every
+/// consumer - the ranking floor, the choice trace comparison, the `Server leg`
+/// bound, the header metric - must ask for the ping **of the server it is
+/// describing** and treat a foreign record as "not measured".
+#[derive(Clone, Copy, Debug)]
+struct ServerPing {
+    /// The game server this sample was measured against.
+    server: Ipv4Addr,
+    /// Median ICMP round trip, milliseconds.
+    ms: f32,
+    /// Age of the newest burst sample, seconds.
+    age_secs: u64,
+}
+
 /// What the route surface can honestly say about the relay-to-server leg for the
 /// relay in use.
 ///
@@ -1512,9 +1533,11 @@ pub struct LightSpeedApp<P: Platform> {
     /// Cumulative `(up, down)` counters as they stood when this session started,
     /// so the Relayed row describes the current session rather than the process.
     relayed_base: Option<(String, u64, u64)>,
-    /// Direct (ICMP) ping to the game server in ms, with its age in seconds. The
-    /// one figure here that is a real correlated round trip.
-    server_ping: Option<(f32, u64)>,
+    /// Direct (ICMP) ping to a game server in ms, with its age in seconds **and
+    /// the server it was measured for**. The one figure here that is a real
+    /// correlated round trip; a record for another server is not evidence about
+    /// this one (see [`ServerPing`]).
+    server_ping: Option<ServerPing>,
     /// Set while a worker thread runs a direct burst, which blocks for seconds.
     ping_in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// When the latency comparison was last logged, so the trace carries a
@@ -2115,10 +2138,12 @@ impl<P: Platform> LightSpeedApp<P> {
 
         // The measured direct ping bounds every relay's destination leg: a
         // relayed path is never shorter than the direct one it replaces. Only a
-        // fresh measurement may bound the ranking or support a comparison: a
-        // stale ping describes a path the client is no longer measuring, and
-        // flooring a candidate against it would invent a bound.
-        let direct_us = fresh_direct_us(self.server_ping);
+        // fresh measurement **of this server** may bound the ranking or support a
+        // comparison: a stale ping describes a path the client is no longer
+        // measuring, and a ping measured against another server describes a
+        // different path entirely - flooring this candidate against it would
+        // invent a bound (the live cross-server race, task-25).
+        let direct_us = direct_us_for(self.server_ping, server);
         let ranked = match server_location {
             Some(loc) => {
                 lightspeed_client::rank_relays_at_with_direct(server, loc, &candidates, direct_us)
@@ -2787,7 +2812,9 @@ impl<P: Platform> LightSpeedApp<P> {
             .next()
             .and_then(|ip| ip.parse::<std::net::Ipv4Addr>().ok());
         tracing::info!(
-            direct_ms = self.server_ping.map(|(ms, _)| ms),
+            direct_ms = server
+                .and_then(|server| self.server_ping_for(server))
+                .map(|ping| ping.ms),
             direct_jitter_ms = server.map(lightspeed_client::latency::direct_jitter),
             shadow_jitter_ms = lightspeed_client::latency::shadow_direct_jitter_ms(),
             shadow_samples = lightspeed_client::latency::shadow_direct_samples(),
@@ -2944,8 +2971,12 @@ impl<P: Platform> LightSpeedApp<P> {
     /// a worker thread because five probes with timeouts block for seconds.
     fn refresh_server_ping(&mut self, server: std::net::Ipv4Addr) {
         let sample = lightspeed_client::latency::direct_sample(server);
-        self.server_ping = sample.map(|(ms, age)| (ms, age.as_secs()));
         let stale = sample.is_none_or(|(_, age)| age > PING_REFRESH_AFTER);
+        // The record is stamped with the server it was measured for and replaced
+        // wholesale, so a poll for a new server can never leave the previous
+        // server's value looking current.
+        self.server_ping =
+            refreshed_server_ping(server, sample.map(|(ms, age)| (ms, age.as_secs())));
         if !stale {
             return;
         }
@@ -2957,6 +2988,19 @@ impl<P: Platform> LightSpeedApp<P> {
             let _ = lightspeed_client::latency::probe_direct(server);
             flag.store(false, std::sync::atomic::Ordering::Release);
         });
+    }
+
+    /// The direct-ping record, only while it belongs to `server`.
+    ///
+    /// Every consumer that describes a specific server's path asks through here:
+    /// a sample measured against another server is not evidence about this one.
+    /// This is the whole fix for the cross-server floor race observed live
+    /// (task-24 §4): `follow_game_server` runs before `poll_relay_health`, so for
+    /// one frame the stored record can still describe the previous server, and
+    /// the ranking must read that as "direct ping not measured", not as this
+    /// server's floor.
+    fn server_ping_for(&self, server: Ipv4Addr) -> Option<ServerPing> {
+        ping_for_server(self.server_ping, server)
     }
 
     /// What identifies the run the Relayed counters describe: a new relay or a new
@@ -3240,10 +3284,15 @@ impl<P: Platform> LightSpeedApp<P> {
             // shows, and ICMP is the only latency here with real correlation.
             // Otherwise the relay leg, which is always measured. Freshness is one
             // rule ([`SERVER_PING_FRESH_SECS`]), shared with the ranking's floor
-            // and the triangle verdict.
-            let (reading, hint) = match self.server_ping {
-                Some((ms, _)) if fresh_direct_us(self.server_ping).is_some() => {
-                    (ms as f64, i18n::t("route.server_ping_hint"))
+            // and the triangle verdict; the ping is also keyed to the server it
+            // measured (task-25), so a stale record from a previous server is
+            // never shown as this server's ping.
+            let direct_ping = self
+                .game_server_addr()
+                .and_then(|server| self.server_ping_for(server));
+            let (reading, hint) = match direct_ping {
+                Some(ping) if fresh_direct_us(Some((ping.ms, ping.age_secs))).is_some() => {
+                    (ping.ms as f64, i18n::t("route.server_ping_hint"))
                 }
                 _ => (self.status.latest_rtt_ms, i18n::t("route.rtt_hint")),
             };
@@ -3409,8 +3458,15 @@ impl<P: Platform> LightSpeedApp<P> {
         // because the relay leg beside it is instantaneous and swings: a stale
         // probe can legitimately read below the current leg without either
         // number being wrong.
-        if let Some((ms, age)) = self.server_ping {
-            let value = LedgerValue::Data(format!("{ms:.0} ms \u{00b7} {age}s"));
+        // The direct ping is shown only for the server it was measured against;
+        // the age is part of the value so staleness is visible without a second
+        // rule. A record for a previous server is not this server's ping
+        // (task-25), so it is hidden rather than relabelled.
+        if let Some(ping) = self
+            .game_server_addr()
+            .and_then(|server| self.server_ping_for(server))
+        {
+            let value = LedgerValue::Data(format!("{:.0} ms \u{00b7} {}s", ping.ms, ping.age_secs));
             self.ledger_row(ui, narrow, &i18n::t("route.server_ping"), &value);
         }
         // The relay-to-server leg is the half of the path LightSpeed cannot see
@@ -3474,8 +3530,10 @@ impl<P: Platform> LightSpeedApp<P> {
         // The ping may have landed after the choice: state the triangle floor it
         // proves now rather than leaving the row on the prior until the 600 s
         // re-rank. Same verdict, same inputs the ranking would use - no re-rank.
+        // The ping is keyed to `server`, so the previous server's sample is
+        // refused here too (task-25).
         let early_floor_us =
-            early_triangle_floor(self.server_ping, self.ranked_client_leg_us(relay));
+            early_triangle_floor(self.server_ping, server, self.ranked_client_leg_us(relay));
         match server_leg_state(scored, measured, early_floor_us) {
             ServerLegState::Measured(measured) => {
                 let ms = format!("{:.0}", measured.dest_leg_us as f64 / 1000.0);
@@ -3531,7 +3589,10 @@ impl<P: Platform> LightSpeedApp<P> {
             return None;
         }
         let client_leg_us = self.current_client_leg_us()?;
-        relay_cannot_beat_direct(Some(client_leg_us), self.server_ping)
+        // Keyed to the locked server: a ping measured against another server is
+        // not this server's L3d (task-25).
+        let server = self.game_server_addr()?;
+        relay_cannot_beat_direct(Some(client_leg_us), self.server_ping, server)
     }
 
     /// The one-RTT client leg to the relay in use, microseconds.
@@ -5564,7 +5625,8 @@ fn same_relay_endpoint(a: SocketAddrV4, b: SocketAddrV4) -> bool {
 /// be treated as evidence about the path.
 ///
 /// A missing, zero or stale sample yields `None`, so nothing floors the ranking
-/// against a number the client is no longer measuring.
+/// against a number the client is no longer measuring. This freshness step is
+/// about *time* only; [`direct_us_for`] adds the server key.
 fn fresh_direct_us(ping: Option<(f32, u64)>) -> Option<u64> {
     let (ms, age) = ping?;
     // A non-finite value (NaN/inf) is not evidence either; spelling it this way
@@ -5573,6 +5635,39 @@ fn fresh_direct_us(ping: Option<(f32, u64)>) -> Option<u64> {
         return None;
     }
     Some((f64::from(ms) * 1000.0).round() as u64)
+}
+
+/// The direct-ping record, only when it belongs to `server`.
+///
+/// The keying half of the cross-server guard: a sample measured against server A
+/// describes A's path and nothing about B's. Consumers that rank, bound or
+/// display a path for a server ask through here.
+fn ping_for_server(ping: Option<ServerPing>, server: Ipv4Addr) -> Option<ServerPing> {
+    ping.filter(|record| record.server == server)
+}
+
+/// The direct ping in microseconds for `server`, only when the record belongs
+/// to that server and is fresh.
+///
+/// This is the single input every consumer passes to the ranking floor, the
+/// choice-trace comparison and the triangle verdict. `None` means "this server's
+/// direct path is not measured" - never "use the previous server's value".
+fn direct_us_for(ping: Option<ServerPing>, server: Ipv4Addr) -> Option<u64> {
+    let record = ping_for_server(ping, server)?;
+    fresh_direct_us(Some((record.ms, record.age_secs)))
+}
+
+/// The direct-ping record after one `refresh_server_ping` poll for `server`.
+///
+/// The record is replaced wholesale (or cleared when the server has no sample),
+/// so it can never silently keep describing a server the client has moved away
+/// from. Pure so the "new server has no ping yet" ordering is testable.
+fn refreshed_server_ping(server: Ipv4Addr, sample: Option<(f32, u64)>) -> Option<ServerPing> {
+    sample.map(|(ms, age_secs)| ServerPing {
+        server,
+        ms,
+        age_secs,
+    })
 }
 
 /// Compare a whole-path estimate with the measured direct ping.
@@ -5702,13 +5797,15 @@ fn server_leg_state(
 /// two measurements the client already owns - a fresh ICMP ping and the relay's
 /// measured one-RTT client leg - not a new choice: nothing here re-ranks, moves
 /// the session, or claims to have measured the server leg. `None` until both
-/// inputs are present and the ping is fresh ([`SERVER_PING_FRESH_SECS`]); a stale
-/// ping must never manufacture a bound.
+/// inputs are present, the ping is fresh ([`SERVER_PING_FRESH_SECS`]) **and the
+/// ping was measured against `server`**; a stale or foreign ping must never
+/// manufacture a bound.
 fn early_triangle_floor(
-    direct_ping: Option<(f32, u64)>,
+    ping: Option<ServerPing>,
+    server: Ipv4Addr,
     client_leg_us: Option<u64>,
 ) -> Option<u64> {
-    let direct = fresh_direct_us(direct_ping)?;
+    let direct = direct_us_for(ping, server)?;
     let client = client_leg_us?;
     Some(direct.saturating_sub(client))
 }
@@ -5732,13 +5829,15 @@ fn scored_for_relay(
 /// already reaches the measured direct ping, no server leg can make the relayed
 /// path shorter, whatever the server leg is. Both inputs are client
 /// measurements: the one-RTT client leg and the ICMP ping, and the ping must be
-/// fresh for the claim to stand. `None` when either is missing.
+/// fresh **and measured against `server`** for the claim to stand. `None` when
+/// either is missing.
 fn relay_cannot_beat_direct(
     client_leg_us: Option<u64>,
-    ping: Option<(f32, u64)>,
+    ping: Option<ServerPing>,
+    server: Ipv4Addr,
 ) -> Option<(u64, u64)> {
     let client = client_leg_us?;
-    let direct = fresh_direct_us(ping)?;
+    let direct = direct_us_for(ping, server)?;
     (client >= direct).then_some((client, direct))
 }
 
@@ -7194,15 +7293,16 @@ mod tests {
     }
     use super::{
         apply_discovery_result, apply_target_choice, close_decision, compare_to_direct,
-        direct_claim_label, draft_reasons, early_triangle_floor, fresh_direct_us, game_editor_body,
-        game_pick_rows, games, pair_relay_legs, picker_status, primary_action, process_picker,
-        proxy_index_for, ranking_state_label, relay_cannot_beat_direct, relay_health_verdict,
-        same_relay_endpoint, save_user_profiles, scored_for_relay, server_from_fields,
-        server_leg_state, should_apply_race, should_race, switch_is_safe, target_for_pick,
-        target_front_door, target_summary, validate_draft, CloseDecision, EditorActions,
-        GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState,
-        ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ShadowWindowCounters,
-        TargetRowAction, PRIOR_UNCERTAINTY_US, SERVER_PING_FRESH_SECS,
+        direct_claim_label, direct_us_for, draft_reasons, early_triangle_floor, fresh_direct_us,
+        game_editor_body, game_pick_rows, games, pair_relay_legs, picker_status, ping_for_server,
+        primary_action, process_picker, proxy_index_for, ranking_state_label,
+        refreshed_server_ping, relay_cannot_beat_direct, relay_health_verdict, same_relay_endpoint,
+        save_user_profiles, scored_for_relay, server_from_fields, server_leg_state,
+        should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
+        target_summary, validate_draft, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
+        MeasuredServerLeg, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
+        RelayHealthVerdict, ServerLegState, ServerPing, ShadowWindowCounters, TargetRowAction,
+        PRIOR_UNCERTAINTY_US, SERVER_PING_FRESH_SECS,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -7439,6 +7539,15 @@ mod tests {
         }
     }
 
+    /// A direct-ping record for `ip`, in milliseconds, `age_secs` old.
+    fn ping_for(ip: [u8; 4], ms: f32, age_secs: u64) -> ServerPing {
+        ServerPing {
+            server: std::net::Ipv4Addr::from(ip),
+            ms,
+            age_secs,
+        }
+    }
+
     /// The shadow sampler's counters as one judged window reads them; `rejected`
     /// is the sum of the four reasons, exactly as `ShadowCounters::rejected()`
     /// defines it.
@@ -7586,44 +7695,192 @@ mod tests {
 
     #[test]
     fn the_early_bound_needs_a_fresh_ping_and_a_measured_client_leg() {
+        let server = std::net::Ipv4Addr::new(91, 199, 82, 162);
+        let ping = ping_for([91, 199, 82, 162], 279.474, 12);
         // 279.474 ms direct - 219.170 ms client leg = 60.304 ms floor: the same
         // arithmetic `relay_choice::apply_floor` performs at the next ranking.
         assert_eq!(
-            early_triangle_floor(Some((279.474, 12)), Some(219_170)),
+            early_triangle_floor(Some(ping), server, Some(219_170)),
             Some(60_304)
         );
         // A stale ping must not manufacture a bound (one freshness rule, shared
         // with the ranking's floor and the header metric).
         assert_eq!(
-            early_triangle_floor(Some((279.474, SERVER_PING_FRESH_SECS + 1)), Some(219_170)),
+            early_triangle_floor(
+                Some(ping_for(
+                    [91, 199, 82, 162],
+                    279.474,
+                    SERVER_PING_FRESH_SECS + 1
+                )),
+                server,
+                Some(219_170)
+            ),
             None
         );
-        assert_eq!(early_triangle_floor(None, Some(219_170)), None);
+        assert_eq!(early_triangle_floor(None, server, Some(219_170)), None);
         // No measured client leg: nothing to subtract, so no proof.
-        assert_eq!(early_triangle_floor(Some((279.474, 12)), None), None);
-        assert_eq!(early_triangle_floor(Some((0.0, 1)), Some(219_170)), None);
+        assert_eq!(early_triangle_floor(Some(ping), server, None), None);
+        assert_eq!(
+            early_triangle_floor(
+                Some(ping_for([91, 199, 82, 162], 0.0, 1)),
+                server,
+                Some(219_170)
+            ),
+            None
+        );
     }
 
     #[test]
     fn the_triangle_verdict_needs_two_fresh_client_measurements() {
+        let server = std::net::Ipv4Addr::new(3, 237, 142, 3);
+        let fresh = ping_for([3, 237, 142, 3], 283.474, 12);
         // EWR with one-RTT legs: a 305.84 ms client leg against a 283.47 ms
         // direct ping. A relay hop cannot make that path shorter, whatever the
         // server leg is.
         assert_eq!(
-            relay_cannot_beat_direct(Some(305_840), Some((283.474, 12))),
+            relay_cannot_beat_direct(Some(305_840), Some(fresh), server),
             Some((305_840, 283_474))
         );
         // LAX's 220.17 ms leg does not reach the direct ping: no verdict.
         assert_eq!(
-            relay_cannot_beat_direct(Some(220_170), Some((283.474, 12))),
+            relay_cannot_beat_direct(Some(220_170), Some(fresh), server),
             None
         );
-        assert_eq!(relay_cannot_beat_direct(None, Some((283.474, 12))), None);
-        assert_eq!(relay_cannot_beat_direct(Some(305_840), None), None);
+        assert_eq!(relay_cannot_beat_direct(None, Some(fresh), server), None);
+        assert_eq!(relay_cannot_beat_direct(Some(305_840), None, server), None);
         // Staleness is the same rule the ranking's floor and the header use.
         assert_eq!(
-            relay_cannot_beat_direct(Some(305_840), Some((283.474, SERVER_PING_FRESH_SECS + 1))),
+            relay_cannot_beat_direct(
+                Some(305_840),
+                Some(ping_for(
+                    [3, 237, 142, 3],
+                    283.474,
+                    SERVER_PING_FRESH_SECS + 1
+                )),
+                server
+            ),
             None
+        );
+    }
+
+    // ── The direct ping is keyed to the server it measured (task-25) ─────
+    //
+    // The live defect: `follow_game_server` runs before `poll_relay_health`
+    // refreshes `server_ping`, so a choice for a NEW game server could consume the
+    // PREVIOUS server's fresh ping as its triangle floor (observed: a choice for
+    // `91.199.82.221` carried `direct 281` from `91.199.82.162`). Every consumer
+    // must ask for the ping of the server it is describing.
+
+    #[test]
+    fn a_ping_measured_for_another_server_is_not_evidence_for_this_one() {
+        let server_a = std::net::Ipv4Addr::new(91, 199, 82, 162);
+        let server_b = std::net::Ipv4Addr::new(91, 199, 82, 221);
+        let ping_a = ping_for([91, 199, 82, 162], 279.474, 12);
+
+        // The ranking floor and the choice-trace comparison both read this value.
+        assert_eq!(direct_us_for(Some(ping_a), server_b), None);
+        let claim = direct_claim_label(direct_us_for(Some(ping_a), server_b), 286_000);
+        assert!(
+            claim.contains("direct ping not measured"),
+            "a foreign ping must not produce a comparison: {claim}"
+        );
+        // The triangle verdict and the early Server-leg bound refuse it too.
+        assert_eq!(
+            relay_cannot_beat_direct(Some(305_840), Some(ping_a), server_b),
+            None
+        );
+        assert_eq!(
+            early_triangle_floor(Some(ping_a), server_b, Some(219_170)),
+            None
+        );
+        // The header/ledger metric reads through the same key.
+        assert!(ping_for_server(Some(ping_a), server_b).is_none());
+        assert!(
+            ping_for_server(Some(ping_a), server_a).is_some(),
+            "the same record is still valid evidence for its own server"
+        );
+        assert_eq!(direct_us_for(None, server_b), None);
+    }
+
+    #[test]
+    fn a_matching_servers_ping_is_used_exactly_as_before() {
+        let server_a = std::net::Ipv4Addr::new(91, 199, 82, 162);
+        let ping_a = ping_for([91, 199, 82, 162], 279.474, 12);
+
+        assert!(ping_for_server(Some(ping_a), server_a).is_some());
+        assert_eq!(direct_us_for(Some(ping_a), server_a), Some(279_474));
+        let claim = direct_claim_label(direct_us_for(Some(ping_a), server_a), 279_500);
+        assert!(
+            claim.contains("not better than direct (+0 ms, direct 279 ms)"),
+            "{claim}"
+        );
+        // 279.474 - 219.170 = 60.304 ms floor, identical to the task-24 arithmetic.
+        assert_eq!(
+            early_triangle_floor(Some(ping_a), server_a, Some(219_170)),
+            Some(60_304)
+        );
+        assert_eq!(
+            relay_cannot_beat_direct(Some(305_840), Some(ping_a), server_a),
+            Some((305_840, 279_474))
+        );
+    }
+
+    #[test]
+    fn the_observed_poll_ordering_never_reuses_the_previous_servers_ping() {
+        // The production order inside one GUI frame: `follow_game_server` (ranking)
+        // runs before `poll_relay_health` (refresh). Model both steps with the pure
+        // helpers so the seam is pinned.
+        let server_a = std::net::Ipv4Addr::new(91, 199, 82, 162);
+        let server_b = std::net::Ipv4Addr::new(91, 199, 82, 221);
+
+        // 1. An earlier poll refreshed the record for server A.
+        let record = refreshed_server_ping(server_a, Some((279.474, 12)));
+        // 2. The game moves to server B; ranking runs first, while the record is
+        //    still A's. It must read "not measured" for B, not A's 279 ms.
+        assert_eq!(direct_us_for(record, server_b), None);
+        assert_eq!(early_triangle_floor(record, server_b, Some(219_170)), None);
+        assert_eq!(
+            direct_claim_label(direct_us_for(record, server_b), 286_000),
+            ", direct ping not measured"
+        );
+        // 3. `poll_relay_health` then refreshes for B before B's burst returns:
+        //    the record is replaced by None, so A's value is gone, not reused.
+        let record = refreshed_server_ping(server_b, None);
+        assert_eq!(direct_us_for(record, server_b), None);
+        assert_eq!(direct_us_for(record, server_a), None);
+        // 4. B's own ping lands and is used.
+        let record = refreshed_server_ping(server_b, Some((281.0, 4)));
+        assert_eq!(direct_us_for(record, server_b), Some(281_000));
+        assert_eq!(direct_us_for(record, server_a), None);
+    }
+
+    #[test]
+    fn the_early_bound_refuses_a_foreign_ping() {
+        use lightspeed_client::DestinationLegSource;
+        let server_a = std::net::Ipv4Addr::new(91, 199, 82, 162);
+        let server_b = std::net::Ipv4Addr::new(91, 199, 82, 221);
+        let ping_a = ping_for([91, 199, 82, 162], 279.474, 12);
+        let prior = scored_relay(
+            [10, 0, 0, 2],
+            219_000,
+            41_000,
+            DestinationLegSource::RegionPrior,
+            0,
+        );
+
+        // A fresh ping from the previous server must leave the row on the prior...
+        let foreign_floor = early_triangle_floor(Some(ping_a), server_b, Some(219_000));
+        assert_eq!(foreign_floor, None);
+        assert_eq!(
+            server_leg_state(Some(&prior), None, foreign_floor),
+            ServerLegState::Prior { prior_us: 41_000 }
+        );
+        // ...while the same ping for its own server proves the bound.
+        let own_floor = early_triangle_floor(Some(ping_a), server_a, Some(219_000));
+        assert_eq!(own_floor, Some(60_474));
+        assert_eq!(
+            server_leg_state(Some(&prior), None, own_floor),
+            ServerLegState::Bounded { floor_us: 60_474 }
         );
     }
 

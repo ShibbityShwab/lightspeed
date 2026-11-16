@@ -88,6 +88,16 @@ Rules for these states:
   the header's metric, the ranking's triangle floor, the early bound and this
   verdict. A stale ping may not floor a candidate, decide a verdict, or be
   displayed as current.
+- A direct ping is evidence about **exactly one server**. The ranking floor, the
+  choice trace's direct comparison, the `Server leg` bound, the header metric and
+  the `Server ping` row all use the ping only when it was measured against the
+  server being described; a record for the previous server is treated as
+  "direct ping not measured" and never reused (task-25: `follow_game_server` runs
+  before `poll_relay_health` refreshes the store, so for one frame it can still
+  hold the previous server's sample - observed live as a choice for
+  `91.199.82.221` carrying `direct 281` from `91.199.82.162`). A ping whose
+  server does not match may not floor a candidate, support a comparison, prove a
+  bound, or be displayed as the current server's ping.
 - The early (pre-ranking) bound is **not a second ranking rule**: it is
   `L3d − L1` from the same two inputs the ranking's `apply_floor` consumes, it
   only renders when it is stronger than the row it replaces, it re-ranks
