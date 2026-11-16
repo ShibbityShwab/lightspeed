@@ -253,12 +253,17 @@ pub struct InterceptorCounters {
     /// Proxy responses received, including keepalive echoes and frames that
     /// failed to decode. Diagnostic total; not a verdict input.
     pub packets_from_proxy: AtomicU64,
-    /// Proxy game-data replies: decoded, non-keepalive datagrams.
+    /// Proxy game-data replies: datagrams whose tunnel frame decoded and that
+    /// were not keepalives.
     ///
-    /// This, not [`Self::packets_from_proxy`], is what the no-reply watchdog
-    /// compares against `packets_injected`. Keepalive echoes and undecodable
-    /// frames never reach the injector, so counting them as returns would
-    /// report a local injection fault for a relay that only echoed our probes.
+    /// The increment runs after the tunnel-header decode and the keepalive
+    /// filter, before the FEC/TCP payload decode: a frame whose payload later
+    /// fails to decode still counts, because the return path worked. This, not
+    /// [`Self::packets_from_proxy`], is what the no-reply watchdog compares
+    /// against `packets_injected`. Keepalive echoes and frames whose tunnel
+    /// header did not decode never reach the injector, so counting them as
+    /// returns would report a local injection fault for a relay that only
+    /// echoed our probes.
     pub packets_reply_data: AtomicU64,
     /// Errors (intercept or inject failures).
     pub errors: AtomicU64,
@@ -460,8 +465,10 @@ pub struct InterceptorStats {
     pub packets_injected: u64,
     pub bytes_injected: u64,
     pub packets_from_proxy: u64,
-    /// Decoded, non-keepalive replies: the datagrams a working injector is
-    /// expected to deliver, and the only return count a fault verdict may use.
+    /// Replies whose tunnel frame decoded and that were not keepalives: the
+    /// datagrams a working injector is expected to deliver, and the only return
+    /// count a fault verdict may use. The FEC/TCP payload decode has not run
+    /// yet when this is counted.
     pub packets_reply_data: u64,
     /// Per-game-destination counters: the only trustworthy reply ratio.
     pub flows: Vec<FlowSnapshot>,

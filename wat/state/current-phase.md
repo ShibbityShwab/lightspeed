@@ -11,6 +11,63 @@
 
 ## Recent entries
 
+### 2026-11-16 - WF-063: fallback state contract, QA parity fixes, and the reason relay choice is blind
+
+**Agent:** lead + `rust-dev` (task-6) + `interface-designer` (task-11) + `net-eng` (task-12); four board tasks completed including the earlier relay-fix chain
+
+Three parallel tasks landed, then the Lead re-gated the integrated tree.
+
+- **task-6 `rust-dev` - QA parity fixes.** The WinDivert fatal-handle arm now
+  increments `errors` as well as recording `last_error`/`run_failed` (extracted
+  into `record_fatal_receive_error`, unit-tested),
+  so a fallback verdict can no longer print `errors=0` beside "os error 6"; the
+  "decoded" wording around `packets_reply_data` now matches what is actually
+  counted (tunnel-frame decode + non-keepalive, before FEC/TCP payload decode).
+  Mutation-checked; WinDivert-feature suite 1,203 passed.
+- **task-11 `interface-designer` - the fallback state contract.** The design doc
+  now names **eleven** states, including *re-test pending* (`relay_retry_at` from
+  `ReplyFallback.due`; the SAME relay is judged again) and *relay recovered* (trace
+  only, no banner). The overclaiming "relay is not dropping your traffic" became
+  "the outbound leg is clean" - that is what the client can observe. Every judged
+  window now emits one trace line
+  (`Relayed window judged: intercepted/injected/from_relay/share/streak/verdict`),
+  so a live "no false positive" proof is direct instead of absence-based. GUI 167
+  tests; live session 09:09-09:13Z: 6 judged windows, shares 33.3-110%, streak 0,
+  0 fallbacks/WARN/ERROR, 0 relay changes after relaying started.
+- **task-12 `net-eng` - `docs/server-leg-signal.md` (the real "sub-optimal relay"
+  cause).** `RegionPrior` is not a fallback: it is the **only reachable**
+  destination-leg source at this commit (`destination.rs::note_inbound` records
+  nothing and `observe_tunnelled` has no production caller), and both app-RTT
+  estimators used by the GUI are **invalid** - 25/25 `relay_app_ms` values are
+  below the measured client->relay leg (median ratio 0.129: it times the send
+  interval) and the one `shadow_app_ms` sample was 0.42 ms. The relay's
+  `/metrics` upstream lag cannot substitute (unpaired, relay-wide, n=0 on 6/8
+  relays in a 50 s window). The chooser also compares a **2-RTT HTTP wall time**
+  as `client_leg_us` against 1-RTT estimates, and the geometric prior compresses
+  US-coast differences 19x. Recommendation: **v1** client-only quiet-flow
+  tunnelled RTT (no wire change, $0) to make `Measured` reachable; **v2**
+  owner-gated relay-vantage destination probe; keep the prior labelled. Board
+  tasks 13/14/15 filed.
+- **Retraction recorded:** the WF-062 entry/decision/evidence quoted
+  "relay 150 ms faster than direct" from those app-RTT estimators; task-12
+  showed they are invalid, so that figure is retracted in the state, the decision
+  log and `lead-diagnosis.md`. The watchdog fix stands on the 24.07% ratio case,
+  the hopping and the six-hour history poisoning - not on that number. The audit
+  F6 relay-fra text now also marks its `saved_app` figures unsupported.
+
+**Verified:** Lead gate on the integrated tree - fmt clean, workspace clippy
+clean, **1,449** workspace (29 suites), **167** GUI, **1,203** WinDivert-feature,
+**827** QUIC-lib tests passed, 0 failed. CI for the previous fix `46c1a61` is
+green in all workflows. Evidence `wat/evidence/2026-11-16/` (relay-hopping/,
+server-leg-signal/, rust-dev-f1f2/, lead-gate.log).
+
+**Open:** re-test-pending screenshot blocked (needs a genuine zero-return chain;
+forcing it would mean fault injection on the owner's live match); v1/v2 server-leg
+work on board tasks 13/14/15; the monitor instrument (task-7), CI quic-suite
+coverage (task-5), per-game signal (task-8, now estimator-suspect first),
+per-game requests (task-4) remain. The live error-6 path is still only
+unit/mutation verified.
+
 ### 2026-11-16 - WF-062: the relay watchdog stopped abandoning healthy relays (owner report: "jumps around to different relay")
 
 **Agent:** lead + `interface-designer` (fix, task-9) + `qa-engineer` (independent verification + live run, task-10)
@@ -18,11 +75,14 @@
 Owner report: the app jumps between relays and picks a sub-optimal one while
 idling on the same server. Live-reproduced on ROB RUN (the owner's game):
 
-- **The damning window:** on EWR the relayed path was **150 ms faster than
-  direct** (`relay_app_ms` 107 vs `shadow_app_ms` 257) and the relay was
-  returning and injecting replies (13 of 54 intercepted = **24.07%**), but the
-  watchdog required a quarter of the traffic back in one 8 s window and took the
-  session DIRECT - the slow path the owner was feeling.
+- **The damning window:** on EWR the watchdog took the session DIRECT at a
+  return share of **24.07%** (13 of 54 intercepted) because the old rule wanted
+  a quarter of the traffic back in one 8 s window - while the relay was
+  returning and injecting replies. (The `relay_app_ms`/`shadow_app_ms`
+  comparison printed at the same time said the relay was 150 ms faster, but
+  task-12 later showed those app-RTT estimators are invalid - `relay_app_ms` is
+  below the client->relay leg - so that number is **not** evidence and is
+  retracted here; the ratio, the hopping and the history poisoning are.)
 - **The hopping:** an earlier run selected LAX -> EWR -> FRA -> LAX, each with
   `Restarted interception on the new relay`, after watchdog verdicts were written
   into `relay-history` (`594/0`, `545/0`), which then excluded working relays for

@@ -28,11 +28,13 @@ pub struct InterceptorHealth {
     pub detected_server: Option<std::net::SocketAddrV4>,
     pub packets_intercepted: u64,
     pub packets_injected: u64,
-    /// Decoded, non-keepalive game-data replies received from a known relay.
+    /// Game-data replies received from a known relay whose tunnel frame decoded
+    /// and that were not keepalives.
     /// Read beside `packets_injected` so a relay that returned nothing can be
     /// told apart from a client that received replies and failed to inject
-    /// them. Keepalive echoes are excluded: counting them would report a local
-    /// injection fault for a relay that only answered our own probes.
+    /// them. Keepalive echoes and frames whose tunnel header did not decode are
+    /// excluded: counting them would report a local injection fault for a relay
+    /// that only answered our own probes.
     pub packets_reply_data: u64,
     /// The interceptor's last recorded error, when it has one.
     pub last_error: Option<String>,

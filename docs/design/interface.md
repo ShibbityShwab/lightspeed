@@ -1,11 +1,4 @@
-# Interface design
-
-> **Pending update (2026-11-16):** the relay-fallback states gained two fields the
-> inventory below does not name yet — a *re-test pending* state (the session is
-> direct while the same relay is re-tested, `retry_in` counts down) and a
-> *relay recovered* transition that closes the chain. The design follow-up is
-> board task-11 (interface-designer); this note exists so the next reader knows
-> the inventory is one state short until that task lands.: LightSpeed desktop client
+# Interface design: LightSpeed desktop client
 
 This is the working method and the state contract for `client-gui`. It exists because the
 GUI's worst bugs have been **state bugs**, not pixel bugs: a window that said `OPTIMIZING`
@@ -28,17 +21,29 @@ while traffic was on the direct path, `No game detected` under a pinned game, an
 
 ## State contract
 
-| State | What the window must say | Where it comes from |
+**Eleven states.** Each row has exactly one driving fact and the sentence the window must
+show in that state. A state the client cannot observe must not be shown (rules below); a
+state the client can observe but the window has no room to name is still listed here, with
+the trace line that carries it.
+
+| State | What the window must say | Driving fact (single source) |
 | --- | --- | --- |
 | Idle | Not optimizing, relay connected or not | engine status |
 | Connecting | Relay being reached | control plane |
-| Holding | Traffic stays direct until a relay is chosen for the locked server | `direct_fallback` + `sent == 0` |
+| Holding | Traffic stays direct until a relay is chosen for the locked server | `direct_fallback` + `sent == 0` (`is_holding`) |
 | Choosing | A relay is being ranked for the server | destination-aware chooser |
-| Relaying | Route = selected relay; sent and returned both visible | interceptor counters |
-| Direct fallback | The relay was abandoned; why | watchdog verdict |
-| Server rejects relay | Three spaced re-tests failed for this server | `relay_rejected` |
+| Relaying | Route = selected relay; `Relayed` shows sent and returned in both directions | interceptor counters |
+| Direct fallback | `DIRECT`, with `Direct fallback` as the route line and the ledger's `Path`; the relay was abandoned, and why | watchdog verdict: the same fault held for `RELAY_REPLY_STREAK` = 2 consecutive judged windows, each with >= `RELAY_REPLY_MIN_INTERCEPTED` = 20 intercepted and a return share below one in `RETURN_SHARE_DENOMINATOR` = 8 - unless the server's own flow pair shows a working share. `relay_reply_fault` + `ReplyFaultStreak` are the only place this is derived |
+| Re-test pending | `DIRECT`, route line `Direct fallback · retry in {secs}s`; the relay row still names the abandoned relay | `relay_retry_at`, the watchdog's `ReplyFallback.due`, published only while `retry_after_fallback` is on; at zero the hold lifts and the **same** relay is judged again - no re-rank, no interception restart |
+| Server rejects relay | `DIRECT`, route line and ledger's `Path` = `Server rejects the relay` | `relay_rejection`: the re-tests are spent (`RELAY_RETRY_BACKOFF` exhausted, or retries switched off); only a chain that returned nothing at all on every window is also remembered as a relay failure |
+| Relay recovered | The normal `Relaying` sentence: the chain is closed and nothing is remembered as a failure. The recovery itself is trace-only - the window must not invent a "recovered" banner | a judged window with a working return share (>= 1 reply in 8) closes the fallback chain; trace line `The relay is returning this server's traffic again; the fallback chain is closed` |
 | Needs elevation | The action is to restart as administrator | platform check |
 | Error | What failed, in the engine's own words | engine error |
+
+The fallback surface reads top to bottom as one story: traffic goes direct
+(`Direct fallback`), a countdown says when the same relay is re-tested (`Re-test pending`),
+a healthy window ends the story (`Relay recovered`), and only a chain that never returned
+anything at all and spent its retries becomes `Server rejects the relay`.
 
 Rules that follow from the contract:
 
@@ -48,7 +53,12 @@ Rules that follow from the contract:
   leg to the relay, not the game's own ping.
 - Counters show both directions. A sent-only counter reads as health when the return path
   is dead.
-- A state the engine cannot distinguish must not be invented by the UI.
+- The window may claim only what the client measures. `Relayed` counts datagrams the client
+  intercepted and sent; the client cannot see what the relay did with them afterwards, so
+  no sentence may claim the relay's forwarding is healthy. The relay verdict line reports
+  the outbound leg only ("the outbound leg is clean"), never the relay's delivery.
+- A state the engine cannot distinguish must not be invented by the UI. `Relay recovered`
+  is trace-only for exactly this reason; the window falls back to the `Relaying` sentence.
 
 ## Layout spec (decided 2026-11-14)
 
@@ -140,7 +150,11 @@ Open:
 
 ## Verification protocol
 
-- Capture the real window with the `computer` tool at ~435 px and ~1270 px.
+- Capture the real window at the widths the shipped build allows. Today
+  `main.rs` pins the viewport to 320 px (min = max), so **the 320 px capture is
+  the real one**; the 435/1270 px captures in the layout spec need a resizable
+  build and are not reachable in this one. State that in the report rather than
+  claiming a wide capture.
 - Read the screenshot, not the code: the question is what a user sees, not what the
   bindings say.
 - For status changes, force the state (start a boost, let the watchdog fall back) and

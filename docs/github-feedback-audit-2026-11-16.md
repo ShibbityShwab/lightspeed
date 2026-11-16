@@ -128,8 +128,16 @@ exports `..._saved_app_negative_count` (an extra `ms`; the CI fixtures share the
 typo). relay-fra itself is healthy: `/health` 200 in 0.39 s, v1.10.3,
 39.6 h uptime, and positive app-level saving (+50.5 ms over 122 pairs in the
 alert window, +32.3 ms over 409 live; the recommender lists it as necessary).
-The real residual signal is per-game, not per-relay (`fortnite/US` negative on
-both fra and ewr-1). The "in the Discord channel" claim was also wrong:
+**Caveat (task-12, same day):** those app-level saving figures come from the
+client's `saved_app` telemetry, and task-12 showed the app-RTT estimator behind it
+is invalid (`relay_app_ms` runs below the measured client→relay leg, i.e. it
+times the send interval, not a round trip). Treat the app-saving numbers as
+unsupported; the relay-health case rests on `/health`, uptime, packet counters and
+the monitor's `saved_ms` series, not on `saved_app`. The real residual signal is
+per-game, not per-relay (`fortnite/US` negative on
+both fra and ewr-1) — and task-8 must now also test whether that signal is the
+estimator artifact rather than routing. The "in the Discord channel" claim was
+also wrong:
 `DISCORD_WEBHOOK` does not exist in the repository secrets, so these alerts were
 never delivered. Evidence: `wat/evidence/2026-11-16/relay-fra/report.md`;
 follow-ups: board task-7 (instrument fixes) and task-8 (per-game signal).

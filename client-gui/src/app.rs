@@ -411,6 +411,44 @@ fn relay_reply_fault_message(
     }
 }
 
+/// The trace line for every judged return-path window, healthy or not.
+///
+/// The fault lines above only exist when the watchdog acts, so a run that
+/// stayed relayed could only defend itself by the absence of a false positive
+/// (QA finding F1). One line per judgement makes that proof direct: the
+/// counters the decision read, the share they produce, the verdict, and the
+/// streak the next window will extend. Judgements are at least
+/// [`RELAY_REPLY_TIMEOUT`] apart by construction - the baselines are re-taken
+/// after each one - so the 2 Hz poll cannot turn this into a flood.
+///
+/// `share` is the ratio the 1-in-8 floor judges, `injected / intercepted`; a
+/// window that carried no traffic at all prints `n/a` and is never judged in
+/// practice.
+fn relay_reply_window_message(
+    intercepted: u64,
+    injected: u64,
+    from_relay: u64,
+    streak: &ReplyFaultStreak,
+    window: Option<RelayReplyFault>,
+) -> String {
+    let share = if intercepted == 0 {
+        "n/a".to_string()
+    } else {
+        format!("{:.1}%", 100.0 * injected as f64 / intercepted as f64)
+    };
+    let verdict = match window {
+        None => "healthy",
+        Some(RelayReplyFault::NoReplyFromRelay) => "no_reply_from_relay",
+        Some(RelayReplyFault::InjectionFailed) => "injection_failed",
+        Some(RelayReplyFault::TooFewReplies) => "too_few_replies",
+    };
+    format!(
+        "Relay reply window judged: intercepted={intercepted} injected={injected} \
+         from_relay={from_relay} share={share} streak={} verdict={verdict}",
+        streak.count
+    )
+}
+
 /// Spawn the no-reply fallback on a background thread.
 ///
 /// It must not run in the UI loop: a relay or interceptor restart can block
@@ -557,6 +595,20 @@ fn spawn_relay_reply_watchdog(
                 Some((flow_sent, flow_replied)),
             );
             let fault = current.streak.observe(window);
+            // One line per judgement, healthy or not: direct evidence that the
+            // watchdog looked at this window and what it saw, instead of an
+            // absence of WARN lines standing in for a verdict.
+            tracing::info!(
+                server = %server,
+                "{}",
+                relay_reply_window_message(
+                    intercepted_since,
+                    injected_since,
+                    from_proxy_since,
+                    &current.streak,
+                    window,
+                )
+            );
             // Each judgement starts a fresh window: the next verdict must be new
             // evidence, not the same counters re-read half a second later.
             current.window_started = now;
@@ -691,10 +743,12 @@ impl RelayHealthVerdict {
     fn sentence(&self) -> String {
         match self {
             Self::Idle => "no traffic to judge".to_string(),
+            // The client sees these counters: intercepted datagrams against
+            // datagrams the tunnel sent. It cannot see what the relay did with
+            // them afterwards, so the sentence must not claim the relay's
+            // forwarding is healthy - only this machine's outbound leg.
             Self::Healthy => {
-                "every relayed datagram left for the relay; the relay is not dropping your \
-                 traffic on the way out"
-                    .to_string()
+                "every relayed datagram left for the relay; the outbound leg is clean".to_string()
             }
             Self::Unsent { unsent, decided } => format!(
                 "{unsent} of {decided} relayed datagrams never left for the relay in the last \
@@ -6073,8 +6127,8 @@ fn group_digits(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        lock_or_recover, relay_reply_fault, relay_reply_fault_message, relay_switch_allowed,
-        retest_is_about, RelayReplyFault, ReplyFaultStreak, RetestTarget,
+        lock_or_recover, relay_reply_fault, relay_reply_fault_message, relay_reply_window_message,
+        relay_switch_allowed, retest_is_about, RelayReplyFault, ReplyFaultStreak, RetestTarget,
         RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_STREAK, RELAY_REPLY_TIMEOUT,
     };
 
@@ -6424,26 +6478,84 @@ mod tests {
     }
 
     #[test]
-    fn every_starvation_verdict_carries_the_error_fields() {
-        // A fallback is the moment a user asks "which side failed". Only the
-        // injection-failure arm carried the error counters and the last fatal
-        // message, so the other two verdicts left that question unanswerable -
-        // including the WinDivert invalid-handle case that killed the data
-        // plane in issue #167.
-        let message = relay_reply_fault_message(
-            RelayReplyFault::TooFewReplies,
-            152,
-            16,
-            16,
-            3,
-            Some("WinDivert receive handle is invalid (os error 6); interception stopped"),
-        );
-        assert!(message.contains("errors=3"), "{message}");
-        assert!(message.contains("os error 6"), "{message}");
-        assert!(
-            !message.contains("last_error=none"),
-            "a recorded error must not print as none: {message}"
-        );
+    fn every_relay_reply_fault_carries_the_error_fields() {
+        // A fallback is the moment a user asks "which side failed", so every
+        // arm - not just the injection-failure one - must carry the error
+        // counters and the last fatal message. The sibling
+        // `a_silent_relay_and_a_broken_injector_are_told_apart` separates the
+        // three causes; this keeps each arm's trace line honest, including the
+        // WinDivert invalid-handle case that killed the data plane in issue
+        // #167.
+        let last_error =
+            Some("WinDivert receive handle is invalid (os error 6); interception stopped");
+        for (fault, intercepted, injected, from_relay) in [
+            (RelayReplyFault::NoReplyFromRelay, 68, 0, 0),
+            (RelayReplyFault::InjectionFailed, 600, 0, 40),
+            (RelayReplyFault::TooFewReplies, 152, 16, 16),
+        ] {
+            let message =
+                relay_reply_fault_message(fault, intercepted, injected, from_relay, 3, last_error);
+            assert!(
+                message.contains("errors=3"),
+                "{fault:?} dropped the error count: {message}"
+            );
+            assert!(
+                message.contains("os error 6"),
+                "{fault:?} dropped the last error: {message}"
+            );
+            assert!(
+                !message.contains("last_error=none"),
+                "a recorded error must not print as none: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_judged_window_is_traced_even_when_it_is_healthy() {
+        // QA finding F1: a judged-but-healthy window left no trace, so a live
+        // "no false positive" proof was absence-based. Every judgement now emits
+        // the counters the decision read, the share they produce and the streak.
+        let mut streak = ReplyFaultStreak::default();
+        let healthy = relay_reply_fault(RELAY_REPLY_TIMEOUT, 54, 13, 13, None);
+        assert_eq!(streak.observe(healthy), None);
+        let line = relay_reply_window_message(54, 13, 13, &streak, healthy);
+        for field in [
+            "intercepted=54",
+            "injected=13",
+            "from_relay=13",
+            "share=24.1%",
+            "streak=0",
+            "verdict=healthy",
+        ] {
+            assert!(line.contains(field), "missing {field} in {line}");
+        }
+        // A faulting window names its verdict and the streak it advances; the
+        // second one is the window the fallback fires on.
+        let mut streak = ReplyFaultStreak::default();
+        let fault = relay_reply_fault(RELAY_REPLY_TIMEOUT, 60, 0, 0, None);
+        assert_eq!(streak.observe(fault), None);
+        let first = relay_reply_window_message(60, 0, 0, &streak, fault);
+        assert!(first.contains("streak=1"), "{first}");
+        assert!(first.contains("verdict=no_reply_from_relay"), "{first}");
+        assert!(first.contains("share=0.0%"), "{first}");
+        assert!(streak.observe(fault).is_some());
+        let second = relay_reply_window_message(60, 0, 0, &streak, fault);
+        assert!(second.contains("streak=2"), "{second}");
+        // Every window verdict has a stable name in the trace.
+        for (window, verdict) in [
+            (
+                Some(RelayReplyFault::TooFewReplies),
+                "verdict=too_few_replies",
+            ),
+            (
+                Some(RelayReplyFault::InjectionFailed),
+                "verdict=injection_failed",
+            ),
+            (None, "verdict=healthy"),
+        ] {
+            let line = relay_reply_window_message(12, 1, 9, &streak, window);
+            assert!(line.contains(verdict), "missing {verdict} in {line}");
+        }
     }
 
     #[test]

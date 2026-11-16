@@ -489,8 +489,10 @@ impl TrafficInterceptor for PfInterceptor {
 
                         if header.is_keepalive() { continue; }
 
-                        // Data replies only: the no-reply watchdog reads this,
-                        // so keepalive echoes cannot read as an injection fault.
+                        // Data replies only: the tunnel frame decoded and is not
+                        // a keepalive, so the no-reply watchdog cannot read a
+                        // keepalive echo as an injection fault. The FEC payload
+                        // decode below has not run yet.
                         counters_loop
                             .packets_reply_data
                             .fetch_add(1, Ordering::Relaxed);

@@ -1167,15 +1167,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 // failed so the status stops reporting an active
                                 // interceptor while nothing is intercepting.
                                 if raw == ERROR_INVALID_HANDLE {
-                                    let msg = format!(
-                                        "WinDivert receive handle is invalid (os error {raw}); \
-                                         interception stopped"
-                                    );
-                                    tracing::error!("{msg}");
-                                    if let Ok(mut g) = counters_ic.last_error.lock() {
-                                        *g = Some(msg);
-                                    }
-                                    counters_ic.run_failed.store(true, Ordering::Relaxed);
+                                    record_fatal_receive_error(&counters_ic, raw);
                                 }
                                 break;
                             }
@@ -1642,10 +1634,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 continue; // keepalive echo - RTT measured by keepalive task
                             }
 
-                            // Count only what a working injector is expected to
-                            // deliver. The no-reply watchdog reads this counter,
-                            // so keepalive echoes and undecodable frames cannot
-                            // read as a local injection fault.
+                            // Count what a working injector is expected to
+                            // deliver: the tunnel frame decoded and is not a
+                            // keepalive. The FEC/TCP payload decode below can
+                            // still fail; a reply counted here proved the
+                            // return path works. The no-reply watchdog reads
+                            // this counter, so keepalive echoes and frames
+                            // whose tunnel header did not decode cannot read as
+                            // a local injection fault.
                             counters_t.packets_reply_data.fetch_add(1, Ordering::Relaxed);
 
                             if header.has_tcp() {
@@ -1980,6 +1976,30 @@ fn log_open_failure(handle_role: &str, err: &std::io::Error) {
     } else {
         tracing::error!("❌ WinDivert {handle_role} open failed: {err}");
     }
+}
+
+/// Record the state left behind by a receive loop that died on a permanent
+/// handle error ([`ERROR_INVALID_HANDLE`]).
+///
+/// The loop breaks on the first failure, not after the retry budget, so this is
+/// the only place that writes the fatal state: the message, the liveness flag
+/// and the error count cannot drift apart. Parity with the legacy backend
+/// (`capture/windivert_redirect.rs`) and with the retry-exhaustion arm below
+/// matters here: counting the fault is what lets a fallback verdict print
+/// `errors=1 last_error=Some(...)` instead of `errors=0` beside the message
+/// that names it.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn record_fatal_receive_error(counters: &InterceptorCounters, raw_os_error: i32) {
+    let msg = format!(
+        "WinDivert receive handle is invalid (os error {raw_os_error}); \
+         interception stopped"
+    );
+    tracing::error!("{msg}");
+    counters.errors.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut g) = counters.last_error.lock() {
+        *g = Some(msg);
+    }
+    counters.run_failed.store(true, Ordering::Relaxed);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2476,5 +2496,44 @@ mod tests {
 
         let process = build_capture_filter(CapturePolicy::ProcessAll, &[], Some((443, 443)));
         assert!(!process.contains("tcp"), "{process}");
+    }
+
+    // ── fatal receive-handle state ────────────────────────────────────────
+
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn a_fatal_receive_handle_counts_as_an_error_and_names_itself() {
+        // The parity defect this pins: the invalid-handle arm recorded
+        // `last_error` and `run_failed` but not `errors`, so a no-reply fallback
+        // verdict printed `errors=0 last_error=Some(...)` for a dead handle. The
+        // legacy backend (capture/windivert_redirect.rs) and the retry-exhaustion
+        // arm in this file both count the fault.
+        let counters = InterceptorCounters::default();
+
+        record_fatal_receive_error(&counters, ERROR_INVALID_HANDLE);
+
+        assert_eq!(
+            counters.errors.load(Ordering::Relaxed),
+            1,
+            "a fatal receive error must increment the error counter"
+        );
+        assert!(
+            counters.run_failed.load(Ordering::Relaxed),
+            "the run must stop reporting an active interceptor"
+        );
+        let message = counters
+            .last_error
+            .lock()
+            .expect("last_error mutex is not poisoned")
+            .clone()
+            .expect("the fatal arm records its message");
+        assert!(
+            message.contains("os error 6"),
+            "the message names the OS error: {message}"
+        );
+        assert!(
+            message.contains("interception stopped"),
+            "the message says interception stopped: {message}"
+        );
     }
 }
