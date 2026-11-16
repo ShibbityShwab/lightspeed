@@ -6,10 +6,12 @@
 //! beats the direct route. This module estimates that second leg from
 //! measurements the client already takes:
 //!
-//! * the client-to-relay round trip (the keepalive probe, stored per relay in
-//!   [`crate::route::ProxyNode::latency_us`]), and
-//! * the end-to-end tunnelled round trip (the game response arriving back
-//!   through the relay).
+//! * the client-to-relay round trip (the keepalive probe, fed through
+//!   [`crate::latency::record_client_relay_rtt`]), and
+//! * the end-to-end tunnelled round trip, fed only by the physically validated
+//!   quiet-flow probe in [`crate::latency`] (`client/src/latency.rs`). The
+//!   earlier busy-flow pairing was disabled in `7f34412`: it measured one
+//!   inter-send gap, not a round trip.
 //!
 //! Their difference is an estimate of the relay-to-destination round trip:
 //!
@@ -17,17 +19,20 @@
 //! dest_leg ~= p50(tunnelled) - p50(client_leg)
 //! ```
 //!
-//! The two legs are reduced independently with medians because the client
-//! cannot pair every tunnelled sample with the exact probe that preceded it.
-//! Medians are robust to the long tail a busy relay shows, and the estimator
-//! refuses to publish anything until both legs have [`MIN_DEST_SAMPLES`]
-//! samples. A non-positive difference is discarded rather than clamped: it
-//! means the tunnelled round trip did not exceed the client-to-relay round
-//! trip, which is a clock or rate-limit artefact, not a destination leg.
+//! The two legs are reduced independently with medians because one median per
+//! leg is what the pair can support; medians are robust to the long tail a busy
+//! relay shows. The estimator refuses to publish anything until both legs have
+//! [`MIN_DEST_SAMPLES`] samples **and** the newest tunnelled sample is within
+//! [`DEST_FRESHNESS_TTL`], so a stale path is never presented as current. A
+//! non-positive difference is discarded rather than clamped: it means the
+//! tunnelled round trip did not exceed the client-to-relay round trip, which
+//! cannot describe a real path.
 //!
 //! The estimate is deliberately coarse and carries its own uncertainty
 //! ([`DestinationEstimate::uncertainty_us`] is half the tunnelled
-//! interquartile range). Consumers must treat it as a prior, not a fact.
+//! interquartile range). Consumers must treat it as a prior, not a fact, and
+//! [`RelayDestinationEstimator::measurement_age`] is how far from current the
+//! samples behind it are.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -47,6 +52,16 @@ pub const MAX_PLAUSIBLE_RTT_US: u64 = 5_000_000;
 /// Minimum interval between always-on destination samples for one server, so
 /// the routing estimator does not mirror every game packet.
 pub const DEST_SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
+/// How long the newest tunnelled sample stays usable for an estimate.
+///
+/// A path whose last validated sample is older than this is not presented as
+/// current: TTLs in this crate are the rule for every published window (the
+/// direct median, the shadow window and the client-relay keepalive already
+/// carry one), and a relay-to-server path can change under the client when the
+/// route or the server does. Two minutes spans several keepalive intervals and
+/// a typical map change, and it deliberately matches the "fresh enough to show
+/// next to an n" bar the GUI applies to the other figures.
+pub const DEST_FRESHNESS_TTL: Duration = Duration::from_secs(120);
 
 /// A destination-leg estimate together with its uncertainty.
 ///
@@ -72,6 +87,9 @@ pub struct DestinationEstimate {
 struct RelaySamples {
     client_leg_us: VecDeque<u64>,
     tunnelled: HashMap<Ipv4Addr, VecDeque<u64>>,
+    /// When the newest validated tunnelled sample for each destination arrived,
+    /// so a stale path is never published as a current measurement.
+    tunnelled_newest: HashMap<Ipv4Addr, Instant>,
 }
 
 /// Rolling estimator of the relay-to-destination leg.
@@ -134,29 +152,68 @@ impl RelayDestinationEstimator {
     /// Record one observed end-to-end tunnelled round trip from `relay` to
     /// `destination`.
     ///
-    /// Zero, over-long, and clamped samples are dropped.
+    /// Zero, over-long, and clamped samples are dropped. Production feeds this
+    /// only from the physically validated quiet-flow probe in [`crate::latency`],
+    /// so an entry here is a real whole-path round trip, and its arrival time
+    /// starts (or refreshes) the [`DEST_FRESHNESS_TTL`] clock.
     pub fn observe_tunnelled(&self, relay: SocketAddrV4, destination: Ipv4Addr, rtt_us: u64) {
+        self.observe_tunnelled_at(relay, destination, rtt_us, Instant::now());
+    }
+
+    /// The shared body of [`RelayDestinationEstimator::observe_tunnelled`],
+    /// with the arrival instant supplied so the freshness rule is testable
+    /// without waiting two minutes.
+    fn observe_tunnelled_at(
+        &self,
+        relay: SocketAddrV4,
+        destination: Ipv4Addr,
+        rtt_us: u64,
+        at: Instant,
+    ) {
         if !is_plausible(rtt_us) {
             return;
         }
         let mut relays = self.lock();
         let samples = relays.entry(relay).or_default();
-        let tunnelled = samples.tunnelled.entry(destination).or_default();
-        push_bounded(tunnelled, rtt_us);
+        push_bounded(samples.tunnelled.entry(destination).or_default(), rtt_us);
+        samples.tunnelled_newest.insert(destination, at);
     }
 
     /// The current estimate for the `(relay, destination)` pair, or `None`
-    /// while either leg is short of [`MIN_DEST_SAMPLES`] or the implied
-    /// destination leg is implausible.
+    /// while either leg is short of [`MIN_DEST_SAMPLES`], the newest tunnelled
+    /// sample is older than [`DEST_FRESHNESS_TTL`], or the implied destination
+    /// leg is implausible.
+    ///
+    /// This is the single publishability gate callers use: when it returns
+    /// `Some`, the figure describes a path measured recently enough to present
+    /// as current.
     pub fn estimate(
         &self,
         relay: SocketAddrV4,
         destination: Ipv4Addr,
     ) -> Option<DestinationEstimate> {
+        let now = Instant::now();
         let relays = self.lock();
         let samples = relays.get(&relay)?;
         let tunnelled = samples.tunnelled.get(&destination)?;
+        if !is_fresh(samples.tunnelled_newest.get(&destination), now) {
+            return None;
+        }
         estimate_from(&samples.client_leg_us, tunnelled)
+    }
+
+    /// How long the newest validated tunnelled sample for the pair has been
+    /// held, or `None` when the pair has no sample at all.
+    ///
+    /// The age is what turns a bare number into a statement about the current
+    /// path: it is reported next to `n` so a stale path cannot be read as a
+    /// live measurement. It returns `Some` whenever a sample exists (even one
+    /// too stale or too few to publish through [`Self::estimate`]).
+    pub fn measurement_age(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<Duration> {
+        let now = Instant::now();
+        let relays = self.lock();
+        let newest = relays.get(&relay)?.tunnelled_newest.get(&destination)?;
+        Some(now.saturating_duration_since(*newest))
     }
 
     /// Median end-to-end tunnelled round trip for the `(relay, destination)`
@@ -164,12 +221,18 @@ impl RelayDestinationEstimator {
     /// player reads as their in-game latency, as opposed to the client-leg RTT
     /// the window shows from the keepalive echo.
     ///
-    /// `None` until the pair has [`MIN_DEST_SAMPLES`] samples, so a handful of
-    /// packets cannot present a number as if it were measured.
+    /// `None` until the pair has [`MIN_DEST_SAMPLES`] samples and the newest is
+    /// within [`DEST_FRESHNESS_TTL`], so neither a handful of packets nor a
+    /// stale window can present a number as if it were a current measurement.
     pub fn path_rtt_us(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> Option<(u64, usize)> {
+        let now = Instant::now();
         let relays = self.lock();
-        let tunnelled = relays.get(&relay)?.tunnelled.get(&destination)?;
+        let samples = relays.get(&relay)?;
+        let tunnelled = samples.tunnelled.get(&destination)?;
         if tunnelled.len() < MIN_DEST_SAMPLES {
+            return None;
+        }
+        if !is_fresh(samples.tunnelled_newest.get(&destination), now) {
             return None;
         }
         let mut sorted = tunnelled.iter().copied().collect::<Vec<_>>();
@@ -222,15 +285,21 @@ impl RelayDestinationEstimator {
     /// A pooled destination-leg estimate across every measured relay pair.
     ///
     /// Used as a prior for a candidate whose own destination leg is not yet
-    /// measured; `None` until at least one pair has an estimate.
+    /// measured; `None` until at least one pair has an estimate. Pairs whose
+    /// newest sample is stale are skipped: a borrowed prior must not describe a
+    /// path that was last measured minutes ago.
     pub fn pooled_estimate(&self) -> Option<DestinationEstimate> {
+        let now = Instant::now();
         let relays = self.lock();
         let mut dests: Vec<u64> = Vec::new();
         let mut samples = 0usize;
         let mut uncertainty_sum = 0u64;
         let mut confidence_sum = 0.0f64;
         for relay in relays.values() {
-            for tunnelled in relay.tunnelled.values() {
+            for (destination, tunnelled) in &relay.tunnelled {
+                if !is_fresh(relay.tunnelled_newest.get(destination), now) {
+                    continue;
+                }
                 if let Some(est) = estimate_from(&relay.client_leg_us, tunnelled) {
                     dests.push(est.dest_leg_us);
                     samples += est.samples;
@@ -317,6 +386,11 @@ fn is_plausible(rtt_us: u64) -> bool {
     rtt_us > 0 && rtt_us <= MAX_PLAUSIBLE_RTT_US
 }
 
+/// Whether a pair's newest validated sample is recent enough to publish.
+fn is_fresh(newest: Option<&Instant>, now: Instant) -> bool {
+    newest.is_some_and(|at| now.saturating_duration_since(*at) < DEST_FRESHNESS_TTL)
+}
+
 fn push_bounded(ring: &mut VecDeque<u64>, value: u64) {
     if ring.len() >= DEST_RING_CAPACITY {
         ring.pop_front();
@@ -384,30 +458,10 @@ pub fn set_destination_region(destination: Ipv4Addr, region: &str) {
     ensure_global().set_destination_region(destination, region);
 }
 
-#[derive(Clone, Copy)]
-struct PendingSample {
-    sent_at: Instant,
-    relay: Option<SocketAddrV4>,
-}
-
 #[derive(Default)]
 struct Sampler {
-    last_sample: HashMap<Ipv4Addr, Instant>,
-    /// When the last reply for a server arrived, to tell a quiet flow (one
-    /// outbound whose reply is unambiguous) from a busy one, where a reply
-    /// cannot be attributed to any particular send.
-    last_inbound: HashMap<Ipv4Addr, Instant>,
-    /// A send made after a quiet gap, waiting for the reply that answers it.
-    armed: HashMap<Ipv4Addr, PendingSample>,
+    last_report: HashMap<Ipv4Addr, Instant>,
 }
-
-/// A flow has to be silent this long before the next outbound counts as an
-/// unambiguous probe: long enough that no earlier packet's reply can still be in
-/// flight on a normal link, short enough to fire between bursts.
-pub const PROBE_QUIET_GAP: Duration = Duration::from_millis(250);
-
-/// How long an armed probe waits for its reply before giving up.
-pub const PROBE_WINDOW: Duration = Duration::from_secs(2);
 
 static SAMPLER: OnceLock<StdMutex<Sampler>> = OnceLock::new();
 
@@ -415,84 +469,26 @@ fn sampler() -> &'static StdMutex<Sampler> {
     SAMPLER.get_or_init(|| StdMutex::new(Sampler::default()))
 }
 
-/// Always-on helper: note that a game packet for `server` was tunnelled.
+/// Rate limit for reporting the destination to the control plane.
 ///
-/// Records the relay in use at send time. Rate-limited per server so the
-/// estimator samples a small fraction of gameplay rather than every packet.
-/// Returns `true` only when this call recorded a fresh sample, so callers can
-/// hang a one-shot per-server side effect off the same rate limit.
-/// Whether a send made now can be attributed its reply: true when the flow has
-/// been silent for [`PROBE_QUIET_GAP`], because then no earlier packet's reply
-/// can still be in flight to be mistaken for this one's.
-fn probe_is_attributable(last_inbound: Option<Instant>, now: Instant) -> bool {
-    last_inbound.is_none_or(|last| now.saturating_duration_since(last) >= PROBE_QUIET_GAP)
-}
-
-/// The round trip of an armed probe, or `None` when the reply came too late to
-/// belong to it.
-fn probe_rtt(sent_at: Instant, now: Instant) -> Option<u64> {
-    let elapsed = now.saturating_duration_since(sent_at);
-    (elapsed <= PROBE_WINDOW).then_some(elapsed.as_micros() as u64)
-}
-
+/// Returns `true` only when this call claimed the slot for `server`, so the
+/// caller can hang the one-shot `report_destination` side effect off it.
+///
+/// This sampler no longer pairs replies or feeds the estimator: the whole-path
+/// feed is the validated quiet-flow probe in [`crate::latency`], which calls
+/// [`observe_tunnelled`] only for samples that passed its physical checks. The
+/// pairing this used to do (reply minus the most recent outbound) read one
+/// inter-send gap, not a round trip, and was disabled in `7f34412`.
 pub fn note_outbound(server: Ipv4Addr) -> bool {
     let now = Instant::now();
-    let relay = crate::session::current_proxy();
     let mut sampler = sampler().lock().unwrap_or_else(PoisonError::into_inner);
-    // Arm a whole-loop probe when the flow has been quiet: then the next reply
-    // is unambiguously this packet's answer, which is the one case where the
-    // round trip can be attributed at all.
-    let quiet = probe_is_attributable(sampler.last_inbound.get(&server).copied(), now);
-    if quiet {
-        sampler.armed.insert(
-            server,
-            PendingSample {
-                sent_at: now,
-                relay,
-            },
-        );
-    } else {
-        // The flow is busy, so any armed probe is invalid: its reply would be
-        // indistinguishable from the replies now arriving. Leaving it in place
-        // let it pair with an unrelated inbound much later, which is how a 4 ms
-        // whole-loop round trip turned up against a 273 ms relay leg.
-        sampler.armed.remove(&server);
-    }
-    match sampler.last_sample.get(&server) {
-        Some(last) if now.saturating_duration_since(*last) < DEST_SAMPLE_INTERVAL => {
-            return false;
+    match sampler.last_report.get(&server) {
+        Some(last) if now.saturating_duration_since(*last) < DEST_SAMPLE_INTERVAL => false,
+        _ => {
+            sampler.last_report.insert(server, now);
+            true
         }
-        _ => sampler.last_sample.insert(server, now),
-    };
-    true
-}
-
-/// Always-on helper: note that a response for `server` arrived through the
-/// tunnel. Pairs with the most recent [`note_outbound`] and feeds the global
-/// estimator. A response with no pending outbound, or one from a relay we no
-/// longer know, is discarded.
-pub fn note_inbound(server: Ipv4Addr) {
-    let now = Instant::now();
-    let mut sampler = sampler().lock().unwrap_or_else(PoisonError::into_inner);
-    sampler.last_inbound.insert(server, now);
-    // Only an attributed reply feeds the estimator. The rate-limited pairing this
-    // replaces dated the reply against an arbitrary earlier packet and read short
-    // by the flow's packet period, so every destination leg it produced was
-    // inflated. Ranking now waits for real samples or falls back to the region
-    // prior, which is what it did before any were installed.
-    let Some(armed) = sampler.armed.remove(&server) else {
-        return;
-    };
-    let (Some(rtt_us), Some(relay)) = (probe_rtt(armed.sent_at, now), armed.relay) else {
-        return;
-    };
-    drop(sampler);
-    // Nothing is recorded. Live measurement showed this attribution cannot be
-    // trusted on real traffic: it produced 0.157 ms against a 234 ms relay leg
-    // and then stopped producing samples at all. A wrong destination leg moves
-    // relay choice, so the estimator keeps its region prior rather than a
-    // fabricated measurement.
-    let _ = (relay, rtt_us);
+    }
 }
 
 #[cfg(test)]
@@ -678,38 +674,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_quiet_flow_makes_a_reply_attributable() {
-        let now = Instant::now();
-        assert!(probe_is_attributable(None, now), "first send on a flow");
-        assert!(
-            probe_is_attributable(Some(now - PROBE_QUIET_GAP), now),
-            "exactly the quiet gap is quiet enough"
-        );
-        assert!(
-            !probe_is_attributable(Some(now - Duration::from_millis(10)), now),
-            "a busy flow's reply cannot be attributed to one send"
-        );
-    }
-
-    #[test]
-    fn a_probe_reply_must_land_inside_its_window() {
-        let now = Instant::now();
-        assert_eq!(
-            probe_rtt(now - Duration::from_millis(240), now),
-            Some(240_000)
-        );
-        assert!(
-            probe_rtt(now - PROBE_WINDOW, now).is_some(),
-            "the edge of the window still counts"
-        );
-        assert_eq!(
-            probe_rtt(now - PROBE_WINDOW - Duration::from_millis(1), now),
-            None,
-            "a reply that late belongs to something else"
-        );
-    }
-
-    #[test]
     fn the_path_probe_reports_the_newest_sample_and_forgets_old_ones() {
         let est = RelayDestinationEstimator::new();
         assert_eq!(est.path_probe_us(relay(1), server(1)), None);
@@ -796,6 +760,109 @@ mod tests {
         );
         let pooled = estimator.pooled_estimate().expect("pooled");
         assert_eq!(pooled.dest_leg_us, 50_000);
+    }
+
+    #[test]
+    fn a_stale_tunnelled_window_is_not_published_as_current() {
+        // Feed a full window, then age only the newest sample past the TTL.
+        // Every reader that presents the path as current must refuse it.
+        let est = RelayDestinationEstimator::new();
+        feed(&est, relay(1), server(1), 20_000, 260_000, MIN_DEST_SAMPLES);
+        assert!(
+            est.estimate(relay(1), server(1)).is_some(),
+            "fresh is usable"
+        );
+        let stale_at = Instant::now() - DEST_FRESHNESS_TTL - Duration::from_secs(1);
+        est.observe_tunnelled_at(relay(1), server(1), 260_000, stale_at);
+        assert_eq!(
+            est.estimate(relay(1), server(1)),
+            None,
+            "a path last validated more than the TTL ago must not be estimated"
+        );
+        assert_eq!(
+            est.path_rtt_us(relay(1), server(1)),
+            None,
+            "nor presented as a current whole-path RTT"
+        );
+    }
+
+    #[test]
+    fn the_freshness_boundary_is_the_ttl() {
+        let est = RelayDestinationEstimator::new();
+        feed(&est, relay(1), server(1), 20_000, 260_000, MIN_DEST_SAMPLES);
+        let inside = Instant::now() - DEST_FRESHNESS_TTL + Duration::from_secs(1);
+        est.observe_tunnelled_at(relay(1), server(1), 300_000, inside);
+        assert!(
+            est.estimate(relay(1), server(1)).is_some(),
+            "one second inside the TTL is still current"
+        );
+
+        let exactly = Instant::now() - DEST_FRESHNESS_TTL;
+        est.observe_tunnelled_at(relay(1), server(1), 300_000, exactly);
+        assert_eq!(
+            est.estimate(relay(1), server(1)),
+            None,
+            "the TTL is exclusive, matching the other windows in this crate"
+        );
+    }
+
+    #[test]
+    fn measurement_age_reports_the_newest_sample_without_gating_on_n() {
+        let est = RelayDestinationEstimator::new();
+        assert_eq!(
+            est.measurement_age(relay(1), server(1)),
+            None,
+            "no sample means no age"
+        );
+        let five_seconds_ago = Instant::now() - Duration::from_secs(5);
+        est.observe_tunnelled_at(relay(1), server(1), 260_000, five_seconds_ago);
+        let age = est
+            .measurement_age(relay(1), server(1))
+            .expect("one sample has an age");
+        assert!(
+            age >= Duration::from_secs(5),
+            "the age is measured from the newest sample: {age:?}"
+        );
+        // Being under MIN_DEST_SAMPLES does not hide the age: the GUI shows it
+        // beside the n that explains why no estimate is published.
+        assert_eq!(est.estimate(relay(1), server(1)), None);
+        assert!(est.measurement_age(relay(1), server(1)).is_some());
+        assert_eq!(
+            est.measurement_age(relay(2), server(1)),
+            None,
+            "a different relay has no sample"
+        );
+    }
+
+    #[test]
+    fn a_pooled_prior_never_borrows_from_a_stale_path() {
+        let estimator = RelayDestinationEstimator::new();
+        assert_eq!(estimator.pooled_estimate(), None);
+        let stale_at = Instant::now() - DEST_FRESHNESS_TTL - Duration::from_secs(1);
+        for _ in 0..MIN_DEST_SAMPLES {
+            estimator.observe_client_leg(relay(1), 10_000);
+            estimator.observe_tunnelled_at(relay(1), server(1), 60_000, stale_at);
+        }
+        assert_eq!(
+            estimator.pooled_estimate(),
+            None,
+            "a stale pair must not seed another candidate's prior"
+        );
+    }
+
+    #[test]
+    fn a_new_sample_refreshes_the_freshness_clock() {
+        let est = RelayDestinationEstimator::new();
+        feed(&est, relay(1), server(1), 20_000, 260_000, MIN_DEST_SAMPLES);
+        let stale_at = Instant::now() - DEST_FRESHNESS_TTL - Duration::from_secs(1);
+        est.observe_tunnelled_at(relay(1), server(1), 260_000, stale_at);
+        assert_eq!(est.estimate(relay(1), server(1)), None);
+        // A new validated sample is a new measurement: the path is current again.
+        est.observe_tunnelled(relay(1), server(1), 260_000);
+        assert!(
+            est.estimate(relay(1), server(1)).is_some(),
+            "a new sample restarts the TTL"
+        );
     }
 
     #[test]

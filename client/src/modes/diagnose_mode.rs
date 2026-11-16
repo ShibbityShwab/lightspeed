@@ -223,7 +223,6 @@ impl LiveDiagnostics {
                 .with_session_token(crate::session::session_token());
             let packet = header.encode_with_payload(payload.as_bytes());
 
-            self.tracker.note_outbound(*server.ip());
             if self.socket.send_to(&packet, self.relay).is_err() {
                 std::thread::sleep(PROBE_INTERVAL);
                 continue;
@@ -237,7 +236,13 @@ impl LiveDiagnostics {
                         if let Ok((_header, reply)) = TunnelHeader::decode_with_payload(&buf[..len])
                         {
                             if reply == payload.as_bytes() {
-                                self.tracker.record_inbound(*server.ip());
+                                // The reply matches this probe's own payload, so
+                                // the attribution is exact. Recorded in the
+                                // diagnostic window: it is never game latency.
+                                self.tracker.record_diagnostic_rtt(
+                                    *server.ip(),
+                                    sent.elapsed().as_secs_f32() * 1000.0,
+                                );
                                 break;
                             }
                         }
@@ -248,8 +253,8 @@ impl LiveDiagnostics {
             std::thread::sleep(PROBE_INTERVAL);
         }
         trusted(
-            self.tracker.relayed_p50_ms(),
-            self.tracker.relayed_samples() as usize,
+            self.tracker.diagnostic_relayed_p50_ms(),
+            self.tracker.diagnostic_relayed_samples() as usize,
         )
     }
 }

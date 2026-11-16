@@ -101,14 +101,25 @@ async fn measurement_runs_with_telemetry_disabled() {
         "direct ICMP measurement must run without telemetry"
     );
 
-    // Relayed RTT: the inbound hook must still record.
+    // Relayed RTT: the inbound hook still runs local measurement without
+    // telemetry, but a bare tracker has no relay attribution and no
+    // client->relay keepalive floor, so this reply is not attributable to a
+    // whole-path round trip and must be rejected (counted, never reported).
+    // This is the exact case the old assertion got wrong: it expected a 20 ms
+    // "relayed" median, which was the busy-flow pairing reading one inter-send
+    // gap against a 200+ ms path.
     tracker.note_outbound(SERVER);
     clock.advance(Duration::from_millis(20));
     latency::record_inbound(SERVER);
     assert_eq!(
         tracker.relayed_p50_ms(),
-        Some(20.0),
-        "relayed measurement must run without telemetry"
+        None,
+        "an unattributable reply must not be reported as a relayed RTT"
+    );
+    assert_eq!(
+        tracker.probe_counters().rejected_stale,
+        1,
+        "the hook still measured and counted the rejection without telemetry"
     );
 
     // Shadow direct: the sampler must still claim a slot and record.

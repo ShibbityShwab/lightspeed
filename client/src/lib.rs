@@ -18,10 +18,18 @@ pub use registry::{discover_relays, RelayInfo};
 /// `route` itself stays crate-private: the GUI needs the ranking types to
 /// choose a relay for the live game server, and nothing else from that module.
 pub use route::relay_choice::{
-    best as best_relay_for_destination, best_at as best_relay_for_destination_at,
-    rank as rank_relays_for_destination, rank_at_with_direct as rank_relays_at_with_direct,
-    rank_with_direct as rank_relays_with_direct, DestLegSource as DestinationLegSource,
-    RelayCandidate, ScoredRelay,
+    best as best_relay_for_destination,
+    best_at as best_relay_for_destination_at,
+    rank as rank_relays_for_destination,
+    rank_at_with_direct as rank_relays_at_with_direct,
+    rank_with_direct as rank_relays_with_direct,
+    DestLegSource as DestinationLegSource,
+    RelayCandidate,
+    ScoredRelay,
+    // The engine's constant is spelled `PRIOR_UNDERTAINTY_US`; the GUI-facing
+    // name carries the intended spelling of the same 25 ms uncertainty, so the
+    // surface and its documentation do not inherit the typo.
+    PRIOR_UNDERTAINTY_US as PRIOR_UNCERTAINTY_US,
 };
 
 /// The always-on sampler of end-to-end tunnelled round trips, which the window

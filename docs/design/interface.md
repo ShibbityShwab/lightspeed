@@ -21,7 +21,7 @@ while traffic was on the direct path, `No game detected` under a pinned game, an
 
 ## State contract
 
-**Eleven states.** Each row has exactly one driving fact and the sentence the window must
+**Eleven route states**, plus the four server-leg states below. Each row has exactly one driving fact and the sentence the window must
 show in that state. A state the client cannot observe must not be shown (rules below); a
 state the client can observe but the window has no room to name is still listed here, with
 the trace line that carries it.
@@ -44,6 +44,70 @@ The fallback surface reads top to bottom as one story: traffic goes direct
 (`Direct fallback`), a countdown says when the same relay is re-tested (`Re-test pending`),
 a healthy window ends the story (`Relay recovered`), and only a chain that never returned
 anything at all and spent its retries becomes `Server rejects the relay`.
+
+### Server-leg states (added 2026-11-16, task-14)
+
+The relayed path has two halves and the client only measures one of them. The
+`Server leg` ledger row (between `Server ping` and `Relay RTT`) names the
+relay-to-game-server leg and, in the same breath, how the relay choice obtained
+it. There is exactly one driving fact: the ranking row for **the relay in use**
+(never the staged winner), plus the v1 estimator's published measurement when one
+exists. The window does not derive the leg from the geo table or from the
+choice's total a second time.
+
+| State | What the window must say | Driving fact (single source) |
+| --- | --- | --- |
+| Server leg measured | `measured {ms} ms · n={n}` (with `· last {secs}s` once the estimator reports a sample age) | the v1 quiet-flow estimator published an estimate for `(relay in use, game server)`: `destination_estimator().estimate()` - the same "publishable or None" gate the ranking's `Measured` source uses |
+| Server leg bounded | `at least {ms} ms · triangle bound` | the ranking row for the relay in use has `dest_source = GeometricFloor`: `direct - client leg` is a proof of a lower bound, not a measurement |
+| Server leg not measured | `not measured · prior ~{ms} ms ±{unc} ms` | the ranking row for the relay in use has `dest_source = RegionPrior`; `{unc}` is `PRIOR_UNCERTAINTY_US` (25 ms), the same charge the ranking added to the whole-path total |
+| Server leg unknown | `not measured · no region prior` | the ranking row is `Unknown`, or the estimator says `Measured` but publishes nothing the surface can show |
+| Relay cannot beat direct | caption: `This relay cannot be faster than direct for this server` | `L1 >= L3d`: the keepalive's one-RTT client leg against a fresh ICMP direct ping. A triangle-inequality proof from two measurements the client owns |
+
+Rules for these states:
+
+- The row and the caption appear only while a tunnel backend is carrying traffic
+  **and** the route is the relay. On a direct fallback the `Path` row already says
+  the relay is not in use, so a server-leg row there would describe a path the
+  client is not on.
+- The row describes the relay carrying traffic. When a better relay for this
+  server is staged for the next session, the row still describes the current one.
+- `Measured` is only ever the estimator's published value. `n` is shown because
+  the estimator reports it; the sample age comes from `measurement_age()` and is
+  rendered as `· last {secs}s` **only** when the estimator has a sample (the age
+  is measured, not inferred - an invented `last N s` is exactly the kind of
+  precision this contract exists to prevent).
+- The window makes **no claim that relaying is better than direct**. The only
+  whole-path claim it may state is the provable "cannot be faster than direct"
+  verdict above. The choice trace line carries the arithmetic
+  (`better than direct by N ms` / `not better than direct`) so the claim is
+  auditable in the log, not asserted on an estimate.
+- Direct-ping freshness is one rule (`SERVER_PING_FRESH_SECS`, 60 s) shared by
+  the header's metric, the ranking's triangle floor and this verdict. A stale
+  ping may not floor a candidate, decide a verdict, or be displayed as current.
+
+### Relay-choice inputs (changed 2026-11-16, task-14)
+
+- **Client leg is one round trip.** `discovery.rs` probes each relay five times
+  with a TCP connect (the handshake is one RTT) and reports the median and the
+  tail spread, instead of timing a whole `GET /health` (handshake +
+  request/response ≈ two RTTs). Measured against the same relays the HTTP wall
+  time read 1.92-2.03x the TCP figure (`docs/server-leg-signal.md` §4.3), so
+  every relay was charged twice for its own distance and the direct-ping floor
+  could not bind. The picker's `N ms` and its hover ("median of five probes")
+  now mean the one-RTT figure.
+- **Ranking key is the whole-path total.** Candidates are compared on
+  `client_leg + dest_leg + prior uncertainty` (the total the ranking already
+  builds), with jitter only as a tie-break and the address as the final key.
+  The destination leg is therefore a validity/uncertainty term, not an overriding
+  50 ms bucket. This is an **interim GUI re-rank** of the engine's scored list
+  (`client-gui/src/app.rs::whole_path_order`); task-17 canonicalises the same key
+  inside `client/src/route/relay_choice.rs` and the interim re-rank is then
+  removed.
+- **Trace line carries the provenance.** `Destination-aware relay choice for
+  {server}: {relay} ({state}, total {n} ms{claim}) - {k} of {n} candidates raised
+  to the direct-ping floor`, where `{state}` is `Measured(n=..)`,
+  `GeometricFloor`, `RegionPrior(±25 ms)` or `Unknown`, and `{claim}` is the
+  direct comparison above or `direct ping not measured`.
 
 Rules that follow from the contract:
 
@@ -147,6 +211,18 @@ Open:
   fix.
 - The sparkline still has no axis, units or label.
 - The Components labels are English-only by decision; revisit when the rows settle.
+- The `Server leg` row's measured branch (`measured {ms} ms · n={n} · last
+  {secs}s`) is wired to the v1 estimator's `estimate()` and `measurement_age()`
+  (task-13). Whether it is reachable in a live run depends on the estimator's
+  production feed: `Measured` needs ≥8 validated whole-path samples *and* ≥8
+  client-leg samples for the same relay. If the feed produces nothing on a live
+  session the row correctly shows the prior state, not an empty measurement.
+- The seven new `route.server_leg*` / `route.cannot_beat_direct` catalog strings
+  ship as English in all nine locales (documented untranslated fallback, decided
+  2026-11-16). Translation debt, not a design decision.
+- The GUI's whole-path re-rank is interim: the engine's own sort still buckets
+  the destination leg first. Task-17 canonicalises the key and removes the
+  duplicate rule.
 
 ## Verification protocol
 
@@ -160,3 +236,8 @@ Open:
 - For status changes, force the state (start a boost, let the watchdog fall back) and
   capture it rather than trusting a unit test alone.
 - A visual change ships with the state it produces listed in the pull request or commit.
+- For the server-leg row the honest captures are: relayed **without** a measurement
+  (the reachable state at this HEAD) and relayed **with** one only if the v1
+  estimator has a production feed in the build being captured. Do not fake a
+  measurement by injecting samples into the estimator: a screenshot of a state the
+  shipping engine cannot reach is not evidence for that state.

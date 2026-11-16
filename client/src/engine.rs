@@ -1090,7 +1090,7 @@ impl LightSpeedEngine {
                                 "process target '{}' is not running: start it (or pick a running \
                                  process) and try again",
                                 target.describe()
-                            ))
+                            ));
                         }
                     };
                 let live_routes = live.map(|p| p.routes).unwrap_or_default();
@@ -1531,6 +1531,13 @@ async fn run_keepalive(
                         if hdr.is_keepalive() {
                             if let Some(send_time) = ts.remove(&hdr.sequence) {
                                 let rtt_ms = send_time.elapsed().as_secs_f64() * 1000.0;
+                                // Feed the tracker's client->relay leg: it is the
+                                // physical floor the validated quiet-flow
+                                // whole-path probe checks against (and the
+                                // routing estimator's client-leg sample). The
+                                // Linux interceptor already does the same; on
+                                // Windows this keepalive task is the only source.
+                                crate::latency::record_client_relay_rtt(proxy, rtt_ms as f32);
                                 if let Ok(mut s) = status.write() {
                                     s.packets_received += 1;
                                     s.latest_rtt_ms = rtt_ms;

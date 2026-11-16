@@ -5,6 +5,33 @@
 //! actual tunnelled game traffic (client → relay → game server → relay →
 //! client). Their difference is LightSpeed's core value metric, `saved_ms`.
 //!
+//! ## The relayed window is validated, not merely paired
+//!
+//! A reply on a busy UDP flow cannot be attributed to any particular send: the
+//! server does not echo sequence numbers, so "reply minus the most recent
+//! outbound" measures one inter-send gap rather than a round trip. On the live
+//! ROB RUN session that produced 25 of 25 samples below the client→relay leg
+//! (median ratio 0.129), which no whole-path round trip can be. The relayed
+//! window is therefore fed only by **quiet-flow** samples (design
+//! `docs/server-leg-signal.md` §5.1): an outbound is armed only when the flow
+//! has had no inbound for [`PROBE_QUIET_GAP`], and the next inbound is accepted
+//! only when
+//!
+//! * the relay is unchanged between send and reply,
+//! * the flight time is at least the measured client→relay keepalive p50 (a
+//!   whole-path RTT cannot be shorter than its first leg), and
+//! * the flight time is at most [`PROBE_WINDOW`].
+//!
+//! Anything else is counted ([`ProbeCounters`]) and dropped, never clamped. An
+//! accepted sample also feeds the destination-aware routing estimator through
+//! `route::destination::observe_tunnelled`, which is what makes
+//! `DestLegSource::Measured` reachable.
+//!
+//! `--diagnose` is the one caller that pairs exactly (it matches the reply
+//! payload to its own probe), so it records through a separate diagnostic
+//! window ([`LatencyTracker::record_diagnostic_rtt`]) that can never be
+//! presented as game-traffic latency.
+//!
 //! `direct_app_p50_ms` is the median round trip of a small sample of the game's
 //! own packets on the direct, un-relayed path, timed against the server's
 //! reply. It is game-packet-to-game-packet with `relayed_p50_ms`, so the two are
@@ -43,6 +70,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use tracing::debug;
 
 use crate::telemetry::TelemetryCollector;
 
@@ -92,6 +120,38 @@ pub const SHADOW_RING_CAPACITY: usize = 256;
 pub const CLIENT_RELAY_TTL: Duration = Duration::from_secs(15);
 /// Rolling window capacity for client->relay keepalive RTT samples.
 pub const CLIENT_RELAY_RING_CAPACITY: usize = 16;
+
+/// A flow must have had no inbound packet for this long before an outbound
+/// packet is armed as an attributable whole-path probe.
+///
+/// This is deliberately far longer than the inter-send period of real game
+/// traffic. Design `docs/server-leg-signal.md` §5.1 proposes 1000 ms, and the
+/// live measurement that retired the previous 250 ms gap shows why: the ROB RUN
+/// session forwarded 36.5 packets/s (a ~27 ms period), so a 250 ms inbound gap
+/// still left about nine of the client's own packets in flight and the next
+/// reply could be attributed to any of them. The probe then read 0.157 ms
+/// against a 234 ms relay leg (`7f34412`). At 1000 ms a reply to a pre-gap
+/// packet is ~36 send intervals old, and one older than [`PROBE_WINDOW`] is
+/// rejected as a timeout. Menus, loading screens, lobbies and
+/// request/response-style traffic still leave gaps this long, so the sample
+/// rate is a measurement question (the F1 falsifier), not a guess.
+pub const PROBE_QUIET_GAP: Duration = Duration::from_millis(1000);
+
+/// How long an armed probe waits for its reply.
+///
+/// This is also the upper physical bound on an accepted whole-path round trip:
+/// a reply later than this answers an older send (or a send that never left the
+/// host), not the armed one, and is counted as a timeout instead of being
+/// clamped. Five seconds matches the largest RTT the destination estimator
+/// treats as real.
+pub const PROBE_WINDOW: Duration = Duration::from_secs(5);
+
+/// Rolling window capacity for the `--diagnose` window.
+///
+/// Kept separate from the game-traffic window: a diagnostic probe is an
+/// explicit request/response pair, and its value must never be presented as
+/// game latency.
+pub const DIAGNOSTIC_RING_CAPACITY: usize = 64;
 
 const ECHO_PAYLOAD: &[u8] = b"lightspeed-ping";
 
@@ -290,11 +350,23 @@ struct Inner {
     /// Recent burst medians per server, newest last: the direct path's own
     /// spread, which is what a relay has to beat to be worth its hop.
     direct_history: HashMap<Ipv4Addr, VecDeque<f32>>,
-    pending: HashMap<Ipv4Addr, Instant>,
     last_burst: HashMap<Ipv4Addr, Instant>,
     client_relay: HashMap<SocketAddrV4, ClientRelaySample>,
+    /// When the last inbound for a server arrived: the quiet-gap test.
+    last_inbound: HashMap<Ipv4Addr, Instant>,
+    /// The send a reply could be attributed to, once the flow went quiet.
+    armed: HashMap<Ipv4Addr, ArmedProbe>,
+    /// Validated quiet-flow whole-path samples for one server through one relay.
     relayed: Vec<f32>,
     relayed_server: Option<Ipv4Addr>,
+    /// The relay the relayed window belongs to, so changing relay cannot mix
+    /// two paths into one median.
+    relayed_relay: Option<SocketAddrV4>,
+    /// Counters for the quiet-flow probe, exposed through [`ProbeCounters`].
+    probe_counters: ProbeCounters,
+    /// `--diagnose`'s exact-payload window. Never reported as game latency.
+    diagnostic: Vec<f32>,
+    diagnostic_server: Option<Ipv4Addr>,
     shadow_pending: HashMap<Ipv4Addr, Instant>,
     shadow_last: HashMap<Ipv4Addr, Instant>,
     shadow: Vec<f32>,
@@ -351,6 +423,48 @@ impl Inner {
         let replies = self.shadow_replies.min(self.shadow_attempts);
         Some(1.0 - replies as f32 / self.shadow_attempts as f32)
     }
+
+    /// Client->relay p50 for `relay`, using `now` for the freshness check so a
+    /// caller already holding the lock cannot deadlock on it.
+    fn client_relay_p50_at(&self, relay: SocketAddrV4, now: Instant) -> Option<f32> {
+        let sample = self.client_relay.get(&relay)?;
+        if sample.samples_ms.is_empty()
+            || now.saturating_duration_since(sample.measured_at) >= CLIENT_RELAY_TTL
+        {
+            return None;
+        }
+        let mut sorted = sample.samples_ms.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(TelemetryCollector::percentile(&sorted, 50.0))
+    }
+
+    /// Median of the `--diagnose` window, if any.
+    fn diagnostic_median(&self) -> Option<f32> {
+        if self.diagnostic.is_empty() {
+            return None;
+        }
+        let mut sorted = self.diagnostic.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(TelemetryCollector::percentile(&sorted, 50.0))
+    }
+
+    /// Count one rejected probe and trace why. Never stores or clamps a value.
+    fn reject_probe(
+        &mut self,
+        server: Ipv4Addr,
+        relay: Option<SocketAddrV4>,
+        elapsed: Duration,
+        reason: ProbeRejection,
+    ) {
+        reason.count(&mut self.probe_counters);
+        debug!(
+            server = %server,
+            relay = ?relay,
+            rtt_ms = elapsed.as_secs_f64() * 1000.0,
+            reason = reason.as_str(),
+            "Quiet-flow tunnelled RTT rejected"
+        );
+    }
 }
 
 /// A same-server, fresh shadow-direct and relayed window, ready for a
@@ -379,6 +493,112 @@ pub struct LikeForLike {
     pub shadow_samples: u32,
     /// Relayed samples in the current window.
     pub relay_samples: u32,
+}
+
+/// An accepted, physically validated whole-path tunnelled round trip.
+///
+/// Returned by [`LatencyTracker::record_inbound`] so the process-wide hooks can
+/// feed the routing estimator without the tracker depending on it. `rtt_us` is
+/// the true client → relay → server → relay → client figure, not an inter-send
+/// gap: every sample behind it passed the relay, floor and window rules.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ValidatedPathSample {
+    /// The game server the round trip describes.
+    pub server: Ipv4Addr,
+    /// The relay that carried it, unchanged between send and reply.
+    pub relay: SocketAddrV4,
+    /// Whole-path round trip, microseconds.
+    pub rtt_us: u64,
+    /// Validated samples in the window after this one was added.
+    pub samples: u32,
+    /// Median of the window after this sample was added, milliseconds.
+    pub path_p50_ms: f32,
+}
+
+/// Counters for the validated quiet-flow whole-path probe.
+///
+/// The v1 falsifier (F1) is "fewer than 8 accepted samples per (relay, server)
+/// in a 10-minute match means the design is not viable", so the accepted and
+/// rejected totals are published here instead of being inferred from an absence
+/// of log lines. Every accepted sample and every rejection is also traced.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProbeCounters {
+    /// Samples that passed every validity rule and entered the relayed window.
+    pub accepted: u64,
+    /// Replies faster than the measured client->relay leg. A whole-path round
+    /// trip cannot be shorter than its first leg; rejected, never clamped.
+    pub rejected_behind_floor: u64,
+    /// Replies whose relay differed from the relay in use when the probe was
+    /// armed (including a probe armed with no relay known).
+    pub rejected_relay_changed: u64,
+    /// Replies later than [`PROBE_WINDOW`], or a probe that expired unanswered.
+    pub rejected_timeout: u64,
+    /// Probes that cannot be validated at all: no fresh client->relay keepalive
+    /// sample exists to check the physical floor, or the relay is unknown at
+    /// send or reply time.
+    pub rejected_stale: u64,
+}
+
+impl ProbeCounters {
+    /// Total samples rejected by any rule.
+    pub fn rejected(&self) -> u64 {
+        self.rejected_behind_floor
+            .saturating_add(self.rejected_relay_changed)
+            .saturating_add(self.rejected_timeout)
+            .saturating_add(self.rejected_stale)
+    }
+
+    /// Accepted plus rejected: every probe that resolved to a verdict.
+    pub fn resolved(&self) -> u64 {
+        self.accepted.saturating_add(self.rejected())
+    }
+}
+
+/// Why a quiet-flow reply could not become a validated sample.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeRejection {
+    /// The reply was faster than the first leg of the path.
+    BehindFloor,
+    /// The relay changed between the armed send and the reply.
+    RelayChanged,
+    /// The reply arrived after [`PROBE_WINDOW`] (or never arrived).
+    Timeout,
+    /// No fresh keepalive floor or no relay attribution, so the sample cannot
+    /// be validated.
+    Stale,
+}
+
+impl ProbeRejection {
+    /// The counter this rejection increments.
+    fn count(self, counters: &mut ProbeCounters) {
+        let slot = match self {
+            Self::BehindFloor => &mut counters.rejected_behind_floor,
+            Self::RelayChanged => &mut counters.rejected_relay_changed,
+            Self::Timeout => &mut counters.rejected_timeout,
+            Self::Stale => &mut counters.rejected_stale,
+        };
+        *slot = slot.saturating_add(1);
+    }
+
+    /// The stable name used in the trace line.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::BehindFloor => "behind_floor",
+            Self::RelayChanged => "relay_changed",
+            Self::Timeout => "timeout",
+            Self::Stale => "stale",
+        }
+    }
+}
+
+/// One send that a single inbound packet could be attributed to.
+#[derive(Debug, Clone, Copy)]
+struct ArmedProbe {
+    /// When the probe's send left the client.
+    sent_at: Instant,
+    /// The relay in use at that instant, as `session::current_proxy` reported
+    /// it. `None` means the send cannot be attributed and must be rejected.
+    relay: Option<SocketAddrV4>,
 }
 
 /// Mean of consecutive absolute RTT deltas in arrival order.
@@ -416,10 +636,35 @@ impl LatencyTracker {
 
     /// Record T0 for an outbound tunnelled game packet to `server`, returning
     /// `true` when a rate-limited direct burst is due for that server.
+    ///
+    /// Also maintains the quiet-flow attribution probe: while the flow has had
+    /// no inbound for [`PROBE_QUIET_GAP`], the newest send is the one a reply
+    /// can be attributed to (design §5.1), so it is kept armed with the relay in
+    /// use at that instant. A busy flow cannot have a reply attributed at all,
+    /// so nothing is armed and the next inbound is not measured.
     pub fn note_outbound(&self, server: Ipv4Addr) -> bool {
+        self.note_outbound_from(server, crate::session::current_proxy())
+    }
+
+    /// [`LatencyTracker::note_outbound`] with the relay supplied, so tests do
+    /// not depend on the process-wide current-relay state.
+    fn note_outbound_from(&self, server: Ipv4Addr, relay: Option<SocketAddrV4>) -> bool {
         let now = self.clock.now();
         let mut inner = self.lock();
-        inner.pending.insert(server, now);
+        Self::expire_armed(&mut inner, server, now);
+        let quiet = inner
+            .last_inbound
+            .get(&server)
+            .is_none_or(|last| now.saturating_duration_since(*last) >= PROBE_QUIET_GAP);
+        if quiet {
+            inner.armed.insert(
+                server,
+                ArmedProbe {
+                    sent_at: now,
+                    relay,
+                },
+            );
+        }
         match inner.last_burst.get(&server) {
             Some(last) if now.saturating_duration_since(*last) < DIRECT_BURST_INTERVAL => false,
             _ => {
@@ -429,27 +674,159 @@ impl LatencyTracker {
         }
     }
 
-    /// Record a relayed response for `server`. Only responses with a matching
-    /// pending outbound are measured, mirroring the proxy's single pending
-    /// forward marker.
-    pub fn record_inbound(&self, server: Ipv4Addr) {
-        let now = self.clock.now();
-        let mut inner = self.lock();
-        let Some(sent_at) = inner.pending.remove(&server) else {
-            return;
-        };
-        let rtt_ms = now.saturating_duration_since(sent_at).as_secs_f64() * 1000.0;
-        if !rtt_ms.is_finite() || rtt_ms <= 0.0 {
+    /// Drop an armed probe that has waited longer than [`PROBE_WINDOW`], so a
+    /// reply much later cannot pair with it, and count the timeout once.
+    fn expire_armed(inner: &mut Inner, server: Ipv4Addr, now: Instant) {
+        let expired = inner
+            .armed
+            .get(&server)
+            .is_some_and(|armed| now.saturating_duration_since(armed.sent_at) > PROBE_WINDOW);
+        if !expired {
             return;
         }
-        if inner.relayed_server != Some(server) {
+        if let Some(armed) = inner.armed.remove(&server) {
+            let elapsed = now.saturating_duration_since(armed.sent_at);
+            inner.reject_probe(server, armed.relay, elapsed, ProbeRejection::Timeout);
+        }
+    }
+
+    /// Record a relayed response for `server`.
+    ///
+    /// A response becomes a whole-path sample only when it can be attributed to
+    /// the armed quiet-flow send and physically validated:
+    ///
+    /// * the relay is unchanged between send and reply,
+    /// * the flight time is at least the measured client->relay keepalive p50,
+    /// * the flight time is no more than [`PROBE_WINDOW`].
+    ///
+    /// Every failure is counted and traced and stores nothing; nothing is
+    /// clamped. Only accepted samples enter the relayed window that
+    /// [`LatencyTracker::relayed_p50_ms`] and [`LatencyTracker::like_for_like`]
+    /// report, so the old busy-flow pairing can no longer produce a figure.
+    ///
+    /// Returns the accepted sample so the process-wide hook can feed the
+    /// destination-aware estimator; the tracker itself stays free of routing.
+    pub fn record_inbound(&self, server: Ipv4Addr) -> Option<ValidatedPathSample> {
+        self.record_inbound_from(server, crate::session::current_proxy())
+    }
+
+    /// [`LatencyTracker::record_inbound`] with the relay supplied, so tests do
+    /// not depend on the process-wide current-relay state.
+    fn record_inbound_from(
+        &self,
+        server: Ipv4Addr,
+        relay_now: Option<SocketAddrV4>,
+    ) -> Option<ValidatedPathSample> {
+        let now = self.clock.now();
+        let mut inner = self.lock();
+        inner.last_inbound.insert(server, now);
+        let Some(armed) = inner.armed.remove(&server) else {
+            // No quiet-flow send: the reply cannot be attributed, so there is no
+            // verdict and no counter (there was no probe to reject).
+            return None;
+        };
+        let elapsed = now.saturating_duration_since(armed.sent_at);
+        if elapsed > PROBE_WINDOW {
+            inner.reject_probe(server, armed.relay, elapsed, ProbeRejection::Timeout);
+            return None;
+        }
+        let (Some(armed_relay), Some(relay_now)) = (armed.relay, relay_now) else {
+            // The relay is unknown at one end, so "unchanged" cannot be shown:
+            // never assume it.
+            inner.reject_probe(server, armed.relay, elapsed, ProbeRejection::Stale);
+            return None;
+        };
+        if armed_relay != relay_now {
+            inner.reject_probe(
+                server,
+                Some(armed_relay),
+                elapsed,
+                ProbeRejection::RelayChanged,
+            );
+            return None;
+        }
+        let Some(client_leg_ms) = inner.client_relay_p50_at(armed_relay, now) else {
+            // The physical floor needs a fresh client->relay leg; without one a
+            // sample cannot be validated and is rejected rather than clipped.
+            inner.reject_probe(server, Some(armed_relay), elapsed, ProbeRejection::Stale);
+            return None;
+        };
+        let rtt_ms = elapsed.as_secs_f64() * 1000.0;
+        if !rtt_ms.is_finite() || rtt_ms < f64::from(client_leg_ms) {
+            inner.reject_probe(
+                server,
+                Some(armed_relay),
+                elapsed,
+                ProbeRejection::BehindFloor,
+            );
+            return None;
+        }
+        if inner.relayed_server != Some(server) || inner.relayed_relay != Some(armed_relay) {
             inner.relayed.clear();
             inner.relayed_server = Some(server);
+            inner.relayed_relay = Some(armed_relay);
         }
         if inner.relayed.len() >= RELAYED_RING_CAPACITY {
             inner.relayed.remove(0);
         }
         inner.relayed.push(rtt_ms as f32);
+        inner.probe_counters.accepted = inner.probe_counters.accepted.saturating_add(1);
+        let samples = inner.relayed.len() as u32;
+        let path_p50_ms = inner.relayed_median().unwrap_or_default();
+        debug!(
+            server = %server,
+            relay = %armed_relay,
+            rtt_ms = rtt_ms,
+            samples = samples,
+            path_p50_ms = path_p50_ms,
+            "Quiet-flow tunnelled RTT accepted"
+        );
+        Some(ValidatedPathSample {
+            server,
+            relay: armed_relay,
+            rtt_us: u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
+            samples,
+            path_p50_ms,
+        })
+    }
+
+    /// Record one **explicitly correlated** diagnostic round trip for `server`.
+    ///
+    /// `--diagnose` sends a synthetic probe and only calls this once the reply
+    /// payload matches its own, so the attribution the game-traffic rule has to
+    /// infer is already exact. That is why it does not need the quiet gap or the
+    /// physical floor - and why it lives in its own window: a diagnostic value
+    /// is never reported as game-traffic latency
+    /// ([`LatencyTracker::relayed_p50_ms`] does not read it) and a game-traffic
+    /// sample never appears here.
+    pub fn record_diagnostic_rtt(&self, server: Ipv4Addr, rtt_ms: f32) {
+        if !rtt_ms.is_finite() || rtt_ms <= 0.0 {
+            return;
+        }
+        let mut inner = self.lock();
+        if inner.diagnostic_server != Some(server) {
+            inner.diagnostic.clear();
+            inner.diagnostic_server = Some(server);
+        }
+        if inner.diagnostic.len() >= DIAGNOSTIC_RING_CAPACITY {
+            inner.diagnostic.remove(0);
+        }
+        inner.diagnostic.push(rtt_ms);
+    }
+
+    /// Median of the `--diagnose` window for the current server, if any.
+    pub fn diagnostic_relayed_p50_ms(&self) -> Option<f32> {
+        self.lock().diagnostic_median()
+    }
+
+    /// Samples in the `--diagnose` window.
+    pub fn diagnostic_relayed_samples(&self) -> u32 {
+        self.lock().diagnostic.len() as u32
+    }
+
+    /// Snapshot of the quiet-flow probe counters.
+    pub fn probe_counters(&self) -> ProbeCounters {
+        self.lock().probe_counters
     }
 
     /// Jitter of the direct (ICMP) burst medians for `server`.
@@ -558,16 +935,7 @@ impl LatencyTracker {
     /// sample arrived within [`CLIENT_RELAY_TTL`].
     pub fn client_relay_p50_ms(&self, relay: SocketAddrV4) -> Option<f32> {
         let now = self.clock.now();
-        let inner = self.lock();
-        let sample = inner.client_relay.get(&relay)?;
-        if sample.samples_ms.is_empty()
-            || now.saturating_duration_since(sample.measured_at) >= CLIENT_RELAY_TTL
-        {
-            return None;
-        }
-        let mut sorted = sample.samples_ms.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        Some(TelemetryCollector::percentile(&sorted, 50.0))
+        self.lock().client_relay_p50_at(relay, now)
     }
 
     /// Claim the shadow-direct sampling slot for `server`. Returns `true` when
@@ -852,13 +1220,21 @@ pub fn record_outbound(server: Ipv4Addr) {
 /// T1 hook: call when the first relayed response for `server` is decoded.
 /// Gated on local measurement, not on telemetry, so a muted client still
 /// records the relayed RTT it needs for local decisions.
+///
+/// Only a response that the tracker can attribute to an armed quiet-flow send
+/// and validate against the client->relay leg becomes a sample; it then feeds
+/// the destination-aware routing estimator, which is what makes
+/// `DestLegSource::Measured` reachable. Rejected replies are counted and traced
+/// inside the tracker and feed nothing.
 pub fn record_inbound(server: Ipv4Addr) {
-    crate::route::destination::note_inbound(server);
     if !is_measuring() {
         return;
     }
-    if let Some(tracker) = global() {
-        tracker.record_inbound(server);
+    let Some(tracker) = global() else {
+        return;
+    };
+    if let Some(sample) = tracker.record_inbound(server) {
+        crate::route::destination::observe_tunnelled(sample.relay, sample.server, sample.rtt_us);
     }
 }
 
@@ -932,15 +1308,37 @@ pub fn probe_direct(server: Ipv4Addr) -> Option<f32> {
     global().and_then(|tracker| tracker.maybe_probe_direct(server))
 }
 
-/// Record one client->relay keepalive RTT (ms) for `relay`. Gated on local
-/// measurement; a single-hop sample, not the end-to-end relayed round trip.
+/// Record one client->relay keepalive RTT (ms) for `relay`.
+///
+/// Also feeds the destination estimator's client-leg ring: that leg is routing
+/// state (the `L2 = L3 - L1` subtraction and the triangle-inequality floor), not
+/// telemetry, so it is recorded even when measurement is not installed. The
+/// keepalive is the only production source of this figure; a validated
+/// quiet-flow sample is rejected as `stale` when it is missing rather than
+/// checked against a guessed floor.
 pub fn record_client_relay_rtt(relay: SocketAddrV4, rtt_ms: f32) {
+    if !rtt_ms.is_finite() || rtt_ms <= 0.0 {
+        return;
+    }
+    let rtt_us = (f64::from(rtt_ms) * 1000.0).round();
+    if rtt_us > 0.0 && rtt_us <= u64::MAX as f64 {
+        crate::route::destination::observe_client_leg(relay, rtt_us as u64);
+    }
     if !is_measuring() {
         return;
     }
     if let Some(tracker) = global() {
         tracker.record_client_relay_rtt(relay, rtt_ms);
     }
+}
+
+/// Current quiet-flow probe counters, or all-zero when no tracker is installed.
+///
+/// These are the v1 falsifier's instrument: a 10-minute live match must produce
+/// at least 8 accepted samples per (relay, server), and the rejection reasons
+/// explain any shortfall.
+pub fn probe_counters() -> ProbeCounters {
+    global().map_or_else(ProbeCounters::default, |tracker| tracker.probe_counters())
 }
 
 /// Median client->relay RTT (ms) for `relay`, or `None` when no keepalive
@@ -1112,6 +1510,24 @@ mod tests {
     const SERVER: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 7);
     const OTHER_SERVER: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 9);
 
+    /// One accepted quiet-flow sample: refresh the keepalive floor, wait out the
+    /// quiet gap, arm a send, let `rtt_ms` pass, then record the reply. Returns
+    /// what the tracker reported for the accepted sample.
+    fn accept_sample(
+        t: &LatencyTracker,
+        clock: &TestClock,
+        server: Ipv4Addr,
+        relay_addr: SocketAddrV4,
+        floor_ms: f32,
+        rtt_ms: u64,
+    ) -> Option<ValidatedPathSample> {
+        t.record_client_relay_rtt(relay_addr, floor_ms);
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(server, Some(relay_addr));
+        clock.advance(Duration::from_millis(rtt_ms));
+        t.record_inbound_from(server, Some(relay_addr))
+    }
+
     #[test]
     fn the_direct_sample_carries_the_value_and_its_age() {
         let clock = Arc::new(TestClock::new());
@@ -1223,22 +1639,26 @@ mod tests {
         let t = tracker(prober, clock.clone());
 
         t.run_direct_burst(SERVER);
-        t.note_outbound(SERVER);
-        clock.advance(Duration::from_millis(20));
-        t.record_inbound(SERVER);
+        accept_sample(&t, &clock, SERVER, relay(1), 10.0, 20);
 
         assert_eq!(t.relayed_p50_ms(), Some(20.0));
         assert_eq!(t.saved_ms(), Some(30.0));
     }
 
     #[test]
-    fn inbound_without_pending_outbound_is_ignored() {
+    fn an_unattributed_reply_is_ignored() {
         let t = tracker(
             Arc::new(ScriptedProber::new(vec![])),
             Arc::new(TestClock::new()),
         );
         t.record_inbound(SERVER);
         assert_eq!(t.relayed_p50_ms(), None);
+        assert_eq!(
+            t.probe_counters(),
+            ProbeCounters::default(),
+            "a reply with no armed probe is not a rejected probe: there was \
+             nothing to attribute it to"
+        );
     }
 
     #[test]
@@ -1259,9 +1679,7 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let t = tracker(prober, clock.clone());
         t.run_direct_burst(SERVER);
-        t.note_outbound(SERVER);
-        clock.advance(Duration::from_millis(20));
-        t.record_inbound(SERVER);
+        accept_sample(&t, &clock, SERVER, relay(1), 10.0, 20);
 
         clock.advance(Duration::from_secs(301));
         let (direct, relayed) = t.take_report_values();
@@ -1275,9 +1693,7 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let t = tracker(prober, clock.clone());
         t.run_direct_burst(SERVER);
-        t.note_outbound(OTHER_SERVER);
-        clock.advance(Duration::from_millis(20));
-        t.record_inbound(OTHER_SERVER);
+        accept_sample(&t, &clock, OTHER_SERVER, relay(1), 10.0, 20);
 
         let (direct, relayed) = t.take_report_values();
         assert_eq!(
@@ -1293,9 +1709,7 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let t = tracker(prober, clock.clone());
         t.run_direct_burst(SERVER);
-        t.note_outbound(OTHER_SERVER);
-        clock.advance(Duration::from_millis(20));
-        t.record_inbound(OTHER_SERVER);
+        accept_sample(&t, &clock, OTHER_SERVER, relay(1), 10.0, 20);
 
         assert_eq!(
             t.saved_ms(),
@@ -1310,9 +1724,7 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let t = tracker(prober, clock.clone());
         t.run_direct_burst(SERVER);
-        t.note_outbound(SERVER);
-        clock.advance(Duration::from_millis(20));
-        t.record_inbound(SERVER);
+        accept_sample(&t, &clock, SERVER, relay(1), 10.0, 20);
 
         clock.advance(Duration::from_secs(301));
         assert_eq!(
@@ -1332,12 +1744,348 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let t = tracker(prober, clock.clone());
         t.run_direct_burst(SERVER);
-        t.note_outbound(SERVER);
-        clock.advance(Duration::from_millis(35));
-        t.record_inbound(SERVER);
+        accept_sample(&t, &clock, SERVER, relay(1), 10.0, 35);
 
         assert_eq!(t.take_report_values(), (Some(50.0), Some(35.0)));
         assert_eq!(t.take_report_values(), (Some(50.0), None));
+    }
+
+    // ── Validated quiet-flow whole-path probe (design §5.1) ─────────────────
+
+    #[test]
+    fn an_accepted_quiet_flow_sample_reports_its_values() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        let sample = accept_sample(&t, &clock, SERVER, relay(1), 200.0, 260)
+            .expect("a reply above the client->relay floor is a whole-path sample");
+
+        assert_eq!(sample.server, SERVER);
+        assert_eq!(sample.relay, relay(1));
+        assert_eq!(
+            sample.rtt_us, 260_000,
+            "a real flight time, in microseconds"
+        );
+        assert_eq!(sample.samples, 1);
+        assert_eq!(sample.path_p50_ms, 260.0);
+        assert_eq!(t.relayed_samples(), 1);
+        assert_eq!(t.relayed_p50_ms(), Some(260.0));
+        assert_eq!(t.probe_counters().accepted, 1);
+        assert_eq!(t.probe_counters().rejected(), 0);
+    }
+
+    #[test]
+    fn the_quiet_gap_outlasts_the_live_send_cadence() {
+        // The live ROB RUN session forwarded 36.5 packets/s (~27 ms period).
+        // The retired 250 ms gap still left ~9 packets in flight, so a reply
+        // could be attributed to the wrong send and read 0.157 ms against a
+        // 234 ms relay leg. 1000 ms is the design's value and must stay well
+        // past that cadence.
+        assert_eq!(PROBE_QUIET_GAP, Duration::from_millis(1000));
+        assert!(
+            PROBE_QUIET_GAP >= Duration::from_millis(36 * 27),
+            "the gap must span tens of the live session's send intervals"
+        );
+        assert!(
+            PROBE_WINDOW >= Duration::from_secs(5),
+            "the upper bound is the largest physical RTT the estimator accepts"
+        );
+    }
+
+    #[test]
+    fn a_busy_flow_never_arms_a_probe() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 100.0);
+
+        // A reply last arrived, then a send 10 ms later is not attributable.
+        t.record_inbound_from(SERVER, Some(relay(1)));
+        clock.advance(Duration::from_millis(10));
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(Duration::from_millis(20));
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
+        assert_eq!(t.relayed_samples(), 0, "a busy-flow reply is not a sample");
+        assert_eq!(
+            t.probe_counters(),
+            ProbeCounters::default(),
+            "no probe was armed, so nothing was rejected"
+        );
+    }
+
+    #[test]
+    fn a_reply_inside_the_physical_floor_is_rejected_not_clamped() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 200.0);
+
+        // A 20 ms flight time against a 200 ms client->relay leg is impossible
+        // for a whole path: the reply cannot have made the round trip.
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(Duration::from_millis(20));
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
+
+        assert_eq!(t.relayed_samples(), 0, "nothing may be stored or clamped");
+        assert_eq!(t.relayed_p50_ms(), None);
+        assert_eq!(t.probe_counters().rejected_behind_floor, 1);
+        assert_eq!(t.probe_counters().accepted, 0);
+        assert_eq!(t.probe_counters().rejected(), 1, "counted, not silent");
+    }
+
+    #[test]
+    fn a_reply_after_a_relay_change_is_rejected() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 50.0);
+        t.record_client_relay_rtt(relay(2), 50.0);
+
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(Duration::from_millis(120));
+        // The session moved to relay 2 before the reply came back: the sample
+        // would mix two paths.
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(2))), None);
+        assert_eq!(t.relayed_samples(), 0);
+        assert_eq!(t.probe_counters().rejected_relay_changed, 1);
+    }
+
+    #[test]
+    fn a_reply_after_the_probe_window_is_rejected_as_a_timeout() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 50.0);
+
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(PROBE_WINDOW + Duration::from_millis(1));
+        // Still inside CLIENT_RELAY_TTL, so this can only be the window rule.
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
+        assert_eq!(t.relayed_samples(), 0);
+        assert_eq!(t.probe_counters().rejected_timeout, 1);
+    }
+
+    #[test]
+    fn an_unanswered_probe_expires_and_is_counted_once() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(PROBE_WINDOW + Duration::from_millis(1));
+        // The next outbound notices the unanswered probe is dead.
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        assert_eq!(t.probe_counters().rejected_timeout, 1);
+        // A later inbound must not pair with it nor count it again.
+        clock.advance(Duration::from_millis(10));
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
+        assert_eq!(t.probe_counters().rejected_timeout, 1);
+        assert_eq!(t.relayed_samples(), 0);
+    }
+
+    #[test]
+    fn a_probe_without_a_keepalive_floor_is_rejected_as_stale() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        // No keepalive sample ever arrived, so the floor cannot be checked.
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(Duration::from_millis(300));
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
+        assert_eq!(t.relayed_samples(), 0);
+        assert_eq!(
+            t.probe_counters().rejected_stale,
+            1,
+            "no L1 means reject, never clip the floor"
+        );
+    }
+
+    #[test]
+    fn an_expired_keepalive_floor_is_stale_too() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 100.0);
+        clock.advance(CLIENT_RELAY_TTL + Duration::from_millis(1));
+
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
+        clock.advance(Duration::from_millis(300));
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
+        assert_eq!(t.probe_counters().rejected_stale, 1);
+    }
+
+    #[test]
+    fn a_probe_armed_without_a_relay_is_rejected_as_stale() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 50.0);
+
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, None);
+        clock.advance(Duration::from_millis(120));
+        assert_eq!(t.record_inbound_from(SERVER, Some(relay(1))), None);
+        assert_eq!(
+            t.probe_counters().rejected_stale,
+            1,
+            "an unattributable relay must not be assumed unchanged"
+        );
+    }
+
+    #[test]
+    fn the_relayed_median_is_over_the_validated_ring() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        for rtt_ms in [400u64, 200, 300] {
+            accept_sample(&t, &clock, SERVER, relay(1), 100.0, rtt_ms);
+        }
+        assert_eq!(t.relayed_samples(), 3);
+        assert_eq!(
+            t.relayed_p50_ms(),
+            Some(300.0),
+            "the median of the validated window, not the newest or the fastest"
+        );
+    }
+
+    #[test]
+    fn changing_relay_starts_a_new_relayed_window() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        accept_sample(&t, &clock, SERVER, relay(1), 100.0, 200);
+        accept_sample(&t, &clock, SERVER, relay(1), 100.0, 220);
+        assert_eq!(t.relayed_samples(), 2);
+
+        accept_sample(&t, &clock, SERVER, relay(2), 100.0, 300);
+        assert_eq!(
+            t.relayed_samples(),
+            1,
+            "samples from two relays must not share one median"
+        );
+        assert_eq!(t.relayed_p50_ms(), Some(300.0));
+    }
+
+    #[test]
+    fn changing_server_starts_a_new_relayed_window() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        accept_sample(&t, &clock, SERVER, relay(1), 100.0, 200);
+        accept_sample(&t, &clock, OTHER_SERVER, relay(1), 100.0, 400);
+        assert_eq!(t.relayed_samples(), 1);
+        assert_eq!(t.relayed_p50_ms(), Some(400.0));
+    }
+
+    #[test]
+    fn the_old_busy_flow_pairing_no_longer_feeds_the_reported_figure() {
+        // The removed estimator paired a reply with the most recent outbound on
+        // any flow, which measured one inter-send gap (7.33-34.30 ms against a
+        // 200+ ms relay leg live). Such a reply must now produce nothing at all.
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 200.0);
+
+        // A busy exchange: sends every 25 ms, replies interleaved.
+        t.record_inbound_from(SERVER, Some(relay(1)));
+        for _ in 0..4 {
+            t.note_outbound_from(SERVER, Some(relay(1)));
+            clock.advance(Duration::from_millis(25));
+            t.record_inbound_from(SERVER, Some(relay(1)));
+            clock.advance(Duration::from_millis(5));
+        }
+
+        assert_eq!(
+            t.relayed_p50_ms(),
+            None,
+            "a busy flow has no attributable round trip"
+        );
+        assert_eq!(t.relayed_samples(), 0);
+        assert_eq!(t.saved_ms(), None);
+        assert_eq!(
+            t.probe_counters(),
+            ProbeCounters::default(),
+            "none of those replies was a probe, so none is a rejection"
+        );
+    }
+
+    #[test]
+    fn a_flow_that_goes_quiet_after_busy_traffic_still_produces_a_sample() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+        t.record_client_relay_rtt(relay(1), 120.0);
+
+        // Busy first: nothing attributable.
+        t.record_inbound_from(SERVER, Some(relay(1)));
+        for _ in 0..3 {
+            t.note_outbound_from(SERVER, Some(relay(1)));
+            clock.advance(Duration::from_millis(25));
+            t.record_inbound_from(SERVER, Some(relay(1)));
+            clock.advance(Duration::from_millis(5));
+        }
+        assert_eq!(t.relayed_samples(), 0);
+
+        // Then the quiet gap: the next send is armed and its reply measured.
+        let sample = accept_sample(&t, &clock, SERVER, relay(1), 120.0, 260);
+        assert!(sample.is_some());
+        assert_eq!(t.relayed_samples(), 1);
+        assert_eq!(t.probe_counters().accepted, 1);
+        assert_eq!(t.probe_counters().rejected(), 0);
+    }
+
+    // ── The `--diagnose` seam is a separate window ──────────────────────────
+
+    #[test]
+    fn a_diagnostic_sample_never_appears_in_the_game_traffic_window() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        t.record_diagnostic_rtt(SERVER, 180.0);
+        t.record_diagnostic_rtt(SERVER, 220.0);
+        assert_eq!(
+            t.diagnostic_relayed_p50_ms(),
+            Some(220.0),
+            "the median reducer used by every window (nearest-rank)"
+        );
+        assert_eq!(t.diagnostic_relayed_samples(), 2);
+        assert_eq!(
+            t.relayed_p50_ms(),
+            None,
+            "a diagnostic value must never be presented as game latency"
+        );
+        assert_eq!(t.relayed_samples(), 0);
+        assert_eq!(t.saved_ms(), None);
+    }
+
+    #[test]
+    fn a_game_traffic_sample_never_appears_in_the_diagnostic_window() {
+        let clock = Arc::new(TestClock::new());
+        let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
+
+        accept_sample(&t, &clock, SERVER, relay(1), 100.0, 250);
+        assert_eq!(t.relayed_p50_ms(), Some(250.0));
+        assert_eq!(t.diagnostic_relayed_p50_ms(), None);
+        assert_eq!(t.diagnostic_relayed_samples(), 0);
+    }
+
+    #[test]
+    fn the_diagnostic_window_is_per_server_and_ignores_implausible_values() {
+        let t = tracker(
+            Arc::new(ScriptedProber::new(vec![])),
+            Arc::new(TestClock::new()),
+        );
+        t.record_diagnostic_rtt(SERVER, 100.0);
+        t.record_diagnostic_rtt(SERVER, f32::NAN);
+        t.record_diagnostic_rtt(SERVER, -5.0);
+        t.record_diagnostic_rtt(SERVER, 0.0);
+        assert_eq!(t.diagnostic_relayed_samples(), 1);
+
+        t.record_diagnostic_rtt(OTHER_SERVER, 300.0);
+        assert_eq!(
+            t.diagnostic_relayed_samples(),
+            1,
+            "a new server starts a fresh diagnostic window"
+        );
+        assert_eq!(t.diagnostic_relayed_p50_ms(), Some(300.0));
     }
 
     #[test]
@@ -1406,15 +2154,17 @@ mod tests {
     }
 
     #[test]
-    fn shadow_sample_does_not_clobber_relayed_pending() {
+    fn shadow_sampling_does_not_disturb_the_validated_window() {
         let clock = Arc::new(TestClock::new());
         let t = tracker(Arc::new(ScriptedProber::new(vec![])), clock.clone());
 
-        t.note_outbound(SERVER);
+        t.record_client_relay_rtt(relay(1), 10.0);
+        clock.advance(PROBE_QUIET_GAP);
+        t.note_outbound_from(SERVER, Some(relay(1)));
         assert!(t.record_shadow_outbound(SERVER));
 
         clock.advance(Duration::from_millis(25));
-        t.record_inbound(SERVER);
+        t.record_inbound_from(SERVER, Some(relay(1)));
         assert_eq!(t.relayed_p50_ms(), Some(25.0));
 
         clock.advance(Duration::from_millis(5));
@@ -1516,9 +2266,7 @@ mod tests {
             clock.advance(Duration::from_secs(30));
         }
         for _ in 0..4 {
-            t.note_outbound(SERVER);
-            clock.advance(Duration::from_millis(25));
-            t.record_inbound(SERVER);
+            accept_sample(&t, &clock, SERVER, relay(1), 10.0, 25);
         }
         assert_eq!(
             t.saved_app_pairs(),
@@ -1557,6 +2305,8 @@ mod tests {
 
     // ── Like-for-like bypass pairing ────────────────────────────────────────
 
+    /// A validated whole-path sample and a shadow-direct sample for the same
+    /// server, which is the pair the bypass gate compares.
     fn paired_windows(
         t: &LatencyTracker,
         clock: &TestClock,
@@ -1564,9 +2314,7 @@ mod tests {
         relay_ms: u64,
         shadow_ms: u64,
     ) {
-        t.note_outbound(server);
-        clock.advance(Duration::from_millis(relay_ms));
-        t.record_inbound(server);
+        accept_sample(t, clock, server, relay(1), 10.0, relay_ms);
         assert!(t.record_shadow_outbound(server));
         clock.advance(Duration::from_millis(shadow_ms));
         t.record_shadow_inbound(server);

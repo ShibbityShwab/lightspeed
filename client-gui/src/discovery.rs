@@ -200,12 +200,19 @@ pub fn spawn_relay_measurement(
     rx
 }
 
-/// One relay's measured client leg: the latency and how much it moved.
+/// One relay's measured client leg: the one-round-trip latency and how much it
+/// moved.
 ///
 /// Both are needed because the owner's goal is "lowest latency and the most stable
 /// connection", and on a mobile link the spread is what makes a match feel bad
 /// even when the median is fine. A single probe cannot see spread: the ranking
 /// weights jitter, and until this existed it was always handed zero.
+///
+/// The latency is a **one-RTT** figure (the TCP connect handshake), because that
+/// is the leg the destination-aware ranking adds to a one-RTT destination
+/// estimate. The previous probe timed a whole `GET /health`, which is two round
+/// trips, and measured against the same relays it read 1.92-2.03x the TCP figure
+/// (`docs/server-leg-signal.md` §4.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RelaySample {
     /// Middle value across the probes.
@@ -229,7 +236,7 @@ pub const RELAY_PROBES: usize = 5;
 ///
 /// Unlike [`measure_all_blocking`], which takes one sample and is used for the
 /// fastest-relay race, this exists to characterise a link. A relay that does not
-/// answer at all is omitted rather than reported as zero.
+/// accept a connection at all is omitted rather than reported as zero.
 pub fn measure_spreads_blocking(
     addrs: &[SocketAddrV4],
 ) -> Vec<(SocketAddrV4, Option<RelaySample>)> {
@@ -244,7 +251,7 @@ pub fn measure_spreads_blocking(
             scope.spawn(move || {
                 let mut times: Vec<Duration> = Vec::with_capacity(RELAY_PROBES);
                 for _ in 0..RELAY_PROBES {
-                    if let Some(rtt) = probe_latency(addr) {
+                    if let Some(rtt) = connect_latency(addr) {
                         times.push(rtt);
                     }
                 }
@@ -287,19 +294,20 @@ fn summarise(times: &mut [Duration]) -> Option<RelaySample> {
     Some(RelaySample { median, jitter })
 }
 
-/// Probe every address concurrently and return the one with the lowest
-/// round-trip to `/health`. Addresses that fail to answer are ignored.
+/// Probe every address concurrently and return the one with the lowest one-RTT
+/// connect time. Addresses that fail to accept a connection are ignored.
 pub fn race_blocking(addrs: &[SocketAddrV4]) -> Option<SocketAddrV4> {
     fastest_addr(measure_all_blocking(addrs))
 }
 
-/// Probe every address concurrently and return every measured round trip.
+/// Probe every address concurrently and return every measured one-RTT connect
+/// time.
 ///
 /// [`race_blocking`] keeps only the winner, which throws away exactly the
 /// per-relay figures a destination-aware choice needs: knowing that Los Angeles
 /// answers in 244 ms is useless without knowing what New Jersey answers, because
 /// the winner of that race is not the winner of the whole path. Addresses that
-/// fail to answer are omitted rather than reported as zero.
+/// fail to accept a connection are omitted rather than reported as zero.
 pub fn measure_all_blocking(addrs: &[SocketAddrV4]) -> Vec<(SocketAddrV4, Option<Duration>)> {
     if addrs.is_empty() {
         return Vec::new();
@@ -310,7 +318,7 @@ pub fn measure_all_blocking(addrs: &[SocketAddrV4]) -> Vec<(SocketAddrV4, Option
             let tx = tx.clone();
             let addr = *addr;
             scope.spawn(move || {
-                let _ = tx.send((index, addr, probe_latency(addr)));
+                let _ = tx.send((index, addr, connect_latency(addr)));
             });
         }
     });
@@ -325,10 +333,24 @@ pub fn measure_all_blocking(addrs: &[SocketAddrV4]) -> Vec<(SocketAddrV4, Option
         .collect()
 }
 
-/// Time one `/health` round trip, or `None` when the relay does not answer.
-fn probe_latency(addr: SocketAddrV4) -> Option<Duration> {
+/// Time one TCP round trip to a relay's health endpoint, or `None` when the
+/// relay does not accept a connection.
+///
+/// The TCP handshake (SYN -> SYN-ACK -> ACK) is exactly **one** round trip,
+/// which is the leg the ranking adds to a one-RTT destination estimate. Timing a
+/// whole `GET /health` instead, as this did before, costs two round trips
+/// (handshake + request/response) and measured 1.92-2.03x the TCP figure on the
+/// same relays, so every relay was charged twice for its own distance and the
+/// direct-ping floor could never bind (`docs/server-leg-signal.md` §4.3).
+///
+/// A relay that accepts TCP but answers `/health` slowly still has a real client
+/// leg; the health counters are fetched separately by [`probe_blocking`].
+fn connect_latency(addr: SocketAddrV4) -> Option<Duration> {
+    let socket = std::net::SocketAddr::V4(addr);
     let started = std::time::Instant::now();
-    probe_blocking(addr).ok().map(|_| started.elapsed())
+    std::net::TcpStream::connect_timeout(&socket, HEALTH_TIMEOUT)
+        .ok()
+        .map(|_| started.elapsed())
 }
 
 /// The address with the smallest successful latency; ties keep input order.
@@ -398,9 +420,10 @@ fn parse_health(body: &str) -> Result<RelayHealth, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        fastest_addr, friendly_label, health_endpoint, measure_spreads_blocking, parse_health,
-        parse_nodes, probe_blocking, race_blocking, spawn_relay_race, split_body, summarise,
-        RelayHealth, RelaySample, RELAY_PROBES,
+        fastest_addr, friendly_label, health_endpoint, measure_all_blocking,
+        measure_spreads_blocking, parse_health, parse_nodes, probe_blocking, race_blocking,
+        spawn_relay_race, split_body, summarise, RelayHealth, RelaySample, HEALTH_TIMEOUT,
+        RELAY_PROBES,
     };
     use std::net::SocketAddrV4;
     use std::time::Duration;
@@ -701,6 +724,61 @@ mod tests {
             measured[0].1.map(|s| s.median) > Some(Duration::ZERO),
             "a relay that answered has a real median"
         );
+    }
+
+    #[test]
+    fn a_client_leg_is_one_round_trip_so_an_http_silent_relay_still_measures() {
+        // The client leg the ranking charges is ONE round trip: the TCP connect
+        // handshake. A relay that accepts TCP but never answers `/health` still
+        // has a real client leg, so it must still produce a sample. The old
+        // probe timed a whole GET /health, spent one read timeout per probe here
+        // (`RELAY_PROBES` x HEALTH_TIMEOUT) and reported no sample at all -
+        // silently dropping the relay from the ranking.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = match listener.local_addr().expect("addr") {
+            std::net::SocketAddr::V4(v4) => v4,
+            std::net::SocketAddr::V6(_) => unreachable!("bound to IPv4"),
+        };
+        let handle = std::thread::spawn(move || {
+            // Hold every accepted connection open so a probe that waits for an
+            // HTTP response would wait until its read timeout.
+            let accepted: Vec<_> = (0..RELAY_PROBES)
+                .filter_map(|_| listener.accept().ok().map(|(stream, _)| stream))
+                .collect();
+            accepted
+        });
+        let started = std::time::Instant::now();
+        let measured = measure_spreads_blocking(&[addr]);
+        let elapsed = started.elapsed();
+        let accepted = handle.join().expect("listener thread");
+        assert_eq!(accepted.len(), RELAY_PROBES, "every probe connects");
+        assert_eq!(measured.len(), 1);
+        assert_eq!(measured[0].0, addr);
+        assert!(
+            measured[0].1.is_some(),
+            "a relay that accepts a connection has a one-RTT client leg even when \
+             /health is silent"
+        );
+        assert!(
+            elapsed < HEALTH_TIMEOUT,
+            "one round trip must not wait for an HTTP body (took {elapsed:?})"
+        );
+    }
+
+    #[test]
+    fn a_refused_port_has_no_client_leg() {
+        // Bind then drop: nothing listens, so there is no round trip to measure
+        // and the relay must be reported as unmeasured rather than as zero.
+        let refused = match std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind")
+            .local_addr()
+            .expect("addr")
+        {
+            std::net::SocketAddr::V4(v4) => v4,
+            std::net::SocketAddr::V6(_) => unreachable!("bound to IPv4"),
+        };
+        assert!(super::connect_latency(refused).is_none());
+        assert_eq!(super::fastest_addr(measure_all_blocking(&[refused])), None);
     }
 
     #[test]

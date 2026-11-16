@@ -448,6 +448,10 @@ async fn run_capture_mode_inner(
                     };
                     if let Some(rtt) = rtt_us {
                         let latency_ms = rtt as f64 / 1000.0;
+                        // The client->relay leg is the physical floor the
+                        // validated whole-path probe checks against; without it
+                        // every quiet-flow sample is rejected as stale.
+                        crate::latency::record_client_relay_rtt(proxy_addr, latency_ms as f32);
                         tracing::trace!(
                             seq = header.sequence,
                             rtt_ms = latency_ms,

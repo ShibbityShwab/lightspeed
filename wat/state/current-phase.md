@@ -5,11 +5,73 @@
 
 ## Current state
 
-**Workflow:** WF-060 (the WF-059 audit's #167 and QUIC follow-ups, this entry); WF-059 closed, product work continues under WF-057 and PR #173
-**Agent:** lead (RustDev + QAEngineer contracts; single-threaded)
-**Status:** 1.10.3 is the latest release (2026-11-14): server ping in the route card, bounded relay re-tests, session-scoped Relayed counters, the retuned no-reply watchdog, destination-aware relay choice, ARC Raiders TCP control-plane support and the TCP-connection ownership fix; 1.10.0 added Jedi Outcast and Tibia. Master is CI-green after the 2026-11-16 shadow-gate test fix. Open GitHub feedback is triaged in `docs/github-feedback-audit-2026-11-16.md`: 8 issues (2 bug threads, 5 game requests, 1 fixed-but-open), 10 discussions, 1 community PR whose CI was unblocked. WF-060 now surfaces a dead data plane in the status (#167) and turns QUIC alert 120 into a verdict (#140/#147); the ALPN migration is the next owner-gated step. The agent layer (WF-058) is DSH-native with Team-mode personas.
+**Workflow:** WF-064 (server-leg signal v1, honest route surface, v2 NO-GO, per-game verdict - this entry); WF-063 fallback state contract and WF-062 relay-watchdog fix are the current product changes, unreleased
+**Agent:** lead + `rust-dev` + `interface-designer` + `infra-dev` + `net-eng` + `qa-engineer` (Agent Teams; five board tasks, all completed)
+**Status:** 1.10.3 is the latest release (2026-11-14): server ping in the route card, bounded relay re-tests, session-scoped Relayed counters, the retuned no-reply watchdog, destination-aware relay choice, ARC Raiders TCP control-plane support and the TCP-connection ownership fix; 1.10.0 added Jedi Outcast and Tibia. Master is CI-green after the 2026-11-16 shadow-gate test fix. Open GitHub feedback is triaged in `docs/github-feedback-audit-2026-11-16.md` (backlog 6 issues after the 2026-11-16 hygiene round), 10 discussions, 1 community PR whose CI was unblocked. WF-062 stopped the relay watchdog abandoning healthy relays and hopping mid-session; WF-063 added the fallback state contract and a trace per judged window; WF-064 makes the relay-to-server leg measurable (validated quiet-flow RTT), reports it honestly on the route surface, measures the client leg as one RTT, and ranks on the whole path - with the v2 fleet probe at NO-GO pending fixed gates. The ALPN migration is the next owner-gated step. The agent layer (WF-058) is DSH-native with Team-mode personas.
 
 ## Recent entries
+
+### 2026-11-16 - WF-064: a real server-leg signal, an honest route surface, and the v2 NO-GO
+
+**Agent:** lead + `rust-dev` (task-13) + `interface-designer` (task-14) + `infra-dev` (task-15) + `net-eng` (task-8) + `qa-engineer` (task-16 independent verification)
+
+Four parallel deliverables landed on one integrated tree; independent QA then
+re-derived the mutation checks and ran the GUI live.
+
+- **task-13 `rust-dev` - v1 quiet-flow server-leg signal.** `latency.rs` arms a
+  whole-path probe only after 1 s without inbound and accepts the next reply only
+  when the relay is unchanged and `L1 <= RTT <= 5 s`; rejections are counted
+  (`behind_floor`/`relay_changed`/`timeout`/`stale`) and never clamped. Accepted
+  samples feed `destination::observe_tunnelled`, `DEST_FRESHNESS_TTL = 120 s`
+  bounds publication, and the invalid busy-flow pairing is deleted from
+  `relayed_p50_ms`/`like_for_like`/telemetry (a separate locked `--diagnose`
+  window replaces it there). Prerequisite found and fixed: Windows keepalive never
+  fed `record_client_relay_rtt`, so three feeds (engine + both CLI modes) were
+  added. `client/tests/latency_telemetry_gate.rs` asserted the old artefact and
+  now asserts the truthful `None` + `rejected_stale`.
+- **task-14 `interface-designer` - honest route surface.** New `Server leg` row
+  with five states (measured n+age / triangle-bounded / prior +/-25 ms / unknown /
+  absent on direct), a provable "cannot be faster than direct" verdict, the client
+  leg measured as **one** TCP RTT instead of a 2-RTT HTTP wall time, and a
+  whole-path ranking key in the GUI (interim; engine canonicalisation is task-17).
+  7 new locale keys across en + 8 catalogs (English fallback; translation debt
+  7x8). 11 new GUI tests.
+- **task-15 `infra-dev` - v2 feasibility: NO-GO today, conditional GO.**
+  `docs/relay-server-leg-probe.md` (618 lines) + evidence. Premise corrections:
+  `Register.destination` is never populated in production (the relay learns the
+  destination from the data-plane header and already logs it), the relay units are
+  `DynamicUser`/`NoNewPrivileges` so raw ICMP is impossible and `CAP_NET_RAW` is a
+  NO-GO, and the decisive F3 measurement needs fleet access behind fixed gates
+  G1-G5. Cost $0.00.
+- **task-8 `net-eng` - per-game negative saving: MIXED.** Magnitudes and the
+  per-game pattern are the invalid-estimator artefact (the old relayed figure was
+  a one-sided lower bound; shadow collapsed to 0.42 ms), but the **sign** of the
+  two `fortnite/US` cells survives an artifact-free ICMP bound (`saved_icmp`
+  negative on both relays, n=6/4); `arcraiders/RU` is unsettled without an ICMP
+  anchor. Two data defects: `client_country` is the OS locale, and the stats
+  branch has no per-game dimension. Board tasks 18/19 filed; no drain, no
+  per-game routing.
+- **task-16 `qa-engineer` - independent verification.** PASS criteria 1-3, 5;
+  live PARTIAL (quiet-flow n=0 on this chatty game - falsifier F1 observed). 5/5
+  mutations re-derived and restored byte-identically; one pre-existing flake
+  named. **Finding fixed by the Lead:** probe counters were `debug!`-only while
+  the shipped GUI sink is INFO, so F1 was unmeasurable in release - the per-window
+  INFO line now carries `probe_accepted`/`probe_rejected` (tested). Low doc and
+  screenshot nits recorded; the "trace stall" claim was not reproduced.
+
+**Verified:** Lead gate on the integrated tree - fmt clean; workspace clippy
+clean; **1,491** workspace tests across 29 suites, **178** GUI, **1,245**
+WinDivert-feature and **848** QUIC-lib passed, 0 failed. Evidence:
+`wat/evidence/2026-11-16/wf064-qa/`, `server-leg-signal/{v1,gui,per-game}/`,
+`server-leg-probe/`, `lead-gate.log`.
+
+**Open:** the `Measured` state was not observed live (needs >=8 validated samples
+in a 10-minute match; F1 is the falsifier, now measurable via the new counters);
+tasks 17 (canonical engine rank key), 18 (shadow estimator + telemetry publication
+gate), 19 (locale-vs-location labels + per-game dimension); translation debt 7x8;
+`--diagnose` wiring compile/review-verified only; three `no_reply_from_relay`
+fallbacks for one ROB RUN server were observed live and the relay-side cause was
+not investigated.
 
 ### 2026-11-16 - WF-063: fallback state contract, QA parity fixes, and the reason relay choice is blind
 

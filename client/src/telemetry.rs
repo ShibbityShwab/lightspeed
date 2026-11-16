@@ -175,6 +175,24 @@ impl TelemetryCollector {
     /// Build a [`TelemetryReport`] from the current samples without consuming
     /// them. A report is only committed by [`Self::commit_report`] once it has
     /// been sent, so a failed flush can retry with the same data.
+    ///
+    /// # `relayed_p50_ms` and `saved_app` are on a new scale
+    ///
+    /// The relayed figure this report carries comes from
+    /// [`crate::latency::peek_report_values`], i.e. the **validated quiet-flow**
+    /// whole-path window (`client/src/latency.rs`, design
+    /// `docs/server-leg-signal.md` §5.1), not the old busy-flow pairing. The
+    /// pairing it replaces dated the reply against the most recent send and so
+    /// measured roughly one inter-send interval: on the task-10 live session
+    /// 25/25 values sat below the client→relay leg (median ratio 0.129), so
+    /// `direct - relayed` was inflated by an order of magnitude. The new value
+    /// is a real client → relay → server → relay → client RTT, so it is larger
+    /// (low hundreds of ms on the observed paths) and present far less often
+    /// (the validated sample rate is falsifier F1). Fleet `lightspeed_telemetry_saved_*`
+    /// baselines before and after this change are not comparable; historical
+    /// stats-branch points are on the old scale. The wire field is unchanged
+    /// (`Option<f32>`, same valid range), so no protocol or relay change is
+    /// involved.
     async fn build_report(&self, game_id: u8, country: &str) -> Option<TelemetryReport> {
         let (direct_p50_ms, relayed_p50_ms) = crate::latency::peek_report_values();
         let direct_app_p50_ms = crate::latency::shadow_direct_p50_ms();

@@ -31,7 +31,7 @@ use eframe::egui;
 use lightspeed_client::interceptor::ProcessTarget;
 use lightspeed_client::profiles::schema::{is_valid_key, parse_port_range, slugify, PortRange};
 use lightspeed_client::profiles::{ProfileStore, UserGameProfile, UserServer};
-use lightspeed_client::{EngineStatus, LightSpeedEngine, RelayCandidate};
+use lightspeed_client::{EngineStatus, LightSpeedEngine, RelayCandidate, PRIOR_UNCERTAINTY_US};
 use std::net::Ipv4Addr;
 
 // ── Tray state enum ──────────────────────────────────────────────────────────
@@ -85,6 +85,12 @@ const LOCK_SETTLE: Duration = Duration::from_secs(3);
 /// trying. Two minutes of retries each, so three is already several minutes of a
 /// match spent proving what the first two already showed.
 const MAX_RELAYS_TRIED: usize = 3;
+
+/// How old a direct-ping sample may be before the window stops showing it and
+/// the ranking stops using it as a triangle bound. One rule for both, because a
+/// stale ping displayed as current and a stale ping shaping the choice are the
+/// same defect.
+const SERVER_PING_FRESH_SECS: u64 = 60;
 
 /// How old a direct-ping sample may be before the window asks for a fresh one.
 const PING_REFRESH_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
@@ -424,10 +430,18 @@ fn relay_reply_fault_message(
 /// `share` is the ratio the 1-in-8 floor judges, `injected / intercepted`; a
 /// window that carried no traffic at all prints `n/a` and is never judged in
 /// practice.
+///
+/// The last two fields are the engine's validated quiet-flow probe counters
+/// (`latency::probe_counters`). They are here because the probe's own accepted/
+/// rejected lines are `debug!` and the shipped GUI file sink is INFO, so without
+/// this line the F1 falsifier (accepted samples per match, and *why* replies were
+/// rejected) would be unmeasurable in a released build.
 fn relay_reply_window_message(
     intercepted: u64,
     injected: u64,
     from_relay: u64,
+    probe_accepted: u64,
+    probe_rejected: u64,
     streak: &ReplyFaultStreak,
     window: Option<RelayReplyFault>,
 ) -> String {
@@ -444,7 +458,8 @@ fn relay_reply_window_message(
     };
     format!(
         "Relay reply window judged: intercepted={intercepted} injected={injected} \
-         from_relay={from_relay} share={share} streak={} verdict={verdict}",
+         from_relay={from_relay} share={share} streak={} verdict={verdict} \
+         probe_accepted={probe_accepted} probe_rejected={probe_rejected}",
         streak.count
     )
 }
@@ -597,7 +612,10 @@ fn spawn_relay_reply_watchdog(
             let fault = current.streak.observe(window);
             // One line per judgement, healthy or not: direct evidence that the
             // watchdog looked at this window and what it saw, instead of an
-            // absence of WARN lines standing in for a verdict.
+            // absence of WARN lines standing in for a verdict. The quiet-flow
+            // probe counters ride along because their own trace is debug-level
+            // and the shipped file sink is INFO (QA finding: F1 unmeasurable).
+            let probe = lightspeed_client::latency::probe_counters();
             tracing::info!(
                 server = %server,
                 "{}",
@@ -605,6 +623,8 @@ fn spawn_relay_reply_watchdog(
                     intercepted_since,
                     injected_since,
                     from_proxy_since,
+                    probe.accepted,
+                    probe.rejected(),
                     &current.streak,
                     window,
                 )
@@ -719,6 +739,55 @@ const RELAY_HEALTH_MAX_UNSENT_SHARE: f64 = 0.2;
 /// Every discovered relay's measured client leg, as the destination-aware
 /// chooser consumes it (a relay that did not answer carries `None`).
 type RelayLegs = Vec<(SocketAddrV4, Option<discovery::RelaySample>)>;
+
+/// One destination-aware ranking, kept as the single record of what the chooser
+/// knew when it ranked relays for `server`.
+///
+/// The route surface has to say whether the relay-to-server leg was measured or
+/// only estimated. That fact exists in exactly one place - the scored candidates
+/// the choice was made from - so it is kept here instead of being re-derived
+/// from the estimator and the geo table a second time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RouteRanking {
+    /// The game server the ranking is for.
+    server: Ipv4Addr,
+    /// Every candidate, best first under [`whole_path_cmp`].
+    scored: Vec<lightspeed_client::ScoredRelay>,
+}
+
+/// A published quiet-flow server-leg measurement: the value, the samples behind
+/// it, and the age of the newest one when the estimator reports an age.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MeasuredServerLeg {
+    /// Relay-to-server round trip, microseconds.
+    dest_leg_us: u64,
+    /// Samples behind the published estimate.
+    samples: usize,
+    /// Age of the newest contributing sample; `None` only if the estimator
+    /// publishes an estimate without an age, which the surface must not invent.
+    age: Option<Duration>,
+}
+
+/// What the route surface can honestly say about the relay-to-server leg for the
+/// relay in use.
+///
+/// Exactly one value drives the `Server leg` row; the window never derives the
+/// same fact from two sources. Precedence: a published estimator measurement
+/// first (it is the only thing that can be called measured), then the ranking's
+/// own row for that relay - the geometric prior, or the triangle-inequality floor
+/// that proves the leg is at least a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServerLegState {
+    /// The v1 quiet-flow estimator published an estimate for this exact pair.
+    Measured(MeasuredServerLeg),
+    /// The prior was below the triangle bound, so the leg is known to be at
+    /// least this: a proof, not a measurement.
+    Bounded { floor_us: u64 },
+    /// No measurement existed, so the ranking used the geometric region prior.
+    Prior { prior_us: u64 },
+    /// No measurement and no usable region prior.
+    Unknown,
+}
 
 /// The tunnel counters as of the last relay-verdict sample.
 #[derive(Clone, Copy, Debug)]
@@ -1355,6 +1424,11 @@ pub struct LightSpeedApp<P: Platform> {
     /// server, shown in the picker so a manual choice can see what it overrides.
     destination_winner: Option<SocketAddrV4>,
 
+    /// The last destination-aware ranking for the game server, kept so the route
+    /// surface can say how the server leg was obtained (measured, triangle bound,
+    /// or region prior) instead of presenting a relayed path as fully measured.
+    route_ranking: Option<RouteRanking>,
+
     /// The game server the current relay was chosen for, so a new raid's server
     /// triggers a fresh choice and a repeated tick does not.
     chosen_for_server: Option<Ipv4Addr>,
@@ -1631,6 +1705,7 @@ impl<P: Platform> LightSpeedApp<P> {
             relay_race: None,
             relay_legs: None,
             destination_winner: None,
+            route_ranking: None,
             relay_measurement: None,
             chosen_for_server: None,
             locked_addr: None,
@@ -1900,7 +1975,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// The client legs come from [`Self::start_relay_measurement`], which measures
     /// every relay rather than only the winner: the winner of the client-leg race
     /// is exactly the relay this function is usually about to reject.
-    fn choose_relay_for_destination(&self) -> Option<SocketAddrV4> {
+    fn choose_relay_for_destination(&mut self) -> Option<SocketAddrV4> {
         let server = self.game_server_addr()?;
         let measured = self.relay_legs.as_ref()?;
 
@@ -1983,9 +2058,12 @@ impl<P: Platform> LightSpeedApp<P> {
         }
 
         // The measured direct ping bounds every relay's destination leg: a
-        // relayed path is never shorter than the direct one it replaces.
-        let direct_us = self.server_ping.map(|(ms, _)| (ms as f64 * 1000.0) as u64);
-        let ranked = match server_location {
+        // relayed path is never shorter than the direct one it replaces. Only a
+        // fresh measurement may bound the ranking or support a comparison: a
+        // stale ping describes a path the client is no longer measuring, and
+        // flooring a candidate against it would invent a bound.
+        let direct_us = fresh_direct_us(self.server_ping);
+        let mut ranked = match server_location {
             Some(loc) => {
                 lightspeed_client::rank_relays_at_with_direct(server, loc, &candidates, direct_us)
             }
@@ -2000,16 +2078,34 @@ impl<P: Platform> LightSpeedApp<P> {
                 )
             })
             .count();
-        let best = ranked.into_iter().next()?;
+        // Interim whole-path re-rank. The engine sorts the destination leg into
+        // 50 ms buckets *before* it compares whole-path totals, so it can put a
+        // relay whose estimated total is 368.9 ms above one at 283.5 ms merely
+        // because its destination leg fell in a lower bucket - the EWR/LAX
+        // counterfactual in
+        // `wat/evidence/2026-11-16/server-leg-signal/rank-harness.out`. Ranking
+        // on the whole-path total is the honest key; task-17 canonicalises the
+        // same rule inside `client/src/route/relay_choice.rs` and this re-rank
+        // then goes away. See `whole_path_cmp` for the exact ordering.
+        whole_path_order(&mut ranked);
+        let best = ranked.first().cloned()?;
+        let state = ranking_state_label(best.dest_source, best.relay, server);
+        let claim = direct_claim_label(direct_us, best.total_leg_us);
         tracing::info!(
-            "Destination-aware relay choice for {server}: {} ({:?}, total {} ms) - \
+            "Destination-aware relay choice for {server}: {} ({state}, total {} ms{claim}) - \
              {floored} of {} candidates raised to the direct-ping floor",
             best.relay,
-            best.dest_source,
             best.total_leg_us / 1000,
             candidates.len()
         );
-        Some(best.relay)
+        let chosen = best.relay;
+        // One record of the ranking, written here and read only by the route
+        // surface: the server leg's provenance must not be derived twice.
+        self.route_ranking = Some(RouteRanking {
+            server,
+            scored: ranked,
+        });
+        Some(chosen)
     }
 
     /// Measure every discovered relay's client leg on a background thread.
@@ -3090,9 +3186,13 @@ impl<P: Platform> LightSpeedApp<P> {
             // The headline is the game-server ping when a direct measurement is
             // fresh: that is the figure a player compares with the one their game
             // shows, and ICMP is the only latency here with real correlation.
-            // Otherwise the relay leg, which is always measured.
+            // Otherwise the relay leg, which is always measured. Freshness is one
+            // rule ([`SERVER_PING_FRESH_SECS`]), shared with the ranking's floor
+            // and the triangle verdict.
             let (reading, hint) = match self.server_ping {
-                Some((ms, age)) if age <= 60 => (ms as f64, i18n::t("route.server_ping_hint")),
+                Some((ms, _)) if fresh_direct_us(self.server_ping).is_some() => {
+                    (ms as f64, i18n::t("route.server_ping_hint"))
+                }
                 _ => (self.status.latest_rtt_ms, i18n::t("route.rtt_hint")),
             };
             let text = if reading > 0.0 {
@@ -3211,6 +3311,25 @@ impl<P: Platform> LightSpeedApp<P> {
                 });
                 ui.add_space(S2);
                 self.ledger_rows(ui, narrow, false);
+                // The one whole-path claim the client can prove from its own
+                // measurements: when the one-RTT client leg already reaches the
+                // direct ping, adding the relay hop cannot shorten the path. It
+                // is stated only while both figures are fresh, and never as a
+                // latency verdict on the server leg, which the client cannot see.
+                if let Some((client_leg_us, direct_us)) = self.cannot_beat_direct() {
+                    ui.add_space(S2);
+                    ui.label(
+                        egui::RichText::new(i18n::t("route.cannot_beat_direct"))
+                            .size(CAPTION)
+                            .color(warn),
+                    )
+                    .on_hover_text(format!(
+                        "Client leg {:.0} ms to the relay is at least the direct ping {:.0} ms, \
+                         so a path through this relay cannot be shorter than going direct.",
+                        client_leg_us as f64 / 1000.0,
+                        direct_us as f64 / 1000.0
+                    ));
+                }
                 // A chart of nothing is worse than no chart: while the client is
                 // merely connected, the sparkline draws a flat line across an empty
                 // band and reads as data. It is drawn only while a session is
@@ -3242,6 +3361,15 @@ impl<P: Platform> LightSpeedApp<P> {
             let value = LedgerValue::Data(format!("{ms:.0} ms \u{00b7} {age}s"));
             self.ledger_row(ui, narrow, &i18n::t("route.server_ping"), &value);
         }
+        // The relay-to-server leg is the half of the path LightSpeed cannot see
+        // without a measurement, and the surface used to present it as if it were
+        // known. The row states how the choice obtained it - measured with its
+        // sample count, a triangle bound, or the region prior with its
+        // uncertainty - and appears only while that choice is the route actually
+        // carrying traffic.
+        if let Some(value) = self.server_leg_value() {
+            self.ledger_row(ui, narrow, &i18n::t("route.server_leg"), &value);
+        }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
             self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
@@ -3266,6 +3394,107 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         let routed = self.routed_value();
         self.ledger_row(ui, narrow, &i18n::t("route.relayed"), &routed);
+    }
+
+    /// The route surface's `Server leg` row: the relay-to-server leg for the
+    /// relay in use, and how the relay choice obtained it.
+    ///
+    /// Present only while this client is tunnelling and the route is the relay (a
+    /// direct fallback's own row already says the relay is not in use), and only
+    /// for a game server the chooser ranked with a relay it ranked. A row with no
+    /// fact behind it would be exactly the invented state this surface exists to
+    /// stop.
+    ///
+    /// Units: microseconds in the model, milliseconds on screen. One metric, one
+    /// label (`route.server_leg`); the hover carries no separate number.
+    fn server_leg_value(&self) -> Option<LedgerValue> {
+        if !self.run_boosting() || self.direct_fallback {
+            return None;
+        }
+        let server = self.game_server_addr()?;
+        let ranking = self
+            .route_ranking
+            .as_ref()
+            .filter(|ranking| ranking.server == server)?;
+        let relay = self.selected_entry()?.addr;
+        let scored = scored_for_relay(&ranking.scored, relay);
+        let measured = measured_server_leg(relay, server);
+        match server_leg_state(scored, measured) {
+            ServerLegState::Measured(measured) => {
+                let ms = format!("{:.0}", measured.dest_leg_us as f64 / 1000.0);
+                let samples = measured.samples.to_string();
+                let text = match measured.age {
+                    // Only the estimator may say how old the newest sample is.
+                    // `None` (no age reported) is rendered as no age, never as
+                    // zero and never estimated from the choice's own clock.
+                    Some(age) => {
+                        let secs = age.as_secs().to_string();
+                        i18n::t_with(
+                            "route.server_leg_measured_age",
+                            &[("ms", &ms), ("n", &samples), ("secs", &secs)],
+                        )
+                    }
+                    None => {
+                        i18n::t_with("route.server_leg_measured", &[("ms", &ms), ("n", &samples)])
+                    }
+                };
+                Some(LedgerValue::Data(text))
+            }
+            ServerLegState::Bounded { floor_us } => {
+                let ms = format!("{:.0}", floor_us as f64 / 1000.0);
+                Some(LedgerValue::Data(i18n::t_with(
+                    "route.server_leg_bounded",
+                    &[("ms", &ms)],
+                )))
+            }
+            ServerLegState::Prior { prior_us } => {
+                let prior = format!("{:.0}", prior_us as f64 / 1000.0);
+                let uncertainty = format!("{:.0}", PRIOR_UNCERTAINTY_US as f64 / 1000.0);
+                Some(LedgerValue::Hint(
+                    i18n::t_with(
+                        "route.server_leg_prior",
+                        &[("prior", &prior), ("unc", &uncertainty)],
+                    )
+                    .into(),
+                ))
+            }
+            ServerLegState::Unknown => Some(LedgerValue::Hint(i18n::t("route.server_leg_unknown"))),
+        }
+    }
+
+    /// The triangle-inequality verdict for the relay in use, when it holds.
+    ///
+    /// The client leg is the keepalive echo - the one-RTT leg the client measures
+    /// continuously - falling back to the ranking's probe median before the first
+    /// echo arrives. Both are one-RTT measurements of the same leg, which is what
+    /// the triangle inequality needs; the old two-RTT HTTP wall time would have
+    /// made this verdict wrong in the other direction.
+    fn cannot_beat_direct(&self) -> Option<(u64, u64)> {
+        if !self.run_boosting() || self.direct_fallback {
+            return None;
+        }
+        let client_leg_us = self.current_client_leg_us()?;
+        relay_cannot_beat_direct(Some(client_leg_us), self.server_ping)
+    }
+
+    /// The one-RTT client leg to the relay in use, microseconds.
+    fn current_client_leg_us(&self) -> Option<u64> {
+        if self.status.latest_rtt_ms > 0.0 {
+            return Some((self.status.latest_rtt_ms * 1000.0).round() as u64);
+        }
+        let relay = self.selected_entry()?.addr;
+        self.ranked_client_leg_us(relay)
+    }
+
+    /// Whether any tunnel backend is currently carrying the game's traffic.
+    ///
+    /// One definition, because the rail, the tray and the route surface must not
+    /// disagree about whether the client is "on".
+    fn run_boosting(&self) -> bool {
+        self.status.interceptor_active
+            || self.status.windivert_active
+            || self.status.capture_active
+            || self.status.redirect_active
     }
 
     fn ledger_row(&self, ui: &mut egui::Ui, narrow: bool, label: &str, value: &LedgerValue) {
@@ -3517,9 +3746,13 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// The measured client leg for `addr`, in milliseconds, when the last
-    /// measurement pass produced one.
-    fn leg_ms(&self, addr: std::net::SocketAddrV4) -> Option<u64> {
+    /// The one-RTT client leg the ranking charges for `addr`, in microseconds,
+    /// from the last full measurement pass.
+    ///
+    /// The probe is a TCP connect (one round trip), not the two-RTT HTTP wall
+    /// time it used to be - see [`discovery::RelaySample`] - so this figure is
+    /// directly comparable with a one-RTT destination estimate.
+    fn ranked_client_leg_us(&self, addr: std::net::SocketAddrV4) -> Option<u64> {
         let sample = self
             .relay_legs
             .as_ref()?
@@ -3527,7 +3760,12 @@ impl<P: Platform> LightSpeedApp<P> {
             .find(|(candidate, _)| *candidate == addr)?
             .1
             .as_ref()?;
-        Some(u64::try_from(sample.median.as_millis()).unwrap_or(u64::MAX))
+        Some(u64::try_from(sample.median.as_micros()).unwrap_or(u64::MAX))
+    }
+
+    /// The measured client leg for `addr`, in milliseconds (the picker's unit).
+    fn leg_ms(&self, addr: std::net::SocketAddrV4) -> Option<u64> {
+        self.ranked_client_leg_us(addr).map(|us| us / 1000)
     }
 
     /// The Boost Server selector: auto-select or a pinned relay, one dropdown.
@@ -4779,10 +5017,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // route card are fixed; the config region is the only scrolling part;
         // the footer stays pinned. At a short height the route card folds into
         // the scroll region so the fixed chrome never crowds out the footer.
-        let boosting = self.status.interceptor_active
-            || self.status.windivert_active
-            || self.status.capture_active
-            || self.status.redirect_active;
+        let boosting = self.run_boosting();
 
         let rail_edge = if boosting {
             signal
@@ -5266,6 +5501,178 @@ fn proxy_index_for(proxies: &[crate::config::ProxyEntry], addr: SocketAddrV4) ->
 /// different port than the data plane, so only the IP can be compared.
 fn same_relay_endpoint(a: SocketAddrV4, b: SocketAddrV4) -> bool {
     a.ip() == b.ip()
+}
+
+/// Order two scored relays by the whole path, not by the destination leg alone.
+///
+/// The comparison key is `total_leg_us`, which the ranking builds from the client
+/// leg plus the destination leg plus the destination leg's own uncertainty
+/// (`PRIOR_UNCERTAINTY_US` for a prior, nothing for a measurement or the
+/// triangle bound). That makes the destination leg a validity/uncertainty term
+/// inside one whole-path number rather than an overriding bucket: the EWR case
+/// in `rank-harness.out` has total 368.9 ms against LAX's 283.5 ms and must rank
+/// second, though its prior sits in a lower 50 ms bucket.
+///
+/// Jitter only separates exactly equal totals, so a steadier relay wins a
+/// genuine tie; the relay address is the final key so the order is total and
+/// deterministic across calls (no flapping from an unstable sort).
+fn whole_path_cmp(
+    a: &lightspeed_client::ScoredRelay,
+    b: &lightspeed_client::ScoredRelay,
+) -> std::cmp::Ordering {
+    a.total_leg_us
+        .cmp(&b.total_leg_us)
+        .then_with(|| a.jitter_us.cmp(&b.jitter_us))
+        .then_with(|| a.relay.cmp(&b.relay))
+}
+
+/// Sort scored relays best first under [`whole_path_cmp`].
+fn whole_path_order(scored: &mut [lightspeed_client::ScoredRelay]) {
+    scored.sort_by(whole_path_cmp);
+}
+
+/// The direct-ping measurement in microseconds, only while it is fresh enough to
+/// be treated as evidence about the path.
+///
+/// A missing, zero or stale sample yields `None`, so nothing floors the ranking
+/// against a number the client is no longer measuring.
+fn fresh_direct_us(ping: Option<(f32, u64)>) -> Option<u64> {
+    let (ms, age) = ping?;
+    // A non-finite value (NaN/inf) is not evidence either; spelling it this way
+    // rejects it explicitly instead of through a negated float comparison.
+    if age > SERVER_PING_FRESH_SECS || !ms.is_finite() || ms <= 0.0 {
+        return None;
+    }
+    Some((f64::from(ms) * 1000.0).round() as u64)
+}
+
+/// Compare a whole-path estimate with the measured direct ping.
+///
+/// `Some((faster, delta_us))` where `faster` is true only when the estimated
+/// relayed total is strictly below the direct measurement; `None` without a
+/// direct measurement, because then nothing can be claimed. This is the only
+/// place the window or the trace may call a relayed path "better than direct".
+fn compare_to_direct(total_leg_us: u64, direct_us: Option<u64>) -> Option<(bool, u64)> {
+    let direct = direct_us?;
+    if total_leg_us < direct {
+        Some((true, direct - total_leg_us))
+    } else {
+        Some((false, total_leg_us - direct))
+    }
+}
+
+/// The trace half of [`compare_to_direct`], as a sentence fragment.
+fn direct_claim_label(direct_us: Option<u64>, total_leg_us: u64) -> String {
+    match compare_to_direct(total_leg_us, direct_us) {
+        None => ", direct ping not measured".to_string(),
+        Some((true, delta)) => format!(", better than direct by {} ms", delta / 1000),
+        Some((false, delta)) => format!(
+            ", not better than direct (+{} ms, direct {} ms)",
+            delta / 1000,
+            direct_us.unwrap_or(0) / 1000
+        ),
+    }
+}
+
+/// How the chooser obtained the server leg, for the choice trace line.
+///
+/// `Measured` carries its sample count, because "measured" without an `n` is a
+/// claim the reader cannot size; the prior carries its uncertainty for the same
+/// reason.
+fn ranking_state_label(
+    source: lightspeed_client::DestinationLegSource,
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+) -> String {
+    use lightspeed_client::DestinationLegSource;
+    match source {
+        DestinationLegSource::Measured => match measured_server_leg(relay, server) {
+            Some(measured) => format!("Measured(n={})", measured.samples),
+            None => "Measured".to_string(),
+        },
+        DestinationLegSource::GeometricFloor => "GeometricFloor".to_string(),
+        DestinationLegSource::RegionPrior => {
+            format!("RegionPrior(±{} ms)", PRIOR_UNCERTAINTY_US / 1000)
+        }
+        DestinationLegSource::Unknown => "Unknown".to_string(),
+    }
+}
+
+/// The v1 estimator's published server-leg measurement for `(relay, server)`,
+/// if it has one.
+///
+/// `estimate()` is the estimator's single "publishable or None" gate (sample
+/// count, physical bounds, 120 s freshness), so the window implements no rule of
+/// its own here. The age comes from the estimator's own timestamp
+/// (`measurement_age`), which is the only thing that may say how old the newest
+/// sample is; `None` there is rendered as no age, never as zero.
+fn measured_server_leg(relay: SocketAddrV4, server: Ipv4Addr) -> Option<MeasuredServerLeg> {
+    let estimator = lightspeed_client::destination_estimator()?;
+    let estimate = estimator.estimate(relay, server)?;
+    Some(MeasuredServerLeg {
+        dest_leg_us: estimate.dest_leg_us,
+        samples: estimate.samples,
+        age: estimator.measurement_age(relay, server),
+    })
+}
+
+/// The route surface's state for the relay-to-server leg of the relay in use.
+///
+/// Precedence is deliberate and single:
+/// 1. a published estimator measurement (the only thing that may be called
+///    measured), else
+/// 2. the ranking's own row for that relay: the triangle floor (a proof, so
+///    "at least"), the geometric prior, or nothing.
+fn server_leg_state(
+    scored: Option<&lightspeed_client::ScoredRelay>,
+    measured: Option<MeasuredServerLeg>,
+) -> ServerLegState {
+    use lightspeed_client::DestinationLegSource;
+    if let Some(measured) = measured {
+        return ServerLegState::Measured(measured);
+    }
+    let Some(scored) = scored else {
+        return ServerLegState::Unknown;
+    };
+    match scored.dest_source {
+        DestinationLegSource::Measured => ServerLegState::Unknown,
+        DestinationLegSource::GeometricFloor => ServerLegState::Bounded {
+            floor_us: scored.dest_leg_us,
+        },
+        DestinationLegSource::RegionPrior => ServerLegState::Prior {
+            prior_us: scored.dest_leg_us,
+        },
+        DestinationLegSource::Unknown => ServerLegState::Unknown,
+    }
+}
+
+/// The scored row for `relay` in a ranking, if the relay was a candidate at all.
+///
+/// The surface describes the relay actually carrying traffic, which is not
+/// necessarily the winner: a better relay for this server applies next session
+/// when the live session cannot be moved, so looking up the winner would name
+/// the wrong relay's leg.
+fn scored_for_relay(
+    scored: &[lightspeed_client::ScoredRelay],
+    relay: SocketAddrV4,
+) -> Option<&lightspeed_client::ScoredRelay> {
+    scored.iter().find(|candidate| candidate.relay == relay)
+}
+
+/// The triangle-inequality verdict for the relay in use, when it holds.
+///
+/// A relayed round trip is `client_leg + server_leg`; when the client leg alone
+/// already reaches the measured direct ping, no server leg can make the relayed
+/// path shorter, whatever the server leg is. Both inputs are client
+/// measurements: the one-RTT client leg and the ICMP ping, and the ping must be
+/// fresh for the claim to stand. `None` when either is missing.
+fn relay_cannot_beat_direct(
+    client_leg_us: Option<u64>,
+    ping: Option<(f32, u64)>,
+) -> Option<(u64, u64)> {
+    let client = client_leg_us?;
+    let direct = fresh_direct_us(ping)?;
+    (client >= direct).then_some((client, direct))
 }
 
 fn try_auto_detect_game() -> Option<String> {
@@ -6518,7 +6925,7 @@ mod tests {
         let mut streak = ReplyFaultStreak::default();
         let healthy = relay_reply_fault(RELAY_REPLY_TIMEOUT, 54, 13, 13, None);
         assert_eq!(streak.observe(healthy), None);
-        let line = relay_reply_window_message(54, 13, 13, &streak, healthy);
+        let line = relay_reply_window_message(54, 13, 13, 7, 41, &streak, healthy);
         for field in [
             "intercepted=54",
             "injected=13",
@@ -6526,6 +6933,11 @@ mod tests {
             "share=24.1%",
             "streak=0",
             "verdict=healthy",
+            // The engine probe counters ride on this INFO line because the
+            // probe's own accepted/rejected trace is debug-level and the shipped
+            // file sink is INFO; without them F1 is unmeasurable in release.
+            "probe_accepted=7",
+            "probe_rejected=41",
         ] {
             assert!(line.contains(field), "missing {field} in {line}");
         }
@@ -6534,12 +6946,12 @@ mod tests {
         let mut streak = ReplyFaultStreak::default();
         let fault = relay_reply_fault(RELAY_REPLY_TIMEOUT, 60, 0, 0, None);
         assert_eq!(streak.observe(fault), None);
-        let first = relay_reply_window_message(60, 0, 0, &streak, fault);
+        let first = relay_reply_window_message(60, 0, 0, 7, 42, &streak, fault);
         assert!(first.contains("streak=1"), "{first}");
         assert!(first.contains("verdict=no_reply_from_relay"), "{first}");
         assert!(first.contains("share=0.0%"), "{first}");
         assert!(streak.observe(fault).is_some());
-        let second = relay_reply_window_message(60, 0, 0, &streak, fault);
+        let second = relay_reply_window_message(60, 0, 0, 7, 42, &streak, fault);
         assert!(second.contains("streak=2"), "{second}");
         // Every window verdict has a stable name in the trace.
         for (window, verdict) in [
@@ -6553,7 +6965,7 @@ mod tests {
             ),
             (None, "verdict=healthy"),
         ] {
-            let line = relay_reply_window_message(12, 1, 9, &streak, window);
+            let line = relay_reply_window_message(12, 1, 9, 0, 0, &streak, window);
             assert!(line.contains(verdict), "missing {verdict} in {line}");
         }
     }
@@ -6660,13 +7072,16 @@ mod tests {
         ));
     }
     use super::{
-        apply_discovery_result, apply_target_choice, close_decision, draft_reasons,
-        game_editor_body, game_pick_rows, games, pair_relay_legs, picker_status, primary_action,
-        process_picker, proxy_index_for, relay_health_verdict, same_relay_endpoint,
-        save_user_profiles, server_from_fields, should_apply_race, should_race, switch_is_safe,
-        target_for_pick, target_front_door, target_summary, validate_draft, CloseDecision,
-        EditorActions, GameEditorDraft, GamePickRow, PickerStatus, ProcessListState, ProcessPicker,
-        ProcessTarget, RelayHealthVerdict, TargetRowAction,
+        apply_discovery_result, apply_target_choice, close_decision, compare_to_direct,
+        direct_claim_label, draft_reasons, fresh_direct_us, game_editor_body, game_pick_rows,
+        games, pair_relay_legs, picker_status, primary_action, process_picker, proxy_index_for,
+        ranking_state_label, relay_cannot_beat_direct, relay_health_verdict, same_relay_endpoint,
+        save_user_profiles, scored_for_relay, server_from_fields, server_leg_state,
+        should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
+        target_summary, validate_draft, whole_path_order, CloseDecision, EditorActions,
+        GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState,
+        ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, TargetRowAction,
+        PRIOR_UNCERTAINTY_US, SERVER_PING_FRESH_SECS,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -6873,6 +7288,302 @@ mod tests {
             !should_apply_race(true, false, true),
             "a known game server governs the relay choice"
         );
+    }
+
+    // ── The server leg on the route surface ──────────────────────────────
+
+    /// A scored relay as the ranking composes it: `total_leg_us` is the client
+    /// leg plus the destination leg plus the prior's uncertainty charge, exactly
+    /// as `relay_choice::score_with` builds it.
+    fn scored_relay(
+        ip: [u8; 4],
+        client_leg_us: u64,
+        dest_leg_us: u64,
+        source: lightspeed_client::DestinationLegSource,
+        jitter_us: u64,
+    ) -> lightspeed_client::ScoredRelay {
+        use lightspeed_client::DestinationLegSource;
+        let penalty = match source {
+            DestinationLegSource::Measured | DestinationLegSource::GeometricFloor => 0,
+            DestinationLegSource::RegionPrior | DestinationLegSource::Unknown => {
+                PRIOR_UNCERTAINTY_US
+            }
+        };
+        lightspeed_client::ScoredRelay {
+            relay: SocketAddrV4::new(std::net::Ipv4Addr::from(ip), 4434),
+            total_leg_us: client_leg_us + dest_leg_us + penalty,
+            dest_leg_us,
+            dest_source: source,
+            jitter_us,
+        }
+    }
+
+    #[test]
+    fn the_whole_path_total_outranks_the_destination_bucket() {
+        // The rank-harness counterfactual with one-RTT legs and the live direct
+        // ping (283.47 ms): EWR's prior lands in destination bucket 0 while LAX is
+        // floored to 63.3 ms (bucket 1), so the engine's bucket-first key ranks
+        // EWR (total 368.9 ms) above LAX (total 283.5 ms). The whole path says the
+        // opposite, and the GUI must choose LAX.
+        use lightspeed_client::DestinationLegSource;
+        let lax = scored_relay(
+            [207, 246, 106, 36],
+            220_170,
+            63_300,
+            DestinationLegSource::GeometricFloor,
+            17_150,
+        );
+        let ewr = scored_relay(
+            [207, 246, 124, 117],
+            305_840,
+            38_000,
+            DestinationLegSource::RegionPrior,
+            6_160,
+        );
+        assert_eq!(lax.total_leg_us, 283_470);
+        assert_eq!(ewr.total_leg_us, 368_840);
+        // The defect is the key order, not a tie: the destination buckets differ.
+        assert!(ewr.dest_leg_us / 50_000 < lax.dest_leg_us / 50_000);
+        let mut ranked = vec![ewr.clone(), lax.clone()];
+        whole_path_order(&mut ranked);
+        assert_eq!(ranked[0], lax, "the smaller whole path must win");
+        assert_eq!(ranked[1], ewr);
+    }
+
+    #[test]
+    fn a_destination_leg_in_a_lower_bucket_cannot_outrank_the_whole_path() {
+        // The destination leg is a validity/uncertainty term, not the primary
+        // key: a measured 50 ms leg (bucket 1) whose whole path is 150 ms must
+        // beat a prior 40 ms leg (bucket 0) whose whole path is 165 ms once the
+        // prior's own uncertainty is charged.
+        use lightspeed_client::DestinationLegSource;
+        let measured = scored_relay(
+            [10, 0, 0, 1],
+            100_000,
+            50_000,
+            DestinationLegSource::Measured,
+            2_000,
+        );
+        let prior = scored_relay(
+            [10, 0, 0, 2],
+            100_000,
+            40_000,
+            DestinationLegSource::RegionPrior,
+            2_000,
+        );
+        assert_eq!(measured.total_leg_us, 150_000);
+        assert_eq!(prior.total_leg_us, 165_000);
+        assert!(
+            prior.dest_leg_us < measured.dest_leg_us,
+            "the prior's destination leg is the smaller one"
+        );
+        let mut ranked = vec![prior, measured.clone()];
+        whole_path_order(&mut ranked);
+        assert_eq!(ranked[0], measured);
+    }
+
+    #[test]
+    fn the_order_is_total_deterministic_and_jitter_breaks_a_genuine_tie() {
+        use lightspeed_client::DestinationLegSource;
+        let tie = |ip: [u8; 4], jitter_us: u64| {
+            scored_relay(
+                ip,
+                100_000,
+                50_000,
+                DestinationLegSource::Measured,
+                jitter_us,
+            )
+        };
+        let mut ranked = vec![tie([10, 0, 0, 2], 9_000), tie([10, 0, 0, 1], 5_000)];
+        whole_path_order(&mut ranked);
+        assert_eq!(
+            ranked[0].relay.ip(),
+            &std::net::Ipv4Addr::new(10, 0, 0, 1),
+            "equal totals: the steadier relay wins"
+        );
+        let first = ranked.clone();
+        whole_path_order(&mut ranked);
+        assert_eq!(ranked, first, "the same inputs must produce the same order");
+        // Equal totals and equal jitter: the address decides, so the order is
+        // total and a sort can never swap two equal candidates between calls.
+        let mut tied = vec![tie([10, 0, 0, 2], 5_000), tie([10, 0, 0, 1], 5_000)];
+        whole_path_order(&mut tied);
+        assert_eq!(tied[0].relay.ip(), &std::net::Ipv4Addr::new(10, 0, 0, 1));
+    }
+
+    #[test]
+    fn the_server_leg_state_says_how_the_leg_was_obtained() {
+        use lightspeed_client::DestinationLegSource;
+        let measured = scored_relay(
+            [10, 0, 0, 1],
+            100_000,
+            50_000,
+            DestinationLegSource::Measured,
+            0,
+        );
+        let prior = scored_relay(
+            [10, 0, 0, 2],
+            100_000,
+            40_000,
+            DestinationLegSource::RegionPrior,
+            0,
+        );
+        let floored = scored_relay(
+            [10, 0, 0, 3],
+            220_170,
+            63_300,
+            DestinationLegSource::GeometricFloor,
+            0,
+        );
+        let unknown = scored_relay(
+            [10, 0, 0, 4],
+            100_000,
+            40_000,
+            DestinationLegSource::Unknown,
+            0,
+        );
+        let published = MeasuredServerLeg {
+            dest_leg_us: 51_000,
+            samples: 12,
+            age: Some(Duration::from_secs(3)),
+        };
+
+        assert_eq!(
+            server_leg_state(Some(&measured), Some(published)),
+            ServerLegState::Measured(published)
+        );
+        assert_eq!(
+            server_leg_state(Some(&prior), None),
+            ServerLegState::Prior { prior_us: 40_000 },
+            "an estimate the ranking did not measure is stated as the prior it is"
+        );
+        assert_eq!(
+            server_leg_state(Some(&floored), None),
+            ServerLegState::Bounded { floor_us: 63_300 },
+            "a triangle bound is a proof of a lower bound, not a measurement"
+        );
+        assert_eq!(
+            server_leg_state(Some(&unknown), None),
+            ServerLegState::Unknown
+        );
+        assert_eq!(server_leg_state(None, None), ServerLegState::Unknown);
+        // The ranking row says measured but no published estimate survives: say
+        // nothing the estimator cannot back up.
+        assert_eq!(
+            server_leg_state(Some(&measured), None),
+            ServerLegState::Unknown
+        );
+    }
+
+    #[test]
+    fn the_triangle_verdict_needs_two_fresh_client_measurements() {
+        // EWR with one-RTT legs: a 305.84 ms client leg against a 283.47 ms
+        // direct ping. A relay hop cannot make that path shorter, whatever the
+        // server leg is.
+        assert_eq!(
+            relay_cannot_beat_direct(Some(305_840), Some((283.474, 12))),
+            Some((305_840, 283_474))
+        );
+        // LAX's 220.17 ms leg does not reach the direct ping: no verdict.
+        assert_eq!(
+            relay_cannot_beat_direct(Some(220_170), Some((283.474, 12))),
+            None
+        );
+        assert_eq!(relay_cannot_beat_direct(None, Some((283.474, 12))), None);
+        assert_eq!(relay_cannot_beat_direct(Some(305_840), None), None);
+        // Staleness is the same rule the ranking's floor and the header use.
+        assert_eq!(
+            relay_cannot_beat_direct(Some(305_840), Some((283.474, SERVER_PING_FRESH_SECS + 1))),
+            None
+        );
+    }
+
+    #[test]
+    fn a_better_than_direct_claim_needs_a_measured_comparison() {
+        // Nothing is claimed without a direct measurement.
+        assert_eq!(compare_to_direct(283_470, None), None);
+        assert!(direct_claim_label(None, 250_000).contains("not measured"));
+        // Arithmetic on the two figures, in both directions and with its delta.
+        assert_eq!(
+            compare_to_direct(250_000, Some(283_474)),
+            Some((true, 33_474))
+        );
+        assert_eq!(
+            compare_to_direct(368_840, Some(283_474)),
+            Some((false, 85_366))
+        );
+        assert!(direct_claim_label(Some(283_474), 250_000).contains("better than direct by 33 ms"));
+        assert!(
+            direct_claim_label(Some(283_474), 368_840).contains("not better than direct"),
+            "a relay whose estimate exceeds direct must not be presented as better"
+        );
+    }
+
+    #[test]
+    fn a_direct_ping_is_evidence_only_while_fresh() {
+        assert_eq!(fresh_direct_us(Some((283.47, 0))), Some(283_470));
+        assert_eq!(
+            fresh_direct_us(Some((283.47, SERVER_PING_FRESH_SECS))),
+            Some(283_470)
+        );
+        assert_eq!(
+            fresh_direct_us(Some((283.47, SERVER_PING_FRESH_SECS + 1))),
+            None,
+            "a stale ping must not floor the ranking or support a verdict"
+        );
+        assert_eq!(fresh_direct_us(Some((0.0, 1))), None);
+        assert_eq!(fresh_direct_us(None), None);
+    }
+
+    #[test]
+    fn the_choice_trace_names_how_the_server_leg_was_obtained() {
+        use lightspeed_client::DestinationLegSource;
+        let relay = addr("207.246.106.36:4434");
+        let server = std::net::Ipv4Addr::new(91, 199, 82, 166);
+        assert_eq!(
+            ranking_state_label(DestinationLegSource::RegionPrior, relay, server),
+            format!("RegionPrior(±{} ms)", PRIOR_UNCERTAINTY_US / 1000)
+        );
+        assert_eq!(
+            ranking_state_label(DestinationLegSource::GeometricFloor, relay, server),
+            "GeometricFloor"
+        );
+        assert_eq!(
+            ranking_state_label(DestinationLegSource::Unknown, relay, server),
+            "Unknown"
+        );
+        // No estimator samples are fed in the test process, so this is the
+        // "measured but no count" arm; the prefix is the contract either way.
+        assert!(
+            ranking_state_label(DestinationLegSource::Measured, relay, server)
+                .starts_with("Measured")
+        );
+    }
+
+    #[test]
+    fn the_surface_describes_the_relay_in_use_not_the_winner() {
+        use lightspeed_client::DestinationLegSource;
+        let winner = scored_relay(
+            [207, 246, 124, 117],
+            100_000,
+            50_000,
+            DestinationLegSource::Measured,
+            0,
+        );
+        let running = scored_relay(
+            [207, 246, 106, 36],
+            200_000,
+            40_000,
+            DestinationLegSource::RegionPrior,
+            0,
+        );
+        let scored = vec![winner, running.clone()];
+        assert_eq!(
+            scored_for_relay(&scored, running.relay),
+            Some(&running),
+            "the row must describe the relay carrying traffic, not the staged winner"
+        );
+        assert_eq!(scored_for_relay(&scored, addr("10.0.0.9:4434")), None);
     }
 
     #[test]

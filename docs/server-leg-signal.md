@@ -323,6 +323,24 @@ server, v1 cannot publish and the estimator stays at the prior.**
 64 samples, so a burst of bad samples ages out only after 64 new ones; publish
 the IQR and n next to any figure the UI shows.
 
+**Telemetry scale change (consequence of implementing v1).** `client/src/telemetry.rs`
+builds `TelemetryReport.relayed_p50_ms` from `latency::peek_report_values()`,
+which now returns the **validated quiet-flow whole-path p50**
+(client -> relay -> server -> relay -> client) instead of the invalid busy-flow
+pairing (reply minus the most recent send, which is roughly one inter-send
+interval: 7.33-34.30 ms on the task-10 session, median ratio 0.129 of the relay
+leg). Consequences: fleet `saved_ms` (direct ICMP p50 - relayed p50) and
+`saved_app` (direct-app p50 - relayed p50) shift scale, because the old relayed
+side was an inter-send gap rather than a round trip; reports will carry
+`relayed_p50_ms` much less often - the validated sample rate *is* falsifier F1 -
+so `lightspeed_telemetry_saved_*` sample counts will drop. Dashboard baselines
+must not be read as a regression, and historical stats-branch points are on the
+old scale and are not directly comparable with post-change points. The wire
+field is unchanged (`Option<f32>`, same valid range). Separately, `--diagnose`
+keeps its own exact-payload diagnostic window, separate from the validated
+game-traffic window, so the CLI mode is not silently broken by the new validity
+rules.
+
 ### 5.2 D2 — relay-vantage destination probe (the candidate-ranking fix)
 
 **Metric.** `L2(relay, server)` measured **from the relay**: when a client asks,
@@ -366,6 +384,39 @@ relays per server change: tens of packets per match. Owner spend stays `$0.00`
 same samples; a candidate with no probe result stays on the prior with its
 uncertainty. Combine with the triangle bound as a *validity* check (the probe
 must not report below `direct − L1` for the same server), never as a substitute.
+
+**v2 status (2026-11-16, `infra-dev` feasibility, NO-GO today; conditional GO
+path).** Three corrections to the design above, from
+[`relay-server-leg-probe.md`](relay-server-leg-probe.md) and its evidence:
+
+- **`Register.destination` is not usable as the destination source.** All four
+  production callers pass `None`, so `RegisterAck.dest_region` is `None` in
+  practice. The relay learns the destination from the data-plane tunnel header
+  and stores it in `ClientSession.game_server`; it already logs
+  `New client session created client=... game_server=<ip:port>` at INFO after
+  destination validation, which is the real sample source (876 session events in
+  the last 41 h fleet-wide).
+- **Privilege blocker.** Relay units run `DynamicUser=true` +
+  `NoNewPrivileges=true` with no ambient capabilities, so they cannot send raw
+  ICMP as deployed. Unprivileged ICMP (host `net.ipv4.ping_group_range`) is the
+  only acceptable route; granting the daemon `CAP_NET_RAW` is a NO-GO.
+- **Gates fixed in advance:** G1 privilege/egress per relay; G2 >= 30 distinct
+  destinations across >= 3 relays and >= 2 games; G3 the decisive F3 ICMP answer
+  rate >= 50%; F4 v2 vs v1 within 20%; G5 `sec-ops` review plus the owner fleet
+  gate. The operator runbook and rollback are in
+  [`relay-server-leg-probe.md`](relay-server-leg-probe.md); the owner must approve
+  the fleet step and any reversible host sysctl change. Cost stays `$0.00`.
+
+**Per-game signal (2026-11-16, `net-eng`).** The two negative `fortnite/US` cells
+are partly an estimator artifact (the old relayed figure was a one-sided lower
+bound, not an RTT) but their **sign survives** an artifact-free ICMP bound
+(`saved_icmp` negative on both relays, n = 6 and 4); `arcraiders/RU` cannot be
+settled without an ICMP anchor. Two data defects matter for any future per-game
+work: the published `client_country` is the OS locale rather than the client IP,
+and the `stats` branch has no per-game dimension (the collector aggregates by
+locale country only). Board tasks 18/19 own the estimator/publication gate and
+the label/dimension fixes; re-measure with the validated quiet-flow L3 after
+v1 and a real Fortnite/Arc Raiders session.
 
 ### 5.3 What to do when a server never answers through a relay
 
