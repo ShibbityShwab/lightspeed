@@ -12,6 +12,59 @@
 
 ## Recent entries
 
+### 2026-11-17 (ownership) - Sole-owner licence v1.1 + CLA, and contributor-identity scrub
+
+**Agent:** lead, on owner instruction. Two AI-agent identities were showing in the
+repository's Contributors card, and the owner asked for them gone and for the
+contributor licence to leave sole authority with the owner.
+
+- **History.** The Contributors card was fed by non-author `Co-authored-by`
+  trailers. Rewrote the 25 commits from the merged squash commit to the tip,
+  stripping the tool trailers and session links; every tree is byte-identical
+  (tip tree `8674abf2b3863fef4c4a64644997ecc4c3e9cf32`) and the commit count
+  stays 1033. Force-pushed with lease (`b4dbc01 -> c15c479`), then pushed the
+  licensing commit (`dc0abcb`). Deleted the local pre-rewrite backup branch and
+  temporary PR refs, expired reflogs and ran `git gc --prune=now`;
+  `git log --all` and `git fsck --unreachable --no-reflogs` no longer contain
+  the identities.
+- **GitHub cache.** `GET /repos/.../stats/contributors` returned 202 and then
+  recomputed to the six real contributors; `graphs/contributors-data` and the
+  REST contributor list agree. A temporary default-branch swap
+  (`master -> stats-sync -> master`, branch deleted) was used to fire
+  `DefaultBranchChangedEvent`: after it, the anonymous/public repository page
+  and the contributor endpoints show only the real contributors. The owner's
+  **logged-in** tab still showed the two cached cards at the time of writing;
+  that authenticated sidebar cache lags the public one and clears on GitHub's
+  schedule. If it persists, GitHub Support can purge the contributor cache.
+- **Licensing.** `LICENSE` is **v1.1**: copyright is ShibbityShwab alone, sole
+  ownership/authority is explicit, contributions are assignment-only, all other
+  rights are reserved, and third-party terms are separated. New `CLA.md`
+  (copyright assignment, moral-rights waiver, patents, no-AI-authorship,
+  electronic acceptance) and `docs/licensing.md`; `CONTRIBUTING.md`, the PR
+  template, `README.md`, `docs/faq.md` and the `AGENTS.md` guardrails now
+  require the CLA. `Cargo.toml` (authors, `LicenseRef-LightSpeed-NC-1.1`),
+  `deny.toml`, `NOTICE`, WiX `Manufacturer`, AUR, Scoop, Homebrew, winget
+  copyright and the site footer name the owner only; historical release
+  manifests keep the licence version they shipped under. The retired agent
+  brand was also removed from the two historical WAT entries that carried it.
+  No code changed.
+- **Verification.** Worktree `git grep -i "sisyphus|anthropic|claude"` and
+  `git grep "LightSpeed Contributors"` are empty; `cargo fmt --all --check`
+  clean; `cargo metadata --no-deps` parses; the 56 relative links in the
+  changed docs resolve; `git diff --check` clean. Evidence:
+  `wat/evidence/2026-11-17/ownership-scrub/` (gitignored).
+- **Open.** (1) The authenticated GitHub sidebar cache above; public pages are
+  already correct. (2) PR #173's own branch commits (GitHub PR refs are
+  immutable) still carry the tool trailer in that PR's commit view; it is not on
+  the default branch and does not feed the public contributor list, and removing
+  it would need GitHub Support. (3) Contributions merged before the CLA remain
+  under the licence in force when submitted until their authors sign
+  `CLA.md`; the owner may ask `@devgrunge` (#72), `@Kianmhz` (#173) and
+  `@CiroBurro` (one commit). (4) CLA acceptance is enforced by the PR template
+  and review, not a bot; a CLA-assistant is an optional follow-up. (5) Next
+  release package manifests should carry `LicenseRef-LightSpeed-NC-1.1` and
+  the sole-owner copyright.
+
 ### 2026-11-17 (later) - Backlog follow-ups: publishing channels wired, registry signing fixed, images reviewed, WinDivert debt cleared
 
 **Agent:** lead + `infra-dev-3` (publishing-channel wiring). Follows the audit round above; the owner replied to it and asked for five follow-ups.
