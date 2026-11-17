@@ -284,10 +284,12 @@ impl RelayDestinationEstimator {
 
     /// A pooled destination-leg estimate across every measured relay pair.
     ///
-    /// Used as a prior for a candidate whose own destination leg is not yet
-    /// measured; `None` until at least one pair has an estimate. Pairs whose
-    /// newest sample is stale are skipped: a borrowed prior must not describe a
-    /// path that was last measured minutes ago.
+    /// Retired from production use when the CLI's second ranking was removed:
+    /// the canonical whole-path ranking reads per-pair measurements directly and
+    /// never borrows a pooled prior. Kept test-only so the aggregation maths it
+    /// covered stays asserted; `None` until at least one pair has an estimate,
+    /// and pairs whose newest sample is stale are skipped.
+    #[cfg(test)]
     pub fn pooled_estimate(&self) -> Option<DestinationEstimate> {
         let now = Instant::now();
         let relays = self.lock();

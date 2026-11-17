@@ -96,7 +96,8 @@ main.rs ────────────────────────
   │
   ├── route/                         ← Proxy selection & failover
   │   ├── mod.rs                     ← ProxyNode, RouteSelector trait, ProxyHealth
-  │   ├── selector.rs                ← NearestSelector (latency), MlSelector (Linear Ensemble)
+  │   ├── selector.rs                ← DestinationAwareSelector (canonical whole-path ranking),
+│   │                                  NearestSelector (latency), MlSelector (Linear Ensemble)
   │   ├── multipath.rs               ← Multi-path routing config
   │   └── failover.rs                ← Automatic failover state machine
   │
