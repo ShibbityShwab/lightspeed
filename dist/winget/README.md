@@ -48,9 +48,17 @@ winget-pkgs bot re-runs `winget validate` plus its own policy checks.
 `manifests/s/ShibbityShwab/LightSpeed` path (contents API returns `404`);
 `winget install ShibbityShwab.LightSpeed` fails with "No package found".
 
+The earlier bootstrap PRs used manifest schema 1.6.0 and carried the
+`Manifest-Version-Deprecated` label, which is one reason they were not
+actionable. The 1.11.0 manifests were refreshed to the schema in current use
+(the same one recent merges use) and both `winget validate` and the
+winget-pkgs Validation Pipeline accept them; on 2026-11-17 the manifests were
+bumped again to **1.28.0** so the submission carries no deprecated schema
+version.
+
 On 2026-11-17 the replacement first-version PR was opened:
 **[microsoft/winget-pkgs#481953](https://github.com/microsoft/winget-pkgs/pull/481953)**
-(`ShibbityShwab.LightSpeed` 1.11.0, manifest schema **1.12.0**, `winget
+(`ShibbityShwab.LightSpeed` 1.11.0, manifest schema **1.28.0**, `winget
 validate` clean, CLA already signed on the account). It is waiting on a
 winget-pkgs moderator; once it merges, the `winget-releaser` job publishes
 later versions automatically because `WINGET_TOKEN` already exists.
