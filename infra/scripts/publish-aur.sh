@@ -144,15 +144,17 @@ fi
 
 # Each source_<arch> entry needs its sha256sums_<arch> counterpart, and every
 # source URL must point at the release the pkgver names.
-arches="$(sed -n 's/^source_\([A-Za-z0-9_]*\) = .*/\1/p' "$SRCINFO" | sort -u)"
+# .SRCINFO keys are tab-indented (makepkg --printsrcinfo); match leading
+# whitespace so the check works on the real file format.
+arches="$(sed -n 's/^[[:space:]]*source_\([A-Za-z0-9_]*\) = .*/\1/p' "$SRCINFO" | sort -u)"
 [ -n "$arches" ] || fail ".SRCINFO has no source_* entries: $SRCINFO"
 for arch in $arches; do
-  srcs="$(grep -c "^source_${arch} = " "$SRCINFO" || true)"
-  sums="$(grep -c "^sha256sums_${arch} = " "$SRCINFO" || true)"
+  srcs="$(grep -c "^[[:space:]]*source_${arch} = " "$SRCINFO" || true)"
+  sums="$(grep -c "^[[:space:]]*sha256sums_${arch} = " "$SRCINFO" || true)"
   if [ "$srcs" != "$sums" ]; then
     fail ".SRCINFO has ${srcs} source_${arch} entries but ${sums} sha256sums_${arch} entries; regenerate it with 'makepkg --printsrcinfo > .SRCINFO'"
   fi
-  bad="$(grep "^source_${arch} = " "$SRCINFO" | grep -vc "/releases/download/v${pkgver}/" || true)"
+  bad="$(grep "^[[:space:]]*source_${arch} = " "$SRCINFO" | grep -vc "/releases/download/v${pkgver}/" || true)"
   if [ "$bad" != "0" ]; then
     fail ".SRCINFO source_${arch} has ${bad} URL(s) that do not point at v${pkgver}; refresh the sums and regenerate .SRCINFO"
   fi
