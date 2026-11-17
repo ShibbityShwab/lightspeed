@@ -5,7 +5,7 @@
 > optimizer for multiplayer games: a Rust workspace (`client/`, `proxy/`,
 > `protocol/`, `client-gui/`) plus `infra/`, `web/`, `dist/`, `packaging/` and
 > GitHub Actions.
-> Last updated: 2026-11-16
+> Last updated: 2026-11-17
 
 ## Start every session here
 
@@ -118,3 +118,9 @@ and any destructive fleet operation. Bundle related gates into one question.
 - No secrets in the repo, fixtures, logs or evidence (`[SECURITY_STUB]`).
 - No harness drift: no `.opencode/`, no OmO config, no second agent system
   (`[AGENT_STUB]`).
+- Sole ownership: the project and all accepted contributions are owned by
+  ShibbityShwab; contributors assign their rights under `CLA.md` and are merged
+  only after accepting it.
+- No agent co-authors: commits name only human authors. Never add a
+  `Co-authored-by`/`Co-Authored-By` trailer, or a tool session link, for an AI
+  tool, model, or agent.

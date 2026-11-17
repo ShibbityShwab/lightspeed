@@ -2,6 +2,11 @@
 
 <!-- Briefly describe what this PR does and why. -->
 
+## Contributor License Agreement (required)
+
+- [ ] I have read and accept [CLA.md](https://github.com/ShibbityShwab/lightspeed/blob/master/CLA.md), and I assign the copyright in this contribution to ShibbityShwab.
+- [ ] I am a natural person and the author of this contribution. No AI tool, model, or agent is listed as an author or co-author.
+
 ## Type of Change
 
 - [ ] 🐛 Bug fix

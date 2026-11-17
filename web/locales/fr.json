@@ -35,7 +35,7 @@
     "blk.e26ed5b752": "{0} La télémétrie agrégée anonyme est {1}. Elle envoie des métriques de latence agrégées (centiles, gigue, compteurs FEC et la différence directe / via relais) en HTTP non chiffré vers le point de terminaison {2} non authentifié du relais. Une cellule n'est publiée qu'à partir de 3 signalements. Désactivez-la à tout moment avec {3}, {4} dans {5}, ou la case de l'interface. Lisez {6} et {7}.",
     "blk.ff9777106d": "Le tunnel client-proxy utilise UDP par défaut, mais bascule en TCP ({0}) sur les réseaux qui bloquent l'UDP : hôtels, cafés, FAI restrictifs. La même optimisation à faible surcoût, avec une compatibilité plus large.",
     "idx.00413945b1": "Pris en charge : aucun compte",
-    "idx.011ac4eb8d": "© 2026 LightSpeed Contributors. Gratuit pour un usage personnel. Écrit en Rust.",
+    "idx.011ac4eb8d": "© 2025-2026 ShibbityShwab. Gratuit pour un usage personnel. Écrit en Rust.",
     "idx.01be38a029": "Client + intercepteur",
     "idx.0227459811": "Le trafic de votre jeu est redirigé de façon transparente, sans modification des paquets, pensé pour la compatibilité anti-triche. Juste des paquets plus rapides.",
     "idx.0369e9e4b5": "Mac Intel lightspeed-client-x86_64-apple-darwin.tar.xz",

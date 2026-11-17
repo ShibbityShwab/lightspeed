@@ -62,7 +62,7 @@
         Id='*'
         Name='lightspeed-proxy'
         UpgradeCode='C320857F-CC05-48BB-BE1F-412A5634100F'
-        Manufacturer='LightSpeed Contributors'
+        Manufacturer='ShibbityShwab'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
@@ -70,7 +70,7 @@
         <Package Id='*'
             Keywords='Installer'
             Description='LightSpeed game network optimizer — proxy relay server'
-            Manufacturer='LightSpeed Contributors'
+            Manufacturer='ShibbityShwab'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'

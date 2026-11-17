@@ -1,6 +1,15 @@
-# LightSpeed Software License v1.0
+# LightSpeed Software License v1.1
 
-Copyright (c) 2025-2026 ShibbityShwab and LightSpeed Contributors
+Copyright (c) 2025-2026 ShibbityShwab. All rights reserved.
+
+Effective 2026-11-17. This version supersedes LightSpeed Software License v1.0
+for releases distributed under it.
+
+LightSpeed is a proprietary work owned solely by ShibbityShwab ("the Owner").
+The Owner is the only person or entity with authority to license, relicense,
+distribute, sublicense, or commercially exploit the Software. Contributing to,
+distributing, or using the Software does not make anyone a copyright holder,
+co-owner, or licensor of the Software.
 
 ---
 
@@ -58,7 +67,45 @@ Powered by LightSpeed (https://github.com/ShibbityShwab/lightspeed)
 
 ---
 
-## 4. Disclaimer
+## 4. Third-Party Components
+
+The Software includes third-party data and components listed in `NOTICE`,
+each governed by its own license. Nothing in this license changes those terms.
+
+---
+
+## 5. Contributions
+
+Contributions are accepted only under the LightSpeed Contributor License
+Agreement (`CLA.md`), which must be accepted before a contribution is merged.
+
+By submitting a contribution, you agree to `CLA.md` and assign to the Owner
+all right, title, and interest in and to the contribution, including copyright
+and all related rights, to the maximum extent permitted by law. You retain no
+ownership or copyright in a contribution. Where an assignment of copyright is
+not enforceable, you instead grant the Owner an exclusive, perpetual,
+irrevocable, worldwide, royalty-free license to use, reproduce, modify,
+sublicense, relicense, and distribute the contribution.
+
+The Owner may license the Software, including all contributions, under any
+terms, including commercial or proprietary terms.
+
+Contributions submitted before the effective date remain governed by the
+license terms in force when they were submitted, unless the contributor signs
+the CLA.
+
+---
+
+## 6. Reservation of Rights
+
+All rights not expressly granted in this license are reserved by the Owner.
+No right is granted by implication, estoppel, or otherwise, and no person
+acquires any ownership interest in the Software or its contributions by using
+or contributing to it.
+
+---
+
+## 7. Disclaimer
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -67,12 +114,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-## 5. Contributions
-
-By submitting a pull request or contribution to this project, you agree to
-license your contribution under the same terms as this license. You retain
-copyright over your contribution but grant the project a perpetual,
-worldwide, non-exclusive, royalty-free license to use it.

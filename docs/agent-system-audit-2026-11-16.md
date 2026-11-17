@@ -67,9 +67,10 @@ contributor is told to run something.
 
 ### 1. One harness, one instruction chain (A1, A2)
 
-DSH (`@deepseek-ai/dsh-agent-instructions`) loads `AGENTS.md`/`CLAUDE.md` from
-the project root down to the session directory, plus `.local` overlays. On a
-case-insensitive filesystem, `agents.md` is a valid candidate. The old persona
+DSH (`@deepseek-ai/dsh-agent-instructions`) loads `AGENTS.md` and compatible
+agent-instruction files from the project root down to the session directory,
+plus `.local` overlays. On a case-insensitive filesystem, `agents.md` is a
+valid candidate. The old persona
 file therefore appeared as project instructions, and because it lived in
 `wat/archive/`, it also re-appeared whenever an agent touched that directory.
 

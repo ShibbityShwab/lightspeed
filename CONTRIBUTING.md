@@ -246,8 +246,12 @@ sponsor-funded Vultr instances, and the setup script targets Ubuntu 22.04+.
 2. Make your changes with tests
 3. Run the [quality gates](#quality-gates) - all must pass
 4. Submit a PR with a clear description
+5. Accept the [Contributor License Agreement](CLA.md) in the PR (required;
+   it is the first section of the pull-request template)
 
 ### PR Checklist
+- [ ] I have read and accepted [CLA.md](CLA.md) - it assigns the copyright in
+      this contribution to the Owner and is required before a merge
 - [ ] Tests pass (`cargo test --workspace --all --exclude lightspeed-gui`, plus
       `-p lightspeed-gui` on Windows)
 - [ ] No clippy warnings (`-D warnings` in CI)
@@ -271,6 +275,12 @@ rules in `wat/rules.md`, and durable state under `wat/state/`.
 
 An agent's change is only "verified" when the evidence path is recorded in
 `wat/state/current-phase.md`.
+
+**Authorship.** Commits name only the human who wrote them. Never add an AI
+tool, model, or agent as an author or co-author (`Co-authored-by`/
+`Co-Authored-By` trailers, tool session links), and never accept the CLA on
+behalf of a tool. A contribution is merged only after its human author accepts
+[CLA.md](CLA.md).
 
 ---
 
@@ -327,8 +337,12 @@ state needs an explicit owner decision first. Example:
 
 ## License
 
-LightSpeed is free for non-commercial use. Commercial use requires a paid
-license. By contributing, you agree to license your contribution under the same
-terms. See [LICENSE](LICENSE) for full details.
+LightSpeed is owned solely by ShibbityShwab and is free for non-commercial use;
+commercial use requires a paid license. Contributions are accepted only under
+the [Contributor License Agreement](CLA.md), which assigns the copyright in your
+contribution to the Owner - you do not retain rights in a contribution. See
+[LICENSE](LICENSE), [CLA.md](CLA.md) and
+[docs/licensing.md](docs/licensing.md) for the full terms.
 
 **tl;dr:** Free for gamers. If you want to use this commercially, contact us.
+Contributors assign their work to the owner when they sign the CLA.

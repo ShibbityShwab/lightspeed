@@ -269,7 +269,11 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) and the [issue 
 
 ## 📄 License
 
-Free for non-commercial use. Commercial use requires a paid license. See [LICENSE](LICENSE).
+LightSpeed is owned solely by ShibbityShwab and is free for non-commercial use;
+commercial use requires a paid license. Contributions are accepted under the
+[Contributor License Agreement](CLA.md), which assigns their copyright to the
+Owner. See [LICENSE](LICENSE), [CLA.md](CLA.md) and
+[docs/licensing.md](docs/licensing.md).
 
 ---
 

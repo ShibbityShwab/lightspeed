@@ -40,8 +40,8 @@ Upstream publishes **no** `lightspeed-gui` build for
 release; a separate `lightspeed-proxy-bin` package would be the natural
 follow-up if a relay operator wants one.
 
-Licensing is the custom noncommercial **LightSpeed-NC-1.0**
-(`license=('custom:LightSpeed-NC-1.0')`). The prebuilt binaries are installed
+Licensing is the custom noncommercial **LightSpeed-NC-1.1**
+(`license=('custom:LightSpeed-NC-1.1')`). The prebuilt binaries are installed
 byte-identical to the release artifacts (`options=('!strip')`) so the Sigstore
 attestations stay valid.
 

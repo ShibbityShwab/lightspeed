@@ -1,5 +1,5 @@
 # Maintainer: ShibbityShwab
-# Contributor: LightSpeed Contributors
+# Contributor: ShibbityShwab
 
 # Prebuilt ("-bin") AUR package for LightSpeed, the zero-cost global network
 # optimizer for multiplayer games: https://github.com/ShibbityShwab/lightspeed
@@ -28,7 +28,7 @@ pkgrel=1
 pkgdesc="Zero-cost global network optimizer for multiplayer games - prebuilt LightSpeed CLI client and x86_64 GUI tray app"
 arch=('x86_64' 'aarch64')
 url="https://github.com/ShibbityShwab/lightspeed"
-license=('custom:LightSpeed-NC-1.0')
+license=('custom:LightSpeed-NC-1.1')
 depends=()
 options=('!strip')  # keep upstream cargo-dist artifacts byte-identical (Sigstore attestations)
 

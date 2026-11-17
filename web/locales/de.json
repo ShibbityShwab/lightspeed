@@ -35,7 +35,7 @@
     "blk.e26ed5b752": "{0} Anonyme aggregierte Telemetrie ist {1}. Sie sendet aggregierte Latenzmetriken (Perzentile, Jitter, FEC-Zähler und die Differenz direkt vs. über Relay) über unverschlüsseltes HTTP an den nicht authentifizierten {2}-Endpunkt des Relays. Eine Zelle wird erst ab mindestens 3 Meldungen veröffentlicht. Schalte sie jederzeit ab mit {3}, {4} in {5} oder dem Kontrollkästchen in der GUI. Lies {6} und {7}.",
     "blk.ff9777106d": "Der Tunnel zwischen Client und Proxy nutzt standardmäßig UDP, wechselt aber auf TCP ({0}) in Netzwerken, die UDP blockieren: Hotels, Cafés, restriktive ISPs. Gleiche Optimierung mit geringem Overhead, breitere Kompatibilität.",
     "idx.00413945b1": "Unterstützt: Keine Accounts",
-    "idx.011ac4eb8d": "© 2026 LightSpeed Contributors. Kostenlos für die persönliche Nutzung. Gebaut mit Rust.",
+    "idx.011ac4eb8d": "© 2025-2026 ShibbityShwab. Kostenlos für die persönliche Nutzung. Gebaut mit Rust.",
     "idx.01be38a029": "Client + Interceptor",
     "idx.0227459811": "Dein Spielverkehr wird transparent umgeleitet, ohne Pakete zu verändern, gebaut für Anti-Cheat-Kompatibilität. Einfach schnellere Pakete.",
     "idx.0369e9e4b5": "Intel Mac lightspeed-client-x86_64-apple-darwin.tar.xz",

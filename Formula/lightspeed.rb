@@ -2,7 +2,7 @@ class Lightspeed < Formula
   desc "Zero-cost global network optimizer for multiplayer games"
   homepage "https://github.com/ShibbityShwab/lightspeed"
   version "1.11.0"
-  # Custom noncommercial license (LightSpeed-NC-1.0), not an SPDX identifier.
+  # Custom noncommercial license (LightSpeed-NC-1.1), not an SPDX identifier.
   license :cannot_represent
 
   on_macos do

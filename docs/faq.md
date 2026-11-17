@@ -6,7 +6,7 @@
 
 ### Is LightSpeed really free?
 
-Yes. LightSpeed is free for personal, non-commercial use under the LightSpeed Software License. Commercial use requires a paid license - see [LICENSE](../LICENSE). You run your own proxy on a small VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
+Yes. LightSpeed is owned solely by ShibbityShwab and is free for personal, non-commercial use under the LightSpeed Software License. Commercial use requires a paid license - see [LICENSE](../LICENSE). Contributions are accepted only under the [Contributor License Agreement](../CLA.md), which assigns their copyright to the Owner - see [Licensing and ownership](licensing.md). You run your own proxy on a small VPS (see [deployment guide](../infra/README.md)). There are no subscriptions, no usage fees, no paid tiers.
 
 ### Will LightSpeed get me banned?
 

@@ -62,7 +62,7 @@
         Id='*'
         Name='lightspeed-gui'
         UpgradeCode='41D817A3-8271-4718-B962-EC50BAAF4D99'
-        Manufacturer='LightSpeed Contributors'
+        Manufacturer='ShibbityShwab'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
@@ -70,7 +70,7 @@
         <Package Id='*'
             Keywords='Installer'
             Description='LightSpeed Windows tray icon + egui status window'
-            Manufacturer='LightSpeed Contributors'
+            Manufacturer='ShibbityShwab'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'

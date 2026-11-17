@@ -62,7 +62,7 @@
         Id='*'
         Name='lightspeed-client'
         UpgradeCode='97B46AF6-E50E-49C3-BE72-A8A5B5C8BDC6'
-        Manufacturer='LightSpeed Contributors'
+        Manufacturer='ShibbityShwab'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
@@ -70,7 +70,7 @@
         <Package Id='*'
             Keywords='Installer'
             Description='LightSpeed game network optimizer — client application'
-            Manufacturer='LightSpeed Contributors'
+            Manufacturer='ShibbityShwab'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'

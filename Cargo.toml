@@ -10,8 +10,8 @@ members = [
 [workspace.package]
 version = "1.11.0"
 edition = "2021"
-authors = ["LightSpeed Contributors"]
-license = "LicenseRef-LightSpeed-NC-1.0"
+authors = ["ShibbityShwab"]
+license = "LicenseRef-LightSpeed-NC-1.1"
 repository = "https://github.com/ShibbityShwab/lightspeed"
 
 [workspace.dependencies]

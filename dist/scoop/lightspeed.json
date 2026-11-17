@@ -3,13 +3,13 @@
     "description": "Zero-cost global network optimizer for multiplayer games (CLI client)",
     "homepage": "https://github.com/ShibbityShwab/lightspeed",
     "license": {
-        "identifier": "LightSpeed-NC-1.0",
+        "identifier": "LightSpeed-NC-1.1",
         "url": "https://github.com/ShibbityShwab/lightspeed/blob/master/LICENSE"
     },
     "notes": [
         "The CLI needs a one-time admin setup for packet capture: run 'lightspeed --help'.",
         "The tray GUI ships as an MSI: https://github.com/ShibbityShwab/lightspeed/releases",
-        "Noncommercial license (LightSpeed-NC-1.0)."
+        "Noncommercial license (LightSpeed-NC-1.1)."
     ],
     "architecture": {
         "64bit": {
