@@ -124,14 +124,14 @@ LightSpeed ships three packages. **You only need one**:
 | **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (1.11.0; the bucket is synced from this repo automatically once `SCOOP_TOKEN` is set) |
 | **Windows (Chocolatey)** | `choco install lightspeed` (1.11.0 was pushed on 2026-11-17 and is awaiting moderator approval; the feed serves 1.10.3 until then) |
 | **Windows (winget)** | not published yet: the first-version PR ([microsoft/winget-pkgs#481953](https://github.com/microsoft/winget-pkgs/pull/481953)) is in review. Until it merges, use the MSI from [Releases](https://github.com/ShibbityShwab/lightspeed/releases). |
-| **Arch Linux** | `yay -S lightspeed-bin` (AUR, 1.11.0 prepared in `dist/aur`; the first push needs an AUR account + SSH key, then `AUR_SSH_PRIVATE_KEY` makes releases publish it) |
+| **Arch Linux** | `yay -S lightspeed-bin` (AUR, **1.11.0-1 published 2026-11-17**; future releases publish automatically via `AUR_SSH_PRIVATE_KEY`) |
 
-> **Channel state (2026-11-17).** Homebrew is current. The Chocolatey 1.11.0
-> package is pushed and pending moderation (the feed will serve 1.10.3 until
-> approved). The Scoop bucket is at 1.11.0 and future releases sync it
-> automatically. winget and AUR have never been published: winget's first
-> manifest is in review at microsoft/winget-pkgs#481953, and AUR's first push
-> needs the package owner's account. Until a channel catches up, the MSI or
+> **Channel state (2026-11-17).** Homebrew and AUR are current; the AUR package
+> **lightspeed-bin 1.11.0-1** is published and future releases publish
+> automatically. The Scoop bucket is at 1.11.0 and future releases sync it
+> automatically. The Chocolatey 1.11.0 package is pushed and pending moderation
+> (the feed will serve 1.10.3 until approved). winget's first manifest is in
+> review at microsoft/winget-pkgs#481953. Until a channel catches up, the MSI or
 > `.zip` from [Releases](https://github.com/ShibbityShwab/lightspeed/releases)
 > is current. See [docs/publishing-channels.md](docs/publishing-channels.md).
 

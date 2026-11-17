@@ -16,7 +16,7 @@ All channels are free community infrastructure; the owner's cost is **$0.00**.
 | **Chocolatey** (`choco install lightspeed`) | Feed lists **1.10.3**; **1.11.0 pushed 2026-11-17** and awaits moderation | `dist/chocolatey/` | `bump-chocolatey` job bumps the source and pushes the `.nupkg`; Choco Push workflow re-pushes by hand for a missed version | `CHOCO_API_KEY` **set** (2026-10-02); account exists. No action beyond the moderation queue |
 | **Scoop** (`scoop install lightspeed`) | Bucket serves **1.11.0** (synced 2026-11-17 from the Lead's manual API write; in-repo manifest was already 1.11.0) | `dist/scoop/lightspeed.json` | **new** `publish-scoop` job (`infra/scripts/publish-scoop.sh`) syncs the bucket after `bump-scoop` commits to master; no-op when the bucket already matches | **`SCOOP_TOKEN` missing** - owner creates a token with Contents-write on `ShibbityShwab/scoop-bucket` and stores it as the secret |
 | **winget** (`winget install ShibbityShwab.LightSpeed`) | **Not published** - `microsoft/winget-pkgs` has no `manifests/s/ShibbityShwab/LightSpeed` (HTTP 404) | `dist/winget/manifests/s/ShibbityShwab/LightSpeed/1.11.0/` (added 2026-11-17; older versions kept) | `winget-releaser` job exists and is gated on the package existing + `WINGET_TOKEN`; it is a clean no-op today | **First-version PR missing.** PRs #435790 (1.4.3) and #437292 (1.4.4) were closed unmerged; a new 1.11.0 bootstrap PR + Microsoft CLA merge is an owner/manual step. `WINGET_TOKEN` **already exists** (set 2026-09-18) - verify/rotate it, but the token is not the blocker |
-| **AUR** (`yay -S lightspeed-bin`) | **No package** - AUR RPC returns `resultcount: 0` for `lightspeed-bin`; the name is free | `dist/aur/PKGBUILD` + `.SRCINFO` at **1.11.0-1** | **new** `publish-aur` job (`infra/scripts/publish-aur.sh`) pushes to `ssh://aur@aur.archlinux.org/lightspeed-bin.git` when pkgver/pkgrel changed; no-op when already current | **`AUR_SSH_PRIVATE_KEY` missing and no AUR account.** Owner creates an AUR account, registers an SSH key, stores the private key as the secret. The PKGBUILD is still bumped by hand each release (no bump automation yet) |
+| **AUR** (`yay -S lightspeed-bin`) | **Published 1.11.0-1** (2026-11-17 03:53 UTC; [package page](https://aur.archlinux.org/packages/lightspeed-bin), maintainer `chrissinclair`, 3 sources). AUR's RPC index can lag a freshly created package by minutes; the package page is authoritative | `dist/aur/PKGBUILD` + `.SRCINFO` at **1.11.0-1** | **new** `publish-aur` job (`infra/scripts/publish-aur.sh`) pushes to `ssh://aur@aur.archlinux.org/lightspeed-bin.git` when pkgver/pkgrel changed; no-op when already current | **Done:** AUR account key registered and `AUR_SSH_PRIVATE_KEY` **set** (2026-11-17). The PKGBUILD is still bumped by hand each release (no bump automation yet) |
 | **Direct downloads** (MSI / zip / tarballs) | **1.11.0** | - | GitHub Releases (same as the first row) | none |
 
 ### What the next tag does automatically
@@ -50,13 +50,13 @@ workflow event (PR included, no token, no network).
    **`SCOOP_TOKEN`**. Until then the bucket only moves when someone syncs it
    by hand (`gh api --method PUT .../contents/bucket/lightspeed.json`; see
    `dist/scoop/README.md`).
-2. **AUR account + SSH key.** Create an AUR account and register an SSH public
-   key on it at <https://aur.archlinux.org/register/> (browser step; the page is
-   behind an Anubis bot challenge, so automation cannot complete or even check
-   it). The package name `lightspeed-bin` is free - the `lightspeed` name is an
-   unrelated package. Then add the (passphrase-less) private key as the
-   repository secret **`AUR_SSH_PRIVATE_KEY`** and re-run a release, or run
-   the publish script by hand from a Linux host.
+2. ~~**AUR account + SSH key.**~~ **Done 2026-11-17:** the `chrissinclair`
+   account now carries the `lightspeed-bin` CI public key
+   (`ssh-ed25519 ... lightspeed-aur-ci`), the package was first-pushed
+   (`lightspeed-bin 1.11.0-1`, commit `e690531`) and `AUR_SSH_PRIVATE_KEY`
+   is stored as the repository secret, so `publish-aur` is armed. Note: the
+   AUR profile save also required the Homepage field to be a full URL; it is now
+   `https://chrissinclairdesign.com`.
 3. **winget first-version PR.** The package has never been created in
    `microsoft/winget-pkgs`, and automation cannot create the first version.
    Open a fresh PR with the `1.11.0` manifest (the prior 1.4.3/1.4.4 bootstrap
@@ -94,8 +94,9 @@ curl -fsSL https://raw.githubusercontent.com/ShibbityShwab/scoop-bucket/master/b
 jq -r .version dist/scoop/lightspeed.json
 # 2026-11-17 -> 1.11.0 / 1.11.0
 
-# AUR RPC: resultcount 0 means the package does not exist yet
+# AUR: the RPC index can lag a freshly created package; check the page too
 curl -fsSL 'https://aur.archlinux.org/rpc/v5/info?arg[]=lightspeed-bin' | jq -r '.resultcount'
+curl -fsSL -o /dev/null -w '%{http_code}\n' 'https://aur.archlinux.org/packages/lightspeed-bin'
 # 2026-11-17 -> 0
 
 # winget-pkgs: 404 until the first manifest PR merges
