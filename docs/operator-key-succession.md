@@ -43,13 +43,19 @@ There is exactly one key. There is no key ID, no key list, and no expiry.
 ### How the registry is signed
 
 The registry is a small JSON document (`schema_version`, `published_at`,
-`nodes`, `revoked`). Signing is a one-shot offline step:
+`nodes`, `revoked`, and the optional informational `issued_at`). Signing is a
+one-shot offline step:
 
 ```bash
 cargo run -p lightspeed-client --example sign_registry -- operator.pk8 registry.json
 ```
 
-`sign_registry` (`client/src/registry.rs:105`) serializes the registry to a
+The tool stamps a fresh publication by default: `published_at` becomes
+`max(now, previous + 1)` (clients use it only as a monotonic anti-rollback
+floor, never as an expiry) and `issued_at` becomes now (informational, not read
+by the client). Pass `--keep-timestamps` to sign an unchanged payload.
+
+`sign_registry` (`client/src/registry.rs`) serializes the registry to a
 JSON string, signs the exact bytes with Ed25519, and emits a `SignedRegistry`:
 the raw registry string plus a base64 signature. The signature covers the raw
 bytes, so there is no canonicalization step and no ambiguity about what was
@@ -255,8 +261,12 @@ would bound how long a revoked node stays trusted by a disconnected client.
 
 ### 5. No automated signing in CI
 
-Signing is deliberately offline, which is correct for key safety, but it means
-there is no CI check that the committed `web/registry.json` verifies against the
+Signing is deliberately offline, which is correct for key safety, and it is not
+a recurring task: re-sign only when the node set or the revocation list changes
+(the client treats `published_at` as a monotonic anti-rollback floor, not an
+expiry, so a registry neither ages out nor needs periodic re-signing; GitHub
+Pages republishes the committed file on every master push). It does mean there
+is no CI check that the committed `web/registry.json` verifies against the
 compiled-in key. A test that loads `web/registry.json` and calls
 `verify_registry` with `DEFAULT_OPERATOR_PUBKEY_B64` would catch a mismatched
 key or a bad signature before it ships. (The test at `client/src/registry.rs:598`

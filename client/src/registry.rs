@@ -45,11 +45,25 @@ pub struct RegistryNode {
 pub struct Registry {
     pub schema_version: u32,
     /// Unix timestamp (seconds) when this registry was published.
+    ///
+    /// Clients use it only as a monotonic anti-rollback floor: a registry whose
+    /// value is lower than the last one seen for the same URL is rejected. It
+    /// is **not** an expiry and there is no max-age check, so an old value in a
+    /// still-current registry breaks nothing. Operator tooling stamps it on
+    /// every re-sign (see `client/examples/sign_registry.rs`).
     pub published_at: u64,
     pub nodes: Vec<RegistryNode>,
     /// Base64-encoded Ed25519 public keys of revoked nodes.
     #[serde(default)]
     pub revoked: Vec<String>,
+    /// Unix timestamp (seconds) when the payload was authored.
+    ///
+    /// Informational only - the client does not read it. It is modelled so
+    /// operator tooling round-trips the field instead of silently dropping it
+    /// when re-signing (the signature covers the raw payload, so a dropped
+    /// field would change the document).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<u64>,
 }
 
 /// A signed registry: the raw registry JSON plus its Ed25519 signature.
@@ -379,6 +393,7 @@ mod tests {
                 note: String::new(),
             }],
             revoked: vec![],
+            issued_at: None,
         }
     }
 
@@ -391,6 +406,28 @@ mod tests {
         let signed = sign_registry(&registry, &key_pair);
         let verified = verify_registry(&signed, &pubkey_b64).unwrap();
         assert_eq!(verified, registry);
+    }
+
+    #[test]
+    fn sign_registry_round_trips_the_issued_at_metadata() {
+        let key_pair = new_key_pair();
+        let pubkey_b64 = b64(key_pair.public_key().as_ref());
+        let mut registry = sample_registry();
+        registry.issued_at = Some(1_762_000_000);
+
+        let signed = sign_registry(&registry, &key_pair);
+        let verified = verify_registry(&signed, &pubkey_b64).unwrap();
+        assert_eq!(verified, registry, "re-signing must not drop issued_at");
+        assert!(signed.registry.contains("\"issued_at\":1762000000"));
+    }
+
+    #[test]
+    fn sign_registry_omits_issued_at_when_absent() {
+        let signed = sign_registry(&sample_registry(), &new_key_pair());
+        assert!(
+            !signed.registry.contains("issued_at"),
+            "an absent metadata field must not appear as null"
+        );
     }
 
     #[test]
@@ -436,6 +473,7 @@ mod tests {
             published_at: 1,
             nodes: vec![],
             revoked: vec!["revoked-key".into()],
+            issued_at: None,
         };
         let node = RegistryNode {
             node_id: "x".into(),
@@ -475,6 +513,7 @@ mod tests {
                 },
             ],
             revoked: vec!["revoked-key".into()],
+            issued_at: None,
         };
         assert_eq!(available_data_addrs(&registry), vec!["1.2.3.4:4434"]);
     }

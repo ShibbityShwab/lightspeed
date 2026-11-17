@@ -282,7 +282,7 @@ changed by this audit.
 | # | Finding | Severity | Action / owner |
 |---|---|---|---|
 | F1 | **M1 is still increasing** (fleet +390 in 102.9 s ≈ 13,650/h; 5/8 relays; since-flip average ≈23,832/h; M1:accepted ≈241:1). The drain's clean condition is not met and cannot be claimed from a ~100 s window with 0 accepted handshakes. | High (blocks task-10 closure) | Keep task-10 open. The next probe must be a **per-relay multi-hour window with accepted ≥ 200 and M1 == 0** (plan §7.4), not another short sample. No code or fleet change needed. |
-| F2 | **Signed registry is authentic, but `published_at` is frozen at 2026-09-20 and predates the true content timestamp `issued_at` (2026-09-22) by 1.97 days; `issued_at` is not modelled by the client.** Content unchanged since the Sydney node was added. | Medium (observability/rollback semantics) | `infra-dev` / owner: when the registry is next re-signed, bump `published_at`; decide whether the client should surface `issued_at` as the authoritative freshness field. No re-sign is needed today (fleet unchanged). |
+| F2 | **Signed registry is authentic; `published_at` (2026-09-20) is frozen below the payload's `issued_at` (2026-09-22) and `issued_at` was not modelled by the client.** Content unchanged since the Sydney node was added. | Low (cosmetic; no functional impact) | **Corrected 2026-11-17:** no re-sign is needed. `published_at` is only a monotonic anti-rollback floor (not an expiry) and nothing reads `issued_at`, so the old value breaks nothing. The tooling gap is closed: `sign_registry` now stamps `published_at = max(now, previous + 1)` and `issued_at = now` by default, and `Registry` models `issued_at` so a re-sign cannot silently drop it (tests added). Re-sign only when the node set or revocations change. |
 | F3 | **Pages deploy cadence is throttled (~4–10 h between scheduled runs; last deploy 6.8 h before audit), so `Last-Modified` and the site's live stats are not content-freshness evidence.** | Low | Do not use Pages `Last-Modified` as a registry-freshness signal in monitors; if live stats must be fresher, that is an infra/workflow decision outside this audit. |
 | F4 | **Auth rejections dominate drops (99.2%), and sgp-1 / mad-1 are effectively idle** (87 and 346 packets relayed in 9.6 h while rejecting 7,113 / 8,040). Consistent with stranded pre-1.11.0 clients; rejection itself is correct behaviour. | Low / informational | Re-read these two relays when F1 closes to see whether they revive. No action now. |
 | F5 | **`/health.update.rollback_version == current_version == 1.11.0` on all eight relays, and `last_apply_at` predates the current deploy** (2026-11-14 vs 2026-11-16). The field is not a distinct rollback target and does not describe the current deploy. | Low | `dev-ops`/`infra-dev`: document, or align the updater state with the deploy path. Operators rolling back 1.11.0 must use the deployment's release list, not this field. |
@@ -312,8 +312,9 @@ a version/status/ALPN change.
   client/QUIC handshake).
 - The repo's own `cargo test -p lightspeed-client` registry test was not run
   (task forbids cargo); the independent Node Ed25519 verification replaces it for
-  authenticity, not for the client's parser behaviour on `issued_at` (that is
-  source-read: `Registry` has no such field and serde ignores unknown fields).
+  authenticity. `issued_at` is informational only: it is now modelled by
+  `Registry` (preserved on re-sign) but deliberately not read by any client
+  logic; `published_at` is a monotonic anti-rollback floor, not an expiry.
 - `placement.json` (stats branch, advisory) is not published on Pages (404) by
   design; it was not audited further.
 
