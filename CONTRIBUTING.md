@@ -301,6 +301,18 @@ GitHub Artifact Attestations". GitHub already lists every artifact on the
 release page, and cargo-dist's generated block is discarded in favor of the
 changelog entry.
 
+### Announcements
+
+Any release that changes client/relay compatibility or a user-visible
+requirement must also ship a **GitHub Discussions -> Announcements** post,
+published with (or before) the release. It names the affected versions, what
+the user must do, where to update and any rollback path, and links the release
+notes. Issue/discussion replies link to it instead of re-explaining. This is
+the `[COMMS_STUB]` rule in [`wat/rules.md`](wat/rules.md); routine release
+notices are covered by the owner's standing grant, anything beyond shipped
+state needs an explicit owner decision first. Example:
+[discussion #177](https://github.com/ShibbityShwab/lightspeed/discussions/177).
+
 ---
 
 ## Community Guidelines
