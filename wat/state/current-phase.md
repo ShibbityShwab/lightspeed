@@ -66,7 +66,11 @@ contributor licence to leave sole authority with the owner.
   the sole-owner copyright. (6) The licensing answer in `docs/faq.md` was left
   unchanged because changing English copy forces the Localization workflow to
   re-translate eight localized docs; run that workflow if the FAQ should link
-  the CLA (README, CONTRIBUTING and `docs/licensing.md` already do).
+  the CLA (README, CONTRIBUTING and `docs/licensing.md` already do). (7) Security
+  Audit went red on `RUSTSEC-2026-0543` ("chrono is unmaintained", informational,
+  no patched release) when the advisory DB updated mid-round; `deny.toml` now
+  carries a reasoned ignore so the gate is green, and migrating chrono to
+  `jiff`/`time` is tracked follow-up work.
 
 ### 2026-11-17 (later) - Backlog follow-ups: publishing channels wired, registry signing fixed, images reviewed, WinDivert debt cleared
 
