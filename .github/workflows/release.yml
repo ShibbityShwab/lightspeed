@@ -19,8 +19,12 @@
 # (infra/scripts/publish-release.sh), the package bumps are gated on the
 # published release instead of on the `host` job's status (`release-state`), a
 # self-test runs on every event, and a read-only `workflow_dispatch` probe
-# exists. Background and the manual fallback: docs/deploy-proxy.md,
-# "Publishing a release".
+# exists. The same round added the gated publishers for the remaining channels:
+# `publish-scoop` (ShibbityShwab/scoop-bucket via SCOOP_TOKEN) and
+# `publish-aur` (AUR via AUR_SSH_PRIVATE_KEY), plus their hermetic
+# self-tests; channel state and owner-only blockers: docs/publishing-channels.md.
+# Background and the manual fallback: docs/deploy-proxy.md, "Publishing a
+# release".
 
 name: Release
 permissions:
@@ -558,6 +562,100 @@ jobs:
           git push origin HEAD:master
 
 
+  # The Scoop bucket (ShibbityShwab/scoop-bucket) is what `scoop install
+  # lightspeed` reads, and it is a SEPARATE public repository. dist/scoop is
+  # the source of truth and bump-scoop committed the tag's manifest to master
+  # above; this job publishes that copy to the bucket through the GitHub
+  # contents API (infra/scripts/publish-scoop.sh).
+  #
+  # SCOOP_TOKEN is a token with "Contents: write" on ShibbityShwab/scoop-bucket.
+  # A missing secret is a clean skip (the notice names it); a broken publish is
+  # red, and --version makes a stale master manifest red instead of silently
+  # publishing the previous version. See docs/publishing-channels.md.
+  publish-scoop:
+    needs:
+      - release-state
+      - bump-scoop
+    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    runs-on: "ubuntu-22.04"
+    permissions:
+      contents: read
+    env:
+      # secrets.* cannot be read inside an `if:`, so mirror it and gate the step.
+      SCOOP_TOKEN: ${{ secrets.SCOOP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+      - name: Publish the Scoop manifest to ShibbityShwab/scoop-bucket
+        if: ${{ env.SCOOP_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.SCOOP_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # --version: refuse to publish a bucket manifest that is not at this
+          # tag, so a failed or skipped bump-scoop is visible instead of
+          # shipping the previous version to `scoop install` users.
+          bash infra/scripts/publish-scoop.sh --version "${VERSION#v}"
+      - name: Note the secret is absent
+        if: ${{ env.SCOOP_TOKEN == '' }}
+        run: echo "::notice::SCOOP_TOKEN is not set; the Scoop bucket was not updated for ${GITHUB_REF_NAME}. Add a token with the Contents-write permission on ShibbityShwab/scoop-bucket (see docs/publishing-channels.md)."
+
+  # The AUR package (lightspeed-bin, dist/aur) has never been published: the
+  # AUR repository is empty and the name is free. The FIRST push needs an AUR
+  # account with an SSH key registered - an owner action, not something CI can
+  # create (see dist/aur/README.md). After that, AUR_SSH_PRIVATE_KEY (the
+  # matching private key) lets this job publish through
+  # infra/scripts/publish-aur.sh. A missing secret is a clean skip; a broken
+  # publish, or a PKGBUILD that was not bumped to this tag, is red.
+  publish-aur:
+    needs:
+      - release-state
+    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    runs-on: "ubuntu-22.04"
+    permissions:
+      contents: read
+    env:
+      # secrets.* cannot be read inside an `if:`, so mirror it and gate the step.
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+      - name: Note the secret is absent
+        if: ${{ env.AUR_SSH_PRIVATE_KEY == '' }}
+        run: echo "::notice::AUR_SSH_PRIVATE_KEY is not set; the AUR package was not published. The first push needs an AUR account with an SSH key registered - see docs/publishing-channels.md."
+      - name: Install the AUR SSH key and pin aur.archlinux.org's host key
+        if: ${{ env.AUR_SSH_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/aur_ssh_key"
+          printf '%s' "$AUR_SSH_PRIVATE_KEY" > "$key"
+          # ssh wants the private key file to end with a newline; a secret is
+          # normally stored without a trailing one.
+          if [ "$(tail -c 1 "$key" | od -An -tx1 | tr -d ' \n')" != "0a" ]; then
+            printf '\n' >> "$key"
+          fi
+          chmod 600 "$key"
+          known_hosts="$RUNNER_TEMP/aur_known_hosts"
+          ssh-keyscan -t ed25519,rsa aur.archlinux.org > "$known_hosts" 2>/dev/null
+          [ -s "$known_hosts" ] || { echo "::error::ssh-keyscan returned no host keys for aur.archlinux.org"; exit 1; }
+          {
+            echo "GIT_SSH_COMMAND=ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts"
+          } >> "$GITHUB_ENV"
+      - name: Publish the AUR package
+        if: ${{ env.AUR_SSH_PRIVATE_KEY != '' }}
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # --version: a PKGBUILD that was not bumped to this tag is a red job
+          # (bump it, then re-run) rather than a stale AUR publish.
+          bash infra/scripts/publish-aur.sh --version "${VERSION#v}"
+
+
   announce:
     needs:
       - plan
@@ -709,6 +807,25 @@ jobs:
           persist-credentials: false
       - name: Release publish self-test
         run: bash infra/scripts/test_release_publish.sh
+
+  # The two channel publishers above only execute on a tag push with the
+  # matching secret, so a PR could break them and nothing would notice until a
+  # release. These hermetic self-tests run on every event: a stateful gh stub
+  # for the Scoop contents-API write and a file:// bare repository for the AUR
+  # push. No token, no network, no real package repository.
+  publishing-self-test:
+    name: Publishing channels self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Scoop bucket publish self-test
+        run: bash infra/scripts/test_publish_scoop.sh
+      - name: AUR publish self-test
+        run: bash infra/scripts/test_publish_aur.sh
 
   # Read-only probe for a workflow_dispatch. It cannot publish: `plan` runs
   # `dist plan` only on a dispatch, `publishing` is false, and the build/host

@@ -173,6 +173,17 @@ jobs:
         timeout-minutes: 5
         run: bash infra/scripts/test_release_publish.sh
 
+      # The tag-push-only channel publishers (Scoop bucket, AUR) are driven by
+      # hermetic stateful-stub suites so a broken publisher cannot first execute
+      # on a real release.
+      - name: Scoop publish self-test
+        timeout-minutes: 5
+        run: bash infra/scripts/test_publish_scoop.sh
+
+      - name: AUR publish self-test
+        timeout-minutes: 5
+        run: bash infra/scripts/test_publish_aur.sh
+
   localization-checks:
     name: Localization Checks
     runs-on: ubuntu-latest
