@@ -4,16 +4,30 @@ Prebuilt (`-bin`) AUR packaging for **LightSpeed**, the zero-cost global
 network optimizer for multiplayer games:
 <https://github.com/ShibbityShwab/lightspeed>.
 
-This directory is a **prepared but unpublished** state. Publishing to
-`aur.archlinux.org` is external and intentionally **not** performed here.
-Arch Linux account registration is currently **closed**, so this package
-cannot be submitted at this time; the files are kept ready for whenever
-registration reopens. There is currently **no** `lightspeed-bin` package on
-the AUR.
+## Status on 2026-11-17
+
+- The files in this directory are the **source of truth** for the AUR package,
+  at **1.11.0-1**.
+- **Nothing is published to the AUR yet.** The AUR RPC reports
+  `resultcount: 0` for `lightspeed-bin` (checked 2026-11-17), i.e. the package
+  name is free.
+- The plain `lightspeed` name is **taken** by an unrelated special-relativity
+  app (maintainer `PhotonX`, package base `lightspeed`), hence the `-bin`
+  suffix.
+- **The first push is owner-gated** - it needs an AUR account with an SSH key
+  registered on it. Account registration is a browser step and the register
+  page is behind an Anubis bot challenge, so it cannot be completed (or even
+  checked for availability) from automation:
+  <https://aur.archlinux.org/register/>. Do not store the account password in
+  this repo.
+- Once the account exists, the release workflow's `publish-aur` job
+  (infra/scripts/publish-aur.sh) publishes on tag pushes when the
+  `AUR_SSH_PRIVATE_KEY` repository secret is set. See
+  [`docs/publishing-channels.md`](../../docs/publishing-channels.md).
 
 ## What ships
 
-| File        | Arch          | Source asset (GitHub release v1.6.5) |
+| File        | Arch          | Source asset (GitHub release v1.11.0) |
 |-------------|---------------|--------------------------------------|
 | `/usr/bin/lightspeed`     | x86_64, aarch64 | `lightspeed-client-<triple>.tar.xz`   |
 | `/usr/bin/lightspeed-gui` | x86_64 only     | `lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz` |
@@ -21,71 +35,88 @@ the AUR.
 
 Upstream publishes **no** `lightspeed-gui` build for
 `aarch64-unknown-linux-gnu`, so the GUI is only installed on x86_64
-(handled by per-arch `source_*` arrays and a `$CARCH` guard in `package()`).
-The `lightspeed-proxy` relay-server tarballs also exist on the release; a
-separate `lightspeed-proxy-bin` package would be the natural follow-up if a
-relay operator wants one.
+(handled by per-arch `source_*` arrays and a `$CARCH` guard in
+`package()`). The `lightspeed-proxy` relay-server tarballs also exist on the
+release; a separate `lightspeed-proxy-bin` package would be the natural
+follow-up if a relay operator wants one.
 
 Licensing is the custom noncommercial **LightSpeed-NC-1.0**
-(`license=('custom:LightSpeed-NC-1.0')`). The `lightspeed` package name is
-already taken on the AUR by an unrelated special-relativity app, hence the
-`-bin` suffixed name; there is currently **no** `lightspeed-bin` package.
+(`license=('custom:LightSpeed-NC-1.0')`). The prebuilt binaries are installed
+byte-identical to the release artifacts (`options=('!strip')`) so the Sigstore
+attestations stay valid.
 
-## First-time submission
+## First-time submission (owner steps, then automation)
 
-Requires an AUR account (SSH key registered with your account) and a
-real `# Maintainer: YourName <you@example.com>` line in `PKGBUILD`
-(the placeholder must be replaced first).
+1. Create an Arch Linux / AUR account and register an **SSH public key** with
+   it: <https://aur.archlinux.org/register/> (browser; the page is protected by
+   an Anubis bot challenge).
+2. Create an SSH key for publishing (ed25519, **no passphrase** - the workflow
+   cannot unlock one), store the **private** key as the `AUR_SSH_PRIVATE_KEY`
+   repository secret, and never commit it.
+3. Publish. Either wait for the next tag push (the `publish-aur` job then runs
+   `infra/scripts/publish-aur.sh`), or push by hand from a Linux host:
 
-```sh
-# 1. Fill in the real Maintainer line in PKGBUILD, then regenerate .SRCINFO:
-makepkg --printsrcinfo > .SRCINFO
+   ```sh
+   # On a Linux host/CI runner with the AUR SSH key loaded (this host is
+   # Windows; the script is POSIX and cannot run here):
+   bash infra/scripts/publish-aur.sh --dry-run   # show the plan
+   bash infra/scripts/publish-aur.sh             # clone AUR repo, push if changed
+   ```
 
-# 2. Clone the (empty) AUR package repo via SSH and copy the files in:
-git clone ssh://aur@aur.archlinux.org/lightspeed-bin.git
-cd lightspeed-bin
-cp /path/to/dist/aur/PKGBUILD /path/to/dist/aur/.SRCINFO .
+   The manual pre-automation path is still valid:
 
-# 3. Commit and push. Pushing the initial commit publishes the package:
-git add PKGBUILD .SRCINFO
-git commit -m "lightspeed-bin 1.6.5-1"
-git push
-```
+   ```sh
+   git clone ssh://aur@aur.archlinux.org/lightspeed-bin.git
+   cd lightspeed-bin
+   cp /path/to/dist/aur/PKGBUILD /path/to/dist/aur/.SRCINFO .
+   git add PKGBUILD .SRCINFO
+   git commit -m "lightspeed-bin 1.11.0-1"
+   git push
+   ```
+
+The AUR repo is **empty until the first push**; pushing the initial commit
+creates the package page.
 
 ## Updating to a new upstream release
 
-When LightSpeed tags a new version (e.g. `v1.5.0`):
+The PKGBUILD is bumped **by hand** (there is no bump-aur automation yet; the
+AUR publish job only pushes what the repo already says):
 
-1. `pkgver=1.5.0` in `PKGBUILD` (keep `pkgrel=1` on a version bump; bump
-   `pkgrel` for packaging-only changes).
-2. Refresh the sha256 sums against the new release's assets:
+1. `pkgver=X.Y.Z` in `PKGBUILD` and `pkgrel=1` (bump `pkgrel` instead for a
+   packaging-only change).
+2. Refresh the sha256 sums from the new release:
    ```sh
-   gh release view v1.5.0 --repo ShibbityShwab/lightspeed --json assets \
-     -q '.assets[] | select(.name | endswith(".tar.xz")) | "\(.name)  \(.digest | sub("sha256:"; ""))"'
+   gh release view vX.Y.Z --repo ShibbityShwab/lightspeed --json assets \
+     --jq '.assets[] | select(.name | endswith(".tar.xz")) | "\(.name)  \(.digest | sub("sha256:"; ""))"'
    ```
-   Asset names follow `lightspeed-{client,gui}-<target-triple>.tar.xz`;
-   confirm upstream did not add an aarch64 GUI tarball before enabling it.
-3. `makepkg --printsrcinfo > .SRCINFO` and sanity-build with
-   `makepkg -f` (also run once per arch change).
-4. Commit both files and `git push`.
-
-Do **not** update sha256sums of unchanged assets unnecessarily: real sums
-are already in place for 1.6.5 (verified against the release's published
-sha256; see Local verification below).
+   The released `sha256.sum` asset lists the same digests.
+3. Regenerate `.SRCINFO` **on a Linux host with pacman**:
+   `makepkg --printsrcinfo > .SRCINFO` (or hand-edit it to match exactly;
+   `infra/scripts/publish-aur.sh` refuses a PKGBUILD/.SRCINFO mismatch).
+4. Validate with `makepkg --nobuild` (checksums), or `makepkg -f` for a full
+   local build, then commit both files.
+5. The next tag push runs the `publish-aur` job; it pushes only when
+   `pkgver`/`pkgrel` differ from the AUR copy and is a clean no-op otherwise.
+   A version mismatch between the tag and the PKGBUILD is a red job on
+   purpose - it means this step was skipped.
 
 ## Local verification
 
-- 1.6.5: `sha256sums` were refreshed from the v1.6.5 release assets via
-  `gh release view v1.6.5 --json assets` and match the published digests for
-  the x86_64 client, x86_64 GUI, and aarch64 client tarballs.
-- 1.5.0: `makepkg --nobuild` validated the `sha256sums` against the published
-  assets (`Passed` for both x86_64 tarballs), and `makepkg --printsrcinfo` was
-  regenerated so `.SRCINFO` matches `PKGBUILD`. The packaging logic is
-  unchanged since 1.4.3.
-- 1.4.3 (full build): `makepkg -f` on x86_64 succeeded with checksums
-  `Passed`; the package contained `/usr/bin/lightspeed`,
-  `/usr/bin/lightspeed-gui`, and the LICENSE file, and `/usr/bin/lightspeed
-  --version` reported `lightspeed 1.4.3`.
-- `ldd` on both binaries shows glibc/libgcc only, hence `depends=()`. The GUI
-  dlopens X11/Wayland/EGL at runtime (winit/glutin); install `mesa`,
-  `libxkbcommon`, and the wayland/X11 libs on a bare system.
+- **1.11.0 (2026-11-17):** the three sha256 values in `PKGBUILD` were checked
+  two ways: against the release asset digests from
+  `gh release view v1.11.0 --json assets`, and by downloading the three
+  `linux-gnu` tarballs and hashing them locally (values match exactly). A
+  `tar -tf` listing confirms each tarball extracts to a
+  `lightspeed-{client,gui}-<triple>/` directory containing the binary and
+  `LICENSE` paths used by `package()`; the aarch64 release has no GUI tarball.
+- **makepkg is not run here.** This development host is Windows and has no
+  pacman/Arch userland; the build is verified by CI's packaging self-test only
+  for the publish script, and by any Arch contributor running
+  `makepkg -f`. The last full `makepkg -f` build on x86_64 was 1.4.3 (see
+  git history); the packaging logic is unchanged since then.
+- **Publish script:** `infra/scripts/test_publish_aur.sh` is a hermetic
+  self-test (a `file://` bare repo standing in for the AUR remote, no network,
+  no credentials) run by the Release workflow's *publishing self-test* job on
+  every event. It covers first push, same-version no-op, version bump,
+  `pkgrel`-only change, PKGBUILD/.SRCINFO mismatch refusal, downgrade refusal,
+  and `--dry-run`.

@@ -1,114 +1,139 @@
 # LightSpeed winget (Windows Package Manager) publishing
 
-This directory holds the winget manifest for the LightSpeed Windows GUI MSI
-(`lightspeed-gui`, produced by cargo-dist), plus notes for publishing it to the
-community package repository.
+This directory holds the winget manifests for the LightSpeed Windows GUI MSI
+(`lightspeed-gui`, produced by cargo-dist), plus the exact procedure and
+current blockers for publishing them to the community package repository
+`microsoft/winget-pkgs`.
+
+```
+winget install --id ShibbityShwab.LightSpeed --exact
+```
 
 ## Manifest layout
 
-The committed manifests stop at `manifests/s/ShibbityShwab/LightSpeed/1.5.0/`;
-the `1.4.3/` directory is the version submitted in the bootstrap PR. They follow
-the winget multi-file manifest schema (ManifestVersion 1.6.0). Older directories
-are kept for history:
+```
+manifests/s/ShibbityShwab/LightSpeed/<version>/
+  ShibbityShwab.LightSpeed.yaml                 # version manifest
+  ShibbityShwab.LightSpeed.installer.yaml       # installer manifest
+  ShibbityShwab.LightSpeed.locale.en-US.yaml    # default locale
+```
 
-| File | ManifestType | Purpose |
-| --- | --- | --- |
-| `ShibbityShwab.LightSpeed.yaml` | `version` | Binds the version dir to its default locale |
-| `ShibbityShwab.LightSpeed.installer.yaml` | `installer` | x64 MSI, `Scope: machine`, silent switches `/qn` / `/norestart`, `UpgradeBehavior: install` |
-| `ShibbityShwab.LightSpeed.locale.en-US.yaml` | `defaultLocale` | Publisher, description, tags, license |
+The committed versions are `1.3.2`, `1.4.2`, `1.4.3`, `1.4.4`, `1.5.0`,
+`1.6.14` and **`1.11.0`** (new on 2026-11-17). Older directories are kept for
+history. `PackageIdentifier` is `ShibbityShwab.LightSpeed` and must always
+match the folder path under `manifests/s/`.
 
-`PackageIdentifier` is `ShibbityShwab.LightSpeed` and always matches the folder
-path under `manifests/s/`.
+The `1.11.0` `installer.yaml` points at the published release asset:
 
-The installer URL points at the GitHub release asset:
-`https://github.com/ShibbityShwab/lightspeed/releases/download/v1.4.3/lightspeed-gui-x86_64-pc-windows-msvc.msi`
-with the real `InstallerSha256`
-`091BC682B1BB23DE4A10FC24CCD6CC5870F60936613D1B0EF328B57FD2E72792`
-(verified against the `.msi.sha256` sidecar cargo-dist uploads with the
-release).
+- URL: `https://github.com/ShibbityShwab/lightspeed/releases/download/v1.11.0/lightspeed-gui-x86_64-pc-windows-msvc.msi`
+- `InstallerSha256`: `C4CA86749CD542E4BBC760397D84F74100D304CA0ABE80218353021C11097436`
+  (matches the release asset digest and the `.msi.sha256` sidecar on
+  `v1.11.0`; verified 2026-11-17)
+- `InstallerType: wix`, `Architecture: x64`, `Scope: machine`,
+  `UpgradeBehavior: install`, MSI silent switches `/qn` / `/norestart`.
 
-Validation caveat: `winget validate` only runs on Windows and is not available
-in this repo's Linux toolchain. The manifests are validated by schema
-conformance against the winget-cli v1.6.0 JSON schemas plus manual review, and
-the real gate is the microsoft/winget-pkgs PR pipeline described below.
+Validation on this Windows host (winget 1.29.380):
 
-## How a release reaches winget (handoff)
+```powershell
+winget validate --manifest dist\winget\manifests\s\ShibbityShwab\LightSpeed\1.11.0
+# Manifest validation succeeded.
+```
 
-**First submission is a manual PR to `microsoft/winget-pkgs` (external, not done
-from this repo).** There is no "create" permission on that repository from the
-LightSpeed repo, so the very first manifest cannot be opened by automation:
+The real gate stays the `microsoft/winget-pkgs` PR pipeline below; the
+winget-pkgs bot re-runs `winget validate` plus its own policy checks.
 
-1. Fork `https://github.com/microsoft/winget-pkgs`.
-2. Copy this version directory into the fork at
-   `manifests/s/ShibbityShwab/LightSpeed/1.4.3/` (create the folder if absent).
+## Status on 2026-11-17 (why `winget install` does not work yet)
 
-   **Done for 1.4.3:** the first manual submission was opened from this repo's
-   manifest via the GitHub contents API:
-   https://github.com/microsoft/winget-pkgs/pull/435790
-   (branch `ShibbityShwab.LightSpeed-1.4.3` in the `ShibbityShwab/winget-pkgs`
-   fork). Once that PR merges, later versions can be automated by adding the
-   `WINGET_TOKEN` secret described below.
-3. Open a pull request. The winget-pkgs bot runs `winget validate` and the
-   Microsoft.Winget.Create pipeline; fix anything it flags and keep the PR
-   updated until it merges.
-4. Do NOT delete this local `dist/winget` copy: winget-releaser (below) reads
-   its manifest from the repo, and winget-pkgs updates are diffed against the
-   currently published version.
+**The package has never been published.** `microsoft/winget-pkgs` has no
+`manifests/s/ShibbityShwab/LightSpeed` path (contents API returns `404`);
+`winget install ShibbityShwab.LightSpeed` fails with "No package found".
 
-**After the first PR merges, add the `winget-releaser` GitHub Action** to this
-repo (see https://github.com/vedantmgoyal2009/winget-releaser). On every
-LightSpeed release it reads this manifest directory, generates the new-version
-manifest for the MSI asset, and opens an update PR to `microsoft/winget-pkgs`
-automatically.
+On 2026-11-17 the replacement first-version PR was opened:
+**[microsoft/winget-pkgs#481953](https://github.com/microsoft/winget-pkgs/pull/481953)**
+(`ShibbityShwab.LightSpeed` 1.11.0, manifest schema **1.12.0**, `winget
+validate` clean, CLA already signed on the account). It is waiting on a
+winget-pkgs moderator; once it merges, the `winget-releaser` job publishes
+later versions automatically because `WINGET_TOKEN` already exists.
 
-Required setup for the action:
+The two earlier bootstrap attempts were **closed without merging**, so they do
+not bootstrap the package:
 
-- A `WINGET_TOKEN` secret: a **classic** personal access token with the single
-  `public_repo` scope. Fine-grained PATs do NOT work here: opening the PR
-  against `microsoft/winget-pkgs` requires the token's resource owner to match
-  the repository owner (Microsoft), which needs Microsoft org membership, so
-  the action fails with `403 Resource not accessible by personal access token`
-  (vedantmgoyal9/winget-releaser#172). Add it under repo Settings > Secrets and
-  variables > Actions (owner `ShibbityShwab`, repo `lightspeed`). Because
-  `public_repo` is broad (write to every public repository the account can
-  access), set an expiry and rotate it.
+| PR | Version | State at 2026-11-17 |
+|----|---------|---------------------|
+| [microsoft/winget-pkgs#435790](https://github.com/microsoft/winget-pkgs/pull/435790) | 1.4.3 | `closed`, not merged (updated 2026-11-16) |
+| [microsoft/winget-pkgs#437292](https://github.com/microsoft/winget-pkgs/pull/437292) | 1.4.4 | `closed`, not merged |
 
-  **Status at v1.4.4: this secret IS set** (classic `public_repo` PAT named
-  `lightspeed-winget`, 90-day expiry). The `winget-releaser` job in
-  `release.yml` reads it. The package must already exist in
-  `microsoft/winget-pkgs` before the job can publish an update, so the first
-  submission must merge first (see the PRs linked above).
-- Pin `uses: vedantmgoyal2009/winget-releaser@v2` (or the current major) and
-  set `with: identifier: ShibbityShwab.LightSpeed`.
+A **new first-version PR for 1.11.0** is required. The repository secret
+`WINGET_TOKEN` **does exist** (set 2026-09-18), so the missing piece is the
+bootstrap PR - not the token. The `winget-releaser` job in
+`.github/workflows/release.yml` is already wired: it pre-checks whether the
+package exists and skips cleanly until it does, so it opens no duplicate
+first-version PR.
 
-Notes that apply to every future release:
+## One-time bootstrap procedure (owner actions)
 
-- The manifest must reference the exact GitHub release asset name cargo-dist
-  produces (`lightspeed-gui-x86_64-pc-windows-msvc.msi`), or winget-pkgs
-  validation fails on the 404 / hash mismatch.
-- `InstallerSha256` must be refreshed for every new version. winget-releaser
-  recomputes it from the asset automatically; for manual updates, download the
-  MSI and run `sha256sum`, then transcribe the hash (uppercase) into the
-  installer manifest.
-- The MSI is per-machine and bundles the WinDivert kernel driver; those facts
-  are encoded as `Scope: machine` and a machine-scope product. Keep them when
-  bumping versions.
+Automatic publishing cannot start until the first manifest merges. For 1.11.0,
+steps 1 and 2 are **done** (CLA signed 2026-09-18; PR #481953 open from this
+repository's fork); the remaining action is a winget-pkgs moderator merge. The
+steps below are the repeatable procedure if that PR is closed instead. Steps 1,
+2 and 4 require the owner's GitHub account; do not automate the first PR.
 
-## Status at v1.6.5
+1. **Sign the Microsoft CLA** if not already signed for the account - the
+   winget-pkgs bot prompts on the first PR. (The 1.4.3 submission reported it
+   as signed; the prompt re-appears only if that signature is invalid.)
+2. **Open the first-version PR** from a fork of `microsoft/winget-pkgs`:
+   - fork `https://github.com/microsoft/winget-pkgs`;
+   - copy this directory's `1.11.0/` to
+     `manifests/s/ShibbityShwab/LightSpeed/1.11.0/` in the fork;
+   - open a PR titled
+     `New version: ShibbityShwab.LightSpeed version 1.11.0`;
+   - do **not** delete `dist/winget` (the automation reads release assets and
+     re-generates manifests itself; this directory is the reviewed source and
+     the bootstrap copy).
+3. **Let the winget-pkgs pipeline validate and a moderator merge it.** A
+   package cannot be created by two simultaneous first-version PRs - only one
+   bootstrap PR at a time.
+4. **Verify the token** `WINGET_TOKEN` (set 2026-09-18) can open PRs on
+   `microsoft/winget-pkgs`; rotate/replace it when it expires. The documented
+   token shape for the publisher is a **fine-grained PAT** with repository
+   access to `microsoft/winget-pkgs` and permissions **Pull requests: read and
+   write** and **Contents: read** (store it under Settings -> Secrets and
+   variables -> Actions). If GitHub refuses to grant `Pull requests: write` on
+   a repository you do not administer, the winget-releaser fallback is a
+   classic PAT with the `public_repo` scope (broad - set an expiry and rotate).
+   Never commit the token.
 
-- **Nothing is published to winget yet.** The package is created only when the
-  bootstrap PR merges. `microsoft/winget-pkgs#435790` (1.4.3) is still open:
-  the CLA is signed and its validation checks pass, and it is waiting on a
-  community moderator. `microsoft/winget-pkgs#437292` (1.4.4) was closed as a
-  duplicate, because a package cannot be created by two simultaneous
-  first-version PRs.
-- The committed manifests stop at `1.5.0/`; no `1.6.5/` manifest exists locally
-  because the version manifests are generated by the `winget-releaser`
-  automation, which cannot run until the package exists.
-- The `winget-releaser` job in `release.yml` pre-checks for
-  `manifests/s/ShibbityShwab/LightSpeed` in `microsoft/winget-pkgs` and skips
-  when it is absent, so it no longer opens a duplicate first-version PR on every
-  release. Once the bootstrap merges, the next release publishes automatically,
-  and from then on the automation keeps winget current.
-- Do not open further winget PRs by hand while the bootstrap is pending; it
-  would be a duplicate and would lose its queue position.
+After the bootstrap merges, the next tag release publishes automatically: the
+`winget-releaser` job runs
+[`vedantmgoyal9/winget-releaser@v2`](https://github.com/vedantmgoyal9/winget-releaser)
+with `identifier: ShibbityShwab.LightSpeed`, which opens an update PR to
+`microsoft/winget-pkgs` on every release.
+
+## Notes for every future release
+
+- The installer asset name must stay
+  `lightspeed-gui-x86_64-pc-windows-msvc.msi`; winget-pkgs validation fails on
+  a 404 or hash mismatch.
+- `InstallerSha256` must be refreshed for every version. `winget-releaser`
+  recomputes it from the release asset; for a manual bump download the MSI,
+  hash it, and transcribe the uppercase hash.
+- The MSI is per-machine and bundles the WinDivert driver; those facts stay
+  encoded as `Scope: machine` and `InstallerType: wix`.
+
+## Verification commands
+
+```powershell
+# Is the package bootstrapped?
+gh api repos/microsoft/winget-pkgs/contents/manifests/s/ShibbityShwab/LightSpeed
+# -> 404 (HTTP 404: Not Found) until the first PR merges
+
+# Is the release asset hash in the manifest correct?
+gh release view v1.11.0 --repo ShibbityShwab/lightspeed --json assets --jq '.assets[] | select(.name == "lightspeed-gui-x86_64-pc-windows-msvc.msi")'
+# -> "digest": "sha256:c4ca86749cd542e4bbc760397d84f74100d304ca0abe80218353021c11097436"
+
+# Validate the local manifests (Windows host)
+winget validate --manifest dist\winget\manifests\s\ShibbityShwab\LightSpeed\1.11.0
+```
+
+See [`docs/publishing-channels.md`](../../docs/publishing-channels.md) for the
+cross-channel state table.

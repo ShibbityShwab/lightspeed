@@ -121,18 +121,19 @@ LightSpeed ships three packages. **You only need one**:
 | Platform | Command |
 |-----------|---------|
 | **macOS and Linux** | `brew tap ShibbityShwab/lightspeed https://github.com/ShibbityShwab/lightspeed && brew install ShibbityShwab/lightspeed/lightspeed` (current at the latest release) |
-| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (the bucket copy is at 1.8.2; the manifest in this repo is at 1.9.0 and is synced to the bucket by hand) |
-| **Windows (Chocolatey)** | `choco install lightspeed` (1.9.0 is pushed and awaiting moderator approval; the feed serves 1.8.4 until then) |
-| **Windows (winget)** | not published yet: `winget install ShibbityShwab.LightSpeed` will fail until the first manifest merges. Use the MSI from [Releases](https://github.com/ShibbityShwab/lightspeed/releases). |
-| **Arch Linux** | `yay -S lightspeed-bin` (AUR, prepared but not yet published; Arch registration is closed) |
+| **Windows (Scoop)** | `scoop bucket add ShibbityShwab https://github.com/ShibbityShwab/scoop-bucket && scoop install lightspeed` (1.11.0; the bucket is synced from this repo automatically once `SCOOP_TOKEN` is set) |
+| **Windows (Chocolatey)** | `choco install lightspeed` (1.11.0 was pushed on 2026-11-17 and is awaiting moderator approval; the feed serves 1.10.3 until then) |
+| **Windows (winget)** | not published yet: the first-version PR ([microsoft/winget-pkgs#481953](https://github.com/microsoft/winget-pkgs/pull/481953)) is in review. Until it merges, use the MSI from [Releases](https://github.com/ShibbityShwab/lightspeed/releases). |
+| **Arch Linux** | `yay -S lightspeed-bin` (AUR, 1.11.0 prepared in `dist/aur`; the first push needs an AUR account + SSH key, then `AUR_SSH_PRIVATE_KEY` makes releases publish it) |
 
-> **Windows package managers are not all current.** The Chocolatey feed serves
-> 1.8.4 while the 1.9.0 package awaits moderator approval. The Scoop bucket
-> still serves 1.8.2 because publishing to it is a
-> manual sync, and winget has no published manifest yet (the first submission is
-> awaiting a Microsoft moderator). For Scoop and winget, the MSI or `.zip` from
-> [Releases](https://github.com/ShibbityShwab/lightspeed/releases) is current.
-> macOS and Linux users get the current version from Homebrew.
+> **Channel state (2026-11-17).** Homebrew is current. The Chocolatey 1.11.0
+> package is pushed and pending moderation (the feed will serve 1.10.3 until
+> approved). The Scoop bucket is at 1.11.0 and future releases sync it
+> automatically. winget and AUR have never been published: winget's first
+> manifest is in review at microsoft/winget-pkgs#481953, and AUR's first push
+> needs the package owner's account. Until a channel catches up, the MSI or
+> `.zip` from [Releases](https://github.com/ShibbityShwab/lightspeed/releases)
+> is current. See [docs/publishing-channels.md](docs/publishing-channels.md).
 
 ### One-line Install (Linux and macOS)
 
