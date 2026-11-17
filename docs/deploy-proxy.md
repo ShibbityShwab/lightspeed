@@ -376,3 +376,125 @@ A relay flipped to `required` is watched before the next relay is touched:
 
 Only after the canary's clean window may the remaining relays be flipped, one at
 a time, each with its own approval and its own window.
+## Publishing a release (and the manual fallback)
+
+A release is cut by pushing a version tag (`vX.Y.Z`). The `Release` workflow
+builds the cargo-dist artifacts, publishes the GitHub Release, and then bumps
+the packaging manifests (Homebrew, Chocolatey, Scoop) and verifies them. This
+section is the operator contract for that last step: what the automation does,
+what to do when it cannot publish, and how to check the logic without cutting
+a release.
+
+### What the workflow does now (2026-11-17)
+
+The publish step is `infra/scripts/publish-release.sh`, called by the `host`
+job. It is idempotent because on 2026-11-16 the generated
+`gh release create` line failed with `HTTP 403: Resource not accessible by
+integration` on `POST /releases`, the release had to be published by hand, and
+the packaging bumps were skipped (they required the `host` job to succeed).
+
+- **Release missing:** `gh release create <tag> --target <sha> --title ...
+  --notes-file ...`, then `gh release upload <tag> artifacts/* --clobber`.
+- **Release already exists** (created by a previous attempt, a re-run, or by
+  hand): no second create; the assets are uploaded with `--clobber` and the
+  title/notes/draft metadata is refreshed. A create race (`already_exists`)
+  falls back to the upload path instead of failing.
+- **Bounded retry:** HTTP 5xx/429, timeouts, connection resets, the
+  "Egress is over the account limit" 503, and a 403 are retried on one budget
+  of four attempts with 5 s / 15 s / 30 s backoff. Every attempt is logged.
+- **Persistent 403:** the step stops with an actionable `::error::` block - the
+  repository workflow-permission setting, the workflow `permissions:` block,
+  an org/App cap, rulesets, the failing run URL, and the optional
+  `RELEASE_TOKEN` fallback below - instead of only "Resource not accessible by
+  integration".
+- **Complete release + read-only token:** if the release already has every
+  expected asset and the token cannot rewrite them, the step warns and exits 0
+  and reports `writable=false`; the note trim is skipped. A usable release is
+  not turned red because a retry could not re-upload identical assets.
+- **`release-state` job:** after `host`, it checks that the release is
+  published and carries the six assets the packaging steps read (the four
+  client tarballs, the Windows client zip and the GUI MSI). It reads release
+  metadata only, so it adds no artifact egress. `bump-homebrew`,
+  `bump-chocolatey`, `bump-scoop`, `verify-bumps` and `winget-releaser` are
+  gated on *that* (`ready=true`), not on `host` success, so a red publish step
+  no longer skips packaging when the release exists - and they still never run
+  before those assets exist.
+- **Pull requests never publish:** `publishing` is true only for a tag push.
+  A PR runs `dist plan` (plus whatever build-on-PR jobs cargo-dist asks for) and
+  the publish-logic self-test, but never the publish step. `workflow_dispatch`
+  is a read-only probe (below).
+
+The 2026-11-17 token probe (throwaway branch, run `43989309532`, workflow
+`permissions: contents: write`) created a tag ref and a draft release with the
+Actions token, so the 2026-11-16 403 is not reproducible under the current
+repository config; the same window also hit an artifact-egress 503. The
+workflow therefore assumes publish works and survives a repeat - it does not
+re-add permissions that were already present.
+
+### Verifying the publish logic without a release
+
+The publish path only runs on a tag, so it is tested with a stateful `gh`
+stub: `bash infra/scripts/test_release_publish.sh`. The
+`Release publish self-test` job runs it on every workflow event, including
+`pull_request`; 64 assertions cover create/upload, the create race, the
+transient retry, the
+persistent 403 verdict, the complete-release tolerance, `--dry-run`, and the
+PR refusal. It needs bash + jq and no credentials, so it is CI-only on the
+Windows dev host.
+
+Read-only probe / dry run:
+
+```text
+Actions -> Release -> Run workflow -> tag = v1.11.0
+```
+
+The `Release publish probe (read-only)` job reports the token and repository
+permission state and prints what the publish step would do for that tag,
+without creating, editing or uploading anything. Locally (Linux/macOS, or CI):
+
+```bash
+bash infra/scripts/publish-release.sh --dry-run --tag v1.11.0
+```
+
+### If the Release workflow cannot publish
+
+Publishing a release is an owner gate. Prefer fixing the token path to
+publishing by hand, because the workflow also bumps every package manifest.
+
+1. **Read the error.** The step prints the failing `gh` output and, on a
+   persistent 403, the settings to check in order:
+   `Settings -> Actions -> General -> Workflow permissions` must allow the
+   workflow token to write (the workflow itself keeps
+   `permissions: contents: write`), no org/App policy may cap Actions tokens at
+   read, and no ruleset may block release/tag creation.
+2. **If the Actions token is capped:** create a fine-grained PAT with
+   "Contents: read and write" on this repository and store it as the
+   `RELEASE_TOKEN` repository secret. The publish step prefers it when set and
+   falls back to `GITHUB_TOKEN` when it is absent. This is an owner/credential
+   action - never commit a token.
+3. **Alternatively, publish manually from the run's own artifacts** (this is
+   what was done for `v1.11.0`; the commands work in PowerShell too):
+
+   ```text
+   gh run download <run-id> --dir release-artifacts
+   # verify one archive against sha256.sum before uploading anything
+   gh release create vX.Y.Z --target <tag-commit-sha> \
+     --title "X.Y.Z - YYYY-MM-DD" --notes-file release-notes.md
+   gh release upload vX.Y.Z release-artifacts/* --clobber
+   ```
+
+   The body should be the `CHANGELOG.md` section for the version
+   (`bash infra/scripts/release-notes.sh X.Y.Z > release-notes.md`).
+4. **Then re-run the Release workflow** (Actions -> Release -> Re-run all
+   jobs). The publish step finds the release and uploads with `--clobber`, or
+   accepts a complete release it cannot write, and `release-state` lets the
+   packaging bumps run. Verify the outcome with
+   `gh release view vX.Y.Z --json isDraft,isLatest,assets`, by checking that
+   `Formula/lightspeed.rb`, `dist/chocolatey/lightspeed.nuspec` and
+   `dist/scoop/lightspeed.json` moved to the new version, and by the
+   `verify-bumps` job.
+
+Rollback: `gh release delete vX.Y.Z --cleanup-tag --yes` removes the release,
+its assets and the tag - it is destructive and needs owner approval; re-tag
+the correct commit afterwards. The packaging bumps are normal commits on
+`master` and can be reverted with `git revert`.

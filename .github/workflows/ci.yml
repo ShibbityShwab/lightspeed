@@ -164,6 +164,15 @@ jobs:
       - name: Relay control_alpn flip self-test
         run: bash infra/scripts/test_relay_control_alpn.sh
 
+      # The Release workflow's publish step only runs on a tag push, so the
+      # idempotent-create / --clobber / bounded-retry / permission-verdict
+      # paths would otherwise first execute on a real release. The suite drives
+      # infra/scripts/publish-release.sh with a stateful gh stub (no token, no
+      # network, no release).
+      - name: Release publish self-test
+        timeout-minutes: 5
+        run: bash infra/scripts/test_release_publish.sh
+
   localization-checks:
     name: Localization Checks
     runs-on: ubuntu-latest

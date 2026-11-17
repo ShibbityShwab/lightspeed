@@ -12,6 +12,15 @@
 #
 # Note that the GitHub Release will be created with a generated
 # title/body based on your changelogs.
+#
+# This file is hand-edited on top of cargo-dist's output (dist-workspace.toml
+# sets allow-dirty = ["ci"]). The hand edits are the release-publish hardening
+# from 2026-11-17: the publish step is idempotent and retried
+# (infra/scripts/publish-release.sh), the package bumps are gated on the
+# published release instead of on the `host` job's status (`release-state`), a
+# self-test runs on every event, and a read-only `workflow_dispatch` probe
+# exists. Background and the manual fallback: docs/deploy-proxy.md,
+# "Publishing a release".
 
 name: Release
 permissions:
@@ -43,6 +52,17 @@ on:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
+  # Read-only probe: report the token/release state and what the publish step
+  # would do, without publishing anything. A dispatch is never publishing:
+  # `publishing` below is true only for a tag push, so the build and publish
+  # jobs stay off. Used to verify a fix (and the self-test job) on a branch.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to inspect (for example v1.11.0). Empty = report only the token state.'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
@@ -50,9 +70,14 @@ jobs:
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
-      tag: ${{ !github.event.pull_request && github.ref_name || '' }}
-      tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
-      publishing: ${{ !github.event.pull_request }}
+      # A release is only ever planned and published from a tag push. This used
+      # to be `!github.event.pull_request`, which made a workflow_dispatch count
+      # as publishing and run `dist host --steps=create --tag=<branch>`. PRs and
+      # dispatches now run `dist plan` only, so the publish jobs cannot run by
+      # accident on either event.
+      tag: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) && github.ref_name || '' }}
+      tag-flag: ${{ ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) && format('--tag={0}', github.ref_name)) || '' }}
+      publishing: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -70,14 +95,13 @@ jobs:
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/dist
-      # sure would be cool if github gave us proper conditionals...
-      # so here's a doubly-nested ternary-via-truthiness to try to provide the best possible
-      # functionality based on whether this is a pull_request, and whether it's from a fork.
-      # (PRs run on the *source* but secrets are usually on the *target* -- that's *good*
-      # but also really annoying to build CI around when it needs secrets to work right.)
+      # Build the release plan (or the host manifest) for this event. Only a tag
+      # push may plan a release; a pull_request and a workflow_dispatch both run
+      # `dist plan`, which writes nothing to GitHub. The nested ternary is
+      # cargo-dist's, kept because it also handles the fork case for PRs.
       - id: plan
         run: |
-          dist ${{ (!github.event.pull_request && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
+          dist ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
           echo "dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
@@ -263,7 +287,13 @@ jobs:
           # Overwrite the previous copy
           name: artifacts-dist-manifest
           path: dist-manifest.json
-      # Create a GitHub Release while uploading all files to it
+      # Create a GitHub Release while uploading all files to it.
+      #
+      # In cargo-dist 0.32's generated workflow the `dist host` step above only
+      # produces the announcement manifest; the real GitHub write has always
+      # happened here, through gh. That is why this block is the one that hit
+      # the 2026-11-16 403, and why it can be made idempotent and retried
+      # without touching cargo-dist's dist-manifest outputs.
       - name: "Download GitHub Artifacts"
         uses: actions/download-artifact@v8
         with:
@@ -274,42 +304,137 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
-      - name: Create GitHub Release
+      # Idempotent publish: create when the release is missing, upload
+      # --clobber when it already exists, bounded retry on a transient
+      # 5xx/403, and an actionable permission verdict on a persistent 403.
+      # --dry-run/skip logic lives in infra/scripts/publish-release.sh.
+      - name: "Create or update the GitHub Release"
+        id: publish
         env:
-          PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
-          ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
+          # Prefer an explicit PAT only when GITHUB_TOKEN cannot write releases
+          # in this repository; empty by default, so the Actions token is used.
+          # See the RELEASE_TOKEN note in docs/deploy-proxy.md.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: "${{ needs.plan.outputs.tag }}"
+          TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
+          PRERELEASE: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
           RELEASE_COMMIT: "${{ github.sha }}"
         run: |
+          set -euo pipefail
           # Write and read notes from a file to avoid quoting breaking things
-          echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
-
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          echo "$ANNOUNCEMENT_BODY" > "$RUNNER_TEMP/notes.txt"
+          bash infra/scripts/publish-release.sh \
+            --tag "$TAG" \
+            --target "$RELEASE_COMMIT" \
+            --title "$TITLE" \
+            --notes-file "$RUNNER_TEMP/notes.txt" \
+            $PRERELEASE \
+            --assets artifacts
 
       # cargo-dist's generated body repeats an Install/Download/checksum block
       # for every package. GitHub already lists the artifacts, so replace the
       # body with the changelog section for this version. When there is no
       # changelog section, leave cargo-dist's body in place.
       - name: "Trim release notes to the changelog"
+        # Skipped when the publish step accepted a complete release it could not
+        # rewrite (read-only token): there is nothing to edit, and attempting it
+        # would only turn a usable release red.
+        if: ${{ steps.publish.outputs.writable == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: "${{ needs.plan.outputs.tag }}"
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TAG#v}"
           bash infra/scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/release-notes.txt"
           if [ -s "$RUNNER_TEMP/release-notes.txt" ]; then
-            gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.txt"
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/release-notes.txt"
           else
             echo "no changelog section"
           fi
+
+  # The package bumps below only need a PUBLISHED release whose client assets
+  # are complete: they read the sha256 digests from the release with
+  # `gh release view`. Before this job they required needs.host.result ==
+  # 'success', so ANY later host failure skipped every bump - on 2026-11-16
+  # the failing publish step did exactly that even after the release existed,
+  # and the packaging manifests had to be bumped by hand (bdae448).
+  #
+  # This job checks the release itself: published, and carrying every asset the
+  # packaging steps read, so the bumps run whenever the release exists and
+  # never before its assets exist. `always()` is what lets a red host job not
+  # hide a complete release.
+  release-state:
+    needs:
+      - plan
+      - host
+    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.outputs.tag != '' }}
+    runs-on: "ubuntu-22.04"
+    permissions:
+      contents: read
+    outputs:
+      ready: ${{ steps.state.outputs.ready }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # The bumps read their sha256 values from the release, and the winget
+      # publisher needs the MSI. Those six assets are the gate: a release that
+      # is published and carries them can be packaged; anything less (a failed
+      # or partial publish) keeps the bumps skipped. This check reads only the
+      # release metadata, so it adds no artifact egress (the 2026-11-16 failure
+      # window also hit an artifact-egress 503).
+      - name: Check the published release has the assets the packaging steps read
+        id: state
+        shell: bash
+        env:
+          TAG: "${{ needs.plan.outputs.tag }}"
+        run: |
+          set -euo pipefail
+          skip() { printf '::warning::%s\n' "$1"; printf 'ready=false\n' >> "$GITHUB_OUTPUT"; exit 0; }
+          notice_skip() { printf '::notice::%s\n' "$1"; printf 'ready=false\n' >> "$GITHUB_OUTPUT"; exit 0; }
+          if [ -z "${TAG:-}" ]; then
+            notice_skip "no tag on this run; package bumps stay skipped"
+          fi
+          if ! gh release view "$TAG" --json isDraft,url,assets > state.json 2>state.err; then
+            notice_skip "$TAG has no readable release ($(head -1 state.err)); package bumps stay skipped"
+          fi
+          if [ "$(jq -r '.isDraft' state.json)" = "true" ]; then
+            skip "the release for $TAG is still a draft; package bumps stay skipped"
+          fi
+          jq -r '.assets[].name' state.json > got.txt
+          missing=''
+          for name in \
+            lightspeed-client-x86_64-pc-windows-msvc.zip \
+            lightspeed-client-x86_64-apple-darwin.tar.xz \
+            lightspeed-client-aarch64-apple-darwin.tar.xz \
+            lightspeed-client-x86_64-unknown-linux-gnu.tar.xz \
+            lightspeed-client-aarch64-unknown-linux-gnu.tar.xz \
+            lightspeed-gui-x86_64-pc-windows-msvc.msi
+          do
+            if ! grep -Fxq -- "$name" got.txt; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            printf '::warning::the release for %s is missing these assets; package bumps stay skipped:%s\n' "$TAG" "$missing"
+            printf 'ready=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '::notice::the release for %s is published with %s assets, including every asset the packaging steps read; package bumps may run\n' "$TAG" "$(jq '.assets | length' state.json)"
+          printf 'ready=true\n' >> "$GITHUB_OUTPUT"
+      - name: Report the release state
+        shell: bash
+        run: |
+          echo "release-state: ready=${{ steps.state.outputs.ready }} for tag ${{ needs.plan.outputs.tag }}"
 
   # Homebrew is tapped straight from this repo (no separate tap repository), so
   # each release must move Formula/lightspeed.rb to the new version and sums.
   # Committing it here keeps `brew install` current without a manual step.
   bump-homebrew:
     needs:
-      - plan
-      - host
-    if: ${{ always() && github.event_name == 'push' && needs.host.result == 'success' }}
+      - release-state
+    # Gated on the published release, not on host success (see release-state).
+    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
     # The three bump jobs all commit to master, so they must not run at the same
     # time. `needs` chains them instead of a concurrency group: the group kept
     # cancelling bump-chocolatey (a queued job in a group loses its slot when a
@@ -350,10 +475,9 @@ jobs:
   # moderator approves it - that is normal and not a failure.
   bump-chocolatey:
     needs:
-      - plan
-      - host
+      - release-state
       - bump-homebrew
-    if: ${{ always() && github.event_name == 'push' && needs.host.result == 'success' }}
+    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
     permissions:
       contents: write
     runs-on: "ubuntu-22.04"
@@ -407,10 +531,9 @@ jobs:
   # repo (see dist/scoop/README.md).
   bump-scoop:
     needs:
-      - plan
-      - host
+      - release-state
       - bump-chocolatey
-    if: ${{ always() && github.event_name == 'push' && needs.host.result == 'success' }}
+    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
     permissions:
       contents: write
     runs-on: "ubuntu-22.04"
@@ -475,11 +598,11 @@ jobs:
           curl -sS -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"
 
   # Manual addition (not cargo-dist generated): publish the Windows GUI MSI to
-  # the Windows Package Manager via winget-releaser on each successful tag-push
-  # release. It is gated on `host` having succeeded so the GitHub release (and
-  # its MSI asset) is already published when this runs; winget-releaser requires
-  # a published release, and reads assets + the release tag directly from GitHub
-  # (no checkout needed).
+  # the Windows Package Manager via winget-releaser on each tag-push release.
+  # It is gated on `release-state` (the release exists with every built asset,
+  # including the MSI) instead of on host success, because on 1.11.0 the host
+  # job was red at the publish step while the release existed and this publisher
+  # was skipped. winget-releaser reads assets + the tag directly from GitHub.
   #
   # No-op when unconfigured: secrets cannot be read inside an `if:`, so
   # WINGET_TOKEN is mirrored into a job-level env var and the step is gated on
@@ -489,11 +612,12 @@ jobs:
   # step is skipped and this job exits 0.
   winget-releaser:
     needs:
-      - plan
-      - host
-    # Same gating as `announce`: only for a successful tag-push release, while
-    # still resolving to a clean skip on pull_request runs.
-    if: ${{ always() && needs.host.result == 'success' }}
+      - release-state
+    # Gated on the published release rather than on host success: on 1.11.0 the
+    # host job was red at the publish step while the release existed, and this
+    # publisher must still run (it is a clean no-op without WINGET_TOKEN and
+    # while the package is not bootstrapped).
+    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
     runs-on: "ubuntu-22.04"
     # The package has never been bootstrapped in microsoft/winget-pkgs, and
     # winget-releaser cannot create the first version. A pre-check below skips
@@ -532,10 +656,12 @@ jobs:
   # feed was never pushed. This turns that silent drift into a red release.
   verify-bumps:
     needs:
+      - release-state
       - bump-homebrew
       - bump-chocolatey
       - bump-scoop
-    if: ${{ always() && github.event_name == 'push' }}
+    # Only meaningful once the release (and therefore the bumps) could run.
+    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -566,3 +692,62 @@ jobs:
             exit 1
           fi
           echo "all package manifests are at $VERSION"
+
+  # The publish path only runs on a tag push, so nothing would exercise it on a
+  # PR. This job runs its hermetic self-test on every event - including
+  # pull_request - with gh stubbed out: no token, no network, no release. It is
+  # the PR-runnable verification that the idempotent create / --clobber upload /
+  # bounded retry / permission verdict logic is not broken by a workflow change.
+  release-publish-self-test:
+    name: Release publish self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Release publish self-test
+        run: bash infra/scripts/test_release_publish.sh
+
+  # Read-only probe for a workflow_dispatch. It cannot publish: `plan` runs
+  # `dist plan` only on a dispatch, `publishing` is false, and the build/host
+  # jobs are skipped. It reports the token/repository state and what the publish
+  # step would do for the `tag` input, without running a mutating gh command -
+  # the safe way to check a fix (and to run the self-test) on a branch.
+  release-probe:
+    name: Release publish probe (read-only)
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROBE_TAG: "${{ github.event.inputs.tag }}"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Report the token and repository state
+        run: |
+          set -uo pipefail
+          echo "## Release publish probe"
+          echo ""
+          echo "- actor: ${GITHUB_ACTOR}"
+          echo "- repository: ${GITHUB_REPOSITORY}"
+          echo "- ref: ${GITHUB_REF}"
+          echo "- this job's token: contents: read; the publish job asks for contents: write"
+          echo "- repository workflow-permission default: $(gh api "/repos/${GITHUB_REPOSITORY}/actions/permissions/workflow" --jq '.default_workflow_permissions' 2>/dev/null || echo 'not readable with this token')"
+          echo "- token repository permissions: $(gh api "/repos/${GITHUB_REPOSITORY}" --jq '.permissions' 2>/dev/null | tr -d '\n' || echo 'not readable with this token')"
+          echo ""
+          echo "This probe never creates, edits, or uploads a release."
+      - name: Show what the publish step would do
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ -z "${PROBE_TAG:-}" ]; then
+            echo "::notice::no tag input; the publish dry run was skipped"
+            exit 0
+          fi
+          echo "### Dry run for ${PROBE_TAG}"
+          bash infra/scripts/publish-release.sh --dry-run --tag "$PROBE_TAG"
