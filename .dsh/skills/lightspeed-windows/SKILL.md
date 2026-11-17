@@ -78,15 +78,36 @@ it builds.
 - Launch a GUI build with `Start-Process` and keep the handle; do not leave
   console windows behind.
 
-## Sandbox quirk (2026-11-16, danger-full-access policy)
+## Sandbox quirk: workspace binaries run at Low integrity (diagnosed 2026-11-17)
 
 A test binary that lives under the workspace (`target\...`) can be denied when it
-creates files outside it: `cargo test` panicked with `Access is denied` on
-`create_dir_all(%TEMP%\...)`, while the **same binary copied to `%TEMP%`
-succeeded**. This is a host sandbox interaction, not a code failure. Workarounds
-that stay Windows-native: run the suite from CI, or build with
-`$env:CARGO_TARGET_DIR` outside the workspace so the test binaries are too.
-Verify a suspected failure this way before blaming the code.
+creates files outside it: `cargo test` panics with `Access is denied` on
+`%TEMP%\...` while the **same binary copied to `%TEMP%` succeeds**.
+
+Diagnosed cause: the workspace tree is **Low-integrity labelled**, so an exe
+built into `target` starts at Low Integrity (Mandatory Integrity Control) and
+cannot write to a Medium-integrity location such as `%TEMP%`, `%APPDATA%` or
+`Documents`. The same exe copied to `%TEMP%` starts at Medium and can. Proof:
+`whoami /groups` printed by the binary shows `Mandatory Label\Low Mandatory
+Level` from `target\...` and `Medium Mandatory Level` from the `%TEMP%` copy;
+.exe files in `C:\Windows\System32` (`cmd.exe`, `powershell.exe`) run Medium, so
+their writes succeed - that asymmetry is the tell.
+
+**Verified workaround (keeps tests in the workspace):** point the child temp dir
+inside the workspace before the test run, so the Low process writes to Low:
+
+```powershell
+New-Item -ItemType Directory -Force target\test-temp | Out-Null
+$env:TEMP = (Join-Path (Get-Location) 'target\test-temp')
+$env:TMP  = $env:TEMP
+cargo test --workspace --all --exclude lightspeed-gui
+```
+
+With that, the 2026-11-17 gate was **1,738 workspace tests / 0 failed / 7 ignored
+and 181 GUI / 0 / 1** on this host. Without it, every test that calls
+`std::env::temp_dir()` fails with os error 5 - an environment failure, not a
+code failure. Building with `CARGO_TARGET_DIR` outside the workspace is the
+other workaround. Do not "fix" the tests for this.
 
 ## Evidence
 
