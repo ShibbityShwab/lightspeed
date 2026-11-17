@@ -65,9 +65,9 @@ process's UDP traffic, not the TCP game connection.
 
 | Game | Issue / discussion | State | Missing |
 |---|---|---|---|
-| Aion 2 | #148, discussion #149 | blocked | remote gameplay UDP endpoint measured in the world; the posted evidence is a loopback `127.0.0.1:37300` row and a TCP listing |
+| Aion 2 | #148, discussion #149 | blocked (TCP gameplay) | the reporter's 2026-10/11 screenshots show the world connection is **TCP** (`ESTABLISHED` to `193.202.112.233:13328` plus TCP 443) and the only UDP socket is loopback `127.0.0.1:37300`, so there is no remote UDP path to profile; tracked by the TCP work in #176 |
 | Black Desert Online | #153 | blocked | measured remote gameplay UDP port range; the form's range arrived as region names (`Nz` to `LAX`), and whether `BlackDesert64.exe` or a launcher owns the gameplay sockets is unconfirmed |
-| Delta Force | #168, discussion #63 | blocked | measured gameplay endpoint from the app trace (`Locked game server: <ip>:<port>`); if gameplay is TCP, #176 is the tracker |
+| Delta Force | #168, discussion #63 | blocked | measured gameplay endpoint from the app trace (`Locked game server: <ip>:<port>`); the 2026-11-14 screenshot is the in-game region selector (latencies), not an endpoint; if gameplay turns out UDP-less, #176 is the tracker |
 | EA Sports FC 27 | #166 | near-ready | confirmation that `21006-21039` is gameplay (not EA app control traffic); matchmade servers likely (mark dynamic) |
 | Battlefield 6 | discussion #172, #63 | under evaluation | measured gameplay UDP port range and matchmade-vs-fixed servers |
 | Warface | discussion #63 | under evaluation | measured gameplay UDP port range and matchmade-vs-fixed servers |
