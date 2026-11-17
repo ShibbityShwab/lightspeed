@@ -57,6 +57,28 @@ The binding constraint is the owner's spend, and it is still $0.00.
   real user IP.
 - The protocol is documented and open for inspection.
 
+## [COMMS_STUB] — Announcements And User Communication
+
+Users learn about requirements and breaking changes from **GitHub Discussions →
+Announcements**. That is the canonical public channel for anything that changes
+what a user must do (minimum client version, relay requirement, outage,
+security fix, publishing-channel change).
+
+- Every release that changes client/relay compatibility or a user-visible
+  requirement gets an Announcements discussion, published with the release (or
+  before it when the requirement is forward-looking).
+- The announcement names: affected versions, what the user must do, where to
+  update, and any rollback path; it links to the release notes.
+- Issue and discussion replies link to the announcement instead of re-explaining
+  the same thing in every thread.
+- `CHANGELOG.md` remains the technical record; the announcement is the
+  user-facing notice.
+- Announcements are public posts: routine release/requirement notices are
+  covered by the owner's standing grant; anything beyond shipped state (policy,
+  pricing, deprecation timelines) needs an explicit owner decision first.
+- Do not assume a private channel exists (no Discord webhook, no email list). If
+  the only durable channel is a public one, use it and say so.
+
 ---
 
 ## [QUALITY_STUB] — Tests, Lints, Docs
