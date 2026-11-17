@@ -48,8 +48,8 @@ contributor licence to leave sole authority with the owner.
   manifests keep the licence version they shipped under. The retired agent
   brand was also removed from the two historical WAT entries that carried it.
   No code changed.
-- **Verification.** Worktree `git grep -i "sisyphus|anthropic|claude"` and
-  `git grep "LightSpeed Contributors"` are empty; `cargo fmt --all --check`
+- **Verification.** Worktree greps for the removed identities and for the old
+  collective name are empty; `cargo fmt --all --check`
   clean; `cargo metadata --no-deps` parses; the 56 relative links in the
   changed docs resolve; `git diff --check` clean. Evidence:
   `wat/evidence/2026-11-17/ownership-scrub/` (gitignored).
