@@ -93,8 +93,9 @@ fn run() -> anyhow::Result<()> {
     // height is free to follow the content.
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([320.0, 760.0])
-        .with_min_inner_size([320.0, 420.0])
-        .with_max_inner_size([320.0, 1400.0])
+        // The same bounds the auto-size in `app.rs` clamps to, from one place.
+        .with_min_inner_size([320.0, app::MIN_WINDOW_HEIGHT])
+        .with_max_inner_size([320.0, app::MAX_WINDOW_HEIGHT])
         .with_resizable(true)
         .with_title("LightSpeed");
     // A failed icon decode must not abort startup.

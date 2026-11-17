@@ -5011,13 +5011,15 @@ impl<P: Platform> LightSpeedApp<P> {
 // ── eframe::App impl ─────────────────────────────────────────────────────────
 
 impl<P: Platform> eframe::App for LightSpeedApp<P> {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // The full window rect, read before any panel claims space, drives the
         // narrow (width) and short (height) breakpoints.
         let viewport = ui.available_rect_before_wrap();
         let narrow = viewport.width() < 380.0;
         let short = viewport.height() < 560.0;
+        // Where the window sits on its monitor, for the auto-size cap below.
+        let (monitor_height, window_top) = monitor_geometry(frame, &ctx);
 
         // One-time first-frame setup: platform-specific fonts and the
         // branded header mark texture.
@@ -5295,8 +5297,14 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 // what is drawn, so nothing is hidden and nothing is left empty.
                 // The 8 px deadband keeps a one-pixel text re-wrap from becoming a
                 // resize loop.
+                //
+                // The growth stops at the bottom of the screen. Past it, the pinned
+                // action bar and footer were drawn off-screen - in Manual mode, the
+                // tallest form, that hid the only button that applies the typed
+                // server. Capped, this region scrolls instead, as the shell intends.
                 let chrome = (viewport.height() - out.inner_rect.height()).max(0.0);
-                let needed = (chrome + out.content_size.y + 2.0).clamp(420.0, 1400.0);
+                let limit = window_height_limit(monitor_height, window_top);
+                let needed = (chrome + out.content_size.y + 2.0).clamp(MIN_WINDOW_HEIGHT, limit);
                 if (needed - viewport.height()).abs() > 8.0 {
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
                         320.0, needed,
@@ -5887,6 +5895,81 @@ pub enum CloseDecision {
     /// Quit was requested, or the window closed with no tray to recover from:
     /// tear the engine down and exit.
     Exit,
+}
+
+/// The shortest the status window gets. `main.rs` builds the window with it as
+/// the minimum, and the auto-size never goes below it.
+pub(crate) const MIN_WINDOW_HEIGHT: f32 = 420.0;
+
+/// The tallest the status window gets, even on a screen that could hold more.
+/// `main.rs` builds the window with it as the maximum.
+pub(crate) const MAX_WINDOW_HEIGHT: f32 = 1400.0;
+
+/// Points kept free below the window for a taskbar or dock. The monitor size is
+/// the whole screen, not the work area, so this is an allowance, not a reading.
+const SCREEN_BOTTOM_RESERVE: f32 = 72.0;
+
+/// Points assumed above the client area when the window position is unknown
+/// (Wayland, headless) or not on the reported monitor: a title bar on a window
+/// at the top.
+const TITLE_BAR_ALLOWANCE: f32 = 40.0;
+
+/// The current monitor's height and the client area's top edge measured from
+/// that monitor's top, both in points.
+///
+/// Read from winit, not from egui's `ViewportInfo`: its `inner_rect` is a
+/// desktop-wide coordinate divided by this window's scale factor, while
+/// `monitor_size` is local to one monitor, so on stacked or mixed-DPI monitors
+/// the two do not compare. winit reports the monitor's origin in the same
+/// physical pixels as the window, so the offset is taken in pixels and only
+/// then scaled (see [`monitor_local_top`]). With no winit window (headless) the
+/// egui monitor size is used; where winit cannot place the window (Wayland) the
+/// top is `None`. Either way [`window_height_limit`] then assumes the top.
+fn monitor_geometry(frame: &eframe::Frame, ctx: &egui::Context) -> (Option<f32>, Option<f32>) {
+    let pixels_per_point = ctx.pixels_per_point();
+    let Some((window, monitor)) = frame
+        .winit_window()
+        .and_then(|window| Some((window, window.current_monitor()?)))
+    else {
+        return (
+            ctx.input(|i| i.viewport().monitor_size.map(|size| size.y)),
+            None,
+        );
+    };
+    let height = monitor.size().height as f32 / pixels_per_point;
+    let top = window
+        .inner_position()
+        .ok()
+        .map(|inner| monitor_local_top(inner.y, monitor.position().y, pixels_per_point));
+    (Some(height), top)
+}
+
+/// The client area's top edge on its own monitor, in points. Both inputs are
+/// physical-pixel desktop coordinates, so they are subtracted before scaling:
+/// scaling a desktop coordinate first would fold other monitors, at their own
+/// scale, into this one's.
+fn monitor_local_top(window_top_px: i32, monitor_top_px: i32, pixels_per_point: f32) -> f32 {
+    (window_top_px - monitor_top_px) as f32 / pixels_per_point
+}
+
+/// The tallest the status window may auto-size to, in points.
+///
+/// `monitor_height` is the current monitor's full height and `window_top` the
+/// top of the window's client area measured from that monitor's top edge (see
+/// [`monitor_geometry`]). The window must end above the taskbar or dock, or the
+/// pinned action bar below the scroll region is drawn off-screen. A top outside
+/// `0..monitor_height` - a window straddling two monitors, its top on the other
+/// one - is ignored and the window is assumed to sit at the top of this one.
+/// Never below the window's minimum height; with no monitor reading, the fixed
+/// maximum.
+fn window_height_limit(monitor_height: Option<f32>, window_top: Option<f32>) -> f32 {
+    let Some(monitor_height) = monitor_height.filter(|h| *h > 0.0) else {
+        return MAX_WINDOW_HEIGHT;
+    };
+    let top = window_top
+        .filter(|top| (0.0..monitor_height).contains(top))
+        .unwrap_or(TITLE_BAR_ALLOWANCE);
+    (monitor_height - SCREEN_BOTTOM_RESERVE - top).clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT)
 }
 
 /// Whether discovery should start a latency race instead of connecting to the
@@ -7294,15 +7377,16 @@ mod tests {
     use super::{
         apply_discovery_result, apply_target_choice, close_decision, compare_to_direct,
         direct_claim_label, direct_us_for, draft_reasons, early_triangle_floor, fresh_direct_us,
-        game_editor_body, game_pick_rows, games, pair_relay_legs, picker_status, ping_for_server,
-        primary_action, process_picker, proxy_index_for, ranking_state_label,
+        game_editor_body, game_pick_rows, games, monitor_local_top, pair_relay_legs, picker_status,
+        ping_for_server, primary_action, process_picker, proxy_index_for, ranking_state_label,
         refreshed_server_ping, relay_cannot_beat_direct, relay_health_verdict, same_relay_endpoint,
         save_user_profiles, scored_for_relay, server_from_fields, server_leg_state,
         should_apply_race, should_race, switch_is_safe, target_for_pick, target_front_door,
-        target_summary, validate_draft, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
-        MeasuredServerLeg, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
-        RelayHealthVerdict, ServerLegState, ServerPing, ShadowWindowCounters, TargetRowAction,
-        PRIOR_UNCERTAINTY_US, SERVER_PING_FRESH_SECS,
+        target_summary, validate_draft, window_height_limit, CloseDecision, EditorActions,
+        GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState,
+        ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ServerPing,
+        ShadowWindowCounters, TargetRowAction, MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT,
+        PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE, SERVER_PING_FRESH_SECS, TITLE_BAR_ALLOWANCE,
     };
     use crate::config::ProxyEntry;
     use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -7487,6 +7571,78 @@ mod tests {
                 entry.key
             );
         }
+    }
+
+    #[test]
+    fn the_window_never_auto_sizes_past_the_bottom_of_the_screen() {
+        // 2560x1440 at 125%: 1152 pt tall. The Manual form needed more than
+        // that, and the old fixed 1400 pt cap put the action bar under the
+        // taskbar. The window must now end above the taskbar allowance.
+        let limit = window_height_limit(Some(1152.0), Some(31.0));
+        assert_eq!(limit, 1152.0 - SCREEN_BOTTOM_RESERVE - 31.0);
+        assert!(31.0 + limit <= 1152.0 - 48.0, "clears a 48 pt taskbar");
+
+        // A window placed lower on the screen gets less room.
+        assert!(window_height_limit(Some(1152.0), Some(300.0)) < limit);
+
+        // Position unknown (Wayland), or a window straddling two monitors with
+        // its top on the other one: assume a title bar at the top of this one.
+        let assumed = 1152.0 - SCREEN_BOTTOM_RESERVE - TITLE_BAR_ALLOWANCE;
+        assert_eq!(window_height_limit(Some(1152.0), None), assumed);
+        assert_eq!(window_height_limit(Some(1152.0), Some(-900.0)), assumed);
+        assert_eq!(window_height_limit(Some(1152.0), Some(1500.0)), assumed);
+    }
+
+    #[test]
+    fn a_window_on_a_stacked_mixed_dpi_monitor_is_measured_on_that_monitor() {
+        // A 1920x1080 primary at 100% on top, a 2560x1440 secondary at 125%
+        // below it: the secondary's origin is desktop y = 1080 px. The window's
+        // client area starts 50 px down the secondary.
+        let ppp = 1.25;
+        let monitor_height = 1440.0 / ppp; // 1152 pt
+        let top = monitor_local_top(1080 + 50, 1080, ppp);
+        assert_eq!(top, 40.0);
+        let limit = window_height_limit(Some(monitor_height), Some(top));
+        assert_eq!(limit, 1152.0 - SCREEN_BOTTOM_RESERVE - 40.0);
+
+        // Scaling the desktop coordinate first folds the primary's 1080 px in
+        // at the secondary's scale: 904 pt "down" a 1152 pt monitor, which would
+        // have pinned the window to its minimum for no reason.
+        let desktop_scaled = (1080.0 + 50.0) / ppp;
+        assert_eq!(
+            window_height_limit(Some(monitor_height), Some(desktop_scaled)),
+            MIN_WINDOW_HEIGHT
+        );
+
+        // The secondary above the primary instead (a negative origin): the
+        // same window 50 px down it measures the same.
+        assert_eq!(monitor_local_top(-1440 + 50, -1440, ppp), 40.0);
+
+        // Side by side with the secondary's top 300 px lower than the
+        // primary's: measured from the secondary's own top, not desktop 0.
+        assert_eq!(monitor_local_top(300 + 50, 300, ppp), 40.0);
+    }
+
+    #[test]
+    fn the_window_height_limit_keeps_the_fixed_bounds() {
+        // A tall monitor still stops at the fixed maximum.
+        assert_eq!(
+            window_height_limit(Some(2160.0), Some(31.0)),
+            MAX_WINDOW_HEIGHT
+        );
+        // No monitor reading: the fixed maximum, as before.
+        assert_eq!(window_height_limit(None, Some(31.0)), MAX_WINDOW_HEIGHT);
+        assert_eq!(window_height_limit(Some(0.0), None), MAX_WINDOW_HEIGHT);
+        // A tiny screen or a window parked near the bottom never shrinks the
+        // window below its minimum; the scroll region absorbs the rest.
+        assert_eq!(
+            window_height_limit(Some(480.0), Some(31.0)),
+            MIN_WINDOW_HEIGHT
+        );
+        assert_eq!(
+            window_height_limit(Some(1152.0), Some(1000.0)),
+            MIN_WINDOW_HEIGHT
+        );
     }
 
     #[test]
