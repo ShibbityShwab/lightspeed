@@ -131,11 +131,13 @@ if [ "$method" = "PUT" ]; then
   # attempted, so each PUT must leave its fields behind.
   content=""
   sha=""
+  message=""
   for f in "${fields[@]}"; do
     printf '%s\n' "$f" >> "$STATE/put.log"
     case "$f" in
       content=*) content="${f#content=}" ;;
       sha=*) sha="${f#sha=}" ;;
+      message=*) message="${f#message=}" ;;
     esac
   done
   if [ -z "$content" ]; then
@@ -165,6 +167,7 @@ if [ "$method" = "PUT" ]; then
   newsha="stub-blob-${n}"
   printf '%s' "$content" > "$STATE/submitted-content.b64"
   printf '%s' "$sha" > "$STATE/submitted-sha.txt"
+  printf '%s' "$message" > "$STATE/submitted-message.txt"
   write_contents "$content" "$newsha"
   jq -n --arg sha "$newsha" '{sha:$sha,commit:{sha:("stub-commit-" + $sha)}}'
   exit 0
