@@ -62,35 +62,69 @@ LightSpeed includes built-in profiles for 27 popular multiplayer games. Each pro
 > with a packet capture. WARDOGS is Windows-only for now: its kernel-level
 > Elytra anti-cheat blocks Proton on Linux, so capture must run on Windows.
 
+> **Tibia note:** the shipped profile captures UDP `7171-7172`. Tibia's login
+> and world connection are TCP (reported in
+> [#176](https://github.com/ShibbityShwab/lightspeed/issues/176)), so the profile
+> cannot accelerate Tibia's gameplay today, and **Target a process** relays UDP
+> only. The TCP game status is described below.
+
+> **Minecraft Java Edition note:** this is the built-in TCP profile carried by
+> the tunnel's TCP path (TCP 25565). The design/implementation record is
+> [`docs/tcp-tunnel-design.md`](tcp-tunnel-design.md). TCP-primary auto-detection
+> and user-profile TCP ports are not exposed yet - see the TCP status below and
+> [#176](https://github.com/ShibbityShwab/lightspeed/issues/176).
+
 ---
 
-## TCP-only games (not supported)
+## TCP game traffic (partial support)
 
-LightSpeed accelerates **UDP game traffic only**. Its interceptor and tunnel operate on UDP, so a title whose gameplay runs entirely over TCP cannot be accelerated yet.
+The tunnel carries TCP game streams: protocol v5 adds a `TcpExtHeader`, the
+client terminates TCP locally and the relay splices a real connection to the game
+server, so the server sees one ordinary connection. The built-in **Minecraft
+Java Edition** profile (TCP 25565) is the reference profile for this path; the
+design/implementation record is
+[`docs/tcp-tunnel-design.md`](tcp-tunnel-design.md).
 
-A known example is **Angels Online Global**, which uses TCP ports 38201, 38304, 38501, and 38502 with the process `angel.dat`. Because that traffic is TCP, LightSpeed cannot route it. This is a protocol limitation, not a per-game setting.
+It is not a general "any TCP game" capability yet. The request/profile flow is
+built around UDP gameplay, user/custom profiles reject `tcp_ports`, and
+TCP-primary auto-detection is not exposed in the GUI, so a new TCP-only title
+cannot be added through the game-request procedure. That work is tracked in
+[#176](https://github.com/ShibbityShwab/lightspeed/issues/176); no timeline is
+promised.
 
-If a game uses UDP for gameplay and TCP only for login or patching, LightSpeed can still accelerate the UDP gameplay traffic. If the gameplay itself is TCP-only, it is out of scope for now.
+The shipped **Tibia** profile captures UDP `7171-7172` (1.10.0, from issue #171).
+Tibia's game connection is TCP, so the profile cannot accelerate Tibia's gameplay
+today, and **Target a process** relays UDP traffic only.
+
+A known older example is **Angels Online Global**, which uses TCP ports 38201,
+38304, 38501, and 38502 with the process `angel.dat`; there is no UDP gameplay
+to carry.
+
+If a game uses UDP for gameplay and TCP only for login or patching, LightSpeed
+can still accelerate the UDP gameplay traffic.
 
 ---
 
 ## Community requests under evaluation
 
-The following titles have been requested by the community and are under evaluation:
+The following titles have been requested by the community. The per-request
+status and the exact missing fact are maintained in
+[`docs/game-requests.md`](game-requests.md); nothing below is promised.
 
-- Aion 2
-- Battlefield 6
-- Black Desert Online
-- Delta Force
-- EA Sports FC 27
-- Warface
+- **Aion 2** - blocked: the measured remote gameplay UDP endpoint (#148).
+- **Black Desert Online** - blocked: the measured gameplay UDP port range (#153).
+- **Delta Force** - blocked: the measured gameplay endpoint (#168); if the
+  gameplay is TCP, #176 is the tracker.
+- **EA Sports FC 27** - near-ready: two confirmations are open on #166.
+- **Battlefield 6**, **Warface** - under evaluation: measured gameplay UDP port
+  range and matchmade-vs-fixed servers (discussion #63).
+- **Deadlock** - blocked by Steam Datagram Relay: if its gameplay runs over SDR,
+  a relay profile cannot improve it, because the game already routes through
+  Valve's own network (discussion #142). The request stays tracked, not promised.
+- **Tibia** - the shipped profile is UDP-only while Tibia is TCP; a TCP gameplay
+  path is a feature request under #176.
 
-Separately, **Deadlock** is requested but is on Valve's Steam Datagram Relay:
-if its gameplay runs over SDR, a relay profile cannot improve it, because the
-game already routes through Valve's own network. The request stays tracked, not
-promised.
-
-These are requests only. No support is promised, and no port ranges or anti-cheat compatibility claims are made for them at this time. If and when a profile ships, it will appear in the game list above. The intake checklist and the current per-game status are in [`docs/game-requests.md`](game-requests.md).
+These are requests only. No support is promised, and no port ranges or anti-cheat compatibility claims are made for them at this time. If and when a profile ships, it will appear in the game list above.
 
 ---
 
