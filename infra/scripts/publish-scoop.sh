@@ -109,15 +109,18 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-command -v gh >/dev/null 2>&1 || fail "gh is not installed"
-command -v jq >/dev/null 2>&1 || fail "jq is not installed"
-[ -n "${GH_TOKEN:-}" ] || fail "GH_TOKEN is not set; it needs \"Contents: write\" on ${BUCKET_REPO} (the release workflow passes SCOOP_TOKEN). Never commit a token"
+# Argument validation comes before the environment checks: a malformed --bucket-repo
+# is a usage error (exit 2) whether or not a token happens to be set.
 [ -n "$BUCKET_REPO" ] || die "--bucket-repo must not be empty"
 [ -n "$BUCKET_PATH" ] || die "--bucket-path must not be empty"
 case "$BUCKET_REPO" in
   */*) ;;
   *) die "--bucket-repo must look like OWNER/REPO (got: $BUCKET_REPO)" ;;
 esac
+
+command -v gh >/dev/null 2>&1 || fail "gh is not installed"
+command -v jq >/dev/null 2>&1 || fail "jq is not installed"
+[ -n "${GH_TOKEN:-}" ] || fail "GH_TOKEN is not set; it needs \"Contents: write\" on ${BUCKET_REPO} (the release workflow passes SCOOP_TOKEN). Never commit a token"
 [ -f "$MANIFEST" ] || fail "manifest not found: $MANIFEST"
 jq -e . "$MANIFEST" >/dev/null 2>&1 || fail "manifest is not valid JSON: $MANIFEST"
 
