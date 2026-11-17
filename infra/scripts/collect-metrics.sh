@@ -26,11 +26,14 @@
 # Signed sums: `saved_ms_sum` and `saved_app_ms_sum` accumulate a SIGNED
 # saving, so a decrease is normal client data (clients reported the relay
 # slower than direct), not a relay restart. They are differenced as
-# current - previous even when negative; only a detected restart (one of the
-# RESTART_PROBES counters went backwards) books the current value. Booking a
-# signed decrease as a restart inflates the window: on 2026-11-16 it booked
-# -104.2 and -121.0 where the true increments were -124.5 and -16.8, a ~60%
-# inflation that fired a false `saved_regression` alert (relay-fra task-3).
+# current - previous even when negative; only a detected restart books the
+# current value. A restart has two independent signals: one of the
+# RESTART_PROBES counters went backwards (a new process is accumulating), or
+# the per-relay `version` label changed (the updater only reports a new build
+# from the new process). Booking a signed decrease as a restart inflates the
+# window: on 2026-11-16 it booked -104.2 and -121.0 where the true increments
+# were -124.5 and -16.8, a ~60% inflation that fired a false
+# `saved_regression` alert (relay-fra task-3).
 #
 # A relay absent from the current scrape is carried forward from the prior
 # snapshot (same lifetime, zero delta, reachable=false). Per-relay
@@ -115,10 +118,14 @@ SIGNED_COUNTERS='["saved_ms_sum","saved_app_ms_sum"]'
 # Monotone counters used to detect a relay restart for the signed sums above.
 # `packets_relayed`, `bytes_relayed` and `sessions_created` only ever grow
 # within one relay process, so any decrease means a new process is
-# accumulating and the signed cumulative restarted at zero. Residual
-# limitation (documented, not guessed at): if the new process already exceeds
-# every old counter by scrape time the restart is invisible here and its
-# signed growth is indistinguishable from a continuing process.
+# accumulating and the signed cumulative restarted at zero. A per-relay
+# `version` change is the second, independent signal: the relay serves a new
+# build only after restarting, which catches a deploy even when a young
+# process's counters have already been overtaken by scrape time (the
+# 2026-11-14 alert window bridged a deploy burst: 12 Deploy Proxy runs in 3 h).
+# Residual limitation (documented, not guessed at): a same-version crash
+# restart whose new counters already exceed the old ones by scrape time is
+# still invisible here; the relay exports no uptime field to distinguish it.
 RESTART_PROBES='["packets_relayed","bytes_relayed","sessions_created"]'
 
 # ── Always write valid JSON; never fail the caller ───────────
@@ -341,14 +348,22 @@ def prev_life($pr; $k):
     | (.cumulative // {}) as $cc
     | (($prevrelay[$id]) // null) as $pr
     | (($pr.cumulative) // {}) as $pc
-    # Restart signal for the signed sums: a new relay (no previous row) or a
-    # monotone probe counter that went backwards. A signed-sum decrease alone
-    # is NOT a restart (that was the 2026-11-16 mis-booking).
+    # Restart signal for the signed sums: a new relay (no previous row), a
+    # monotone probe counter that went backwards, or a `version` change (the
+    # updater only reports a new build from the new process). A signed-sum
+    # decrease alone is NOT a restart (that was the 2026-11-16 mis-booking).
+    # The version signal closes the deploy-burst blind spot the rollback probe
+    # cannot see: a young process replaced by one that already exceeds its
+    # counters by scrape time shows no backwards probe, but its version moved.
+    | (($pr.version // "") | tostring) as $pvver
+    | ((.version // "") | tostring) as $cvver
+    | ($pvver != "" and $cvver != "" and $cvver != $pvver) as $vchange
     | (if $pr == null then true
-       else ([ $restart_probes[] as $rp
-               | ($cc[$rp] // 0 | n) as $rcv
-               | (if ($pc | type) == "object" then ($pc[$rp] // 0 | n) else 0 end) as $rpv
-               | select($rcv < $rpv) ] | length) > 0
+       else (([ $restart_probes[] as $rp
+                | ($cc[$rp] // 0 | n) as $rcv
+                | (if ($pc | type) == "object" then ($pc[$rp] // 0 | n) else 0 end) as $rpv
+                | select($rcv < $rpv) ] | length) > 0)
+            or $vchange
        end) as $restart
     | (reduce $counters[] as $k (
          {cum:{}, delta:{}, lifetime:{}, reset_metrics:[]};
@@ -357,8 +372,9 @@ def prev_life($pr; $k):
          | (if $reach then $cv else $pv end) as $effc
          | delta_of($cv; $pv; $reach; is_signed($k); $restart) as $d
          # reset_metrics keeps its "a counter went backwards" meaning: signed
-         # sums are excluded because their decreases are data (only a real
-         # restart, visible on the monotone counters, marks the relay reset).
+         # sums are excluded because their decreases are data (a real restart
+         # is flagged by a probe rollback or by `reset` below; neither is a
+         # signed-sum decrease).
          | (if $reach and (is_signed($k) | not) and ($pr == null or $cv < $pv)
             then true else false end) as $rst
          | .cum[$k] = $effc
@@ -380,7 +396,9 @@ def prev_life($pr; $k):
         delta: $r.delta,
         lifetime: $r.lifetime,
         reset_metrics: $r.reset_metrics,
-        reset: (($r.reset_metrics | length) > 0)
+        # `reset` = this row is a NEW relay process: a counter rolled back OR
+        # the version changed (a deploy the rollback probe can miss).
+        reset: ((($r.reset_metrics | length) > 0) or $vchange)
       }
   ] as $rows
 | [ $staleids[]

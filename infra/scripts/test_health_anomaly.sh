@@ -14,6 +14,11 @@
 #   (d) saved_regression            ping-saved drops vs own baseline, in BOTH
 #                                   the sparse ICMP and dense app-level metrics
 #   (d) negative_saving_spike       negative saving share spikes
+#   (d contract)                    the negative-count chain is pinned: the
+#                                   collector reads the family the relay emits
+#                                   and the detector reads the field the
+#                                   collector writes, so a metric-name typo
+#                                   cannot silently starve the spike detector
 #   (e) relay_missing_from_registry
 #   (e) relay_health_failed
 #   (i) load_skew                  one relay dominates fleet traffic
@@ -80,6 +85,26 @@ assert_not_out() {
 	if printf '%s' "$OUT" | grep -qF -- "$1"; then
 		printf '  FAIL: %s (unexpected: %s)\n        output: %s\n' \
 			"$2" "$1" "$(printf '%s' "$OUT" | head -8 | tr '\n' '|')" >&2
+		FAILURES=$((FAILURES + 1))
+	else
+		PASS=$((PASS + 1))
+	fi
+}
+
+assert_in_file() {
+	# assert_in_file <path> <fixed-string> <message>
+	if grep -qF -- "$2" "$1" 2>/dev/null; then
+		PASS=$((PASS + 1))
+	else
+		printf '  FAIL: %s (missing: %s in %s)\n' "$3" "$2" "$1" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
+}
+
+assert_not_in_file() {
+	# assert_not_in_file <path> <fixed-string> <message>
+	if grep -qF -- "$2" "$1" 2>/dev/null; then
+		printf '  FAIL: %s (unexpected: %s in %s)\n' "$3" "$2" "$1" >&2
 		FAILURES=$((FAILURES + 1))
 	else
 		PASS=$((PASS + 1))
@@ -590,6 +615,32 @@ run_anomaly "$H_NEG" "$REG4"
 assert_rc 1 "(d) negative share run exits 1"
 assert_out "negative_saving_spike" "(d) fires negative-saving spike"
 assert_out "relay-a" "(d) negative share names the relay"
+
+# ── (d contract) negative_saving_spike input chain ───────────
+# The detector reads `lifetime.saved_app_ms_negative_count` from the history
+# the collector writes. That field is only ever non-zero if the collector
+# matches the family the relay actually emits:
+#   lightspeed_telemetry_saved_app_negative_count   (no `ms`)
+# The pre-fix collector read `..._saved_app_ms_negative_count`, which no relay
+# emits, so $wn stayed 0 and the spike could never fire (relay-fra 2026-11-16;
+# audit F6). test_collect_metrics.sh pins the fixtures; this pins the
+# producer->detector chain in the detector's own suite, so a metric-name typo
+# fails here too instead of only on the next live window.
+COLLECT_SCRIPT="$SCRIPT_DIR/collect-metrics.sh"
+assert_in_file "$COLLECT_SCRIPT" 'lightspeed_telemetry_saved_app_negative_count' \
+	"(d contract) the collector reads the emitted negative-count family"
+assert_not_in_file "$COLLECT_SCRIPT" 'lightspeed_telemetry_saved_app_ms_negative_count' \
+	"(d contract) the collector does not read the dead family name"
+assert_in_file "$ANOMALY" 'saved_app_ms_negative_count' \
+	"(d contract) the detector reads the collector's negative-count field"
+# ... and the field must stay in the lifetime-accumulated counter list, or the
+# history value the detector differences never advances.
+if grep -F 'COUNTERS=' "$COLLECT_SCRIPT" 2>/dev/null | grep -qF '"saved_app_ms_negative_count"'; then
+	PASS=$((PASS + 1))
+else
+	printf '  FAIL: (d contract) the collector no longer lifetime-accumulates saved_app_ms_negative_count\n' >&2
+	FAILURES=$((FAILURES + 1))
+fi
 
 # ══════════════════════════════════════════════════════════════
 # (e) registry and health

@@ -27,7 +27,8 @@
 #   (s) signed sums (`saved_ms_sum`, `saved_app_ms_sum`) are not monotone
 #       counters: a decrease is a negative-saving window (book the negative
 #       difference, no reset); only a detected relay restart books the
-#       current value
+#       current value, where a restart is a probe-counter rollback OR a
+#       per-relay `version` change (a deploy the rollback probe can miss)
 #   (t) metric-name consistency: the collector and network-stats read the
 #       `lightspeed_telemetry_saved_app_negative_count` family the relay
 #       actually emits, not the dead `..._saved_app_ms_negative_count` name,
@@ -108,6 +109,14 @@ lightspeed_drops_session_setup_total{node_id="relay-a"} 0
 lightspeed_drops_relay_send_errors_total{node_id="relay-a"} 0
 lightspeed_build_info{node_id="relay-a",version="1.3.2"} 1
 METRICS
+}
+
+# set_health_version <dir> <relay-name> <version>
+# Rewrites only the health fixture's version label, simulating an in-place
+# update: the relay reports a new build only after the new process is serving.
+set_health_version() {
+	local f="$1/relay-$2.health.json"
+	jq --arg v "$3" '.version = $v' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
 }
 
 # append_geo <dir> <prometheus-line>...
@@ -651,6 +660,29 @@ assert_rc0 $? "(s) restart run exits 0"
 assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].reset == true' "(s) a monotone decrease still marks the relay reset"
 assert_jq "$SGN_H" '.snapshots[-1].interval.saved_ms_sum == 60' "(s) restart books the new process's signed cumulative (60)"
 assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].lifetime.saved_ms_sum == 360' "(s) lifetime survives the restart (300 + 60)"
+
+# A deploy restart can be invisible to the rollback probes: during a deploy
+# burst a young process is replaced by one that has already overtaken its
+# counters by scrape time. The version label still moved, and the new
+# process's signed cumulative restarted at zero - booking the negative
+# difference would invent data that never existed. 2026-11-14 had 12 Deploy
+# Proxy runs (fleet restarts) in 3 h while relay-fra's alert baseline bridged
+# one of them.
+write_fixture "$TMP" 200 6 1800 5 4 2 3 700 15 0 30
+set_health_version "$TMP" a "1.3.3"
+append_metrics_file "$TMP" a \
+	'lightspeed_telemetry_saved_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 40.0' \
+	'lightspeed_telemetry_saved_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 5' \
+	'lightspeed_telemetry_saved_app_ms_sum{region="us-west",node_id="relay-a",game="cs2",country="DE"} 50.0' \
+	'lightspeed_telemetry_saved_app_ms_count{region="us-west",node_id="relay-a",game="cs2",country="DE"} 10'
+run_collect "$SGN_H" "$REG_A"
+assert_rc0 $? "(s) version-change run exits 0"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].version == "1.3.3"' "(s) the new build version is recorded"
+assert_jq "$SGN_H" '(.snapshots[-1].per_relay["relay-a"].reset_metrics | length) == 0' "(s) a version-only restart has no counter rollback"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].reset == true' "(s) a version change marks the relay reset"
+assert_jq "$SGN_H" '.snapshots[-1].interval.saved_ms_sum == 40' "(s) a version-change restart books the new process signed cumulative (40), not the -20 difference"
+assert_jq "$SGN_H" '.snapshots[-1].interval.saved_app_ms_sum == 50' "(s) the app-level signed sum starts the new lifetime (50)"
+assert_jq "$SGN_H" '.snapshots[-1].per_relay["relay-a"].lifetime.saved_ms_sum == 400' "(s) lifetime survives the version-change restart (360 + 40)"
 
 # ── (t) metric-name consistency: the relay's real family name ──
 # The relay emits `lightspeed_telemetry_saved_app_negative_count` (no `ms`);
