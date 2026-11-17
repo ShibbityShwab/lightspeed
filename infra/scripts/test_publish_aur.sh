@@ -114,6 +114,12 @@ run_publish() {
 	shift 2
 	OUT="$(bash "$PUBLISH" --source-dir "$src" --repo-url "$url" "$@" 2>&1)"
 	RC=$?
+	# A failing path is usually asserted by message; print the publisher's own
+	# output for the first failing scenario so a CI-only environment difference
+	# (git version, file:// protocol policy) is diagnosable from the job log.
+	if [ "$RC" -ne 0 ] && [ -z "${AUR_TEST_QUIET:-}" ]; then
+		printf '  --- publisher output (rc=%s) ---\n%s\n' "$RC" "$OUT" >&2
+	fi
 }
 
 bare_head() {
