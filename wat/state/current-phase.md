@@ -41,7 +41,7 @@ contributor licence to leave sole authority with the owner.
   rights are reserved, and third-party terms are separated. New `CLA.md`
   (copyright assignment, moral-rights waiver, patents, no-AI-authorship,
   electronic acceptance) and `docs/licensing.md`; `CONTRIBUTING.md`, the PR
-  template, `README.md`, `docs/faq.md` and the `AGENTS.md` guardrails now
+  template, `README.md` and the `AGENTS.md` guardrails now
   require the CLA. `Cargo.toml` (authors, `LicenseRef-LightSpeed-NC-1.1`),
   `deny.toml`, `NOTICE`, WiX `Manufacturer`, AUR, Scoop, Homebrew, winget
   copyright and the site footer name the owner only; historical release
@@ -63,7 +63,10 @@ contributor licence to leave sole authority with the owner.
   `@CiroBurro` (one commit). (4) CLA acceptance is enforced by the PR template
   and review, not a bot; a CLA-assistant is an optional follow-up. (5) Next
   release package manifests should carry `LicenseRef-LightSpeed-NC-1.1` and
-  the sole-owner copyright.
+  the sole-owner copyright. (6) The licensing answer in `docs/faq.md` was left
+  unchanged because changing English copy forces the Localization workflow to
+  re-translate eight localized docs; run that workflow if the FAQ should link
+  the CLA (README, CONTRIBUTING and `docs/licensing.md` already do).
 
 ### 2026-11-17 (later) - Backlog follow-ups: publishing channels wired, registry signing fixed, images reviewed, WinDivert debt cleared
 

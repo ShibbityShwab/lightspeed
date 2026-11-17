@@ -35,7 +35,7 @@
     "blk.e26ed5b752": "{0} A telemetria agregada anônima está {1}. Ela envia métricas de latência agregadas (percentis, jitter, contadores FEC e a diferença entre direto e retransmitido) por HTTP sem criptografia para o endpoint {2} não autenticado do relé. Uma célula fica suprimida até ter pelo menos 3 relatos. Desligue-a a qualquer momento com {3}, {4} em {5}, ou a caixa de seleção da interface. Leia {6} e {7}.",
     "blk.ff9777106d": "O túnel entre cliente e proxy usa UDP por padrão, mas muda para TCP ({0}) em redes que bloqueiam UDP: hotéis, cafeterias, ISPs restritivos. A mesma otimização de baixa sobrecarga, com compatibilidade maior.",
     "idx.00413945b1": "Suporte: Sem contas",
-    "idx.011ac4eb8d": "(c) 2026 Contribuidores do LightSpeed. Grátis para uso pessoal. Feito com Rust.",
+    "idx.38c20097ea": "(c) 2025-2026 ShibbityShwab. Grátis para uso pessoal. Feito com Rust.",
     "idx.01be38a029": "Cliente + interceptor",
     "idx.0227459811": "O tráfego do seu jogo é redirecionado de forma transparente, sem modificar pacotes, pensado para compatibilidade com anti-cheat. Só pacotes mais rápidos.",
     "idx.0369e9e4b5": "Mac Intel lightspeed-client-x86_64-apple-darwin.tar.xz",
