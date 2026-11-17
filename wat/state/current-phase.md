@@ -1,6 +1,6 @@
 # Current Phase
 
-**Updated:** 2026-11-17
+**Updated:** 2026-11-18
 **History:** older entries live in `wat/state/phases/<YYYY-MM>.md`; this file keeps the live state and the newest entries only.
 
 ## Current state
@@ -11,6 +11,16 @@
 **Status:** **1.11.0 is the latest release (2026-11-16)** and all eight relays run it with `control_alpn=required`, healthy, same processes since the rollout restart (both 2026-11-17 `Deploy Proxy` runs were version-keyed no-ops). The 2026-11-16 publish 403 is **not reproducible** (2026-11-17 token probe created a release) and the Release workflow is now idempotent/retried, gates package bumps on the published release, and self-tests on every event; the real tag path is proven only by the next release. GitHub backlog is triaged and documented; pre-1.11.0 clients still cannot register anywhere (measured M1 retry stream, owner-accepted). The agent layer (WF-058) is DSH-native with Team-mode personas and durable per-persona owners.
 
 ## Recent entries
+
+### 2026-11-18 (hygiene) - Remote branch cleanup: 43 branches -> 2
+
+**Agent:** lead, on owner request ("I see a lot of open or old branches are those necessary can we clean any orphaned ones up?").
+
+- **Classification (43 remote branches).** 40 were head branches of merged PRs with zero unique work (39 ancestors of `master`; `dependabot/cargo/patch-ee65abdbca` was squash-merged as PR #174). One was `dependabot/cargo/eframe-0.37.0`, a closed unmerged branch (PR #158, 2026-10-22) whose bump had already landed on `master` as `d575d48` (`client-gui/Cargo.toml` is `eframe = { version = "0.37", ... }`), so its two commits are superseded. Two are genuinely long-lived and were kept: `master` (default) and `stats` (data-only orphan branch written hourly by `.github/workflows/pages.yml` and read by `health-anomaly.yml`; its tip moves constantly - `af97dac` at cleanup time). No PR was open and no workflow references any deleted branch name.
+- **Action.** Deleted the 41 orphaned branches in one `git push origin --delete` (41/41 `[deleted]`, exit 0), then `git fetch --prune` dropped the local tracking refs. Enabled repository setting `delete_branch_on_merge` (`false -> true`) so merged PR head branches are removed automatically from now on - that setting being off is why ten weeks of merged branches had accumulated. `master` is unchanged at `bfd3b87`; the worktree is clean; only the WAT state files changed.
+- **Verification.** GitHub branches API after: exactly 2 (`master bfd3b87`, `stats af97dac`); `git ls-remote --heads origin` lists exactly those two refs; local `git branch -r` shows only `origin/master` and `origin/stats`; `delete_branch_on_merge` reads `true`; the two non-ancestor heads stay recoverable as `refs/pull/158/head` (`bbb66d3`) and `refs/pull/174/head` (`b986acf`). Evidence: `wat/evidence/2026-11-18/branch-cleanup/` (`report.md`, `classification.txt`, `delete.log`, after-state files).
+
+**Open:** none. `stats` must not be deleted: the Pages publisher writes it hourly and the anomaly monitor reads it.
 
 ### 2026-11-17 (ownership) - Sole-owner licence v1.1 + CLA, and contributor-identity scrub
 
