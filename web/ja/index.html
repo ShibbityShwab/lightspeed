@@ -159,7 +159,7 @@
             </div>
             <div class="stat">
               <dt class="stat-label">ゲームプロファイル</dt>
-              <dd class="stat-value">19</dd>
+              <dd class="stat-value">28</dd>
             </div>
             <div class="stat">
               <dt class="stat-label">RTT削減量の中央値</dt>
@@ -230,7 +230,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>LightSpeedを起動</h3>
-            <p>ゲームの前に軽量クライアントを実行します。 24 の組み込みプロファイルを自動検出します: Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft (Bedrock および Java)、Hunt:ショーダウン、レインボーシックス シージ、ARC レイダース。</p>
+            <p>ゲームの前に軽量クライアントを実行します。 28 個の組み込みプロファイルを自動検出します: Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft Bedrock、Minecraft Java Edition、Hunt:ショーダウン、レインボー シックス シージ、ジェダイ ナイト II: ジェダイ アウトキャスト、ティビア、ROB RUN、EA SPORTS FC 27、および ARC Raiders。</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -309,7 +309,7 @@
               -- 地域
             </div>
             <div class="stat">
-              19個のゲームプロファイル
+              28 のゲームプロファイル
             </div>
           </div>
           <div class="stats-row">
@@ -374,7 +374,7 @@
       <div class="container">
         <p class="section-eyebrow">対応状況</p>
         <h2 class="section-title">対応ゲーム</h2>
-        <p class="section-subtitle">24 のゲーム用の組み込みプロファイル。ドロップインして遊んでください。</p>
+        <p class="section-subtitle">28 のゲーム用の組み込みプロファイル。ドロップインして遊んでください。</p>
         <div class="games-grid">
           <article class="game-card">
             <div class="game-head">
@@ -613,7 +613,18 @@
               <span class="game-tag">UDP 19132-19133</span>
               <span class="game-tag">None</span>
             </div>
-            <p>Bedrock EditionのマルチプレイはUDP 19132/19133で、デスクトップもコンソールのサーバーも同様です。Java EditionはTCP 25565で、1.7以降TCPトンネル経由で対応しています: アプリで「Manual / Custom…」を選び、サーバーを入力してください。</p>
+            <p>デスクトップサーバーとコンソールサーバーの両方で、UDP 19132/19133 を介した Bedrock Edition マルチプレイヤー。 Java Edition は UDP ではなく TCP を使用するため、別のプロファイル (以下の TCP 25565) です。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">ジャワ</span>
+              <h3>Minecraft Java版</h3>
+            </div>
+            <div class="game-details">
+              TCP 25565 なし
+            </div>
+            <p>Java Edition マルチプレイヤーは、トンネルの TCP パスによって伝送される TCP 25565 です。クライアントは接続をローカルで終了し、リレーは実際の接続をゲーム サーバーに接続します。組み込みプロファイルは、それを中継するためのサポートされている方法です。 TCP プライマリ自動検出とカスタム TCP ポートは、アプリではまだ公開されていません。</p>
             <div class="game-status game-status-ready">対応</div>
           </article>
           <article class="game-card">
@@ -650,6 +661,51 @@
             </div>
             <p>RAID はローテーションする専用サーバーに割り当てられるため、プロファイルは一致するたびにサーバーを再検出します。自分のリージョンではないリージョンに参加するプレイヤーのために構築されています。リレーはあなたの近くではなく、ゲーム サーバーの近くで選択されます。</p>
             <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">JK2</span>
+              <h3>ジェダイ・ナイト II: ジェダイ・アウトキャスト</h3>
+            </div>
+            <div class="game-details">
+              UDP 28070 報告なし
+            </div>
+            <p>NWH マルチプレイヤー MOD は固定 UDP 28070 ゲーム ポートを使用するため、再検出する試合ごとのサーバーはありません。マルチプレイヤーに対するアンチチートは報告されておらず、データグラムは変更されずに転送されます。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">TIB</span>
+              <h3>脛骨</h3>
+            </div>
+            <div class="game-details">
+              <span class="game-tag">TCP 7171-7172</span>
+              <span class="game-tag">BattlEye</span>
+            </div>
+            <p>ログイン (7171) 接続とワールド (7172) 接続は TCP であり、トンネルの TCP パスによって伝送されます。 UDP のみを中継するプロセスをターゲットにするのではなく、Tibia ゲーム プロファイルを選択します。すべてのコミュニティ リレーが TCP レーンをアドバタイズします。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">走る</span>
+              <h3>ロブ・ラン</h3>
+            </div>
+            <div class="game-details">
+              UDP 32768-60999 簡単なアンチチート
+            </div>
+            <p>ROB RUN は、セッションごとに上位の一時範囲から送信 UDP ポートを選択するため、リダイレクトではなくキャプチャ/インターセプト モードがサポートされるパスになります。転送は透過的であり、Easy Anti-Cheat と互換性があります。</p>
+            <div class="game-status game-status-ready">対応</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">FC27</span>
+              <h3>EA スポーツ FC 27</h3>
+            </div>
+            <div class="game-details">
+              UDP 21000-21050 EA ジャベリン
+            </div>
+            <p>マッチホストはマッチごとに割り当てられる AWS インスタンスであるため、キャプチャ/インターセプトモードがサポートされるパスであり、固定サーバーターゲットはキックオフ前に失効します。 21000 ～ 21050 の範囲は、~10 マッチの測定値 (21006 ～ 21039) を囲むブロックであり、このタイトルでは Javelin の互換性がまだ現場で確認されていません。</p>
+            <div class="game-status">プレビュー - 現場で確認されていません</div>
           </article>
         </div>
         <p class="games-more">お使いのゲームが見つかりませんか？ <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">ゲームのリクエスト</a></p>
@@ -1032,7 +1088,7 @@
           </details>
           <details class="faq-item">
             <summary>対応しているゲームは?</summary>
-            <p>現在 24 のゲーム: Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft、Hunt: Showdown、Rainbow Six Siege、ARC Raiders はすべて組み込みプロファイル。 <code>--game &lt;name&gt;</code> を指定して実行するか、自動検出に任せてください。他の UDP ベースのゲームは手動ポート構成で動作します。</p>
+            <p>現在 28 のゲーム: Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、League of Legends、PUBG、MapleStory、Genshin Impact、Rocket League、World of Tanks、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft Bedrock、Minecraft Java Edition、Hunt: Showdown、Rainbow Six Siege、 Jedi Knight II: Jedi Outcast、Tibia、ROB RUN、EA SPORTS FC 27、ARC Raiders にはすべてプロファイルが組み込まれています。 <code>--game &lt;name&gt;</code> を押して実行するか、自動検出に任せてください。他の UDP ベースのゲームは手動ポート構成で動作します。</p>
           </details>
           <details class="faq-item">
             <summary>データは安全?</summary>

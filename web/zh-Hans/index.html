@@ -159,7 +159,7 @@
             </div>
             <div class="stat">
               <dt class="stat-label">游戏配置</dt>
-              <dd class="stat-value">19</dd>
+              <dd class="stat-value">28</dd>
             </div>
             <div class="stat">
               <dt class="stat-label">RTT 节省中位数</dt>
@@ -230,7 +230,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>启动 LightSpeed</h3>
-            <p>在游戏前运行轻量级客户端。它自动检测 24 个内置配置文件：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、英雄联盟、PUBG、MapleStory、Genshin Impact、Rocket League、坦克世界、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft（基岩和 Java）、Hunt: Showdown、彩虹六号围攻和ARC攻略。</p>
+            <p>在游戏前运行轻量级客户端。它自动检测 28 个内置配置文件：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、英雄联盟、PUBG、MapleStory、Genshin Impact、火箭联盟、坦克世界、黎明杀机、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft Bedrock、Minecraft Java 版、Hunt: Showdown、彩虹六号围攻、 《绝地武士 II：绝地流亡者》、《Tibia》、《ROB RUN》、《EA SPORTS FC 27》和《ARC Raiders》。</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -309,7 +309,7 @@
               -- 区域
             </div>
             <div class="stat">
-              19 个游戏配置
+              28 个游戏简介
             </div>
           </div>
           <div class="stats-row">
@@ -374,7 +374,7 @@
       <div class="container">
         <p class="section-eyebrow">兼容性</p>
         <h2 class="section-title">支持的游戏</h2>
-        <p class="section-subtitle">24 种游戏的内置配置文件。顺便进来玩一下。</p>
+        <p class="section-subtitle">28 种游戏的内置配置文件。顺便进来玩一下。</p>
         <div class="games-grid">
           <article class="game-card">
             <div class="game-head">
@@ -608,7 +608,18 @@
             <div class="game-details">
               UDP 19132-19133 无
             </div>
-            <p>Bedrock 版多人游戏走 UDP 19132/19133，桌面和主机服务器都一样，Java 版则通过 TCP 25565 走 TCP 隧道，从 1.7 起就支持：在应用里选 &quot;Manual / Custom…&quot;，填入你的服务器。</p>
+            <p>基岩版多人游戏通过 UDP 19132/19133，在桌面和控制台服务器上进行。 Java 版是一个单独的配置文件（TCP 25565，如下），因为它使用 TCP 而不是 UDP。</p>
+            <div class="game-status game-status-ready">就绪</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">爪哇</span>
+              <h3>我的世界 Java 版</h3>
+            </div>
+            <div class="game-details">
+              TCP 25565 无
+            </div>
+            <p>Java版多人游戏是TCP 25565，由隧道的TCP路径承载：客户端在本地终止连接，中继将真实的连接拼接到游戏服务器。内置配置文件是受支持的中继方式； TCP 主要自动检测和自定义 TCP 端口尚未在应用程序中公开。</p>
             <div class="game-status game-status-ready">就绪</div>
           </article>
           <article class="game-card">
@@ -645,6 +656,50 @@
             </div>
             <p>袭击被分配给轮换的专用服务器，因此配置文件会在每次匹配时重新检测服务器。专为加入不属于他们的区域的玩家而设计：中继选择在游戏服务器附近，而不是您附近。</p>
             <div class="game-status game-status-ready">就绪</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">JK2型</span>
+              <h3>绝地武士 II：绝地流放者</h3>
+            </div>
+            <div class="game-details">
+              UDP 28070 未报告
+            </div>
+            <p>NWH 多人游戏模组使用固定的 UDP 28070 游戏端口，因此无需重新检测每场比赛的服务器。其多人游戏没有反作弊报告，并且数据报转发不变。</p>
+            <div class="game-status game-status-ready">就绪</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">TIB</span>
+              <h3>胫骨</h3>
+            </div>
+            <div class="game-details">
+              TCP 7171-7172 战眼
+            </div>
+            <p>登录 (7171) 和世界 (7172) 连接是 TCP，并由隧道的 TCP 路径承载。选择 Tibia 游戏配置文件而不是 Target a process，它仅中继 UDP；每个社区中继都会通告 TCP 通道。</p>
+            <div class="game-status game-status-ready">就绪</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">跑步</span>
+              <h3>罗布跑</h3>
+            </div>
+            <div class="game-details">
+              UDP 32768-60999 轻松反作弊
+            </div>
+            <p>ROB RUN 从每个会话的高临时范围中选择其出站 UDP 端口，因此捕获/拦截模式是受支持的路径，而不是重定向。转发是透明的并且与 Easy Anti-Cheat 兼容。</p>
+            <div class="game-status game-status-ready">就绪</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">FC27</span>
+              <h3>EA 体育 FC 27</h3>
+            </div>
+            <div class="game-details">
+              UDP 21000-21050 EA 标枪
+            </div>
+            <p>比赛主机是为每场比赛分配的 AWS 实例，因此捕获/拦截模式是受支持的路径，并且固定服务器目标在开赛前就会过时。 21000-21050 范围是约 10 场比赛测量 (21006-21039) 周围的封闭块，并且该游戏的 Javelin 兼容性尚未得到现场确认。</p>
+            <div class="game-status">预览 - 未经现场确认</div>
           </article>
         </div>
         <p class="games-more">没有找到你的游戏？<a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">请求添加游戏</a></p>
@@ -1027,7 +1082,7 @@
           </details>
           <details class="faq-item">
             <summary>支持哪些游戏？</summary>
-            <p>目前有 24 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、英雄联盟、PUBG、MapleStory、Genshin Impact、Rocket League、坦克世界、Dead by Daylight、Bodycam、Roblox、Project Zomboid、WARDOGS、Minecraft、Hunt: Showdown、彩虹六号围攻和 ARC Raiders 都有内置配置文件。只需使用 <code>--game &lt;name&gt;</code> 运行或让自动检测检测到它。任何其他基于 UDP 的游戏都可以使用手动端口配置。</p>
+            <p>目前有 28 款游戏：Fortnite、CS2、CS:GO Legacy、Dota 2、Rust、Valorant、Apex Legends、Overwatch 2、英雄联盟、PUBG、MapleStory、Genshin Impact、火箭联盟、坦克世界、黎明杀机、Bodycam、Roblox、僵尸计划、WARDOGS、Minecraft Bedrock、Minecraft Java Edition、狩猎：对决、彩虹六号围攻、绝地武士 II：绝地Outcast、Tibia、ROB RUN、EA SPORTS FC 27 和 ARC Raiders 都有内置配置文件。只需使用 <code>--game &lt;name&gt;</code> 运行或让自动检测检测到它。任何其他基于 UDP 的游戏都可以使用手动端口配置。</p>
           </details>
           <details class="faq-item">
             <summary>我的数据安全吗？</summary>

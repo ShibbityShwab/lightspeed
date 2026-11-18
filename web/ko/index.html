@@ -159,7 +159,7 @@
             </div>
             <div class="stat">
               <dt class="stat-label">게임 프로필</dt>
-              <dd class="stat-value">19</dd>
+              <dd class="stat-value">28</dd>
             </div>
             <div class="stat">
               <dt class="stat-label">절약된 중앙값 RTT</dt>
@@ -230,7 +230,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>LightSpeed 실행</h3>
-            <p>게임을 시작하기 전에 경량 클라이언트를 실행하세요. 24개의 내장 프로필을 자동으로 감지합니다: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft(Bedrock 및 Java), Hunt: Showdown, Rainbow Six Siege 및 ARC 레이더스.</p>
+            <p>게임을 시작하기 전에 경량 클라이언트를 실행하세요. 28개의 내장 프로필을 자동 감지합니다: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft Bedrock, Minecraft Java Edition, Hunt: Showdown, Rainbow Six Siege, Jedi Knight II: Jedi Outcast, Tibia, ROB RUN, EA SPORTS FC 27 및 ARC Raiders.</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -309,7 +309,7 @@
               -- 리전
             </div>
             <div class="stat">
-              게임 프로필 19개
+              28개의 게임 프로필
             </div>
           </div>
           <div class="stats-row">
@@ -374,7 +374,7 @@
       <div class="container">
         <p class="section-eyebrow">호환성</p>
         <h2 class="section-title">지원 게임</h2>
-        <p class="section-subtitle">24개 게임에 대한 프로필이 내장되어 있습니다. 들러서 플레이하세요.</p>
+        <p class="section-subtitle">28개 게임에 대한 프로필이 내장되어 있습니다. 들러서 플레이하세요.</p>
         <div class="games-grid">
           <article class="game-card">
             <div class="game-head">
@@ -613,7 +613,18 @@
               <span class="game-tag">UDP 19132-19133</span>
               <span class="game-tag">없음</span>
             </div>
-            <p>데스크톱과 콘솔 서버 모두에서 UDP 19132/19133을 통한 Bedrock Edition 멀티플레이, 그리고 TCP 25565를 통한 Java Edition - 1.7부터 TCP 터널로 지원: 앱에서 &quot;Manual / Custom...&quot;를 선택하고 서버를 입력하세요.</p>
+            <p>데스크톱 및 콘솔 서버 모두에서 UDP 19132/19133을 통한 Bedrock Edition 멀티플레이어. Java Edition은 UDP가 아닌 TCP를 사용하므로 별도의 프로필(아래 TCP 25565)입니다.</p>
+            <div class="game-status game-status-ready">준비됨</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">자바</span>
+              <h3>마인크래프트 자바 에디션</h3>
+            </div>
+            <div class="game-details">
+              TCP 25565 없음
+            </div>
+            <p>Java Edition 멀티플레이어는 터널의 TCP 경로를 통해 전달되는 TCP 25565입니다. 클라이언트는 로컬로 연결을 종료하고 릴레이는 실제 연결을 게임 서버에 연결합니다. 내장된 프로필은 이를 전달하는 지원 방법입니다. TCP 기본 자동 감지 및 사용자 지정 TCP 포트는 아직 앱에 노출되지 않습니다.</p>
             <div class="game-status game-status-ready">준비됨</div>
           </article>
           <article class="game-card">
@@ -650,6 +661,50 @@
             </div>
             <p>공격대는 회전하는 전용 서버에 할당되므로 프로필은 일치하는 서버를 다시 검색합니다. 자신의 지역이 아닌 지역에 참여하는 플레이어를 위해 제작되었습니다. 릴레이는 사용자 근처가 아닌 게임 서버 근처에서 선택됩니다.</p>
             <div class="game-status game-status-ready">준비됨</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">JK2</span>
+              <h3>제다이 나이트 II: 제다이 아웃캐스트</h3>
+            </div>
+            <div class="game-details">
+              UDP 28070 보고된 내용 없음
+            </div>
+            <p>NWH 멀티플레이어 모드는 고정 UDP 28070 게임 포트를 사용하므로 경기당 재감지할 서버가 없습니다. 멀티플레이어에 대한 안티 치트가 보고되지 않았으며 데이터그램은 변경되지 않은 채 전달됩니다.</p>
+            <div class="game-status game-status-ready">준비됨</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">팁</span>
+              <h3>경골</h3>
+            </div>
+            <div class="game-details">
+              TCP 7171-7172 배틀아이
+            </div>
+            <p>로그인(7171) 및 월드(7172) 연결은 TCP이며 터널의 TCP 경로를 통해 전달됩니다. UDP만 중계하는 프로세스를 대상으로 지정하는 대신 Tibia 게임 프로필을 선택합니다. 모든 커뮤니티 릴레이는 TCP 레인을 광고합니다.</p>
+            <div class="game-status game-status-ready">준비됨</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">달리다</span>
+              <h3>롭 런</h3>
+            </div>
+            <div class="game-details">
+              UDP 32768-60999 간편한 안티 치트
+            </div>
+            <p>ROB RUN은 매 세션마다 높은 임시 범위에서 아웃바운드 UDP 포트를 선택하므로 캡처/가로채기 모드는 리디렉션이 아닌 지원되는 경로입니다. 전달은 투명하며 Easy Anti-Cheat와 호환됩니다.</p>
+            <div class="game-status game-status-ready">준비됨</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">FC27</span>
+              <h3>EA 스포츠 FC 27</h3>
+            </div>
+            <div class="game-details">
+              UDP 21000-21050 EA 자벨린
+            </div>
+            <p>매치 호스트는 매치별로 할당된 AWS 인스턴스이므로 캡처/가로채기 모드가 지원되는 경로이며 고정 서버 대상은 킥오프 전에 무효화됩니다. 21000-21050 범위는 ~10 매치 측정값(21006-21039)을 둘러싸는 블록이며, 이 타이틀에 대한 Javelin 호환성은 아직 현장에서 확인되지 않았습니다.</p>
+            <div class="game-status">미리보기 - 현장에서 확인되지 않음</div>
           </article>
         </div>
         <p class="games-more">게임이 보이지 않나요? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">게임 요청</a></p>
@@ -1032,7 +1087,7 @@
           </details>
           <details class="faq-item">
             <summary>어떤 게임이 지원되나요?</summary>
-            <p>현재 24개 게임: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft, Hunt: Showdown, Rainbow Six Siege 및 ARC Raiders에는 모두 프로필이 내장되어 있습니다. <code>--game &lt;name&gt;</code>로 실행하거나 자동 감지를 통해 선택하도록 하세요. 다른 UDP 기반 게임은 수동 포트 구성으로 작동할 수 있습니다.</p>
+            <p>현재 28개 게임: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft Bedrock, Minecraft Java Edition, Hunt: Showdown, Rainbow Six Siege, Jedi Knight II: Jedi Outcast, Tibia, ROB RUN, EA SPORTS FC 27 및 ARC Raiders에는 모두 프로필이 내장되어 있습니다. <code>--game &lt;name&gt;</code>를 사용하여 실행하거나 자동 감지가 선택하도록 하세요. 다른 UDP 기반 게임은 수동 포트 구성으로 작동할 수 있습니다.</p>
           </details>
           <details class="faq-item">
             <summary>제 데이터는 안전한가요?</summary>

@@ -159,7 +159,7 @@
             </div>
             <div class="stat">
               <dt class="stat-label">Perfiles de juego</dt>
-              <dd class="stat-value">19</dd>
+              <dd class="stat-value">28</dd>
             </div>
             <div class="stat">
               <dt class="stat-label">RTT mediana ahorrada</dt>
@@ -230,7 +230,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>Inicia LightSpeed</h3>
-            <p>Ejecute el cliente ligero antes de su juego. Detecta automáticamente 24 perfiles integrados: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft (Bedrock y Java), Hunt: Showdown, Rainbow Six Siege y ARC Raiders.</p>
+            <p>Ejecute el cliente ligero antes de su juego. Detecta automáticamente 28 perfiles integrados: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft Bedrock, Minecraft Java Edition, Hunt: Showdown, Rainbow Six Siege, Jedi Knight II: Jedi Outcast, Tibia, ROB RUN, EA SPORTS FC 27 y ARC Raiders.</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -309,7 +309,7 @@
               -- Regiones
             </div>
             <div class="stat">
-              19 perfiles de juego
+              28 perfiles de juego
             </div>
           </div>
           <div class="stats-row">
@@ -374,7 +374,7 @@
       <div class="container">
         <p class="section-eyebrow">Compatibilidad</p>
         <h2 class="section-title">Juegos compatibles</h2>
-        <p class="section-subtitle">Perfiles integrados para 24 juegos. Entra y juega.</p>
+        <p class="section-subtitle">Perfiles integrados para 28 juegos. Entra y juega.</p>
         <div class="games-grid">
           <article class="game-card">
             <div class="game-head">
@@ -608,7 +608,18 @@
             <div class="game-details">
               UDP 19132-19133 Ninguno
             </div>
-            <p>Multijugador de la edición Bedrock sobre UDP 19132/19133, tanto en servidores de escritorio como de consola, y edición Java sobre TCP 25565 - compatible desde la 1.7 mediante el túnel TCP: elige &quot;Manual / Personalizado...&quot; en la app e introduce tu servidor.</p>
+            <p>Bedrock Edition multijugador a través de UDP 19132/19133, tanto en servidores de escritorio como de consola. Java Edition es un perfil separado (TCP 25565, a continuación) porque habla TCP en lugar de UDP.</p>
+            <div class="game-status game-status-ready">Listo</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">JAVA</span>
+              <h3>Minecraft Edición Java</h3>
+            </div>
+            <div class="game-details">
+              TCP 25565 Ninguno
+            </div>
+            <p>El modo multijugador de Java Edition es TCP 25565, transportado por la ruta TCP del túnel: el cliente finaliza la conexión localmente y el relé empalma una real con el servidor del juego. El perfil integrado es la forma admitida de transmitirlo; La detección automática primaria de TCP y los puertos TCP personalizados aún no están expuestos en la aplicación.</p>
             <div class="game-status game-status-ready">Listo</div>
           </article>
           <article class="game-card">
@@ -645,6 +656,50 @@
             </div>
             <p>Las incursiones se asignan a servidores dedicados rotativos, por lo que el perfil vuelve a detectar el servidor en cada coincidencia. Creado para jugadores que se unen a una región que no es la suya: el relevo se elige cerca del servidor del juego, no cerca de usted.</p>
             <div class="game-status game-status-ready">Listo</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">JK2</span>
+              <h3>Caballero Jedi II: Jedi marginado</h3>
+            </div>
+            <div class="game-details">
+              UDP 28070 Ninguno reportado
+            </div>
+            <p>El mod multijugador NWH utiliza un puerto de juego UDP 28070 fijo, por lo que no hay ningún servidor por partida que volver a detectar. No se informa ningún anti-trampas para su modo multijugador y los datagramas se reenvían sin cambios.</p>
+            <div class="game-status game-status-ready">Listo</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">TIB</span>
+              <h3>Tibia</h3>
+            </div>
+            <div class="game-details">
+              TCP 7171-7172 Ojo de batalla
+            </div>
+            <p>Las conexiones de inicio de sesión (7171) y mundial (7172) son TCP y se transportan por la ruta TCP del túnel. Seleccione el perfil del juego Tibia en lugar de Apuntar a un proceso, que transmite UDP únicamente; cada retransmisión comunitaria anuncia el carril TCP.</p>
+            <div class="game-status game-status-ready">Listo</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">CORRER</span>
+              <h3>ROB CORRER</h3>
+            </div>
+            <div class="game-details">
+              UDP 32768-60999 Antitrampa fácil
+            </div>
+            <p>ROB RUN elige su puerto UDP saliente del rango efímero alto en cada sesión, por lo que el modo de captura/intercepción es la ruta admitida en lugar de la redirección. El reenvío es transparente y compatible con Easy Anti-Cheat.</p>
+            <div class="game-status game-status-ready">Listo</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">FC27</span>
+              <h3>EA SPORTS FC 27</h3>
+            </div>
+            <div class="game-details">
+              UDP 21000-21050 EA jabalina
+            </div>
+            <p>Los hosts de los partidos son instancias de AWS asignadas por partido, por lo que el modo de captura/intercepción es la ruta admitida y un objetivo de servidor fijo queda obsoleto antes del inicio. El rango 21000-21050 es el bloque circundante alrededor de una medida de ~10 coincidencias (21006-21039), y la compatibilidad con Javelin aún no ha sido confirmada en campo para este título.</p>
+            <div class="game-status">Vista previa: no confirmada en el campo</div>
           </article>
         </div>
         <p class="games-more">¿No ves tu juego? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Solicitar un juego</a></p>
@@ -1026,7 +1081,7 @@
           </details>
           <details class="faq-item">
             <summary>¿Qué juegos son compatibles?</summary>
-            <p>Actualmente, 24 juegos: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft, Hunt: Showdown, Rainbow Six Siege y ARC Raiders tienen perfiles integrados. Simplemente ejecute con <code>--game &lt;name&gt;</code> o deje que la detección automática lo detecte. Cualquier otro juego basado en UDP puede funcionar con la configuración manual del puerto.</p>
+            <p>Actualmente 28 juegos: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft Bedrock, Minecraft Java Edition, Hunt: Showdown, Rainbow Six Siege, Jedi Knight II: Jedi Outcast, Tibia, ROB RUN, EA SPORTS FC 27 y ARC Raiders tienen perfiles integrados. Simplemente ejecute con <code>--game &lt;name&gt;</code> o deje que la detección automática lo detecte. Cualquier otro juego basado en UDP puede funcionar con la configuración manual del puerto.</p>
           </details>
           <details class="faq-item">
             <summary>¿Están seguros mis datos?</summary>

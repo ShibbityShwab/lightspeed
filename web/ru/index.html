@@ -159,7 +159,7 @@
             </div>
             <div class="stat">
               <dt class="stat-label">Игровые профили</dt>
-              <dd class="stat-value">19</dd>
+              <dd class="stat-value">28</dd>
             </div>
             <div class="stat">
               <dt class="stat-label">Медианная экономия RTT</dt>
@@ -230,7 +230,7 @@
               <span class="step-number" aria-hidden="true">1</span>
             </div>
             <h3>Запустите LightSpeed</h3>
-            <p>Запустите легкий клиент перед игрой. Он автоматически определяет 24 встроенных профиля: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft (Bedrock и Java), Hunt: Showdown, Rainbow Six. Осада и ARC Raiders.</p>
+            <p>Запустите легкий клиент перед игрой. Он автоматически определяет 28 встроенных профилей: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft Bedrock, Minecraft Java Edition, Hunt: Showdown, Rainbow Six. Осада, Рыцарь-джедай II: Изгой-джедай, Тибия, ROB RUN, EA SPORTS FC 27 и ARC Raiders.</p>
           </div>
           <div class="step-link" aria-hidden="true"><svg class="icon" focusable="false"><use href="#i-chevron-down"></use></svg></div>
           <div class="step">
@@ -309,7 +309,7 @@
               -- Регионов
             </div>
             <div class="stat">
-              19 игровых профилей
+              28 игровых профилей
             </div>
           </div>
           <div class="stats-row">
@@ -374,7 +374,7 @@
       <div class="container">
         <p class="section-eyebrow">Совместимость</p>
         <h2 class="section-title">Поддерживаемые игры</h2>
-        <p class="section-subtitle">Встроенные профили на 24 игры. Заходите и играйте.</p>
+        <p class="section-subtitle">Встроенные профили на 28 игр. Заходите и играйте.</p>
         <div class="games-grid">
           <article class="game-card">
             <div class="game-head">
@@ -613,7 +613,18 @@
               <span class="game-tag">UDP 19132-19133</span>
               <span class="game-tag">Нет</span>
             </div>
-            <p>Мультиплеер Bedrock Edition по UDP 19132/19133, как на настольных, так и на консольных серверах, и Java Edition по TCP 25565 - поддержка с версии 1.7 через туннель TCP: выберите &quot;Ручной / Свой...&quot; в приложении и введите свой сервер.</p>
+            <p>Многопользовательская игра Bedrock Edition через UDP 19132/19133 как на настольных, так и на консольных серверах. Java Edition представляет собой отдельный профиль (TCP 25565, ниже), поскольку он поддерживает TCP, а не UDP.</p>
+            <div class="game-status game-status-ready">Готово</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">ЯВА</span>
+              <h3>Майнкрафт Java-версия</h3>
+            </div>
+            <div class="game-details">
+              TCP 25565 Нет
+            </div>
+            <p>Многопользовательская игра Java Edition — это TCP 25565, передаваемый по TCP-пути туннеля: клиент разрывает соединение локально, а реле соединяет реальное соединение с игровым сервером. Встроенный профиль — это поддерживаемый способ его ретрансляции; Автоматическое определение основного TCP-порта и настраиваемых TCP-портов пока не представлены в приложении.</p>
             <div class="game-status game-status-ready">Готово</div>
           </article>
           <article class="game-card">
@@ -650,6 +661,50 @@
             </div>
             <p>Рейды назначаются сменяющимся выделенным серверам, поэтому профиль повторно определяет сервер при каждом совпадении. Создано для игроков, присоединяющихся к чужому региону: реле выбирается рядом с игровым сервером, а не рядом с вами.</p>
             <div class="game-status game-status-ready">Готово</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-cyan" aria-hidden="true">JK2</span>
+              <h3>Рыцарь-джедай II: Изгой-джедай</h3>
+            </div>
+            <div class="game-details">
+              UDP 28070 Ничего не сообщается
+            </div>
+            <p>Многопользовательский мод NWH использует фиксированный игровой порт UDP 28070, поэтому нет сервера для каждого матча, который нужно было бы повторно обнаружить. Для многопользовательской игры не сообщается об античите, а датаграммы пересылаются без изменений.</p>
+            <div class="game-status game-status-ready">Готово</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-signal" aria-hidden="true">ТИБ</span>
+              <h3>большеберцовая кость</h3>
+            </div>
+            <div class="game-details">
+              ПТС 7171-7172 БаттлАй
+            </div>
+            <p>Соединения для входа (7171) и мира (7172) являются TCP и передаются по TCP-пути туннеля. Выберите игровой профиль Tibia вместо параметра «Назначить процесс», который передает только UDP; каждый ретранслятор сообщества объявляет линию TCP.</p>
+            <div class="game-status game-status-ready">Готово</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile tone-warn" aria-hidden="true">БЕГАТЬ</span>
+              <h3>Роб Бег</h3>
+            </div>
+            <div class="game-details">
+              UDP 32768-60999 Легкий античит
+            </div>
+            <p>ROB RUN выбирает свой исходящий порт UDP из высокого эфемерного диапазона для каждого сеанса, поэтому поддерживаемым путем является режим захвата/перехвата, а не перенаправление. Переадресация прозрачна и совместима с Easy Anti-Cheat.</p>
+            <div class="game-status game-status-ready">Готово</div>
+          </article>
+          <article class="game-card">
+            <div class="game-head">
+              <span class="game-tile" aria-hidden="true">ФК27</span>
+              <h3>ЕА СПОРТ ФК 27</h3>
+            </div>
+            <div class="game-details">
+              UDP 21000-21050 ЕА Джавелин
+            </div>
+            <p>Хосты сопоставления — это экземпляры AWS, назначаемые для каждого сопоставления, поэтому поддерживаемым путем является режим захвата/перехвата, а фиксированный целевой сервер устаревает еще до запуска. Диапазон 21000–21050 представляет собой блок, охватывающий размер примерно 10 совпадений (21006–21039), а совместимость с Javelin для этой игры еще не подтверждена на местах.</p>
+            <div class="game-status">Предварительный просмотр – не подтвержден на местах</div>
           </article>
         </div>
         <p class="games-more">Не нашли свою игру? <a href="https://github.com/ShibbityShwab/lightspeed/issues" target="_blank" rel="noopener">Предложить игру</a></p>
@@ -1032,7 +1087,7 @@
           </details>
           <details class="faq-item">
             <summary>Какие игры поддерживаются?</summary>
-            <p>На данный момент 24 игры: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft, Hunt: Showdown, Rainbow Six Siege и ARC Raiders имеют встроенную функцию. профили. Просто запустите с <code>--game &lt;name&gt;</code> или позвольте автоопределению подобрать его. Любая другая игра на основе UDP может работать с ручной настройкой порта.</p>
+            <p>На данный момент 28 игр: Fortnite, CS2, CS:GO Legacy, Dota 2, Rust, Valorant, Apex Legends, Overwatch 2, League of Legends, PUBG, MapleStory, Genshin Impact, Rocket League, World of Tanks, Dead by Daylight, Bodycam, Roblox, Project Zomboid, WARDOGS, Minecraft Bedrock, Minecraft Java Edition, Hunt: Showdown, Rainbow Six Siege, Jedi Knight II: Jedi Outcast, Tibia, ROB RUN, EA SPORTS FC 27 и ARC Raiders имеют встроенные профили. Просто запустите с помощью <code>--game &lt;name&gt;</code> или позвольте автоопределению подобрать его. Любая другая игра на основе UDP может работать с ручной настройкой порта.</p>
           </details>
           <details class="faq-item">
             <summary>Мои данные в безопасности?</summary>
