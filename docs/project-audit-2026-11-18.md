@@ -552,8 +552,20 @@ makes both the pmtud cap test and the relay cap test fail; restoring the code
 passes both. Logs in `wat/evidence/2026-11-18/remediation/`.
 
 **Still open from the audit:** F-02's fleet policy decision (owner), F-03's public
-reply (owner), F-08 the ~150-package dependency refresh (not taken in this round
-to keep the verified diff focused), F-09 Actions pinning/permissions, F-12
-notification hygiene (owner account), F-13 `app.rs` split, F-14 release-exe icon
-check, F-15 advisory-review cadence.
+reply (owner), F-09 Actions pinning/permissions, F-12 notification hygiene (owner
+account), F-13 `app.rs` split, F-14 release-exe icon check, F-15 advisory-review
+cadence.
+
+**F-08 (dependency refresh) — attempted, reverted, and a new build finding.** The
+~150 compatible updates themselves are fine, but rebuilding the *vendored*
+`windivert-sys` on Windows failed with MSVC `C1041: cannot open program database
+... vc140.pdb` when two build-script instances compiled `windivert.c`
+concurrently (the generated PDB lives in the shared registry source directory,
+not the target dir). This is a pre-existing build-system race, not a version
+conflict: it only appeared because the update forced a rebuild of that crate.
+The lockfile was reverted to the verified commit. To take the refresh later,
+either build it on the CI runner (where the crate is compiled once per job), or
+pass `-j 1` / `CFLAGS=/FS`, or stage the WinDivert build through a writable
+target-local copy. Recommend letting Dependabot land it on a clean CI runner and
+watching the Windows job rather than refreshing the lock by hand on this host.
 

@@ -24,11 +24,12 @@
 - **F-11.** Removed the unused `windivert` wrapper (use `windivert-sys` with `vendored`) and unused `windows` crate; `rcgen` moved to `[dev-dependencies]`. Manifest warnings are now zero (was 2).
 - **F-02 confirmation.** `/metrics`: relay-syd-1 `negotiated_v1=42`, `rejected_no_application_protocol=32,167`, 6 sessions / 17,903 relayed; relay-fra `2,418` vs `289,373`. Relays healthy; the monitor's alert is the stranded pre-1.11.0 client population, not a relay fault. Owner decision on `required` vs a mercy `off` remains open (no fleet change).
 - **F-03.** `#168` reply drafted and held for the owner (public post): `wat/evidence/2026-11-18/github-audit/issue-168-reply-draft.md`. Not posted.
-- **Not taken this round:** F-08 dependency refresh (kept the verified diff focused), F-09 Actions pinning, F-12 notification hygiene (owner account), F-13 `app.rs` split, F-14 release-exe icon check, F-15 advisory-review cadence.
+- **F-08 attempted and reverted (new build finding).** `cargo update` proposes ~150 compatible updates; the lockfile refresh itself is fine, but a rebuild of the **vendored `windivert-sys`** failed on this host with MSVC `C1041: cannot open program database ... vc140.pdb` when two build-script instances compiled `windivert.c` concurrently (the PDB is written into the shared registry source dir, not the target dir). This is a pre-existing build race exposed by the forced rebuild, not a version conflict; `Cargo.lock` was reverted to the verified state. Take the refresh on a clean CI runner (or with `-j 1`/`CFLAGS=/FS`), and watch the Windows job.
+- **Not taken this round:** F-09 Actions pinning, F-12 notification hygiene (owner account), F-13 `app.rs` split, F-14 release-exe icon check, F-15 advisory-review cadence.
 
 **Verified:** full gate on the integrated tree (`wat/evidence/2026-11-18/remediation/`): `cargo fmt --all --check` clean; workspace clippy `--all-features` exit 0 with **0 warnings**; workspace tests **1,585 / 0 / 6** (client 1,314, protocol 86, proxy 185; +24 vs baseline); GUI clippy exit 0; GUI **186 / 0 / 1** (+2). Total **1,771 / 0 / 7**. Mutation check: reverting `effective_path_mtu` to the fixed clamp fails the pmtud cap test and the relay cap test; restoring passes both (`mutation-fail*.log`, `mutation-restored.log`).
 
-**Open:** the held `#168` reply and the F-02 fleet decision (both owner gates); field confirmation of the MTU fix needs a sub-1492 path (the adapter-MTU workaround is interim); remaining F-08/F-09/F-12..F-15.
+**Open:** the held `#168` reply and the F-02 fleet decision (both owner gates); field confirmation of the MTU fix needs a sub-1492 path (the adapter-MTU workaround is interim); F-08 needs a clean-CI-runner dependency refresh (the vendored `windivert-sys` MSVC PDB race must not be hit by a manual refresh on this host); remaining F-09/F-12..F-15.
 
 ### 2026-11-18 (audit) - WF-069: full project audit (code, CI, docs, GitHub, fleet), read-only
 
