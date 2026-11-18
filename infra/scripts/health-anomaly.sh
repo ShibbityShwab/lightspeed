@@ -444,7 +444,7 @@ def rel_life($snap; $id; $k):
   ((($snap.per_relay // {})[$id] // {}) | life($k));
 def rel_reach($snap; $id):
   ((((($snap.per_relay // {})[$id] // {}).reachable) // false) == true);
-# Does this relay's row in that snapshot carry the counter at all? Used by the
+# Does the row for this relay in that snapshot carry the counter at all? Used by the
 # M1 detector, whose fields were added to the collector schema on 2026-11-18.
 # Two distinct cases, easy to confuse:
 #   * an OLD SNAPSHOT written before the schema has no control_handshakes_* keys
@@ -593,14 +593,14 @@ def probe_ok($probe; $id):
    ]) as $authFlags
 # (k) M1 reject drain: the pre-1.11.0 (TLS alert 120) rejection population
 # accelerating while accepted handshakes stay flat/zero. Skipped, not
-# zero-read, when a snapshot predates the collector's control-handshake fields
+# zero-read, when a snapshot predates the control-handshake fields from the collector
 # (2026-11-18 schema): an old snapshot has no split to trend, and treating its
 # absent field as 0 would fabricate a drain. That is distinct from a relay that
 # predates 1.11.0 and exports no family - the collector records an explicit 0
 # for it, so the field is present, the row is evaluated, and the zero delta
 # keeps it silent (a zero split is not an anomaly). A steady-state drain (the
 # expected state under `required`) is deliberately NOT an anomaly - only a rate
-# at least M1_FACTOR times the relay's own baseline while accepted stays under
+# at least M1_FACTOR times the relay baseline while accepted stays under
 # the flat ceiling. Rates divide by $m1_win_hours, the same span the numerator
 # covers (QA F1). Reported and posted, never build-failing (NON_FATAL_TYPES).
 | ([ $ids[] as $id
@@ -611,7 +611,7 @@ def probe_ok($probe; $id):
      | select(rel_has($wstart; $id; "control_handshakes_rejected_no_application_protocol"))
      | select(rel_has($win[-1]; $id; "control_handshakes_rejected_no_application_protocol"))
      # A restart inside the baseline or the window makes the counter delta the
-     # new process's lifetime, not a rate: skip rather than invent a spike.
+     # new process lifetime, not a rate: skip rather than invent a spike.
      | ([ $win[] | ((((.per_relay // {})[$id] // {}).reset) // false) ] | any) as $win_reset
      | ([ $base[] | ((((.per_relay // {})[$id] // {}).reset) // false) ] | any) as $base_reset
      | select(($win_reset | not) and ($base_reset | not))
