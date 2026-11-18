@@ -5,11 +5,13 @@ no deploy was dispatched, no process was restarted, and no public post was made
 for this document. Every figure below comes from public `GET /health` and
 `GET /metrics` responses on the eight community relays.
 
-**A decision is required from the owner:** choose Option A, B or C in §5. The
-policy being decided is `[network] control_alpn` on the community fleet. The
-rollout plan (`docs/quic-alpn-rollout.md` §11) makes any relay set to `required`
-or returned to `off` an owner-gated fleet operation, one crisp yes/no per relay.
-This memo does not decide it and carries no timeline commitment.
+**Decision (2026-11-18): Option A — keep `control_alpn = "required"` on all
+eight relays.** The owner accepted the team recommendation. No relay was
+changed, no deploy was dispatched and no process was restarted for this
+decision. The mercy path (Option B on `relay-syd-1`) is not taken. Revisit only
+if the rejected-client evidence changes materially or a relay shows a
+data-plane fault; the M1 instrumentation follows up to make the trend
+measurable.
 
 ---
 
