@@ -22,8 +22,8 @@
 - **Verification.** QA task-21 and task-24 both PASS on the same combined tree: helper boundaries re-derived, only one `upper_bound` call site, cap threaded from the real sources, quic-off stub compiles, no egui-thread detection call site, worker lifecycle/cadence/join proven, no test weakened or removed. `interface-designer` task-25 PASS: shell unchanged at 320 px; a synthetic detectable process was auto-detected and applied; Manual mode spawned **0** `tasklist`/`powershell` in 15 s while Auto spawned one pair per 5.06 s, never overlapping; UI jitter <=0.27 s over 30 s; clean quit. Lead final gate: fmt clean, workspace clippy 0 warnings, **1,600 / 0 / 6** workspace (client 1,328 + protocol 86 + proxy 186), GUI clippy 0, GUI **193 / 0 / 1** (186 + 7 presence tests).
 - **Not verified.** The reporter's EDR-slowed 2.5-3.4 s freeze and a real sub-1500 path are not reproducible here; H2 (wgpu/hybrid present path) needs the reporter's A/B data. No default-renderer change on one report. The fixes are **unreleased**; a 1.11.2 patch release is the owner's gate.
 
-**Verified:** gate counts above; QA PASS both tasks; visual PASS; mutation fail/restore records; evidence paths in the current-state block. CI on the push is the remaining proof.
-**Open:** CI green; next patch release (owner); #178 reporter retest; #168 retest; M1 trend; H2 needs data; `SCOOP_TOKEN`/winget; backlog.
+**Verified:** gate counts above; QA PASS both tasks; visual PASS; mutation fail/restore records; evidence paths in the current-state block. CI on `2556c93`: **14/14 jobs green** (Windows Build & Test, Windows GUI Build, Check & Test, QUIC Integration Tests, Infra Script Tests, Localization, Code Coverage, feature matrices, E2E, smoke); **Security Audit green** on the same commit. Deploy Proxy was running at report time (version-keyed; the release is unchanged at 1.11.1).
+**Open:** Deploy Proxy/CodeQL completion; next patch release (owner gate); #178 reporter retest; #168 retest; M1 trend; H2 needs data; `SCOOP_TOKEN`/winget; backlog.
 
 ### 2026-11-18 (team) - WF-075: app.rs Phase A split (mechanical, token-identical)
 
