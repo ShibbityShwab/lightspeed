@@ -67,6 +67,11 @@ on:
         required: false
         default: ''
         type: string
+      run_bumps:
+        description: 'Run the package/channel bumps for the tag above (an already-published release). Never builds or publishes a release.'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
@@ -372,14 +377,20 @@ jobs:
     needs:
       - plan
       - host
-    if: ${{ always() && needs.plan.outputs.publishing == 'true' && needs.plan.outputs.tag != '' }}
+    if: ${{ always() && ((github.event_name == 'push' && needs.plan.outputs.publishing == 'true' && needs.plan.outputs.tag != '') || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps == 'true' && github.event.inputs.tag != '')) }}
     runs-on: "ubuntu-22.04"
     permissions:
       contents: read
     outputs:
       ready: ${{ steps.state.outputs.ready }}
+      tag: ${{ github.event_name == 'push' && needs.plan.outputs.tag || github.event.inputs.tag }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # `gh release view` refuses to run outside a git repository; this job has
+      # no checkout (it reads only release metadata), so name the repo
+      # explicitly. Without it the gate always reported ready=false and every
+      # packaging bump was silently skipped (found on the v1.11.1 tag).
+      GH_REPO: ${{ github.repository }}
     steps:
       # The bumps read their sha256 values from the release, and the winget
       # publisher needs the MSI. Those six assets are the gate: a release that
@@ -391,7 +402,7 @@ jobs:
         id: state
         shell: bash
         env:
-          TAG: "${{ needs.plan.outputs.tag }}"
+          TAG: "${{ github.event_name == 'push' && needs.plan.outputs.tag || github.event.inputs.tag }}"
         run: |
           set -euo pipefail
           skip() { printf '::warning::%s\n' "$1"; printf 'ready=false\n' >> "$GITHUB_OUTPUT"; exit 0; }
@@ -429,7 +440,7 @@ jobs:
       - name: Report the release state
         shell: bash
         run: |
-          echo "release-state: ready=${{ steps.state.outputs.ready }} for tag ${{ needs.plan.outputs.tag }}"
+          echo "release-state: ready=${{ steps.state.outputs.ready }} for tag ${{ github.event_name == 'push' && needs.plan.outputs.tag || github.event.inputs.tag }}"
 
   # Homebrew is tapped straight from this repo (no separate tap repository), so
   # each release must move Formula/lightspeed.rb to the new version and sums.
@@ -438,7 +449,7 @@ jobs:
     needs:
       - release-state
     # Gated on the published release, not on host success (see release-state).
-    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps == 'true')) && needs.release-state.outputs.ready == 'true' }}
     # The three bump jobs all commit to master, so they must not run at the same
     # time. `needs` chains them instead of a concurrency group: the group kept
     # cancelling bump-chocolatey (a queued job in a group loses its slot when a
@@ -455,7 +466,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.release-state.outputs.tag }}"; VERSION="${VERSION#v}"
           bash infra/scripts/bump-homebrew.sh "$VERSION"
           if git diff --quiet -- Formula/lightspeed.rb; then
             echo "formula already up to date"
@@ -481,7 +492,7 @@ jobs:
     needs:
       - release-state
       - bump-homebrew
-    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps == 'true')) && needs.release-state.outputs.ready == 'true' }}
     permissions:
       contents: write
     runs-on: "ubuntu-22.04"
@@ -495,7 +506,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.release-state.outputs.tag }}"; VERSION="${VERSION#v}"
           bash infra/scripts/bump-chocolatey.sh "$VERSION"
           if git diff --quiet -- dist/chocolatey; then
             echo "package already up to date"
@@ -512,7 +523,7 @@ jobs:
         # bump above is the part every checkout needs.
         if: ${{ env.CHOCO_API_KEY != '' }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.release-state.outputs.tag }}"; VERSION="${VERSION#v}"
           bash dist/chocolatey/build.sh
           nupkg="dist/chocolatey/lightspeed.${VERSION}.nupkg"
           [ -f "$nupkg" ] || nupkg="$(ls dist/chocolatey/lightspeed.*.nupkg | head -1)"
@@ -537,7 +548,7 @@ jobs:
     needs:
       - release-state
       - bump-chocolatey
-    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps == 'true')) && needs.release-state.outputs.ready == 'true' }}
     permissions:
       contents: write
     runs-on: "ubuntu-22.04"
@@ -549,7 +560,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.release-state.outputs.tag }}"; VERSION="${VERSION#v}"
           bash infra/scripts/bump-scoop.sh "$VERSION"
           if git diff --quiet -- dist/scoop; then
             echo "manifest already up to date"
@@ -576,7 +587,7 @@ jobs:
     needs:
       - release-state
       - bump-scoop
-    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps == 'true')) && needs.release-state.outputs.ready == 'true' }}
     runs-on: "ubuntu-22.04"
     permissions:
       contents: read
@@ -591,7 +602,7 @@ jobs:
         if: ${{ env.SCOOP_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.SCOOP_TOKEN }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.release-state.outputs.tag }}
         run: |
           set -euo pipefail
           # --version: refuse to publish a bucket manifest that is not at this
@@ -612,7 +623,7 @@ jobs:
   publish-aur:
     needs:
       - release-state
-    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps == 'true')) && needs.release-state.outputs.ready == 'true' }}
     runs-on: "ubuntu-22.04"
     permissions:
       contents: read
@@ -648,7 +659,7 @@ jobs:
       - name: Publish the AUR package
         if: ${{ env.AUR_SSH_PRIVATE_KEY != '' }}
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.release-state.outputs.tag }}
         run: |
           set -euo pipefail
           # --version: a PKGBUILD that was not bumped to this tag is a red job
@@ -677,8 +688,8 @@ jobs:
       - name: Post release announcement to Discord
         if: ${{ env.DISCORD_WEBHOOK != '' }}
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_URL: https://github.com/ShibbityShwab/lightspeed/releases/tag/${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.release-state.outputs.tag }}
+          RELEASE_URL: https://github.com/ShibbityShwab/lightspeed/releases/tag/${{ needs.release-state.outputs.tag }}
         run: |
           PAYLOAD=$(cat <<EOF
           {
@@ -715,7 +726,7 @@ jobs:
     # host job was red at the publish step while the release existed, and this
     # publisher must still run (it is a clean no-op without WINGET_TOKEN and
     # while the package is not bootstrapped).
-    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps == 'true')) && needs.release-state.outputs.ready == 'true' }}
     runs-on: "ubuntu-22.04"
     # The package has never been bootstrapped in microsoft/winget-pkgs, and
     # winget-releaser cannot create the first version. A pre-check below skips
@@ -759,7 +770,7 @@ jobs:
       - bump-chocolatey
       - bump-scoop
     # Only meaningful once the release (and therefore the bumps) could run.
-    if: ${{ always() && github.event_name == 'push' && needs.release-state.outputs.ready == 'true' }}
+    if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps == 'true')) && needs.release-state.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -770,7 +781,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.release-state.outputs.tag }}"; VERSION="${VERSION#v}"
           fail=0
           for attempt in 1 2 3 4 5 6; do
             git pull --ff-only origin master || true
@@ -834,7 +845,7 @@ jobs:
   # the safe way to check a fix (and to run the self-test) on a branch.
   release-probe:
     name: Release publish probe (read-only)
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_bumps != 'true' }}
     runs-on: ubuntu-22.04
     permissions:
       contents: read
