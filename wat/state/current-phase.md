@@ -22,8 +22,8 @@
 - **What the tag does.** Tag `v1.11.2` and publish: the release workflow builds/attests/publishes; the eight relays then self-update hourly. Known wrinkle (same as 1.11.1): `publish-aur` will be red on the tag because `dist/aur` is still 1.11.1 until the assets exist - bump it after publish with the new sha256s and run the `workflow_dispatch` `tag=v1.11.2 run_bumps=true` mode to complete Homebrew/Chocolatey/Scoop/AUR; winget stays a gated no-op until #481953 merges, and Scoop's bucket still needs `SCOOP_TOKEN` (the source manifest will bump).
 - **Not done (deliberately).** No tag, no publish, no other public post; no relay change.
 
-**Verified:** version/lock consistency at 1.11.2; full gate counts above; `release-notes.sh` can extract the `## [1.11.2]` section; `git diff --check` clean. CI on the prep push is the next proof.
-**Open:** CI on the push; owner tag/publish; after publish the AUR bump + bump dispatch, asset/attestation check, fleet rollout to 1.11.2, and the #178/#168 retests.
+**Verified:** version/lock consistency at 1.11.2; full gate counts above; `release-notes.sh` can extract the `## [1.11.2]` section; `git diff --check` clean. CI on `d3ce848`: **14/14 jobs green** (Windows Build & Test, Windows GUI Build, Check & Test, QUIC integration, Infra, Localization, coverage, matrices, E2E, smoke); **Security Audit green** on the same commit; Health Monitor green on the preceding fix commit. CodeQL still running at report time.
+**Open:** owner tag/publish; after publish the AUR bump + `run_bumps` dispatch, asset/attestation check, fleet rollout to 1.11.2, and the #178/#168 retests; CodeQL completion.
 
 ### 2026-11-18 (team) - WF-076: #178 fixes - control-plane MTU cap and off-thread game detection
 
