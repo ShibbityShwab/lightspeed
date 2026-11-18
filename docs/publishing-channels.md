@@ -1,6 +1,6 @@
 # Publishing channels
 
-> **Status snapshot: 2026-11-17.** This page is the cross-channel map the owner
+> **Status snapshot: 2026-11-18.** This page is the cross-channel map the owner
 > asked for ("why are we not on choco, winget, AUR etc"): what each channel
 > serves today, which part is automated, and which step still needs the owner.
 > Re-verify a row with the commands at the bottom before quoting it.
@@ -9,15 +9,15 @@ All channels are free community infrastructure; the owner's cost is **$0.00**.
 
 ## Channel map
 
-| Channel | Serves today (2026-11-17) | In-repo source | Automation | Required secret / owner step |
+| Channel | Serves today (2026-11-18) | In-repo source | Automation | Required secret / owner step |
 |---|---|---|---|---|
-| **GitHub Releases** (source of truth) | **1.11.0** (published 2026-11-16, 39 assets) | - | Release workflow: host + `infra/scripts/publish-release.sh`; release-state gates everything below on a published release with the six packaging assets | none (optional RELEASE_TOKEN if the Actions token cannot write; see deploy-proxy) |
-| **Homebrew** (tap `ShibbityShwab/lightspeed`) | **1.11.0** (formula committed in this repo) | `Formula/lightspeed.rb` | `bump-homebrew` job updates and commits the formula on every tag | none |
-| **Chocolatey** (`choco install lightspeed`) | Feed lists **1.10.3**; **1.11.0 pushed 2026-11-17** and awaits moderation | `dist/chocolatey/` | `bump-chocolatey` job bumps the source and pushes the `.nupkg`; Choco Push workflow re-pushes by hand for a missed version | `CHOCO_API_KEY` **set** (2026-10-02); account exists. No action beyond the moderation queue |
-| **Scoop** (`scoop install lightspeed`) | Bucket serves **1.11.0** (synced 2026-11-17 from the Lead's manual API write; in-repo manifest was already 1.11.0) | `dist/scoop/lightspeed.json` | **new** `publish-scoop` job (`infra/scripts/publish-scoop.sh`) syncs the bucket after `bump-scoop` commits to master; no-op when the bucket already matches | **`SCOOP_TOKEN` missing** - owner creates a token with Contents-write on `ShibbityShwab/scoop-bucket` and stores it as the secret |
-| **winget** (`winget install ShibbityShwab.LightSpeed`) | **Not published** - `microsoft/winget-pkgs` has no `manifests/s/ShibbityShwab/LightSpeed` (HTTP 404) | `dist/winget/manifests/s/ShibbityShwab/LightSpeed/1.11.0/` (added 2026-11-17; older versions kept) | `winget-releaser` job exists and is gated on the package existing + `WINGET_TOKEN`; it is a clean no-op today | **First-version PR missing.** PRs #435790 (1.4.3) and #437292 (1.4.4) were closed unmerged; a new 1.11.0 bootstrap PR + Microsoft CLA merge is an owner/manual step. `WINGET_TOKEN` **already exists** (set 2026-09-18) - verify/rotate it, but the token is not the blocker |
-| **AUR** (`yay -S lightspeed-bin`) | **Published 1.11.0-1** (2026-11-17 03:53 UTC; [package page](https://aur.archlinux.org/packages/lightspeed-bin), maintainer `chrissinclair`, 3 sources). AUR's RPC index can lag a freshly created package by minutes; the package page is authoritative | `dist/aur/PKGBUILD` + `.SRCINFO` at **1.11.0-1** | **new** `publish-aur` job (`infra/scripts/publish-aur.sh`) pushes to `ssh://aur@aur.archlinux.org/lightspeed-bin.git` when pkgver/pkgrel changed; no-op when already current | **Done:** AUR account key registered and `AUR_SSH_PRIVATE_KEY` **set** (2026-11-17). The PKGBUILD is still bumped by hand each release (no bump automation yet) |
-| **Direct downloads** (MSI / zip / tarballs) | **1.11.0** | - | GitHub Releases (same as the first row) | none |
+| **GitHub Releases** (source of truth) | **1.11.1** (published 2026-11-18, 39 assets) | - | Release workflow: host + `infra/scripts/publish-release.sh`; `release-state` gates everything below on a published release with the six packaging assets | none (optional RELEASE_TOKEN if the Actions token cannot write; see deploy-proxy) |
+| **Homebrew** (tap `ShibbityShwab/lightspeed`) | **1.11.1** (formula committed in this repo) | `Formula/lightspeed.rb` | `bump-homebrew` job updates and commits the formula on every tag | none |
+| **Chocolatey** (`choco install lightspeed`) | Feed lists **1.10.3**; **1.11.0 pushed 2026-11-17** and **1.11.1 pushed 2026-11-18 (HTTP 201)**, both awaiting moderation | `dist/chocolatey/` at 1.11.1 | `bump-chocolatey` job bumps the source and pushes the `.nupkg`; Choco Push workflow re-pushes by hand for a missed version | `CHOCO_API_KEY` **set** (2026-10-02); account exists. No action beyond the moderation queue |
+| **Scoop** (`scoop install lightspeed`) | Bucket serves **1.11.0**; the in-repo manifest is **1.11.1** (bumped 2026-11-18) but the bucket was **not** synced | `dist/scoop/lightspeed.json` | `publish-scoop` job (`infra/scripts/publish-scoop.sh`) syncs the bucket after `bump-scoop` commits to master; no-op when the bucket already matches | **`SCOOP_TOKEN` missing** - owner creates a token with Contents-write on `ShibbityShwab/scoop-bucket` and stores it as the secret |
+| **winget** (`winget install ShibbityShwab.LightSpeed`) | **Not published** - bootstrap PR **[microsoft/winget-pkgs#481953](https://github.com/microsoft/winget-pkgs/pull/481953)** is open (1.11.0) awaiting a moderator; `microsoft/winget-pkgs` has no package yet | `dist/winget/manifests/s/ShibbityShwab/LightSpeed/1.11.0/` | `winget-releaser` job is gated on the package existing + `WINGET_TOKEN`; it is a clean no-op today | **First-version PR is open, not merged.** Once #481953 merges, the existing `WINGET_TOKEN` (set 2026-09-18; verify valid) is enough for the 1.11.1+ updates |
+| **AUR** (`yay -S lightspeed-bin`) | **Published 1.11.1-1** (2026-11-18; [package page](https://aur.archlinux.org/packages/lightspeed-bin), maintainer `chrissinclair`, 3 sources) | `dist/aur/PKGBUILD` + `.SRCINFO` at **1.11.1-1** | `publish-aur` job (`infra/scripts/publish-aur.sh`) pushes to `ssh://aur@aur.archlinux.org/lightspeed-bin.git` when pkgver/pkgrel changed; no-op when already current | **Done:** AUR account key registered and `AUR_SSH_PRIVATE_KEY` set. The PKGBUILD is still bumped by hand each release (no `bump-aur` automation yet) |
+| **Direct downloads** (MSI / zip / tarballs) | **1.11.1** | - | GitHub Releases (same as the first row) | none |
 
 ### What the next tag does automatically
 
@@ -42,7 +42,18 @@ published with its assets:
 `publishing-self-test` runs the hermetic Scoop/AUR self-tests on **every**
 workflow event (PR included, no token, no network).
 
-## Owner-only blockers (exact)
+### Re-running the bumps for an already-published release
+
+The `release-state` gate reads the release with `gh release view`. Before
+2026-11-18 that job had no git checkout, so `gh` failed with "not a git
+repository", `ready` stayed false and **every** bump was silently skipped (this
+hit the v1.11.1 tag; the release itself published fine). The job now sets
+`GH_REPO`, and a `workflow_dispatch` takes `tag` + `run_bumps=true` to run the
+same bump jobs for a release that is already published - no build, no publish.
+v1.11.1's channels were completed with that mode. A release that needs its
+channels re-run no longer needs a new tag.
+
+### Owner-only blockers (exact)
 
 1. **Scoop bucket token.** Create a token (fine-grained preferred, resource
    owner `ShibbityShwab`) with **Contents: write** on
@@ -59,11 +70,11 @@ workflow event (PR included, no token, no network).
    `https://chrissinclairdesign.com`.
 3. **winget first-version PR.** The package has never been created in
    `microsoft/winget-pkgs`, and automation cannot create the first version.
-   Open a fresh PR with the `1.11.0` manifest (the prior 1.4.3/1.4.4 bootstrap
-   PRs are closed, not merged), sign the Microsoft CLA if prompted, and let a
-   winget-pkgs moderator merge it. After that the existing `WINGET_TOKEN`
-   (set 2026-09-18; verify it is valid and not expired) is enough for updates.
-   Full procedure: `dist/winget/README.md`.
+   **[microsoft/winget-pkgs#481953](https://github.com/microsoft/winget-pkgs/pull/481953)**
+   (1.11.0) is open and awaiting a moderator; sign the Microsoft CLA if prompted.
+   After it merges, the existing `WINGET_TOKEN` (set 2026-09-18; verify it is
+   valid and not expired) is enough for updates, starting with 1.11.1. Full
+   procedure: `dist/winget/README.md`.
 4. **Release publish token (optional).** Only if the Actions token cannot write
    releases in this repository: add `RELEASE_TOKEN` with Contents read/write.
    The 2026-11-16 403 was not reproducible on 2026-11-17; see
@@ -71,8 +82,9 @@ workflow event (PR included, no token, no network).
 
 The **AUR PKGBUILD bump** is also manual today: before tagging a release, set
 `pkgver` in `dist/aur/PKGBUILD`, refresh the three sha256 values from the
-release's `sha256.sum`, update `.SRCINFO`, and commit both. A `bump-aur`
-automation would remove that step; it does not exist yet.
+release's `sha256.sum`, update `.SRCINFO`, and commit both. v1.11.1 was bumped
+this way after the assets existed; a `bump-aur` automation would remove that
+step, and the bump-dispatch mode above is the recovery path when it is missed.
 
 ## Verification commands (2026-11-17 state)
 
