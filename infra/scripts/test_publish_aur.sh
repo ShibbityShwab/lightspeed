@@ -37,6 +37,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PUBLISH="$SCRIPT_DIR/publish-aur.sh"
 SHIPPED_DIR="$REPO_ROOT/dist/aur"
+# The shipped version is whatever dist/aur currently declares, so a release
+# bump does not require editing this test. The bump scenarios use the next
+# minor above it: newer than what the first push installs, and distinct from
+# the 9.9.9 expected-version fixture.
+SHIPPED_VERSION="$(sed -n 's/^pkgver=//p' "$SHIPPED_DIR/PKGBUILD" | head -1)"
+NEXT_VERSION="$(printf '%s' "$SHIPPED_VERSION" | awk -F. '{printf "%s.%d.0", $1, $2 + 1}')"
 
 PASS=0
 FAILURES=0
@@ -140,7 +146,7 @@ new_bare "$BARE"
 EMPTY_HEAD="$(bare_head "$BARE")"
 
 # ══════════════════════════════════════════════════════════════
-# (a) first push publishes the shipped 1.11.0 files, as a bot commit
+# (a) first push publishes the shipped dist/aur files, as a bot commit
 # ══════════════════════════════════════════════════════════════
 run_publish "$SHIPPED_DIR" "file://$BARE"
 assert_eq "$RC" "0" "(a) the first push exits 0"
@@ -148,9 +154,9 @@ assert_contains "$OUT" "pushed lightspeed-bin" "(a) the push is reported"
 assert_eq "$EMPTY_HEAD" "" "(a) the bare repo started empty"
 HEAD1="$(bare_head "$BARE")"
 if [ -n "$HEAD1" ]; then pass; else fail "(a) the first push created refs/heads/master"; fi
-assert_contains "$(bare_show "$BARE" PKGBUILD)" "pkgver=1.11.0" "(a) PKGBUILD landed at 1.11.0"
-assert_contains "$(bare_show "$BARE" .SRCINFO)" "pkgver = 1.11.0" "(a) .SRCINFO landed at 1.11.0"
-assert_eq "$(bare_msg "$BARE")" "lightspeed-bin 1.11.0-1" "(a) the commit message names the version-release"
+assert_contains "$(bare_show "$BARE" PKGBUILD)" "pkgver=$SHIPPED_VERSION" "(a) PKGBUILD landed at the shipped version"
+assert_contains "$(bare_show "$BARE" .SRCINFO)" "pkgver = $SHIPPED_VERSION" "(a) .SRCINFO landed at the shipped version"
+assert_eq "$(bare_msg "$BARE")" "lightspeed-bin ${SHIPPED_VERSION}-1" "(a) the commit message names the version-release"
 assert_eq "$(bare_author "$BARE")" "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" \
 	"(a) the commit is authored as the actions bot"
 bare_show "$BARE" PKGBUILD > "$TMP/remote-PKGBUILD"
@@ -178,13 +184,13 @@ assert_eq "$(bare_head "$BARE")" "$HEAD1" "(b) a re-run made no new commit"
 # (c) a version bump pushes
 # ══════════════════════════════════════════════════════════════
 SRC_1111="$TMP/src-1.11.1"
-make_source "$SRC_1111" "1.11.1" "1"
+make_source "$SRC_1111" "$NEXT_VERSION" "1"
 run_publish "$SRC_1111" "file://$BARE"
 assert_eq "$RC" "0" "(c) a version bump exits 0"
-assert_contains "$OUT" "pushed lightspeed-bin 1.11.1-1" "(c) the new version is reported"
-assert_eq "$(bare_msg "$BARE")" "lightspeed-bin 1.11.1-1" "(c) the commit message uses the new version"
-assert_contains "$(bare_show "$BARE" PKGBUILD)" "pkgver=1.11.1" "(c) PKGBUILD was updated"
-assert_contains "$(bare_show "$BARE" .SRCINFO)" "pkgver = 1.11.1" "(c) .SRCINFO was updated"
+assert_contains "$OUT" "pushed lightspeed-bin ${NEXT_VERSION}-1" "(c) the new version is reported"
+assert_eq "$(bare_msg "$BARE")" "lightspeed-bin ${NEXT_VERSION}-1" "(c) the commit message uses the new version"
+assert_contains "$(bare_show "$BARE" PKGBUILD)" "pkgver=$NEXT_VERSION" "(c) PKGBUILD was updated"
+assert_contains "$(bare_show "$BARE" .SRCINFO)" "pkgver = $NEXT_VERSION" "(c) .SRCINFO was updated"
 HEAD2="$(bare_head "$BARE")"
 if [ -n "$HEAD2" ] && [ "$HEAD2" != "$HEAD1" ]; then pass; else fail "(c) the bump created a new commit"; fi
 
@@ -192,7 +198,7 @@ if [ -n "$HEAD2" ] && [ "$HEAD2" != "$HEAD1" ]; then pass; else fail "(c) the bu
 # (d) a content change without a pkgrel/pkgver bump is refused
 # ══════════════════════════════════════════════════════════════
 SRC_SAME="$TMP/src-same"
-make_source "$SRC_SAME" "1.11.1" "1"
+make_source "$SRC_SAME" "$NEXT_VERSION" "1"
 printf '\n# packaging tweak without a pkgrel bump\n' >> "$SRC_SAME/PKGBUILD"
 run_publish "$SRC_SAME" "file://$BARE"
 assert_eq "$RC" "1" "(d) an unbumped content change exits non-zero"
@@ -203,18 +209,18 @@ assert_eq "$(bare_head "$BARE")" "$HEAD2" "(d) the refusal pushed nothing"
 # (e) a pkgrel-only bump is allowed
 # ══════════════════════════════════════════════════════════════
 SRC_REL="$TMP/src-rel"
-make_source "$SRC_REL" "1.11.1" "2"
+make_source "$SRC_REL" "$NEXT_VERSION" "2"
 printf '\n# packaging tweak with a pkgrel bump\n' >> "$SRC_REL/PKGBUILD"
 run_publish "$SRC_REL" "file://$BARE"
 assert_eq "$RC" "0" "(e) a pkgrel-only bump exits 0"
-assert_eq "$(bare_msg "$BARE")" "lightspeed-bin 1.11.1-2" "(e) the commit message uses the new pkgrel"
+assert_eq "$(bare_msg "$BARE")" "lightspeed-bin ${NEXT_VERSION}-2" "(e) the commit message uses the new pkgrel"
 HEAD3="$(bare_head "$BARE")"
 
 # ══════════════════════════════════════════════════════════════
 # (f) a downgrade is refused
 # ══════════════════════════════════════════════════════════════
 SRC_OLD="$TMP/src-old"
-make_source "$SRC_OLD" "1.11.0" "1"
+make_source "$SRC_OLD" "0.9.9" "1"
 run_publish "$SRC_OLD" "file://$BARE"
 assert_eq "$RC" "1" "(f) a downgrade exits non-zero"
 assert_contains "$OUT" "refusing to downgrade" "(f) the refusal says downgrade"
@@ -224,7 +230,7 @@ assert_eq "$(bare_head "$BARE")" "$HEAD3" "(f) the downgrade pushed nothing"
 # (g) a PKGBUILD/.SRCINFO mismatch is refused before any git work
 # ══════════════════════════════════════════════════════════════
 SRC_MISMATCH="$TMP/src-mismatch"
-make_source "$SRC_MISMATCH" "1.11.1" "1"
+make_source "$SRC_MISMATCH" "$NEXT_VERSION" "1"
 sed -i 's/^\tpkgver = .*/\tpkgver = 1.10.0/' "$SRC_MISMATCH/.SRCINFO"
 run_publish "$SRC_MISMATCH" "file://$BARE"
 assert_eq "$RC" "1" "(g) a .SRCINFO mismatch exits non-zero"
@@ -235,17 +241,17 @@ assert_eq "$(bare_head "$BARE")" "$HEAD3" "(g) the mismatch pushed nothing"
 # (h) a source URL that does not match pkgver is refused
 # ══════════════════════════════════════════════════════════════
 SRC_URL="$TMP/src-url"
-make_source "$SRC_URL" "1.11.1" "1"
-sed -i 's|/download/v1\.11\.1/|/download/v1.10.0/|' "$SRC_URL/.SRCINFO"
+make_source "$SRC_URL" "$NEXT_VERSION" "1"
+sed -i "s|/download/v${NEXT_VERSION}/|/download/v1.10.0/|" "$SRC_URL/.SRCINFO"
 run_publish "$SRC_URL" "file://$BARE"
 assert_eq "$RC" "1" "(h) a stale source URL exits non-zero"
-assert_contains "$OUT" "do not point at v1.11.1" "(h) the stale source URL is named"
+assert_contains "$OUT" "do not point at v${NEXT_VERSION}" "(h) the stale source URL is named"
 
 # ══════════════════════════════════════════════════════════════
 # (i) a source/sha256 count mismatch is refused
 # ══════════════════════════════════════════════════════════════
 SRC_SUMS="$TMP/src-sums"
-make_source "$SRC_SUMS" "1.11.1" "1"
+make_source "$SRC_SUMS" "$NEXT_VERSION" "1"
 # Remove exactly one sha256sums_x86_64 line (the first match). The pattern is
 # unanchored on purpose: awk implementations differ on \t in a regex, and the
 # string only appears on the sha256sums_x86_64 lines.
@@ -269,7 +275,7 @@ assert_contains "$OUT" "PKGBUILD not found" "(j) the missing PKGBUILD is named"
 # (k) --dry-run pushes nothing
 # ══════════════════════════════════════════════════════════════
 SRC_NEXT="$TMP/src-next"
-make_source "$SRC_NEXT" "1.12.0" "1"
+make_source "$SRC_NEXT" "$NEXT_VERSION" "3"
 run_publish "$SRC_NEXT" "file://$BARE" --dry-run
 assert_eq "$RC" "0" "(k) --dry-run exits 0"
 assert_contains "$OUT" "dry run" "(k) --dry-run says nothing was pushed"
@@ -299,7 +305,7 @@ OUT="$(GIT_CONFIG_GLOBAL="$CFG" GIT_CONFIG_NOSYSTEM=1 bash "$PUBLISH" --source-d
 RC=$?
 assert_eq "$RC" "0" "(m) the default ssh:// URL publish path exits 0"
 assert_contains "$OUT" "ssh://aur@aur.archlinux.org/lightspeed-bin.git" "(m) the default URL is reported"
-assert_contains "$(bare_show "$BARE2" PKGBUILD)" "pkgver=1.11.0" "(m) the default-URL path pushed the package"
+assert_contains "$(bare_show "$BARE2" PKGBUILD)" "pkgver=$SHIPPED_VERSION" "(m) the default-URL path pushed the package"
 
 # ══════════════════════════════════════════════════════════════
 # (n) usage errors
