@@ -5,7 +5,7 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.11.2] - 2026-11-18
 
 ### Fixed
 
@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   EDR-loaded machine), which froze window moves and clicks. A dedicated worker
   owns the cadence, keeps at most one scan in flight, joins on shutdown, and
   Manual/Custom mode no longer scans at all.
+
+### Notes
+
+- The `[tunnel] mtu` / GUI `tunnel_mtu` key is written by 1.11.x only. Running
+  an older client against the same `config.toml` (a downgrade) drops it, and
+  the tunnel returns to the default 1492 clamp; re-set it after a downgrade.
 
 ## [1.11.1] - 2026-11-18
 
