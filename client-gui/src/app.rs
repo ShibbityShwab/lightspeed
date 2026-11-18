@@ -39,6 +39,7 @@ mod editor;
 mod games;
 mod ledger;
 mod picker;
+mod presence;
 mod relay_choice;
 #[cfg(test)]
 mod tests;
@@ -52,6 +53,7 @@ use editor::*;
 use games::*;
 use ledger::*;
 use picker::*;
+use presence::*;
 use relay_choice::*;
 use theme::*;
 use watchdog::*;
@@ -78,12 +80,6 @@ pub enum TrayState {
 /// While auto-select is on and the tunnel is up, how often to re-run the relay
 /// race so a better - or newly faster - relay can take over.
 const RELAY_RECHECK_INTERVAL: Duration = Duration::from_secs(600);
-
-/// How often to scan the process table for a game appearing or exiting.
-///
-/// Slower than a relay probe on purpose: starting a game is a minutes-scale
-/// event, and the scan walks every process on the machine.
-const GAME_PRESENCE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How long traffic may be held direct before the app gives up identifying the
 /// game server and relays through the nearest relay anyway.
@@ -278,8 +274,13 @@ pub struct LightSpeedApp<P: Platform> {
     /// every second.
     relay_health: Option<RelayHealthVerdict>,
 
-    /// When the process table was last scanned for a game.
-    last_presence_check: Option<std::time::Instant>,
+    /// The single background worker that scans the host for a running game.
+    ///
+    /// Detection spawns `tasklist` plus a PowerShell process query (0.4 s here,
+    /// seconds on the EDR-heavy machine in issue #178), so it must never run on
+    /// the egui thread. The worker owns the 5 s cadence; this handle is only the
+    /// polled result channel plus the stop/join token.
+    presence: GamePresence,
 
     /// Whether a game was present at the last scan, so a start/stop happens on a
     /// transition only and not on every tick.
@@ -410,7 +411,11 @@ impl<P: Platform> LightSpeedApp<P> {
         tracing::info!("system tray created: {}", tray.is_some());
         let status = lock_or_recover(&engine).snapshot();
 
-        let auto_detected_game = try_auto_detect_game();
+        // Detection is deliberately not run here: `new()` executes on the thread
+        // that will pump the egui loop, and one scan spawns two processes. The
+        // presence worker (see `app::presence`) performs the first scan as soon
+        // as the first frame enables it, and `poll_game_presence` applies it.
+        let auto_detected_game: Option<String> = None;
 
         let is_admin = P::is_admin();
 
@@ -526,7 +531,7 @@ impl<P: Platform> LightSpeedApp<P> {
             history_counters: None,
             history_saved_at: None,
             verdict_recorded: None,
-            last_presence_check: None,
+            presence: GamePresence::spawn(),
             auto_game_present: false,
             auto_started_for_presence: false,
             last_race: None,
@@ -1393,6 +1398,9 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     fn shutdown_engine(&mut self) {
+        // Stop the background watcher first and wait for it: a presence scan is
+        // two process spawns, and the app must not go away while one runs.
+        self.presence.shutdown();
         let mut engine = lock_or_recover(&self.engine);
         engine.stop_interceptor();
         engine.stop_windivert();
@@ -1819,39 +1827,46 @@ impl<P: Platform> LightSpeedApp<P> {
         P::relaunch_as_admin();
     }
 
-    /// Watch for a game appearing or exiting, and relay without being asked.
+    /// Apply the background game-presence watcher's latest result.
     ///
     /// This is what removes the button press the user has to remember: with
     /// `game_auto` on, relaying starts when a known game shows up and stops when
     /// it leaves, so a match is optimized from its first packet rather than from
-    /// whichever moment the user noticed. Detection is throttled because it
-    /// scans the whole process table, and a scan per frame would be wasteful for
-    /// a signal that changes on the scale of minutes.
+    /// whichever moment the user noticed.
+    ///
+    /// The scan itself - two process spawns that block for 0.4-3.4 s - runs on
+    /// the watcher thread (see `app::presence`); this method only tells it which
+    /// mode the Game field is in and applies whatever finished.
     ///
     /// A manual game pick or a manual process target disables the arm entirely:
     /// the user has expressed an intent that an automatic scan must not override.
     fn poll_game_presence(&mut self) {
-        if !self.game_auto && !self.game_manual {
-            self.auto_detected_game = None;
-            self.auto_game_present = false;
+        // Auto is the only scanning mode. Manual / Custom hands routing to the
+        // typed server, and a pinned game or process target is an explicit
+        // choice, so "not allowed" also means "never auto-start from a scan".
+        let auto_mode = self.game_auto && !self.game_manual;
+        let allowed = presence_scan_allowed(
+            self.game_auto,
+            self.game_manual,
+            self.target_process.is_some(),
+        );
+        self.presence.set_enabled(allowed);
+        if !allowed {
+            // Drop a result produced before the switch, so leaving Auto can
+            // never be followed by an auto-start on a stale scan.
+            self.presence.discard_pending();
+            if !auto_mode {
+                self.auto_detected_game = None;
+                self.auto_game_present = false;
+            }
             return;
         }
 
-        let due = match self.last_presence_check {
-            Some(at) => at.elapsed() >= GAME_PRESENCE_INTERVAL,
-            None => true,
+        // The worker owns the 5 s cadence and keeps one scan in flight, so this
+        // never waits; a frame without a result keeps the previous state.
+        let Some(detected) = self.presence.latest() else {
+            return;
         };
-        if !due {
-            return;
-        }
-        self.last_presence_check = Some(std::time::Instant::now());
-
-        // A manual process target is the user's explicit choice; never fight it.
-        if self.target_process.is_some() {
-            return;
-        }
-
-        let detected = try_auto_detect_game();
         let present = detected.is_some();
         let changed = detected != self.auto_detected_game;
         self.auto_detected_game = detected;
