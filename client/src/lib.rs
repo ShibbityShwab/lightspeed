@@ -82,6 +82,14 @@ pub mod test_support {
     };
     pub use crate::session::{path_token, session_token};
 
+    /// The data plane's default path-MTU cap (1,500 bytes).
+    ///
+    /// `register_session` / `ensure_registration` take the effective
+    /// `[tunnel] mtu` cap explicitly; integration tests pass this default so
+    /// their supervised control connection behaves exactly as at the default
+    /// while the new cap parameter is exercised.
+    pub use crate::tunnel::pmtud::HARD_CAP_PATH_MTU;
+
     /// Install the process-wide rustls `CryptoProvider` for a test binary.
     ///
     /// The shipped binaries pin `ring` early (see `client-gui/src/main.rs`),

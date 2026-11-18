@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lightspeed_client::test_support::{path_token, register_session, stop_supervisor};
+use lightspeed_client::test_support::{
+    path_token, register_session, stop_supervisor, HARD_CAP_PATH_MTU,
+};
 use lightspeed_protocol::control::ControlMessage;
 
 static HOME_ONCE: Once = Once::new();
@@ -150,10 +152,10 @@ async fn every_active_path_registered() {
     let _ = stop_supervisor(path_a);
     let _ = stop_supervisor(path_b);
 
-    let token_a = register_session(path_a, server_a.control_port)
+    let token_a = register_session(path_a, server_a.control_port, HARD_CAP_PATH_MTU)
         .await
         .expect("path A must register");
-    let token_b = register_session(path_b, server_b.control_port)
+    let token_b = register_session(path_b, server_b.control_port, HARD_CAP_PATH_MTU)
         .await
         .expect("path B must register");
 

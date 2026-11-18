@@ -278,7 +278,10 @@ async fn live_stage(
         .map_err(|error| anyhow::anyhow!(error))?;
     let platform = interceptor.platform_name().to_string();
 
-    crate::quic::register_session(proxy, 4433).await;
+    // No CLI/config value reaches this diagnostic path, so verify against the
+    // conservative clamp: below the 1,472-byte hard cap, and the documented
+    // fallback for callers without a resolved `[tunnel] mtu`.
+    crate::quic::register_session(proxy, 4433, crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU).await;
     crate::session::set_current_proxy(proxy);
 
     let mut handle = interceptor.start(config)?;

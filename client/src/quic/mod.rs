@@ -35,6 +35,34 @@ pub(crate) fn token_rotation_secs() -> u64 {
     TOKEN_ROTATION_SECS.load(Ordering::Relaxed)
 }
 
+/// The UDP payload the QUIC control plane may use on an IP path whose MTU is
+/// `path_mtu` bytes.
+///
+/// The data plane has always budgeted the outer IPv4/UDP headers out of the
+/// path MTU; the control plane did not, so it kept probing and sending
+/// 1,472-byte datagrams toward the relay's control port even when the user had
+/// lowered `[tunnel] mtu` (issue #178: `WSAEMSGSIZE` 10040 on a sub-1500 path).
+/// This is the same budget, applied to the supervised QUIC socket.
+///
+/// The result is clamped to QUIC's 1,200-byte floor (RFC 9000 §14.1: no larger
+/// packet before the path is known to allow it; quinn's own minimum is 1,200)
+/// and to the data plane's hard cap
+/// ([`crate::tunnel::pmtud::HARD_CAP_UDP_PAYLOAD`], 1,472), so the default
+/// 1,500-byte configuration keeps exactly the previous upper bound.
+pub(crate) fn quic_udp_payload_upper_bound(path_mtu: usize) -> u16 {
+    let udp_payload = path_mtu.saturating_sub(
+        lightspeed_protocol::OUTER_IPV4_HEADER_SIZE + lightspeed_protocol::OUTER_UDP_HEADER_SIZE,
+    );
+    udp_payload.clamp(
+        QUIC_MIN_UDP_PAYLOAD,
+        crate::tunnel::pmtud::HARD_CAP_UDP_PAYLOAD,
+    ) as u16
+}
+
+/// The smallest UDP payload QUIC permits on an unvalidated path, in bytes
+/// (RFC 9000 §14.1, quinn's minimum initial MTU).
+const QUIC_MIN_UDP_PAYLOAD: usize = 1200;
+
 pub(crate) mod fingerprint;
 
 #[cfg(feature = "quic")]
@@ -55,6 +83,7 @@ mod inner {
     use lightspeed_protocol::control::ControlMessage;
     use lightspeed_protocol::PROTOCOL_VERSION;
 
+    use super::quic_udp_payload_upper_bound;
     use crate::error::QuicError;
 
     /// Time budget for one token-rotation exchange over the control connection.
@@ -135,9 +164,15 @@ mod inner {
     /// `alpn` is empty for a relay that answered alert 120 earlier in this
     /// process, and otherwise the versioned control-plane list: an empty list
     /// sends no ALPN extension at all, which is what a pre-rollout client did.
+    ///
+    /// `path_mtu_cap` is the effective `[tunnel] mtu` cap ([`HARD_CAP_PATH_MTU`]
+    /// when unset). It bounds DPLPMTUD on this path so the control plane never
+    /// probes or sends a datagram larger than the configured path allows
+    /// (issue #178); see [`quic_udp_payload_upper_bound`].
     fn build_client_config(
         addr: SocketAddr,
         alpn: Vec<Vec<u8>>,
+        path_mtu_cap: usize,
     ) -> Result<quinn::ClientConfig, QuicError> {
         // quinn pulls rustls with its aws-lc-rs default while this crate (and
         // the pinning verifier) uses ring, so a workspace build has two
@@ -174,8 +209,11 @@ mod inner {
         ));
         // Bound quinn's built-in RFC 8899 DPLPMTUD so the client-to-relay path
         // is probed only up to the cap the data plane is willing to trust.
+        // The configured `[tunnel] mtu` cap (1,500 when unset) is the same
+        // budget the tunnel uses, not the hard cap: on a reduced path a
+        // 1,472-byte control datagram is exactly the #178 `WSAEMSGSIZE` case.
         let mut mtu_discovery = quinn::MtuDiscoveryConfig::default();
-        mtu_discovery.upper_bound(crate::tunnel::pmtud::HARD_CAP_UDP_PAYLOAD as u16);
+        mtu_discovery.upper_bound(quic_udp_payload_upper_bound(path_mtu_cap));
         transport.mtu_discovery_config(Some(mtu_discovery));
         client_config.transport_config(Arc::new(transport));
 
@@ -261,10 +299,21 @@ mod inner {
         /// `None` on a live connection means the relay accepted an ALPN-less
         /// handshake, i.e. it has not been upgraded to `lightspeed-control/1`.
         negotiated_alpn: Option<Vec<u8>>,
+        /// Effective path-MTU cap for this client's path.
+        ///
+        /// Bounds DPLPMTUD on the control connection; the default is the hard
+        /// cap ([`crate::tunnel::pmtud::HARD_CAP_PATH_MTU`]), which preserves
+        /// the previous upper bound for probe and test clients. The supervised
+        /// registration path lowers it to the configured `[tunnel] mtu` cap.
+        path_mtu_cap: usize,
     }
 
     impl ControlClient {
-        /// Create a new control plane client.
+        /// Create a new control plane client with the hard-cap default.
+        ///
+        /// Probe and test clients keep this default; the supervised
+        /// registration path calls [`Self::set_path_mtu_cap`] with the
+        /// configured cap before connecting.
         pub fn new() -> Result<Self, QuicError> {
             // Bind to any available port for the client endpoint. The default
             // client config (with the proxy's pinned certificate) is set per
@@ -283,7 +332,20 @@ mod inner {
                 telemetry_quic: false,
                 dest_region: None,
                 negotiated_alpn: None,
+                path_mtu_cap: crate::tunnel::pmtud::HARD_CAP_PATH_MTU,
             })
+        }
+
+        /// Set the effective path-MTU cap used for this client's connections.
+        ///
+        /// The DPLPMTUD upper bound becomes the cap's UDP payload
+        /// ([`quic_udp_payload_upper_bound`]). The supervised registration path
+        /// sets the configured `[tunnel] mtu` cap here before connecting, so a
+        /// reduced path stops probing 1,472-byte control datagrams (issue
+        /// #178). The value is clamped by the helper, so an out-of-range cap
+        /// cannot escape quinn's 1,200..=1,472 window.
+        pub fn set_path_mtu_cap(&mut self, path_mtu_cap: usize) {
+            self.path_mtu_cap = path_mtu_cap;
         }
 
         /// Connect to a proxy's control plane and register.
@@ -339,8 +401,11 @@ mod inner {
             }
 
             loop {
-                self.endpoint
-                    .set_default_client_config(build_client_config(addr, offer.clone())?);
+                self.endpoint.set_default_client_config(build_client_config(
+                    addr,
+                    offer.clone(),
+                    self.path_mtu_cap,
+                )?);
                 let connecting = self
                     .endpoint
                     .connect(addr, "lightspeed-proxy")
@@ -836,6 +901,10 @@ mod inner {
             })
         }
 
+        /// Accepted for API parity with the enabled build; the stub has no
+        /// transport whose MTU discovery could be bounded.
+        pub fn set_path_mtu_cap(&mut self, _path_mtu_cap: usize) {}
+
         pub async fn connect(&mut self, addr: SocketAddr, game: u8) -> Result<(), QuicError> {
             self.connect_with_destination(addr, game, None).await
         }
@@ -966,6 +1035,10 @@ mod supervisor {
         /// replacement (a newly learned destination) does not forget it.
         alpn_memory: Arc<AlpnMemory>,
         control_port: u16,
+        /// Effective path-MTU cap the live supervisor was created with; a
+        /// request with a different cap replaces the supervisor so the new cap
+        /// reaches the next control connection.
+        path_mtu_cap: usize,
         _join: JoinHandle<()>,
     }
 
@@ -977,6 +1050,7 @@ mod supervisor {
         target: Arc<Mutex<Option<ControlTarget>>>,
         destination: Arc<Mutex<Option<Ipv4Addr>>>,
         alpn_memory: Arc<AlpnMemory>,
+        path_mtu_cap: usize,
     }
 
     static REGISTRY: OnceLock<Mutex<HashMap<SocketAddrV4, Entry>>> = OnceLock::new();
@@ -1035,10 +1109,16 @@ mod supervisor {
 
     /// Ensure exactly one supervisor exists for `data_addr`, returning the
     /// receiver that reports its first registration outcome.
+    ///
+    /// `path_mtu_cap` is the effective `[tunnel] mtu` cap; a supervisor created
+    /// with a different cap is replaced so the next control connection uses the
+    /// new value (like a newly learned destination, a cap change is a
+    /// re-registration reason).
     pub(super) fn ensure_supervisor(
         data_addr: SocketAddrV4,
         control_port: u16,
         destination: Option<Ipv4Addr>,
+        path_mtu_cap: usize,
     ) -> watch::Receiver<Initial> {
         let mut registry = lock_registry();
         if let Some(entry) = registry.get(&data_addr) {
@@ -1047,7 +1127,9 @@ mod supervisor {
                     .destination
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if destination.is_none() || known == destination {
+                if (destination.is_none() || known == destination)
+                    && entry.path_mtu_cap == path_mtu_cap
+                {
                     return entry.initial_rx.clone();
                 }
             }
@@ -1087,6 +1169,7 @@ mod supervisor {
             target,
             destination: Arc::clone(&destination),
             alpn_memory: Arc::clone(&alpn_memory),
+            path_mtu_cap,
         };
         let join = tokio::spawn(supervisor_loop(context, control_port, initial_tx, stop_rx));
 
@@ -1099,6 +1182,7 @@ mod supervisor {
                 destination,
                 alpn_memory,
                 control_port,
+                path_mtu_cap,
                 _join: join,
             },
         );
@@ -1112,8 +1196,9 @@ mod supervisor {
         data_addr: SocketAddrV4,
         control_port: u16,
         destination: Option<Ipv4Addr>,
+        path_mtu_cap: usize,
     ) -> Option<u32> {
-        let mut initial_rx = ensure_supervisor(data_addr, control_port, destination);
+        let mut initial_rx = ensure_supervisor(data_addr, control_port, destination, path_mtu_cap);
         if matches!(*initial_rx.borrow(), Initial::Pending) {
             let _ = initial_rx.changed().await;
         }
@@ -1125,8 +1210,8 @@ mod supervisor {
     }
 
     /// Spawn a supervisor for `data_addr` without waiting for the first result.
-    pub fn ensure_registration(data_addr: SocketAddrV4, control_port: u16) {
-        let _ = ensure_supervisor(data_addr, control_port, None);
+    pub fn ensure_registration(data_addr: SocketAddrV4, control_port: u16, path_mtu_cap: usize) {
+        let _ = ensure_supervisor(data_addr, control_port, None, path_mtu_cap);
     }
 
     /// Spawn a supervisor for `data_addr`, reporting the game server so the
@@ -1137,8 +1222,9 @@ mod supervisor {
         data_addr: SocketAddrV4,
         control_port: u16,
         destination: Option<Ipv4Addr>,
+        path_mtu_cap: usize,
     ) {
-        let _ = ensure_supervisor(data_addr, control_port, destination);
+        let _ = ensure_supervisor(data_addr, control_port, destination, path_mtu_cap);
     }
 
     /// Report the game server to the currently selected relay so it resolves
@@ -1149,13 +1235,13 @@ mod supervisor {
         let Some(data_addr) = crate::session::current_proxy() else {
             return;
         };
-        let control_port = lock_registry()
+        let registered = lock_registry()
             .get(&data_addr)
-            .map(|entry| entry.control_port);
-        let Some(control_port) = control_port else {
+            .map(|entry| (entry.control_port, entry.path_mtu_cap));
+        let Some((control_port, path_mtu_cap)) = registered else {
             return;
         };
-        ensure_registration_with_destination(data_addr, control_port, Some(server));
+        ensure_registration_with_destination(data_addr, control_port, Some(server), path_mtu_cap);
     }
 
     /// Stop the supervisor for `data_addr`, if one is running.
@@ -1210,6 +1296,7 @@ mod supervisor {
             target,
             destination,
             alpn_memory,
+            path_mtu_cap,
         } = context;
         let control_addr = SocketAddr::V4(SocketAddrV4::new(*data_addr.ip(), control_port));
         let mut backoff = Backoff::new();
@@ -1223,7 +1310,8 @@ mod supervisor {
             let destination = *destination
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match connect_and_register(control_addr, destination, &alpn_memory).await {
+            match connect_and_register(control_addr, destination, &alpn_memory, path_mtu_cap).await
+            {
                 Ok(client) => {
                     let token = client.session_token().unwrap_or(0);
                     let live = client.connection().cloned();
@@ -1387,8 +1475,10 @@ mod supervisor {
         control_addr: SocketAddr,
         destination: Option<Ipv4Addr>,
         alpn_memory: &AlpnMemory,
+        path_mtu_cap: usize,
     ) -> Result<ControlClient, QuicError> {
         let mut client = ControlClient::new()?;
+        client.set_path_mtu_cap(path_mtu_cap);
         client
             .connect_with_relay_memory(
                 control_addr,
@@ -1406,6 +1496,19 @@ mod supervisor {
         lock_registry()
             .get(&data_addr)
             .map(|entry| Arc::clone(&entry.alpn_memory))
+    }
+
+    /// The effective path-MTU cap a live supervisor was created with, for tests.
+    ///
+    /// This is the value the supervisor's next `build_client_config` call uses
+    /// as the DPLPMTUD upper bound (`quic_udp_payload_upper_bound`), so a test
+    /// can assert the configured cap actually reached the supervised path
+    /// without reproducing a sub-1500 network.
+    #[cfg(test)]
+    pub(super) fn supervised_path_mtu_cap(data_addr: SocketAddrV4) -> Option<usize> {
+        lock_registry()
+            .get(&data_addr)
+            .map(|entry| entry.path_mtu_cap)
     }
 
     #[derive(PartialEq, Eq)]
@@ -1531,8 +1634,12 @@ mod supervisor {
 pub use supervisor::SupervisorHandle;
 
 #[cfg(feature = "quic")]
-pub fn ensure_registration(data_addr: std::net::SocketAddrV4, control_port: u16) {
-    supervisor::ensure_registration(data_addr, control_port);
+pub fn ensure_registration(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    path_mtu_cap: usize,
+) {
+    supervisor::ensure_registration(data_addr, control_port, path_mtu_cap);
 }
 
 #[cfg(feature = "quic")]
@@ -1540,8 +1647,14 @@ pub fn ensure_registration_with_destination(
     data_addr: std::net::SocketAddrV4,
     control_port: u16,
     destination: Option<std::net::Ipv4Addr>,
+    path_mtu_cap: usize,
 ) {
-    supervisor::ensure_registration_with_destination(data_addr, control_port, destination);
+    supervisor::ensure_registration_with_destination(
+        data_addr,
+        control_port,
+        destination,
+        path_mtu_cap,
+    );
 }
 
 #[cfg(feature = "quic")]
@@ -1598,13 +1711,19 @@ pub async fn send_telemetry(
 }
 
 #[cfg(not(feature = "quic"))]
-pub fn ensure_registration(_data_addr: std::net::SocketAddrV4, _control_port: u16) {}
+pub fn ensure_registration(
+    _data_addr: std::net::SocketAddrV4,
+    _control_port: u16,
+    _path_mtu_cap: usize,
+) {
+}
 
 #[cfg(not(feature = "quic"))]
 pub fn ensure_registration_with_destination(
     _data_addr: std::net::SocketAddrV4,
     _control_port: u16,
     _destination: Option<std::net::Ipv4Addr>,
+    _path_mtu_cap: usize,
 ) {
 }
 
@@ -1642,26 +1761,39 @@ pub fn supervised_path_mtu(_data_addr: std::net::SocketAddrV4) -> Option<u16> {
 /// one, and a background task holds the connection open and reconnects with
 /// backoff after a control-plane loss, refreshing the per-path token. Repeated
 /// calls for the same relay are idempotent and do not spawn duplicate tasks.
-pub async fn register_session(data_addr: std::net::SocketAddrV4, control_port: u16) -> Option<u32> {
-    register_session_inner(data_addr, control_port).await
+///
+/// `path_mtu_cap` is the effective `[tunnel] mtu` cap (pass
+/// [`crate::tunnel::pmtud::HARD_CAP_PATH_MTU`] when there is none). It bounds
+/// the control connection's DPLPMTUD so a reduced path never probes or sends
+/// 1,472-byte datagrams toward the relay's control port (issue #178).
+pub async fn register_session(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    path_mtu_cap: usize,
+) -> Option<u32> {
+    register_session_inner(data_addr, control_port, path_mtu_cap).await
 }
 
 /// Register with the relay, reporting the game server so the relay can resolve
-/// its region from its MMDB. Identical to [`register_session`] otherwise.
+/// its region from its MMDB. Identical to [`register_session`] otherwise,
+/// including the `path_mtu_cap` bound on the control connection's DPLPMTUD.
 pub async fn register_session_with_destination(
     data_addr: std::net::SocketAddrV4,
     control_port: u16,
     destination: Option<std::net::Ipv4Addr>,
+    path_mtu_cap: usize,
 ) -> Option<u32> {
-    register_session_with_destination_inner(data_addr, control_port, destination).await
+    register_session_with_destination_inner(data_addr, control_port, destination, path_mtu_cap)
+        .await
 }
 
 #[cfg(feature = "quic")]
 async fn register_session_inner(
     data_addr: std::net::SocketAddrV4,
     control_port: u16,
+    path_mtu_cap: usize,
 ) -> Option<u32> {
-    supervisor::register_and_wait(data_addr, control_port, None).await
+    supervisor::register_and_wait(data_addr, control_port, None, path_mtu_cap).await
 }
 
 #[cfg(feature = "quic")]
@@ -1669,14 +1801,16 @@ async fn register_session_with_destination_inner(
     data_addr: std::net::SocketAddrV4,
     control_port: u16,
     destination: Option<std::net::Ipv4Addr>,
+    path_mtu_cap: usize,
 ) -> Option<u32> {
-    supervisor::register_and_wait(data_addr, control_port, destination).await
+    supervisor::register_and_wait(data_addr, control_port, destination, path_mtu_cap).await
 }
 
 #[cfg(not(feature = "quic"))]
 async fn register_session_inner(
     _data_addr: std::net::SocketAddrV4,
     _control_port: u16,
+    _path_mtu_cap: usize,
 ) -> Option<u32> {
     None
 }
@@ -1686,6 +1820,7 @@ async fn register_session_with_destination_inner(
     _data_addr: std::net::SocketAddrV4,
     _control_port: u16,
     _destination: Option<std::net::Ipv4Addr>,
+    _path_mtu_cap: usize,
 ) -> Option<u32> {
     None
 }
@@ -1695,11 +1830,14 @@ mod supervisor_tests {
     use super::supervisor::{
         ensure_registration, ensure_registration_with_destination, is_supervised,
         report_destination, send_telemetry, stop_supervisor, supervised_alpn_memory,
-        supervisor_handle, Backoff, MAX_BACKOFF, MIN_BACKOFF,
+        supervised_path_mtu_cap, supervisor_handle, Backoff, MAX_BACKOFF, MIN_BACKOFF,
     };
     use std::net::{Ipv4Addr, SocketAddrV4};
     use std::sync::Arc;
     use std::time::Duration;
+
+    /// The default cap: these tests exercise the unchanged default behaviour.
+    const PATH_MTU_CAP: usize = crate::tunnel::pmtud::HARD_CAP_PATH_MTU;
 
     #[test]
     fn backoff_advances_exponentially_and_caps() {
@@ -1733,11 +1871,11 @@ mod supervisor_tests {
     async fn registration_is_idempotent_per_relay() {
         let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42101);
         let _ = stop_supervisor(addr);
-        ensure_registration(addr, 59991);
+        ensure_registration(addr, 59991, PATH_MTU_CAP);
         let first = supervisor_handle(addr)
             .expect("supervisor registered")
             .generation;
-        ensure_registration(addr, 59991);
+        ensure_registration(addr, 59991, PATH_MTU_CAP);
         let second = supervisor_handle(addr)
             .expect("supervisor registered")
             .generation;
@@ -1751,12 +1889,12 @@ mod supervisor_tests {
     async fn restart_after_stop_bumps_generation() {
         let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42102);
         let _ = stop_supervisor(addr);
-        ensure_registration(addr, 59992);
+        ensure_registration(addr, 59992, PATH_MTU_CAP);
         let first = supervisor_handle(addr)
             .expect("supervisor registered")
             .generation;
         assert!(stop_supervisor(addr));
-        ensure_registration(addr, 59992);
+        ensure_registration(addr, 59992, PATH_MTU_CAP);
         let second = supervisor_handle(addr)
             .expect("supervisor registered")
             .generation;
@@ -1781,12 +1919,17 @@ mod supervisor_tests {
     async fn a_newly_learned_destination_restarts_the_supervisor() {
         let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42104);
         let _ = stop_supervisor(addr);
-        ensure_registration(addr, 59993);
+        ensure_registration(addr, 59993, PATH_MTU_CAP);
         let first = supervisor_handle(addr)
             .expect("supervisor registered")
             .generation;
 
-        ensure_registration_with_destination(addr, 59993, Some(Ipv4Addr::new(8, 8, 8, 8)));
+        ensure_registration_with_destination(
+            addr,
+            59993,
+            Some(Ipv4Addr::new(8, 8, 8, 8)),
+            PATH_MTU_CAP,
+        );
         let second = supervisor_handle(addr)
             .expect("supervisor registered")
             .generation;
@@ -1795,7 +1938,12 @@ mod supervisor_tests {
             "a newly learned destination must re-register to fetch its region"
         );
 
-        ensure_registration_with_destination(addr, 59993, Some(Ipv4Addr::new(8, 8, 8, 8)));
+        ensure_registration_with_destination(
+            addr,
+            59993,
+            Some(Ipv4Addr::new(8, 8, 8, 8)),
+            PATH_MTU_CAP,
+        );
         let repeated = supervisor_handle(addr)
             .expect("supervisor registered")
             .generation;
@@ -1804,7 +1952,7 @@ mod supervisor_tests {
             "a repeated identical destination must not re-register"
         );
 
-        ensure_registration(addr, 59993);
+        ensure_registration(addr, 59993, PATH_MTU_CAP);
         let third = supervisor_handle(addr)
             .expect("supervisor registered")
             .generation;
@@ -1822,7 +1970,7 @@ mod supervisor_tests {
         let server = Ipv4Addr::new(198, 51, 100, 7);
         let _ = stop_supervisor(relay);
         crate::session::set_current_proxy(relay);
-        ensure_registration(relay, 59994);
+        ensure_registration(relay, 59994, PATH_MTU_CAP);
         let first = supervisor_handle(relay)
             .expect("supervisor registered")
             .generation;
@@ -1858,12 +2006,17 @@ mod supervisor_tests {
     async fn a_replaced_supervisor_keeps_the_relays_alpn_answer() {
         let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42106);
         let _ = stop_supervisor(addr);
-        ensure_registration(addr, 59995);
+        ensure_registration(addr, 59995, PATH_MTU_CAP);
         let memory = supervised_alpn_memory(addr).expect("supervisor registered");
         assert!(!memory.needs_empty_offer(), "a relay starts unanswered");
         memory.record_alert_120();
 
-        ensure_registration_with_destination(addr, 59995, Some(Ipv4Addr::new(9, 9, 9, 9)));
+        ensure_registration_with_destination(
+            addr,
+            59995,
+            Some(Ipv4Addr::new(9, 9, 9, 9)),
+            PATH_MTU_CAP,
+        );
         let carried = supervised_alpn_memory(addr).expect("supervisor registered");
         assert!(
             carried.needs_empty_offer(),
@@ -1874,5 +2027,90 @@ mod supervisor_tests {
             "the process-lifetime memory is reused across replacements, not rebuilt"
         );
         assert!(stop_supervisor(addr));
+    }
+
+    /// Given: a reduced `[tunnel] mtu` cap. When: a supervisor is spawned for
+    /// the relay. Then: the supervisor carries that cap (so the next control
+    /// connection's DPLPMTUD upper bound is `quic_udp_payload_upper_bound(cap)`,
+    /// not the hard cap), and a later cap change replaces it instead of being
+    /// silently ignored. The default 1,500-byte cap is unchanged (issue #178).
+    #[tokio::test]
+    async fn a_configured_path_mtu_cap_reaches_the_supervisor() {
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42107);
+        let _ = stop_supervisor(addr);
+
+        ensure_registration(addr, 59996, 1400);
+        assert_eq!(
+            supervised_path_mtu_cap(addr),
+            Some(1400),
+            "the configured cap must reach the supervisor"
+        );
+        let reduced = supervisor_handle(addr)
+            .expect("supervisor registered")
+            .generation;
+
+        ensure_registration(addr, 59996, 1400);
+        assert_eq!(
+            supervisor_handle(addr)
+                .expect("supervisor registered")
+                .generation,
+            reduced,
+            "the same cap must not respawn the supervisor"
+        );
+
+        ensure_registration(addr, 59996, 1492);
+        assert_eq!(supervised_path_mtu_cap(addr), Some(1492));
+        let restored = supervisor_handle(addr)
+            .expect("supervisor registered")
+            .generation;
+        assert!(
+            restored > reduced,
+            "a changed cap must re-register so the next connection uses it"
+        );
+        assert!(stop_supervisor(addr));
+    }
+}
+
+/// The control plane's UDP-payload budget follows the configured path-MTU cap.
+///
+/// These are the pure range tests for the #178 fix: the supervised control
+/// connection must not probe or send a datagram larger than the path allows,
+/// while the default 1,500-byte configuration keeps the previous 1,472-byte
+/// DPLPMTUD upper bound.
+#[cfg(test)]
+mod mtu_tests {
+    use super::quic_udp_payload_upper_bound;
+    use crate::tunnel::pmtud::{HARD_CAP_PATH_MTU, HARD_CAP_UDP_PAYLOAD, MIN_PATH_MTU};
+
+    #[test]
+    fn the_control_plane_udp_payload_follows_the_configured_path_mtu() {
+        // The default cap keeps exactly the previous upper bound ...
+        assert_eq!(quic_udp_payload_upper_bound(HARD_CAP_PATH_MTU), 1472);
+        // ... and every lower cap sheds the same 28-byte outer IP/UDP header.
+        assert_eq!(quic_udp_payload_upper_bound(1492), 1464);
+        assert_eq!(quic_udp_payload_upper_bound(1400), 1372);
+        // The clamp floor is the documented `MIN_PATH_MTU` (1280 -> 1252).
+        assert_eq!(quic_udp_payload_upper_bound(MIN_PATH_MTU), 1252);
+        // QUIC's own 1,200-byte floor is never crossed ...
+        assert_eq!(quic_udp_payload_upper_bound(1200), 1200);
+        assert_eq!(quic_udp_payload_upper_bound(900), 1200);
+        assert_eq!(quic_udp_payload_upper_bound(0), 1200);
+        // ... and the data plane's hard cap is the ceiling.
+        assert_eq!(
+            quic_udp_payload_upper_bound(2000),
+            HARD_CAP_UDP_PAYLOAD as u16
+        );
+        assert_eq!(
+            quic_udp_payload_upper_bound(usize::MAX),
+            HARD_CAP_UDP_PAYLOAD as u16
+        );
+        // Every documented cap lands inside quinn's [1,200, 1,472] window.
+        for cap in [MIN_PATH_MTU, 1300, 1400, 1492, HARD_CAP_PATH_MTU] {
+            let bound = quic_udp_payload_upper_bound(cap);
+            assert!(
+                (1200..=HARD_CAP_UDP_PAYLOAD as u16).contains(&bound),
+                "cap {cap} -> {bound}"
+            );
+        }
     }
 }

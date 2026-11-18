@@ -333,6 +333,7 @@ fn start_continuous_rerouting(candidates: &[ProbeCandidate], config: &config::Co
         } else {
             1
         },
+        cli_mtu_cap(cli, config),
         rx,
     ));
 }
@@ -639,6 +640,7 @@ async fn main() -> anyhow::Result<()> {
             proxy_addr,
             config.proxy.quic_port,
             Some(*target_addr.ip()),
+            cli_mtu_cap(&cli, &config),
         )
         .await;
         return run_benchmark(target_addr, proxy_addr).await;
@@ -658,6 +660,7 @@ async fn main() -> anyhow::Result<()> {
             proxy_addr,
             config.proxy.quic_port,
             Some(*server.ip()),
+            cli_mtu_cap(&cli, &config),
         )
         .await;
         if token.is_none() {
@@ -683,6 +686,7 @@ async fn main() -> anyhow::Result<()> {
             proxy_addr,
             config.proxy.quic_port,
             known_game_server(&cli),
+            cli_mtu_cap(&cli, &config),
         )
         .await;
         crate::session::set_current_proxy(proxy_addr);
@@ -704,7 +708,12 @@ async fn main() -> anyhow::Result<()> {
         let proxy_str = cli.proxy.as_deref().unwrap_or("127.0.0.1:4434");
         let proxy_addr = parse_proxy_addr(proxy_str)?;
         info!("🔥 Running E2E smoke test (needs root for nftables)...");
-        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        crate::quic::register_session(
+            proxy_addr,
+            config.proxy.quic_port,
+            cli_mtu_cap(&cli, &config),
+        )
+        .await;
         return run_smoke_test(proxy_addr).await;
     }
 
@@ -1116,6 +1125,7 @@ async fn main() -> anyhow::Result<()> {
             proxy_addr,
             config.proxy.quic_port,
             known_game_server(&cli),
+            cli_mtu_cap(&cli, &config),
         )
         .await;
         crate::session::set_current_proxy(proxy_addr);
@@ -1329,6 +1339,7 @@ async fn main() -> anyhow::Result<()> {
             proxy_addr,
             config.proxy.quic_port,
             echo_server.map(|addr| *addr.ip()),
+            cli_mtu_cap(&cli, &config),
         )
         .await;
         return run_live_test(&config, Some(proxy_addr), echo_server, cli.fec, cli.fec_k).await;
@@ -1370,7 +1381,12 @@ async fn main() -> anyhow::Result<()> {
 
     // ── --test-tunnel ─────────────────────────────────────────────
     if cli.test_tunnel {
-        crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+        crate::quic::register_session(
+            proxy_addr,
+            config.proxy.quic_port,
+            cli_mtu_cap(&cli, &config),
+        )
+        .await;
         return run_tunnel_test(relay, proxy_addr).await;
     }
 
@@ -1379,7 +1395,12 @@ async fn main() -> anyhow::Result<()> {
         return run_control_test(proxy_addr, &config).await;
     }
 
-    crate::quic::register_session(proxy_addr, config.proxy.quic_port).await;
+    crate::quic::register_session(
+        proxy_addr,
+        config.proxy.quic_port,
+        cli_mtu_cap(&cli, &config),
+    )
+    .await;
 
     // ── Online learner ────────────────────────────────────────────
     //
@@ -1465,6 +1486,7 @@ async fn main() -> anyhow::Result<()> {
             proxy_addr,
             config.proxy.quic_port,
             Some(*game_server_addr.ip()),
+            cli_mtu_cap(&cli, &config),
         )
         .await;
         return redirect_proxy.run().await;
@@ -1521,6 +1543,7 @@ async fn main() -> anyhow::Result<()> {
                         proxy_addr,
                         config.proxy.quic_port,
                         known_game_server(&cli),
+                        cli_mtu_cap(&cli, &config),
                     )
                     .await;
                     crate::session::set_current_proxy(proxy_addr);

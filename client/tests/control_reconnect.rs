@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lightspeed_client::test_support::{
-    is_supervised, path_token, register_session, session_token, stop_supervisor,
+    is_supervised, path_token, register_session, session_token, stop_supervisor, HARD_CAP_PATH_MTU,
 };
 use lightspeed_client::LightSpeedEngine;
 use lightspeed_protocol::control::ControlMessage;
@@ -199,7 +199,7 @@ async fn reconnects_after_control_loss_and_preserves_token() {
     let server = TestServer::start(true);
     let data_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41001);
 
-    let token_a = register_session(data_addr, server.control_port)
+    let token_a = register_session(data_addr, server.control_port, HARD_CAP_PATH_MTU)
         .await
         .expect("initial registration must return a token");
     assert!(token_a > 0, "initial token must be non-zero");
@@ -250,10 +250,10 @@ async fn registers_every_active_path() {
     let path_a = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41101);
     let path_b = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41102);
 
-    let token_a = register_session(path_a, server_a.control_port)
+    let token_a = register_session(path_a, server_a.control_port, HARD_CAP_PATH_MTU)
         .await
         .expect("path A must register");
-    let token_b = register_session(path_b, server_b.control_port)
+    let token_b = register_session(path_b, server_b.control_port, HARD_CAP_PATH_MTU)
         .await
         .expect("path B must register");
 

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use lightspeed_client::test_support::{
     estimated_destination_region, register_session, register_session_with_destination,
-    report_destination, set_current_proxy, stop_supervisor,
+    report_destination, set_current_proxy, stop_supervisor, HARD_CAP_PATH_MTU,
 };
 use lightspeed_protocol::control::ControlMessage;
 
@@ -126,7 +126,7 @@ async fn registration_reports_destination_and_caches_the_resolved_region() -> an
     let _ = stop_supervisor(addr);
 
     assert_eq!(
-        register_session_with_destination(addr, port, Some(DESTINATION)).await,
+        register_session_with_destination(addr, port, Some(DESTINATION), HARD_CAP_PATH_MTU).await,
         Some(TOKEN),
     );
     assert_eq!(
@@ -158,7 +158,10 @@ async fn registration_without_a_destination_leaves_the_region_unset() -> anyhow:
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 45_011);
     let _ = stop_supervisor(addr);
 
-    assert_eq!(register_session(addr, port).await, Some(TOKEN));
+    assert_eq!(
+        register_session(addr, port, HARD_CAP_PATH_MTU).await,
+        Some(TOKEN)
+    );
     assert_eq!(
         first_seen(&seen).await,
         None,
@@ -191,7 +194,7 @@ async fn destination_known_after_registration_is_backfilled() -> anyhow::Result<
 
     // Registered before the game server was known: nothing is cached.
     assert_eq!(
-        register_session_with_destination(addr, port, None).await,
+        register_session_with_destination(addr, port, None, HARD_CAP_PATH_MTU).await,
         Some(TOKEN)
     );
     assert_eq!(first_seen(&seen).await, None);

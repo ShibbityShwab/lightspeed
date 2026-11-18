@@ -468,8 +468,13 @@ impl LightSpeedEngine {
         }
         let status = Arc::clone(&self.status);
         let control_port = self.control_port;
+        // The registered control connection must bound DPLPMTUD by the same
+        // path-MTU cap the data plane uses, or a reduced `[tunnel] mtu` path
+        // still emits 1,472-byte control datagrams (issue #178).
+        let path_mtu_cap = self.path_mtu_cap;
         self.rt.spawn(async move {
-            let result = crate::quic::register_session(proxy_addr, control_port).await;
+            let result =
+                crate::quic::register_session(proxy_addr, control_port, path_mtu_cap).await;
             if let Ok(mut s) = status.write() {
                 apply_registration_result(&mut s, result);
             }

@@ -83,10 +83,11 @@ fn sync_supervisors(
     supervised: &mut Vec<SocketAddrV4>,
     active: &[SocketAddrV4],
     control_port: u16,
+    path_mtu_cap: usize,
 ) {
     for addr in active {
         if !supervised.contains(addr) {
-            crate::quic::ensure_registration(*addr, control_port);
+            crate::quic::ensure_registration(*addr, control_port, path_mtu_cap);
         }
     }
     for addr in supervised.iter() {
@@ -131,6 +132,7 @@ pub async fn run_continuous_rerouting(
     game_server: SocketAddrV4,
     strategy: String,
     max_paths: u8,
+    path_mtu_cap: usize,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut current = crate::session::current_proxy();
@@ -161,6 +163,7 @@ pub async fn run_continuous_rerouting(
                     relay,
                     control_port,
                     Some(*destination.ip()),
+                    path_mtu_cap,
                 )
                 .await;
                 reported_destination = Some(destination);
@@ -182,7 +185,7 @@ pub async fn run_continuous_rerouting(
             paths.extend(route.backups.iter().map(|b| b.data_addr));
             paths.truncate(max_paths as usize);
             let paths = order_by_win_rate(paths);
-            sync_supervisors(&mut supervised_paths, &paths, control_port);
+            sync_supervisors(&mut supervised_paths, &paths, control_port, path_mtu_cap);
             crate::session::set_multipath_paths(paths);
             log_multipath_stats();
         }
@@ -210,10 +213,11 @@ pub async fn run_continuous_rerouting(
                 best.data_addr,
                 control_port,
                 Some(*destination.ip()),
+                path_mtu_cap,
             )
             .await
         } else {
-            crate::quic::register_session(best.data_addr, control_port).await
+            crate::quic::register_session(best.data_addr, control_port, path_mtu_cap).await
         };
 
         match registered {

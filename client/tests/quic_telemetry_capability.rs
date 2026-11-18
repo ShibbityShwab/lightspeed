@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lightspeed_client::test_support::{
-    control_telemetry_accepted, register_session, stop_supervisor,
+    control_telemetry_accepted, register_session, stop_supervisor, HARD_CAP_PATH_MTU,
 };
 use lightspeed_protocol::control::ControlMessage;
 
@@ -91,7 +91,7 @@ async fn telemetry_falls_back_when_relay_lacks_control_telemetry() -> anyhow::Re
     let old_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 45_001);
     let _ = stop_supervisor(old_addr);
     assert_eq!(
-        register_session(old_addr, old_port).await,
+        register_session(old_addr, old_port, HARD_CAP_PATH_MTU).await,
         Some(OLD_PROXY_TOKEN),
         "registration must succeed against the legacy relay"
     );
@@ -108,7 +108,7 @@ async fn telemetry_falls_back_when_relay_lacks_control_telemetry() -> anyhow::Re
     let new_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 45_002);
     let _ = stop_supervisor(new_addr);
     assert_eq!(
-        register_session(new_addr, new_port).await,
+        register_session(new_addr, new_port, HARD_CAP_PATH_MTU).await,
         Some(NEW_PROXY_TOKEN),
         "registration must succeed against the upgraded relay"
     );
