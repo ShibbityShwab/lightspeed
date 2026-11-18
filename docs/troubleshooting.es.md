@@ -39,7 +39,7 @@ lightspeed --check
 **CLI:** El interceptor no puede encontrar paquetes de juegos en el rango de puertos esperado.
 
 1. Asegúrate de que tu juego esté **conectado a un servidor** (no solo al menú principal o al lobby)
-2. Verifica el juego con `--scan-processes`:
+2. Verificar el juego con `--scan-processes`:
    ```bash
    lightspeed --scan-processes
    ```
@@ -78,11 +78,45 @@ sudo pfctl -d  # Temporarily disable pf to test
 
 **Windows:**
 ```powershell
-# Check if the firewall rule exists
+# Check if the stable rule exists (one rule, not one per boost)
 netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
 
 # Add it manually if missing
-netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+netsh advfirewall firewall add rule name="LightSpeed WinDivert Tunnel" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+```
+
+Las reglas de compilaciones anteriores se denominaron `LightSpeed WinDivert Tunnel <port>`; actual
+Las compilaciones eliminan la del puerto que utilizan y mantienen una única regla estable. Cualquiera
+Las reglas restantes por puerto se pueden eliminar de forma segura:
+`netsh advfirewall firewall delete rule name="LightSpeed WinDivert Tunnel 4434"`
+(coincide con el puerto mostrado por `netsh advfirewall firewall show rule name=all`).
+
+### `sendmsg error: ... 10040` / `WSAEMSGSIZE` (Windows) o `EMSGSIZE` (Linux/macOS)
+
+El datagrama que el cliente intentó enviar es mayor que la MTU de ruta **real**. el
+La abrazadera de túnel predeterminada es de 1492 bytes (seguro para PPPoE), pero una VPN, un ajuste de DPI como
+Zapret o un adaptador de MTU reducido pueden ser más pequeños, por lo que un paquete que se ajuste a la abrazadera
+todavía es rechazado por el sistema operativo (`Windows error 10040`).
+
+Solución: baje el límite de MTU de ruta del túnel, en `config.toml`:
+
+```toml
+[tunnel]
+# 1280-1500. Start at 1400, then 1350 if the error persists.
+mtu = 1400
+```
+
+o pase `--mtu 1400` en la CLI. Las construcciones actuales también reducen el presupuesto.
+automáticamente cuando se rechaza un envío, vuelva a intentar ese datagrama una vez con
+fragmentación permitida y registre el error del sistema operativo en el estado en lugar de
+informando que el relé está en silencio.
+
+Solución alternativa inmediata mientras el cliente no se modifica: baje la velocidad del adaptador de Windows
+MTU para que el juego emita paquetes más pequeños, luego reinicia el juego:
+
+```powershell
+netsh interface ipv4 show subinterfaces
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 ```
 
 ### La comprobación del estado del proxy falla
@@ -116,7 +150,7 @@ dirección del respondedor):
 **una vez** con una oferta ALPN vacía y luego recuerda la respuesta de ese relevo para el resto
 del proceso, por lo que en la operación normal del cliente el apretón de manos adicional condenado ocurre en
 más una vez por relevo por lanzamiento. Un retroceso exitoso es normal contra un relé que
-no se ha actualizado (el valor predeterminado del relé es `[network] control_alpn = "off"`): el
+no se ha actualizado (el relé predeterminado es `[network] control_alpn = "off"`): el
 La línea `QUIC connection established` muestra `alpn=none` y se continúa con el registro.
 
 **Qué significa el error final.** El reintento de la oferta vacía también falló, por lo que hay
@@ -136,9 +170,9 @@ exactamente dos posibilidades y el apretón de manos por sí solo no puede difer
 **Cómo reducirlo:**
 
 - Ejecute `lightspeed-client --test-control --proxy <relay-ip>` para ver en qué etapa
-  El relé está en. El valor `alpn=` en la línea conectada y en el resumen final es el
-  protocolo de aplicación negociado: `lightspeed-control/1` significa que el relé aceptó el
-  oferta versionada, `none` significa que aceptó una oferta vacía después del respaldo (una oferta anterior
+  El relé está en. El valor de `alpn=` en la línea conectada y en el resumen final es el
+  Protocolo de aplicación negociado: `lightspeed-control/1` significa que el relé aceptó el
+  oferta versionada, `none` significa que aceptó una oferta vacía después del respaldo (una versión anterior
   relevo), y una carrera que falla con el veredicto de esta sección es el caso anterior.
 - Si todos los relés fallan en esta red pero los mismos relés funcionan en otros lugares, sospeche del
   middlebox: deshabilite la VPN o la inspección HTTPS/QUIC del producto de seguridad y vuelva a intentarlo,
@@ -155,7 +189,7 @@ exactamente dos posibilidades y el apretón de manos por sí solo no puede difer
 El interceptor captura paquetes antes de que el juego pueda recibir respuestas y la ruta de inyección falla.
 
 **Windows:**
-1. Verifique que `WinDivert64.sys` y `WinDivert.dll` estén al lado de `.exe`
+1. Verifique que `WinDivert64.sys` y `WinDivert.dll` estén al lado del `.exe`.
 2. Desconecte los adaptadores de red secundarios (adaptadores virtuales Docker, VMware, Hamachi)
 3. Conéctese al servidor del juego **antes** de iniciar el interceptor
 
@@ -167,7 +201,7 @@ El interceptor captura paquetes antes de que el juego pueda recibir respuestas y
 
 WinDivert registra una llamada/filtro de WFP para cada identificador abierto. Si un identificador nunca se cierra, el estado del filtro persiste y el siguiente `WinDivertOpen` falla con `FWP_E_IN_USE` (0x8032000A) aunque ningún proceso esté usando WinDivert visiblemente.
 
-Las compilaciones recientes de LightSpeed ​​cierran los controladores de captura e inyección en cada ruta de cierre ordenada, incluido Ctrl+C en `--watch` y `--start-interceptor` y **Salir** en la GUI, y el bucle de recepción se desbloquea con `WinDivertShutdown` antes del cierre, por lo que el desmontaje es determinista. Una interrupción brusca (`taskkill /f`, un bloqueo o el cierre de la ventana de la consola) aún pueden dejar el controlador WinDivert 2.2.x en estado obsoleto; esa es una limitación del controlador ascendente (basil00/WinDivert#294, #406) que el espacio de usuario no puede borrar una vez que finaliza el proceso.
+Las compilaciones recientes de LightSpeed ​​cierran los controladores de captura e inyección en cada ruta de cierre ordenada, incluido Ctrl+C en `--watch` y `--start-interceptor` y **Salir** en la GUI, y el bucle de recepción se desbloquea con `WinDivertShutdown` antes del cierre, por lo que el desmontaje es determinista. Una interrupción brusca (`taskkill /f`, un bloqueo o el cierre de la ventana de la consola) aún puede dejar el controlador WinDivert 2.2.x en estado obsoleto; esa es una limitación del controlador ascendente (basil00/WinDivert#294, #406) que el espacio de usuario no puede borrar una vez que finaliza el proceso.
 
 Si aún lo golpeas:
 
@@ -178,7 +212,7 @@ Si aún lo golpeas:
    ```
 3. **Apagado completo, no reinicio**: el "reinicio" de Windows puede reutilizar la sesión del kernel que mantiene el estado obsoleto; un **Apagado → encendido** completo lo borra.
 
-> **Consejo:** En la versión 1.2.2 y anteriores, un error separado (la autenticación del plano de datos rechaza todos los paquetes, problema #59) congeló la conexión y obligó a los usuarios a cerrar repetidamente el cliente, que es lo que desencadenó la mayoría de los `FWP_E_IN_USE` informes. Ese error de autenticación se solucionó en v1.2.3.
+> **Consejo:** En la versión 1.2.2 y anteriores, un error separado (la autenticación del plano de datos rechaza todos los paquetes, problema #59) congeló la conexión y obligó a los usuarios a cerrar repetidamente el cliente, que es lo que desencadenó la mayoría de los informes `FWP_E_IN_USE`. Ese error de autenticación se solucionó en v1.2.3.
 
 ---
 

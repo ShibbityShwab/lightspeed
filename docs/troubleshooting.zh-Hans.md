@@ -27,7 +27,7 @@ lightspeed --check
 |----|----------|------------|
 | Linux | nftables 或 iptables + root | `sudo lightspeed ...` |
 | macOS | pfctl（内置）+ root | `sudo lightspeed ...` |
-|窗户 | WinDivert 驱动程序 + 管理员 |右键单击→以管理员身份运行|
+|窗户| WinDivert 驱动程序 + 管理员 |右键单击→以管理员身份运行|
 
 验证：
 ```bash
@@ -39,7 +39,7 @@ lightspeed --check
 **CLI：** 拦截器无法在预期端口范围内找到游戏数据包。
 
 1. 确保您的游戏**连接到服务器**（不仅仅是主菜单或大厅）
-2. 使用`--scan-processes`验证游戏：
+2.用`--scan-processes`验证游戏：
    ```bash
    lightspeed --scan-processes
    ```
@@ -78,11 +78,45 @@ sudo pfctl -d  # Temporarily disable pf to test
 
 **Windows：**
 ```powershell
-# Check if the firewall rule exists
+# Check if the stable rule exists (one rule, not one per boost)
 netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
 
 # Add it manually if missing
-netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+netsh advfirewall firewall add rule name="LightSpeed WinDivert Tunnel" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+```
+
+旧版本的规则被命名为 `LightSpeed WinDivert Tunnel <port>`；当前
+构建删除了他们使用的端口的规则并保留一个稳定的规则。任意
+剩余的每端口规则可以安全删除：
+`netsh advfirewall firewall delete rule name="LightSpeed WinDivert Tunnel 4434"`
+（与`netsh advfirewall firewall show rule name=all`所示的端口匹配）。
+
+### `sendmsg error: ... 10040` / `WSAEMSGSIZE` (Windows) 或 `EMSGSIZE` (Linux/macOS)
+
+客户端尝试发送的数据报大于**真实**路径 MTU。的
+默认隧道钳位为 1492 字节（PPPoE 安全），但 VPN、DPI 垫片如
+Zapret 或减少 MTU 的适配器可以更小，因此适合夹具的数据包
+仍然被操作系统拒绝（`Windows error 10040`）。
+
+修复 — 降低 `config.toml` 中隧道的路径 MTU 上限：
+
+```toml
+[tunnel]
+# 1280-1500. Start at 1400, then 1350 if the error persists.
+mtu = 1400
+```
+
+或在 CLI 上传递 `--mtu 1400`。当前的构建也降低了预算
+当发送被拒绝时，自动重试该数据报一次
+允许碎片，并在状态中记录操作系统错误而不是
+将继电器报告为静音。
+
+在客户端不变的情况下立即解决方法：降低 Windows 适配器的
+MTU 使游戏发出较小的数据包，然后重新启动游戏：
+
+```powershell
+netsh interface ipv4 show subinterfaces
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 ```
 
 ### 代理健康检查失败
@@ -100,7 +134,7 @@ curl http://YOUR_PROXY_IP:8080/health
 - 检查防火墙是否允许 UDP 4434 和 TCP 8080
 - 检查代理日志：`journalctl -u lightspeed-proxy --tail 50`
 
-### QUIC 控制平面失败并显示 `error 120` / `no_application_protocol`
+### QUIC 控制平面出现 `error 120` / `no_application_protocol` 故障
 
 客户端无法使用中继完成 QUIC 控制平面握手。当
 一次性空报价重试也失败了，日志以此判决结束（引用
@@ -116,8 +150,8 @@ curl http://YOUR_PROXY_IP:8080/health
 **一次**，带有空的 ALPN 报价，然后记住中继的其余答案
 的过程，所以在正常的客户端操作中注定的额外握手发生在
 每次发射每次中继最多一次。对于以下中继来说，成功的回退是正常的
-尚未升级（中继默认为`[network] control_alpn = "off"`）：
-`QUIC connection established`行显示`alpn=none`，并且注册继续。
+未升级（继电器默认为`[network] control_alpn = "off"`）：
+`QUIC connection established`行显示`alpn=none`，并且注册继续进行。
 
 **最后失败是什么意思。** 空盘重试也失败了，所以有
 恰好有两种可能性，仅靠握手无法区分它们：
@@ -137,16 +171,16 @@ curl http://YOUR_PROXY_IP:8080/health
 
 - 运行 `lightspeed-client --test-control --proxy <relay-ip>` 查看哪个阶段
   继电器位于。连接线上和最终汇总中的 `alpn=` 值是
-  协商的应用协议：`lightspeed-control/1`表示中继接受了
-  版本化报价，`none` 意味着它在回退后接受了一个空报价（较旧的报价）
+  协商应用协议：`lightspeed-control/1` 表示中继接受了
+  版本化报价，`none` 意味着它在回退后接受了空报价（较旧的报价）
   中继），并且本节判定失败的运行就是上面的情况。
 - 如果该网络上的每个中继都发生故障，但相同的中继在其他地方工作，则怀疑是
   middlebox：禁用VPN或安全产品的HTTPS/QUIC检查并重试，
   然后将 UDP 4433 捕获附加到 #140。
 - 如果只有一个中继失败，请将该中继的 ALPN 模式与您的客户端版本进行比较：
-  继电器的启动行及其 `GET /health` 上的 `control_alpn` 字段报告
+  继电器的启动线及其 `GET /health` 上的 `control_alpn` 字段报告
   配置模式（请参阅 [CLI 参考](CLI-REFERENCE.md#proxy-configuration)）。如果你
-  操作该继电器，`control_alpn = "off"` 恢复较旧的之前的行为
+  操作该继电器，`control_alpn = "off"` 恢复旧版本的先前行为
   客户；操作员程序和客户优先排序规则位于
   [部署代理](deploy-proxy.md) 和 [ALPN 部署计划](quic-alpn-rollout.md)。
 
@@ -155,12 +189,12 @@ curl http://YOUR_PROXY_IP:8080/health
 拦截器在游戏接收响应之前捕获数据包，并且注入路径失败。
 
 **Windows：**
-1. 验证 `WinDivert64.sys` 和 `WinDivert.dll` 位于 `.exe` 旁边
+1.验证`WinDivert64.sys`和`WinDivert.dll`是否在`.exe`旁边
 2. 断开辅助网络适配器（Docker、VMware、Hamachi 虚拟适配器）
 3. **在**启动拦截器之前连接到游戏服务器
 
 **Linux：**
-1.检查nftables规则：`sudo nft list ruleset | grep lightspeed`
+1.查看nftables规则：`sudo nft list ruleset | grep lightspeed`
 2. 如果规则已过时：`sudo lightspeed --check` 进行诊断
 
 ### Windows 上的“WinDivert 打开失败”/`FWP_E_IN_USE` (0x8032000A)
@@ -178,7 +212,7 @@ WinDivert 为每个打开的句柄注册一个 WFP 标注/过滤器。如果句�
    ```
 3. **完全关闭，而不是重新启动**：Windows“重新启动”可以重用保持陈旧状态的内核会话；完全**关机 → 开机**会清除它。
 
-> **提示：** 在 v1.2.2 及更早版本中，一个单独的错误（数据平面身份验证拒绝所有数据包，问题 #59）冻结了连接并迫使用户反复终止客户端，这是触发大多数 `FWP_E_IN_USE` 报告的原因。该身份验证错误已在 v1.2.3 中修复。
+> **提示：** 在 v1.2.2 及更早版本中，一个单独的错误（数据平面身份验证拒绝所有数据包，问题 #59）冻结了连接并迫使用户反复终止客户端，这就是触发大多数 `FWP_E_IN_USE` 报告的原因。该身份验证错误已在 v1.2.3 中修复。
 
 ---
 

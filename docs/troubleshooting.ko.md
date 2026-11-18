@@ -23,7 +23,7 @@ lightspeed --check
 
 **CLI:** 귀하의 OS에 필수 패킷 필터링 도구가 없거나 권한이 부족합니다.
 
-| 운영체제 | 필수 | 수정 방법 |
+| OS | 필수 | 수정 방법 |
 |----|----------|------------|
 | 리눅스 | nftables 또는 iptables + 루트 | `sudo lightspeed ...` |
 | macOS | pfctl(내장) + 루트 | `sudo lightspeed ...` |
@@ -39,7 +39,7 @@ lightspeed --check
 **CLI:** 인터셉터가 예상 포트 범위에서 게임 패킷을 찾을 수 없습니다.
 
 1. 게임이 **서버에 연결**되어 있는지 확인하세요(메인 메뉴나 로비뿐만 아니라).
-2. `--scan-processes`를 사용하여 게임을 확인합니다.
+2. `--scan-processes`로 게임을 확인합니다.
    ```bash
    lightspeed --scan-processes
    ```
@@ -78,11 +78,45 @@ sudo pfctl -d  # Temporarily disable pf to test
 
 **윈도우:**
 ```powershell
-# Check if the firewall rule exists
+# Check if the stable rule exists (one rule, not one per boost)
 netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
 
 # Add it manually if missing
-netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+netsh advfirewall firewall add rule name="LightSpeed WinDivert Tunnel" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+```
+
+이전 빌드의 규칙 이름은 `LightSpeed WinDivert Tunnel <port>`였습니다. 현재
+빌드에서는 사용하는 포트에 대한 포트를 제거하고 안정적인 단일 규칙을 유지합니다. 모두
+나머지 포트별 규칙은 삭제해도 안전합니다.
+`netsh advfirewall firewall delete rule name="LightSpeed WinDivert Tunnel 4434"`
+(`netsh advfirewall firewall show rule name=all`에 표시된 포트와 일치).
+
+### `sendmsg error: ... 10040` / `WSAEMSGSIZE`(Windows) 또는 `EMSGSIZE`(Linux/macOS)
+
+클라이언트가 전송하려고 시도한 데이터그램이 **실제** 경로 MTU보다 큽니다. 는
+기본 터널 클램프는 1492바이트(PPPoE 안전)이지만 VPN, DPI 심(예:
+Zapret 또는 감소된 MTU 어댑터는 더 작을 수 있으므로 클램프에 맞는 패킷
+OS(`Windows error 10040`)에서는 여전히 거부됩니다.
+
+수정 — `config.toml`에서 터널의 경로 MTU 한도를 낮춥니다.
+
+```toml
+[tunnel]
+# 1280-1500. Start at 1400, then 1350 if the error persists.
+mtu = 1400
+```
+
+또는 CLI에서 `--mtu 1400`를 전달하세요. 현재 빌드도 예산을 낮춥니다.
+전송이 거부되면 자동으로 해당 데이터그램을 한 번 다시 시도합니다.
+조각화를 허용하고 대신 상태에 OS 오류를 기록합니다.
+릴레이를 무음으로 보고합니다.
+
+클라이언트가 변경되지 않은 동안 즉시 해결 방법: Windows 어댑터의 성능을 낮추세요.
+MTU를 사용하면 게임에서 더 작은 패킷을 방출한 다음 게임을 다시 시작합니다.
+
+```powershell
+netsh interface ipv4 show subinterfaces
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 ```
 
 ### 프록시 상태 확인 실패
@@ -96,15 +130,15 @@ curl http://YOUR_PROXY_IP:8080/health
 ```
 
 연결할 수 없는 경우:
-- 프록시가 실행 중인지 확인하세요: `systemctl status lightspeed-proxy`
+- 프록시가 실행 중인지 확인: `systemctl status lightspeed-proxy`
 - 방화벽이 UDP 4434 및 TCP 8080을 허용하는지 확인하세요.
-- 프록시 로그를 확인하세요: `journalctl -u lightspeed-proxy --tail 50`
+- 프록시 로그 확인: `journalctl -u lightspeed-proxy --tail 50`
 
-### QUIC 제어 평면이 `error 120` / `no_application_protocol`로 인해 실패합니다.
+### `error 120` / `no_application_protocol`로 인해 QUIC 제어 평면이 실패함
 
 클라이언트가 릴레이를 사용하여 QUIC 제어 평면 핸드셰이크를 완료할 수 없습니다. 때
 일회성 빈 제안 재시도도 실패했습니다. 로그는 다음 결과로 끝납니다(인용문 포함).
-클라이언트에서 그대로; `{err}`는 근본적인 QUIC 오류이고 `{addr}`은
+클라이언트에서 그대로; `{err}`는 기본 QUIC 오류이고 `{addr}`는
 응답자 주소):
 
 ```text
@@ -117,7 +151,7 @@ curl http://YOUR_PROXY_IP:8080/health
 프로세스의 정상적인 클라이언트 작업에서는 운명의 추가 핸드셰이크가 발생합니다.
 실행 시 릴레이당 가장 많이 한 번입니다. 성공적인 폴백은 다음과 같은 릴레이에 대해 정상입니다.
 업그레이드되지 않았습니다(릴레이 기본값은 `[network] control_alpn = "off"`입니다):
-`QUIC connection established` 라인에는 `alpn=none`이 표시되고 등록이 진행됩니다.
+`QUIC connection established` 라인에 `alpn=none`가 표시되고 등록이 진행됩니다.
 
 **최종 실패의 의미.** 빈 제안 재시도도 실패했기 때문에
 정확히 두 가지 가능성이 있으며 악수만으로는 이를 구분할 수 없습니다.
@@ -128,25 +162,25 @@ curl http://YOUR_PROXY_IP:8080/health
    한 네트워크에서는 실패하지만 동일한 릴레이가 다른 네트워크에서는 작동하는 경우 경로는 공통입니다.
    요인.
 2. **버전 차이** - 릴레이에는 이 클라이언트가 제공하지 않는 ALPN 개정판이 필요합니다.
-   (예를 들어 `control_alpn = "required"`로 설정된 릴레이와 프로토콜 실행
+   (예를 들어 릴레이는 `control_alpn = "required"`로 설정되고 프로토콜을 실행합니다.
    이 클라이언트보다 최신 버전). 이것은 의도적으로 큰 소리로 실패하며 결코 자동으로 실패하지 않습니다.
    다운그레이드: `lightspeed-control/1`의 릴레이에 대해 현재 클라이언트가 협상합니다.
    이 클라이언트가 제공하지 않는 것을 요구하는 릴레이는 120으로 이를 거부합니다.
 
 **범위를 좁히는 방법:**
 
-- `lightspeed-client --test-control --proxy <relay-ip>`를 실행하여 어느 단계에 해당하는지 확인하세요.
-  릴레이가 있습니다. 연결된 선과 최종 요약의 `alpn=` 값은
-  협상된 애플리케이션 프로토콜: `lightspeed-control/1`은 릴레이가 해당 애플리케이션을 수락했음을 의미합니다.
-  버전이 지정된 제안, `none`은 대체 이후 빈 제안(이전 버전)을 수락했음을 의미합니다.
+- `lightspeed-client --test-control --proxy <relay-ip>`를 실행하여 어떤 단계가 해당되는지 확인하세요.
+  릴레이가 있습니다. 연결된 라인과 최종 요약의 `alpn=` 값은
+  협상된 애플리케이션 프로토콜: `lightspeed-control/1`는 릴레이가
+  버전이 지정된 제안인 `none`는 대체 후 빈 제안(이전 버전)을 수락했음을 의미합니다.
   릴레이), 이 섹션의 판결로 실패하는 실행은 위의 경우입니다.
 - 이 네트워크의 모든 릴레이가 실패하지만 다른 곳에서는 동일한 릴레이가 작동하는 경우
   미들박스: VPN 또는 보안 제품의 HTTPS/QUIC 검사를 비활성화하고 재시도합니다.
   그런 다음 UDP 4433 캡처를 #140에 연결합니다.
 - 하나의 릴레이만 실패하는 경우 해당 릴레이의 ALPN 모드를 클라이언트 빌드와 비교하십시오.
-  릴레이의 시작 라인과 해당 `GET /health`의 `control_alpn` 필드는
+  릴레이의 시작 라인과 `GET /health`의 `control_alpn` 필드는 다음을 보고합니다.
   구성된 모드([CLI 참조](CLI-REFERENCE.md#proxy-configuration) 참조). 당신이
-  해당 릴레이를 작동하면 `control_alpn = "off"` 이전 동작을 복원합니다.
+  해당 릴레이를 작동하면 `control_alpn = "off"`가 이전 동작을 복원합니다.
   클라이언트; 연산자 절차와 클라이언트 우선 순서 규칙이 있습니다.
   [프록시 배포](deploy-proxy.md) 및 [ALPN 롤아웃 계획](quic-alpn-rollout.md).
 
@@ -160,14 +194,14 @@ curl http://YOUR_PROXY_IP:8080/health
 3. 인터셉터를 시작하기 **전에** 게임 서버에 연결하세요
 
 **리눅스:**
-1. nftables 규칙을 확인하세요: `sudo nft list ruleset | grep lightspeed`
-2. 규칙이 오래된 경우: `sudo lightspeed --check` 진단
+1. nftables 규칙 확인: `sudo nft list ruleset | grep lightspeed`
+2. 규칙이 오래된 경우: 진단용 `sudo lightspeed --check`
 
-### Windows에서 "WinDivert 열기 실패" / `FWP_E_IN_USE` (0x8032000A)
+### Windows에서 "WinDivert 열기 실패" / `FWP_E_IN_USE`(0x8032000A)
 
-WinDivert는 열려 있는 각 핸들에 대해 WFP 콜아웃/필터를 등록합니다. 핸들이 닫히지 않으면 해당 필터 상태가 유지되고 WinDivert를 사용하는 프로세스가 눈에 띄지 않더라도 다음 `WinDivertOpen`은 `FWP_E_IN_USE`(0x8032000A)과 함께 실패합니다.
+WinDivert는 열려 있는 각 핸들에 대해 WFP 콜아웃/필터를 등록합니다. 핸들이 닫히지 않으면 필터 상태가 유지되고 WinDivert를 사용하는 프로세스가 눈에 띄지 않더라도 다음 `WinDivertOpen`는 `FWP_E_IN_USE`(0x8032000A)와 함께 실패합니다.
 
-최근 LightSpeed ​​빌드는 `--watch` 및 `--start-interceptor`의 Ctrl+C와 GUI의 **Quit**을 포함하여 모든 정상적인 종료 경로에서 캡처 및 주입 핸들을 모두 닫고, 닫기 전에 `WinDivertShutdown`을 사용하여 수신 루프가 차단 해제되므로 분해가 결정적입니다. 강제 종료(`taskkill /f`, 충돌 또는 콘솔 창 닫기)로 인해 WinDivert 2.2.x 드라이버가 여전히 오래된 상태로 남을 수 있습니다. 이는 프로세스가 종료되면 사용자 공간에서 지울 수 없는 업스트림 드라이버 제한 사항(basil00/WinDivert#294, #406)입니다.
+최근 LightSpeed ​​빌드는 `--watch` 및 `--start-interceptor`의 Ctrl+C와 GUI의 **Quit**을 포함하여 모든 정상적인 종료 경로에서 캡처 및 주입 핸들을 모두 닫고, 닫기 전에 `WinDivertShutdown`를 사용하여 수신 루프가 차단 해제되므로 분해가 결정적입니다. 강제 종료(`taskkill /f`, 충돌 또는 콘솔 창 닫기)로 인해 WinDivert 2.2.x 드라이버가 여전히 오래된 상태로 남을 수 있습니다. 이는 프로세스가 종료되면 사용자 공간에서 지울 수 없는 업스트림 드라이버 제한 사항(basil00/WinDivert#294, #406)입니다.
 
 그래도 맞으면:
 
@@ -178,7 +212,7 @@ WinDivert는 열려 있는 각 핸들에 대해 WFP 콜아웃/필터를 등록�
    ```
 3. **다시 시작하지 않고 완전히 종료**: Windows "다시 시작"은 오래된 상태를 유지하는 커널 세션을 재사용할 수 있습니다. 완전 **종료 → 전원 켜기**를 하면 문제가 해결됩니다.
 
-> **팁:** v1.2.2 이하에서는 별도의 버그(모든 패킷을 거부하는 데이터 플레인 인증, 문제 #59)로 인해 연결이 중단되고 사용자가 반복적으로 클라이언트를 종료해야 했으며, 이것이 대부분의 `FWP_E_IN_USE` 보고서를 촉발했습니다. 해당 인증 버그는 v1.2.3에서 수정되었습니다.
+> **팁:** v1.2.2 이하에서는 별도의 버그(모든 패킷을 거부하는 데이터 플레인 인증, 문제 #59)로 인해 연결이 중단되고 사용자가 클라이언트를 반복적으로 종료해야 했으며, 이것이 대부분의 `FWP_E_IN_USE` 보고서를 촉발했습니다. 해당 인증 버그는 v1.2.3에서 수정되었습니다.
 
 ---
 
@@ -200,7 +234,7 @@ Get-Process lightspeed-gui -ErrorAction SilentlyContinue | Stop-Process
 
 ### 첫 번째 인스턴스에 초점을 맞추는 대신 두 번째 인스턴스가 열립니다.
 
-v1.4.2 이전 버전에서는 GUI를 실행하면 두 번째 창과 두 번째 엔진이 두 번 쌓였습니다. 이제 GUI는 단일 인스턴스 가드를 보유합니다. 두 번째 실행에서는 간단한 "LightSpeed가 이미 실행 중입니다" 알림이 표시되고 다른 엔진을 시작하는 대신 종료됩니다. 두 번째 인스턴스를 강제로 실행하려면(진단을 위해) `--force`을 전달하거나 `LIGHTSPEED_GUI_FORCE=1`을 설정하십시오.
+v1.4.2 이전 버전에서는 GUI를 실행하면 두 번째 창과 두 번째 엔진이 두 번 쌓였습니다. 이제 GUI는 단일 인스턴스 가드를 보유합니다. 두 번째 실행에서는 간단한 "LightSpeed가 이미 실행 중입니다" 알림이 표시되고 다른 엔진을 시작하는 대신 종료됩니다. 두 번째 인스턴스를 강제로 실행하려면(진단을 위해) `--force`를 전달하거나 `LIGHTSPEED_GUI_FORCE=1`를 설정하세요.
 
 ### 릴레이가 발견되지 않았습니다.
 
@@ -219,7 +253,7 @@ GUI는 추적 로그를 다음에 기록합니다.
 %LOCALAPPDATA%\Lightspeed\gui-trace.log
 ```
 
-해당 경로를 파일 탐색기 주소 표시줄에 붙여넣어 폴더를 연 다음 텍스트 편집기에서 `gui-trace.log`을 엽니다. 버그 보고서에 첨부하세요.
+해당 경로를 파일 탐색기 주소 표시줄에 붙여넣어 폴더를 연 다음 텍스트 편집기에서 `gui-trace.log`를 엽니다. 버그 보고서에 첨부하세요.
 
 ### 로그의 "Heartbeat 0 in"
 
@@ -229,7 +263,7 @@ GUI는 추적 로그를 다음에 기록합니다.
 - 선택한 릴레이에 연결할 수 없습니다.
 - 인터셉터가 시작되지 않았으므로 활성화된 세션이 없습니다.
 
-등록이 성공하고 하트비트가 흐르기 시작하면 카운터가 올라갑니다. 릴레이가 정상으로 표시되는 동안 0으로 유지되면 `lightspeed-client --test-control`을 실행하여 컨트롤 플레인에 도달할 수 있는지 여부를 격리합니다.
+등록이 성공하고 하트비트가 흐르기 시작하면 카운터가 올라갑니다. 릴레이가 정상으로 표시되는 동안 0으로 유지되면 `lightspeed-client --test-control`를 실행하여 제어 플레인에 연결할 수 있는지 여부를 격리합니다.
 
 ---
 

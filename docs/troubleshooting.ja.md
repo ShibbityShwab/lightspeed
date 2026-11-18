@@ -78,11 +78,36 @@ sudo pfctl -d  # Temporarily disable pf to test
 
 **Windows:**
 ```powershell
-# Check if the firewall rule exists
+# 安定したルールが存在するか確認します (ブーストごとに1つではなく、単一のルールです)
 netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
 
-# Add it manually if missing
-netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+# 存在しない場合は手動で追加します
+netsh advfirewall firewall add rule name="LightSpeed WinDivert Tunnel" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+```
+
+以前のビルドのルールは `LightSpeed WinDivert Tunnel <port>` という名前でした。現在のビルドは使用するポートのルールを削除し、単一の安定したルールを保持します。残っているポート別ルールは削除して問題ありません:
+`netsh advfirewall firewall delete rule name="LightSpeed WinDivert Tunnel 4434"`
+(`netsh advfirewall firewall show rule name=all` に表示されるポートに合わせてください)。
+
+### `sendmsg error: ... 10040` / `WSAEMSGSIZE` (Windows) または `EMSGSIZE` (Linux/macOS)
+
+クライアントが送信しようとしたデータグラムが、**実際の**パス MTU より大きい状態です。トンネルの既定のクランプは 1492 バイト (PPPoE 対応) ですが、VPN、Zapret のような DPI シム、MTU を下げたアダプタではそれより小さいことがあるため、クランプ内に収まるパケットでも OS に拒否されます (Windows エラー 10040)。
+
+修正 — `config.toml` でトンネルのパス MTU 上限を下げます:
+
+```toml
+[tunnel]
+# 1280-1500。まず 1400、エラーが続く場合は 1350 にしてください。
+mtu = 1400
+```
+
+または CLI で `--mtu 1400` を渡します。現在のビルドは、送信が拒否されると予算を自動的に下げ、そのデータグラムをフラグメンテーション許可で一度だけ再送し、リレーが無応答であるかのように扱う代わりに OS エラーをステータスに記録します。
+
+クライアントが更新されるまでの暫定回避策: Windows アダプタの MTU を下げてゲームがより小さいパケットを送るようにし、ゲームを再起動します:
+
+```powershell
+netsh interface ipv4 show subinterfaces
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 ```
 
 ### プロキシのヘルスチェックが失敗する

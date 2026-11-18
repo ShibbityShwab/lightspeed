@@ -78,11 +78,45 @@ sudo pfctl -d  # Temporarily disable pf to test
 
 **Janelas:**
 ```powershell
-# Check if the firewall rule exists
+# Check if the stable rule exists (one rule, not one per boost)
 netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
 
 # Add it manually if missing
-netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+netsh advfirewall firewall add rule name="LightSpeed WinDivert Tunnel" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+```
+
+As regras de compilações mais antigas foram denominadas `LightSpeed WinDivert Tunnel <port>`; atual
+builds removem aquele da porta que usam e mantêm uma única regra estável. Qualquer
+as regras restantes por porta podem ser excluídas com segurança:
+`netsh advfirewall firewall delete rule name="LightSpeed WinDivert Tunnel 4434"`
+(corresponde à porta mostrada por `netsh advfirewall firewall show rule name=all`).
+
+### `sendmsg error: ... 10040` / `WSAEMSGSIZE` (Windows) ou `EMSGSIZE` (Linux/macOS)
+
+O datagrama que o cliente tentou enviar é maior que o MTU do caminho **real**. O
+o limite de túnel padrão é 1492 bytes (seguro para PPPoE), mas uma VPN, um calço de DPI como
+Zapret, ou um adaptador de MTU reduzido, pode ser menor, portanto, um pacote que caiba no grampo
+ainda é rejeitado pelo sistema operacional (`Windows error 10040`).
+
+Correção – reduza o limite MTU do caminho do túnel, em `config.toml`:
+
+```toml
+[tunnel]
+# 1280-1500. Start at 1400, then 1350 if the error persists.
+mtu = 1400
+```
+
+ou passe `--mtu 1400` na CLI. As construções atuais também reduzem o orçamento
+automaticamente quando um envio for rejeitado, tente novamente esse datagrama uma vez com
+fragmentação permitida e registre o erro do sistema operacional no status em vez de
+relatando o relé como silencioso.
+
+Solução alternativa imediata enquanto o cliente permanece inalterado: diminua o adaptador do Windows
+MTU para que o jogo emita pacotes menores e reinicie o jogo:
+
+```powershell
+netsh interface ipv4 show subinterfaces
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 ```
 
 ### Falha na verificação de integridade do proxy
@@ -146,7 +180,7 @@ exatamente duas possibilidades e o aperto de mão por si só não pode diferenci
 - Se apenas um relé falhar, compare o modo ALPN desse relé com a construção do seu cliente: o
   linha de inicialização do relé e o campo `control_alpn` em seu `GET /health` relatam o
   modo configurado (consulte [Referência CLI](CLI-REFERENCE.md#proxy-configuration)). Se você
-  operar esse relé, `control_alpn = "off"` restaura o comportamento anterior para os mais antigos
+  operar esse relé, `control_alpn = "off"` restaura o comportamento anterior para dispositivos mais antigos
   clientes; o procedimento do operador e a regra de ordenação do cliente primeiro estão em
   [Deploy Proxy](deploy-proxy.md) e o [plano de implementação do ALPN](quic-alpn-rollout.md).
 
@@ -155,19 +189,19 @@ exatamente duas possibilidades e o aperto de mão por si só não pode diferenci
 O interceptador captura pacotes antes que o jogo possa receber respostas e o caminho de injeção falha.
 
 **Janelas:**
-1. Verifique se `WinDivert64.sys` e `WinDivert.dll` estão próximos a `.exe`
+1. Verifique se `WinDivert64.sys` e `WinDivert.dll` estão próximos ao `.exe`
 2. Desconecte os adaptadores de rede secundários (adaptadores virtuais Docker, VMware, Hamachi)
 3. Conecte-se ao servidor do jogo **antes** de iniciar o interceptador
 
 **Linux:**
-1. Verifique as regras do Nftables: `sudo nft list ruleset | grep lightspeed`
+1. Verifique as regras do nftables: `sudo nft list ruleset | grep lightspeed`
 2. Se as regras estiverem obsoletas: `sudo lightspeed --check` para diagnosticar
 
-### "Falha ao abrir o WinDivert" / `FWP_E_IN_USE` (0x8032000A) no Windows
+### "Falha na abertura do WinDivert" / `FWP_E_IN_USE` (0x8032000A) no Windows
 
 WinDivert registra uma chamada/filtro WFP para cada identificador aberto. Se um identificador nunca for fechado, esse estado de filtro permanecerá e o próximo `WinDivertOpen` falhará com `FWP_E_IN_USE` (0x8032000A), mesmo que nenhum processo esteja visivelmente usando o WinDivert.
 
-Compilações recentes do LightSpeed ​​fecham os identificadores de captura e injeção em cada caminho de desligamento ordenado, incluindo Ctrl+C em `--watch` e `--start-interceptor` e **Quit** na GUI, e o loop de recebimento é desbloqueado com `WinDivertShutdown` antes do fechamento, portanto a desmontagem é determinística. Um hard kill (`taskkill /f`, uma falha ou fechamento da janela do console) ainda pode deixar o driver WinDivert 2.2.x com estado obsoleto; essa é uma limitação do driver upstream (basil00/WinDivert#294, #406) que o espaço do usuário não pode limpar depois que o processo termina.
+Compilações recentes do LightSpeed ​​fecham as alças de captura e injeção em cada caminho de desligamento ordenado, incluindo Ctrl+C em `--watch` e `--start-interceptor` e **Quit** na GUI, e o loop de recebimento é desbloqueado com `WinDivertShutdown` antes do fechamento, portanto a desmontagem é determinística. Um hard kill (`taskkill /f`, uma falha ou fechamento da janela do console) ainda pode deixar o driver WinDivert 2.2.x com estado obsoleto; essa é uma limitação do driver upstream (basil00/WinDivert#294, #406) que o espaço do usuário não pode limpar depois que o processo termina.
 
 Se você ainda acertar:
 
@@ -178,7 +212,7 @@ Se você ainda acertar:
    ```
 3. **Desligamento total, não reinicialização**: "Reiniciar" do Windows pode reutilizar a sessão do kernel que mantém o estado obsoleto; um **Desligamento → ligar** completo o limpa.
 
-> **Dica:** Na versão 1.2.2 e anteriores, um bug separado (autenticação do plano de dados rejeitando todos os pacotes, problema nº 59) congelou a conexão e forçou os usuários a matar o cliente repetidamente, que foi o que acionou a maioria dos `FWP_E_IN_USE` relatórios. Esse bug de autenticação foi corrigido na v1.2.3.
+> **Dica:** Na versão 1.2.2 e anteriores, um bug separado (autenticação do plano de dados rejeitando todos os pacotes, problema nº 59) congelou a conexão e forçou os usuários a matar o cliente repetidamente, que foi o que acionou a maioria dos relatórios `FWP_E_IN_USE`. Esse bug de autenticação foi corrigido na v1.2.3.
 
 ---
 

@@ -78,11 +78,45 @@ sudo pfctl -d  # Temporarily disable pf to test
 
 **Fenêtres :**
 ```powershell
-# Check if the firewall rule exists
+# Check if the stable rule exists (one rule, not one per boost)
 netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
 
 # Add it manually if missing
-netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+netsh advfirewall firewall add rule name="LightSpeed WinDivert Tunnel" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+```
+
+Les règles des anciennes versions étaient nommées `LightSpeed WinDivert Tunnel <port>` ; courant
+les builds suppriment celui du port qu’ils utilisent et conservent une seule règle stable. N'importe lequel
+Les règles restantes par port peuvent être supprimées en toute sécurité :
+`netsh advfirewall firewall delete rule name="LightSpeed WinDivert Tunnel 4434"`
+(correspond au port indiqué par `netsh advfirewall firewall show rule name=all`).
+
+### `sendmsg error: ... 10040` / `WSAEMSGSIZE` (Windows) ou `EMSGSIZE` (Linux/macOS)
+
+Le datagramme que le client a essayé d'envoyer est plus grand que le MTU du chemin **réel**. Le
+la limite de tunnel par défaut est de 1492 octets (PPPoE-safe), mais un VPN, une cale DPI telle que
+Zapret, ou un adaptateur à MTU réduit, peut être plus petit, donc un paquet qui s'adapte à la pince
+est toujours rejeté par le système d'exploitation (`Windows error 10040`).
+
+Correctif : abaissez le plafond du chemin-MTU du tunnel, dans `config.toml` :
+
+```toml
+[tunnel]
+# 1280-1500. Start at 1400, then 1350 if the error persists.
+mtu = 1400
+```
+
+ou transmettez `--mtu 1400` sur la CLI. Les versions actuelles réduisent également le budget
+automatiquement lorsqu'un envoi est rejeté, réessayez ce datagramme une fois avec
+fragmentation autorisée et enregistrez l'erreur du système d'exploitation dans l'état au lieu de
+signalant le relais comme silencieux.
+
+Solution de contournement immédiate alors que le client est inchangé : réduisez la valeur de l'adaptateur Windows.
+MTU pour que le jeu émette des paquets plus petits, puis redémarrez le jeu :
+
+```powershell
+netsh interface ipv4 show subinterfaces
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 ```
 
 ### La vérification de l'état du proxy échoue
@@ -104,7 +138,7 @@ Si inaccessible :
 
 Le client n'a pas pu terminer la négociation du plan de contrôle QUIC avec un relais. Quand le
 La nouvelle tentative d'offre vide unique a également échoué, le journal se termine par ce verdict (cité
-verbatim du client ; `{err}` est l'erreur QUIC sous-jacente et `{addr}` le
+verbatim du client ; `{err}` est l'erreur QUIC sous-jacente et `{addr}` l'erreur QUIC sous-jacente.
 adresse du répondeur) :
 
 ```text
@@ -116,7 +150,7 @@ adresse du répondeur) :
 **une fois** avec une offre ALPN vide, puis se souvient de la réponse de ce relais pour le reste
 du processus, donc dans le fonctionnement normal du client, la poignée de main supplémentaire vouée à l'échec se produit à
 au maximum une fois par relais et par lancement. Un repli réussi est normal contre un relais qui
-n'a pas été mis à niveau (le relais par défaut est `[network] control_alpn = "off"`) : le
+n'a pas été mis à niveau (le relais par défaut est `[network] control_alpn = "off"`) : le
 La ligne `QUIC connection established` affiche `alpn=none` et l'enregistrement se poursuit.
 
 **Ce que signifie l'échec final.** La nouvelle tentative d'offre vide a également échoué, il y a donc
@@ -130,14 +164,14 @@ exactement deux possibilités et la poignée de main seule ne peut pas les disti
 2. **Version asymétrique** - le relais nécessite une révision ALPN que ce client n'offre pas
    (par exemple un relais réglé sur `control_alpn = "required"` et exécutant un protocole
    révision plus récente que ce client). Cela échoue bruyamment par conception, jamais de manière silencieuse
-   downgrade : un client actuel contre un relais sur `lightspeed-control/1` négocie,
+   downgrade : un client actuel contre un relais sur `lightspeed-control/1` négocie,
    et un relais exigeant tout ce que ce client ne propose pas le rejette avec 120.
 
 **Comment affiner le résultat :**
 
-- Exécutez `lightspeed-client --test-control --proxy <relay-ip>` pour voir quelle étape cela
+- Exécutez `lightspeed-client --test-control --proxy <relay-ip>` pour voir à quelle étape cela
   le relais est activé. La valeur `alpn=` sur la ligne connectée et dans le résumé final est la
-  protocole d'application négocié : `lightspeed-control/1` signifie que le relais a accepté le
+  Protocole d'application négocié : `lightspeed-control/1` signifie que le relais a accepté le
   offre versionnée, `none` signifie qu'il a accepté une offre vide après la solution de secours (une version plus ancienne)
   relais), et une exécution qui échoue avec le verdict de cette section est le cas ci-dessus.
 - Si tous les relais tombent en panne sur ce réseau mais que les mêmes relais fonctionnent ailleurs, suspectez le
@@ -155,7 +189,7 @@ exactement deux possibilités et la poignée de main seule ne peut pas les disti
 L'intercepteur saisit les paquets avant que le jeu ne puisse recevoir des réponses et le chemin d'injection échoue.
 
 **Fenêtres :**
-1. Vérifiez que `WinDivert64.sys` et `WinDivert.dll` sont à côté du `.exe`
+1. Vérifiez que `WinDivert64.sys` et `WinDivert.dll` sont à côté du `.exe`.
 2. Déconnectez les adaptateurs réseau secondaires (adaptateurs virtuels Docker, VMware, Hamachi)
 3. Connectez-vous au serveur de jeu **avant** de démarrer l'intercepteur
 
@@ -167,7 +201,7 @@ L'intercepteur saisit les paquets avant que le jeu ne puisse recevoir des répon
 
 WinDivert enregistre une légende/filtre WFP pour chaque handle ouvert. Si un handle n'est jamais fermé, cet état de filtre persiste et le `WinDivertOpen` suivant échoue avec `FWP_E_IN_USE` (0x8032000A) même si aucun processus n'utilise visiblement WinDivert.
 
-Les versions récentes de LightSpeed ​​ferment à la fois les poignées de capture et d'injection sur chaque chemin d'arrêt ordonné, y compris Ctrl+C dans `--watch` et `--start-interceptor` et **Quit** dans l'interface graphique, et la boucle de réception est débloquée avec `WinDivertShutdown` avant la fermeture, le démontage est donc déterministe. Un arrêt brutal (`taskkill /f`, un crash ou la fermeture de la fenêtre de la console) peut toujours laisser le pilote WinDivert 2.2.x dans un état obsolète ; il s'agit d'une limitation du pilote en amont (basil00/WinDivert#294, #406) que l'espace utilisateur ne peut pas effacer une fois le processus terminé.
+Les versions récentes de LightSpeed ​​ferment les poignées de capture et d'injection sur chaque chemin d'arrêt ordonné, y compris Ctrl+C dans `--watch` et `--start-interceptor` et **Quit** dans l'interface graphique, et la boucle de réception est débloquée avec `WinDivertShutdown` avant la fermeture, le démontage est donc déterministe. Un arrêt brutal (`taskkill /f`, un crash ou la fermeture de la fenêtre de la console) peut toujours laisser le pilote WinDivert 2.2.x dans un état obsolète ; il s'agit d'une limitation du pilote en amont (basil00/WinDivert#294, #406) que l'espace utilisateur ne peut pas effacer une fois le processus terminé.
 
 Si vous frappez toujours :
 
@@ -178,13 +212,13 @@ Si vous frappez toujours :
    ```
 3. **Arrêt complet, pas de redémarrage** : le « redémarrage » de Windows peut réutiliser la session du noyau qui contient l'état obsolète ; un **arrêt → mise sous tension** complet l'efface.
 
-> **Astuce :** Sur la version 1.2.2 et les versions antérieures, un bug distinct (authentification du plan de données rejetant tous les paquets, problème n°59) a gelé la connexion et forcé les utilisateurs à tuer le client à plusieurs reprises, ce qui a déclenché la plupart des `FWP_E_IN_USE` rapports. Ce bug d'authentification est corrigé dans la v1.2.3.
+> **Conseil :** Sur la version 1.2.2 et les versions antérieures, un bug distinct (authentification du plan de données rejetant tous les paquets, problème n° 59) a gelé la connexion et forcé les utilisateurs à tuer le client à plusieurs reprises, ce qui a déclenché la plupart des rapports `FWP_E_IN_USE`. Ce bug d'authentification est corrigé dans la v1.2.3.
 
 ---
 
 ## Problèmes d'interface graphique Windows
 
-Ceux-ci s'appliquent à l'application `lightspeed-gui` sous Windows.
+Celles-ci s'appliquent à l'application `lightspeed-gui` sous Windows.
 
 ### Quitter n'a rien fait et a laissé un processus zombie
 
@@ -200,7 +234,7 @@ Ensuite, effectuez la mise à niveau vers la version 1.4.2 ou ultérieure.
 
 ### Une deuxième instance s'ouvre au lieu de concentrer la première
 
-Sur les versions antérieures à la v1.4.2, le lancement de l'interface graphique empilait deux fois une deuxième fenêtre et un deuxième moteur. L'interface graphique contient désormais une garde à instance unique : un deuxième lancement affiche un bref avis "LightSpeed ​​est déjà en cours d'exécution" et se ferme au lieu de démarrer un autre moteur. Pour forcer quand même une deuxième instance (pour les diagnostics), transmettez `--force` ou définissez `LIGHTSPEED_GUI_FORCE=1`.
+Sur les versions antérieures à la v1.4.2, le lancement de l'interface graphique empilait deux fois une deuxième fenêtre et un deuxième moteur. L'interface graphique contient désormais une garde à instance unique : un deuxième lancement affiche un bref avis "LightSpeed ​​est déjà en cours d'exécution" et se ferme au lieu de démarrer un autre moteur. Pour forcer quand même une deuxième instance (à des fins de diagnostic), transmettez `--force` ou définissez `LIGHTSPEED_GUI_FORCE=1`.
 
 ### Aucun relais découvert
 
@@ -223,7 +257,7 @@ Collez ce chemin dans la barre d'adresse de l'Explorateur de fichiers pour ouvri
 
 ### "Heartbeat 0 in" dans le journal
 
-Une ligne comme `Heartbeat 0 in` signifie que le moteur n'a envoyé aucun battement de coeur keepalive dans la fenêtre actuelle. En pratique, cela apparaît lorsque le client n'a pas encore établi de connexion fonctionnelle au plan de contrôle, donc aucun battement de cœur n'a été émis. Causes courantes :
+Une ligne comme `Heartbeat 0 in` signifie que le moteur n’a envoyé aucun battement de coeur keepalive dans la fenêtre actuelle. En pratique, cela apparaît lorsque le client n'a pas encore établi de connexion fonctionnelle au plan de contrôle, donc aucun battement de cœur n'a été émis. Causes courantes :
 
 - Le client ne s'est pas encore inscrit auprès d'un relais (vérifier la ligne d'inscription dans la vue statut).
 - Le relais sélectionné est inaccessible.

@@ -78,11 +78,45 @@ sudo pfctl -d  # Temporarily disable pf to test
 
 **Windows:**
 ```powershell
-# Check if the firewall rule exists
+# Check if the stable rule exists (one rule, not one per boost)
 netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
 
 # Add it manually if missing
-netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+netsh advfirewall firewall add rule name="LightSpeed WinDivert Tunnel" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+```
+
+Regeln aus älteren Builds wurden `LightSpeed WinDivert Tunnel <port>` genannt; aktuell
+Builds entfernen diejenige für den Port, den sie verwenden, und behalten eine einzige stabile Regel bei. Irgendein
+Die verbleibenden Regeln pro Port können sicher gelöscht werden:
+`netsh advfirewall firewall delete rule name="LightSpeed WinDivert Tunnel 4434"`
+(entspricht dem von `netsh advfirewall firewall show rule name=all` angezeigten Port).
+
+### `sendmsg error: ... 10040` / `WSAEMSGSIZE` (Windows) oder `EMSGSIZE` (Linux/macOS)
+
+Das Datagramm, das der Client zu senden versuchte, ist größer als die **echte** Pfad-MTU. Die
+Die Standard-Tunnelklemme beträgt 1492 Byte (PPPoE-sicher), aber ein VPN, ein DPI-Shim wie z
+Zapret oder ein Adapter mit reduzierter MTU können kleiner sein, also ein Paket, das zur Klemme passt
+wird immer noch vom Betriebssystem abgelehnt (`Windows error 10040`).
+
+Fix – Senken Sie die Pfad-MTU-Obergrenze des Tunnels in `config.toml`:
+
+```toml
+[tunnel]
+# 1280-1500. Start at 1400, then 1350 if the error persists.
+mtu = 1400
+```
+
+oder übergeben Sie `--mtu 1400` an der CLI. Aktuelle Builds senken zudem das Budget
+Wenn ein Versand automatisch abgelehnt wird, wiederholen Sie das Datagramm einmal mit
+Fragmentierung erlaubt, und stattdessen den Betriebssystemfehler im Status aufzeichnen
+Meldet das Relais als still.
+
+Sofortige Problemumgehung bei unverändertem Client: Reduzieren Sie die Windows-Adapter
+MTU, damit das Spiel kleinere Pakete aussendet, dann starte das Spiel neu:
+
+```powershell
+netsh interface ipv4 show subinterfaces
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 ```
 
 ### Proxy-Zustandsprüfung schlägt fehl
@@ -100,7 +134,7 @@ Falls nicht erreichbar:
 - Überprüfen Sie, ob die Firewall UDP 4434 und TCP 8080 zulässt
 - Überprüfen Sie die Proxy-Protokolle: `journalctl -u lightspeed-proxy --tail 50`
 
-### QUIC-Steuerungsebene schlägt mit `error 120` / `no_application_protocol` fehl
+### QUIC-Steuerebene schlägt mit `error 120` / `no_application_protocol` fehl
 
 Der Client konnte den QUIC-Steuerungsebenen-Handshake mit einem Relay nicht abschließen. Wenn die
 Da der einmalige Wiederholungsversuch mit leerem Angebot ebenfalls fehlgeschlagen ist, endet das Protokoll mit diesem Urteil (zitiert
@@ -117,7 +151,7 @@ Antwortadresse):
 des Prozesses, sodass im normalen Client-Betrieb der zum Scheitern verurteilte zusätzliche Handshake auftritt
 Meistens einmal pro Staffel und Start. Gegen ein Relay ist ein erfolgreicher Fallback normal
 wurde nicht aktualisiert (der Relaisstandard ist `[network] control_alpn = "off"`): die
-In der Zeile `QUIC connection established` wird `alpn=none` angezeigt und die Registrierung wird fortgesetzt.
+In der Zeile `QUIC connection established` wird `alpn=none` angezeigt, und die Registrierung wird fortgesetzt.
 
 **Was der endgültige Fehler bedeutet.** Der Wiederholungsversuch mit leerem Angebot ist ebenfalls fehlgeschlagen, also gibt es solche
 genau zwei Möglichkeiten und der Händedruck allein kann sie nicht unterscheiden:
@@ -128,25 +162,25 @@ genau zwei Möglichkeiten und der Händedruck allein kann sie nicht unterscheide
    Wenn in einem Netzwerk ein Fehler auftritt, in einem anderen jedoch dieselben Relays funktionieren, ist der Pfad der gemeinsame
    Faktor.
 2. **Versionsversatz** – das Relay erfordert eine ALPN-Revision, die dieser Client nicht anbietet
-   (zum Beispiel ein Relais, das auf `control_alpn = "required"` eingestellt ist und ein Protokoll ausführt
+   (z. B. ein Relais, das auf `control_alpn = "required"` eingestellt ist und ein Protokoll ausführt
    Revision neuer als dieser Client). Das fällt konstruktionsbedingt lautstark aus, niemals leise
-   Downgrade: ein aktueller Client gegen ein Relay auf `lightspeed-control/1` verhandelt,
+   Downgrade: Ein aktueller Client verhandelt gegen ein Relay auf `lightspeed-control/1`,
    und ein Relay, das etwas erfordert, was dieser Client nicht anbietet, lehnt es mit 120 ab.
 
 **So grenzen Sie es ein:**
 
 - Führen Sie `lightspeed-client --test-control --proxy <relay-ip>` aus, um zu sehen, in welcher Phase das ist
-  Relais ist an. Der `alpn=`-Wert auf der verbundenen Linie und in der endgültigen Zusammenfassung ist der
-  Ausgehandeltes Anwendungsprotokoll: `lightspeed-control/1` bedeutet, dass das Relay das akzeptiert hat
-  versioniertes Angebot, `none` bedeutet, dass nach dem Fallback ein leeres Angebot angenommen wurde (ein älteres
+  Relais ist an. Der `alpn=`-Wert auf der verbundenen Leitung und in der endgültigen Zusammenfassung ist der
+  ausgehandeltes Anwendungsprotokoll: `lightspeed-control/1` bedeutet, dass das Relais das akzeptiert hat
+  versioniertes Angebot, `none` bedeutet, dass nach dem Fallback ein leeres Angebot angenommen wurde (ein älteres).
   Staffel), und ein Lauf, der mit dem Urteil dieses Abschnitts fehlschlägt, ist der oben genannte Fall.
 - Wenn jedes Relais in diesem Netzwerk ausfällt, die gleichen Relais aber anderswo funktionieren, liegt der Verdacht nahe
   Middlebox: Deaktivieren Sie das VPN oder die HTTPS/QUIC-Überprüfung des Sicherheitsprodukts und versuchen Sie es erneut.
   Hängen Sie dann eine UDP 4433-Erfassung an #140 an.
 - Wenn nur ein Relay ausfällt, vergleichen Sie den ALPN-Modus dieses Relays mit Ihrem Client-Build: dem
-  Die Startzeile des Relais und das Feld `control_alpn` auf seinem `GET /health` melden das
+  Die Startleitung des Relais und das `control_alpn`-Feld auf seinem `GET /health` melden die
   konfigurierten Modus (siehe [CLI-Referenz](CLI-REFERENCE.md#proxy-configuration)). Wenn Sie
-  Betätigen Sie dieses Relais, `control_alpn = "off"` stellt das vorherige Verhalten für ältere wieder her
+  Wenn Sie dieses Relais betätigen, stellt `control_alpn = "off"` das vorherige Verhalten für ältere Geräte wieder her
   Kunden; Das Operator-Verfahren und die Client-First-Order-Regel sind enthalten
   [Proxy bereitstellen](deploy-proxy.md) und der [ALPN-Rollout-Plan](quic-alpn-rollout.md).
 
@@ -155,19 +189,19 @@ genau zwei Möglichkeiten und der Händedruck allein kann sie nicht unterscheide
 Der Interceptor erfasst Pakete, bevor das Spiel Antworten empfangen kann, und der Injektionspfad schlägt fehl.
 
 **Windows:**
-1. Stellen Sie sicher, dass `WinDivert64.sys` und `WinDivert.dll` neben `.exe` liegen.
+1. Stellen Sie sicher, dass sich `WinDivert64.sys` und `WinDivert.dll` neben dem `.exe` befinden
 2. Trennen Sie sekundäre Netzwerkadapter (virtuelle Docker-, VMware- und Hamachi-Adapter)
 3. Stellen Sie eine Verbindung zum Spieleserver her, **bevor** Sie den Interceptor starten
 
 **Linux:**
-1. Nftables-Regeln prüfen: `sudo nft list ruleset | grep lightspeed`
-2. Wenn Regeln veraltet sind: `sudo lightspeed --check` zur Diagnose
+1. Überprüfen Sie die Nftables-Regeln: `sudo nft list ruleset | grep lightspeed`
+2. Wenn die Regeln veraltet sind: `sudo lightspeed --check` zur Diagnose
 
 ### „WinDivert-Öffnung fehlgeschlagen“ / `FWP_E_IN_USE` (0x8032000A) unter Windows
 
 WinDivert registriert einen WFP-Callout/Filter für jedes offene Handle. Wenn ein Handle nie geschlossen wird, bleibt dieser Filterstatus bestehen und der nächste `WinDivertOpen` schlägt mit `FWP_E_IN_USE` (0x8032000A) fehl, obwohl kein Prozess sichtbar WinDivert verwendet.
 
-Aktuelle LightSpeed-Builds schließen sowohl die Capture- als auch die Inject-Handles auf jedem ordnungsgemäßen Shutdown-Pfad, einschließlich Strg+C in `--watch` und `--start-interceptor` und **Quit** in der GUI, und die Empfangsschleife wird vor dem Schließen mit `WinDivertShutdown` entsperrt, sodass das Teardown deterministisch ist. Ein Hard Kill (`taskkill /f`, ein Absturz oder das Schließen des Konsolenfensters) kann immer noch dazu führen, dass der WinDivert 2.2.x-Treiber veraltet ist. Das ist eine Einschränkung des Upstream-Treibers (basil00/WinDivert#294, #406), die der Userspace nicht löschen kann, sobald der Prozess beendet ist.
+Aktuelle LightSpeed-Builds schließen sowohl die Capture- als auch die Inject-Handles auf jedem ordnungsgemäßen Shutdown-Pfad, einschließlich Strg+C in `--watch` und `--start-interceptor` und **Quit** in der GUI, und die Empfangsschleife wird mit `WinDivertShutdown` vor dem Schließen entsperrt, sodass das Teardown deterministisch ist. Ein Hard Kill (`taskkill /f`, ein Absturz oder das Schließen des Konsolenfensters) kann immer noch dazu führen, dass der WinDivert 2.2.x-Treiber veraltet ist. Das ist eine Einschränkung des Upstream-Treibers (basil00/WinDivert#294, #406), die der Userspace nicht löschen kann, sobald der Prozess beendet ist.
 
 Wenn Sie es immer noch treffen:
 
@@ -178,7 +212,7 @@ Wenn Sie es immer noch treffen:
    ```
 3. **Vollständiges Herunterfahren, kein Neustart**: Windows „Neustart“ kann die Kernel-Sitzung wiederverwenden, die den veralteten Zustand enthält; ein vollständiges **Herunterfahren → Einschalten** löscht es.
 
-> **Tipp:** In Version 1.2.2 und früher fror ein separater Fehler (Authentifizierung auf Datenebene lehnte alle Pakete ab, Problem Nr. 59) die Verbindung ein und zwang Benutzer, den Client wiederholt zu beenden, was die meisten `FWP_E_IN_USE` Berichte auslöste. Dieser Authentifizierungsfehler wurde in Version 1.2.3 behoben.
+> **Tipp:** In Version 1.2.2 und früher fror ein separater Fehler (Authentifizierung auf Datenebene lehnte alle Pakete ab, Problem Nr. 59) die Verbindung ein und zwang Benutzer, den Client wiederholt zu beenden, was die meisten `FWP_E_IN_USE`-Berichte auslöste. Dieser Authentifizierungsfehler wurde in Version 1.2.3 behoben.
 
 ---
 
@@ -229,7 +263,7 @@ Eine Zeile wie `Heartbeat 0 in` bedeutet, dass die Engine im aktuellen Fenster k
 - Das ausgewählte Relais ist nicht erreichbar.
 - Der Interceptor wurde nicht gestartet, daher ist keine Sitzung aktiv.
 
-Sobald die Registrierung erfolgreich ist und der Herzschlag zu fließen beginnt, steigt der Zähler. Wenn es bei 0 bleibt, während ein Relais als fehlerfrei anzeigt, führen Sie `lightspeed-client --test-control` aus, um festzustellen, ob die Steuerungsebene erreichbar ist.
+Sobald die Registrierung erfolgreich ist und der Herzschlag zu fließen beginnt, steigt der Zähler. Wenn es auf 0 bleibt, während ein Relais als fehlerfrei anzeigt, führen Sie `lightspeed-client --test-control` aus, um zu isolieren, ob die Steuerungsebene erreichbar ist.
 
 ---
 
