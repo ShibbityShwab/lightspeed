@@ -33,6 +33,11 @@
 #       `lightspeed_telemetry_saved_app_negative_count` family the relay
 #       actually emits, not the dead `..._saved_app_ms_negative_count` name,
 #       and the fixtures emit the real family so a drift fails (o)/(q)
+#   (u) control-handshake split (M1): the four
+#       `lightspeed_control_handshakes_total{outcome=...}` series parse into
+#       reset-safe cumulative/delta/lifetime/totals fields, roll back like any
+#       counter, survive an old snapshot that predates the fields, and the
+#       family/outcome names stay in sync with proxy/src/metrics.rs
 #
 # No network: the fake registry points health/metrics URLs at file://
 # fixtures, which curl reads locally.
@@ -137,6 +142,20 @@ append_metrics_file() {
 	for line in "$@"; do
 		printf '%s\n' "$line" >>"$dir/relay-$name.metrics.txt"
 	done
+}
+
+# append_control_handshakes <dir> <relay-name> <negotiated_v1> <no_alpn> <rej120> <rej_other>
+# Emits the real `lightspeed_control_handshakes_total{outcome="..."}` family in
+# the order/label shape the proxy renders (region, node_id, outcome), with all
+# four outcomes present even at zero - the relay exports every variant from
+# process start so a reader cannot mistake an absent series for a zero.
+append_control_handshakes() {
+	local dir="$1" name="$2" nv1="$3" na="$4" rej120="$5" ro="$6"
+	append_metrics_file "$dir" "$name" \
+		"lightspeed_control_handshakes_total{region=\"r\",node_id=\"relay-$name\",outcome=\"negotiated_v1\"} $nv1" \
+		"lightspeed_control_handshakes_total{region=\"r\",node_id=\"relay-$name\",outcome=\"no_alpn\"} $na" \
+		"lightspeed_control_handshakes_total{region=\"r\",node_id=\"relay-$name\",outcome=\"rejected_no_application_protocol\"} $rej120" \
+		"lightspeed_control_handshakes_total{region=\"r\",node_id=\"relay-$name\",outcome=\"rejected_other\"} $ro"
 }
 
 # write_relay_fixture <dir> <name> <packets> <malformed> <sessions>
@@ -716,6 +735,105 @@ else
 		"${fixture_real:-0}" "${fixture_dead:-0}" >&2
 	FAILURES=$((FAILURES + 1))
 fi
+
+# ── (u) control-handshake split (M1 observability) ───────────
+# The relay exports four `lightspeed_control_handshakes_total{outcome=...}`
+# series (proxy/src/metrics.rs). They are ordinary monotone counters, so they
+# must round-trip through cumulative/interval/totals/lifetime and the rollback
+# rule exactly like every other family; the anomaly detector reads the lifetime
+# views to trend the pre-1.11.0 (alert-120) rejection population.
+CTL_H="$TMP/history-control.json"
+write_fixture "$TMP" 100 5 1000 2 3 1 1 500 10 0 25
+append_control_handshakes "$TMP" a 10 0 90 1
+run_collect "$CTL_H" "$REG_A"
+assert_rc0 $? "(u) control first run exits 0"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].cumulative.control_handshakes_negotiated_v1 == 10' "(u) negotiated_v1 parsed"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].cumulative.control_handshakes_no_alpn == 0' "(u) no_alpn parsed even at zero"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].cumulative.control_handshakes_rejected_no_application_protocol == 90' "(u) alert-120 rejects parsed"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].cumulative.control_handshakes_rejected_other == 1' "(u) rejected_other parsed"
+assert_jq "$CTL_H" '.snapshots[-1].interval.control_handshakes_rejected_no_application_protocol == 90 and .snapshots[-1].totals.control_handshakes_rejected_no_application_protocol == 90' "(u) first interval == totals == raw"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].lifetime.control_handshakes_negotiated_v1 == 10' "(u) lifetime seeded"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].reset == true' "(u) first-seen relay is a reset row"
+# The detector's M1-drain context also needs the auth and session counters the
+# task names: both were already collected (auth_rejections_total is recorded as
+# drops_auth_rejected, sessions_created_total as sessions_created); pinned here
+# so the M1 section documents the complete input set.
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].cumulative.drops_auth_rejected == 2' "(u) auth_rejections_total recorded as drops_auth_rejected"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].cumulative.sessions_created == 3' "(u) sessions_created_total recorded as sessions_created"
+
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
+append_control_handshakes "$TMP" a 12 1 120 2
+run_collect "$CTL_H" "$REG_A"
+assert_rc0 $? "(u) control second run exits 0"
+assert_jq "$CTL_H" '.snapshots[-1].interval.control_handshakes_negotiated_v1 == 2' "(u) negotiated_v1 delta"
+assert_jq "$CTL_H" '.snapshots[-1].interval.control_handshakes_no_alpn == 1' "(u) no_alpn delta"
+assert_jq "$CTL_H" '.snapshots[-1].interval.control_handshakes_rejected_no_application_protocol == 30' "(u) alert-120 reject delta"
+assert_jq "$CTL_H" '.snapshots[-1].interval.control_handshakes_rejected_other == 1' "(u) rejected_other delta"
+assert_jq "$CTL_H" '.snapshots[-1].totals.control_handshakes_rejected_no_application_protocol == 120' "(u) reject totals accumulate"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].reset == false' "(u) monotone handshake counters are not a reset"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].cumulative.sessions_created == 5 and .snapshots[-1].interval.sessions_created == 2' "(u) sessions_created still deltas alongside the handshake split"
+
+# Rollback: reset-safe like every other family - the delta is the new process's
+# current value and reset_metrics names the field.
+write_fixture "$TMP" 40 2 300 1 1 1 0 100 3 0 10
+append_control_handshakes "$TMP" a 3 0 20 0
+run_collect "$CTL_H" "$REG_A"
+assert_rc0 $? "(u) control rollback run exits 0"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].reset == true' "(u) handshake counter rollback marks reset"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].reset_metrics | index("control_handshakes_rejected_no_application_protocol") != null' "(u) reset_metrics names the rolled-back handshake field"
+assert_jq "$CTL_H" '.snapshots[-1].interval.control_handshakes_rejected_no_application_protocol == 20' "(u) rollback delta equals the new lifetime"
+assert_jq "$CTL_H" '.snapshots[-1].per_relay["relay-a"].lifetime.control_handshakes_rejected_no_application_protocol == 140' "(u) lifetime survives the rollback (120 + 20)"
+
+# Old-snapshot compatibility (schema evolution): a history written before the
+# M1 fields existed has no control_* keys. The collector must append cleanly,
+# keep the old snapshot as-is, delta the pre-existing counters normally, and
+# seed the new fields from their current lifetime (the documented
+# first-seen-counter rule; see docs/m1-handshake-trend.md).
+OLD_H="$TMP/history-control-old-schema.json"
+cat >"$OLD_H" <<'JSON'
+{"version":1,"generated_at":900,"snapshots":[{"t":900,"relay_count":1,"healthy_count":1,"interval":{},"totals":{},"per_relay":{"relay-a":{"reachable":true,"version":"1.3.2","active_sessions":0,"cumulative":{"packets_relayed":100},"lifetime":{"packets_relayed":100},"delta":{"packets_relayed":100},"reset":true,"reset_metrics":[]}}}]}
+JSON
+write_fixture "$TMP" 150 9 1600 6 5 2 4 900 20 0 40
+append_control_handshakes "$TMP" a 10 0 90 1
+run_collect "$OLD_H" "$REG_A"
+assert_rc0 $? "(u) old-schema history run exits 0"
+assert_jq "$OLD_H" '.version == 1 and (.snapshots | length) == 2' "(u) old snapshot preserved and a new one appended"
+assert_jq "$OLD_H" '.snapshots[0].per_relay["relay-a"].cumulative.packets_relayed == 100' "(u) old snapshot left untouched"
+assert_jq "$OLD_H" '.snapshots[-1].interval.packets_relayed == 50' "(u) pre-existing counter still deltas across the schema change"
+assert_jq "$OLD_H" '.snapshots[-1].interval.control_handshakes_rejected_no_application_protocol == 90' "(u) new field seeds from its current lifetime on an old snapshot"
+assert_jq "$OLD_H" '.snapshots[-1].totals.control_handshakes_rejected_no_application_protocol == 90' "(u) new field totals reconcile on an old snapshot"
+assert_jq "$OLD_H" '(.snapshots[0].per_relay["relay-a"].lifetime | has("control_handshakes_rejected_no_application_protocol")) | not' "(u) old snapshot is not rewritten with the new fields"
+
+# Producer -> collector contract: the family and outcome labels the collector
+# reads must be the ones proxy/src/metrics.rs exports, or every handshake field
+# silently files as 0 (the same defect class as the saved-app negative-count
+# name in (t)). The COUNTERS list is what lifetime-accumulates the fields the
+# anomaly detector differences, so a field dropped from one side fails here.
+PROXY_METRICS="$SCRIPT_DIR/../../proxy/src/metrics.rs"
+CTL_FAMILY="lightspeed_control_handshakes_total"
+M1_FIELDS="control_handshakes_negotiated_v1 control_handshakes_no_alpn control_handshakes_rejected_no_application_protocol control_handshakes_rejected_other"
+for outcome in negotiated_v1 no_alpn rejected_no_application_protocol rejected_other; do
+	if grep -Fq "$outcome" "$COLLECT" 2>/dev/null && grep -Fq "$outcome" "$PROXY_METRICS" 2>/dev/null; then
+		PASS=$((PASS + 1))
+	else
+		printf '  FAIL: (u contract) the collector and proxy must agree on outcome "%s"\n' "$outcome" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
+done
+if grep -Fq "$CTL_FAMILY" "$COLLECT" 2>/dev/null && grep -Fq "$CTL_FAMILY" "$PROXY_METRICS" 2>/dev/null; then
+	PASS=$((PASS + 1))
+else
+	printf '  FAIL: (u contract) collector and proxy must share the family "%s"\n' "$CTL_FAMILY" >&2
+	FAILURES=$((FAILURES + 1))
+fi
+for field in $M1_FIELDS; do
+	if grep -F 'COUNTERS=' "$COLLECT" 2>/dev/null | grep -qF "\"$field\""; then
+		PASS=$((PASS + 1))
+	else
+		printf '  FAIL: (u contract) the collector no longer lifetime-accumulates "%s"\n' "$field" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
+done
 
 # ── Verdict ──────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

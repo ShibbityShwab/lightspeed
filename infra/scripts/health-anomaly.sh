@@ -70,6 +70,25 @@
 #                                 Severity warning, but it fails the run: a
 #                                 blind collector silently invalidates every
 #                                 per-relay baseline.
+#   (k) m1_reject_drain           the pre-1.11.0 (TLS alert 120) rejection
+#                                 population is ACCELERATING while accepted
+#                                 handshakes stay flat/zero. The fleet is
+#                                 deliberately `required` (owner decision
+#                                 recorded in docs/fleet-alpn-options-
+#                                 2026-11-18.md), so a steady reject stream is
+#                                 the expected state and must NOT alert every
+#                                 run; this fires only when the window's
+#                                 reject RATE is at least M1_FACTOR times the
+#                                 relay's own pre-window baseline rate. It
+#                                 reads the control-handshake fields the
+#                                 collector writes (2026-11-18 schema) and
+#                                 skips any relay whose snapshots lack them,
+#                                 so old histories and pre-1.11.0 relays stay
+#                                 silent instead of firing on absent data.
+#                                 Reported/posted, never fails the run (the
+#                                 population is a policy outcome, not a fault);
+#                                 the trend itself lives in the stats branch
+#                                 (docs/m1-handshake-trend.md).
 #
 # The window is sustained (default 3 snapshots), never a single
 # snapshot, so a legitimately idle relay is not mistaken for an outage.
@@ -166,6 +185,43 @@ SKEW_SHARE=0.5  # top relay's share of the fleet's window relayed packets
 UNREACHABLE_MIN_SNAPSHOTS=3
 UNREACHABLE_MIN_SECS=21600
 
+# m1_reject_drain: the alert-120 rejection population accelerating while accepted
+# handshakes stay flat. Unlike the data-plane detectors this one is calibrated to
+# a RATE CHANGE, not to an absolute level: the fleet is intentionally `required`
+# (owner decision 2026-11-18), so the steady-state drain (99.4% of handshakes
+# rejected at the 2026-11-18 sample) is expected and alerting on it every run is
+# exactly the "monitor stops being read" failure this file warns about. The
+# detector compares the window's reject rate with the relay's own pre-window
+# baseline rate and suppresses the steady state.
+# The schema-introduction snapshot books the counters' current lifetime as its
+# interval (the collector's first-seen-counter rule), which can inflate the
+# baseline for the few runs while that snapshot is still inside the baseline
+# window. That direction only ever SUPPRESSES an alert, never fabricates one, and
+# the flat-accepted gate independently rejects the seeding snapshot because its
+# accepted-handshake jump is large too.
+#   M1_MIN_PER_HOUR  window alert-120 rejects per hour, floor. The quietest
+#                    relay at the 2026-11-18 paired sample ran ~86 rejects/h;
+#                    100/h sits just above the fleet's quietest real relay.
+#   M1_FACTOR        window rate / baseline rate multiple that counts as
+#                    "rising"; 2 is a doubling, far outside scrape/traffic noise.
+#   M1_ACCEPT_MAX_PER_HOUR  accepted handshakes (negotiated_v1 + no_alpn) per
+#                    hour still treated as flat/zero. Fleet-wide 1.11.0 accepted
+#                    rate is ~103/h over eight relays, so a relay above 10/h is
+#                    genuinely serving clients and is not "flat".
+# Rate denominator (QA F1): the window numerator is
+# lifetime[win[-1]] - lifetime[wstart], which spans W snapshot INTERVALS
+# (wstart -> win[-1]). $win_hours, which the pre-existing count/reference
+# detectors use, measures win[0] -> win[-1] = W-1 intervals; dividing the M1
+# numerator by it inflated every M1 rate by W/(W-1) (1.5x at the default
+# --window 3), so the documented 100/h floor and 2x factor really fired at
+# ~67/h and ~1.34x. The M1 rates now divide by $m1_win_hours, measured over
+# exactly the numerator's span (floored at 1 hour like the existing
+# convention, falling back to $win_hours when those timestamps are
+# unavailable). The other detectors' floors and messages are unchanged.
+M1_MIN_PER_HOUR=100
+M1_FACTOR=2
+M1_ACCEPT_MAX_PER_HOUR=10
+
 # Traffic-distribution detectors: reported and alerted, but not build-failing.
 # idle_relay names a relay that was UP but had a quiet window - its own
 # message says "traffic distribution, not a failure", and live data confirms
@@ -179,7 +235,10 @@ UNREACHABLE_MIN_SECS=21600
 # Everything else still fails the run, including the warning-severity
 # detectors that describe real degradation. LIGHTSPEED_ANOMALY_STRICT=1
 # restores fail-on-anything.
-NON_FATAL_TYPES='"idle_relay","abuse_flood","load_skew"'
+# m1_reject_drain joins them: the pre-1.11.0 rejection population is a policy
+# outcome (the fleet is deliberately `required`), so an acceleration is
+# reported and posted but a scheduled run does not go red for it.
+NON_FATAL_TYPES='"idle_relay","abuse_flood","load_skew","m1_reject_drain"'
 
 # abuse_flood's absolute floor is expressed PER HOUR and scaled by the
 # window's real duration (the detector's original hourly-window calibration
@@ -385,6 +444,21 @@ def rel_life($snap; $id; $k):
   ((($snap.per_relay // {})[$id] // {}) | life($k));
 def rel_reach($snap; $id):
   ((((($snap.per_relay // {})[$id] // {}).reachable) // false) == true);
+# Does this relay's row in that snapshot carry the counter at all? Used by the
+# M1 detector, whose fields were added to the collector schema on 2026-11-18.
+# Two distinct cases, easy to confuse:
+#   * an OLD SNAPSHOT written before the schema has no control_handshakes_* keys
+#     at all -> SKIP it. rel_life()/life() default an absent key to 0 for the
+#     other detectors, so presence has to be asked explicitly here or an absent
+#     field would be read as a measured zero;
+#   * a RELAY that predates 1.11.0 exports no handshake family, so the collector
+#     records an EXPLICIT 0 for it: the field IS present (value 0) in every
+#     snapshot the current collector writes. That row is evaluated, not skipped,
+#     and stays silent because its reject delta is 0 - a zero split is not an
+#     anomaly.
+def rel_has($snap; $id; $k):
+  (($snap.per_relay // {})[$id] // {}) as $row
+  | (($row.lifetime[$k]) // ($row.cumulative[$k]) // null) != null;
 def span($a; $b): (($b - $a) | if . < 0 then null else . end);
 def pct($x): (((($x // 0) * 1000 | round) / 10) | tostring) + "%";
 def one($x): (((($x // 0) * 10 | round) / 10) | tostring);
@@ -417,6 +491,22 @@ def probe_ok($probe; $id):
 | (if ($wtimes | length) >= 2
    then ((($wtimes[-1] - $wtimes[0]) / 3600) | if . < 1 then 1 else . end)
    else 1 end) as $win_hours
+# Baseline duration for the M1 rate comparison, floored at one hour exactly
+# like the window (collector snapshots are hours apart, so sub-hour spreads are
+# throttle artifacts, not a rate).
+| (($base | length)) as $bL
+| (if ($bL >= 2 and (($base[0].t // null) != null) and (($base[-1].t // null) != null))
+   then ((($base[-1].t - $base[0].t) / 3600) | if . < 1 then 1 else . end)
+   else null end) as $base_hours
+# M1-specific window duration (QA F1): the M1 numerator is
+# lifetime[win[-1]] - lifetime[wstart], i.e. W intervals, so its denominator
+# must cover wstart -> win[-1] too. $win_hours (win[0] -> win[-1], W-1
+# intervals) stays untouched for the pre-existing detectors, whose count-based
+# floors must keep their historical behaviour. Floored at 1h like the existing
+# convention; falls back to $win_hours when the timestamps are unavailable.
+| (if (($wstart.t // null) != null) and (($win[-1].t // null) != null)
+   then ((($win[-1].t - $wstart.t) / 3600) | if . < 1 then 1 else . end)
+   else $win_hours end) as $m1_win_hours
 | (($abuse_min * $win_hours) | floor) as $abuse_floor
 | (($skew_min * $win_hours) | floor) as $skew_floor
 | ([ $winids[] as $id
@@ -501,6 +591,64 @@ def probe_ok($probe; $id):
                    + " over " + ($WL | tostring) + " snapshots (fleet sessions +"
                    + ($fleet_sess | tostring) + ")") }
    ]) as $authFlags
+# (k) M1 reject drain: the pre-1.11.0 (TLS alert 120) rejection population
+# accelerating while accepted handshakes stay flat/zero. Skipped, not
+# zero-read, when a snapshot predates the collector's control-handshake fields
+# (2026-11-18 schema): an old snapshot has no split to trend, and treating its
+# absent field as 0 would fabricate a drain. That is distinct from a relay that
+# predates 1.11.0 and exports no family - the collector records an explicit 0
+# for it, so the field is present, the row is evaluated, and the zero delta
+# keeps it silent (a zero split is not an anomaly). A steady-state drain (the
+# expected state under `required`) is deliberately NOT an anomaly - only a rate
+# at least M1_FACTOR times the relay's own baseline while accepted stays under
+# the flat ceiling. Rates divide by $m1_win_hours, the same span the numerator
+# covers (QA F1). Reported and posted, never build-failing (NON_FATAL_TYPES).
+| ([ $ids[] as $id
+     | select($WL >= $W and $W >= 2 and $BL >= 2 and $base_hours != null)
+     | ([ $win[] | rel_reach(.; $id) ] | all) as $up
+     | select($up)
+     | select(rel_has($base[0]; $id; "control_handshakes_rejected_no_application_protocol"))
+     | select(rel_has($wstart; $id; "control_handshakes_rejected_no_application_protocol"))
+     | select(rel_has($win[-1]; $id; "control_handshakes_rejected_no_application_protocol"))
+     # A restart inside the baseline or the window makes the counter delta the
+     # new process's lifetime, not a rate: skip rather than invent a spike.
+     | ([ $win[] | ((((.per_relay // {})[$id] // {}).reset) // false) ] | any) as $win_reset
+     | ([ $base[] | ((((.per_relay // {})[$id] // {}).reset) // false) ] | any) as $base_reset
+     | select(($win_reset | not) and ($base_reset | not))
+     | (($win[-1] | rel_life(.; $id; "control_handshakes_rejected_no_application_protocol"))
+        - ($wstart | rel_life(.; $id; "control_handshakes_rejected_no_application_protocol"))) as $rejRaw
+     | ($rejRaw | if . < 0 then 0 else . end) as $rej
+     | (($win[-1] | rel_life(.; $id; "control_handshakes_negotiated_v1"))
+        - ($wstart | rel_life(.; $id; "control_handshakes_negotiated_v1"))) as $nv1Raw
+     | (($win[-1] | rel_life(.; $id; "control_handshakes_no_alpn"))
+        - ($wstart | rel_life(.; $id; "control_handshakes_no_alpn"))) as $noalpnRaw
+     | (($nv1Raw | if . < 0 then 0 else . end)
+        + ($noalpnRaw | if . < 0 then 0 else . end)) as $acc
+     | (($base[-1] | rel_life(.; $id; "control_handshakes_rejected_no_application_protocol"))
+        - ($base[0] | rel_life(.; $id; "control_handshakes_rejected_no_application_protocol"))) as $baseRejRaw
+     | ($baseRejRaw | if . < 0 then 0 else . end) as $baseRej
+     | (($rej / $m1_win_hours) | floor) as $rej_ph
+     | (($acc / $m1_win_hours) | floor) as $acc_ph
+     | (($baseRej / $base_hours) | floor) as $base_ph
+     | select($rej_ph >= $m1_min)
+     | select($acc_ph <= $m1_accept)
+     | select($base_ph <= 0 or $rej_ph >= ($base_ph * $m1_factor))
+     | { type: "m1_reject_drain", severity: "warning", relay: $id,
+         window: $WL, window_hours: $m1_win_hours, baseline_hours: $base_hours,
+         rejected_alert_120: $rej, accepted_handshakes: $acc,
+         rejects_per_hour: $rej_ph, accepted_per_hour: $acc_ph,
+         baseline_rejects_per_hour: $base_ph,
+         message: ($id + ": alert-120 rejects +" + ($rej | tostring)
+                   + " over " + ($WL | tostring) + " snapshot(s) (~"
+                   + ($m1_win_hours | tostring) + "h, ~" + ($rej_ph | tostring)
+                   + "/h) vs its own pre-window baseline ~" + ($base_ph | tostring)
+                   + "/h, while accepted handshakes stayed flat (+" + ($acc | tostring)
+                   + " over the window, ~" + ($acc_ph | tostring) + "/h): the "
+                   + "pre-1.11.0 rejection population is accelerating, not "
+                   + "draining. Under required this is a policy outcome, not a "
+                   + "relay fault; the trend is in the stats branch "
+                   + "(docs/m1-handshake-trend.md)") }
+   ]) as $m1Flags
 | ([ $cur | to_entries[]
      | select(((.value.version // "") != "") and ((.value.reachable // false)))
      | { id: .key, v: (.value.version | tostring) } ]) as $vrows
@@ -721,7 +869,7 @@ def probe_ok($probe; $id):
      | { type: "relay_health_failed", severity: "critical", relay: $id,
          message: ($id + ": /health probe failed") }
    ]) as $healthFlags
-| ($zeroFlags + $idleFlags + $authFlags + $verFlags + $relFlags + $savedFlags + $abuseFlags
+| ($zeroFlags + $idleFlags + $authFlags + $m1Flags + $verFlags + $relFlags + $savedFlags + $abuseFlags
    + $skewFlags + $staleFlags + $streakFlags + $missingFlags + $healthFlags) as $flags
 | {
     window: $W,
@@ -751,6 +899,9 @@ result="$(jq -c \
 	--argjson abuse_share "$ABUSE_SHARE" \
 	--argjson skew_min "$SKEW_MIN" \
 	--argjson skew_share "$SKEW_SHARE" \
+	--argjson m1_min "$M1_MIN_PER_HOUR" \
+	--argjson m1_factor "$M1_FACTOR" \
+	--argjson m1_accept "$M1_ACCEPT_MAX_PER_HOUR" \
 	--argjson unreachable_min "$UNREACHABLE_MIN_SNAPSHOTS" \
 	--argjson unreachable_secs "$UNREACHABLE_MIN_SECS" \
 	--argjson live_probe "$LIVE_PROBE" \
@@ -816,10 +967,12 @@ fi
 
 # ── Severity gate ────────────────────────────────────────────
 # Every anomaly alerts: it is printed and posted to Discord. The run fails only
-# when a detector outside NON_FATAL_TYPES fires. The three traffic-distribution
-# detectors - idle_relay, abuse_flood, load_skew - describe a quiet or skewed
-# fleet, not an outage, and failing every scheduled run on a healthy fleet is
-# how a monitor stops being read.
+# when a detector outside NON_FATAL_TYPES fires. The traffic-distribution and
+# policy detectors - idle_relay, abuse_flood, load_skew and m1_reject_drain -
+# describe a quiet relay, a scanner flood, an unbalanced fleet or the
+# deliberately-`required` pre-1.11.0 rejection population, not an outage, and
+# failing every scheduled run on a healthy fleet is how a monitor stops being
+# read.
 #
 # Deliberately still fatal, warning severity included: stale_history (the
 # collector stopped), relay_unreachable_streak (the collector cannot see a

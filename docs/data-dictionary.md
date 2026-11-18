@@ -155,6 +155,39 @@ sample count, not a k-anonymity guarantee; the k floor is the distinct-source
 rule above. See the recommender's `source_quality` block and
 `min_measured_samples`.
 
+### Control-handshake split (M1) in the published snapshot
+
+Since 2026-11-18 the history also carries the relay control-plane handshake
+split, as reset-safe counters in the same per-relay
+`cumulative`/`delta`/`lifetime` shape as the data-plane counters (and in the
+fleet `interval`/`totals` sums):
+
+- `control_handshakes_negotiated_v1` / `..._no_alpn` — completed handshakes;
+  their sum is "accepted". Under `control_alpn = "required"` (fleet mode since
+  2026-11-16) `no_alpn` is 0 and accepted equals `negotiated_v1`.
+- `control_handshakes_rejected_no_application_protocol` — **M1**: handshakes
+  refused with TLS alert 120, the pre-1.11.0 client signal (it also counts
+  scanners and middleboxes that do not offer the control ALPN identifier).
+- `control_handshakes_rejected_other` — every other rejection. The four
+  outcomes partition the control handshakes the relay process observed.
+
+The counters carry **no client identity**: M1 is an upper bound on the stranded
+client share, never a count of clients; attributing rejects to real users needs
+the relay's own log lines and is operator-only. Two different absences must not
+be conflated:
+
+- **A snapshot written before the field was added** has no
+  `control_handshakes_*` keys. Treat an absent field as unknown, not as a
+  measured zero; the `m1_reject_drain` detector skips such snapshots.
+- **A relay running a pre-1.11.0 build** exports no handshake family, but the
+  collector records an explicit 0 for it, so the field is present with a zero
+  split in every snapshot the current collector writes. A zero split is not an
+  anomaly; it simply has nothing to trend until that relay's first 1.11.0
+  scrape.
+
+See [m1-handshake-trend](m1-handshake-trend.md) for the trend queries, the
+seeding caveat and the `m1_reject_drain` anomaly detector.
+
 ### No per-game history in the published snapshot
 
 The stats-branch snapshot aggregates the saved-app families by the

@@ -24,6 +24,12 @@
 #   (i) load_skew                  one relay dominates fleet traffic
 #   (j) relay_unreachable_streak   collector blind to a relay whose live
 #                                   /health still answers
+#   (k) m1_reject_drain            the pre-1.11.0 (TLS alert 120) rejection
+#                                   population accelerates while accepted
+#                                   handshakes stay flat; the detector reads the
+#                                   collector's control-handshake fields
+#                                   (2026-11-18 schema) and stays silent on old
+#                                   snapshots that lack them
 #
 # False-positive guards:
 #   * a single zero snapshot is not enough (sustained window required)
@@ -35,6 +41,9 @@
 #     baseline and agreement from the weighted app-level metric
 #   * an unreachable streak under 3 snapshots / 6h is a missed scrape, and a
 #     dead relay is relay_health_failed, not a collector blind spot
+#   * a STEADY alert-120 drain (the expected state under `required`) raises no
+#     m1_reject_drain; the detector needs the window rate to be >= 2x the
+#     relay's own baseline, and it skips old snapshots without the fields
 #
 # No network: almost every case runs with --no-probe. The two live-probe cases
 # point the registry health_url at a local file:// URL, so curl runs but only
@@ -357,6 +366,112 @@ a_negshare() {
 # about the relay is abnormal - no auth storm, no saved regression - so
 # load_skew must be the only thing that fires.
 a_skew() { mkrelay relay-a true "$STD_VER" "$(($1 * 500000))" "$(($1))" "$(($1 * 2))" "$(($1 * 20))" "$(($1 * 4))" 0 "$(($1 * 3))"; }
+
+# ── M1 (control-handshake split) fixtures ───────────────────
+# mkrelay_m1 <id> <version> <packets> <negotiated_v1> <no_alpn> <rej120> <rej_other>
+# A relay row carrying the collector's 2026-11-18 control-handshake fields in
+# `lifetime` (the view the anomaly detector differences). `accepted` is
+# negotiated_v1 + no_alpn; rej120 is M1 (TLS alert 120, the pre-1.11.0 signal).
+mkrelay_m1() {
+	jq -cn --arg id "$1" --arg ver "$2" \
+		--argjson p "$3" --argjson nv1 "$4" --argjson na "$5" \
+		--argjson rej "$6" --argjson ro "$7" '
+        {node_id:$id, reachable:true, version:$ver, active_sessions:0,
+         lifetime:{packets_relayed:$p, sessions_created:0,
+                   drops_auth_rejected:0,
+                   control_handshakes_negotiated_v1:$nv1,
+                   control_handshakes_no_alpn:$na,
+                   control_handshakes_rejected_no_application_protocol:$rej,
+                   control_handshakes_rejected_other:$ro,
+                   saved_ms_sum:0, saved_ms_count:0,
+                   saved_app_ms_negative_count:0, saved_app_ms_count:0}}'
+}
+# The pre-1.11.0 rejection population ACCELERATES in the window (rejects
+# +400/snapshot in the baseline, +2,700/snapshot in the window) while accepted
+# handshakes stay at zero - the signature the detector exists for.
+a_m1drain() {
+	local rej
+	case "$1" in
+	0) rej=0 ;;
+	1) rej=400 ;;
+	2) rej=800 ;;
+	3) rej=1200 ;;
+	4) rej=1600 ;;
+	5) rej=4300 ;;
+	6) rej=7000 ;;
+	7) rej=9700 ;;
+	esac
+	mkrelay_m1 relay-a "$STD_VER" "$(($1 * 100))" 0 0 "$rej" 0
+}
+# Steady state: the reject rate is unchanged from the baseline. The fleet is
+# deliberately `required`, so this MUST stay silent - otherwise the monitor
+# alerts on its own documented expected state every run.
+a_m1steady() {
+	mkrelay_m1 relay-a "$STD_VER" "$(($1 * 100))" 0 0 "$(($1 * 300))" 0
+}
+# Rejects accelerate but accepted handshakes do too: that is traffic growth (or
+# the drain easing), not a rejection acceleration.
+a_m1traffic() {
+	local rej nv1
+	case "$1" in
+	0) rej=0; nv1=0 ;;
+	1) rej=200; nv1=0 ;;
+	2) rej=400; nv1=0 ;;
+	3) rej=600; nv1=0 ;;
+	4) rej=800; nv1=0 ;;
+	5) rej=3300; nv1=25 ;;
+	6) rej=5800; nv1=50 ;;
+	7) rej=8300; nv1=75 ;;
+	esac
+	mkrelay_m1 relay-a "$STD_VER" "$(($1 * 100))" "$nv1" 0 "$rej" 0
+}
+# Rejects accelerate but stay under the per-hour floor (background scanner
+# noise): silent.
+a_m1tiny() {
+	mkrelay_m1 relay-a "$STD_VER" "$(($1 * 100))" 0 0 "$(($1 * 20))" 0
+}
+# True M1 rate 1.6x its own baseline: 200 rejects/h in the baseline and
+# 320 rejects/h in the window, accepted 0. The corrected math keeps this below
+# the 2x factor -> silent. The pre-F1 denominator (win[0] -> win[-1], 2h
+# instead of 3h) inflated the window to 480/h and would have fired, so this
+# case fails if the denominator regresses.
+a_m1_hourly_slow() {
+	local rej
+	if [ "$1" -le 4 ]; then
+		rej=$(($1 * 200))
+	else
+		rej=$((800 + ($1 - 4) * 320))
+	fi
+	mkrelay_m1 relay-a "$STD_VER" "$(($1 * 100))" 0 0 "$rej" 0
+}
+# True M1 rate 4.5x its own baseline (200 -> 900 rejects/h), accepted 0: fires,
+# and the emitted rejects_per_hour must be 900 (the pre-F1 denominator emitted
+# 1,350/h for the same fixture).
+a_m1_hourly_fire() {
+	local rej
+	if [ "$1" -le 4 ]; then
+		rej=$(($1 * 200))
+	else
+		rej=$((800 + ($1 - 4) * 900))
+	fi
+	mkrelay_m1 relay-a "$STD_VER" "$(($1 * 100))" 0 0 "$rej" 0
+}
+
+# emit_m1_hourly <out> <relay-a-function>
+# Eight snapshots ONE HOUR apart (t = 1000 + i*3600), so the M1 rate
+# denominator is a real multi-hour span rather than the 1h floor. At the
+# default --window 3 the M1 numerator spans wstart -> newest = 3 intervals;
+# the shared win_hours spans win[0] -> win[-1] = 2 intervals. These fixtures
+# make the two denominators observably different (1.5x).
+emit_m1_hourly() {
+	local out="$1" afn="$2"
+	local snaps=()
+	local i
+	for i in 0 1 2 3 4 5 6 7; do
+		snaps+=("$(mksnap "$((1000 + i * 3600))" "$($afn "$i")" "$(std_b "$i")" "$(std_c "$i")" "$(std_d "$i")")")
+	done
+	build_history "$out" "${snaps[@]}"
+}
 
 # mkrelay_abuse <id> <reach> <ver> <relayed> <dropped> <abuse> <sessions>
 # The abuse counter lives in `lifetime.drops_abuse_blocked` in the real
@@ -902,6 +1017,167 @@ assert_rc 1 "(j) a live relay missing from the collector exits 1"
 assert_out "relay_unreachable_streak" "(j) fires while the live /health probe answers"
 assert_out "while the live /health probe answers" "(j) says the relay itself is alive"
 assert_not_out "relay_health_failed" "(j) no health failure for a live relay"
+
+# ══════════════════════════════════════════════════════════════
+# (k) M1 reject drain: alert-120 rejects accelerating, accepted flat
+# ══════════════════════════════════════════════════════════════
+# The fleet is deliberately `required` (owner decision recorded in
+# docs/fleet-alpn-options-2026-11-18.md), so a steady rejection stream is the
+# expected state. The detector is therefore a RATE-CHANGE alarm: window reject
+# rate >= M1_FACTOR x the relay's own pre-window baseline, accepted handshakes
+# flat, restart-free data, and the collector's control-handshake fields present
+# in both the baseline and the window. It is a warning that does not fail the
+# run (a policy outcome, not a relay fault); LIGHTSPEED_ANOMALY_STRICT=1 still
+# fails on it for an operator who wants that.
+H_M1="$TMP/m1-drain.json"
+emit8 "$H_M1" a_m1drain
+run_anomaly "$H_M1" "$REG4"
+assert_rc 0 "(k) m1 drain warns without failing the run"
+assert_out "m1_reject_drain" "(k) fires m1_reject_drain"
+assert_out "[warning]" "(k) is a warning, not critical"
+assert_out "relay-a" "(k) names the relay"
+assert_out "pre-1.11.0 rejection population is accelerating" "(k) says what it means"
+assert_out "docs/m1-handshake-trend.md" "(k) points at the trend doc"
+assert_not_out "auth_spike" "(k) is not an auth spike (auth counter untouched)"
+
+LIGHTSPEED_ANOMALY_STRICT=1 run_anomaly "$H_M1" "$REG4"
+assert_rc 1 "(k strict) an operator opt-in still fails on the warning"
+
+run_anomaly "$H_M1" "$REG4" --json
+assert_rc 0 "(k json) non-fatal m1 drain exits 0"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain" and .relay == "relay-a")] | length == 1' "(k json) m1_reject_drain object present"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain")] | all(.severity == "warning")' "(k json) severity is warning"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain") | .rejected_alert_120] | all(. > 0)' "(k json) carries the reject delta"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain") | .accepted_per_hour] | all(. <= 10)' "(k json) accepted handshakes are flat"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain") | .rejects_per_hour >= (2 * .baseline_rejects_per_hour)] | all' "(k json) the rate is at least 2x its own baseline"
+
+# Guard: steady-state drain is the documented expected state under `required`.
+H_M1STEADY="$TMP/m1-steady.json"
+emit8 "$H_M1STEADY" a_m1steady
+run_anomaly "$H_M1STEADY" "$REG4"
+assert_rc 0 "(k guard) steady reject stream exits 0"
+assert_not_out "m1_reject_drain" "(k guard) a steady drain is not an acceleration"
+
+# Guard: accepted handshakes rising with the rejects is traffic, not a drain.
+H_M1TRAFFIC="$TMP/m1-traffic.json"
+emit8 "$H_M1TRAFFIC" a_m1traffic
+run_anomaly "$H_M1TRAFFIC" "$REG4"
+assert_not_out "m1_reject_drain" "(k guard) accepted handshakes must stay flat"
+
+# Guard: below the per-hour reject floor is background scanner noise.
+H_M1TINY="$TMP/m1-tiny.json"
+emit8 "$H_M1TINY" a_m1tiny
+run_anomaly "$H_M1TINY" "$REG4"
+assert_not_out "m1_reject_drain" "(k guard) absolute floor suppresses scanner noise"
+
+# Guard: a single-snapshot window is not sustained.
+run_anomaly "$H_M1" "$REG4" --window 1
+assert_rc 0 "(k guard) window=1 is not sustained"
+assert_not_out "m1_reject_drain" "(k guard) a single snapshot is not a rate change"
+
+# Guard: a restart inside the window makes the counter delta the new process's
+# lifetime, not a trend, so the detector must skip it.
+H_M1RST="$TMP/m1-reset.json"
+emit8_reset_at "$H_M1RST" a_m1drain 6
+run_anomaly "$H_M1RST" "$REG4"
+assert_rc 0 "(k guard) a restart-bridged window exits 0"
+assert_not_out "m1_reject_drain" "(k guard) a reset in the window is not a rate"
+
+# Old-snapshot compatibility: a history collected before the 2026-11-18 schema
+# has no control_* fields at all - the detector must skip cleanly, never read
+# the absent fields as zero counters.
+H_M1OLD="$TMP/m1-old.json"
+emit8 "$H_M1OLD" a_healthy
+run_anomaly "$H_M1OLD" "$REG4"
+assert_rc 0 "(k old) a history without the fields exits 0"
+assert_not_out "m1_reject_drain" "(k old) absent fields are skipped, not read as zero"
+
+# Partial old snapshot: the baseline lacks the fields while the window has them
+# (the first snapshot after the collector upgrade). The detector needs a
+# field-bearing baseline, so it stays quiet for one window instead of firing on
+# the schema change.
+H_M1PART="$TMP/m1-partial-old.json"
+m1part=()
+for i in 0 1 2 3 4 5 6 7; do
+	if [ "$i" -lt 5 ]; then
+		m1part+=("$(mksnap "$((1000 + i * 100))" \
+			"$(mkrelay relay-a true "$STD_VER" "$(($i * 100))" "$i" "$(($i * 2))" "$(($i * 20))" "$(($i * 4))" 0 "$(($i * 3))")" \
+			"$(std_b "$i")" "$(std_c "$i")" "$(std_d "$i")")")
+	else
+		case "$i" in
+		5) rej=4300 ;;
+		6) rej=7000 ;;
+		7) rej=9700 ;;
+		esac
+		m1part+=("$(mksnap "$((1000 + i * 100))" \
+			"$(mkrelay_m1 relay-a "$STD_VER" "$(($i * 100))" 0 0 "$rej" 0)" \
+			"$(std_b "$i")" "$(std_c "$i")" "$(std_d "$i")")")
+	fi
+done
+build_history "$H_M1PART" "${m1part[@]}"
+run_anomaly "$H_M1PART" "$REG4"
+assert_rc 0 "(k old) a window whose baseline lacks the fields exits 0"
+assert_not_out "m1_reject_drain" "(k old) no acceleration without a field-bearing baseline"
+
+# ── (k F1) corrected M1 rate denominator ─────────────────────
+# The M1 numerator spans wstart -> win[-1] = W snapshot intervals, so its
+# denominator must too. The pre-fix code divided by win[0] -> win[-1] (W-1
+# intervals), inflating every M1 rate by 1.5x at the default --window 3 and
+# making the documented 2x factor / 100-per-hour floor fire at ~1.34x / ~67/h.
+# These one-hour-spaced fixtures make the two denominators differ observably.
+M1_NOW=$((1000 + 7 * 3600 + 100))
+H_M1H_SLOW="$TMP/m1-hourly-slow.json"
+emit_m1_hourly "$H_M1H_SLOW" a_m1_hourly_slow
+LIGHTSPEED_NOW_EPOCH=$M1_NOW run_anomaly "$H_M1H_SLOW" "$REG4"
+assert_rc 0 "(k F1) a 1.6x true-rate window exits 0"
+assert_not_out "m1_reject_drain" "(k F1) the corrected denominator keeps 1.6x below the 2x factor (the old 1.5x inflation would fire)"
+
+H_M1H_FIRE="$TMP/m1-hourly-fire.json"
+emit_m1_hourly "$H_M1H_FIRE" a_m1_hourly_fire
+LIGHTSPEED_NOW_EPOCH=$M1_NOW run_anomaly "$H_M1H_FIRE" "$REG4"
+assert_rc 0 "(k F1) a 4.5x true-rate window warns without failing"
+assert_out "m1_reject_drain" "(k F1) fires on the real acceleration"
+
+LIGHTSPEED_NOW_EPOCH=$M1_NOW run_anomaly "$H_M1H_FIRE" "$REG4" --json
+assert_rc 0 "(k F1 json) the corrected rate run exits 0"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain") | .rejects_per_hour == 900] | all' "(k F1) emitted reject rate divides by the 3-interval window (900/h, not the pre-fix 1350/h)"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain") | .baseline_rejects_per_hour == 200] | all' "(k F1) baseline rate is unchanged (200/h over 4 intervals)"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain") | .window_hours == 3] | all' "(k F1) emitted window_hours is the numerator span (3h)"
+assert_json '[.anomalies[] | select(.type == "m1_reject_drain") | .accepted_per_hour == 0] | all' "(k F1) accepted rate also uses the corrected denominator"
+
+# Producer -> detector contract: the detector differences the fields the
+# collector writes, and the collector lifetime-accumulates them; a drift on
+# either side would silently starve the detector (the same defect class as the
+# saved-app negative-count name pinned in (d contract)).
+assert_in_file "$COLLECT_SCRIPT" 'lightspeed_control_handshakes_total' \
+	"(k contract) the collector reads the handshake family"
+for m1_outcome in negotiated_v1 no_alpn rejected_no_application_protocol rejected_other; do
+	assert_in_file "$COLLECT_SCRIPT" "$m1_outcome" \
+		"(k contract) the collector reads outcome $m1_outcome"
+done
+assert_in_file "$ANOMALY" 'control_handshakes_rejected_no_application_protocol' \
+	"(k contract) the detector reads the collector's alert-120 field"
+assert_in_file "$ANOMALY" 'm1_reject_drain' \
+	"(k contract) the detector type is wired into the anomaly document"
+if grep -F 'COUNTERS=' "$COLLECT_SCRIPT" 2>/dev/null | grep -qF '"control_handshakes_rejected_no_application_protocol"'; then
+	PASS=$((PASS + 1))
+else
+	printf '  FAIL: (k contract) the collector no longer lifetime-accumulates the alert-120 field\n' >&2
+	FAILURES=$((FAILURES + 1))
+fi
+
+# (k F1) the M1 rates use the numerator's own span, and the pre-existing
+# detectors keep the shared $win_hours denominator byte-for-byte.
+assert_in_file "$ANOMALY" 'm1_win_hours' \
+	"(k F1) the M1 detector has a numerator-span duration"
+assert_not_in_file "$ANOMALY" '($rej / $win_hours)' \
+	"(k F1) the M1 reject rate no longer divides by the W-1 span"
+assert_not_in_file "$ANOMALY" '($acc / $win_hours)' \
+	"(k F1) the M1 accepted rate no longer divides by the W-1 span"
+assert_in_file "$ANOMALY" '($abuse_min * $win_hours)' \
+	"(k F1) the abuse floor still uses the pre-existing window_hours"
+assert_in_file "$ANOMALY" '($skew_min * $win_hours)' \
+	"(k F1) the load-skew floor still uses the pre-existing window_hours"
 
 # ══════════════════════════════════════════════════════════════
 # --json output contract

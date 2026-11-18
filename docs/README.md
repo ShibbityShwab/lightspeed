@@ -24,6 +24,7 @@ Welcome to the LightSpeed documentation wiki - synced from the [source repo](htt
 | [Community Relay Network](community-network) | Run + publish a relay for others |
 | [Troubleshooting](troubleshooting) | Diagnose and fix issues |
 | [Game Requests](game-requests) | How a game request becomes a profile (or an honest "cannot") |
+| [Control-Handshake Trend](m1-handshake-trend) | M1 (alert-120) trend in the published history and the `m1_reject_drain` detector |
 | [Agent Operations](agent-operations) | How AI agents drive this repo (DeepSeek Harness, personas, team mode) |
 
 ## 🏗️ Architecture & Protocol

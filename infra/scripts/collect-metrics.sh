@@ -79,6 +79,25 @@
 # condition is a validated quiet-flow L3 in a release plus an artifact-free
 # re-measurement of the per-game signal.
 #
+# Control-handshake split (M1 observability, added 2026-11-18)
+# ─────────────────────────────────────────────────────────
+# The relay exports four `lightspeed_control_handshakes_total{outcome=...}`
+# series — negotiated_v1, no_alpn, rejected_no_application_protocol and
+# rejected_other — plus the existing `lightspeed_auth_rejections_total` and
+# `lightspeed_sessions_created_total`. The collector records the four handshake
+# counters as reset-safe counters in the same cumulative/delta/lifetime/totals
+# shape as every other family, so the stats branch can trend the pre-1.11.0
+# rejection population instead of inferring it from point samples:
+#   accepted = negotiated_v1 + no_alpn
+#   M1 (TLS alert 120) = rejected_no_application_protocol
+# The counters carry no client identity, so M1 is an upper bound on the stranded
+# client share, never a count of clients (see docs/m1-handshake-trend.md).
+# A relay older than 1.11.0 exports no such family; its fields are 0 until the
+# first 1.11.0 scrape, which books that process's lifetime exactly like any
+# counter introduced into an existing snapshot schema (and like a first-seen
+# relay). Consumers must treat an ABSENT field in an older snapshot as unknown,
+# not as a zero.
+#
 # See `docs/data-dictionary.md` ("Label semantics" and "No per-game history in
 # the published snapshot") for the consumer-side statement of the same limits.
 #
@@ -105,7 +124,7 @@ REGIONS_PATH="${LIGHTSPEED_REGIONS_PATH:-$REPO_ROOT/infra/geo/regions.json}"
 
 # Cumulative counters tracked for reset-safe deltas. Keep this list in
 # sync with RELAY_JQ's `cumulative` object.
-COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","sessions_created","direct_ms_sum","direct_ms_count","relayed_ms_sum","relayed_ms_count","saved_ms_sum","saved_ms_count","direct_app_ms_sum","direct_app_ms_count","saved_app_ms_sum","saved_app_ms_count","saved_app_ms_negative_count","route_reports","route_samples","route_rtt_p50_ms_sum","route_rtt_p50_ms_count","route_rtt_p95_ms_sum","route_rtt_p95_ms_count","route_rtt_p99_ms_sum","route_rtt_p99_ms_count","route_jitter_ms_sum","route_jitter_ms_count","route_lost","route_recovered","route_dedup_saved","route_rejected"]'
+COUNTERS='["packets_relayed","bytes_relayed","packets_dropped","drops_malformed","drops_auth_rejected","drops_abuse_blocked","drops_rate_limited","drops_fec_malformed","drops_session_setup","drops_relay_send_errors","fec_data_packets","fec_parity_received","fec_recoveries","fec_losses","relay_latency_us_sum","relay_latency_us_count","rate_limit_hits","rate_limit_ip_hits","rate_limit_overflow","control_handshakes_negotiated_v1","control_handshakes_no_alpn","control_handshakes_rejected_no_application_protocol","control_handshakes_rejected_other","sessions_created","direct_ms_sum","direct_ms_count","relayed_ms_sum","relayed_ms_count","saved_ms_sum","saved_ms_count","direct_app_ms_sum","direct_app_ms_count","saved_app_ms_sum","saved_app_ms_count","saved_app_ms_negative_count","route_reports","route_samples","route_rtt_p50_ms_sum","route_rtt_p50_ms_count","route_rtt_p95_ms_sum","route_rtt_p95_ms_count","route_rtt_p99_ms_sum","route_rtt_p99_ms_count","route_jitter_ms_sum","route_jitter_ms_count","route_lost","route_recovered","route_dedup_saved","route_rejected"]'
 
 # Metrics whose value is a SIGNED accumulator, not a monotone counter. A
 # decrease is data, not a relay restart: `saved_ms_sum` and
@@ -167,6 +186,21 @@ def sum_family($m; $name):
    | map(try (capture("^[^ ]+ +(?<v>[-+0-9.eE]+)").v | tonumber) catch null)
    | map(select(. != null))
    | add) // 0;
+# One series out of a family labeled by `outcome="..."` (the relay exports the
+# four control-handshake outcomes, all four even at zero, so a canary can read
+# rejected_no_application_protocol == 0 as a real zero). Label ORDER is not
+# assumed; the target label is matched by substring inside the brace set.
+# A relay older than 1.11.0 has no such family at all: this parser records an
+# explicit 0 for it, so the snapshot field is PRESENT with value 0 (a zero
+# split - not an anomaly). An older SNAPSHOT written before this schema has no
+# field at all; consumers treat that as unknown, which the anomaly detector does
+# by skipping such snapshots (see docs/m1-handshake-trend.md).
+def mval_outcome($m; $name; $outcome):
+  (($m // "") | split("\n")
+   | map(select(startswith($name + "{")))
+   | map(select(contains("outcome=\"" + $outcome + "\"")))
+   | (.[0] // "")) as $line
+  | (try ($line | capture("^[^ ]+ +(?<v>[-+0-9.eE]+)").v | tonumber) catch 0) // 0;
 def pick($H; $m; $hk; $mn):
   ($H[$hk]) as $v
   | if $v != null then ($v | tonumber? // 0) else mval($m; $mn) end;
@@ -308,7 +342,16 @@ def source_cells($m; $countries):
       rate_limit_hits: mval($m; "lightspeed_rate_limit_hits_total"),
       rate_limit_ip_hits: mval($m; "lightspeed_rate_limit_ip_hits_total"),
       rate_limit_overflow: mval($m; "lightspeed_rate_limit_overflow_total"),
-      sessions_created: pick($H; $m; "sessions_created"; "lightspeed_sessions_created_total")
+      sessions_created: pick($H; $m; "sessions_created"; "lightspeed_sessions_created_total"),
+      # M1 observability (2026-11-18): the control-plane handshake split.
+      # `accepted` = negotiated_v1 + no_alpn; rejected_no_application_protocol is
+      # TLS alert 120, the pre-ALPN / stranded-client signal. Names mirror the
+      # family proxy/src/metrics.rs emits; a relay older than 1.11.0 has none of
+      # these series and records 0.
+      control_handshakes_negotiated_v1: mval_outcome($m; "lightspeed_control_handshakes_total"; "negotiated_v1"),
+      control_handshakes_no_alpn: mval_outcome($m; "lightspeed_control_handshakes_total"; "no_alpn"),
+      control_handshakes_rejected_no_application_protocol: mval_outcome($m; "lightspeed_control_handshakes_total"; "rejected_no_application_protocol"),
+      control_handshakes_rejected_other: mval_outcome($m; "lightspeed_control_handshakes_total"; "rejected_other")
     }
   }
 | if $g.unmapped > 0 then .geo_unmapped_cells = $g.unmapped else . end
