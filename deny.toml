@@ -1,30 +1,25 @@
 # cargo-deny v2 configuration for LightSpeed
+#
+# Advisory allowlist policy (see docs/security-advisory-review-2026-11-18.md):
+# every ignored advisory needs a reason and the dependency path it covers, and
+# the list is re-reviewed quarterly and whenever the Security Audit workflow
+# fails. Remove an entry when its advisory is withdrawn or the crate leaves the
+# dependency graph. Last reviewed 2026-11-18; next review due 2027-02-18.
 [advisories]
 yanked = "warn"
 ignore = [
-  # -- unmaintained GTK3 bindings (lightspeed-gui tray-icon transitive dep) --
-  { id = "RUSTSEC-2024-0412", reason = "gdk unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
-  { id = "RUSTSEC-2024-0413", reason = "atk unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
-  { id = "RUSTSEC-2024-0415", reason = "gtk unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
-  { id = "RUSTSEC-2024-0416", reason = "atk-sys unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
-  { id = "RUSTSEC-2024-0418", reason = "gdk-sys unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
-  { id = "RUSTSEC-2024-0419", reason = "gtk3-macros unmaintained; GUI-only transitive dep, no runtime security impact" },
-  { id = "RUSTSEC-2024-0420", reason = "gtk-sys unmaintained; GUI-only transitive dep via tray-icon, no impact on proxy" },
-  # -- other unmaintained utility crates pulled in by GUI / proptest stack ---
-  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; build-time proc-macro only, no runtime impact" },
-  { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; macro-only crate, zero runtime security impact" },
-  # -- protobuf (Prometheus metrics only, no user-controlled parsing) --------
-  { id = "RUSTSEC-2024-0437", reason = "protobuf used only in prometheus monitoring; no user-controlled parsing surface" },
+  # -- build-time macro crates, never compiled in a shipped target -----------
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; build-time macro reached only via tray-icon's Linux-only gtk3-macros/glib-macros path, while tray-icon is a Windows-only dep of lightspeed-gui, so it is never compiled; no patched release" },
+  { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; macro-only crate reached via argmin under the client's optional `ml` feature (CI feature matrix only, not shipped); zero runtime code" },
   # -- unmaintained crates with no safe upgrade path -------------------------
-  { id = "RUSTSEC-2025-0141", reason = "bincode unmaintained; v1.3.3 considered complete by maintainers, zero runtime risk" },
-  { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; linfa transitive dep, upstream migration tracked" },
-  { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; GUI font parsing via egui, no network-facing code" },
-  # -- zvariant/zbus_names moved into zbus and are no longer standalone -------
-  { id = "RUSTSEC-2026-0370", reason = "zvariant consolidating into zbus; Linux accessibility stack via eframe/accesskit, GUI-only, no network surface" },
-  { id = "RUSTSEC-2026-0371", reason = "zbus_names consolidating into zbus; Linux accessibility stack via eframe/accesskit, GUI-only" },
-  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive consolidating into zbus; build-time derive for the Linux accessibility stack" },
+  { id = "RUSTSEC-2025-0141", reason = "bincode unmaintained; v1.3.3 is considered complete by upstream and has no security finding; reached only through the client's optional `ml` feature and used to decode local model files, not network input" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; reached only through winit/sctk-adwaita window-decoration title text in the Linux GUI build and the client-gui font-coverage dev-dependency, no network-facing code; removal needs an upstream sctk-adwaita/winit change" },
+  # -- zvariant/zbus_names moved into zbus 6; Linux accessibility stack ------
+  { id = "RUSTSEC-2026-0370", reason = "zvariant consolidating into zbus 6; Linux-only accessibility stack via eframe/accesskit_unix, no network surface; removal blocked on an eframe/accesskit upgrade" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names consolidating into zbus 6; Linux-only accessibility stack via eframe/accesskit_unix, no network surface; removal blocked on an eframe/accesskit upgrade" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive consolidating into zbus 6; build-time derive for the Linux accessibility stack; removal blocked on an eframe/accesskit upgrade" },
   # -- direct deps that are unmaintained: informational, no patched release ---
-  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (informational; no memory-safety finding); used for wall-clock timestamps and the ML time-of-day features; migration to jiff/time tracked as follow-up" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (informational; no memory-safety finding); used for wall-clock timestamps and the ML time-of-day features; migration to jiff/time scoped in docs/security-advisory-review-2026-11-18.md" },
 ]
 
 [licenses]

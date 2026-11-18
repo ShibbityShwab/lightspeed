@@ -4,9 +4,12 @@
 
 | Version | Supported          |
 |---------|--------------------|
-| 1.6.x   | ✅ Active support  |
-| 1.5.x   | ❌ End of life     |
-| < 1.5   | ❌ End of life     |
+| 1.11.x  | ✅ Active support  |
+| ≤1.10.x | ❌ End of life     |
+
+Only the current release line is supported. Community relays require a 1.11.0
+or newer client, so older clients cannot register on them; see
+[docs/quic-alpn-rollout.md](docs/quic-alpn-rollout.md) for the rollout record.
 
 ## Reporting a Vulnerability
 
@@ -42,5 +45,10 @@ LightSpeed is built with security in mind:
 - **Destination validation** - blocks forwarding to private/internal IPs
 - **Anti-amplification** - inbound/outbound byte ratio tracking
 - **No secrets in source** - all credentials via environment variables
+- **Dependency advisories** - `cargo audit` and `cargo deny`
+  (`.github/workflows/security.yml`) run on every push and weekly; every
+  advisory ignored in `deny.toml` carries a written reason, and the allowlist
+  is re-reviewed quarterly - the current review is
+  [docs/security-advisory-review-2026-11-18.md](docs/security-advisory-review-2026-11-18.md)
 
 See the [Security Audit](docs/security-audit-mvp.md) for the full MVP review.

@@ -1,10 +1,11 @@
 # cargo-audit configuration for LightSpeed
-# Advisories acknowledged and accepted pending dependency upgrades.
-# Review periodically.
+#
+# Keep this list empty by default. `deny.toml` is the canonical advisory
+# allowlist and docs/security-advisory-review-2026-11-18.md records the review.
+# cargo-audit does not read `deny.toml`, so a crate belongs here only when a
+# specific advisory is both unfixable and provably unreachable, with the reason
+# written down. The previous RUSTSEC-2024-0437 (protobuf) ignore was stale:
+# protobuf/prometheus are not in the dependency graph.
 
 [advisories]
-ignore = [
-    # protobuf 2.x uncontrolled recursion -- transitive via prometheus.
-    # No user-controlled protobuf parsing in our attack surface.
-    "RUSTSEC-2024-0437",
-]
+ignore = []
