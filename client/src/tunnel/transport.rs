@@ -101,21 +101,83 @@ impl Drop for FragmentAllowed<'_> {
     }
 }
 
-/// Send one already-encoded tunnel datagram, allowing the local kernel to
-/// fragment it when it exceeds the conservative clamp.
+/// Send one already-encoded tunnel datagram under the fixed conservative clamp.
 ///
-/// Datagrams that fit keep the socket's don't-fragment guarantee. Used by the
-/// interceptor backends and capture mode, which send on a raw socket.
+/// Datagrams that fit keep the socket's don't-fragment guarantee. Callers that
+/// know the effective path MTU (the user's `[tunnel] mtu` cap, or a value
+/// lowered by [`super::pmtud::lower_path_mtu_on_send_error`]) should use
+/// [`send_datagram_at`] instead.
 pub async fn send_datagram(
     socket: &UdpSocket,
     packet: &[u8],
     addr: SocketAddrV4,
 ) -> io::Result<usize> {
-    if crate::tunnel::budget::datagram_fits(packet.len()) {
+    send_datagram_at(
+        socket,
+        packet,
+        addr,
+        lightspeed_protocol::CONSERVATIVE_PATH_MTU,
+    )
+    .await
+}
+
+/// Send one already-encoded tunnel datagram against an effective `path_mtu`.
+///
+/// A datagram within the effective budget keeps don't-fragment; one over it is
+/// sent with fragmentation temporarily allowed, so a real game packet is never
+/// dropped just because it no longer fits once wrapped. This is the path the
+/// interceptor backends and capture mode use, which send on a raw socket.
+pub async fn send_datagram_at(
+    socket: &UdpSocket,
+    packet: &[u8],
+    addr: SocketAddrV4,
+    path_mtu: usize,
+) -> io::Result<usize> {
+    if crate::tunnel::budget::datagram_fits_at(packet.len(), path_mtu) {
         socket.send_to(packet, addr).await
     } else {
-        let _allow = FragmentAllowed::new(socket)?;
-        socket.send_to(packet, addr).await
+        send_datagram_may_fragment(socket, packet, addr).await
+    }
+}
+
+/// Send one datagram with fragmentation allowed for the duration of the call.
+///
+/// Used for an over-budget datagram and for the retry after an `EMSGSIZE`
+/// (`WSAEMSGSIZE`) rejection: the kernel may split it across fragments instead
+/// of dropping the game's packet. The socket's don't-fragment bit is restored
+/// when the guard drops.
+pub async fn send_datagram_may_fragment(
+    socket: &UdpSocket,
+    packet: &[u8],
+    addr: SocketAddrV4,
+) -> io::Result<usize> {
+    let _allow = FragmentAllowed::new(socket)?;
+    socket.send_to(packet, addr).await
+}
+
+/// Whether `err` is the OS "datagram larger than the path MTU" rejection.
+///
+/// Windows reports `WSAEMSGSIZE` as 10040; Linux and macOS report `EMSGSIZE`
+/// as 90 and 40. This is the one send error that a smaller budget can fix, so
+/// the data plane uses it to lower the effective path MTU and retry rather than
+/// silently losing every datagram on the session.
+pub fn is_message_too_long(err: &io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        err.raw_os_error() == Some(10040)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        err.raw_os_error() == Some(90)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        err.raw_os_error() == Some(40)
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        let _ = err;
+        false
     }
 }
 
@@ -493,6 +555,28 @@ impl TunnelReader {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn message_too_long_is_recognised_per_platform() {
+        // The reported failure is Windows 10040; Linux/macOS report EMSGSIZE as
+        // 90/40. Anything else must not trigger the MTU-lowering path.
+        #[cfg(windows)]
+        let code = 10040;
+        #[cfg(target_os = "linux")]
+        let code = 90;
+        #[cfg(target_os = "macos")]
+        let code = 40;
+        assert!(is_message_too_long(&io::Error::from_raw_os_error(code)));
+        assert!(!is_message_too_long(&io::Error::from_raw_os_error(1)));
+    }
+
+    #[test]
+    fn a_datagram_is_fragmented_only_when_it_exceeds_the_effective_mtu() {
+        // Pure decision the send path makes: same datagram, two path MTUs.
+        let datagram = 1420usize; // 24-byte header + 1396-byte payload
+        assert!(!crate::tunnel::budget::datagram_fits_at(datagram, 1400));
+        assert!(crate::tunnel::budget::datagram_fits_at(datagram, 1492));
+    }
 
     #[tokio::test]
     async fn test_udp_transport_roundtrip() {

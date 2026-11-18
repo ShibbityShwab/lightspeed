@@ -41,6 +41,12 @@ pub struct InterceptorHealth {
     /// Interceptor errors, including failed WinDivert sends. A rising count
     /// with `packets_from_proxy` also rising is an injection fault.
     pub errors: u64,
+    /// Outbound sends that failed locally and never left the machine, and the
+    /// last such failure. This is what separates "the relay is silent" from
+    /// "our datagrams could not be sent" (`WSAEMSGSIZE` 10040 on a reduced-MTU
+    /// path) in the no-reply message.
+    pub send_errors: u64,
+    pub last_send_error: Option<String>,
     pub tunnelling_enabled: Option<bool>,
     /// This server's own sent/replied counters, when the interceptor has seen
     /// traffic for it. The window counters above are relay-wide; this pair is the
@@ -169,6 +175,13 @@ pub struct EngineStatus {
     /// relayed. The pair tells a held flow (both zero) from a relay that is not
     /// taking the traffic (intercepted climbing, sent not).
     pub interceptor_tunnel_sent: u64,
+    /// Outbound sends that failed locally and never left the machine.
+    ///
+    /// Separates "the relay never answered" from "our datagrams could not be
+    /// sent" (the reported `WSAEMSGSIZE` 10040 case).
+    pub interceptor_send_errors: u64,
+    /// The most recent local send failure, verbatim.
+    pub interceptor_last_send_error: Option<String>,
     /// Per game destination (server, sent, replied): the only pair a reply-ratio
     /// verdict may be built from. The relay-wide counters also count keepalives
     /// and parity frames and are cumulative across relay switches.
@@ -266,6 +279,9 @@ pub struct LightSpeedEngine {
     windivert_stat_slot: Option<WinDivertStatSlot>,
     /// Live handle for the OOP TrafficInterceptor (multiplatform MITM).
     interceptor_handle: Option<crate::interceptor::InterceptorHandle>,
+    /// Effective path-MTU cap for the tunnel (`[tunnel] mtu` / `--mtu`),
+    /// applied to every interceptor start. Defaults to the conservative clamp.
+    path_mtu_cap: usize,
     /// Watcher that ends the current hold once its predicate says so.
     ///
     /// See [`Self::release_hold_when_connected`]; `None` when the run is not
@@ -301,6 +317,7 @@ impl LightSpeedEngine {
             windivert_done_rx: None,
             windivert_stat_slot: None,
             interceptor_handle: None,
+            path_mtu_cap: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             hold_watch: None,
             telemetry_flush: None,
             telemetry_proxy: None,
@@ -319,6 +336,24 @@ impl LightSpeedEngine {
     /// The control-plane port used for relay registration.
     pub fn control_port(&self) -> u16 {
         self.control_port
+    }
+
+    /// Set the effective path-MTU cap used by the next interceptor start, from
+    /// `[tunnel] mtu` / `--mtu`.
+    ///
+    /// The value is clamped into `[MIN_PATH_MTU, HARD_CAP_PATH_MTU]`; the
+    /// default is the conservative clamp. A lower value is the fix for a path
+    /// smaller than PPPoE (the reported `WSAEMSGSIZE` 10040 case).
+    pub fn set_path_mtu_cap(&mut self, cap: usize) {
+        self.path_mtu_cap = cap.clamp(
+            crate::tunnel::pmtud::MIN_PATH_MTU,
+            crate::tunnel::pmtud::HARD_CAP_PATH_MTU,
+        );
+    }
+
+    /// The effective path-MTU cap in force for the next interceptor start.
+    pub fn path_mtu_cap(&self) -> usize {
+        self.path_mtu_cap
     }
 
     /// Start (or restart) the keepalive loop toward `proxy_addr`.
@@ -986,6 +1021,8 @@ impl LightSpeedEngine {
                 packets_reply_data: stats.packets_reply_data,
                 last_error: stats.last_error,
                 errors: stats.errors,
+                send_errors: stats.send_errors,
+                last_send_error: stats.last_send_error,
                 tunnelling_enabled: stats.tunnelling_enabled,
                 flow: stats.detected_server.and_then(|server| {
                     stats
@@ -1144,6 +1181,9 @@ impl LightSpeedEngine {
                 config
             }
         };
+
+        let mut config = config;
+        config.path_mtu = self.path_mtu_cap;
 
         let interceptor = crate::interceptor::create_interceptor();
 
@@ -1387,6 +1427,8 @@ impl LightSpeedEngine {
             snap.interceptor_intercepted = ist.packets_intercepted;
             snap.interceptor_seen = ist.packets_seen;
             snap.interceptor_tunnel_sent = ist.packets_tunnel_sent;
+            snap.interceptor_send_errors = ist.send_errors;
+            snap.interceptor_last_send_error = ist.last_send_error.clone();
             // The redirect path fills the same field; do not clobber it with this
             // path's empty map when only one of the two is running.
             if !ist.flows.is_empty() {
@@ -1691,6 +1733,33 @@ mod tests {
     }
 
     #[test]
+    fn the_engine_clamps_the_path_mtu_cap() {
+        let mut engine = test_engine();
+        assert_eq!(
+            engine.path_mtu_cap(),
+            crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+            "the default cap is the conservative clamp"
+        );
+
+        engine.set_path_mtu_cap(900);
+        assert_eq!(
+            engine.path_mtu_cap(),
+            crate::tunnel::pmtud::MIN_PATH_MTU,
+            "a cap below the floor is raised to it"
+        );
+
+        engine.set_path_mtu_cap(9000);
+        assert_eq!(
+            engine.path_mtu_cap(),
+            crate::tunnel::pmtud::HARD_CAP_PATH_MTU,
+            "a cap above the Ethernet hard cap is refused"
+        );
+
+        engine.set_path_mtu_cap(1400);
+        assert_eq!(engine.path_mtu_cap(), 1400);
+    }
+
+    #[test]
     fn the_start_line_names_the_target_process_not_the_fallback_key() {
         // Field-verification regression: the interceptor logged "started for
         // Fortnite" while relaying chrome.exe, because it printed the fallback
@@ -1704,6 +1773,7 @@ mod tests {
             process_names: vec!["chrome.exe".to_string()],
             process_target: Some(ProcessTarget::by_name("chrome.exe")),
             port_range: (0, 0),
+            path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: Vec::new(),
             proxy_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
             fec_enabled: false,
@@ -1762,6 +1832,7 @@ mod tests {
                 process_names: vec!["TestGame.exe".to_string()],
                 process_target: Some(ProcessTarget::by_name("TestGame.exe")),
                 port_range: (27015, 27017),
+                path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
                 initial_routes: Vec::new(),
                 proxy_addr: std::net::SocketAddrV4::new(
                     std::net::Ipv4Addr::new(127, 0, 0, 1),
@@ -1797,6 +1868,7 @@ mod tests {
                 process_names: vec!["TestGame.exe".to_string()],
                 process_target: Some(ProcessTarget::by_name("TestGame.exe")),
                 port_range: (27015, 27017),
+                path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
                 initial_routes: Vec::new(),
                 proxy_addr: std::net::SocketAddrV4::new(
                     std::net::Ipv4Addr::new(127, 0, 0, 1),
@@ -1843,6 +1915,7 @@ mod tests {
                 process_names: vec!["TestGame.exe".to_string()],
                 process_target: Some(ProcessTarget::by_name("TestGame.exe")),
                 port_range: (27015, 27017),
+                path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
                 initial_routes: Vec::new(),
                 proxy_addr: std::net::SocketAddrV4::new(
                     std::net::Ipv4Addr::new(127, 0, 0, 1),

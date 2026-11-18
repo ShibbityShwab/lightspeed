@@ -91,6 +91,13 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub path_mtu_discovery: bool,
 
+    /// Effective path-MTU cap for the tunnel, in bytes (1280-1500). Default:
+    /// the config value (1492, the PPPoE-safe clamp). Lower it when your path
+    /// is smaller than that -- a VPN, a DPI shim such as Zapret, or a
+    /// reduced-MTU adapter -- which otherwise fails with WSAEMSGSIZE (10040).
+    #[arg(long, value_name = "BYTES")]
+    pub mtu: Option<usize>,
+
     /// Enable Cloudflare WARP for improved routing (5-10ms savings).
     /// Automatically connects WARP on startup and restores on shutdown.
     #[arg(short = 'w', long, default_value_t = false)]

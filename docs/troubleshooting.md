@@ -75,11 +75,45 @@ sudo pfctl -d  # Temporarily disable pf to test
 
 **Windows:**
 ```powershell
-# Check if the firewall rule exists
+# Check if the stable rule exists (one rule, not one per boost)
 netsh advfirewall firewall show rule name="LightSpeed WinDivert Tunnel"
 
 # Add it manually if missing
-netsh advfirewall firewall add rule name="LightSpeed" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+netsh advfirewall firewall add rule name="LightSpeed WinDivert Tunnel" protocol=UDP dir=in action=allow program="C:\path\to\lightspeed-gui.exe"
+```
+
+Rules from older builds were named `LightSpeed WinDivert Tunnel <port>`; current
+builds remove the one for the port they use and keep a single stable rule. Any
+remaining per-port rules are safe to delete:
+`netsh advfirewall firewall delete rule name="LightSpeed WinDivert Tunnel 4434"`
+(match the port shown by `netsh advfirewall firewall show rule name=all`).
+
+### `sendmsg error: ... 10040` / `WSAEMSGSIZE` (Windows) or `EMSGSIZE` (Linux/macOS)
+
+The datagram the client tried to send is larger than the **real** path MTU. The
+default tunnel clamp is 1492 bytes (PPPoE-safe), but a VPN, a DPI shim such as
+Zapret, or a reduced-MTU adapter can be smaller, so a packet that fits the clamp
+is still rejected by the OS (`Windows error 10040`).
+
+Fix — lower the tunnel's path-MTU cap, in `config.toml`:
+
+```toml
+[tunnel]
+# 1280-1500. Start at 1400, then 1350 if the error persists.
+mtu = 1400
+```
+
+or pass `--mtu 1400` on the CLI. Current builds also lower the budget
+automatically when a send is rejected, retry that datagram once with
+fragmentation allowed, and record the OS error in the status instead of
+reporting the relay as silent.
+
+Immediate workaround while the client is unchanged: lower the Windows adapter's
+MTU so the game emits smaller packets, then restart the game:
+
+```powershell
+netsh interface ipv4 show subinterfaces
+netsh interface ipv4 set subinterface "Ethernet" mtu=1400 store=persistent
 ```
 
 ### Proxy health check fails

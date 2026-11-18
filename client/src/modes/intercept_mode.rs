@@ -39,6 +39,7 @@ pub async fn run_intercept_mode(
     fec_k: u8,
     adaptive_fec: AdaptiveConfig,
     server_addr: Option<SocketAddrV4>,
+    path_mtu: usize,
 ) -> anyhow::Result<()> {
     // ── Resolve game profile ────────────────────────────────────────
     let game = crate::games::resolve(game_key)?;
@@ -54,6 +55,13 @@ pub async fn run_intercept_mode(
                 game_key
             )
         })?;
+    config.path_mtu = path_mtu;
+    info!(
+        "📏 Client-to-relay path-MTU cap: {} bytes (clamped into [{}, {}])",
+        config.path_mtu,
+        crate::tunnel::pmtud::MIN_PATH_MTU,
+        crate::tunnel::pmtud::HARD_CAP_PATH_MTU
+    );
 
     // ── Server address override (for testing without a running game) ─
     if let Some(addr) = server_addr {

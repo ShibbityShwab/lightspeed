@@ -81,6 +81,12 @@ pub struct GuiConfig {
     /// The Manual / Custom mode's port-range field, persisted for the same
     /// reason. Empty means the profile's default range is used.
     pub manual_port_range: String,
+    /// Effective path-MTU cap for the tunnel, in bytes (1280-1500). The default
+    /// 1492 is the PPPoE-safe clamp; lower it when the local path is smaller
+    /// (VPN, DPI shim such as Zapret, reduced-MTU adapter), which otherwise
+    /// fails with `WSAEMSGSIZE` (Windows 10040). The data plane also lowers it
+    /// automatically when the OS rejects a send.
+    pub tunnel_mtu: usize,
 }
 
 impl Default for GuiConfig {
@@ -97,6 +103,7 @@ impl Default for GuiConfig {
             language: None,
             manual_server: String::new(),
             manual_port_range: String::new(),
+            tunnel_mtu: 1492,
         }
     }
 }
@@ -164,6 +171,14 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         .unwrap_or_default()
         .to_string();
 
+    // A hand-edited path-MTU cap is clamped into the range the tunnel supports;
+    // an absent key keeps the PPPoE-safe 1492 default.
+    let tunnel_mtu = table
+        .get("tunnel_mtu")
+        .and_then(Value::as_integer)
+        .map(|value| value.clamp(1280, 1500) as usize)
+        .unwrap_or(1492);
+
     let game_auto = table
         .get("game_auto")
         .and_then(Value::as_bool)
@@ -214,6 +229,7 @@ pub fn parse(text: &str) -> Result<GuiConfig, String> {
         language,
         manual_server,
         manual_port_range,
+        tunnel_mtu,
     })
 }
 
@@ -252,6 +268,10 @@ pub fn render(config: &GuiConfig) -> String {
             Value::String(config.manual_port_range.clone()),
         );
     }
+    table.insert(
+        "tunnel_mtu".into(),
+        Value::Integer(config.tunnel_mtu as i64),
+    );
     let entries: Vec<Value> = config
         .proxies
         .iter()
@@ -328,7 +348,26 @@ mod tests {
             language: Some("de".into()),
             manual_server: "203.0.113.7:28015".into(),
             manual_port_range: "27000-27050".into(),
+            tunnel_mtu: 1400,
         }
+    }
+
+    #[test]
+    fn tunnel_mtu_is_clamped_from_the_config_file() {
+        let lowered = parse("tunnel_mtu = 900\n").expect("parse");
+        assert_eq!(
+            lowered.tunnel_mtu, 1280,
+            "a cap below the floor is raised to it"
+        );
+
+        let raised = parse("tunnel_mtu = 9000\n").expect("parse");
+        assert_eq!(
+            raised.tunnel_mtu, 1500,
+            "a cap above the Ethernet hard cap is refused"
+        );
+
+        let absent = parse("").expect("parse");
+        assert_eq!(absent.tunnel_mtu, 1492, "the default is the PPPoE clamp");
     }
 
     #[test]

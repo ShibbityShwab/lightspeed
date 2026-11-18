@@ -42,7 +42,7 @@ path = "src/lib.rs"
 [features]
 default = []
 # Enable QUIC control plane (requires C compiler for ring)
-quic = ["dep:quinn", "dep:rustls", "dep:rcgen", "lightspeed-protocol/quic"]
+quic = ["dep:quinn", "dep:rustls", "lightspeed-protocol/quic"]
 # Enable pcap packet capture (requires Npcap/libpcap)
 pcap-capture = ["dep:pcap"]
 # Enable WinDivert active redirect (Windows only; requires WinDivert64.sys next to exe)
@@ -51,7 +51,7 @@ ml = ["dep:linfa", "dep:linfa-linear", "dep:ndarray", "dep:bincode"]
 # WinDivert packet interception. Windows-only at runtime, but safe to enable on
 # any target — the `windivert` dependency is `cfg(windows)`-gated, so non-Windows
 # builds skip it (verified: `cargo check --features windivert-redirect` on Linux).
-windivert-redirect = ["dep:windivert", "dep:windivert-sys", "dep:windows"]
+windivert-redirect = ["dep:windivert-sys"]
 # Enable all features
 full = ["quic", "pcap-capture", "ml"]  # windivert-redirect excluded (Windows-only)
 
@@ -75,7 +75,6 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # Optional dependencies (require C compiler or system libraries)
 quinn = { version = "0.11", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
-rcgen = { version = "0.14", optional = true }
 pcap = { version = "2", optional = true }
 linfa = { version = "0.8", optional = true }
 linfa-linear = { version = "0.8", optional = true }
@@ -88,17 +87,18 @@ sys-locale = "0.3"
 socket2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
-windivert = { version = "0.7.0-beta.4", optional = true, features = ["vendored"] }
 # Raw FFI used by `interceptor::windivert_handle` for an owned handle whose
-# `shutdown(&self)` can unblock a concurrent blocking recv. The `windows` types
-# must match windivert-sys's own 0.48 dependency so `HANDLE` is the same type.
-# `vendored` reaches windivert-sys through the `windivert` dependency above, so
-# it is intentionally not repeated here.
-windivert-sys = { version = "0.11.0-beta.2", optional = true }
-windows = { version = "0.62", optional = true, default-features = false, features = ["Win32_Foundation"] }
+# `shutdown(&self)` can unblock a concurrent blocking recv. `windivert-sys`
+# 0.11 models the handle as a raw pointer and no longer depends on the
+# `windows` crate, so neither do we; `vendored` builds the WinDivert import
+# library/DLLs from the crate's bundled sources. The high-level `windivert`
+# wrapper was never used (it only forwarded this feature) and is gone.
+windivert-sys = { version = "0.11.0-beta.2", optional = true, features = ["vendored"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"
+# Test-only: the QUIC integration suites generate a throwaway TLS certificate.
+rcgen = "0.14"

@@ -43,4 +43,5 @@ Welcome to the LightSpeed documentation wiki - synced from the [source repo](htt
 | [Privacy](privacy) | Privacy policy and telemetry |
 | [Agent-System Audit](agent-system-audit-2026-11-16) | The 2026-11-16 DeepSeek Harness migration record |
 | [GitHub Feedback Audit](github-feedback-audit-2026-11-16) | Triage of the open issues, discussions and PR at 1.10.3 |
+| [Project Audit](project-audit-2026-11-18) | Code, CI, docs, GitHub and fleet audit at 1.11.0, with the prioritized fix list |
 | [Contributing](../CONTRIBUTING.md) | Build, test, and submit changes on Windows, macOS or Linux |

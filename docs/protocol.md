@@ -240,8 +240,29 @@ world-state packet stutters the game): it is forwarded with don't-fragment
 cleared for that datagram, so the local kernel may fragment it, and the client
 counts it. A lost fragment loses the whole datagram, which is why the clamp
 exists; forwarding the oversized payload is a deliberate tradeoff of that
-fragmentation risk against certain loss. This is a fixed clamp over the
-client-to-relay hop.
+fragmentation risk against certain loss.
+
+### Lower-mtu paths: the explicit cap and the automatic fallback
+
+1492 is sized for PPPoE, which is not the smallest path in the field. On a VPN,
+a DPI shim such as Zapret, or a reduced-MTU adapter the real path can be
+smaller, and a datagram within the clamp is then rejected by the OS with
+`EMSGSIZE` (`WSAEMSGSIZE`, Windows error 10040). Two mechanisms cover that:
+
+- **`[tunnel] mtu` / `--mtu`** (1280-1500, default 1492) is an explicit cap on
+  the effective path MTU. Lower it to the path's real MTU; it also caps what
+  path-MTU discovery may raise. This is the setting to use when the value is
+  known.
+- **Automatic fallback.** If a send is still rejected as too large, the data
+  plane lowers the effective path MTU by 64 bytes (never below 1280), retries
+  that datagram once with fragmentation allowed, records the OS error in
+  `send_errors`/`last_send_error`, and keeps the lower budget for the session.
+  A GUI status therefore reports the local send failure instead of presenting
+  the relay silence as `NoReplyFromRelay`.
+
+Both apply to the Windows WinDivert interceptor (the GUI boost path) and the
+CLI's interceptor and relay paths, so a session on a sub-1492 path keeps
+forwarding instead of failing closed.
 
 ### Path-MTU discovery (opt-in)
 
@@ -257,9 +278,11 @@ Discovery can only move the effective MTU between the clamp and the cap. Any
 failed or ambiguous probe, a missing control connection, or a path that shrinks
 falls back to the conservative clamp, so a path that never answers can never
 stall or break a session. Discovery is **off by default**; with it off the fixed
-clamp above is the whole policy. The effective MTU in force is logged
-(`client-to-relay path MTU updated`) and exposed as the `effective_path_mtu`
-stat.
+clamp above (or the user's `mtu` cap, when lower) is the whole policy. The
+discovery path is the relay data plane; the WinDivert interceptor relies on the
+explicit cap and the automatic fallback instead. The effective MTU in force is
+logged (`client-to-relay path MTU updated`) and exposed as the
+`effective_path_mtu` stat.
 
 ### DSCP
 

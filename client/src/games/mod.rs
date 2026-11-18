@@ -389,7 +389,7 @@ impl GameConfig for UserProfileConfig {
 ///
 /// This is the single source of truth: [`resolve`] resolves the keys and
 /// [`all_games`] / [`all_game_keys`] derive from it. Register every new game
-/// here (the `games` tests enforce the 20-entry count and key/name agreement).
+/// here (the `games` tests enforce the exact count and key/name agreement).
 pub const GAME_REGISTRY: &[(&str, &str)] = &[
     ("fortnite", "Fortnite"),
     ("cs2", "Counter-Strike 2"),
@@ -1523,8 +1523,8 @@ udp_ports = "30008"
     }
 
     /// The protocol side of the same guard: the append-only wire-id table stays
-    /// at 23 entries, every id is unique, and none reuses the reserved
-    /// `UNKNOWN` (the protocol's `test_game_ids_unique_and_stable`).
+    /// at the registry count (27), every id is unique, and none reuses the
+    /// reserved `UNKNOWN` (the protocol's `test_game_ids_unique_and_stable`).
     fn game_ids_guard(ids: &[(&str, u8)]) -> Result<(), String> {
         if ids.len() != 27 {
             return Err(format!(
@@ -1546,9 +1546,9 @@ udp_ports = "30008"
         Ok(())
     }
 
-    /// Loading N user profiles leaves `GAME_REGISTRY` at 23 entries and the
-    /// protocol `GAME_IDS` count guard intact, and none of the user keys leaks
-    /// into the built-in key set.
+    /// Loading N user profiles leaves `GAME_REGISTRY` at the built-in count (27)
+    /// and the protocol `GAME_IDS` count guard intact, and none of the user keys
+    /// leaks into the built-in key set.
     #[test]
     fn user_profiles_never_enter_the_builtin_registries() {
         // Load the profiles through the real store path (file -> loader ->

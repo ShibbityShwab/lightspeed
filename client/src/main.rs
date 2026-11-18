@@ -292,6 +292,20 @@ fn known_game_server(cli: &Cli) -> Option<Ipv4Addr> {
     found.routes.first().map(|route| *route.remote.ip())
 }
 
+/// The effective path-MTU cap: `--mtu` overrides `[tunnel] mtu`, and both are
+/// clamped into the range the tunnel supports.
+///
+/// This is the knob a user on a reduced path (VPN, DPI shim, small-MTU adapter)
+/// sets when the 1492-byte default is still larger than their path and `sendto`
+/// fails with `WSAEMSGSIZE` (Windows 10040).
+fn cli_mtu_cap(cli: &Cli, config: &config::Config) -> usize {
+    let raw = cli.mtu.unwrap_or(config.tunnel.mtu);
+    raw.clamp(
+        crate::tunnel::pmtud::MIN_PATH_MTU,
+        crate::tunnel::pmtud::HARD_CAP_PATH_MTU,
+    )
+}
+
 /// Spawn the continuous re-routing loop when multiple relays are configured.
 fn start_continuous_rerouting(candidates: &[ProbeCandidate], config: &config::Config, cli: &Cli) {
     if candidates.len() <= 1 {
@@ -1113,6 +1127,7 @@ async fn main() -> anyhow::Result<()> {
             cli.fec_k,
             adaptive_cfg,
             server_override,
+            cli_mtu_cap(&cli, &config),
         )
         .await;
     }
@@ -1330,13 +1345,22 @@ async fn main() -> anyhow::Result<()> {
         relay = relay.with_adaptive_fec(adaptive_cfg);
     }
     let pmtud_enabled = cli.path_mtu_discovery || config.tunnel.path_mtu_discovery;
+    let mtu_cap = cli_mtu_cap(&cli, &config);
     if pmtud_enabled {
         info!(
             "Client-to-relay path-MTU discovery: on (hard cap {} bytes)",
             crate::tunnel::pmtud::HARD_CAP_PATH_MTU
         );
     }
-    relay = relay.with_pmtud(pmtud_enabled);
+    if mtu_cap != crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU {
+        info!(
+            "Client-to-relay path-MTU cap: {} bytes (clamped into [{}, {}])",
+            mtu_cap,
+            crate::tunnel::pmtud::MIN_PATH_MTU,
+            crate::tunnel::pmtud::HARD_CAP_PATH_MTU
+        );
+    }
+    relay = relay.with_pmtud(pmtud_enabled, mtu_cap);
     if use_tcp {
         relay.connect_tcp(proxy_addr).await?;
     } else {
@@ -1507,6 +1531,7 @@ async fn main() -> anyhow::Result<()> {
                         cli.fec_k,
                         adaptive_cfg,
                         None,
+                        cli_mtu_cap(&cli, &config),
                     )
                     .await;
                 }

@@ -281,12 +281,15 @@ pub fn is_destination_allowed(ip: &Ipv4Addr, allowlist: &[(Ipv4Addr, u8)]) -> bo
 /// Check if an IPv4 address is a public (routable) address.
 ///
 /// Returns `false` for:
+/// - `0.0.0.0/8` ("this network")
 /// - RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
 /// - Loopback (127.0.0.0/8)
 /// - Link-local (169.254.0.0/16)
 /// - Multicast (224.0.0.0/4)
-/// - Broadcast (255.255.255.255)
+/// - Broadcast (255.255.255.255) and reserved 240.0.0.0/4
 /// - Unspecified (0.0.0.0)
+/// - IETF assignments (192.0.0.0/24)
+/// - Benchmarking (198.18.0.0/15)
 /// - Documentation (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)
 /// - Shared address space (100.64.0.0/10)
 pub fn is_public_ipv4(ip: &Ipv4Addr) -> bool {
@@ -294,6 +297,13 @@ pub fn is_public_ipv4(ip: &Ipv4Addr) -> bool {
 
     // Unspecified
     if ip.is_unspecified() {
+        return false;
+    }
+
+    // "This network": 0.0.0.0/8. The client-side `is_public_ipv4` (the clone in
+    // interceptor/process_scanner.rs) already rejects the whole block; a relay
+    // must not accept a destination the client would refuse.
+    if octets[0] == 0 {
         return false;
     }
 
@@ -327,8 +337,18 @@ pub fn is_public_ipv4(ip: &Ipv4Addr) -> bool {
         return false;
     }
 
+    // IETF protocol assignments: 192.0.0.0/24
+    if octets[0] == 192 && octets[1] == 0 && octets[2] == 0 {
+        return false;
+    }
+
     // Documentation: 192.0.2.0/24 (TEST-NET-1)
     if octets[0] == 192 && octets[1] == 0 && octets[2] == 2 {
+        return false;
+    }
+
+    // Benchmarking: 198.18.0.0/15
+    if octets[0] == 198 && (octets[1] == 18 || octets[1] == 19) {
         return false;
     }
 
@@ -347,8 +367,8 @@ pub fn is_public_ipv4(ip: &Ipv4Addr) -> bool {
         return false;
     }
 
-    // Broadcast
-    if ip.is_broadcast() {
+    // Broadcast and the reserved 240.0.0.0/4 block.
+    if ip.is_broadcast() || octets[0] >= 240 {
         return false;
     }
 
@@ -392,6 +412,41 @@ mod tests {
         // Edge: 172.15.x is NOT private, 172.32.x is NOT private
         assert!(is_public_ipv4(&Ipv4Addr::new(172, 15, 0, 1)));
         assert!(is_public_ipv4(&Ipv4Addr::new(172, 32, 0, 1)));
+    }
+
+    #[test]
+    fn is_public_ipv4_rejects_every_special_use_range_the_client_rejects() {
+        // The client keeps an identical check in interceptor/process_scanner.rs;
+        // the two copies must not drift. A destination the client refuses must
+        // also be refused by the relay's anti-abuse gate.
+        let refused = [
+            "0.1.2.3",         // 0.0.0.0/8 "this network"
+            "192.0.0.1",       // IETF protocol assignments
+            "198.18.0.1",      // benchmarking
+            "198.19.255.255",  // benchmarking
+            "240.0.0.1",       // reserved
+            "255.255.255.255", // broadcast
+        ];
+        for ip in refused {
+            assert!(
+                !is_public_ipv4(&ip.parse().unwrap()),
+                "{ip} must be refused as a destination"
+            );
+        }
+
+        let allowed = [
+            "11.0.0.1",       // just above 10/8
+            "172.32.0.1",     // just above 172.16/12
+            "192.0.1.1",      // just above 192.0.0/24
+            "198.17.255.255", // just below 198.18/15
+            "198.20.0.1",     // just above 198.18/15
+        ];
+        for ip in allowed {
+            assert!(
+                is_public_ipv4(&ip.parse().unwrap()),
+                "{ip} must remain a valid public destination"
+            );
+        }
     }
 
     #[test]

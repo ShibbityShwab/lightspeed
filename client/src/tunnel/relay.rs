@@ -146,11 +146,17 @@ impl UdpRelay {
         }
     }
 
-    /// Enable or disable client-to-relay path-MTU discovery.
+    /// Enable or disable client-to-relay path-MTU discovery, and set the
+    /// explicit path-MTU cap (`[tunnel] mtu`, default 1492).
     ///
-    /// Disabled (the default) reproduces the fixed conservative clamp exactly.
-    pub fn with_pmtud(mut self, enabled: bool) -> Self {
-        self.pmtud = PathMtuDiscovery::new(PmtudConfig { enabled });
+    /// Discovery disabled with the default cap reproduces the fixed
+    /// conservative clamp exactly. A cap below 1492 lowers the budget even
+    /// without discovery, which is the fix for a path smaller than PPPoE.
+    pub fn with_pmtud(mut self, enabled: bool, path_mtu_cap: usize) -> Self {
+        self.pmtud = PathMtuDiscovery::new(PmtudConfig {
+            enabled,
+            path_mtu_cap,
+        });
         self
     }
 
@@ -912,8 +918,8 @@ mod tests {
             crate::session::set_session_token(0xDEAD_BEEF);
             crate::session::set_path_token(proxy_addr, 0x1234_5678);
 
-            let mut relay =
-                UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).with_pmtud(true);
+            let mut relay = UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .with_pmtud(true, HARD_CAP_PATH_MTU);
             relay.bind().await.expect("bind relay");
             assert_eq!(
                 relay.effective_path_mtu(),
@@ -993,6 +999,56 @@ mod tests {
                 relay.stats.payloads_over_budget.load(Ordering::Relaxed),
                 1,
                 "without discovery the conservative clamp still counts it"
+            );
+
+            crate::session::reset_all_tokens();
+        });
+    }
+
+    /// The `[tunnel] mtu` cap lowers the budget even with discovery off: this is
+    /// the reported low-MTU-path fix, and it must count the payload that no
+    /// longer fits as oversized rather than silently send it with DF set.
+    #[test]
+    fn a_user_mtu_cap_lowers_the_budget_without_discovery() {
+        let _guard = crate::session::token_test_guard();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        rt.block_on(async {
+            let receiver = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind receiver");
+            let proxy_addr = match receiver.local_addr().expect("receiver addr") {
+                std::net::SocketAddr::V4(v4) => v4,
+                std::net::SocketAddr::V6(_) => panic!("expected IPv4"),
+            };
+            crate::session::set_session_token(0xDEAD_BEEF);
+            crate::session::set_path_token(proxy_addr, 0x1234_5678);
+
+            let mut relay =
+                UdpRelay::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).with_pmtud(false, 1400);
+            relay.bind().await.expect("bind relay");
+            assert_eq!(
+                relay.effective_path_mtu(),
+                1400,
+                "the user cap must lower the effective path MTU below the clamp"
+            );
+
+            // A payload that fit the 1492 clamp but not the 1400 cap.
+            let payload = vec![0x5Au8; crate::tunnel::pmtud::max_game_payload_at(1400, false) + 1];
+            let src = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000);
+            let dst = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 40001);
+
+            relay
+                .send_to_proxy(&payload, src, dst, proxy_addr)
+                .await
+                .expect("an over-budget payload is still forwarded, never dropped");
+            assert_eq!(
+                relay.stats.payloads_over_budget.load(Ordering::Relaxed),
+                1,
+                "the capped payload must be counted as over budget"
             );
 
             crate::session::reset_all_tokens();

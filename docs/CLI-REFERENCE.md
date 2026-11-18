@@ -62,6 +62,8 @@ lightspeed --game rust --proxy YOUR_PROXY_IP:4434
 |------|-------------|
 | `--tcp` | Use TCP for the client→proxy leg (for networks that block or throttle UDP). The proxy must have its TCP listener enabled (on by default). |
 | `--dscp` | Mark tunnel packets with DSCP EF (46) so the local router/ISP may prioritise them. Off by default; only helps on the player's local hop and is ignored on Windows. Also configurable as `dscp = true` under `[tunnel]`. |
+| `--mtu <BYTES>` | Effective path-MTU cap for the client→relay tunnel (1280-1500). Default: the `[tunnel] mtu` value (1492, the PPPoE-safe clamp). Lower it when the local path is smaller (VPN, DPI shim such as Zapret, reduced-MTU adapter), which otherwise fails with `WSAEMSGSIZE` (Windows 10040). The data plane also lowers it automatically on such a failure. |
+| `--path-mtu-discovery` | Opt-in DPLPMTUD over the QUIC control plane: raise the effective path MTU from the 1492 clamp toward the 1500-byte Ethernet cap when the path supports it. Any failure falls back to the clamp. Also configurable as `path_mtu_discovery = true` under `[tunnel]`. |
 
 ### FEC (Forward Error Correction)
 

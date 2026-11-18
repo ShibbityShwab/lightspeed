@@ -187,6 +187,16 @@ pub struct InterceptorConfig {
     /// from traffic.  Format: `(low_port, high_port)`.
     pub port_range: (u16, u16),
 
+    /// Effective path-MTU cap for the client-to-relay tunnel, in bytes.
+    ///
+    /// From `[tunnel] mtu` / `--mtu`, clamped into
+    /// `[MIN_PATH_MTU, HARD_CAP_PATH_MTU]`. The data plane budgets each
+    /// datagram against this, and lowers it further when the OS rejects a send
+    /// with `EMSGSIZE`/`WSAEMSGSIZE` (the reported 10040 failure on a path
+    /// smaller than the 1492-byte default). Larger values never raise the
+    /// budget above the conservative clamp unless discovery is enabled.
+    pub path_mtu: usize,
+
     /// Pre-discovered server routes from the [`ProcessScanner`].
     ///
     /// If non-empty the interceptor can immediately lock onto the right server
@@ -239,6 +249,14 @@ pub struct InterceptorCounters {
     /// (intercepted climbing, sent not). A user whose match connects but feels
     /// like packet loss has no other way to tell which relay-side fault this is.
     pub packets_tunnel_sent: AtomicU64,
+    /// Outbound sends that failed locally and never left the machine.
+    ///
+    /// This is the counter that distinguishes "the relay never answered" from
+    /// "our datagrams could not be sent" -- the reported 10040 case. It is a
+    /// diagnostic input only; the reply verdict uses the flow counters.
+    pub send_errors: AtomicU64,
+    /// The last local send failure, verbatim, for the status/trace.
+    pub last_send_error: std::sync::Mutex<Option<String>>,
     /// Per game destination sent/replied counters, for reply-ratio verdicts.
     ///
     /// Bounded: the interceptor carries one match at a time, and a stale entry is
@@ -331,6 +349,8 @@ impl Default for InterceptorCounters {
             packets_from_proxy: AtomicU64::new(0),
             packets_reply_data: AtomicU64::new(0),
             errors: AtomicU64::new(0),
+            send_errors: AtomicU64::new(0),
+            last_send_error: std::sync::Mutex::new(None),
             run_failed: AtomicBool::new(false),
             payloads_over_budget: AtomicU64::new(0),
             adaptive_parity_ratio_bp: AtomicU64::new(0),
@@ -366,6 +386,17 @@ impl InterceptorCounters {
     /// undecodable frames are not replies for anyone.
     pub fn count_reply(&self, server: std::net::Ipv4Addr) {
         self.with_flow(server, |counts| counts.replied += 1);
+    }
+
+    /// Record one outbound send that failed locally.
+    ///
+    /// The error is kept verbatim so a status surface can name the actual cause
+    /// (`WSAEMSGSIZE` 10040, a dead socket, …) instead of blaming the relay.
+    pub fn record_send_error(&self, error: &std::io::Error) {
+        self.send_errors.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut slot) = self.last_send_error.lock() {
+            *slot = Some(error.to_string());
+        }
     }
 
     fn with_flow(&self, server: std::net::Ipv4Addr, update: impl FnOnce(&mut FlowCounts)) {
@@ -405,6 +436,8 @@ impl InterceptorCounters {
             packets_from_proxy: self.packets_from_proxy.load(Ordering::Relaxed),
             packets_reply_data: self.packets_reply_data.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
+            send_errors: self.send_errors.load(Ordering::Relaxed),
+            last_send_error: self.last_send_error.lock().ok().and_then(|g| g.clone()),
             payloads_over_budget: self.payloads_over_budget.load(Ordering::Relaxed),
             adaptive_parity_ratio_bp: self.adaptive_parity_ratio_bp.load(Ordering::Relaxed),
             bypass_allowed: self.bypass_allowed.load(Ordering::Relaxed),
@@ -473,6 +506,14 @@ pub struct InterceptorStats {
     /// Per-game-destination counters: the only trustworthy reply ratio.
     pub flows: Vec<FlowSnapshot>,
     pub errors: u64,
+    /// Sends that failed locally and never left the machine.
+    ///
+    /// The signal that separates a relay that never answered from a client whose
+    /// datagrams the OS refused (for example `WSAEMSGSIZE` on a reduced-MTU
+    /// path). Diagnostic only; the reply verdict does not use it.
+    pub send_errors: u64,
+    /// The most recent local send failure, verbatim.
+    pub last_send_error: Option<String>,
     /// Payloads forwarded with fragmentation allowed for exceeding the
     /// conservative tunnel payload budget.
     pub payloads_over_budget: u64,
@@ -809,6 +850,7 @@ mod tests {
             process_names: vec!["TestGame.exe".to_string()],
             process_target: None,
             port_range: (1, 2),
+            path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: vec![],
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
             fec_enabled: false,

@@ -68,7 +68,17 @@ pub struct TunnelConfig {
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
 
-    /// Maximum packet size (MTU).
+    /// Effective path-MTU cap for the client-to-relay tunnel, in bytes.
+    ///
+    /// The tunnel normally clamps to 1492 bytes (PPPoE). On a path with a
+    /// smaller MTU -- a VPN, a DPI shim such as Zapret, or a reduced-MTU
+    /// adapter -- a datagram inside that clamp is still larger than the path
+    /// accepts and `sendto` fails with `WSAEMSGSIZE`/`EMSGSIZE` (Windows error
+    /// 10040). Lower this to the path's real MTU (1300-1492) to fit it.
+    ///
+    /// Values are clamped into `[1280, 1500]`; the default 1492 preserves the
+    /// historic behaviour. An explicitly lowered cap also caps
+    /// `path_mtu_discovery`, which can otherwise raise the budget.
     #[serde(default = "default_mtu")]
     pub mtu: usize,
 
@@ -259,7 +269,22 @@ fn default_timeout_ms() -> u64 {
 }
 
 fn default_mtu() -> usize {
-    1400
+    1492
+}
+
+impl TunnelConfig {
+    /// The path-MTU cap to use, clamped into the range the tunnel supports.
+    ///
+    /// 1492 (the conservative clamp) is the default; anything below it is a
+    /// deliberate user clamp for a reduced path, and anything above the
+    /// Ethernet hard cap is refused so the tunnel can never emit an oversized
+    /// datagram.
+    pub fn effective_mtu_cap(&self) -> usize {
+        self.mtu.clamp(
+            crate::tunnel::pmtud::MIN_PATH_MTU,
+            crate::tunnel::pmtud::HARD_CAP_PATH_MTU,
+        )
+    }
 }
 
 fn default_transport() -> String {
@@ -452,7 +477,12 @@ mod tests {
         assert!(config.general.interface.is_none());
         assert_eq!(config.tunnel.keepalive_ms, 5000);
         assert_eq!(config.tunnel.timeout_ms, 10000);
-        assert_eq!(config.tunnel.mtu, 1400);
+        assert_eq!(config.tunnel.mtu, 1492);
+        assert_eq!(
+            config.tunnel.effective_mtu_cap(),
+            1492,
+            "the default cap is the conservative clamp"
+        );
         assert!(!config.tunnel.dscp);
         assert!(config.tunnel.adaptive_fec);
         assert_eq!(config.tunnel.fec_max_overhead_pct, 25);
@@ -508,7 +538,8 @@ mod tests {
         let tunnel = TunnelConfig::default();
         assert_eq!(tunnel.keepalive_ms, 5000);
         assert_eq!(tunnel.timeout_ms, 10000);
-        assert_eq!(tunnel.mtu, 1400);
+        assert_eq!(tunnel.mtu, 1492);
+        assert_eq!(tunnel.effective_mtu_cap(), 1492);
         assert!(!tunnel.dscp);
         assert!(tunnel.adaptive_fec);
         assert_eq!(tunnel.fec_max_overhead_pct, 25);
@@ -641,6 +672,23 @@ keepalive_ms = 10000
     }
 
     #[test]
+    fn a_lowered_mtu_cap_is_honoured_and_clamped() {
+        let lowered: Config = toml::from_str("[tunnel]\nmtu = 1400\n").unwrap();
+        assert_eq!(
+            lowered.tunnel.effective_mtu_cap(),
+            1400,
+            "a user on a smaller path must be able to clamp below the clamp"
+        );
+
+        let absurd: Config = toml::from_str("[tunnel]\nmtu = 9000\n").unwrap();
+        assert_eq!(
+            absurd.tunnel.effective_mtu_cap(),
+            1500,
+            "a cap above the Ethernet hard cap is refused"
+        );
+    }
+
+    #[test]
     fn test_full_config_toml_roundtrip() {
         let toml_str = r#"
 [general]
@@ -677,6 +725,11 @@ min_samples = 100
         assert_eq!(config.tunnel.keepalive_ms, 2000);
         assert_eq!(config.tunnel.timeout_ms, 5000);
         assert_eq!(config.tunnel.mtu, 1200);
+        assert_eq!(
+            config.tunnel.effective_mtu_cap(),
+            1280,
+            "a cap below the supported floor is raised to it"
+        );
         assert_eq!(config.proxy.servers, vec!["10.0.0.1:4434", "10.0.0.2:4434"]);
         assert_eq!(config.proxy.quic_port, 8443);
         assert_eq!(config.proxy.data_port, 8444);
@@ -892,7 +945,8 @@ servers = [
 
         assert_eq!(config.tunnel.keepalive_ms, 5000);
         assert_eq!(config.tunnel.timeout_ms, 10000);
-        assert_eq!(config.tunnel.mtu, 1400);
+        assert_eq!(config.tunnel.mtu, 1492);
+        assert_eq!(config.tunnel.effective_mtu_cap(), 1492);
         assert_eq!(config.tunnel.transport, "udp");
         assert!(!config.tunnel.adaptive_fec);
         assert_eq!(config.tunnel.fec_max_overhead_pct, 25);

@@ -52,8 +52,11 @@ keepalive_ms = 5000
 # Connection timeout in milliseconds. Default: 10000.
 timeout_ms = 10000
 
-# Maximum packet size (MTU). Default: 1400.
-mtu = 1400
+# Effective path-MTU cap for the client-to-relay tunnel, in bytes. Default: 1492
+# (the PPPoE-safe clamp). Lower it only if your path is smaller than that -- a
+# VPN, a DPI shim such as Zapret, or a reduced-MTU adapter -- which otherwise
+# makes `sendto` fail with WSAEMSGSIZE (Windows 10040). Accepted range: 1280-1500.
+# mtu = 1400
 
 # Client-to-relay transport: "udp" (default) or "tcp".
 transport = "udp"

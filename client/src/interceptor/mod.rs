@@ -19,6 +19,7 @@
 //!     // The one way to say "intercept this process"; `None` is the ports path.
 //!     process_target: Some(ProcessTarget::by_name("RustClient.exe")),
 //!     port_range: (28015, 28017),
+//!     path_mtu: 1492,
 //!     initial_routes: vec![],   // or pre-filled from ProcessScanner
 //!     proxy_addr: "185.1.2.3:4434".parse().unwrap(),
 //!     fec_enabled: false,
@@ -401,6 +402,9 @@ fn assemble_config(
         process_names,
         process_target,
         port_range,
+        // Callers that know the user's `[tunnel] mtu` override this after the
+        // build; the builder's default is the conservative clamp.
+        path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
         initial_routes,
         proxy_addr,
         fec_enabled,
@@ -956,6 +960,7 @@ mod tests {
             process_names: vec!["RustClient.exe".to_string()],
             process_target: Some(ProcessTarget::by_name("RustClient.exe")),
             port_range: (28015, 28017),
+            path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: vec![],
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
             fec_enabled: true,
@@ -995,6 +1000,7 @@ mod tests {
                 process_names: vec!["TestGame.exe".to_string()],
                 process_target: None,
                 port_range: (1, 2),
+                path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
                 initial_routes: vec![],
                 proxy_addr: "127.0.0.1:4434".parse().unwrap(),
                 fec_enabled: false,
@@ -1021,6 +1027,7 @@ mod tests {
             process_names: vec!["RustClient.exe".to_string()],
             process_target: None,
             port_range: (28015, 28017),
+            path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: vec![],
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
             fec_enabled: false,

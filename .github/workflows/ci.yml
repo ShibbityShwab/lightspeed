@@ -281,6 +281,17 @@ jobs:
       - name: Build (release)
         run: cargo build --release --workspace --exclude lightspeed-gui
 
+      # Every other clippy step runs on Linux, where `#[cfg(windows)]` code is
+      # compiled out; the GUI job lints only the GUI crate. Without this step
+      # the Windows interceptor, WinDivert handle and Windows socket paths were
+      # built and tested but never linted. Use the shipped feature set rather
+      # than --all-features: `pcap-capture` needs the Npcap SDK, which this job
+      # does not install.
+      - name: Clippy (Windows-specific code)
+        run: |
+          cargo clippy -p lightspeed-client --features quic,windivert-redirect --all-targets
+          cargo clippy -p lightspeed-proxy --features quic --all-targets
+
       - name: Test
         run: cargo test --workspace --lib --exclude lightspeed-gui
 

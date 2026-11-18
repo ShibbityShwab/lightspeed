@@ -1420,6 +1420,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 let mut silent_ticks: u32 = 0;
 
                 let mut seq: u16 = 0;
+                // Effective client-to-relay path-MTU cap for this session. It
+                // starts at the user's `[tunnel] mtu` (or the conservative
+                // clamp) and is lowered in place when the OS rejects a send as
+                // larger than the path MTU (the reported 10040 failure).
+                let mut path_mtu = config.path_mtu;
                 let mut buf = vec![0u8; 65535];
                 let mut game_src_learned: Option<SocketAddrV4> = None;
                 let mut active_server: Option<SocketAddrV4> = pre_known_server;
@@ -1432,7 +1437,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     tokio::select! {
                         biased;
 
-                        // Intercepted game → proxy
+                        // ── Outbound: intercepted game → proxy ─────────────
                         maybe = intercept_rx.recv() => {
                             let captured = match maybe {
                                 Some(p) => p,
@@ -1513,7 +1518,11 @@ impl TrafficInterceptor for WinDivertInterceptor {
                             if let crate::tunnel::budget::PayloadFit::OverBudget {
                                 payload_len,
                                 budget,
-                            } = crate::tunnel::budget::classify(payload.len(), fec_encoder.is_some())
+                            } = crate::tunnel::budget::classify_at(
+                                payload.len(),
+                                fec_encoder.is_some(),
+                                path_mtu,
+                            )
                             {
                                 counters_t.payloads_over_budget.fetch_add(1, Ordering::Relaxed);
                                 tracing::warn!(
@@ -1545,13 +1554,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     .adaptive_parity_ratio_bp
                                     .store(fec_gate.parity_ratio_bp(), Ordering::Relaxed);
                                 crate::latency::record_outbound(*game_dst.ip());
-                                let sent = crate::tunnel::transport::send_datagram(
+                                let sent = send_tunnel_datagram(
                                     &tunnel_socket,
                                     &buf2,
                                     crate::session::current_proxy().unwrap_or(config_proxy),
+                                    &mut path_mtu,
+                                    &counters_t,
                                 )
-                                .await
-                                .is_ok();
+                                .await;
                                 if sent {
                                     counters_t.packets_tunnel_sent.fetch_add(1, Ordering::Relaxed);
                                     counters_t.count_sent(*game_dst.ip());
@@ -1565,10 +1575,12 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                     pb2.extend_from_slice(&ph.encode_to_array());
                                     pf.encode(&mut pb2);
                                     pb2.extend_from_slice(&pb);
-                                    let _ = crate::tunnel::transport::send_datagram(
+                                    let _ = send_tunnel_datagram(
                                         &tunnel_socket,
                                         &pb2,
                                         crate::session::current_proxy().unwrap_or(config_proxy),
+                                        &mut path_mtu,
+                                        &counters_t,
                                     )
                                     .await;
                                     seq = seq.wrapping_add(1);
@@ -1580,13 +1592,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
                                 crate::latency::record_outbound(*game_dst.ip());
                                 let (dests, n) = crate::session::send_destinations(config_proxy);
                                 for d in dests.iter().take(n) {
-                                    let sent = crate::tunnel::transport::send_datagram(
+                                    let sent = send_tunnel_datagram(
                                         &tunnel_socket,
                                         &pkt,
                                         *d,
+                                        &mut path_mtu,
+                                        &counters_t,
                                     )
-                                    .await
-                                    .is_ok();
+                                    .await;
                                     if sent {
                                         counters_t
                                             .packets_tunnel_sent
@@ -2029,20 +2042,88 @@ impl TrafficInterceptor for WinDivertInterceptor {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Tunnel send + MTU adaptation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Send one tunnel datagram, recording a local failure and adapting to an
+/// `EMSGSIZE`/`WSAEMSGSIZE` rejection.
+///
+/// Returns `true` when the datagram left the machine. On a message-too-long
+/// error the effective path MTU is lowered for the rest of the session and the
+/// datagram is retried once with fragmentation allowed; both attempts are
+/// recorded. The reported 10040 failure is exactly this path: without it the
+/// relay never saw the datagram and the GUI called the silence
+/// `NoReplyFromRelay`.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+async fn send_tunnel_datagram(
+    socket: &tokio::net::UdpSocket,
+    bytes: &[u8],
+    dest: SocketAddrV4,
+    path_mtu: &mut usize,
+    counters: &crate::interceptor::traits::InterceptorCounters,
+) -> bool {
+    match crate::tunnel::transport::send_datagram_at(socket, bytes, dest, *path_mtu).await {
+        Ok(_) => true,
+        Err(err) => {
+            counters.record_send_error(&err);
+            if !crate::tunnel::transport::is_message_too_long(&err) {
+                tracing::debug!(error = %err, %dest, "Tunnel send failed");
+                return false;
+            }
+            let before = *path_mtu;
+            *path_mtu = crate::tunnel::pmtud::lower_path_mtu_on_send_error(*path_mtu);
+            tracing::warn!(
+                error = %err,
+                %dest,
+                path_mtu_before = before,
+                path_mtu_after = *path_mtu,
+                "Tunnel send rejected as larger than the path MTU; lowering the \
+                 client-to-relay budget and retrying with fragmentation"
+            );
+            match crate::tunnel::transport::send_datagram_may_fragment(socket, bytes, dest).await {
+                Ok(_) => true,
+                Err(retry) => {
+                    counters.record_send_error(&retry);
+                    tracing::warn!(
+                        error = %retry,
+                        %dest,
+                        "Tunnel send retry failed after an MTU rejection"
+                    );
+                    false
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Windows Firewall helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// One stable inbound-UDP allow rule for the tunnel socket.
+///
+/// A per-port name (`... {port}`) used to accumulate one rule per boost: the
+/// ephemeral tunnel port changes on every start and only a graceful teardown
+/// removed the rule, so a force-kill or crash left it behind (71 stale rules
+/// were found and deleted once). The rule already matches the program, not the
+/// port, so the port in the name bought nothing.
+const FW_RULE_NAME: &str = "LightSpeed WinDivert Tunnel";
 
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 fn add_fw_rule(port: u16) {
     let exe = std::env::current_exe().unwrap_or_default();
-    let name = format!("LightSpeed WinDivert Tunnel {}", port);
+    // Reconcile first: remove the stable name (a crash may have left it) and
+    // the legacy per-port name this build's predecessor used. Both deletes are
+    // best-effort; a missing rule is not an error.
+    let _ = delete_fw_rule(FW_RULE_NAME);
+    let _ = delete_fw_rule(&legacy_fw_rule_name(port));
     match crate::process::silent_command("netsh")
         .args([
             "advfirewall",
             "firewall",
             "add",
             "rule",
-            &format!("name={name}"),
+            &format!("name={FW_RULE_NAME}"),
             "protocol=UDP",
             "dir=in",
             "action=allow",
@@ -2051,7 +2132,9 @@ fn add_fw_rule(port: u16) {
         .output()
     {
         Ok(o) if o.status.success() => {
-            tracing::info!("🔓 Firewall: added inbound UDP rule for port {}", port);
+            tracing::info!(
+                "🔓 Firewall: ensured the inbound UDP rule (program-scoped, one stable name)"
+            );
         }
         Ok(o) => {
             tracing::warn!(
@@ -2070,30 +2153,36 @@ fn add_fw_rule(port: u16) {
 
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 fn remove_fw_rule(port: u16) {
-    let name = format!("LightSpeed WinDivert Tunnel {}", port);
-    match crate::process::silent_command("netsh")
-        .args([
-            "advfirewall",
-            "firewall",
-            "delete",
-            "rule",
-            &format!("name={name}"),
-        ])
-        .output()
-    {
-        Ok(o) if o.status.success() => {
-            tracing::info!("🔒 Firewall: removed WinDivert rule for port {}", port);
-        }
-        Ok(o) => {
-            tracing::warn!(
-                "Firewall rule remove may have failed: {}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-        }
-        Err(e) => {
-            tracing::warn!("Failed to run netsh for firewall removal: {}", e);
-        }
+    // Remove the stable rule and the legacy per-port name from older builds.
+    let stable = delete_fw_rule(FW_RULE_NAME);
+    let _ = delete_fw_rule(&legacy_fw_rule_name(port));
+    if stable {
+        tracing::info!("🔒 Firewall: removed the WinDivert inbound rule");
     }
+}
+
+/// The per-port rule name an older build used; kept only so an upgrade can
+/// clean it up.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn legacy_fw_rule_name(port: u16) -> String {
+    format!("{FW_RULE_NAME} {port}")
+}
+
+/// Best-effort `netsh` delete of one named rule. Returns whether it succeeded.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn delete_fw_rule(name: &str) -> bool {
+    matches!(
+        crate::process::silent_command("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
+                &format!("name={name}"),
+            ])
+            .output(),
+        Ok(o) if o.status.success()
+    )
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2190,6 +2279,23 @@ mod tests {
         assert!(
             state.unmatched_ports.iter().any(|(_, owned)| *owned),
             "a captured port the table attributes to the target is the late-match case"
+        );
+    }
+
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn the_firewall_rule_name_is_stable_and_port_free() {
+        // One rule must survive every boost. The old name carried the ephemeral
+        // tunnel port, so each start added a new rule and a crash leaked it.
+        assert_eq!(FW_RULE_NAME, "LightSpeed WinDivert Tunnel");
+        assert!(
+            FW_RULE_NAME.chars().all(|c| !c.is_ascii_digit()),
+            "a port in the name is exactly what caused the accumulation: {FW_RULE_NAME}"
+        );
+        assert_eq!(
+            legacy_fw_rule_name(4434),
+            "LightSpeed WinDivert Tunnel 4434",
+            "the legacy per-port name is still recognised so an upgrade can clean it"
         );
     }
 

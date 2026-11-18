@@ -386,6 +386,7 @@ fn zero_return_window(fault: RelayReplyFault, from_proxy_since: u64, injected_si
 
 /// The trace line for a fault. Kept beside the decision so the wording cannot
 /// drift from the counters it quotes.
+#[allow(clippy::too_many_arguments)]
 fn relay_reply_fault_message(
     fault: RelayReplyFault,
     intercepted_since: u64,
@@ -393,25 +394,42 @@ fn relay_reply_fault_message(
     from_proxy_since: u64,
     errors: u64,
     last_error: Option<&str>,
+    send_errors: u64,
+    last_send_error: Option<&str>,
 ) -> String {
     match fault {
-        RelayReplyFault::NoReplyFromRelay => format!(
-            "Relay return path is starving the session; switching it direct \
-             (intercepted={intercepted_since} injected={injected_since} from_relay=0 \
-             errors={errors} last_error={})",
-            last_error.unwrap_or("none")
-        ),
+        RelayReplyFault::NoReplyFromRelay => {
+            // A local send failure explains the silence without the relay being
+            // at fault: the reported 10040 case sent nothing and then blamed the
+            // return path. Name the OS error instead of accusing the relay.
+            if send_errors > 0 {
+                return format!(
+                    "The relay cannot be the cause: {send_errors} outbound datagram(s) never \
+                     left this machine (last: {}); this is a local path-MTU or socket failure. \
+                     Switching direct (intercepted={intercepted_since} injected={injected_since} \
+                     errors={errors} last_error={})",
+                    last_send_error.unwrap_or("unknown"),
+                    last_error.unwrap_or("none")
+                );
+            }
+            format!(
+                "Relay return path is starving the session; switching it direct \
+                 (intercepted={intercepted_since} injected={injected_since} from_relay=0 \
+                 errors={errors} send_errors={send_errors} last_error={})",
+                last_error.unwrap_or("none")
+            )
+        }
         RelayReplyFault::InjectionFailed => format!(
             "The relay returned {from_proxy_since} datagram(s) and none could be injected, \
              so this is the local injection path, not the relay; switching direct \
              (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since} \
-             errors={errors} last_error={})",
+             errors={errors} send_errors={send_errors} last_error={})",
             last_error.unwrap_or("none")
         ),
         RelayReplyFault::TooFewReplies => format!(
             "Relay return path is starving the session; switching it direct \
              (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since} \
-             errors={errors} last_error={})",
+             errors={errors} send_errors={send_errors} last_error={})",
             last_error.unwrap_or("none")
         ),
     }
@@ -770,6 +788,8 @@ fn spawn_relay_reply_watchdog(
                         from_proxy_since,
                         health.errors,
                         health.last_error.as_deref(),
+                        health.send_errors,
+                        health.last_send_error.as_deref(),
                     )
                 );
             }
@@ -1642,6 +1662,9 @@ pub struct LightSpeedApp<P: Platform> {
     /// Language pinned in `config.toml`, or `None` to follow the OS locale.
     language: Option<String>,
 
+    /// Effective path-MTU cap for the tunnel, persisted from `config.toml`.
+    tunnel_mtu: usize,
+
     // ── Boost diagnostics ─────────────────────────────────────────────────
     boost_start: Option<std::time::Instant>,
     custom_port_input: String,
@@ -1696,6 +1719,11 @@ impl<P: Platform> LightSpeedApp<P> {
         let is_admin = P::is_admin();
 
         let saved = config::load(&paths::config_file());
+        // Apply the persisted path-MTU cap before any boost can start; the data
+        // plane also lowers it on an EMSGSIZE rejection, so this is the user's
+        // explicit floor rather than the only protection.
+        lock_or_recover(&engine).set_path_mtu_cap(saved.tunnel_mtu);
+        let tunnel_mtu = saved.tunnel_mtu;
 
         // The Game field mirrors the relay's: "Auto (detect)" is the default,
         // and a pinned key from the config wins over detection.
@@ -1838,6 +1866,7 @@ impl<P: Platform> LightSpeedApp<P> {
             server_saved: None,
             server_error: None,
             language,
+            tunnel_mtu,
             boost_start: None,
             health_base: None,
             relay_health: None,
@@ -2012,6 +2041,7 @@ impl<P: Platform> LightSpeedApp<P> {
             language: self.language.clone(),
             manual_server: self.server_input.clone(),
             manual_port_range: self.custom_port_input.clone(),
+            tunnel_mtu: self.tunnel_mtu,
             selected_game: if self.game_auto || self.game_manual {
                 None
             } else {
@@ -7120,17 +7150,53 @@ mod tests {
             9,
             57,
             Some("WinDivert inject error: invalid handle"),
+            0,
+            None,
         );
         assert!(message.contains("local injection path"), "{message}");
         assert!(message.contains("from_relay=9"), "{message}");
         assert!(message.contains("errors=57"), "{message}");
         assert!(message.contains("invalid handle"), "{message}");
-        let silent =
-            relay_reply_fault_message(RelayReplyFault::NoReplyFromRelay, 100, 0, 0, 0, None);
+        let silent = relay_reply_fault_message(
+            RelayReplyFault::NoReplyFromRelay,
+            100,
+            0,
+            0,
+            0,
+            None,
+            0,
+            None,
+        );
         assert!(silent.contains("from_relay=0"), "{silent}");
         assert!(!silent.contains("local injection"), "{silent}");
         assert!(silent.contains("errors=0"), "{silent}");
         assert!(silent.contains("last_error=none"), "{silent}");
+    }
+
+    #[test]
+    fn a_local_send_failure_is_named_instead_of_blaming_the_relay() {
+        // The reported #168 failure: every send was rejected with WSAEMSGSIZE,
+        // the relay never saw a datagram, and the trace called it relay silence.
+        let message = relay_reply_fault_message(
+            RelayReplyFault::NoReplyFromRelay,
+            120,
+            0,
+            0,
+            0,
+            None,
+            7,
+            Some("A message sent on a datagram socket was larger than the internal message buffer (os error 10040)"),
+        );
+        assert!(
+            message.contains("The relay cannot be the cause"),
+            "{message}"
+        );
+        assert!(message.contains("10040"), "{message}");
+        assert!(message.contains("local path-MTU"), "{message}");
+        assert!(
+            !message.contains("Relay return path is starving"),
+            "a local send failure must not be reported as relay starvation: {message}"
+        );
     }
 
     #[test]
@@ -7149,8 +7215,16 @@ mod tests {
             (RelayReplyFault::InjectionFailed, 600, 0, 40),
             (RelayReplyFault::TooFewReplies, 152, 16, 16),
         ] {
-            let message =
-                relay_reply_fault_message(fault, intercepted, injected, from_relay, 3, last_error);
+            let message = relay_reply_fault_message(
+                fault,
+                intercepted,
+                injected,
+                from_relay,
+                3,
+                last_error,
+                0,
+                None,
+            );
             assert!(
                 message.contains("errors=3"),
                 "{fault:?} dropped the error count: {message}"

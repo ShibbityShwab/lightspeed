@@ -110,6 +110,7 @@ async fn run_smoke_test_linux(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
         process_names: vec!["FortniteClient-Win64-Shipping.exe".to_string()],
         process_target: None,
         port_range: (1024, 65535),
+        path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
         initial_routes: vec![],
         proxy_addr,
         fec_enabled: false,

@@ -89,6 +89,7 @@ pub async fn run_watch_mode(
                                 p.name.clone(),
                             )),
                             port_range: (lo, hi),
+                            path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
                             initial_routes: vec![],
                             proxy_addr,
                             fec_enabled: fec,

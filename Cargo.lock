@@ -3039,9 +3039,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
- "windivert",
  "windivert-sys",
- "windows 0.62.2",
 ]
 
 [[package]]

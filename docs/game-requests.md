@@ -14,8 +14,9 @@ whether match servers are assigned per match. The thread then becomes rounds of
 - #148 Aion 2 - fourteen comments, the port was still `37300 ?`.
 - #153 Black Desert Online - the range fields arrived as `From: Nz` / `To: LAX`,
   which are regions, not ports.
-- #168 Delta Force - the reported ports mix the game port with Steam's query
-  block, and it is not clear which carries gameplay.
+- #168 Delta Force - gameplay UDP and the matchmade endpoints are now measured
+  (2026-11-17 process-target trace); the remaining blocker is the client's
+  path-MTU handling on the reporter's network, not a missing fact.
 
 A built-in profile needs **measured** facts. Custom-process targeting needs none
 of them, which is why it is the recommended answer whenever a profile is missing.
@@ -67,7 +68,7 @@ process's UDP traffic, not the TCP game connection.
 |---|---|---|---|
 | Aion 2 | #148, discussion #149 | blocked (TCP gameplay) | the reporter's 2026-10/11 screenshots show the world connection is **TCP** (`ESTABLISHED` to `193.202.112.233:13328` plus TCP 443) and the only UDP socket is loopback `127.0.0.1:37300`, so there is no remote UDP path to profile; tracked by the TCP work in #176 |
 | Black Desert Online | #153 | blocked | measured remote gameplay UDP port range; the form's range arrived as region names (`Nz` to `LAX`), and whether `BlackDesert64.exe` or a launcher owns the gameplay sockets is unconfirmed |
-| Delta Force | #168, discussion #63 | blocked | measured gameplay endpoint from the app trace (`Locked game server: <ip>:<port>`); the 2026-11-14 screenshot is the in-game region selector (latencies), not an endpoint; if gameplay turns out UDP-less, #176 is the tracker |
+| Delta Force | #168, discussion #63 | measured, blocked by the client MTU bug | UDP gameplay confirmed by process targeting on 2026-11-17 (`43.130.90.129:28000`, `94.74.76.3:28000`, `43.164.65.4:28000`, `43.153.142.239:17869`); matchmade servers, so the profile must be dynamic. The reporter's `WSAEMSGSIZE` (10040) failures are the client path-MTU issue tracked in the 2026-11-18 audit (F-01), not a missing measurement. |
 | EA Sports FC 27 | #166 | near-ready | confirmation that `21006-21039` is gameplay (not EA app control traffic); matchmade servers likely (mark dynamic) |
 | Battlefield 6 | discussion #172, #63 | under evaluation | measured gameplay UDP port range and matchmade-vs-fixed servers |
 | Warface | discussion #63 | under evaluation | measured gameplay UDP port range and matchmade-vs-fixed servers |

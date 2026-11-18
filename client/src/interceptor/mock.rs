@@ -121,6 +121,7 @@ mod tests {
             process_names: vec!["TestGame.exe".to_string()],
             process_target: Some(ProcessTarget::by_pid(12345)),
             port_range: (27015, 27017),
+            path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: vec![],
             proxy_addr: SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
             fec_enabled: false,
