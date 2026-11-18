@@ -5,11 +5,20 @@
 | Author | `interface-designer` (task-6, delegated by `lead`) |
 | Date | 2026-11-18 |
 | Revision measured | worktree at `bc88573`, clean tree; `client-gui/src/app.rs` 9,316 lines |
-| Status | **due diligence + plan only. No code changed this round; `app.rs` untouched.** |
-| Write scope | this file. Evidence: `wat/evidence/2026-11-18/team/interface-designer/` |
-| Cargo | not run by this persona (build lock held by `infra-dev`; a split would be executed by `rust-dev` under the gate) |
+| Status | **Phase A executed 2026-11-18 (WF-075):** `app.rs` 9,316 -> **4,072 lines**, 11 modules, GUI gate 186/0/1 unchanged; Phase B/C not done. |
+| Write scope | this file. Evidence: `wat/evidence/2026-11-18/team/interface-designer/`, `wat/evidence/2026-11-18/app-phase-a/` |
+| Cargo | baseline and every step run by `rust-dev` under the GUI gate; independently re-run by `qa-engineer` (task-18) |
 
 ## Recommendation (read this first)
+
+> **Execution (2026-11-18, WF-075).** Phase A A0-A10 was executed mechanically:
+> `app.rs` 9,316 -> **4,072 lines**, eleven modules; the GUI gate stayed
+> 186 passed / 0 failed / 1 ignored at every step; QA independently proved the
+> move token-identical (21,242 = 21,242 surviving tokens) and the real window
+> renders the same shell. Phase B/C were deliberately not done. Two findings
+> from the visual check: the installed 1.11.0 GUI rewrites `config.toml`
+> without the newer `tunnel_mtu` key (a downgrade silently drops it), and the
+> inner width is pinned to 320 px (`main.rs`), so only one width exists.
 
 **Do the split after the next release, and do only Phase A — a mechanical move of
 the file's self-contained, test-pinned half into sibling modules. Do not do
