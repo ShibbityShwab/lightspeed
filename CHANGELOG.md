@@ -5,6 +5,25 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The QUIC control plane now respects the configured path-MTU cap.** Its
+  DPLPMTUD upper bound was hard-coded to 1472 UDP bytes, so a client on a
+  sub-1500 path still emitted oversized control datagrams (`WSAEMSGSIZE` /
+  Windows error 10040) even after the 1.11.1 tunnel fix (reported in `#178`).
+  The supervised control connection now derives its probe ceiling from
+  `[tunnel] mtu` / `--mtu` / the GUI's `tunnel_mtu`: explicit 1500 keeps 1472,
+  the default 1492 gives 1464, 1400 gives 1372 (never below quinn's 1200-byte
+  floor), and the cap is threaded through every registration path.
+- **Game auto-detection no longer runs on the egui thread.** It ran `tasklist`
+  plus a PowerShell `Get-CimInstance` query every 5 seconds on the UI thread
+  (measured 0.43-0.47 s on a fast host and 2.5-3.4 s on the `#178` reporter's
+  EDR-loaded machine), which froze window moves and clicks. A dedicated worker
+  owns the cadence, keeps at most one scan in flight, joins on shutdown, and
+  Manual/Custom mode no longer scans at all.
+
 ## [1.11.1] - 2026-11-18
 
 ### Fixed
