@@ -390,7 +390,21 @@ fn assemble_config(
         .collect();
 
     let capture_tcp_ports = {
+        // The WinDivert backend's TCP lane (outbound filter clause, terminator,
+        // v5 tunnel send and inbound injection) is driven by this field, not by
+        // `transport` directly. A TCP-primary profile declares its gameplay
+        // range in `tcp_ports()` and carries no UDP traffic, so the primary TCP
+        // range is what that lane must capture; `capture_tcp_ports()` stays the
+        // explicit secondary-range override for dual-transport titles
+        // (Arc Raiders). Without this derivation a TCP-primary profile (Minecraft
+        // Java, Tibia) reaches the backend with `capture_tcp_ports = None` and
+        // its UDP-only primary filter captures nothing.
         let tcp = game.capture_tcp_ports();
+        let tcp = if tcp == (0, 0) && game.transport() == TransportProto::Tcp {
+            game.tcp_ports()
+        } else {
+            tcp
+        };
         (tcp != (0, 0)).then_some(tcp)
     };
 
@@ -691,6 +705,145 @@ mod tests {
         assert_eq!(cfg.game_name, "Rust");
         assert_eq!(cfg.port_range, (28015, 28017));
         assert!(!cfg.fec_enabled);
+    }
+
+    /// A minimal TCP-primary profile for the capture-range derivation tests:
+    /// gameplay traffic is TCP only, with one primary range and an optional
+    /// explicit secondary override.
+    struct TcpOnlyProfile {
+        capture_tcp: (u16, u16),
+    }
+
+    impl crate::games::GameConfig for TcpOnlyProfile {
+        fn name(&self) -> &str {
+            "TCP Only Test"
+        }
+
+        fn process_names(&self) -> Vec<&str> {
+            // A name no process carries: the builder must still return a config
+            // without a running game (the production guard lives at start).
+            vec!["lightspeed-tcp-only-test-not-a-real-process.exe"]
+        }
+
+        fn ports(&self) -> (u16, u16) {
+            (7171, 7172)
+        }
+
+        fn tcp_ports(&self) -> (u16, u16) {
+            (7171, 7172)
+        }
+
+        fn transport(&self) -> TransportProto {
+            TransportProto::Tcp
+        }
+
+        fn capture_tcp_ports(&self) -> (u16, u16) {
+            self.capture_tcp
+        }
+
+        fn anti_cheat(&self) -> &str {
+            "none"
+        }
+
+        fn typical_pps(&self) -> u32 {
+            20
+        }
+
+        fn packet_size_range(&self) -> (usize, usize) {
+            (48, 900)
+        }
+    }
+
+    #[test]
+    fn a_tcp_primary_profile_derives_its_capture_range_from_tcp_ports() {
+        // The Minecraft Java / Tibia shape: `transport() == Tcp` and
+        // `tcp_ports()` set, no explicit secondary range. The WinDivert TCP lane
+        // is driven by `capture_tcp_ports`, so the builder must derive it from
+        // the primary TCP range; otherwise the filter stays `udp and outbound`
+        // and captures nothing for the profile.
+        let cfg = build_config_for_game(
+            &TcpOnlyProfile {
+                capture_tcp: (0, 0),
+            },
+            "127.0.0.1:4434".parse().unwrap(),
+            false,
+            4,
+            Default::default(),
+        )
+        .expect("a config is built even when the process is not running");
+
+        assert_eq!(cfg.transport, TransportProto::Tcp);
+        assert_eq!(
+            cfg.capture_tcp_ports,
+            Some((7171, 7172)),
+            "a TCP-primary profile's primary range must become its TCP capture range"
+        );
+        // The port diagnostics / capture policy still name the same TCP range.
+        assert_eq!(cfg.port_range, (7171, 7172));
+    }
+
+    #[test]
+    fn a_tcp_primary_profile_keeps_its_explicit_secondary_range() {
+        // Dual-transport profiles (Arc Raiders) declare a *different* secondary
+        // TCP range; that explicit value must win over the derivation.
+        let cfg = build_config_for_game(
+            &TcpOnlyProfile {
+                capture_tcp: (443, 443),
+            },
+            "127.0.0.1:4434".parse().unwrap(),
+            false,
+            4,
+            Default::default(),
+        )
+        .expect("config");
+        assert_eq!(cfg.capture_tcp_ports, Some((443, 443)));
+    }
+
+    #[test]
+    fn a_udp_profile_keeps_no_tcp_capture_range() {
+        use crate::games::rust::RustConfig;
+        let cfg = build_config_for_game(
+            &RustConfig,
+            "127.0.0.1:4434".parse().unwrap(),
+            false,
+            4,
+            Default::default(),
+        )
+        .expect("config");
+        assert_eq!(cfg.transport, TransportProto::Udp);
+        assert_eq!(
+            cfg.capture_tcp_ports, None,
+            "a UDP profile must not gain a TCP capture clause"
+        );
+    }
+
+    /// The derived range must actually reach the Windows backend's filter, not
+    /// just the config field: that filter is the thing that captures (or fails
+    /// to capture) the game's TCP handshake.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_tcp_primary_profile_feeds_the_windows_tcp_filter_clause() {
+        let cfg = build_config_for_game(
+            &TcpOnlyProfile {
+                capture_tcp: (0, 0),
+            },
+            "127.0.0.1:4434".parse().unwrap(),
+            false,
+            4,
+            Default::default(),
+        )
+        .expect("config");
+
+        let policy = capture_policy(&cfg);
+        let filter = windows::build_capture_filter(policy, &[], cfg.capture_tcp_ports);
+        assert!(
+            filter.contains("tcp and outbound and tcp.DstPort >= 7171 and tcp.DstPort <= 7172"),
+            "the TCP lane must be in the WinDivert filter: {filter}"
+        );
+        assert!(
+            filter.contains("udp and outbound"),
+            "the UDP lane stays for parity with dual-transport profiles: {filter}"
+        );
     }
 
     #[test]

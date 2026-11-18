@@ -88,6 +88,28 @@ impl RelayStats {
     }
 }
 
+/// Enforce the TCP-in-TCP ban for a game carried over a leg of `leg_transport`.
+///
+/// The same rule as [`UdpRelay::ensure_game_transport`], exposed as a free
+/// function for callers that know the tunnel leg's transport before a
+/// `UdpRelay` exists (the interceptor start path). `None` means "not connected
+/// yet": no leg has been chosen, so no forbidden pairing can be claimed.
+///
+/// Returns an error only for a TCP game over a TCP leg. A UDP game on the TCP
+/// fallback and a TCP game on the UDP transport both stay allowed.
+pub fn ensure_game_transport_for(
+    game_transport: TransportProto,
+    leg_transport: Option<TransportProto>,
+) -> Result<(), TunnelError> {
+    if game_transport.forbidden_over(leg_transport) {
+        return Err(TunnelError::Relay(format!(
+            "TCP-in-TCP is banned: the {game_transport} game profile cannot run over the \
+             TCP tunnel transport; use the UDP transport for TCP games"
+        )));
+    }
+    Ok(())
+}
+
 /// UDP relay, sends tunnel packets to proxy and receives responses.
 ///
 /// Supports optional FEC for packet loss recovery. When FEC is enabled:
@@ -374,21 +396,15 @@ impl UdpRelay {
 
     /// Enforce the TCP-in-TCP ban for a game profile before it starts.
     ///
-    /// A TCP game (Minecraft Java Edition) terminates TCP at both ends of the
-    /// tunnel and carries the stream as sequenced datagrams. Running it over
+    /// A TCP game (Minecraft Java Edition, Tibia) terminates TCP at both ends of
+    /// the tunnel and carries the stream as sequenced datagrams. Running it over
     /// [`TunnelTransport::Tcp`] would nest two congestion controllers and two
     /// retransmission loops, which `docs/tcp-tunnel-design.md` forbids.
     ///
     /// Returns an error only for that pairing. A UDP game on the TCP fallback
     /// and a TCP game on the UDP transport both stay allowed.
     pub fn ensure_game_transport(&self, game_transport: TransportProto) -> Result<(), TunnelError> {
-        if game_transport.forbidden_over(self.transport_proto()) {
-            return Err(TunnelError::Relay(format!(
-                "TCP-in-TCP is banned: the {game_transport} game profile cannot run over the \
-                 TCP tunnel transport; use the UDP transport for TCP games"
-            )));
-        }
-        Ok(())
+        ensure_game_transport_for(game_transport, self.transport_proto())
     }
 
     /// Get the next sequence number.

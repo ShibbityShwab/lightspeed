@@ -1,6 +1,6 @@
 # Supported Games
 
-LightSpeed includes built-in profiles for 27 popular multiplayer games. Each profile defines the UDP port range and process name for auto-detection.
+LightSpeed includes built-in profiles for 28 popular multiplayer games. Each profile defines the port range (UDP, or TCP for the TCP profiles) and process name for auto-detection.
 
 ---
 
@@ -33,8 +33,9 @@ LightSpeed includes built-in profiles for 27 popular multiplayer games. Each pro
 | 23 | **Minecraft Java Edition** | `--game minecraft-java` | 25565 (TCP) | None | `javaw.exe` |
 | 24 | **ARC Raiders** | `--game arcraiders` | 7600-7777 | Easy Anti-Cheat | `PioneerGame.exe` |
 | 25 | **Jedi Knight II: Jedi Outcast (NWH)** | `--game jedioutcast` | 28070 | None reported | `nwhmp.exe` |
-| 26 | **Tibia** | `--game tibia` | 7171-7172 | BattlEye | `Tibia.exe` |
+| 26 | **Tibia** | `--game tibia` | 7171-7172 (TCP) | BattlEye | `Tibia.exe` |
 | 27 | **ROB RUN** | `--game robrun` | 32768-60999 (ephemeral) | Easy Anti-Cheat | `ROB RUN.exe` |
+| 28 | **EA SPORTS FC 27** | `--game fc27` | 21000-21050 | EA Javelin | `FC27.exe` |
 
 > **Rainbow Six Siege note:** the profile is **UNVERIFIED against R6
 > Shieldguard.** Siege ships three anti-cheat layers - BattlEye, Shieldguard and
@@ -62,11 +63,25 @@ LightSpeed includes built-in profiles for 27 popular multiplayer games. Each pro
 > with a packet capture. WARDOGS is Windows-only for now: its kernel-level
 > Elytra anti-cheat blocks Proton on Linux, so capture must run on Windows.
 
-> **Tibia note:** the shipped profile captures UDP `7171-7172`. Tibia's login
-> and world connection are TCP (reported in
-> [#176](https://github.com/ShibbityShwab/lightspeed/issues/176)), so the profile
-> cannot accelerate Tibia's gameplay today, and **Target a process** relays UDP
-> only. The TCP game status is described below.
+> **EA SPORTS FC 27 note:** the profile carries the UDP gameplay range
+> `21000-21050` (server-side ports). The request in
+> [#166](https://github.com/ShibbityShwab/lightspeed/issues/166) measured
+> `21006-21039` over ~10 matches and expected the real range to be slightly
+> wider, so the enclosing 50-port block ships rather than the exact measured
+> span. Match hosts are AWS instances assigned per match (mostly
+> `eu-south-1`), so **capture/intercept mode is the supported path**: a fixed
+> `--game-server IP:PORT` is stale before kickoff and the game cannot be pointed
+> at `127.0.0.1`. The game is launched from the EA app (`EADesktop.exe`), which
+> is the launcher, not the game - only `FC27.exe` is detected. The match servers
+> do not answer ICMP, so this title has no direct-ping anchor and relay ranking
+> uses its geometric floor / region prior.
+
+> **Tibia note:** Tibia's login and world connections are TCP `7171`/`7172`,
+> and the shipped profile now uses the **TCP path** (protocol v5 terminator +
+> relay splice) rather than the old UDP capture. **Target a process** still
+> relays UDP only, so select the Tibia game profile rather than a picked
+> process. The relay must advertise `TCP_TUNNEL` (all eight community relays
+> do; a self-hosted relay needs a proxy build with the TCP lane).
 
 > **Minecraft Java Edition note:** this is the built-in TCP profile carried by
 > the tunnel's TCP path (TCP 25565). The design/implementation record is
@@ -85,16 +100,18 @@ Java Edition** profile (TCP 25565) is the reference profile for this path; the
 design/implementation record is
 [`docs/tcp-tunnel-design.md`](tcp-tunnel-design.md).
 
-It is not a general "any TCP game" capability yet. The request/profile flow is
-built around UDP gameplay, user/custom profiles reject `tcp_ports`, and
-TCP-primary auto-detection is not exposed in the GUI, so a new TCP-only title
-cannot be added through the game-request procedure. That work is tracked in
+It is not yet a general "any TCP game" capability: the request and profile flow
+is built around UDP gameplay, user/custom profiles reject `tcp_ports`, and
+TCP-primary auto-detection is not exposed in the GUI. Built-in TCP profiles can
+be added by the maintainers (see Tibia below), but a new TCP-only title cannot
+be added through the user game-request procedure yet. That work is tracked in
 [#176](https://github.com/ShibbityShwab/lightspeed/issues/176); no timeline is
 promised.
 
-The shipped **Tibia** profile captures UDP `7171-7172` (1.10.0, from issue #171).
-Tibia's game connection is TCP, so the profile cannot accelerate Tibia's gameplay
-today, and **Target a process** relays UDP traffic only.
+The shipped **Tibia** profile is carried by the TCP path (TCP `7171` login,
+`7172` world; from issues #171/#176). Select the game profile, not **Target a
+process** (that path relays UDP only), and use a relay that advertises
+`TCP_TUNNEL` - every community relay does.
 
 A known older example is **Angels Online Global**, which uses TCP ports 38201,
 38304, 38501, and 38502 with the process `angel.dat`; there is no UDP gameplay
@@ -115,14 +132,13 @@ status and the exact missing fact are maintained in
 - **Black Desert Online** - blocked: the measured gameplay UDP port range (#153).
 - **Delta Force** - blocked: the measured gameplay endpoint (#168); if the
   gameplay is TCP, #176 is the tracker.
-- **EA Sports FC 27** - near-ready: two confirmations are open on #166.
 - **Battlefield 6**, **Warface** - under evaluation: measured gameplay UDP port
   range and matchmade-vs-fixed servers (discussion #63).
 - **Deadlock** - blocked by Steam Datagram Relay: if its gameplay runs over SDR,
   a relay profile cannot improve it, because the game already routes through
   Valve's own network (discussion #142). The request stays tracked, not promised.
-- **Tibia** - the shipped profile is UDP-only while Tibia is TCP; a TCP gameplay
-  path is a feature request under #176.
+- **Tibia** - TCP profile shipped (login/world `7171`/`7172`); **Target a
+  process** remains UDP-only, so use the game profile.
 
 These are requests only. No support is promised, and no port ranges or anti-cheat compatibility claims are made for them at this time. If and when a profile ships, it will appear in the game list above.
 
@@ -142,6 +158,7 @@ LightSpeed is compatible with all major anti-cheat systems:
 | **Nexon Game Security (NGS)** | MapleStory | ✅ Permitted |
 | **Byfron (Hyperion)** | Roblox | ✅ Permitted |
 | **Elytra (VAIIYA)** | WARDOGS | ✅ Permitted |
+| **EA Javelin** | EA SPORTS FC 27 | ✅ Permitted (transparent tunnel; not yet field-confirmed with this title) |
 
 LightSpeed uses standard OS-level network drivers (WinDivert, nftables, pfctl). It does **not**:
 - Modify game files or memory

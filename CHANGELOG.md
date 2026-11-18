@@ -5,6 +5,25 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **EA SPORTS FC 27** built-in profile (`--game fc27`, `FC27.exe`, UDP
+  21000-21050, dynamic matchmaker servers) from issue #166. The range encloses
+  the measured 21006-21039 span; the edges are inferred and the anti-cheat
+  caveat (EA Javelin) is documented.
+
+### Fixed
+
+- **Tibia now uses the TCP path** (issues #171/#176). The built-in profile
+  reports TCP `7171`/`7172` and the interceptor derives its TCP capture lane
+  from a profile's transport when no secondary TCP range is declared. This also
+  fixes the latent gap that kept the Minecraft Java profile from reaching the
+  TCP lane. The TCP-in-TCP ban is now enforced at the production start path.
+  **Target a process** remains UDP-only, and a relay must advertise `TCP_TUNNEL`
+  (all community relays do).
+
 ## [1.11.2] - 2026-11-18
 
 ### Fixed

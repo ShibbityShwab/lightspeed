@@ -54,13 +54,11 @@ record is [`docs/tcp-tunnel-design.md`](tcp-tunnel-design.md).
 
 It is not yet a general "any TCP game" capability: the request and profile flow
 is built around UDP gameplay, user/custom profiles reject `tcp_ports`, and
-TCP-primary auto-detection is not exposed in the GUI. So a new TCP-only title is
-a feature request under
-[#176](https://github.com/ShibbityShwab/lightspeed/issues/176), not a UDP profile
-request. **Tibia** is the current example: its shipped profile (1.10.0, from
-#171) captures UDP `7171-7172`, but Tibia's login/world connection is TCP, so
-that profile cannot accelerate Tibia today; **Target a process** relays that
-process's UDP traffic, not the TCP game connection.
+TCP-primary auto-detection is not exposed in the GUI. Built-in TCP profiles can
+be added by the maintainers, and **Tibia** now uses that path (login/world TCP
+`7171`/`7172`; select the game profile, not **Target a process**, which relays
+UDP only). A new TCP-only title still needs the maintainer path tracked in
+[#176](https://github.com/ShibbityShwab/lightspeed/issues/176).
 
 ## Open requests (2026-11-17)
 
@@ -69,11 +67,11 @@ process's UDP traffic, not the TCP game connection.
 | Aion 2 | #148, discussion #149 | blocked (TCP gameplay) | the reporter's 2026-10/11 screenshots show the world connection is **TCP** (`ESTABLISHED` to `193.202.112.233:13328` plus TCP 443) and the only UDP socket is loopback `127.0.0.1:37300`, so there is no remote UDP path to profile; tracked by the TCP work in #176 |
 | Black Desert Online | #153 | blocked | measured remote gameplay UDP port range; the form's range arrived as region names (`Nz` to `LAX`), and whether `BlackDesert64.exe` or a launcher owns the gameplay sockets is unconfirmed |
 | Delta Force | #168, discussion #63 | measured, blocked by the client MTU bug | UDP gameplay confirmed by process targeting on 2026-11-17 (`43.130.90.129:28000`, `94.74.76.3:28000`, `43.164.65.4:28000`, `43.153.142.239:17869`); matchmade servers, so the profile must be dynamic. The reporter's `WSAEMSGSIZE` (10040) failures are the client path-MTU issue tracked in the 2026-11-18 audit (F-01), not a missing measurement. |
-| EA Sports FC 27 | #166 | near-ready | confirmation that `21006-21039` is gameplay (not EA app control traffic); matchmade servers likely (mark dynamic) |
+| EA Sports FC 27 | #166 | profile added (release pending; #166 closes with the release) | - |
 | Battlefield 6 | discussion #172, #63 | under evaluation | measured gameplay UDP port range and matchmade-vs-fixed servers |
 | Warface | discussion #63 | under evaluation | measured gameplay UDP port range and matchmade-vs-fixed servers |
 | Deadlock | discussion #142 (#169 closed as a duplicate) | blocked | whether gameplay runs over Steam Datagram Relay; if it does, a relay profile cannot help |
-| Tibia | #176 (UDP profile shipped in 1.10.0 from #171) | feature request | a TCP gameplay path; the shipped profile is UDP-only and cannot carry Tibia's game connection |
+| Tibia | #176 (UDP profile shipped in 1.10.0 from #171) | TCP profile shipped (release pending) | - ; select the Tibia game profile (TCP `7171`/`7172`), not Target a process |
 | Roblox | #167 | not a profile request | a bug report about relayed Roblox traffic, tracked in #167 |
 
 Update this table when a request moves; it is the public answer to "what is the

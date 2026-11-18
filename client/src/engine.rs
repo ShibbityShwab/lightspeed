@@ -1190,6 +1190,19 @@ impl LightSpeedEngine {
         let mut config = config;
         config.path_mtu = self.path_mtu_cap;
 
+        // TCP-in-TCP ban at the production start path. Every interceptor
+        // backend (WinDivert, nftables, pf) sends on its own **UDP** tunnel
+        // socket; none uses `TunnelTransport::Tcp`, so a TCP-primary profile
+        // always rides the UDP leg here. Asserting the pairing makes the ban
+        // explicit at the one place that can start a TCP profile; a future
+        // backend that gains a TCP leg must pass its transport to this check
+        // instead of the constant.
+        crate::tunnel::relay::ensure_game_transport_for(
+            config.transport,
+            Some(TransportProto::Udp),
+        )
+        .map_err(|error| error.to_string())?;
+
         let interceptor = crate::interceptor::create_interceptor();
 
         interceptor.check_availability()?;

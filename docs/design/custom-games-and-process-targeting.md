@@ -21,7 +21,7 @@ with a regression test named for this discussion). This plan covers asks 2 and 3
 **Profiles are compile-time.** Each game is a module implementing `GameConfig` (`client/src/games/mod.rs`),
 registered in `GAME_REGISTRY` and `detect_game()`. Adding one game touches six code sites plus docs, README,
 CLI reference and the website, and two count guards fail if any site is missed
-(`games/mod.rs` tests; `protocol/src/control.rs` asserts `GAME_IDS.len() == 27`).
+(`games/mod.rs` tests; `protocol/src/control.rs` asserts `GAME_IDS.len() == 28`).
 That is exactly the cost this feature removes for *user* games.
 
 **The GUI game list is derived** from `all_game_keys()` (`client-gui/src/app.rs:94`), so any registry change
@@ -63,8 +63,8 @@ helpers spawn the real game), has no native API path, and is called synchronousl
 **Other verified details.** The legacy `engine.start_windivert_for_game` path has no live caller at HEAD
 (dormant; still the reference implementation of the UDP MITM and TCP terminator). `capture/{windows,macos,
 linux}.rs` are doc-only placeholders and every platform captures through `pcap_backend.rs`. The built-in
-count guards are the `games/mod.rs` tests (`GAME_REGISTRY.len() == 27`) and `protocol/src/control.rs`
-(`GAME_IDS.len() == 27`); the `GAME_REGISTRY` doc comment no longer hard-codes the count (it drifted to 20
+count guards are the `games/mod.rs` tests (`GAME_REGISTRY.len() == 28`) and `protocol/src/control.rs`
+(`GAME_IDS.len() == 28`); the `GAME_REGISTRY` doc comment no longer hard-codes the count (it drifted to 20
 while the registry reached 27, fixed in the 2026-11-18 audit).
 
 **WinDivert can do this job today.** Verified in the pinned dependency: `windivert` 0.7.0-beta.4 exposes the
