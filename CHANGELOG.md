@@ -5,6 +5,56 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] - 2026-11-18
+
+### Fixed
+
+- **A path smaller than the 1492-byte clamp no longer breaks the tunnel
+  (`#168`).** `[tunnel] mtu` (and the new `--mtu` flag, GUI `tunnel_mtu` in
+  `config.toml`) is now an honoured effective path-MTU cap (1280-1500, default
+  1492). When the OS still rejects a datagram as too large (`WSAEMSGSIZE` /
+  `EMSGSIZE`, Windows error 10040), the client lowers the session budget by 64
+  bytes, retries that datagram once with fragmentation allowed, and records
+  `send_errors` / `last_send_error`; the no-reply trace now says a local send
+  failure cannot be blamed on the relay and names the OS error. **The field fix
+  is not yet confirmed on a sub-1492 path** - the `#168` reporter was asked to
+  retest with `tunnel_mtu = 1400` and post the trace.
+- **Windows Firewall rules no longer accumulate.** One stable program-scoped
+  rule replaces the per-port rule that was left behind by a crash or forced
+  exit; startup reconciles the legacy per-port names.
+- **The relay's destination validation now rejects the same special-use ranges
+  the client does** (`0.0.0.0/8`, `192.0.0.0/24`, `198.18.0.0/15`,
+  `240.0.0.0/4`).
+
+### Added
+
+- **Stats-branch M1 instrumentation.** The collector records the four
+  `lightspeed_control_handshakes_total` outcomes per relay (reset-safe), and the
+  anomaly monitor has a bounded, warning-only `m1_reject_drain` detector for an
+  accelerating pre-1.11.0 rejection rate. See `docs/m1-handshake-trend.md`.
+- `--mtu BYTES` CLI flag and `tunnel_mtu` GUI configuration key.
+- Documentation: a `10040`/`EMSGSIZE` troubleshooting entry, MTU semantics in
+  the protocol/CLI references, the advisory review, the fleet ALPN options memo,
+  the app refactor plan and the project audit.
+
+### Changed
+
+- **Replaced the unmaintained `chrono` with `time`** at its 7 use sites. Process
+  timestamps keep the byte-identical UTC format, the ML time features keep their
+  local hour/day-of-week semantics (with a tested UTC fallback when the offset
+  is indeterminate), and the proxy month key is unchanged; the
+  `RUSTSEC-2026-0543` ignore is gone.
+- **GitHub Actions are pinned to commit SHAs** (90 `uses:` across 12 workflows,
+  18 refs) with explicit top-level read permissions.
+- **Advisory allowlist trimmed** from 17 to 7 reasoned entries (9 inert entries
+  removed, including 7 GTK3 advisories withdrawn upstream); `SECURITY.md` now
+  tracks 1.11.x, and a stale `.cargo/audit.toml` ignore was removed.
+- **Dependency lock refreshed** (~150 compatible packages).
+- Troubleshooting translations refreshed for the new section.
+
+This release changes no client/relay compatibility requirement and no relay
+configuration.
+
 ## [1.11.0] - 2026-11-16
 
 ### Added
