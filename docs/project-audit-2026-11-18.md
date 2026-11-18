@@ -551,21 +551,41 @@ baseline); GUI clippy exit 0; GUI tests **186 passed / 0 failed / 1 ignored**
 makes both the pmtud cap test and the relay cap test fail; restoring the code
 passes both. Logs in `wat/evidence/2026-11-18/remediation/`.
 
-**Still open from the audit:** F-02's fleet policy decision (owner), F-03's public
-reply (owner), F-09 Actions pinning/permissions, F-12 notification hygiene (owner
-account), F-13 `app.rs` split, F-14 release-exe icon check, F-15 advisory-review
-cadence.
+**Still open from the audit:** F-02's fleet policy decision (owner; the team memo
+now quantifies it), F-03's public reply (owner; the draft has been corrected with
+QA's flags), F-12 notification hygiene (owner account; policy recommended), and
+F-13's app.rs split (plan delivered; recommended after the next release).
 
-**F-08 (dependency refresh) — attempted, reverted, and a new build finding.** The
-~150 compatible updates themselves are fine, but rebuilding the *vendored*
-`windivert-sys` on Windows failed with MSVC `C1041: cannot open program database
-... vc140.pdb` when two build-script instances compiled `windivert.c`
-concurrently (the generated PDB lives in the shared registry source directory,
-not the target dir). This is a pre-existing build-system race, not a version
-conflict: it only appeared because the update forced a rebuild of that crate.
-The lockfile was reverted to the verified commit. To take the refresh later,
-either build it on the CI runner (where the crate is compiled once per job), or
-pass `-j 1` / `CFLAGS=/FS`, or stage the WinDivert build through a writable
-target-local copy. Recommend letting Dependabot land it on a clean CI runner and
-watching the Windows job rather than refreshing the lock by hand on this host.
+**F-08 (dependency refresh) — corrected root cause, refreshed lock kept.** The
+failure was **not** a PDB race between two build-script instances and **not** the
+dependency bump: this host's repo tree is Low mandatory-integrity labelled (the
+documented DSH quirk), so a build-script exe under `target\` runs Low and cannot
+write the Medium-integrity cargo registry source directory where
+`windivert-sys`'s build script runs `cl.exe` (no `/Fd`/`/Fo`), reported as MSVC
+`C1041`/`D8050`. It is deterministic on the old lock too; the `cc 1.4 → 1.11`
+bump merely forced the first rebuild since the label was applied. Mitigations
+`-j 1`, `CFLAGS=/FS`, stale-PDB deletion and an in-tree target dir all fail; a
+`CARGO_TARGET_DIR` **outside** the Low-labelled tree is the verified workaround.
+With that, the refreshed lock passes the full gate at the same counts
+(1,585/0/6 + 186/0/1), so the 150-package lock refresh was kept. This is a
+host-level sandbox effect; CI's clean Windows runner is unaffected.
+
+## Team due-diligence round (same day, WF-071)
+
+Six persona teammates worked the remaining audit items on disjoint write scopes;
+all six shared tasks completed with evidence. Lead re-verified the integrated
+tree.
+
+| ID | Outcome | Evidence |
+|---|---|---|
+| **F-09** | **Fixed.** 90 `uses:` in 12 workflows pinned to full commit SHAs (18 unique refs, resolved via `git ls-remote` + GitHub API 18/18 match, annotated tags peeled); `release.yml` pinned too (it is hand-edited cargo-dist output; the regeneration note is recorded). Top-level `permissions: contents: read` added to 6 workflows; all 21 existing permission blocks preserved, none widened. All 13 YAML files parse; structural old-vs-new comparison shows 0 unexpected diffs. | `wat/evidence/2026-11-18/team/dev-ops/` |
+| **F-12** | **Audited, owner action recommended.** 282 unread repo notifications (of 455 account-wide), 244 are stale `ci_activity`; 18 `review_requested`/10 `state_change` are old Dependabot PRs; 1 comment. The two live Health Anomaly failures (F-02) are hidden in that pile; latest run is green. Recommended: bulk-Done the stale set, watch "Participating and @mentions" (or custom without Actions), and have scheduled monitors open one auto-closing ops-alert issue. Nothing marked read. | `wat/evidence/2026-11-18/team/qa/` |
+| **F-13** | **Planned, deferred.** Measured `app.rs` at 9,316 lines (not 8,735; 8,807 non-blank), 77 private fields, 78 tests, all function-level. Phase A moves the 5,292 test-pinned lines into 10 `app/` submodules (app.rs → ~4,050, −57%); the 3,666-line untested impl/window half is deferred; field regrouping never unless forced. Recommendation: after the next release, Phase A only, with the stated falsifier. | `docs/design/app-refactor-plan.md` |
+| **F-14** | **Verified — no change needed.** The shipped v1.11.0 GUI exe carries `RT_GROUP_ICON` id 1 and `RT_ICON` ids 1–4 (16/32/48/256 px, 32 bpp), proven with a stdlib PE parser and Win32 extraction; the zip and MSI payload are byte-identical. The local "no resource compiler" warning is a PATH condition on this host only (SDK `rc.exe` exists off-PATH; local exes have no `.rsrc`). | `wat/evidence/2026-11-18/team/qa/` |
+| **F-15** | **Fixed.** `deny.toml` had 17 ignores, not 18. Removed 9 inert entries (7 GTK3 advisories withdrawn 2026-08-14; `protobuf` and `instant` absent from the graph), leaving 8 with refreshed dependency-path/exposure reasons and a quarterly review date. `SECURITY.md` corrected to 1.11.x and links this review. The stale duplicate `RUSTSEC-2024-0437` ignore in `.cargo/audit.toml` (protobuf absent) was removed by the Lead. cargo-deny is not installed locally: the gate is CI-verified only. | `docs/security-advisory-review-2026-11-18.md` |
+| **F-02** | **Quantified for the owner.** Eight relays, process-lifetime window (uptime 38.4–38.6 h): 677,561 handshakes, 3,973 accepted, 673,495 alert-120 rejects (99.4%, an **upper bound** — scanners cannot be separated from old clients), 93 other rejects, 373 sessions, 6.72 M packets; 8/8 healthy on 1.11.0/`required`. Recommendation: keep `required`; if a mercy path is wanted, `relay-syd-1` only (lowest accept share, one command to undo). Add the four handshake outcomes to the CI collector so M1 can be trended. No fleet change was made. | `docs/fleet-alpn-options-2026-11-18.md` |
+| **F-03** | **Draft corrected, still held.** QA checked every mechanism claim; the draft now notes the reporter already tried adapter MTU 1400 (so 1350 is not presented as proven), gives an elevated/rollback-safe `netsh` form, drops the public shipping promise, and says "fixed on master, not yet in a release". Posting remains an owner gate. | `wat/evidence/2026-11-18/github-audit/issue-168-reply-draft.md` |
+
+**Lead verification of the integrated tree (after the team round):** see the
+final gate note below.
 
