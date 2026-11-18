@@ -201,7 +201,11 @@ pub fn extract_features(
     proxy_load: f64,
     geographic_distance_km: f64,
 ) -> NetworkFeatures {
-    let now = chrono::Local::now();
+    // Local wall clock, with a documented UTC fallback when the system offset
+    // is indeterminate: the same source and mapping as the collector uses, so
+    // training and inference see the same feature.
+    let (time_of_day, day_of_week) =
+        crate::clock::hour_and_weekday(crate::clock::now_local_or_utc());
 
     NetworkFeatures {
         current_latency_ms: tracker.current().unwrap_or(0.0),
@@ -209,8 +213,8 @@ pub fn extract_features(
         historical_p95_ms: tracker.p95(),
         jitter_ms: tracker.jitter(),
         hop_count,
-        time_of_day: now.format("%H").to_string().parse().unwrap_or(12),
-        day_of_week: now.format("%u").to_string().parse::<u8>().unwrap_or(1) - 1, // chrono: Mon=1
+        time_of_day,
+        day_of_week,
         bgp_as_path_len,
         packet_loss_pct: tracker.packet_loss_pct(),
         proxy_load,

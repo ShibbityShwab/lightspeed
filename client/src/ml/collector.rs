@@ -115,14 +115,8 @@ impl RouteCollector {
             .unwrap_or_default();
         let timestamp = now.as_secs();
 
-        let now_chrono = chrono::Local::now();
-        let time_of_day: u8 = now_chrono.format("%H").to_string().parse().unwrap_or(12);
-        let day_of_week: u8 = now_chrono
-            .format("%u")
-            .to_string()
-            .parse::<u8>()
-            .unwrap_or(1)
-            - 1;
+        let (time_of_day, day_of_week) =
+            crate::clock::hour_and_weekday(crate::clock::now_local_or_utc());
 
         let measurement = LiveMeasurement {
             proxy_id: proxy_id.to_string(),

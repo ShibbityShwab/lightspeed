@@ -71,12 +71,24 @@ fn platform_entries() -> Vec<ProcessEntry> {
     Vec::new()
 }
 
+/// The process-list start-time format: `YYYY-MM-DD HH:MM:SS` in UTC.
+///
+/// `[year]` is four-digit zero-padded and the other components are two-digit
+/// zero-padded, so this is byte-for-byte what the previous `%Y-%m-%d %H:%M:%S`
+/// formatter produced (pinned by `format_unix_timestamp_is_utc`).
+const TIMESTAMP_FORMAT: &[time::format_description::FormatItem<'static>] =
+    time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+
 /// Format Unix seconds as `YYYY-MM-DD HH:MM:SS` in UTC.
 ///
-/// `None` for a timestamp chrono cannot represent, so a nonsense start time
-/// degrades to an absent field instead of a panic.
+/// `None` for a timestamp `time` cannot represent (or format), so a nonsense
+/// start time degrades to an absent field instead of a panic. The display
+/// domain is a live process's start time, which is always in range.
 fn format_unix_timestamp(secs: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp(secs, 0).map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+    time::OffsetDateTime::from_unix_timestamp(secs)
+        .ok()?
+        .format(TIMESTAMP_FORMAT)
+        .ok()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -413,7 +425,7 @@ mod linux {
                 .and_then(|up| {
                     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
                     let ticks = parse_stat_starttime(&stat)?;
-                    let now = chrono::Utc::now().timestamp();
+                    let now = time::OffsetDateTime::now_utc().unix_timestamp();
                     start_time_unix(now, up, ticks, CLK_TCK)
                 })
                 .and_then(format_unix_timestamp);
@@ -531,6 +543,19 @@ mod tests {
             format_unix_timestamp(1_699_999_002).as_deref(),
             Some("2023-11-14 21:56:42")
         );
+        // Pre-epoch instants and the last second of a day stay in UTC: a local
+        // zone would shift either of these by hours and change the rendered day.
+        assert_eq!(
+            format_unix_timestamp(-1).as_deref(),
+            Some("1969-12-31 23:59:59")
+        );
+        assert_eq!(
+            format_unix_timestamp(1_700_006_399).as_deref(),
+            Some("2023-11-14 23:59:59")
+        );
+        // `time`'s calendar (without the `large-dates` feature) stops at year
+        // 9999, so a nonsense start time stays an absent field, never a panic.
+        assert_eq!(format_unix_timestamp(i64::MAX), None);
     }
 
     #[test]

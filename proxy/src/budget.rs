@@ -214,9 +214,18 @@ impl BudgetGuard {
 ///
 /// `0` is reserved for "no monthly accounting" and never returned.
 pub fn current_month_key() -> u64 {
-    use chrono::{Datelike, Utc};
-    let now = Utc::now();
-    (now.year() as u64) * 12 + now.month() as u64
+    month_key(time::OffsetDateTime::now_utc())
+}
+
+/// The month key of `at` in UTC.
+///
+/// Split out from [`current_month_key`] so the year/month arithmetic is
+/// unit-tested at fixed instants. UTC is deliberate: the egress budget rolls
+/// over at the UTC month boundary (what the previous UTC clock did), so neither
+/// the local zone nor a DST transition may move the reset.
+fn month_key(at: time::OffsetDateTime) -> u64 {
+    let month = u8::from(at.month());
+    (at.year() as u64) * 12 + u64::from(month)
 }
 
 fn pct_of(used: u64, limit: u64) -> u64 {
@@ -334,5 +343,38 @@ mod tests {
         let used = guard.evaluate(2300, 101);
         assert_eq!(used.used_bytes, 800);
         assert!(used.soft_exceeded);
+    }
+
+    #[test]
+    fn month_key_is_year_times_twelve_plus_utc_month() {
+        use time::macros::datetime;
+
+        // The key is `year * 12 + month`; 1-based, so 1970-01 maps to 1970*12+1
+        // (0 stays reserved for "no monthly accounting").
+        assert_eq!(month_key(datetime!(1970-01-01 0:00 UTC)), 1970 * 12 + 1);
+        assert_eq!(
+            month_key(datetime!(2026-11-18 14:39:00 UTC)),
+            2026 * 12 + 11
+        );
+
+        // UTC decides the month: 2026-12-01 00:00 UTC is December even in a
+        // negative-offset local zone, and the last second of a month keeps its
+        // key right up to the boundary.
+        assert_eq!(month_key(datetime!(2026-12-01 0:00 UTC)), 2026 * 12 + 12);
+        assert_eq!(
+            month_key(datetime!(2026-11-30 23:59:59 UTC)),
+            2026 * 12 + 11
+        );
+
+        // Consecutive months are consecutive keys across the year boundary, so
+        // a rollover compares unequal and the allowance rebases exactly once.
+        let november = month_key(datetime!(2026-11-01 0:00 UTC));
+        let december = month_key(datetime!(2026-12-01 0:00 UTC));
+        let january = month_key(datetime!(2027-01-01 0:00 UTC));
+        assert_eq!(december - november, 1);
+        assert_eq!(january - december, 1);
+
+        // The live clock stays in the same key space (never the reserved 0).
+        assert_ne!(current_month_key(), 0);
     }
 }

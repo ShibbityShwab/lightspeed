@@ -12,6 +12,7 @@
 
 mod capture;
 mod cli;
+mod clock;
 mod config;
 mod error;
 mod games;

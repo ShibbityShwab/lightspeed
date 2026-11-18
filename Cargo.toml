@@ -41,8 +41,12 @@ thiserror = "2"
 # Internal crates
 lightspeed-protocol = { path = "protocol" }
 
-# Time
-chrono = { version = "0.4", features = ["serde"] }
+# Time: replaces the unmaintained crate from RUSTSEC-2026-0543 (unconditional
+# dependency of both shipped binaries). `formatting` renders the UTC process
+# timestamps, `local-offset` resolves the local wall clock for the ML
+# time-of-day features (with a documented UTC fallback), and `macros` builds
+# the format descriptions at compile time.
+time = { version = "0.3", features = ["std", "formatting", "local-offset", "macros"] }
 
 # cargo-dist release build profile.
 [profile.dist]

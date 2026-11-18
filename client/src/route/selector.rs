@@ -304,6 +304,8 @@ impl MlSelector {
                     )
                 } else {
                     // No historical data yet - use proxy's reported latency
+                    let (time_of_day, day_of_week) =
+                        crate::clock::hour_and_weekday(crate::clock::now_local_or_utc());
                     NetworkFeatures {
                         current_latency_ms: proxy
                             .latency_us
@@ -319,17 +321,8 @@ impl MlSelector {
                             .unwrap_or(150.0),
                         jitter_ms: 5.0,
                         hop_count: meta.hop_count,
-                        time_of_day: chrono::Local::now()
-                            .format("%H")
-                            .to_string()
-                            .parse()
-                            .unwrap_or(12),
-                        day_of_week: chrono::Local::now()
-                            .format("%u")
-                            .to_string()
-                            .parse::<u8>()
-                            .unwrap_or(1)
-                            - 1,
+                        time_of_day,
+                        day_of_week,
                         bgp_as_path_len: meta.bgp_as_path_len,
                         packet_loss_pct: 0.01,
                         proxy_load: proxy.load,

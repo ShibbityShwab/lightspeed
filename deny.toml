@@ -18,8 +18,6 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant consolidating into zbus 6; Linux-only accessibility stack via eframe/accesskit_unix, no network surface; removal blocked on an eframe/accesskit upgrade" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names consolidating into zbus 6; Linux-only accessibility stack via eframe/accesskit_unix, no network surface; removal blocked on an eframe/accesskit upgrade" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive consolidating into zbus 6; build-time derive for the Linux accessibility stack; removal blocked on an eframe/accesskit upgrade" },
-  # -- direct deps that are unmaintained: informational, no patched release ---
-  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (informational; no memory-safety finding); used for wall-clock timestamps and the ML time-of-day features; migration to jiff/time scoped in docs/security-advisory-review-2026-11-18.md" },
 ]
 
 [licenses]

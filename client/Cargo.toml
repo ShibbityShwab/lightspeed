@@ -67,7 +67,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
-chrono.workspace = true
+time.workspace = true
 ring = "0.17"
 base64 = "0.23"
 ureq = { version = "2", default-features = false, features = ["tls"] }

@@ -51,6 +51,7 @@ pub fn current_relay() -> Option<std::net::SocketAddrV4> {
 
 pub(crate) mod capture;
 pub(crate) mod cli;
+pub(crate) mod clock;
 pub(crate) mod config;
 pub(crate) mod error;
 pub mod latency;

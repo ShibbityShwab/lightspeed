@@ -3,7 +3,12 @@
 > Due diligence for audit finding **F-15 (P3)** in
 > [`project-audit-2026-11-18.md`](project-audit-2026-11-18.md). Owner: `sec-ops`.
 > Scope: `deny.toml` advisory `ignore` list, `SECURITY.md`, and the code
-> migration that is the only real action item (`chrono`).
+> migration that was the only real action item (`chrono`).
+>
+> **Follow-up (2026-11-18): the `chrono` migration is complete.** `time 0.3`
+> replaced it at all 7 use sites, the crate is out of the dependency graph, and
+> the `RUSTSEC-2026-0543` ignore is gone. See the `chrono` migration section
+> below; evidence is in `wat/evidence/2026-11-18/team/rust-dev-chrono/`.
 >
 > **Verification status: the `deny.toml` advisory gate is verified by CI only.**
 > `cargo-deny` and `cargo-audit` are **not installed** on the development host
@@ -23,17 +28,18 @@
 - **9 of the 17 entries were inert and have been removed**: the seven GTK3
   advisories were **withdrawn** by the RustSec DB on 2026-08-14, and the
   `protobuf` and `instant` crates are **not in `Cargo.lock` at all**.
-- **8 entries remain.** Every one is an `informational = "unmaintained"`
-  advisory with no patched release — none is a known vulnerability. `chrono` is
-  the only one that needs a code migration this repo controls (7 use sites,
-  below); the rest are blocked on upstream dependencies and/or have no security
-  finding that requires action.
+- **8 entries remained after that round; 7 remain now.** Every one is an
+  `informational = "unmaintained"` advisory with no patched release — none is a
+  known vulnerability. `chrono` was the only one that needed a code migration
+  this repo controls (7 use sites, below); it was migrated to `time` and removed
+  from the list on 2026-11-18. The rest are blocked on upstream dependencies
+  and/or have no security finding that requires action.
 - Exposure is limited: the GTK3 family and `proc-macro-error` are **never
   compiled for any target** (mutually exclusive `cfg` edges, see the table);
   `paste`/`bincode` compile only under the optional `ml` feature (never in a
   dist feature set); `ttf-parser` and `zvariant`/`zbus_names` are confined to the
-  GUI crate (tests included); `chrono` is the only ignored advisory in a
-  **shipped, always-on** dependency.
+  GUI crate (tests included); `chrono` was the only ignored advisory in a
+  **shipped, always-on** dependency, and it has been migrated (below).
 - No shipped component parses network input with any of these crates. The
   nearest thing is `bincode::deserialize` of a **local** model file, and only
   with the `ml` feature enabled.
@@ -93,7 +99,7 @@ the advisory, not about whether we can act this week.
 | RUSTSEC-2026-0370 | `zvariant@5.15.1` | `lightspeed-gui → eframe → egui-winit → accesskit_winit → accesskit_unix → zbus → zvariant` | Linux GUI build only (`eframe` default features include `accesskit`; `accesskit_unix` is Linux-only); local D-Bus accessibility IPC, no network | unmaintained, no patched release | Merged into zbus 6 as `wire`; blocked on an eframe/accesskit upgrade | **keep** |
 | RUSTSEC-2026-0371 | `zbus_names@4.3.4` | same accessibility chain (`zbus`) | Linux GUI build only; local D-Bus | unmaintained, no patched release | Merged into zbus 6 as `names`; blocked upstream | **keep** |
 | RUSTSEC-2026-0372 | `zvariant_derive@5.15.1` | same accessibility chain (`zvariant`) | Linux GUI build only, build-time derive; local D-Bus | unmaintained, no patched release | Derive macros in zbus 6; blocked upstream | **keep** |
-| RUSTSEC-2026-0543 | `chrono@0.4.45` | `lightspeed-client` and `lightspeed-proxy`, both **direct, non-optional** (`client/Cargo.toml:70`, `proxy/Cargo.toml:46`) | Runtime in every shipped client/proxy binary; wall-clock timestamps and ML time-of-day features only, no untrusted parsing | unmaintained (informational), no patched release | Migrate to jiff/time — **7 use sites, in this repo's control** (scope below) | **keep until replaced** (migration scope below) |
+| RUSTSEC-2026-0543 | *(absent)* | `chrono` is gone from `Cargo.lock` and every manifest: migrated to `time 0.3` on 2026-11-18 (7 sites, below) | None — crate is not in the graph | unmaintained (informational), no patched release | None needed | **remove** (done: migrated) |
 
 Cross-checks for the two "absent" rows: `Cargo.lock` and every `Cargo.toml`
 contain **0** occurrences of `protobuf`, `prometheus` and `instant`
@@ -105,7 +111,9 @@ contain **0** occurrences of `protobuf`, `prometheus` and `instant`
 
 - Removed 9 entries: `RUSTSEC-2024-0412/0413/0415/0416/0418/0419/0420` (GTK3,
   withdrawn) and `RUSTSEC-2024-0437` (`protobuf`, absent) and
-  `RUSTSEC-2024-0384` (`instant`, absent). The list is now 8 entries.
+  `RUSTSEC-2024-0384` (`instant`, absent). The list was then 8 entries.
+- **Follow-up (2026-11-18):** `RUSTSEC-2026-0543` (`chrono`) was removed after
+  the migration described below, so the list is now **7 entries**.
 - Why this is provably safe: a withdrawn advisory is not reported at all
   (cargo-deny's `advisory-not-detected` diagnostic names withdrawal as the
   cause), and a crate that is not in the lock cannot match an advisory. Removing
@@ -175,52 +183,112 @@ exposure, and (5) remove the entry if it is inert. Record the review in WAT stat
 and `wat/evidence/<date>/team/sec-ops/`. Owner: `sec-ops` (`deny.toml` is in the
 persona's ownership).
 
-The natural **removal triggers** for the current 8: an eframe/egui upgrade that
-moves `accesskit` to zbus 6 (`zvariant`, `zbus_names`, `zvariant_derive`), a
+The natural **removal triggers** for the current 7: an eframe/egui upgrade that
+moves `accesskit` to zbus 6 (`zvariant`, `zbus_names`, `zvariant_derive`) and a
 winit/`sctk-adwaita` change that drops `ab_glyph` (`ttf-parser`; epaint already
-uses `skrifa`), and the `chrono` migration (`RUSTSEC-2026-0543`).
-`proc-macro-error` and `paste` have no upstream migration on our side; they stay
-until the tooling that pulls them is gone.
+uses `skrifa`). The `chrono` migration (`RUSTSEC-2026-0543`) has happened and
+that entry is gone. `proc-macro-error` and `paste` have no upstream migration
+on our side; they stay until the tooling that pulls them is gone.
 
-## `chrono` migration scope (RUSTSEC-2026-0543)
+## `chrono` migration (RUSTSEC-2026-0543) — **migrated 2026-11-18**
 
-The advisory is informational ("chrono is unmaintained", all versions, no
-patched release, alternatives jiff/time — `06-advisory-db-summary.md`). It is
-still the highest-value item in the list because `chrono` is compiled into both
+The advisory was informational ("chrono is unmaintained", all versions, no
+patched release, alternatives jiff/time — `06-advisory-db-summary.md`). It was
+the highest-value item in the list because `chrono` was compiled into both
 shipped binaries, unlike every other kept ignore. The audit counted 7 places in
-5 files; that is exact, and **all 7 are unconditional** (no `cfg(feature =
-"ml")` on the files or functions — `05-chrono-use-sites.txt`):
+5 files; that was exact, and **all 7 were unconditional** (no `cfg(feature =
+"ml")` on the files or functions — `05-chrono-use-sites.txt`).
 
-| # | Site | Use |
-|---|---|---|
-| 1 | `client/src/processes.rs:79` | `chrono::DateTime::from_timestamp` + `%Y-%m-%d %H:%M:%S` (UTC) in `format_unix_timestamp` |
-| 2 | `client/src/processes.rs:416` | `chrono::Utc::now().timestamp()` in the Linux `/proc` scan |
-| 3 | `client/src/ml/collector.rs:118` | `chrono::Local::now()` → hour-of-day / day-of-week |
-| 4 | `client/src/ml/features.rs:204` | `chrono::Local::now()` in `extract_features` |
-| 5 | `client/src/route/selector.rs:322` | `chrono::Local::now()` hour-of-day (ML feature input) |
-| 6 | `client/src/route/selector.rs:327` | `chrono::Local::now()` day-of-week (`%u`, chrono Mon=1) |
-| 7 | `proxy/src/budget.rs:218` | `chrono::Utc` year+month → `current_month_key()` (egress budget month) |
+**Outcome:** `chrono` is out of the dependency graph. `lightspeed-client` and
+`lightspeed-proxy` now depend on `time 0.3`, and the `RUSTSEC-2026-0543` ignore
+is deleted — the advisory is no longer suppressed for either shipped binary, it
+simply does not match anything.
 
-Migration notes (scope, not a plan of record — needs an owner/round):
+### What changed
 
-- `time 0.3.55` is **already in `Cargo.lock`** (via `rcgen`/`asn1-rs`/
-  `x509-parser`), so making it a direct dependency adds no new crate download;
-  `jiff` is **not** currently in the lock and would be a new dependency.
-- Sites 1, 2 and 7 are UTC formatting/arithmetic and map cleanly to
-  `time::OffsetDateTime` or `jiff::Timestamp`.
-- Sites 3-6 need **local** wall-clock time. `time` requires the `local-offset`
-  feature and can fail to determine the offset (needs a fallback), while jiff
-  resolves the system time zone. Whichever is chosen, the local-time-zone
-  semantics must be preserved: these values are ML feature inputs that the
-  trainer/collector compute the same way, so changing UTC-offset behaviour would
-  silently shift a feature. This is the only non-mechanical part of the work.
-- The workspace enables chrono's `serde` feature, but no chrono type is
-  serialized (only `DateTime` at `processes.rs:79` appears, in a format call), so
-  the feature can be dropped with the crate.
-- Suggested single PR: add jiff/time to `[workspace.dependencies]`, convert the 7
-  sites, remove `chrono` from both crates, delete the `RUSTSEC-2026-0543` ignore,
-  and let the `Security Audit` workflow prove the gate. Keep it separate from the
-  optional `ml` work; chrono is unconditional and can land first.
+- `[workspace.dependencies]`: `chrono = { version = "0.4", features = ["serde"] }`
+  replaced by
+  `time = { version = "0.3", features = ["std", "formatting", "local-offset", "macros"] }`.
+  Only the features the migration uses: `formatting` for the UTC timestamp
+  format, `local-offset` for the local wall clock, `macros` for the compile-time
+  format description. No `parsing` and no `serde` (no `time` type is
+  serialized, and the old `serde` feature was unused).
+- `Cargo.lock`: the three packages that only `chrono` pulled in leave
+  (`chrono`, `iana-time-zone`, `iana-time-zone-haiku`); `time` gains the `libc`
+  + `num_threads` edges that `local-offset` requires (`num_threads` is the only
+  package the lock gains). No other package version moves.
+- The 7 sites, behaviour-preserving:
+
+| # | Site (now) | Before | After |
+|---|---|---|---|
+| 1 | `client/src/processes.rs` `format_unix_timestamp` | `DateTime::from_timestamp(...).format("%Y-%m-%d %H:%M:%S")` | `OffsetDateTime::from_unix_timestamp(...).format(TIMESTAMP_FORMAT)`; the compile-time `format_description!` expands the same six zero-padded components (identical bytes for every representable start time) |
+| 2 | `client/src/processes.rs` Linux `/proc` scan | `Utc::now().timestamp()` | `OffsetDateTime::now_utc().unix_timestamp()` |
+| 3 | `client/src/ml/collector.rs` | `Local::now()`, `%H`, `%u - 1` | `clock::hour_and_weekday(clock::now_local_or_utc())` |
+| 4 | `client/src/ml/features.rs` `extract_features` | `Local::now()`, `%H`, `%u - 1` | same helper |
+| 5-6 | `client/src/route/selector.rs` | `Local::now()` twice, `%H`, `%u - 1` | same helper, **one** clock read |
+| 7 | `proxy/src/budget.rs` `current_month_key` | `Utc::now()` year + month | `OffsetDateTime::now_utc()` → the same `year * 12 + month` in a pure `month_key` helper |
+
+- New crate-private `client/src/clock.rs` is the single source of the ML time
+  mapping: hour 0-23 and day-of-week 0-6 with Monday = 0
+  (`Weekday::number_days_from_monday`), identical to the old `%H` and `%u - 1`,
+  with one local-offset read per call. **Documented fallback:** when `time`
+  reports the system UTC offset as indeterminate
+  (`OffsetDateTime::now_local()` → `Err(IndeterminateOffset)`), the helper uses
+  **UTC** (offset zero). The old crate neither surfaced nor handled that state
+  consistently: on Unix it fell back to UTC itself, while on Windows a failed
+  timezone lookup panicked inside `TimeZone::offset_from_utc_datetime`. A clock
+  read must not panic a running tunnel, so UTC is the documented fallback;
+  `resolve_local` is split out so the fallback path is deterministic in a unit
+  test.
+- In `client/src/route/selector.rs` the two old `Local::now()` reads (hour from
+  one, weekday from another) became one read, so the two feature values can no
+  longer disagree if the clock ticks between them.
+- `grep -R` for the crate name over source and manifests is empty
+  (`\bchrono\b` in `*.rs`, `*.toml`, `Cargo.lock`: **0 matches**). A plain
+  case-insensitive substring search still hits the pre-existing English words
+  "synchronously"/"asynchronous" in unrelated comments; those lines are
+  unchanged.
+
+### Tests (behaviour, not compile-only)
+
+- `client/src/clock.rs` (5 tests): `hour_and_weekday_follow_the_offset`
+  (positive and negative offsets that cross an hour and a day boundary),
+  `weekday_mapping_is_monday_zero_through_sunday_six`,
+  `local_hour_is_zero_padded_as_a_number`,
+  `resolve_local_falls_back_to_utc_when_the_offset_is_indeterminate`,
+  `resolve_local_keeps_a_determined_local_time`.
+- `client/src/processes.rs` `format_unix_timestamp_is_utc` (extended): epoch and
+  a real process instant (unchanged assertions), plus a pre-epoch instant, the
+  last second of a UTC day, and `None` for an unrepresentable timestamp.
+- `proxy/src/budget.rs` `month_key_is_year_times_twelve_plus_utc_month`: fixed
+  instants, UTC month selection at the boundary, and consecutive keys across
+  the year boundary.
+- Mutation check on the UTC format: changing the format description from
+  `[year]-[month]-[day]` to `[year]/[month]/[day]` fails
+  `format_unix_timestamp_is_utc`
+  (`left: "1970/01/01 00:00:00"`, `right: "1970-01-01 00:00:00"`); restoring
+  the description passes
+  (`wat/evidence/2026-11-18/team/rust-dev-chrono/09-mutation-fail.log`,
+  `10-mutation-restored.log`).
+
+### Verification (2026-11-18, this host)
+
+Full gate with `CARGO_TARGET_DIR` outside the Low-integrity tree (the documented
+host quirk) and `TEMP`/`TMP` inside it:
+
+- `cargo fmt --all --check` — clean.
+- `cargo clippy --workspace --all-targets --all-features --exclude
+  lightspeed-gui` — exit 0, **0 warnings**.
+- `cargo test --workspace --all --exclude lightspeed-gui` — **1,596 passed / 0
+  failed / 6 ignored** (client 1,324, protocol 86, proxy 186; the client count
+  includes its unit tests running in both the lib and bin targets).
+- `cargo clippy -p lightspeed-gui --all-targets` — exit 0.
+- `cargo test -p lightspeed-gui` — **186 passed / 0 failed / 1 ignored**.
+- `cargo-deny` / `cargo-audit` remain **CI-only on this host** (neither is
+  installed), so the ignore deletion is proven locally by the `deny.toml` parse
+  and the empty crate-name grep, and by the next `Security Audit` workflow run.
+
+Evidence: `wat/evidence/2026-11-18/team/rust-dev-chrono/`.
 
 ## Evidence
 
@@ -239,6 +307,12 @@ All under `wat/evidence/2026-11-18/team/sec-ops/` (gitignored):
 | `09-diff-deny-security.txt` | `git diff` of `deny.toml` and `SECURITY.md` |
 | `10-after-hashes.txt` | SHA-256 after the edit and the final entry count |
 | `11-target-gating.txt` | the `cfg` edges proving the GTK path is never compiled, and eframe's default `accesskit` |
+
+The `chrono` migration follow-up (2026-11-18) is separate, under
+`wat/evidence/2026-11-18/team/rust-dev-chrono/`: the dependency-resolution and
+type-check logs, the targeted unit-test runs, the full gate with per-suite
+counts, the format mutation check, and the crate-name grep proving the source
+tree is clean.
 
 ## Sources
 
