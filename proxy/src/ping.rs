@@ -283,7 +283,7 @@ mod linux {
             let len = len as usize;
             if is_echo_reply(&buf[..len], seq) {
                 let elapsed = sent_at.elapsed().as_micros();
-                let elapsed = elapsed.min(u64::from(u32::MAX)) as u32;
+                let elapsed = elapsed.min(u128::from(u32::MAX)) as u32;
                 return (elapsed >= MIN_PLAUSIBLE_US).then_some(elapsed);
             }
             // Overall deadline: `SO_RCVTIMEO` bounds each receive, but a stream
