@@ -19,7 +19,6 @@ use std::time::Duration;
 use crate::config::{self, GuiConfig, ProxyEntry};
 use crate::design::*;
 use crate::discovery::{self, DiscoveryOutcome, RelayHealth};
-use crate::geo;
 use crate::globe;
 use crate::i18n;
 use crate::paths;
@@ -198,6 +197,11 @@ pub struct LightSpeedApp<P: Platform> {
     /// background re-rank does not move the session to another relay under the
     /// re-test. `None` while no chain is open.
     relay_retest: Arc<Mutex<Option<RetestTarget>>>,
+    /// The (server, relay) pair whose return path the watchdog has just found
+    /// starving. The watchdog thread cannot write the relay history (the GUI owns
+    /// it), so it publishes the finding here; the GUI writes the verdict and
+    /// leaves the relay while the watchdog's hold still makes the move free.
+    relay_starved: Arc<Mutex<Option<StarvationVerdict>>>,
 
     // ── Proxy connection ─────────────────────────────────────────────────
     selected_proxy_idx: usize,
@@ -483,6 +487,7 @@ impl<P: Platform> LightSpeedApp<P> {
         let relay_rejected: Arc<Mutex<Option<RelayRejection>>> = Arc::new(Mutex::new(None));
         let relay_retry_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
         let relay_retest: Arc<Mutex<Option<RetestTarget>>> = Arc::new(Mutex::new(None));
+        let relay_starved: Arc<Mutex<Option<StarvationVerdict>>> = Arc::new(Mutex::new(None));
         let retry_enabled = Arc::new(std::sync::atomic::AtomicBool::new(
             saved.retry_after_fallback,
         ));
@@ -499,6 +504,7 @@ impl<P: Platform> LightSpeedApp<P> {
             Arc::clone(&retry_enabled),
             Arc::clone(&relay_retry_at),
             Arc::clone(&relay_retest),
+            Arc::clone(&relay_starved),
         );
         let mut app = Self {
             engine,
@@ -508,6 +514,7 @@ impl<P: Platform> LightSpeedApp<P> {
             relay_rejected,
             relay_retry_at,
             relay_retest,
+            relay_starved,
             selected_proxy_idx,
             auto_select,
             relay_race: None,
@@ -782,6 +789,13 @@ impl<P: Platform> LightSpeedApp<P> {
     /// beats going direct. Returns `None` when no server is locked yet, which is
     /// when the client-leg race is still the best information available.
     ///
+    /// When the server's position is not known exactly, the region prior is a
+    /// guess about the half of the path the client cannot measure; the choice then
+    /// falls back to the relays with a proven carry record for this exact server,
+    /// then the measured client leg, jitter and (last) the relay address, and it
+    /// removes relays whose record shows the starvation signature. See
+    /// [`rank_without_destination`].
+    ///
     /// The client legs come from [`Self::start_relay_measurement`], which measures
     /// every relay rather than only the winner: the winner of the client-leg race
     /// is exactly the relay this function is usually about to reject.
@@ -789,15 +803,13 @@ impl<P: Platform> LightSpeedApp<P> {
         let server = self.game_server_addr()?;
         let measured = self.relay_legs.as_ref()?;
 
-        // The server's position, from the offline country database the globe
-        // already renders from. Country-level precision is enough here for the
-        // same reason it is enough on the globe: the question is which relay is
-        // on the right side of the server, and a country centroid answers that
-        // for every case that matters - an Ashburn server resolves to US, which
-        // is thousands of kilometres from any non-US relay and, within the US,
-        // still discriminates a coast once the relay positions are exact.
-        let server_location =
-            crate::geo::locate(server).map(|(_, (lat, lon))| (lat as f64, lon as f64));
+        // The server's position, when one source is exact enough to rank on.
+        // Only a cloud-provider region qualifies: a country centroid is wrong
+        // for hosting ranges (a G-Core US-Virginia server resolves to JP in the
+        // free databases), so the chooser now gets a point only for the exact
+        // case. Without one, `rank_without_destination` ranks on measured
+        // evidence and drops the region prior rather than presenting a guess.
+        let server_location = crate::server_place::chooser_point(server);
 
         let candidates: Vec<RelayCandidate> = self
             .proxies
@@ -835,10 +847,13 @@ impl<P: Platform> LightSpeedApp<P> {
             return None;
         }
 
-        // A relay on record as not carrying this server is skipped: that ratio was
-        // measured, not inferred, and re-testing the same relay for the same server
-        // every session is what made the window flap. If every candidate is on
-        // record, they are still the only option, so the unfiltered list stands.
+        // A relay on record as not carrying this server is skipped. The record
+        // does not need the watchdog's exhausted-chain verdict any more: a carry
+        // record with enough traffic and no reply at all is the starvation
+        // signature that kept the live 2026-11-19 session re-selecting
+        // relay-sgp-1 (4,522 forwards, zero replies, `failed` never set). If
+        // every candidate is on record, they are still the only option, so the
+        // unfiltered list stands.
         if self.relay_history.condemned_count(server) >= MAX_RELAYS_TRIED {
             tracing::info!(
                 server = %server,
@@ -846,25 +861,6 @@ impl<P: Platform> LightSpeedApp<P> {
                 "Every attempt at this server has failed; not choosing a relay"
             );
             return None;
-        }
-        let survivors: Vec<RelayCandidate> = candidates
-            .iter()
-            .filter(|candidate| !self.relay_history.is_starved(candidate.relay, server))
-            .cloned()
-            .collect();
-        let skipped = candidates.len() - survivors.len();
-        let candidates = if survivors.is_empty() {
-            candidates
-        } else {
-            survivors
-        };
-        if skipped > 0 {
-            tracing::info!(
-                server = %server,
-                skipped,
-                remaining = candidates.len(),
-                "Relays on record as not carrying this server were skipped"
-            );
         }
 
         // The measured direct ping bounds every relay's destination leg: a
@@ -875,12 +871,52 @@ impl<P: Platform> LightSpeedApp<P> {
         // different path entirely - flooring this candidate against it would
         // invent a bound (the live cross-server race, task-25).
         let direct_us = direct_us_for(self.server_ping, server);
-        let ranked = match server_location {
+        let (ranked, skipped, proven) = match server_location {
             Some(loc) => {
-                lightspeed_client::rank_relays_at_with_direct(server, loc, &candidates, direct_us)
+                let (candidates, skipped) =
+                    without_starved(server, &candidates, &self.relay_history);
+                (
+                    lightspeed_client::rank_relays_at_with_direct(
+                        server,
+                        loc,
+                        &candidates,
+                        direct_us,
+                    ),
+                    skipped,
+                    0,
+                )
             }
-            None => lightspeed_client::rank_relays_with_direct(server, &candidates, direct_us),
+            // Without an exact server position the region prior is a guess about
+            // the half of the path the client cannot measure. That guess is what
+            // put a G-Core Virginia server in Japan and then selected relay-sgp-1
+            // for it, so the fallback ranks on what is real instead: a proven
+            // carry record for this exact server first, then the measured client
+            // leg, jitter, and only last the numerical relay address.
+            None => {
+                let FallbackRanking {
+                    ranked,
+                    skipped_starved,
+                    proven,
+                } = rank_without_destination(server, &candidates, direct_us, &self.relay_history);
+                (ranked, skipped_starved, proven)
+            }
         };
+        if skipped > 0 {
+            tracing::info!(
+                server = %server,
+                skipped,
+                ranked = ranked.len(),
+                "Relays on record as starving this server were skipped"
+            );
+        }
+        if proven > 0 {
+            tracing::info!(
+                server = %server,
+                proven,
+                "No exact server position: preferring the relays whose record proves they carry \
+                 this server over the untrusted region prior"
+            );
+        }
         let floored = ranked
             .iter()
             .filter(|scored| {
@@ -892,10 +928,13 @@ impl<P: Platform> LightSpeedApp<P> {
             .count();
         // The engine's order IS the product's order: `rank_relays_*` compares the
         // whole-path total (client leg + destination leg + the prior's
-        // uncertainty), with jitter only as a tie-break, so there is no second
-        // ranking rule here to drift from it. The counterfactual that used to
-        // need an interim re-rank lives in the engine suite as
-        // `relay_choice::tests::the_whole_path_total_outranks_the_destination_bucket`.
+        // uncertainty), with the pre-floor prior, the measured client leg, and
+        // jitter as tie-breaks, so there is no second ranking rule here to drift
+        // from it. The counterfactuals that used to need an interim re-rank live
+        // in the engine suite as
+        // `relay_choice::tests::the_whole_path_total_outranks_the_destination_bucket`
+        // and
+        // `relay_choice::tests::a_floor_tie_with_equal_priors_is_broken_by_the_client_leg_not_the_address`.
         let best = ranked.first().cloned()?;
         let state = ranking_state_label(best.dest_source, best.relay, server);
         let claim = direct_claim_label(direct_us, best.total_leg_us);
@@ -904,7 +943,7 @@ impl<P: Platform> LightSpeedApp<P> {
              {floored} of {} candidates raised to the direct-ping floor",
             best.relay,
             best.total_leg_us / 1000,
-            candidates.len()
+            ranked.len()
         );
         let chosen = best.relay;
         // One record of the ranking, written here and read only by the route
@@ -958,13 +997,19 @@ impl<P: Platform> LightSpeedApp<P> {
             self.destination_winner = Some(addr);
             if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
                 if idx != self.selected_proxy_idx {
-                    // A relay the watchdog is re-testing must not be swapped
-                    // underneath the re-test: that turns one relay's re-test into
-                    // a mid-session hop to another relay (and restarts
-                    // interception under the player). The chain is per server and
-                    // closes when the relay carries the server again or the game
-                    // server changes, so normal re-ranking resumes after it.
-                    if !relay_switch_allowed(self.watchdog_chain(), self.game_server_addr(), addr) {
+                    // The destination ranking may move the session even while the
+                    // watchdog's re-test chain is open: leaving a relay that just
+                    // starved the session is the move that ends the starvation
+                    // loop, and the chain is dropped as stale on the watchdog's
+                    // next tick once the session is elsewhere. The source is
+                    // passed so the policy stays in one place - the client-leg
+                    // race keeps its veto.
+                    if !relay_switch_allowed(
+                        RelayChangeSource::DestinationRanking,
+                        self.watchdog_chain(),
+                        self.game_server_addr(),
+                        addr,
+                    ) {
                         let current = self
                             .proxies
                             .get(self.selected_proxy_idx)
@@ -1271,10 +1316,17 @@ impl<P: Platform> LightSpeedApp<P> {
             );
             return;
         }
-        // A re-test owns the route while it runs: switching to the re-race
-        // winner would restart interception under the watchdog's re-test and
-        // turn it into a mid-session hop. The winner applies next session.
-        if !relay_switch_allowed(self.watchdog_chain(), self.game_server_addr(), addr) {
+        // A re-test owns the route for the client-leg re-race while it runs:
+        // switching to the re-race winner would restart interception under the
+        // watchdog's re-test and turn it into a mid-session hop. The destination
+        // ranking is not vetoed by it (see `relay_switch_allowed`); this winner
+        // is the client-leg race's.
+        if !relay_switch_allowed(
+            RelayChangeSource::ClientLegRace,
+            self.watchdog_chain(),
+            self.game_server_addr(),
+            addr,
+        ) {
             tracing::info!(
                 "Keeping the current relay: the no-reply watchdog is re-testing it for this \
                  server; re-race winner {addr} applies next session"
@@ -1569,6 +1621,104 @@ impl<P: Platform> LightSpeedApp<P> {
         );
     }
 
+    /// Write the watchdog's starvation finding for a relay and server into the
+    /// relay history, so the next ranking already excludes that path.
+    ///
+    /// The watchdog thread cannot touch the history (the GUI owns it), so it
+    /// publishes the finding and this poll writes it. The record is the
+    /// starvation signature, not the exhausted-chain `failed` verdict: the chain
+    /// still has its re-tests to spend, and `record_watchdog_verdict` upgrades the
+    /// record if it spends them and still returns nothing. Returns whether a
+    /// finding was written this poll, so the caller only tries to leave the relay
+    /// when there is something new to leave.
+    fn record_starvation_verdict(&mut self) -> bool {
+        let Some((server, published_relay)) = lock_or_recover(&self.relay_starved).take() else {
+            return false;
+        };
+        let Some(relay) = published_relay.or_else(|| {
+            lightspeed_client::current_relay().or_else(|| {
+                self.status
+                    .proxy_addr
+                    .parse::<std::net::SocketAddrV4>()
+                    .ok()
+            })
+        }) else {
+            return false;
+        };
+        let server_ip = *server.ip();
+        self.relay_history.record_starvation(relay, server_ip);
+        let _ = self.relay_history.save(&crate::paths::relay_history_file());
+        tracing::info!(
+            relay = %relay,
+            server = %server,
+            "Recorded the starvation verdict: the watchdog saw no return path for this server; \
+             the relay is demoted for the next ranking"
+        );
+        true
+    }
+
+    /// Move the session off a relay the watchdog just found starving, when the
+    /// ranking prefers another one.
+    ///
+    /// Only safe while the watchdog holds tunnelling: game traffic is not
+    /// flowing, so restarting interception on another relay cannot drop the
+    /// player's connection. The starvation verdict has already been recorded, so
+    /// the ranking demotes the relay that just failed; this is what turns "the
+    /// watchdog falls back and re-tests the same relay forever" into "the session
+    /// leaves for the next candidate". The watchdog drops its now-stale re-test
+    /// chain on its next tick because the session is no longer on that relay.
+    fn leave_starved_relay(&mut self) {
+        if !self.auto_select {
+            return;
+        }
+        let Some(server) = self.game_server_addr() else {
+            return;
+        };
+        if self.relay_legs.is_none() {
+            // No measured client legs yet: start a pass so the ranking can run on
+            // its next poll instead of waiting for the 600 s re-check.
+            self.start_relay_measurement();
+            return;
+        }
+        let held = lock_or_recover(&self.engine)
+            .interceptor_health()
+            .and_then(|health| health.tunnelling_enabled)
+            == Some(false);
+        if !held {
+            // Traffic is flowing (or the interceptor is not up): a relay change
+            // now would restart interception under the player.
+            return;
+        }
+        let Some(chosen) = self.choose_relay_for_destination() else {
+            return;
+        };
+        let Some(idx) = self.proxies.iter().position(|entry| entry.addr == chosen) else {
+            return;
+        };
+        if idx == self.selected_proxy_idx {
+            tracing::info!(
+                server = %server,
+                relay = %chosen,
+                "The starving relay is still the best candidate for this server; keeping the re-test"
+            );
+            return;
+        }
+        let previous = self
+            .selected_proxy_addr()
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        tracing::info!(
+            server = %server,
+            from = %previous,
+            to = %chosen,
+            "Leaving the starving relay for a better candidate for this server"
+        );
+        self.destination_winner = Some(chosen);
+        self.selected_proxy_idx = idx;
+        self.connect_selected();
+        self.persist_config();
+    }
+
     /// Remember the watchdog's exhaustion verdict for this relay and server.
     ///
     /// Once the re-tests are spent the relay has failed this server on more
@@ -1759,6 +1909,14 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         self.log_latency_comparison();
         self.record_relay_history();
+        // The starvation finding is written before the exhaustion verdict so that
+        // verdict's "the measured ratio says this relay carries the server" guard
+        // reads the finding rather than a stale healthy record. A new finding is
+        // also the moment to leave the relay while the watchdog still holds
+        // tunnelling, which makes that move free.
+        if self.record_starvation_verdict() {
+            self.leave_starved_relay();
+        }
         self.record_watchdog_verdict();
         if self.status.interceptor_active || self.status.redirect_active {
             let key = self.session_key();
@@ -2128,15 +2286,44 @@ impl<P: Platform> LightSpeedApp<P> {
         ]
         .into_iter()
         .find_map(|s| s.split(':').next()?.parse::<std::net::Ipv4Addr>().ok());
-        let server_at = server_ip.and_then(geo::locate).map(|(code, at)| {
+        let server_place = server_ip.map(crate::server_place::place);
+        let server_at = server_ip.and_then(crate::server_place::display_point);
+        if let Some(at) = server_at {
+            let label = match server_place {
+                Some(crate::server_place::Place::Cloud {
+                    provider, region, ..
+                }) => format!("{} {region}", provider.to_uppercase()),
+                Some(crate::server_place::Place::Country { code, .. }) => code.to_string(),
+                _ => String::new(),
+            };
             markers.push(globe::Marker {
                 at,
                 colour: warn,
-                label: code.to_string(),
+                label,
             });
-            at
-        });
+        }
         let route = server_at.map(|to| (centre, to));
+        // What the card may say about the server's place, and the source that
+        // backs it. This is the honest ladder: an exact provider region, a
+        // hosting network whose geoIP country is not trustworthy, the country
+        // estimate, or nothing. Only the cloud and country cases have a point.
+        let location_caption: Option<(String, Option<String>)> = server_place.map(|place| {
+            use crate::server_place::Place;
+            match place {
+                Place::Cloud {
+                    provider, region, ..
+                } => (
+                    i18n::t("route.location_provider").to_string(),
+                    Some(format!("{} · {region}", provider.to_uppercase())),
+                ),
+                Place::Hosting { asn, name } => (
+                    i18n::t("route.location_hosting").to_string(),
+                    Some(format!("AS{asn} · {name}")),
+                ),
+                Place::Country { .. } => (i18n::t("route.location_estimate").to_string(), None),
+                Place::Unknown => (i18n::t("route.location_unknown").to_string(), None),
+            }
+        });
 
         egui::Frame::new()
             .fill(bg_2)
@@ -2150,6 +2337,27 @@ impl<P: Platform> LightSpeedApp<P> {
                     // spends the card's width rather than its height.
                     let map_w = ui.available_width().min(430.0);
                     globe::draw_map(ui, map_w, 132.0, &markers, route);
+                    // The dot's position comes from free databases, not from a
+                    // measurement: say which source backs it under the map
+                    // instead of letting it read as a verified location. Hosting
+                    // ranges are the documented weak spot (a G-Core US-Virginia
+                    // server publishes as JP in the shipped DB-IP data), so such
+                    // a server gets no dot at all - just its network name.
+                    if let Some((caption, detail)) = &location_caption {
+                        ui.add_space(S1);
+                        ui.label(
+                            egui::RichText::new(caption.as_str())
+                                .size(CAPTION)
+                                .color(text_3),
+                        );
+                        if let Some(detail) = detail {
+                            ui.label(
+                                egui::RichText::new(detail.as_str())
+                                    .size(CAPTION)
+                                    .color(text_3),
+                            );
+                        }
+                    }
                 });
                 ui.add_space(S2);
                 self.ledger_rows(ui, narrow, false);
@@ -2212,12 +2420,29 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         // The relay-to-server leg is the half of the path LightSpeed cannot see
         // without a measurement, and the surface used to present it as if it were
-        // known. The row states how the choice obtained it - measured with its
-        // sample count, a triangle bound, or the region prior with its
-        // uncertainty - and appears only while that choice is the route actually
-        // carrying traffic.
-        if let Some(value) = self.server_leg_value() {
+        // known. The relay's own ICMP measurement is the strongest evidence
+        // available, so it leads: the row states the measured leg and, beside it,
+        // the only whole-path figure the two measured legs support (`L + S`).
+        // Only while this route is the relay actually carrying traffic.
+        if let Some((leg, expected)) = self.relay_measured_server_leg_rows() {
+            self.ledger_row(ui, narrow, &i18n::t("route.server_leg"), &leg);
+            if let Some(expected) = expected {
+                self.ledger_row(ui, narrow, &i18n::t("route.expected_path"), &expected);
+            }
+        } else if let Some(value) = self.server_leg_value() {
+            // The row states how the choice obtained the leg - measured with its
+            // sample count, a triangle bound, or the region prior with its
+            // uncertainty - and appears only while that choice is the route
+            // actually carrying traffic.
             self.ledger_row(ui, narrow, &i18n::t("route.server_leg"), &value);
+        }
+        // The relay's passive app-RTT sample rides beside the ICMP `S` as a
+        // secondary, display-only figure. It is available even when ICMP is
+        // blocked (ordinary game responses still time it), which is exactly why
+        // the F4 revision uses it as the relay-side peer reference; it never
+        // feeds the ranking and nothing is drawn when no fresh sample exists.
+        if let Some(app) = self.relay_measured_app_server_leg_row() {
+            self.ledger_row(ui, narrow, &i18n::t("route.server_leg_app"), &app);
         }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
@@ -2243,6 +2468,53 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         let routed = self.routed_value();
         self.ledger_row(ui, narrow, &i18n::t("route.relayed"), &routed);
+    }
+
+    /// The relay-measured server-leg rows for the route on screen.
+    ///
+    /// The relay measures the relay→server leg (`S`) with unprivileged ICMP and
+    /// reports it over the control plane; the client validates it before this
+    /// crate ever sees it and says whether the triangle-floor check actually
+    /// ran, so a fail-open report is labelled `measured, unvalidated`. `L` is
+    /// the one-RTT client→relay keepalive already displayed as `Relay RTT`, so
+    /// `L + S` is the first whole-path figure whose both terms are measured. It
+    /// is a floor, not the real path, and the locale string says so with `~`.
+    ///
+    /// Present only while this client is tunnelling through the relay (a direct
+    /// fallback's own row already says the relay is not in use) and only for the
+    /// pair the card is describing: the report is keyed by `(relay, server)` in
+    /// the client crate, so another relay's or another server's measurement can
+    /// never be rendered here.
+    fn relay_measured_server_leg_rows(&self) -> Option<(LedgerValue, Option<LedgerValue>)> {
+        if !self.run_boosting() || self.direct_fallback {
+            return None;
+        }
+        let server = self.game_server_addr()?;
+        let relay = self.selected_entry()?.addr;
+        let report = relay_measured_server_leg(relay, server)?;
+        let leg = LedgerValue::Data(relay_measured_leg_text(&report));
+        let expected =
+            expected_path_text(self.status.latest_rtt_ms, report.median_us).map(LedgerValue::Data);
+        Some((leg, expected))
+    }
+
+    /// The relay's passive app-RTT row for the route on screen.
+    ///
+    /// Display-only and secondary: it is the relay's own
+    /// forward→first-response median for the same `(relay, server)` pair, shown
+    /// beside the ICMP `S`. The client crate already refused a stale, zero or
+    /// absurd report, so `Some` here is always a presentable relay measurement;
+    /// it feeds no ranking decision (the F4 revision keeps `S` non-steering
+    /// until the experiment passes) and disappears when the passive window goes
+    /// quiet rather than showing an old number.
+    fn relay_measured_app_server_leg_row(&self) -> Option<LedgerValue> {
+        if !self.run_boosting() || self.direct_fallback {
+            return None;
+        }
+        let server = self.game_server_addr()?;
+        let relay = self.selected_entry()?.addr;
+        let report = relay_measured_app_server_leg(relay, server)?;
+        Some(LedgerValue::Data(relay_measured_app_leg_text(&report)))
     }
 
     /// The route surface's `Server leg` row: the relay-to-server leg for the

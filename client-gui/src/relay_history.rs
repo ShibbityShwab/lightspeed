@@ -16,11 +16,17 @@
 //!
 //! - **A measurement**, accumulated from the interceptor's own per-server
 //!   counters. It can say a relay carries the server (enough traffic, at least one
-//!   reply in eight). It cannot condemn a relay: game UDP traffic is asymmetric,
-//!   and a working relay measured a 24.1% return share on a live run.
-//! - **A verdict**, written only after the no-reply watchdog spent its re-tests on
-//!   a confirmed zero-return chain. That one may exclude the relay for
-//!   [`VERDICT_TTL`].
+//!   reply in eight). It cannot condemn a relay on a low share: game UDP traffic
+//!   is asymmetric, and a working relay measured a 24.1% return share on a live
+//!   run. A measurement of *no replies at all* over enough traffic is a different
+//!   fact, though - that is the starvation signature, and it demotes the relay
+//!   without being a condemnable verdict.
+//! - **A verdict**, written when the no-reply watchdog confirms the return path
+//!   is gone. The first finding is written as a starvation signature the moment
+//!   the watchdog fires ([`RelayHistory::record_starvation`]); only a chain that
+//!   spent its re-tests and still returned nothing is remembered as `failed`
+//!   ([`RelayHistory::record_failure`]), and only that may be counted as a
+//!   condemnation.
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -82,6 +88,27 @@ impl Record {
         (self.replies as f64 / self.forwards as f64).clamp(0.0, 1.0)
     }
 
+    /// Whether these counters show the starvation *signature*: enough traffic to
+    /// judge and not one reply came back.
+    ///
+    /// This is deliberately narrower than the carry bar. A low share is normal
+    /// for asymmetric game UDP (the live EWR record was 93 forwards for 11
+    /// replies, 11.8%, on a relay that was working), so a share below one in
+    /// eight is only "unproven". Zero replies is a different fact: the relay
+    /// accepted the traffic and nothing came back through it at all. The live
+    /// session of 2026-11-19 recorded 4,522 forwards for a G-Core server with
+    /// zero replies, `failed` stayed false (the watchdog never exhausted a
+    /// chain for that pair), and the chooser kept re-selecting the relay that
+    /// had already proven it did not carry that server.
+    ///
+    /// Time-bounded like the watchdog verdict: a stale record is history, not
+    /// evidence about the relay now.
+    pub fn starvation_signature(&self, now: u64) -> bool {
+        self.replies == 0
+            && self.forwards >= MIN_FORWARDS
+            && now.saturating_sub(self.observed_at) <= VERDICT_TTL.as_secs()
+    }
+
     /// Whether this record's own counters show the relay carrying the server:
     /// enough traffic to judge, and at least one reply in eight coming back.
     pub fn carries(&self) -> bool {
@@ -99,6 +126,27 @@ impl Record {
     pub fn is_starved(&self, now: u64) -> bool {
         self.failed && now.saturating_sub(self.observed_at) <= VERDICT_TTL.as_secs()
     }
+}
+
+/// What a (relay, server) record says about this relay carrying that server.
+///
+/// The chooser needs one answer, not two booleans: preference ("has this relay
+/// proven it carries the server?") and demotion ("has it proven it does not?").
+/// Keeping the three cases in one enum stops the two questions from drifting -
+/// the live defect was exactly that: the demotion asked only for the watchdog's
+/// `failed` flag, so a record with 4,522 forwards and zero replies was neither
+/// condemned nor distrusted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CarryVerdict {
+    /// A fresh measurement at or above the carry bar: the relay demonstrably
+    /// carried this server's traffic recently.
+    Proven,
+    /// The watchdog's verdict, or a fresh record whose counters show the
+    /// starvation signature. The relay is excluded for this server.
+    Starved,
+    /// Nothing known, or a measurement that has not reached the carry bar. It
+    /// may still be the right relay; no evidence either way.
+    Unproven,
 }
 
 /// Per-(relay, server) memory, keyed by `"relay_ip:port|server_ip"`.
@@ -157,6 +205,31 @@ impl RelayHistory {
         self.trim();
     }
 
+    /// Record the watchdog's starvation finding for the pair, without the
+    /// watchdog's exhausted-chain verdict.
+    ///
+    /// Called the moment the watchdog confirms `NoReplyFromRelay` for the pair,
+    /// so the very next ranking already excludes the relay instead of
+    /// re-selecting the path that is starving the session. `failed` is
+    /// deliberately left false: only a chain that returned nothing across every
+    /// re-test is a failure verdict, and this finding has not spent its re-tests
+    /// yet. The record takes the starved shape anyway (enough forwards, no
+    /// replies), which is the signature [`Record::starvation_signature`] reads,
+    /// and a later session that really carries the server is free to redeem it.
+    ///
+    /// The counters restart from [`MIN_FORWARDS`] rather than keeping the
+    /// accumulated ones: a measurement added later must be able to lift the
+    /// share back above the carry bar, and `replies` cannot climb out from under
+    /// a huge `forwards` base within one match.
+    pub fn record_starvation(&mut self, relay: SocketAddrV4, server: Ipv4Addr) {
+        let entry = self.entries.entry(key(relay, server)).or_default();
+        entry.forwards = MIN_FORWARDS;
+        entry.replies = 0;
+        entry.observed_at = now_secs();
+        entry.failed = false;
+        self.trim();
+    }
+
     /// Whether the measured record for this pair says, within the last two
     /// minutes, that the relay is carrying the server.
     ///
@@ -193,6 +266,32 @@ impl RelayHistory {
         self.entries
             .get(&key(relay, server))
             .is_some_and(|record| record.is_starved(now_secs()))
+    }
+
+    /// What this pair's record says about the relay carrying the server.
+    ///
+    /// One entry point for both questions the chooser asks, so "has it proven
+    /// it carries this server" and "has it proven it does not" can never be read
+    /// from different rules of the same record. Starvation is checked first and
+    /// covers both the watchdog's verdict (`failed`, unchanged) and the
+    /// starvation signature a live record can show without one; a record that
+    /// is neither condemned nor above the carry bar is [`CarryVerdict::Unproven`],
+    /// which is not a demotion - a relay with no history is a fair candidate.
+    pub fn carry_verdict(&self, relay: SocketAddrV4, server: Ipv4Addr) -> CarryVerdict {
+        let Some(record) = self.entries.get(&key(relay, server)) else {
+            return CarryVerdict::Unproven;
+        };
+        let now = now_secs();
+        // The watchdog-verdict rule is read through its own method so the two
+        // callers of `failed` can never drift: `is_starved` stays exactly the
+        // exhausted-chain verdict it has always been.
+        if self.is_starved(relay, server) || record.starvation_signature(now) {
+            return CarryVerdict::Starved;
+        }
+        if self.carries(relay, server, now) {
+            return CarryVerdict::Proven;
+        }
+        CarryVerdict::Unproven
     }
 
     #[cfg(test)]
@@ -524,5 +623,142 @@ mod tests {
         let loaded = RelayHistory::load(&path);
         assert!(!loaded.is_starved(relay(), server()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── The starvation signature (carry verdict) ─────────────────────────────
+
+    #[test]
+    fn a_starved_record_is_demoted_even_without_a_failed_verdict() {
+        // The live G-Core case: traffic went through a relay and not one reply
+        // came back, but the watchdog never exhausted a chain, so `failed` stayed
+        // false and `is_starved` - by design, it only reads the explicit verdict -
+        // did not demote the relay. The chooser kept re-selecting it.
+        let mut history = RelayHistory::default();
+        history.record(relay(), server(), 4_522, 0);
+        assert!(
+            !history.is_starved(relay(), server()),
+            "keep the watchdog-verdict semantics: a signature is not a `failed` record"
+        );
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Starved,
+            "a record with enough forwards and no reply is a starvation signature"
+        );
+    }
+
+    #[test]
+    fn the_watchdogs_starvation_finding_is_recorded_without_a_failure() {
+        let mut history = RelayHistory::default();
+        history.record_starvation(relay(), server());
+        assert!(
+            !history.is_starved(relay(), server()),
+            "the first finding is not the exhausted-chain verdict"
+        );
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Starved
+        );
+        let record = history.get(relay(), server()).expect("recorded");
+        assert!(!record.failed, "a finding must not masquerade as a verdict");
+        assert_eq!(record.forwards, MIN_FORWARDS);
+        assert_eq!(record.replies, 0);
+    }
+
+    #[test]
+    fn a_healthy_relay_is_not_demoted() {
+        let mut history = RelayHistory::default();
+        history.record(relay(), server(), 200, 160);
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Proven,
+            "80% answered is a relay that carries the server"
+        );
+        assert!(!history.is_starved(relay(), server()));
+    }
+
+    #[test]
+    fn an_unknown_record_is_not_demoted() {
+        let history = RelayHistory::default();
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Unproven,
+            "no evidence is not evidence against the relay"
+        );
+        assert!(!history.is_starved(relay(), server()));
+    }
+
+    #[test]
+    fn a_low_measured_share_is_not_a_starvation_signature() {
+        // The live EWR record the docs protect: 93 forwards, 11 replies (11.8%)
+        // on a relay that was working. Below the carry bar, so not proven - but
+        // it returned traffic, so it is not starved either.
+        let mut history = RelayHistory::default();
+        history.record(relay(), server(), 93, 11);
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Unproven,
+            "a low share is normal game UDP, not starvation"
+        );
+    }
+
+    #[test]
+    fn a_thin_zero_reply_session_is_not_a_starvation_signature() {
+        let mut history = RelayHistory::default();
+        // Ten forwards with nothing back is a quiet match, not a broken relay.
+        history.record(relay(), server(), MIN_FORWARDS - 1, 0);
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Unproven
+        );
+    }
+
+    #[test]
+    fn a_stale_starvation_signature_expires() {
+        let now = now_secs();
+        let record = Record {
+            forwards: 500,
+            replies: 0,
+            observed_at: now - VERDICT_TTL.as_secs() - 1,
+            failed: false,
+        };
+        assert!(
+            !record.starvation_signature(now),
+            "a six-hour-old zero-reply record is history, not evidence about now"
+        );
+    }
+
+    #[test]
+    fn a_recorded_starvation_is_redeemed_by_a_real_carry_measurement() {
+        let mut history = RelayHistory::default();
+        history.record_starvation(relay(), server());
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Starved
+        );
+        // A later session that really carries the server must be able to lift the
+        // record back to proven; the starved counters restart small so that is
+        // reachable within one match.
+        history.record(relay(), server(), 200, 160);
+        assert!(
+            !history.is_starved(relay(), server()),
+            "a finding is redeemable, not a permanent exclusion"
+        );
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Proven,
+            "the later measurement proves the relay carries this server"
+        );
+    }
+
+    #[test]
+    fn a_watchdog_verdict_is_starved_whatever_its_counters() {
+        let mut history = RelayHistory::default();
+        history.record(relay(), server(), 21, 2);
+        history.record_failure(relay(), server());
+        assert_eq!(
+            history.carry_verdict(relay(), server()),
+            CarryVerdict::Starved,
+            "the explicit verdict outranks the counters"
+        );
     }
 }

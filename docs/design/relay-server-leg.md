@@ -1,6 +1,6 @@
 # Scope: relay-measured server leg
 
-Status: proposed, not started.
+Status: implemented in this round; canary pending.
 Owner: whoever picks it up; the blocking unknown is listed first because it can
 kill the whole design.
 

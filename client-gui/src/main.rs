@@ -20,6 +20,8 @@ mod processes;
 mod race_watch;
 mod relay_history;
 mod self_update;
+mod server_place;
+mod server_tables;
 mod single_instance;
 mod update;
 

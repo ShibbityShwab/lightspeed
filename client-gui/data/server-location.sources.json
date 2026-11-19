@@ -1,0 +1,114 @@
+{
+  "format": "start-little-endian-u32, end-little-endian-u32, index-little-endian-u16",
+  "generated_at": "2026-11-19T08:37:05Z",
+  "sources": {
+    "https://ip-ranges.amazonaws.com/ip-ranges.json": {
+      "bytes": 2756618,
+      "sha256": "749352c75143d27995cf03a43718e81e55ed7535b64855dca3d620e74791d8ce"
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS12876": {
+      "asn": 12876,
+      "name": "Scaleway",
+      "prefixes": 22
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS132203": {
+      "asn": 132203,
+      "name": "Tencent Cloud",
+      "prefixes": 1143
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS13335": {
+      "asn": 13335,
+      "name": "Cloudflare",
+      "prefixes": 2767
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS14061": {
+      "asn": 14061,
+      "name": "DigitalOcean",
+      "prefixes": 881
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS16276": {
+      "asn": 16276,
+      "name": "OVH",
+      "prefixes": 794
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS199524": {
+      "asn": 199524,
+      "name": "G-Core Labs",
+      "prefixes": 469
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS20473": {
+      "asn": 20473,
+      "name": "Vultr",
+      "prefixes": 1867
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS20940": {
+      "asn": 20940,
+      "name": "Akamai",
+      "prefixes": 3958
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS24940": {
+      "asn": 24940,
+      "name": "Hetzner",
+      "prefixes": 95
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS28753": {
+      "asn": 28753,
+      "name": "Leaseweb",
+      "prefixes": 141
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS31898": {
+      "asn": 31898,
+      "name": "Oracle Cloud",
+      "prefixes": 2947
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS32590": {
+      "asn": 32590,
+      "name": "Valve/Steam",
+      "prefixes": 45
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS36351": {
+      "asn": 36351,
+      "name": "IBM SoftLayer",
+      "prefixes": 340
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS45102": {
+      "asn": 45102,
+      "name": "Alibaba Cloud",
+      "prefixes": 1210
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS49505": {
+      "asn": 49505,
+      "name": "Selectel",
+      "prefixes": 673
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS51167": {
+      "asn": 51167,
+      "name": "Contabo",
+      "prefixes": 606
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS54113": {
+      "asn": 54113,
+      "name": "Fastly",
+      "prefixes": 599
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS54825": {
+      "asn": 54825,
+      "name": "Equinix Metal",
+      "prefixes": 109
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS63949": {
+      "asn": 63949,
+      "name": "Linode",
+      "prefixes": 355
+    },
+    "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS9009": {
+      "asn": 9009,
+      "name": "M247",
+      "prefixes": 4487
+    },
+    "https://www.gstatic.com/ipranges/cloud.json": {
+      "bytes": 117974,
+      "sha256": "275b91cf7946e07830481fa54ec0382e3430773fe428e8fbc5106fa47cd203e9"
+    }
+  }
+}

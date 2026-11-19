@@ -5,4 +5,11 @@ This product includes third-party data and software:
 
 IP geolocation data by DB-IP (https://db-ip.com), licensed under CC BY 4.0.
 
+Cloud provider IPv4 ranges: AWS IP ranges (https://ip-ranges.amazonaws.com/ip-ranges.json)
+and Google Cloud IP ranges (https://www.gstatic.com/ipranges/cloud.json), used to
+identify a server's provider region.
+
+Hosting-network prefixes: derived at build time from the RIPE Stat API
+(https://stat.ripe.net, RIPE NCC) for a curated list of hosting ASNs.
+
 Uses the maxminddb crate (MIT licensed).

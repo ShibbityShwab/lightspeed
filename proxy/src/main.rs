@@ -21,6 +21,7 @@ use lightspeed_proxy::handoff;
 use lightspeed_proxy::health;
 use lightspeed_proxy::metrics;
 use lightspeed_proxy::notify;
+use lightspeed_proxy::ping;
 use lightspeed_proxy::rate_limit;
 use lightspeed_proxy::relay;
 
@@ -362,6 +363,10 @@ async fn main() -> anyhow::Result<()> {
     // than a silent default (docs/quic-alpn-rollout.md §5.3, §7.2). OnceLock:
     // the first publish wins and both sites pass the same configured value.
     metrics.set_control_alpn(config.network.control_alpn);
+
+    // Egress budget guard. Built before the server-leg prober so the prober can
+    // charge its own ICMP egress through the same guard: probe traffic counts
+    // against the relay's ceiling instead of being invisible to it.
     let budget_guard = if config.budget.enabled {
         let guard = Arc::new(budget::BudgetGuard::new(config.budget.clone()));
         if guard.is_enabled() {
@@ -380,6 +385,30 @@ async fn main() -> anyhow::Result<()> {
         info!("Egress budget guard disabled");
         None
     };
+
+    // Relay-measured server leg: the registry is shared by the data path (which
+    // registers interest for a game server a live session already forwards to),
+    // the prober thread (which owns the ICMP burst cadence and its caps) and the
+    // control plane (which pushes the report to the session it was measured
+    // for). `None` when the operator disabled probing for this relay, and on a
+    // build without the QUIC control plane there is nothing to report to, so no
+    // probes are issued at all.
+    #[cfg(feature = "quic")]
+    let server_leg_registry: Option<Arc<ping::ServerLegRegistry>> =
+        config.server_leg.enabled.then(|| {
+            let mut registry = ping::ServerLegRegistry::new(
+                ping::ServerLegConfig::default(),
+                Arc::new(ping::SystemClock),
+                Arc::new(ping::SystemEchoProber),
+            )
+            .with_metrics(Arc::clone(&metrics));
+            if let Some(guard) = budget_guard.clone() {
+                registry = registry.with_budget(guard);
+            }
+            Arc::new(registry)
+        });
+    #[cfg(not(feature = "quic"))]
+    let server_leg_registry: Option<Arc<ping::ServerLegRegistry>> = None;
     let public_ip = parse_public_ip(config.server.public_ip.as_deref());
     if geo_resolver.is_some() && public_ip.is_none() {
         warn!(
@@ -410,6 +439,7 @@ async fn main() -> anyhow::Result<()> {
                 &metrics,
                 geo_state.clone(),
                 budget_guard.clone(),
+                server_leg_registry.clone(),
             )
             .await
             .map_err(|e| {
@@ -428,6 +458,9 @@ async fn main() -> anyhow::Result<()> {
             if let Some(guard) = budget_guard.clone() {
                 relay_engine = relay_engine.with_budget(guard);
             }
+            if let Some(registry) = server_leg_registry.clone() {
+                relay_engine = relay_engine.with_server_leg(registry);
+            }
             let engine = Arc::new(relay_engine);
             // Bind every serving plane before spawning any task, so a bind
             // failure aborts startup instead of leaving a half-started service
@@ -441,15 +474,36 @@ async fn main() -> anyhow::Result<()> {
     };
     info!("Data plane socket bound to {}", data_socket.local_addr()?);
 
+    // The probe cadence runs on its own OS thread: an ICMP burst blocks on the
+    // reply timeout, and that must never occupy an async worker. The thread is
+    // detached for the process lifetime.
+    match &server_leg_registry {
+        Some(registry) => match ping::ServerLegRegistry::spawn_prober(Arc::clone(registry)) {
+            Some(_thread) => info!(
+                "Relay-measured server leg: unprivileged ICMP probing enabled \
+                 (one 3-echo burst per 10 s per active server)"
+            ),
+            None => warn!("Relay-measured server leg: probe thread failed to start"),
+        },
+        None => info!(
+            "Relay-measured server leg: probing disabled (by configuration, or this \
+             build has no QUIC control plane to report on)"
+        ),
+    }
+
     #[cfg(feature = "quic")]
     let control_server = {
         let control_addr: std::net::SocketAddr = control_bind.parse()?;
-        let control_state = Arc::new(control::ControlState::new(
+        let mut control_state = control::ControlState::new(
             config.clone(),
             Arc::clone(&authenticator),
             Arc::clone(&metrics),
             geo_resolver,
-        ));
+        );
+        if let Some(registry) = server_leg_registry.clone() {
+            control_state.set_server_leg(registry);
+        }
+        let control_state = Arc::new(control_state);
         control::ControlServer::bind(control_addr, control_state).map_err(|e| {
             anyhow::anyhow!("failed to bind QUIC control plane on {control_addr}: {e}")
         })?
@@ -735,6 +789,7 @@ async fn adopt_handoff(
     metrics: &Arc<metrics::ProxyMetrics>,
     geo: Option<relay::GeoState>,
     budget_guard: Option<Arc<budget::BudgetGuard>>,
+    server_leg: Option<Arc<ping::ServerLegRegistry>>,
 ) -> anyhow::Result<(
     Arc<RwLock<auth::Authenticator>>,
     Arc<relay::RelayEngine>,
@@ -766,6 +821,9 @@ async fn adopt_handoff(
     }
     if let Some(guard) = budget_guard {
         relay_engine = relay_engine.with_budget(guard);
+    }
+    if let Some(registry) = server_leg {
+        relay_engine = relay_engine.with_server_leg(registry);
     }
     let engine = Arc::new(relay_engine);
     let installed = engine
@@ -805,6 +863,7 @@ async fn adopt_handoff(
     _metrics: &Arc<metrics::ProxyMetrics>,
     _geo: Option<relay::GeoState>,
     _budget_guard: Option<Arc<budget::BudgetGuard>>,
+    _server_leg: Option<Arc<ping::ServerLegRegistry>>,
 ) -> anyhow::Result<(
     Arc<RwLock<auth::Authenticator>>,
     Arc<relay::RelayEngine>,

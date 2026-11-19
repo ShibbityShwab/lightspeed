@@ -399,6 +399,12 @@ pub enum DropReason {
     /// A new session was refused because the configured egress budget hard
     /// threshold was reached. Existing sessions are never interrupted.
     EgressBudget,
+    /// A TCP-tunnelled segment was refused by its connection's client→server
+    /// queue budget. The gate runs before the reliability receiver, so the
+    /// cumulative ACK does not advance and the client's retransmit timer
+    /// recovers the bytes exactly once (the drop is indistinguishable from
+    /// path loss).
+    TcpQueueFull,
 }
 
 /// Outcome of one QUIC control-plane handshake.
@@ -502,6 +508,10 @@ pub struct ProxyMetrics {
     pub drops_relay_send_errors: AtomicU64,
     /// New sessions refused because the egress budget hard threshold was hit.
     pub drops_egress_budget: AtomicU64,
+    /// TCP segments dropped because their connection's client→server command
+    /// queue hit its per-connection slot or byte budget. Dropped before the
+    /// reliability layer ACKed them, so the client retransmits them.
+    pub drops_tcp_queue_full: AtomicU64,
 
     // ── Egress budget guard ─────────────────────────────────────
     /// Binding egress budget limit in bytes (0 when no budget is enforced).
@@ -514,6 +524,26 @@ pub struct ProxyMetrics {
     pub egress_budget_hard_exceeded: AtomicU64,
     /// Number of soft-threshold transitions observed.
     pub egress_budget_soft_events: AtomicU64,
+
+    // ── Relay-measured server leg (R2) ──────────────────────────
+    /// ICMP echo bursts issued for relay→server leg measurements.
+    pub server_leg_bursts: AtomicU64,
+    /// Echo requests sent for relay→server leg measurements.
+    pub server_leg_probes: AtomicU64,
+    /// Bursts cut short because the egress budget refused the next echo.
+    pub server_leg_budget_denied: AtomicU64,
+    /// Bursts that produced no usable measurement (ICMP blocked or timed out).
+    pub server_leg_unavailable: AtomicU64,
+    /// Probe opportunities skipped: global budget, concurrency cap, refused
+    /// address, egress-budget denial, or probing disabled by configuration.
+    pub server_leg_skips: AtomicU64,
+    /// Passive relay→server app-RTT samples accepted into a session's window.
+    ///
+    /// These cost no added traffic: each is the difference between an already
+    /// recorded forward timestamp and the first response read on that session's
+    /// socket. Rejected (implausible) gaps and samples for a server a session
+    /// has not forwarded to are not counted.
+    pub server_leg_passive_samples: AtomicU64,
 
     // ── Session metrics ─────────────────────────────────────────
     /// Total sessions created (lifetime).
@@ -609,11 +639,18 @@ impl ProxyMetrics {
             drops_session_setup: AtomicU64::new(0),
             drops_relay_send_errors: AtomicU64::new(0),
             drops_egress_budget: AtomicU64::new(0),
+            drops_tcp_queue_full: AtomicU64::new(0),
             egress_budget_limit_bytes: AtomicU64::new(0),
             egress_budget_used_bytes: AtomicU64::new(0),
             egress_budget_soft_exceeded: AtomicU64::new(0),
             egress_budget_hard_exceeded: AtomicU64::new(0),
             egress_budget_soft_events: AtomicU64::new(0),
+            server_leg_bursts: AtomicU64::new(0),
+            server_leg_probes: AtomicU64::new(0),
+            server_leg_budget_denied: AtomicU64::new(0),
+            server_leg_unavailable: AtomicU64::new(0),
+            server_leg_skips: AtomicU64::new(0),
+            server_leg_passive_samples: AtomicU64::new(0),
             sessions_created: AtomicU64::new(0),
             sessions_expired: AtomicU64::new(0),
             control_handshakes_negotiated_v1: AtomicU64::new(0),
@@ -665,6 +702,9 @@ impl ProxyMetrics {
             }
             DropReason::EgressBudget => {
                 self.drops_egress_budget.fetch_add(1, Ordering::Relaxed);
+            }
+            DropReason::TcpQueueFull => {
+                self.drops_tcp_queue_full.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -1064,6 +1104,39 @@ impl ProxyMetrics {
         sum as f64 / count as f64
     }
 
+    /// Publish the relay-measured server-leg counters.
+    ///
+    /// The prober publishes absolute values from its own state instead of
+    /// incrementing here: one lock already holds the counts, and an absolute
+    /// write cannot double-count a burst that was observed between two ticks.
+    pub fn set_server_leg_counters(
+        &self,
+        bursts: u64,
+        unavailable: u64,
+        skips: u64,
+        probes: u64,
+        budget_denied: u64,
+    ) {
+        self.server_leg_bursts.store(bursts, Ordering::Relaxed);
+        self.server_leg_unavailable
+            .store(unavailable, Ordering::Relaxed);
+        self.server_leg_skips.store(skips, Ordering::Relaxed);
+        self.server_leg_probes.store(probes, Ordering::Relaxed);
+        self.server_leg_budget_denied
+            .store(budget_denied, Ordering::Relaxed);
+    }
+
+    /// Count one accepted passive relay→server app-RTT sample.
+    ///
+    /// Called by the server-leg registry on the response path once a sample has
+    /// passed its bounds and belongs to a session that has forwarded to that
+    /// server. Rejected gaps are not counted, so the series reads as "samples
+    /// that can be reported", not "responses observed".
+    pub fn record_server_leg_passive_sample(&self) {
+        self.server_leg_passive_samples
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Format metrics in Prometheus exposition format.
     pub fn to_prometheus(&self, region: &str, node_id: &str) -> String {
         let labels = format!("region=\"{}\",node_id=\"{}\"", region, node_id);
@@ -1108,6 +1181,67 @@ impl ProxyMetrics {
             "lightspeed_packets_dropped_total{{{}}} {}\n",
             labels,
             self.packets_dropped.load(Ordering::Relaxed)
+        ));
+
+        // ── Relay-measured server leg ───────────────────────────
+        out.push_str(
+            "# HELP lightspeed_server_leg_bursts_total ICMP echo bursts issued for relay-to-server leg measurements\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_bursts_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_bursts_total{{{}}} {}\n",
+            labels,
+            self.server_leg_bursts.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_leg_probes_total ICMP echo requests sent for relay-to-server leg measurements\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_probes_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_probes_total{{{}}} {}\n",
+            labels,
+            self.server_leg_probes.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_leg_budget_denied_total Server-leg bursts cut short by the egress budget (no echo sent after the refusal)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_budget_denied_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_budget_denied_total{{{}}} {}\n",
+            labels,
+            self.server_leg_budget_denied.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_leg_unavailable_total Server-leg bursts that produced no measurement (ICMP blocked or timed out)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_unavailable_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_unavailable_total{{{}}} {}\n",
+            labels,
+            self.server_leg_unavailable.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_leg_skips_total Server-leg probe opportunities skipped (budget, concurrency, refused address, disabled)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_skips_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_skips_total{{{}}} {}\n",
+            labels,
+            self.server_leg_skips.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_leg_passive_samples_total Passive relay-to-server app-RTT samples accepted (timestamp difference already recorded at forward time; no added traffic)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_passive_samples_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_passive_samples_total{{{}}} {}\n",
+            labels,
+            self.server_leg_passive_samples.load(Ordering::Relaxed)
         ));
 
         // ── Gauges ──────────────────────────────────────────────
@@ -1295,6 +1429,16 @@ impl ProxyMetrics {
             "lightspeed_drops_egress_budget_total{{{}}} {}\n",
             labels,
             self.drops_egress_budget.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_drops_tcp_queue_full_total TCP segments dropped because a connection's client-to-server queue reached its per-connection budget. Pre-ACK, so the client's retransmit timer recovers them.\n",
+        );
+        out.push_str("# TYPE lightspeed_drops_tcp_queue_full_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_drops_tcp_queue_full_total{{{}}} {}\n",
+            labels,
+            self.drops_tcp_queue_full.load(Ordering::Relaxed)
         ));
 
         // ── Egress budget guard ─────────────────────────────────
@@ -1958,6 +2102,7 @@ mod tests {
             DropReason::SessionSetup,
             DropReason::RelaySendError,
             DropReason::EgressBudget,
+            DropReason::TcpQueueFull,
         ] {
             m.record_drop(reason);
         }
@@ -1969,9 +2114,24 @@ mod tests {
             + m.drops_fec_malformed.load(Ordering::Relaxed)
             + m.drops_session_setup.load(Ordering::Relaxed)
             + m.drops_relay_send_errors.load(Ordering::Relaxed)
-            + m.drops_egress_budget.load(Ordering::Relaxed);
+            + m.drops_egress_budget.load(Ordering::Relaxed)
+            + m.drops_tcp_queue_full.load(Ordering::Relaxed);
 
         assert_eq!(categories, m.packets_dropped.load(Ordering::Relaxed));
+    }
+
+    /// The TCP backpressure drop is exported as its own counter, so a canary
+    /// can distinguish a stalled-upstream connection from other drop causes.
+    #[test]
+    fn test_tcp_queue_full_series_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_drop(DropReason::TcpQueueFull);
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(output.contains("# TYPE lightspeed_drops_tcp_queue_full_total counter"));
+        assert!(output.contains(
+            "lightspeed_drops_tcp_queue_full_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
     }
 
     #[test]
@@ -2049,6 +2209,25 @@ mod tests {
         let output = m.to_prometheus("test", "test-node");
         assert!(output.contains(
             "lightspeed_relay_latency_discarded_total{region=\"test\",node_id=\"test-node\"} 1"
+        ));
+    }
+
+    #[test]
+    fn test_passive_server_leg_sample_counter_emitted() {
+        let m = ProxyMetrics::new();
+        m.record_server_leg_passive_sample();
+        m.record_server_leg_passive_sample();
+
+        let output = m.to_prometheus("test", "test-node");
+        assert!(
+            output.contains(
+                "lightspeed_server_leg_passive_samples_total{region=\"test\",node_id=\"test-node\"} 2"
+            ),
+            "the passive sample counter must be exported, got:\\n{output}"
+        );
+        // It is a sample counter, not a probe counter: ICMP series stay at zero.
+        assert!(output.contains(
+            "lightspeed_server_leg_probes_total{region=\"test\",node_id=\"test-node\"} 0"
         ));
     }
 

@@ -26,6 +26,9 @@ const MSG_SERVER_INFO: u8 = 0x06;
 const MSG_TELEMETRY: u8 = 0x07;
 const MSG_ROTATE_REQUEST: u8 = 0x08;
 const MSG_ROTATE_ACK: u8 = 0x09;
+const MSG_SERVER_LEG: u8 = 0x0A;
+const MSG_CLIENT_CAPS: u8 = 0x0B;
+const MSG_SERVER_LEG_APP: u8 = 0x0C;
 
 // ── Game IDs ────────────────────────────────────────────────────────
 
@@ -145,14 +148,25 @@ pub mod disconnect_reason {
     pub const AUTH_FAILURE: u8 = 4;
 }
 
-/// Capability bitmap carried in the registration ack's `caps` byte.
+/// Capability bitmap carried in the registration ack's `caps` byte and, as a
+/// client capability, in [`ControlMessage::ClientCaps`].
 ///
-/// A one-byte additive bitmap: bit 0 means the relay supports the TCP tunnel
-/// (protocol version 5). Pre-upgrade relays omit the byte, which decodes as
-/// zero, "no TCP".
+/// A one-byte additive bitmap. Pre-upgrade relays omit the ack byte, which
+/// decodes as zero, "no TCP"; pre-upgrade clients never send
+/// [`ControlMessage::ClientCaps`], so a relay that understands the message
+/// treats them as having no capabilities and does not push server-leg reports
+/// they cannot consume.
 pub mod caps {
     /// The relay supports the TCP tunnel (protocol version 5).
     pub const TCP_TUNNEL: u8 = 0b0000_0001;
+    /// The relay can send relay-measured server-leg reports (`MSG_SERVER_LEG`
+    /// and `MSG_SERVER_LEG_APP`, both on server-initiated unidirectional
+    /// streams). In
+    /// [`ControlMessage::ClientCaps`] the same bit means the client can read
+    /// them: the relay pushes only to a control session that advertised it, so
+    /// a client built before this feature never receives a report stream it
+    /// would not consume. That gate is why no version bump is needed.
+    pub const SERVER_LEG: u8 = 0b0000_0010;
 }
 
 // ── QUIC control-plane ALPN ─────────────────────────────────────────
@@ -267,6 +281,69 @@ pub enum ControlMessage {
         new_token: u32,
         /// The token this rotation replaces.
         old_token: u32,
+    },
+
+    /// Proxy → Client: the relay's own measurement of the relay-to-server leg.
+    ///
+    /// The relay sends an ICMP echo burst to a game server a live session is
+    /// already forwarding to and reports the result over the control plane. The
+    /// client cannot measure this leg itself (docs/server-leg-signal.md §4.1),
+    /// so this is the only source for it. Additive: a client that predates this
+    /// message decodes the type byte as [`ControlDecodeError::UnknownMessageType`]
+    /// and ignores the frame, exactly as a relay that predates
+    /// [`ControlMessage::RotateRequest`] ignores that one.
+    ServerLeg {
+        /// The game server address this measurement is for.
+        server: Ipv4Addr,
+        /// Median of the echo burst, microseconds.
+        median_us: u32,
+        /// Mean absolute delta between the burst medians in the window,
+        /// microseconds. Zero is a legitimate value (a perfectly steady leg).
+        jitter_us: u32,
+        /// How many burst medians the window holds.
+        samples: u8,
+        /// Staleness of the measurement at send time, milliseconds.
+        age_ms: u16,
+    },
+
+    /// Proxy → Client: the relay's passive app-RTT sample for the
+    /// relay-to-server leg.
+    ///
+    /// The relay times every forwarded game-data packet to the first response it
+    /// reads back on the same session socket, so this figure costs no added
+    /// traffic. It rides next to [`ControlMessage::ServerLeg`] for the same
+    /// `(session, server)` pair and is reported on the same server-initiated
+    /// stream path; it exists because the ICMP measurement can be blocked while
+    /// ordinary game traffic still answers.
+    ///
+    /// Additive: a client that predates it decodes the type byte as
+    /// [`ControlDecodeError::UnknownMessageType`] and ignores the frame. The
+    /// same [`caps::SERVER_LEG`] capability gates both report types, because a
+    /// build that advertised it can already ignore an unknown frame.
+    ServerLegApp {
+        /// The game server address this sample is for.
+        server: Ipv4Addr,
+        /// Median of the relay's recent passive samples, microseconds.
+        passive_median_us: u32,
+        /// How many passive samples the relay's window holds.
+        passive_samples: u8,
+        /// Staleness of the newest sample at send time, milliseconds.
+        age_ms: u16,
+    },
+
+    /// Client → Proxy: capabilities this client can consume.
+    ///
+    /// The relay pushes [`ControlMessage::ServerLeg`] and
+    /// [`ControlMessage::ServerLegApp`] reports on server-initiated streams and
+    /// must not send them to a client that cannot read them. A client that predates this message never sends it, which the
+    /// relay treats as "no capabilities"; a relay that predates it decodes the
+    /// type byte as [`ControlDecodeError::UnknownMessageType`] and drops the
+    /// stream without touching the connection. Sent once per control
+    /// connection after registration, best-effort. Additive, so no version
+    /// bump.
+    ClientCaps {
+        /// Bitmap of [`caps`] the client understands.
+        caps: u8,
     },
 
     /// Either direction: graceful disconnect.
@@ -403,6 +480,36 @@ impl ControlMessage {
                 buf.put_u32(*new_token);
                 buf.put_u32(*old_token);
             }
+            Self::ServerLeg {
+                server,
+                median_us,
+                jitter_us,
+                samples,
+                age_ms,
+            } => {
+                buf.put_u8(MSG_SERVER_LEG);
+                buf.put_slice(&server.octets());
+                buf.put_u32(*median_us);
+                buf.put_u32(*jitter_us);
+                buf.put_u8(*samples);
+                buf.put_u16(*age_ms);
+            }
+            Self::ServerLegApp {
+                server,
+                passive_median_us,
+                passive_samples,
+                age_ms,
+            } => {
+                buf.put_u8(MSG_SERVER_LEG_APP);
+                buf.put_slice(&server.octets());
+                buf.put_u32(*passive_median_us);
+                buf.put_u8(*passive_samples);
+                buf.put_u16(*age_ms);
+            }
+            Self::ClientCaps { caps } => {
+                buf.put_u8(MSG_CLIENT_CAPS);
+                buf.put_u8(*caps);
+            }
             Self::Disconnect { reason } => {
                 buf.put_u8(MSG_DISCONNECT);
                 buf.put_u8(*reason);
@@ -526,6 +633,45 @@ impl ControlMessage {
                     new_token,
                     old_token,
                 })
+            }
+            MSG_SERVER_LEG => {
+                // Fixed-width payload: IPv4 (4) + median (4) + jitter (4) +
+                // samples (1) + age (2). Trailing bytes are ignored, so a later
+                // revision may append fields without breaking this reader.
+                ensure_remaining(buf, 4 + 4 + 4 + 1 + 2)?;
+                let server = Ipv4Addr::from(buf.get_u32());
+                let median_us = buf.get_u32();
+                let jitter_us = buf.get_u32();
+                let samples = buf.get_u8();
+                let age_ms = buf.get_u16();
+                Ok(Self::ServerLeg {
+                    server,
+                    median_us,
+                    jitter_us,
+                    samples,
+                    age_ms,
+                })
+            }
+            MSG_SERVER_LEG_APP => {
+                // Fixed-width payload: IPv4 (4) + passive median (4) +
+                // samples (1) + age (2). Trailing bytes are ignored, so a later
+                // revision may append fields without breaking this reader.
+                ensure_remaining(buf, 4 + 4 + 1 + 2)?;
+                let server = Ipv4Addr::from(buf.get_u32());
+                let passive_median_us = buf.get_u32();
+                let passive_samples = buf.get_u8();
+                let age_ms = buf.get_u16();
+                Ok(Self::ServerLegApp {
+                    server,
+                    passive_median_us,
+                    passive_samples,
+                    age_ms,
+                })
+            }
+            MSG_CLIENT_CAPS => {
+                ensure_remaining(buf, 1)?;
+                let caps = buf.get_u8();
+                Ok(Self::ClientCaps { caps })
             }
             MSG_DISCONNECT => {
                 ensure_remaining(buf, 1)?;
@@ -960,6 +1106,320 @@ mod tests {
             frame.as_slice(),
             "a rotate request must round-trip its pinned wire bytes"
         );
+    }
+
+    #[test]
+    fn test_server_leg_roundtrip() {
+        let msg = ControlMessage::ServerLeg {
+            server: Ipv4Addr::new(91, 199, 82, 166),
+            median_us: 148_250,
+            jitter_us: 3_500,
+            samples: 4,
+            age_ms: 1_200,
+        };
+        let encoded = msg.encode();
+        // Type tag + IPv4 + u32 + u32 + u8 + u16 = 16 bytes.
+        assert_eq!(encoded.len(), 16);
+        assert_eq!(ControlMessage::decode(&encoded).unwrap(), msg);
+
+        // Boundary values survive the fixed-width fields.
+        for (median_us, jitter_us, samples, age_ms) in
+            [(1, 0, 1, 0), (u32::MAX, u32::MAX, u8::MAX, u16::MAX)]
+        {
+            let msg = ControlMessage::ServerLeg {
+                server: Ipv4Addr::UNSPECIFIED,
+                median_us,
+                jitter_us,
+                samples,
+                age_ms,
+            };
+            assert_eq!(ControlMessage::decode(&msg.encode()).unwrap(), msg);
+        }
+    }
+
+    #[test]
+    fn test_server_leg_wire_form_is_pinned_by_hardcoded_bytes() {
+        // Hand-built frame: tag 0x0A, server 91.199.82.166, median 0x0002_4320
+        // (148 256 µs), jitter 0x0000_0BB8 (3 000 µs), samples 3, age 0x001F
+        // (31 ms). The bytes are literals on purpose - a reordered or resized
+        // field fails here instead of silently decoding a different number.
+        let frame: [u8; 16] = [
+            0x0A, 91, 199, 82, 166, 0x00, 0x02, 0x43, 0x20, 0x00, 0x00, 0x0B, 0xB8, 3, 0x00, 0x1F,
+        ];
+        let decoded = ControlMessage::decode(&frame).unwrap();
+        assert_eq!(
+            decoded,
+            ControlMessage::ServerLeg {
+                server: Ipv4Addr::new(91, 199, 82, 166),
+                median_us: 148_256,
+                jitter_us: 3_000,
+                samples: 3,
+                age_ms: 31,
+            }
+        );
+        assert_eq!(decoded.encode().as_ref(), frame.as_slice());
+    }
+
+    #[test]
+    fn test_server_leg_truncated_and_malformed_payloads_are_rejected() {
+        // Every shorter length is malformed: the fixed-width payload needs 15
+        // bytes after the tag.
+        for len in 0..15usize {
+            let mut frame = vec![MSG_SERVER_LEG];
+            frame.extend_from_slice(&vec![0u8; len]);
+            assert!(
+                matches!(
+                    ControlMessage::decode(&frame),
+                    Err(ControlDecodeError::BufferTooSmall { got, need: 15 }) if got == len
+                ),
+                "a {len}-byte server-leg payload must be rejected"
+            );
+        }
+        // The full payload decodes.
+        let mut frame = vec![MSG_SERVER_LEG];
+        frame.extend_from_slice(&[0u8; 15]);
+        assert!(ControlMessage::decode(&frame).is_ok());
+    }
+
+    #[test]
+    fn test_server_leg_trailing_bytes_are_ignored_for_forward_compatibility() {
+        // A later revision may append fields; a reader that predates them must
+        // decode the frame it understands rather than dropping it.
+        let mut frame = vec![MSG_SERVER_LEG];
+        frame.extend_from_slice(&Ipv4Addr::new(8, 8, 8, 8).octets());
+        frame.extend_from_slice(&12_000u32.to_be_bytes());
+        frame.extend_from_slice(&40u32.to_be_bytes());
+        frame.push(2);
+        frame.extend_from_slice(&5u16.to_be_bytes());
+        frame.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(
+            ControlMessage::decode(&frame).unwrap(),
+            ControlMessage::ServerLeg {
+                server: Ipv4Addr::new(8, 8, 8, 8),
+                median_us: 12_000,
+                jitter_us: 40,
+                samples: 2,
+                age_ms: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn test_server_leg_tag_is_a_new_unknown_to_an_old_reader() {
+        // Compatibility claim: a build without `ServerLeg` decodes tag 0x0A as
+        // `UnknownMessageType` and ignores the frame. Pinned by asserting the
+        // tag is distinct from every tag such a build already knew, and that
+        // the unknown-tag path itself still behaves that way.
+        assert_eq!(MSG_SERVER_LEG, 0x0A);
+        for known in [
+            MSG_PING,
+            MSG_PONG,
+            MSG_REGISTER,
+            MSG_REGISTER_ACK,
+            MSG_DISCONNECT,
+            MSG_SERVER_INFO,
+            MSG_TELEMETRY,
+            MSG_ROTATE_REQUEST,
+            MSG_ROTATE_ACK,
+        ] {
+            assert_ne!(
+                MSG_SERVER_LEG, known,
+                "the server-leg tag must not reuse an existing message type"
+            );
+        }
+
+        let mut payload = vec![MSG_SERVER_LEG];
+        payload.extend(std::iter::repeat_n(0u8, 15));
+        let decoded = ControlMessage::decode(&payload).expect("a current reader decodes it");
+        assert!(matches!(decoded, ControlMessage::ServerLeg { .. }));
+
+        // An unknown tag is still unknown: nothing is defaulted or guessed.
+        assert!(matches!(
+            ControlMessage::decode(&[0x0D]),
+            Err(ControlDecodeError::UnknownMessageType(0x0D))
+        ));
+    }
+
+    #[test]
+    fn test_server_leg_app_roundtrip() {
+        let msg = ControlMessage::ServerLegApp {
+            server: Ipv4Addr::new(91, 199, 82, 166),
+            passive_median_us: 47_250,
+            passive_samples: 12,
+            age_ms: 900,
+        };
+        let encoded = msg.encode();
+        // Type tag + IPv4 + u32 + u8 + u16 = 12 bytes.
+        assert_eq!(encoded.len(), 12);
+        assert_eq!(ControlMessage::decode(&encoded).unwrap(), msg);
+
+        // Boundary values survive the fixed-width fields.
+        for (passive_median_us, passive_samples, age_ms) in
+            [(0, 0, 0), (u32::MAX, u8::MAX, u16::MAX)]
+        {
+            let msg = ControlMessage::ServerLegApp {
+                server: Ipv4Addr::UNSPECIFIED,
+                passive_median_us,
+                passive_samples,
+                age_ms,
+            };
+            assert_eq!(ControlMessage::decode(&msg.encode()).unwrap(), msg);
+        }
+    }
+
+    #[test]
+    fn test_server_leg_app_wire_form_is_pinned_by_hardcoded_bytes() {
+        // Hand-built frame: tag 0x0C, server 91.199.82.166, passive median
+        // 0x0000_B798 (47 000 µs), samples 9, age 0x012C (300 ms). The bytes
+        // are literals on purpose - a reordered, resized or re-tagged field
+        // fails here instead of silently decoding a different number.
+        let frame: [u8; 12] = [
+            0x0C, 91, 199, 82, 166, 0x00, 0x00, 0xB7, 0x98, 9, 0x01, 0x2C,
+        ];
+        let decoded = ControlMessage::decode(&frame).unwrap();
+        assert_eq!(
+            decoded,
+            ControlMessage::ServerLegApp {
+                server: Ipv4Addr::new(91, 199, 82, 166),
+                passive_median_us: 47_000,
+                passive_samples: 9,
+                age_ms: 300,
+            }
+        );
+        assert_eq!(decoded.encode().as_ref(), frame.as_slice());
+    }
+
+    #[test]
+    fn test_server_leg_app_truncated_payloads_are_rejected() {
+        // Every shorter length is malformed: the fixed-width payload needs 11
+        // bytes after the tag.
+        for len in 0..11usize {
+            let mut frame = vec![MSG_SERVER_LEG_APP];
+            frame.extend_from_slice(&vec![0u8; len]);
+            assert!(
+                matches!(
+                    ControlMessage::decode(&frame),
+                    Err(ControlDecodeError::BufferTooSmall { got, need: 11 }) if got == len
+                ),
+                "an {len}-byte server-leg-app payload must be rejected"
+            );
+        }
+        // The full payload decodes.
+        let mut frame = vec![MSG_SERVER_LEG_APP];
+        frame.extend_from_slice(&[0u8; 11]);
+        assert!(ControlMessage::decode(&frame).is_ok());
+    }
+
+    #[test]
+    fn test_server_leg_app_trailing_bytes_are_ignored_for_forward_compatibility() {
+        // A later revision may append fields; this reader must decode the frame
+        // it understands rather than dropping it.
+        let mut frame = vec![MSG_SERVER_LEG_APP];
+        frame.extend_from_slice(&Ipv4Addr::new(8, 8, 8, 8).octets());
+        frame.extend_from_slice(&47_000u32.to_be_bytes());
+        frame.push(4);
+        frame.extend_from_slice(&250u16.to_be_bytes());
+        frame.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(
+            ControlMessage::decode(&frame).unwrap(),
+            ControlMessage::ServerLegApp {
+                server: Ipv4Addr::new(8, 8, 8, 8),
+                passive_median_us: 47_000,
+                passive_samples: 4,
+                age_ms: 250,
+            }
+        );
+    }
+
+    #[test]
+    fn test_server_leg_app_tag_is_a_new_unknown_to_an_old_reader() {
+        // Compatibility claim: a build without `ServerLegApp` decodes tag 0x0C
+        // as `UnknownMessageType` and ignores the frame. Pinned by asserting
+        // the tag is distinct from every tag such a build already knew, and
+        // that the unknown-tag path itself still behaves that way.
+        assert_eq!(MSG_SERVER_LEG_APP, 0x0C);
+        for known in [
+            MSG_PING,
+            MSG_PONG,
+            MSG_REGISTER,
+            MSG_REGISTER_ACK,
+            MSG_DISCONNECT,
+            MSG_SERVER_INFO,
+            MSG_TELEMETRY,
+            MSG_ROTATE_REQUEST,
+            MSG_ROTATE_ACK,
+            MSG_SERVER_LEG,
+            MSG_CLIENT_CAPS,
+        ] {
+            assert_ne!(
+                MSG_SERVER_LEG_APP, known,
+                "the passive server-leg tag must not reuse an existing message type"
+            );
+        }
+
+        let mut payload = vec![MSG_SERVER_LEG_APP];
+        payload.extend(std::iter::repeat_n(0u8, 11));
+        let decoded = ControlMessage::decode(&payload).expect("a current reader decodes it");
+        assert!(matches!(decoded, ControlMessage::ServerLegApp { .. }));
+
+        // An unknown tag is still unknown: nothing is defaulted or guessed.
+        assert!(matches!(
+            ControlMessage::decode(&[0x0D]),
+            Err(ControlDecodeError::UnknownMessageType(0x0D))
+        ));
+    }
+
+    #[test]
+    fn test_client_caps_roundtrip_and_legacy_tolerance() {
+        let msg = ControlMessage::ClientCaps {
+            caps: caps::SERVER_LEG,
+        };
+        let encoded = msg.encode();
+        assert_eq!(
+            encoded,
+            Bytes::from_static(&[MSG_CLIENT_CAPS, caps::SERVER_LEG])
+        );
+        assert_eq!(ControlMessage::decode(&encoded).unwrap(), msg);
+
+        // The caps bitmap is additive: a client may advertise only what it
+        // knows, and the zero bitmap is well-formed.
+        for bitmap in [0u8, caps::TCP_TUNNEL, u8::MAX] {
+            let msg = ControlMessage::ClientCaps { caps: bitmap };
+            assert_eq!(ControlMessage::decode(&msg.encode()).unwrap(), msg);
+        }
+
+        // A relay that predates the message sees an unknown type and drops the
+        // stream without touching the connection; the tag must not reuse one of
+        // the tags it already knows.
+        assert_eq!(MSG_CLIENT_CAPS, 0x0B);
+        for known in [
+            MSG_PING,
+            MSG_PONG,
+            MSG_REGISTER,
+            MSG_REGISTER_ACK,
+            MSG_DISCONNECT,
+            MSG_SERVER_INFO,
+            MSG_TELEMETRY,
+            MSG_ROTATE_REQUEST,
+            MSG_ROTATE_ACK,
+            MSG_SERVER_LEG,
+            MSG_SERVER_LEG_APP,
+        ] {
+            assert_ne!(MSG_CLIENT_CAPS, known);
+        }
+        assert!(matches!(
+            ControlMessage::decode(&[0x0D]),
+            Err(ControlDecodeError::UnknownMessageType(0x0D))
+        ));
+    }
+
+    #[test]
+    fn test_client_caps_rejects_a_truncated_payload() {
+        assert!(matches!(
+            ControlMessage::decode(&[MSG_CLIENT_CAPS]),
+            Err(ControlDecodeError::BufferTooSmall { got: 0, need: 1 })
+        ));
+        assert!(ControlMessage::decode(&[MSG_CLIENT_CAPS, 0]).is_ok());
     }
 
     #[test]

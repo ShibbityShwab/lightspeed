@@ -2,7 +2,7 @@
 //!
 //! `direct_p50_ms` is the median ICMP echo RTT to the detected game server
 //! over the un-relayed path. `relayed_p50_ms` is the median round trip of
-//! actual tunnelled game traffic (client → relay → game server → relay →
+//! actual tunnelled game traffic (client â†’ relay â†’ game server â†’ relay â†’
 //! client). Their difference is LightSpeed's core value metric, `saved_ms`.
 //!
 //! ## The relayed window is validated, not merely paired
@@ -10,15 +10,15 @@
 //! A reply on a busy UDP flow cannot be attributed to any particular send: the
 //! server does not echo sequence numbers, so "reply minus the most recent
 //! outbound" measures one inter-send gap rather than a round trip. On the live
-//! ROB RUN session that produced 25 of 25 samples below the client→relay leg
+//! ROB RUN session that produced 25 of 25 samples below the clientâ†’relay leg
 //! (median ratio 0.129), which no whole-path round trip can be. The relayed
 //! window is therefore fed only by **quiet-flow** samples (design
-//! `docs/server-leg-signal.md` §5.1): an outbound is armed only when the flow
+//! `docs/server-leg-signal.md` Â§5.1): an outbound is armed only when the flow
 //! has had no inbound for [`PROBE_QUIET_GAP`], and the next inbound is accepted
 //! only when
 //!
 //! * the relay is unchanged between send and reply,
-//! * the flight time is at least the measured client→relay keepalive p50 (a
+//! * the flight time is at least the measured clientâ†’relay keepalive p50 (a
 //!   whole-path RTT cannot be shorter than its first leg), and
 //! * the flight time is at most [`PROBE_WINDOW`].
 //!
@@ -93,10 +93,10 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::telemetry::TelemetryCollector;
 
@@ -160,7 +160,7 @@ pub const CLIENT_RELAY_RING_CAPACITY: usize = 16;
 /// packet is armed as an attributable whole-path probe.
 ///
 /// This is deliberately far longer than the inter-send period of real game
-/// traffic. Design `docs/server-leg-signal.md` §5.1 proposes 1000 ms, and the
+/// traffic. Design `docs/server-leg-signal.md` Â§5.1 proposes 1000 ms, and the
 /// live measurement that retired the previous 250 ms gap shows why: the ROB RUN
 /// session forwarded 36.5 packets/s (a ~27 ms period), so a 250 ms inbound gap
 /// still left about nine of the client's own packets in flight and the next
@@ -576,7 +576,7 @@ pub struct AppSavingReport {
 ///
 /// Returned by [`LatencyTracker::record_inbound`] so the process-wide hooks can
 /// feed the routing estimator without the tracker depending on it. `rtt_us` is
-/// the true client → relay → server → relay → client figure, not an inter-send
+/// the true client â†’ relay â†’ server â†’ relay â†’ client figure, not an inter-send
 /// gap: every sample behind it passed the relay, floor and window rules.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ValidatedPathSample {
@@ -586,6 +586,10 @@ pub struct ValidatedPathSample {
     pub relay: SocketAddrV4,
     /// Whole-path round trip, microseconds.
     pub rtt_us: u64,
+    /// Client-to-relay keepalive p50 (microseconds) the sample was validated
+    /// against: the physical first-leg floor a whole-path round trip cannot be
+    /// shorter than, and the `L1` value the E1 experiment pairs with `rtt_us`.
+    pub client_leg_us: u64,
     /// Validated samples in the window after this one was added.
     pub samples: u32,
     /// Median of the window after this sample was added, milliseconds.
@@ -813,7 +817,7 @@ impl LatencyTracker {
     ///
     /// Also maintains the quiet-flow attribution probe: while the flow has had
     /// no inbound for [`PROBE_QUIET_GAP`], the newest send is the one a reply
-    /// can be attributed to (design §5.1), so it is kept armed with the relay in
+    /// can be attributed to (design Â§5.1), so it is kept armed with the relay in
     /// use at that instant. A busy flow cannot have a reply attributed at all,
     /// so nothing is armed and the next inbound is not measured.
     pub fn note_outbound(&self, server: Ipv4Addr) -> bool {
@@ -959,6 +963,9 @@ impl LatencyTracker {
             );
             return None;
         }
+        // The floor this sample passed is the client-side L1 the E1 experiment
+        // pairs with the whole-path L3, so it travels with the sample.
+        let client_leg_us = (f64::from(client_leg_ms) * 1000.0).round() as u64;
         if inner.relayed_server != Some(server) || inner.relayed_relay != Some(armed_relay) {
             inner.relayed.clear();
             inner.relayed_server = Some(server);
@@ -983,6 +990,7 @@ impl LatencyTracker {
             server,
             relay: armed_relay,
             rtt_us: u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
+            client_leg_us,
             samples,
             path_p50_ms,
         })
@@ -1536,6 +1544,59 @@ pub fn record_outbound(server: Ipv4Addr) {
     }
 }
 
+/// Render one accepted quiet-flow (tunnelled) sample as the durable INFO line
+/// the E1 matched-epoch experiment greps for.
+///
+/// The format is a **stable log contract**, not a debug message: the experiment
+/// harness greps the `QUIET_FLOW_SAMPLE` prefix and parses the key order, so
+/// neither the key set, the key order nor the separators may change. One
+/// accepted sample produces exactly one line:
+///
+/// ```text
+/// QUIET_FLOW_SAMPLE relay=<ip:port> server=<ip[:port]> rtt_us=<u64> \
+/// client_leg_us=<u64> at_unix_ms=<u128> [samples=<n>]
+/// ```
+///
+/// * `relay` - the relay's **data-plane** address;
+/// * `server` - the game server's IPv4 and port. The port is omitted only when
+///   the session has not locked a destination for that IPv4, so the value is
+///   always a bare IPv4 address at worst;
+/// * `rtt_us` - the validated whole-path round trip (`L3`), microseconds;
+/// * `client_leg_us` - the measured client-to-relay keepalive p50 (`L1`) the
+///   sample was validated against, microseconds;
+/// * `at_unix_ms` - the UTC wall-clock instant of acceptance, Unix
+///   milliseconds (the harness pairs it with relay-side timestamps);
+/// * `samples` - the destination estimator's tunnelled sample count for the
+///   pair, present only when the routing estimator is installed.
+///
+/// No payload and no secret is included. `at` is explicit so a test can pin the
+/// timestamp to a fixed instant.
+fn quiet_flow_sample_line(
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+    server_port: Option<u16>,
+    rtt_us: u64,
+    client_leg_us: u64,
+    at: SystemTime,
+    samples: Option<usize>,
+) -> String {
+    let unix_ms = at
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis());
+    let server = match server_port {
+        Some(port) => SocketAddrV4::new(server, port).to_string(),
+        None => server.to_string(),
+    };
+    let base = format!(
+        "QUIET_FLOW_SAMPLE relay={relay} server={server} rtt_us={rtt_us} \
+         client_leg_us={client_leg_us} at_unix_ms={unix_ms}"
+    );
+    match samples {
+        Some(samples) => format!("{base} samples={samples}"),
+        None => base,
+    }
+}
+
 /// T1 hook: call when the first relayed response for `server` is decoded.
 /// Gated on local measurement, not on telemetry, so a muted client still
 /// records the relayed RTT it needs for local decisions.
@@ -1545,6 +1606,11 @@ pub fn record_outbound(server: Ipv4Addr) {
 /// the destination-aware routing estimator, which is what makes
 /// `DestLegSource::Measured` reachable. Rejected replies are counted and traced
 /// inside the tracker and feed nothing.
+///
+/// Every accepted sample also emits one INFO `QUIET_FLOW_SAMPLE` line (see
+/// [`quiet_flow_sample_line`]) so the E1 experiment can pair the client-side L3
+/// and L1 with relay-side measurements instead of inferring them from a stale
+/// window p50.
 pub fn record_inbound(server: Ipv4Addr) {
     if !is_measuring() {
         return;
@@ -1554,6 +1620,28 @@ pub fn record_inbound(server: Ipv4Addr) {
     };
     if let Some(sample) = tracker.record_inbound(server) {
         crate::route::destination::observe_tunnelled(sample.relay, sample.server, sample.rtt_us);
+        // The tracker validates the IPv4 only, so the port comes from the
+        // session's locked destination - and only while it still names the same
+        // IPv4, so a server change cannot mislabel this sample.
+        let server_port = crate::session::locked_destination()
+            .filter(|locked| *locked.ip() == sample.server)
+            .map(|locked| locked.port());
+        let samples = crate::route::destination::tunnelled_samples(sample.relay, sample.server);
+        let line = quiet_flow_sample_line(
+            sample.relay,
+            sample.server,
+            server_port,
+            sample.rtt_us,
+            sample.client_leg_us,
+            SystemTime::now(),
+            samples,
+        );
+        // Stable log contract: the E1 harness greps this exact prefix and parses
+        // the key order rendered by `quiet_flow_sample_line` (format documented
+        // on that helper). One accepted sample emits exactly this one INFO line;
+        // do not rename, reorder, or interleave fields without updating the
+        // harness and the helper's test.
+        info!("{line}");
     }
 }
 
@@ -2142,7 +2230,7 @@ mod tests {
         assert_eq!(t.take_report_values(), (Some(50.0), None));
     }
 
-    // ── Validated quiet-flow whole-path probe (design §5.1) ─────────────────
+    // â”€â”€ Validated quiet-flow whole-path probe (design Â§5.1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn an_accepted_quiet_flow_sample_reports_its_values() {
@@ -2158,12 +2246,75 @@ mod tests {
             sample.rtt_us, 260_000,
             "a real flight time, in microseconds"
         );
+        assert_eq!(
+            sample.client_leg_us, 200_000,
+            "the L1 floor the sample was validated against travels with it"
+        );
         assert_eq!(sample.samples, 1);
         assert_eq!(sample.path_p50_ms, 260.0);
         assert_eq!(t.relayed_samples(), 1);
         assert_eq!(t.relayed_p50_ms(), Some(260.0));
         assert_eq!(t.probe_counters().accepted, 1);
         assert_eq!(t.probe_counters().rejected(), 0);
+    }
+
+    // â”€â”€ The per-sample E1 trace line â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    #[test]
+    fn the_e1_quiet_flow_sample_line_is_stable_and_roundtrips() {
+        // The E1 harness greps this prefix and parses the key order, so the line
+        // is a contract: one accepted sample, exactly one line, no payload.
+        let relay = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 4434);
+        let server = Ipv4Addr::new(198, 51, 100, 23);
+        let at = UNIX_EPOCH + Duration::from_millis(1_700_000_000_123);
+
+        let line =
+            quiet_flow_sample_line(relay, server, Some(36703), 311_232, 227_800, at, Some(1));
+        assert_eq!(
+            line,
+            "QUIET_FLOW_SAMPLE relay=192.0.2.10:4434 \
+             server=198.51.100.23:36703 rtt_us=311232 client_leg_us=227800 \
+             at_unix_ms=1700000000123 samples=1"
+        );
+
+        // Parse it the way the harness does: a stable prefix, then `key=value`
+        // tokens in a fixed order. This is the assertion that breaks if a key is
+        // renamed, reordered, or a field is inserted.
+        let tokens: Vec<&str> = line.split(' ').collect();
+        assert_eq!(tokens[0], "QUIET_FLOW_SAMPLE", "stable grep prefix");
+        let pairs: Vec<(&str, &str)> = tokens[1..]
+            .iter()
+            .map(|token| token.split_once('=').expect("key=value token"))
+            .collect();
+        assert_eq!(
+            pairs.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            [
+                "relay",
+                "server",
+                "rtt_us",
+                "client_leg_us",
+                "at_unix_ms",
+                "samples"
+            ],
+            "the key set and order are the E1 contract"
+        );
+        assert_eq!(pairs[0], ("relay", "192.0.2.10:4434"));
+        assert_eq!(pairs[1], ("server", "198.51.100.23:36703"));
+        assert_eq!(pairs[2], ("rtt_us", "311232"));
+        assert_eq!(pairs[3], ("client_leg_us", "227800"));
+        assert_eq!(pairs[4], ("at_unix_ms", "1700000000123"));
+        assert_eq!(pairs[5], ("samples", "1"));
+
+        // Before the session locks a server port and when no estimator is
+        // installed the sample still emits one line: the port and the optional
+        // sample count disappear, nothing else changes.
+        let bare = quiet_flow_sample_line(relay, server, None, 5_000_000, 1_000, at, None);
+        assert_eq!(
+            bare,
+            "QUIET_FLOW_SAMPLE relay=192.0.2.10:4434 server=198.51.100.23 \
+             rtt_us=5000000 client_leg_us=1000 at_unix_ms=1700000000123"
+        );
+        assert!(!bare.contains("samples="), "no estimator, no count");
     }
 
     #[test]
@@ -2512,7 +2663,7 @@ mod tests {
         assert_eq!(t.probe_counters().rejected(), 0);
     }
 
-    // ── The `--diagnose` seam is a separate window ──────────────────────────
+    // â”€â”€ The `--diagnose` seam is a separate window â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn a_diagnostic_sample_never_appears_in_the_game_traffic_window() {
@@ -2602,7 +2753,7 @@ mod tests {
         );
     }
 
-    // ── Shadow-direct application RTT sampler ───────────────────────────────
+    // â”€â”€ Shadow-direct application RTT sampler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn shadow_sample_is_rate_limited_to_one_per_server_per_interval() {
@@ -3025,7 +3176,7 @@ mod tests {
         );
     }
 
-    // ── Like-for-like bypass pairing ────────────────────────────────────────
+    // â”€â”€ Like-for-like bypass pairing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// A validated whole-path sample and a shadow-direct sample for the same
     /// server, which is the pair the bypass gate compares.
@@ -3154,7 +3305,7 @@ mod tests {
         );
     }
 
-    // ── Client -> relay keepalive RTT (bypass pre-gate input) ───────────────
+    // â”€â”€ Client -> relay keepalive RTT (bypass pre-gate input) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn relay(n: u8) -> SocketAddrV4 {
         SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, n), 4434)

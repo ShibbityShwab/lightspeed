@@ -751,6 +751,38 @@ mod tests {
         out
     }
 
+    /// Wait until the redirect task has bound its local game socket, returning
+    /// the tunnel peer address.
+    ///
+    /// `run_with_shutdown` binds the local socket inside the spawned task, so a
+    /// fixed warm-up sleep races that bind: on a loaded test runner the first
+    /// game datagrams can be sent before the port is open, are dropped by the
+    /// OS, and the measured burst comes up short (observed as 3 of 4 here). The
+    /// probe is an ordinary game datagram: datagrams sent before the bind are
+    /// lost, and the first one that survives is proof the socket is open. It is
+    /// drained before the measured burst, but it does occupy the first FEC block
+    /// slot, which each caller's block accounting already accounts for.
+    async fn wait_until_redirect_bound(
+        game: &UdpSocket,
+        dst: SocketAddrV4,
+        proxy: &UdpSocket,
+    ) -> SocketAddrV4 {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            game.send_to(b"prime", dst).await.unwrap();
+            let primed = recv_fec_burst(proxy, 1, Duration::from_millis(500)).await;
+            if let Some((parity, src)) = primed.first() {
+                assert!(!parity, "the priming packet must not carry parity");
+                return *src;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the redirect never bound its local game socket"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     async fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
@@ -781,15 +813,15 @@ mod tests {
             let stats = Arc::clone(&redirect.stats);
             let (tx, rx) = tokio::sync::oneshot::channel();
             let task = tokio::spawn(async move { redirect.run_with_shutdown(rx).await });
-            tokio::time::sleep(Duration::from_millis(250)).await;
 
             let game = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             let dst = SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_port);
+            wait_until_redirect_bound(&game, dst, &proxy).await;
             for _ in 0..4 {
                 game.send_to(b"data", dst).await.unwrap();
             }
 
-            let burst = recv_fec_burst(&proxy, 5, Duration::from_millis(700)).await;
+            let burst = recv_fec_burst(&proxy, 5, Duration::from_secs(5)).await;
             assert_eq!(burst.len(), 5, "one full block plus its parity");
             assert_eq!(
                 burst.iter().filter(|(parity, _)| *parity).count(),
@@ -829,15 +861,15 @@ mod tests {
             let stats = Arc::clone(&redirect.stats);
             let (tx, rx) = tokio::sync::oneshot::channel();
             let task = tokio::spawn(async move { redirect.run_with_shutdown(rx).await });
-            tokio::time::sleep(Duration::from_millis(250)).await;
 
             let game = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             let dst = SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_port);
+            wait_until_redirect_bound(&game, dst, &proxy).await;
+
             for _ in 0..4 {
                 game.send_to(b"data", dst).await.unwrap();
             }
-
-            let burst = recv_fec_burst(&proxy, 5, Duration::from_millis(700)).await;
+            let burst = recv_fec_burst(&proxy, 4, Duration::from_secs(5)).await;
             assert_eq!(
                 burst.len(),
                 4,
@@ -846,6 +878,14 @@ mod tests {
             assert!(
                 burst.iter().all(|(parity, _)| !*parity),
                 "a clean adaptive link must send no parity"
+            );
+            // No fifth packet followed the block: a short drain window, not a
+            // clean-machine assumption (the scheduler may be busy with the rest
+            // of the suite, so this only proves nothing was already in flight).
+            let extra = recv_fec_burst(&proxy, 1, Duration::from_millis(200)).await;
+            assert!(
+                extra.is_empty(),
+                "a clean adaptive link sends no parity after the block"
             );
             assert_eq!(stats.adaptive_parity_ratio_bp.load(Ordering::Relaxed), 0);
 
@@ -876,18 +916,14 @@ mod tests {
             let stats = Arc::clone(&redirect.stats);
             let (tx, rx) = tokio::sync::oneshot::channel();
             let task = tokio::spawn(async move { redirect.run_with_shutdown(rx).await });
-            tokio::time::sleep(Duration::from_millis(250)).await;
 
             let game = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             let dst = SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_port);
 
-            // One clean outbound packet teaches the test the tunnel source address,
-            // and must arrive without parity.
-            game.send_to(b"prime", dst).await.unwrap();
-            let primed = recv_fec_burst(&proxy, 1, Duration::from_secs(2)).await;
-            assert_eq!(primed.len(), 1, "the priming packet must arrive");
-            assert!(!primed[0].0, "the priming packet must not carry parity");
-            let tunnel_src = primed[0].1;
+            // Wait for the redirect to bind before measuring, then learn the
+            // tunnel source address from a clean outbound packet that must
+            // arrive without parity.
+            let tunnel_src = wait_until_redirect_bound(&game, dst, &proxy).await;
 
             // A proxy -> client block of K=2 with index 1 lost: the parity packet
             // recovers it, which is the loss signal the inline gate consumes.
@@ -922,7 +958,7 @@ mod tests {
             for _ in 0..4 {
                 game.send_to(b"data", dst).await.unwrap();
             }
-            let burst = recv_fec_burst(&proxy, 5, Duration::from_millis(700)).await;
+            let burst = recv_fec_burst(&proxy, 5, Duration::from_secs(5)).await;
             assert_eq!(
                 burst.iter().filter(|(parity, _)| *parity).count(),
                 1,

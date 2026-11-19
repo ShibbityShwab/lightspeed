@@ -33,6 +33,10 @@ pub struct ProxyConfig {
     /// Proxy-side IP-to-country aggregation settings.
     #[serde(default)]
     pub geo: GeoConfig,
+
+    /// Relay-measured relay-to-server leg prober settings.
+    #[serde(default)]
+    pub server_leg: ServerLegConfig,
 }
 
 /// Network bind configuration.
@@ -174,6 +178,30 @@ pub struct GeoConfig {
     /// into memory, so it may be replaced on disk while the proxy runs.
     #[serde(default = "default_geo_mmdb_path")]
     pub mmdb_path: String,
+}
+
+/// Relay-measured relay-to-server leg prober configuration.
+///
+/// The prober sends one small ICMP echo burst every 10 s to a game server a
+/// live session is already forwarding to, and reports the result to that
+/// client. It is on by default because the measurement is the point of the
+/// feature; an operator whose upstream or provider policy disallows ICMP from
+/// the relay, or who does not want the relay's address to be a recognisable
+/// sender of echo traffic, can disable it per relay with
+/// `[server_leg] enabled = false` or `LIGHTSPEED_SERVER_LEG_DISABLED=1`. With
+/// probing off the relay sends no server-leg message and the client falls back
+/// to the prior, exactly as if it spoke to a relay that predates the feature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerLegConfig {
+    /// Master switch for relay-side ICMP probing (default on).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for ServerLegConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Rate limiting configuration.
@@ -439,9 +467,11 @@ impl ProxyConfig {
 
     /// Apply environment overrides on top of the loaded configuration.
     ///
-    /// `LIGHTSPEED_GEO_DISABLED` (truthy) disables geo aggregation, and
-    /// `LIGHTSPEED_GEO_MMDB_PATH` overrides the database path. Applied after
-    /// [`Self::load`] so an operator can toggle geo without editing the file.
+    /// `LIGHTSPEED_GEO_DISABLED` (truthy) disables geo aggregation,
+    /// `LIGHTSPEED_GEO_MMDB_PATH` overrides the database path, and
+    /// `LIGHTSPEED_SERVER_LEG_DISABLED` (truthy) turns off relay-side server-leg
+    /// probing. Applied after [`Self::load`] so an operator can toggle them
+    /// without editing the file.
     pub fn apply_env_overrides(&mut self) {
         self.apply_env_overrides_with(|key| std::env::var(key).ok());
     }
@@ -459,6 +489,11 @@ impl ProxyConfig {
             if !path.trim().is_empty() {
                 self.geo.mmdb_path = path;
             }
+        }
+        // The server-leg prober has a matching per-relay off switch, so an
+        // operator can stop the relay sending ICMP without editing the file.
+        if let Some(raw) = get("LIGHTSPEED_SERVER_LEG_DISABLED") {
+            self.server_leg.enabled = !env_flag_truthy(&raw);
         }
     }
 }
@@ -640,5 +675,42 @@ hard_threshold_pct  = 95
         assert_eq!(config.budget.monthly_bytes, 5_368_709_120);
         assert_eq!(config.budget.soft_threshold_pct, 75);
         assert_eq!(config.budget.hard_threshold_pct, 95);
+    }
+
+    #[test]
+    fn test_server_leg_probing_defaults_to_on() {
+        // Default on: the measurement is the feature, and a relay that has not
+        // opted out should report it.
+        assert!(ProxyConfig::default().server_leg.enabled);
+        let empty: ProxyConfig = toml::from_str("").unwrap();
+        assert!(empty.server_leg.enabled);
+    }
+
+    #[test]
+    fn test_parse_server_leg_section() {
+        let disabled: ProxyConfig = toml::from_str(
+            r#"
+[server_leg]
+enabled = false
+"#,
+        )
+        .unwrap();
+        assert!(!disabled.server_leg.enabled);
+    }
+
+    #[test]
+    fn test_server_leg_env_override_can_disable_probing() {
+        let mut config = ProxyConfig::default();
+        config.apply_env_overrides_with(|key| {
+            (key == "LIGHTSPEED_SERVER_LEG_DISABLED").then(|| "1".to_string())
+        });
+        assert!(!config.server_leg.enabled);
+
+        // The usual falsy spellings leave it on.
+        let mut config = ProxyConfig::default();
+        config.apply_env_overrides_with(|key| {
+            (key == "LIGHTSPEED_SERVER_LEG_DISABLED").then(|| "off".to_string())
+        });
+        assert!(config.server_leg.enabled);
     }
 }

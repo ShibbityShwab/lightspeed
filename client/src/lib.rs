@@ -49,6 +49,18 @@ pub fn current_relay() -> Option<std::net::SocketAddrV4> {
     crate::session::current_proxy()
 }
 
+/// The relay's own measurement of the relay-to-server leg, reported over the
+/// control plane and validated before it is exposed.
+///
+/// One struct and one accessor per report type: the GUI asks for the pair it is
+/// displaying and either gets a validated measurement or `None`. The relay that
+/// delivered the report is part of the key, so a report from another relay can
+/// never be shown for the one in use. `ServerLegAppReport` is the relay's
+/// passive app-RTT sample (forward→first-response), next to the ICMP `S`.
+pub use server_leg::{
+    server_leg_app_report, server_leg_report, ServerLegAppReport, ServerLegReport,
+};
+
 pub(crate) mod capture;
 pub(crate) mod cli;
 pub(crate) mod clock;
@@ -65,6 +77,7 @@ pub(crate) mod quic;
 pub(crate) mod redirect;
 pub mod registry;
 pub(crate) mod route;
+pub mod server_leg;
 pub(crate) mod session;
 pub mod telemetry;
 pub(crate) mod tunnel;

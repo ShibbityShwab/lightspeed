@@ -180,6 +180,90 @@ pub(super) fn measured_server_leg(
     })
 }
 
+/// The relay's own measurement of the relay→server leg for the pair on screen.
+///
+/// The client crate owns the validity rules (plausibility, 120 s freshness, the
+/// direct-ping floor) and the pair binding, so the window has no second copy of
+/// them: it asks for the exact `(relay, server)` it is displaying and either
+/// gets the relay's report or `None`. The report says whether the triangle-floor
+/// check actually ran ([`lightspeed_client::ServerLegReport::validated`]); a
+/// fail-open report is still returned and the row label qualifies it.
+pub(super) fn relay_measured_server_leg(
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+) -> Option<lightspeed_client::ServerLegReport> {
+    lightspeed_client::server_leg_report(relay, server)
+}
+
+/// The `Server leg` row for a relay-measured figure.
+///
+/// One label, one number: the value is the relay's ICMP median and the sample
+/// count behind it, never a derived or rounded-up claim. A report the client
+/// accepted fail-open - the triangle floor could not be checked because the
+/// direct ping or the client leg was missing - is still shown, but its label
+/// says `measured, unvalidated` instead of plainly `measured`: the figure is
+/// the relay's measurement, the validation is what is absent.
+pub(super) fn relay_measured_leg_text(report: &lightspeed_client::ServerLegReport) -> String {
+    let ms = format!("{:.0}", f64::from(report.median_us) / 1000.0);
+    let samples = report.samples.to_string();
+    let secs = report.age.as_secs().to_string();
+    let key = if report.validated {
+        "route.server_leg_relay_measured"
+    } else {
+        "route.server_leg_relay_measured_unvalidated"
+    };
+    i18n::t_with(key, &[("ms", &ms), ("n", &samples), ("secs", &secs)])
+}
+
+/// The relay's passive app-RTT report for the pair on screen.
+///
+/// Same validity split as [`relay_measured_server_leg`]: the client crate owns
+/// the store, freshness and floor flag, so the window asks for its exact
+/// `(relay, server)` pair and gets either the report or `None`. This is a
+/// display-only secondary figure - the F4 revision uses it as the relay-side
+/// peer reference, never as a ranking input, so nothing here feeds the chooser.
+pub(super) fn relay_measured_app_server_leg(
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+) -> Option<lightspeed_client::ServerLegAppReport> {
+    lightspeed_client::server_leg_app_report(relay, server)
+}
+
+/// The `Relay→server (app)` value: the passive median in ms and its sample
+/// count, never the age or a blended figure.
+///
+/// The report's `floor_ok` flag is for the F4 harvest (an invalid passive
+/// sample), not a display rule: the value is the relay's own number and the row
+/// makes no validity claim. The client accepted the report either way.
+pub(super) fn relay_measured_app_leg_text(
+    report: &lightspeed_client::ServerLegAppReport,
+) -> String {
+    let ms = format!("{:.0}", f64::from(report.passive_median_us) / 1000.0);
+    let samples = report.samples.to_string();
+    i18n::t_with(
+        "route.server_leg_app_measured",
+        &[("ms", &ms), ("n", &samples)],
+    )
+}
+
+/// The `Expected path` row: the one measurement the two measured legs support,
+/// `L + S`.
+///
+/// `L` is the one-RTT client→relay keepalive the route card already shows as
+/// `Relay RTT`; `S` is the relay-measured server leg. The sum is a **floor** on
+/// the relayed path, not the path: it omits the relay's own queueing and CPU, so
+/// it is labelled with `~` and never compared to direct as a verdict here.
+/// `None` while no fresh client leg is displayed, because a bare `S` cannot
+/// become a path total without it.
+pub(super) fn expected_path_text(client_leg_ms: f64, server_leg_us: u32) -> Option<String> {
+    if !client_leg_ms.is_finite() || client_leg_ms <= 0.0 {
+        return None;
+    }
+    let total_us = (client_leg_ms * 1000.0).round() as u64 + u64::from(server_leg_us);
+    let ms = format!("{:.0}", total_us as f64 / 1000.0);
+    Some(i18n::t_with("route.expected_path", &[("ms", &ms)]))
+}
+
 /// The route surface's state for the relay-to-server leg of the relay in use.
 ///
 /// Precedence is deliberate and single:
@@ -279,6 +363,123 @@ pub(super) fn relay_cannot_beat_direct(
     let client = client_leg_us?;
     let direct = direct_us_for(ping, server)?;
     (client >= direct).then_some((client, direct))
+}
+
+/// The candidate pool after the starvation demotion, and how many relays it
+/// dropped.
+///
+/// A relay is dropped when its record for this exact server says
+/// [`CarryVerdict::Starved`](crate::relay_history::CarryVerdict::Starved): the
+/// watchdog's exhausted-chain verdict, or the starvation signature (enough
+/// forwards, no reply at all) that a live record can show without one. The
+/// signature is the case the live 2026-11-19 session exposed - 4,522 forwards for
+/// a G-Core server with zero replies, `failed` never set, so the old filter kept
+/// re-selecting the relay that had already proven it did not carry that server.
+///
+/// If every candidate is on record as starved they are still the only relays
+/// available, so the unfiltered list stands and nothing is reported as skipped:
+/// an empty candidate list would silently disable auto-selection.
+pub(super) fn without_starved(
+    server: Ipv4Addr,
+    candidates: &[RelayCandidate],
+    history: &crate::relay_history::RelayHistory,
+) -> (Vec<RelayCandidate>, usize) {
+    let survivors: Vec<RelayCandidate> = candidates
+        .iter()
+        .filter(|candidate| {
+            history.carry_verdict(candidate.relay, server)
+                != crate::relay_history::CarryVerdict::Starved
+        })
+        .cloned()
+        .collect();
+    if survivors.is_empty() {
+        return (candidates.to_vec(), 0);
+    }
+    let skipped = candidates.len() - survivors.len();
+    (survivors, skipped)
+}
+
+/// The candidate pool for a server whose position is unknown, restricted to
+/// relays with a proven carry record for that exact server when any exist.
+///
+/// Returns `(pool, proven)`, where `proven` is the number of candidates kept
+/// because their record is [`CarryVerdict::Proven`](crate::relay_history::CarryVerdict::Proven).
+/// Zero means no candidate had proof and the pool is unchanged - an unproven
+/// relay is not a bad relay, so with no proof at all the pool must not shrink.
+pub(super) fn prefer_proven(
+    server: Ipv4Addr,
+    candidates: Vec<RelayCandidate>,
+    history: &crate::relay_history::RelayHistory,
+) -> (Vec<RelayCandidate>, usize) {
+    let proven: Vec<RelayCandidate> = candidates
+        .iter()
+        .filter(|candidate| {
+            history.carry_verdict(candidate.relay, server)
+                == crate::relay_history::CarryVerdict::Proven
+        })
+        .cloned()
+        .collect();
+    if proven.is_empty() {
+        return (candidates, 0);
+    }
+    let proven_count = proven.len();
+    (proven, proven_count)
+}
+
+/// One ranking of the candidates for a server the client has no position for.
+#[derive(Clone, Debug)]
+pub(super) struct FallbackRanking {
+    /// The engine's order for the surviving candidates, best first.
+    pub(super) ranked: Vec<lightspeed_client::ScoredRelay>,
+    /// Candidates removed because their record says the relay starves this server.
+    pub(super) skipped_starved: usize,
+    /// Candidates kept because their record proves they carry this server; zero
+    /// when none was proven and the whole pool was ranked.
+    pub(super) proven: usize,
+}
+
+/// Rank candidates for a destination whose position is unknown.
+///
+/// The destination-aware ranking needs a server position to know which half of
+/// the path each relay would be on. When there is none, the region prior the
+/// engine falls back on is exactly the guess that produced the live defect (a
+/// G-Core Virginia server was plotted in Japan, so relay-sgp-1 looked nearest),
+/// so it cannot be trusted to order the relays. What is still real evidence:
+///
+/// 1. a recorded carry record proving the relay carried this exact server;
+/// 2. the measured client leg, ascending;
+/// 3. client jitter;
+/// 4. the numerical relay address - last, never a destination signal.
+///
+/// Starved relays are removed first, and when any candidate is proven only the
+/// proven ones are ranked. The region/position hints are then dropped from the
+/// candidates: they feed nothing but the region prior, and there is no server
+/// position to validate that prior against. A *measured* destination leg is
+/// still used - the estimator is keyed by `(relay, server)`, not by those
+/// fields - so real server-side evidence is kept while the guess is not. With
+/// the prior gone, the engine's order is the measured client leg (then jitter,
+/// then address), which is the fallback the product wants.
+pub(super) fn rank_without_destination(
+    server: Ipv4Addr,
+    candidates: &[RelayCandidate],
+    direct_us: Option<u64>,
+    history: &crate::relay_history::RelayHistory,
+) -> FallbackRanking {
+    let (candidates, skipped_starved) = without_starved(server, candidates, history);
+    let (candidates, proven) = prefer_proven(server, candidates, history);
+    let measured_only: Vec<RelayCandidate> = candidates
+        .into_iter()
+        .map(|candidate| RelayCandidate {
+            region: None,
+            node_id: None,
+            ..candidate
+        })
+        .collect();
+    FallbackRanking {
+        ranked: lightspeed_client::rank_relays_with_direct(server, &measured_only, direct_us),
+        skipped_starved,
+        proven,
+    }
 }
 
 pub(super) fn try_auto_detect_game() -> Option<String> {

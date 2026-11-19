@@ -28,6 +28,7 @@ mod quic;
 mod redirect;
 mod registry;
 mod route;
+mod server_leg;
 mod session;
 mod telemetry;
 mod tunnel;

@@ -179,6 +179,20 @@ impl RelayDestinationEstimator {
         samples.tunnelled_newest.insert(destination, at);
     }
 
+    /// How many validated tunnelled samples the estimator holds for the
+    /// `(relay, destination)` pair, or zero when it has never observed it.
+    ///
+    /// This is the sample count behind [`Self::estimate`] and
+    /// [`Self::path_rtt_us`], exposed so the per-sample trace line can carry
+    /// the count the routing estimator actually has for the pair.
+    pub fn tunnelled_samples(&self, relay: SocketAddrV4, destination: Ipv4Addr) -> usize {
+        let relays = self.lock();
+        relays
+            .get(&relay)
+            .and_then(|samples| samples.tunnelled.get(&destination))
+            .map_or(0, |samples| samples.len())
+    }
+
     /// The current estimate for the `(relay, destination)` pair, or `None`
     /// while either leg is short of [`MIN_DEST_SAMPLES`], the newest tunnelled
     /// sample is older than [`DEST_FRESHNESS_TTL`], or the implied destination
@@ -453,6 +467,13 @@ pub fn observe_tunnelled(relay: SocketAddrV4, destination: Ipv4Addr, rtt_us: u64
     }
 }
 
+/// How many tunnelled samples the global estimator holds for
+/// `(relay, destination)`, or `None` when routing has not installed an
+/// estimator.
+pub fn tunnelled_samples(relay: SocketAddrV4, destination: Ipv4Addr) -> Option<usize> {
+    global().map(|estimator| estimator.tunnelled_samples(relay, destination))
+}
+
 /// Record a destination's region into the global estimator, installing it on
 /// first use. A registration ack can arrive before routing has set the
 /// estimator up, and the region must still be cached when selection runs.
@@ -705,6 +726,32 @@ mod tests {
             est.estimate(relay(1), server(1)),
             None,
             "a whole-path probe is not a destination-leg measurement"
+        );
+    }
+
+    #[test]
+    fn tunnelled_samples_counts_the_pair_for_the_trace_line() {
+        // The per-sample QUIET_FLOW_SAMPLE line carries this count, so it must
+        // be the pair's own ring length - not the relay's total and not another
+        // destination's.
+        let est = RelayDestinationEstimator::new();
+        assert_eq!(
+            est.tunnelled_samples(relay(1), server(1)),
+            0,
+            "nothing observed yet"
+        );
+        est.observe_tunnelled(relay(1), server(1), 60_000);
+        est.observe_tunnelled(relay(1), server(1), 61_000);
+        assert_eq!(est.tunnelled_samples(relay(1), server(1)), 2);
+        assert_eq!(
+            est.tunnelled_samples(relay(1), server(2)),
+            0,
+            "a different destination is not counted"
+        );
+        assert_eq!(
+            est.tunnelled_samples(relay(2), server(1)),
+            0,
+            "a different relay is not counted"
         );
     }
 

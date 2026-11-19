@@ -575,6 +575,34 @@ mod inner {
             }
         }
 
+        /// Advertise the capabilities this client can consume.
+        ///
+        /// Sent once per control connection, best-effort and never awaited for a
+        /// reply: a relay that predates [`ControlMessage::ClientCaps`] decodes
+        /// an unknown type and drops the stream without touching the
+        /// connection. The relay uses the bitmap to decide whether it may push
+        /// a relay-measured server-leg report; a session that never sends this
+        /// is simply never pushed one, which is what keeps a pre-R2 client from
+        /// receiving frames it would not read.
+        pub async fn advertise_client_caps(&self, caps: u8) -> Result<(), QuicError> {
+            let conn = self
+                .connection
+                .as_ref()
+                .ok_or_else(|| QuicError::ConnectionFailed("Not connected".into()))?;
+
+            let (mut send, _recv) = conn
+                .open_bi()
+                .await
+                .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+            ControlMessage::ClientCaps { caps }
+                .write_to(&mut send)
+                .await
+                .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+            send.finish()
+                .map_err(|e| QuicError::ConnectionFailed(e.to_string()))?;
+            Ok(())
+        }
+
         /// Request a fresh data-plane session token from the relay.
         ///
         /// Returns `(new_token, old_token)`; the caller applies the rotation to
@@ -983,7 +1011,7 @@ mod supervisor {
     use tokio::task::JoinHandle;
     use tracing::{debug, info, warn};
 
-    use lightspeed_protocol::control::ControlMessage;
+    use lightspeed_protocol::control::{caps, ControlMessage};
 
     use super::inner::{AlpnMemory, ControlClient};
     use crate::error::QuicError;
@@ -1329,6 +1357,18 @@ mod supervisor {
                         backoff.reset();
                         info!(relay = %data_addr, token, "control-plane registered");
                     }
+                    // Tell the relay what this client can consume before holding
+                    // the connection: a relay only pushes a relay-measured
+                    // server-leg report to a session that advertised it can read
+                    // one. Best-effort; a relay that predates the message drops
+                    // the stream and the session is unaffected.
+                    if let Err(error) = client.advertise_client_caps(caps::SERVER_LEG).await {
+                        debug!(
+                            relay = %data_addr,
+                            %error,
+                            "capability advertisement failed; server-leg reports may not be pushed"
+                        );
+                    }
                     if first_attempt {
                         let _ = initial_tx.send_replace(Initial::Done(token));
                         first_attempt = false;
@@ -1553,6 +1593,13 @@ mod supervisor {
         }
     }
 
+    /// Time budget for reading one relay-pushed control message.
+    ///
+    /// Report streams are opened by the relay and are short; a stream that goes
+    /// quiet (relay restarted mid-write, half-finished frame) must not pin the
+    /// reader task forever.
+    const SERVER_LEG_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
     async fn hold_connection(
         client: &ControlClient,
         data_addr: SocketAddrV4,
@@ -1564,6 +1611,15 @@ mod supervisor {
         let Some(connection) = connection else {
             return HoldOutcome::Disconnected;
         };
+        // The relay pushes relay-measured server-leg reports on server-initiated
+        // unidirectional streams. They are read here, bound to this supervisor's
+        // relay, for as long as the connection lives.
+        let report_reader = tokio::spawn(read_server_leg_reports(
+            connection.clone(),
+            data_addr,
+            generation,
+            stop_rx.clone(),
+        ));
         let mut interval = tokio::time::interval(PING_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
@@ -1581,21 +1637,112 @@ mod supervisor {
             interval.tick().await;
         }
 
-        loop {
+        let outcome = loop {
             tokio::select! {
-                _ = stop_requested(stop_rx) => return HoldOutcome::Stopped,
+                _ = stop_requested(stop_rx) => break HoldOutcome::Stopped,
                 _ = connection.closed() => {
                     warn!("control-plane connection closed; reconnecting");
-                    return HoldOutcome::Disconnected;
+                    break HoldOutcome::Disconnected;
                 }
                 _ = interval.tick() => {
                     if client.ping().await.is_err() {
                         warn!("control-plane ping failed; reconnecting");
-                        return HoldOutcome::Disconnected;
+                        break HoldOutcome::Disconnected;
                     }
                 }
                 _ = rotation_tick(&mut rotation) => {
                     rotate_once(client, data_addr, generation, current_token).await;
+                }
+            }
+        };
+        report_reader.abort();
+        outcome
+    }
+
+    /// Read relay-pushed control messages from server-initiated uni streams.
+    ///
+    /// The relay pushes two server-leg report types on this path:
+    /// [`ControlMessage::ServerLeg`] (its ICMP `S`) and
+    /// [`ControlMessage::ServerLegApp`] (its passive forward→first-response
+    /// sample). Each is stored under this supervisor's relay already, so neither
+    /// can describe another relay, and it is dropped if this supervisor has been
+    /// superseded before it arrived. Every other message, and every malformed
+    /// frame, is ignored - the control plane's job is not to police a relay it
+    /// already trusts to carry traffic, and a bad frame must never tear the
+    /// session down.
+    async fn read_server_leg_reports(
+        connection: quinn::Connection,
+        data_addr: SocketAddrV4,
+        generation: u64,
+        mut stop_rx: watch::Receiver<bool>,
+    ) {
+        loop {
+            let accepted = tokio::select! {
+                _ = stop_requested(&mut stop_rx) => return,
+                accepted = connection.accept_uni() => accepted,
+            };
+            let Ok(mut recv) = accepted else {
+                return;
+            };
+            loop {
+                let message = tokio::time::timeout(
+                    SERVER_LEG_READ_TIMEOUT,
+                    ControlMessage::read_from(&mut recv),
+                )
+                .await;
+                match message {
+                    Ok(Ok(Some(ControlMessage::ServerLeg {
+                        server,
+                        median_us,
+                        jitter_us,
+                        samples,
+                        age_ms,
+                    }))) => {
+                        if generation_is_current(data_addr, generation) {
+                            crate::server_leg::record(
+                                data_addr, server, median_us, jitter_us, samples, age_ms,
+                            );
+                        }
+                    }
+                    Ok(Ok(Some(ControlMessage::ServerLegApp {
+                        server,
+                        passive_median_us,
+                        passive_samples,
+                        age_ms,
+                    }))) => {
+                        // `record_app` returns whether the report was accepted;
+                        // exactly one stable info line is emitted per accepted
+                        // report for the E1 harvest.
+                        if generation_is_current(data_addr, generation)
+                            && crate::server_leg::record_app(
+                                data_addr,
+                                server,
+                                passive_median_us,
+                                passive_samples,
+                                age_ms,
+                            )
+                        {
+                            let at_unix_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis();
+                            info!(
+                                "{}",
+                                crate::server_leg::server_leg_app_log_line(
+                                    data_addr,
+                                    server,
+                                    u64::from(passive_median_us),
+                                    passive_samples,
+                                    age_ms,
+                                    at_unix_ms,
+                                )
+                            );
+                        }
+                    }
+                    Ok(Ok(Some(_))) => {}
+                    // A cleanly finished stream, a truncated frame or a timeout
+                    // all end this stream; the connection itself is still good.
+                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => break,
                 }
             }
         }

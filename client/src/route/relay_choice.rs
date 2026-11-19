@@ -44,6 +44,15 @@
 //! only when the whole-path estimates are exactly equal, so that is what the key
 //! does.
 //!
+//! One exception comes before jitter: the triangle floor (`GeometricFloor`) makes
+//! every floored candidate's total exactly the measured direct ping, so the
+//! totals tie by construction. Those ties are ordered by the pre-floor
+//! destination prior - the magnitude was proven optimistic, but its ordering is
+//! still the only destination evidence - because jitter and the numerical relay
+//! address carry no destination signal at all. The live ROB RUN session of
+//! 2026-11-19 is the regression: without this key, relay-syd-1 (`45.76.114.93`)
+//! won a floor tie for a Virginia server purely because its address sorted first.
+//!
 //! What the ranking can and cannot do is part of being honest. With a measured
 //! leg, or the triangle bound derived from a measured direct ping, the
 //! destination side moves the order; with only the country-level prior every US
@@ -99,6 +108,27 @@ pub struct ScoredRelay {
     /// A validity/uncertainty term inside [`ScoredRelay::total_leg_us`], not a
     /// ranking key of its own.
     pub dest_leg_us: u64,
+    /// The destination leg *before* the triangle floor raised it, microseconds.
+    ///
+    /// A floored leg is a lower bound, not an estimate, so every floored candidate
+    /// ends up with exactly the direct-ping total and the totals cannot order
+    /// them. The prior's magnitude was proven too optimistic, but its *order*
+    /// still says which relay is nearer the server; keeping the pre-floor figure
+    /// lets [`sort_scored`] use that order instead of falling through to jitter or
+    /// the numerical relay address, neither of which knows anything about the
+    /// destination. Equals `dest_leg_us` when no floor was applied.
+    pub dest_leg_prior_us: u64,
+    /// The candidate's measured client-to-relay leg, microseconds.
+    ///
+    /// The one measured quantity every candidate has: the destination leg is a
+    /// measurement only for a relay that has already carried traffic to this
+    /// server, and a prior otherwise. When the whole-path totals and the pre-floor
+    /// priors both tie - every US relay resolving to the same country centroid is
+    /// the common case - a shorter measured client leg is real evidence about the
+    /// path while the jitter and the numerical relay address are not. Ranking it
+    /// here is what keeps a floor tie from being decided by which relay's IP sorts
+    /// first (the live 2026-11-19 defect).
+    pub client_leg_us: u64,
     /// How the second leg was obtained, for the log line and for tests.
     pub dest_source: DestLegSource,
     /// Jitter estimate carried forward, microseconds.
@@ -151,10 +181,40 @@ pub const PRIOR_UNDERTAINTY_US: u64 = 25_000;
 /// evidence about any such check; if one is ever observed it belongs in candidate
 /// selection as a validity filter, not as an ordering key that overrides the
 /// estimate.
+/// Sort by the whole-path total, then by the pre-floor destination prior, then
+/// by the measured client leg, then by jitter, then by address.
+///
+/// [`ScoredRelay::total_leg_us`] is the quantity the chooser minimises: the
+/// client leg plus the destination-leg estimate plus that estimate's own
+/// uncertainty. Comparing it first is what makes the destination leg a
+/// validity/uncertainty term rather than an overriding key - the previous
+/// `dest_leg_us / 50_000` bucket could rank a relay whose estimated whole path is
+/// 368.9 ms above one at 283.5 ms
+/// (`tests::the_whole_path_total_outranks_the_destination_bucket`).
+///
+/// The pre-floor prior is the second key because the triangle floor deliberately
+/// makes several candidates' totals *equal*: `GeometricFloor` carries no prior
+/// penalty, so a floored candidate's total is exactly the direct ping and the
+/// totals cannot separate them. Before this key existed, those ties fell through
+/// to jitter and then the numerical relay address - on the live ROB RUN session
+/// of 2026-11-19 that selected relay-syd-1 (`45.76.114.93`) for a Virginia
+/// server purely because its address sorted first. The prior's magnitude was
+/// invalidated by the bound, but its ordering (which relay is nearer the server)
+/// is still destination evidence, and it is the only such evidence left at that
+/// point.
+///
+/// The measured client leg comes next, before jitter and the address, because
+/// the prior cannot always separate the candidates either: every US address
+/// resolves to one country centroid, so LAX and EWR carry the *same* prior, and
+/// a floor tie between them used to fall through to jitter then to whichever IP
+/// sorted first. A real client-leg measurement is evidence; a mobile link's
+/// jitter and the numerical relay address are not.
 fn sort_scored(scored: &mut [ScoredRelay]) {
     scored.sort_by(|a, b| {
         a.total_leg_us
             .cmp(&b.total_leg_us)
+            .then_with(|| a.dest_leg_prior_us.cmp(&b.dest_leg_prior_us))
+            .then_with(|| a.client_leg_us.cmp(&b.client_leg_us))
             .then_with(|| a.jitter_us.cmp(&b.jitter_us))
             .then_with(|| a.relay.cmp(&b.relay))
     });
@@ -191,9 +251,10 @@ pub fn rank_with_direct(
         .iter()
         .filter_map(|c| {
             let (dest_leg_us, dest_source) = dest_leg_for(server, dest_region.as_deref(), c);
+            let dest_leg_prior_us = dest_leg_us;
             let (dest_leg_us, dest_source) =
                 apply_floor(dest_leg_us, dest_source, direct_rtt_us, c.client_leg_us);
-            score_with(c, dest_leg_us, dest_source)
+            score_with(c, dest_leg_us, dest_source, dest_leg_prior_us)
         })
         .collect();
 
@@ -303,6 +364,9 @@ fn score_one_at(
 ) -> Option<ScoredRelay> {
     let (mut dest_leg_us, mut dest_source) =
         dest_leg_for_at(server, server_location, dest_region, candidate);
+    // Keep the prior's own figure: the floor below may replace it with a lower
+    // bound, but its ordering is the only destination signal left for a tie.
+    let dest_leg_prior_us = dest_leg_us;
     let (raised, raised_source) = apply_floor(
         dest_leg_us,
         dest_source,
@@ -311,7 +375,7 @@ fn score_one_at(
     );
     dest_leg_us = raised;
     dest_source = raised_source;
-    score_with(candidate, dest_leg_us, dest_source)
+    score_with(candidate, dest_leg_us, dest_source, dest_leg_prior_us)
 }
 
 /// Combine a candidate's client leg with a destination-leg estimate.
@@ -323,6 +387,7 @@ fn score_with(
     candidate: &RelayCandidate,
     dest_leg_us: u64,
     dest_source: DestLegSource,
+    dest_leg_prior_us: u64,
 ) -> Option<ScoredRelay> {
     let client_leg_us = candidate.client_leg_us?;
 
@@ -340,6 +405,8 @@ fn score_with(
             .saturating_add(dest_leg_us)
             .saturating_add(penalty),
         dest_leg_us,
+        dest_leg_prior_us,
+        client_leg_us,
         dest_source,
         jitter_us: candidate.client_jitter_us,
     })
@@ -752,7 +819,8 @@ mod tests {
         dest_leg_us: u64,
         source: DestLegSource,
     ) -> ScoredRelay {
-        score_with(candidate, dest_leg_us, source).expect("a candidate with a client leg scores")
+        score_with(candidate, dest_leg_us, source, dest_leg_us)
+            .expect("a candidate with a client leg scores")
     }
 
     #[test]
@@ -852,6 +920,158 @@ mod tests {
         let mut tied = vec![row([10, 0, 0, 2], 5_000), row([10, 0, 0, 1], 5_000)];
         sort_scored(&mut tied);
         assert_eq!(tied[0].relay.ip(), &Ipv4Addr::new(10, 0, 0, 1));
+    }
+
+    #[test]
+    fn a_floored_candidate_is_ordered_by_the_prior_not_by_jitter_or_address() {
+        // The live defect this key fixes. When the direct ping floors several
+        // candidates, every total is exactly the direct ping (`GeometricFloor`
+        // carries no penalty), the totals tie, and the old key fell through to
+        // jitter and then the numerical relay address. On 2026-11-19 that picked
+        // relay-syd-1 (45.76.114.93) for a Virginia server because its address
+        // sorted first. The prior's magnitude was proven too optimistic, but its
+        // order still says which relay is nearer the server; that must decide.
+        let nearest = relay([10, 0, 0, 2], "us-east", 100_000, 50_000);
+        let farther = relay([10, 0, 0, 1], "us-east", 100_000, 0);
+        // Both floored to the same bound: 100 ms client + 200 ms floor = 300 ms.
+        let nearest_row = score_with(&nearest, 200_000, DestLegSource::GeometricFloor, 20_000)
+            .expect("a candidate with a client leg scores");
+        let farther_row = score_with(&farther, 200_000, DestLegSource::GeometricFloor, 150_000)
+            .expect("a candidate with a client leg scores");
+        assert_eq!(nearest_row.total_leg_us, 300_000);
+        assert_eq!(farther_row.total_leg_us, 300_000);
+        assert!(farther_row.jitter_us < nearest_row.jitter_us);
+        assert!(farther_row.relay < nearest_row.relay);
+        let mut ranked = vec![farther_row, nearest_row.clone()];
+        sort_scored(&mut ranked);
+        assert_eq!(
+            ranked[0], nearest_row,
+            "with every total at the floor, the destination prior decides - not the \
+             steadier jitter and not the smaller relay address"
+        );
+    }
+
+    #[test]
+    fn a_floor_tie_with_equal_priors_is_broken_by_the_client_leg_not_the_address() {
+        // The destination-less shape of the live 2026-11-19 defect. The client has
+        // no exact server position, so candidates are raised to the measured
+        // direct ping and every total is exactly that ping; when the priors tie
+        // too - every US address resolves to the same country centroid, and the
+        // two US relays are the canonical pair - the old key fell through to
+        // jitter and then to the numerically smaller relay address. The measured
+        // client leg is the only real evidence left, so it must decide.
+        let faster_client = relay([10, 0, 0, 2], "us-west", 45_500, 0);
+        let slower_client = relay([10, 0, 0, 1], "us-east", 216_500, 0);
+        // Both floored to 315 ms direct: client + (direct - client) = direct.
+        let faster_row = score_with(
+            &faster_client,
+            269_500,
+            DestLegSource::GeometricFloor,
+            10_000,
+        )
+        .expect("a candidate with a client leg scores");
+        let slower_row = score_with(
+            &slower_client,
+            98_500,
+            DestLegSource::GeometricFloor,
+            10_000,
+        )
+        .expect("a candidate with a client leg scores");
+        assert_eq!(faster_row.total_leg_us, 315_000);
+        assert_eq!(slower_row.total_leg_us, 315_000);
+        assert_eq!(
+            faster_row.dest_leg_prior_us, slower_row.dest_leg_prior_us,
+            "the country centroid gives both US relays the same prior"
+        );
+        assert_eq!(faster_row.jitter_us, slower_row.jitter_us);
+        assert!(
+            faster_row.relay > slower_row.relay,
+            "the address key alone would pick the slower client leg"
+        );
+        let mut ranked = vec![faster_row.clone(), slower_row.clone()];
+        sort_scored(&mut ranked);
+        assert_eq!(
+            ranked[0], faster_row,
+            "a floored tie with equal priors is broken by the measured client leg"
+        );
+        assert_eq!(ranked[0].client_leg_us, 45_500);
+        assert_eq!(ranked[1].client_leg_us, 216_500);
+        // And the ordering key is the client leg, not the relay address: the
+        // winner is the numerically larger address, which the old key ranked last.
+        assert!(
+            ranked[0].relay > ranked[1].relay,
+            "the numerical relay address must not decide the tie"
+        );
+    }
+
+    #[test]
+    fn the_client_leg_never_outranks_a_smaller_whole_path() {
+        // The key is a tie-break, not a fourth term: a relay that is closer to the
+        // client but on a longer whole path still loses.
+        let short_leg = scored_from(
+            &relay([10, 0, 0, 1], "us-east", 45_500, 0),
+            400_000,
+            DestLegSource::Measured,
+        );
+        let shorter_path = scored_from(
+            &relay([10, 0, 0, 9], "us-east", 216_500, 0),
+            50_000,
+            DestLegSource::Measured,
+        );
+        assert_eq!(short_leg.total_leg_us, 445_500);
+        assert_eq!(shorter_path.total_leg_us, 266_500);
+        let mut ranked = vec![short_leg, shorter_path.clone()];
+        sort_scored(&mut ranked);
+        assert_eq!(ranked[0], shorter_path);
+    }
+
+    /// The live ROB RUN case of 2026-11-19: the measured client legs, the direct
+    /// ICMP ping of that session, and the wrong JP country point the shipped
+    /// DB-IP table still resolves for the server's hosting range.
+    #[test]
+    fn the_live_rob_run_floor_tie_is_not_won_by_the_relay_address() {
+        let server = Ipv4Addr::new(178, 107, 14, 31);
+        let direct_us = 325_000;
+        let candidates = [
+            relay_node([207, 246, 106, 36], "relay-lax-1", 216_500),
+            relay_node([207, 246, 124, 117], "relay-ewr-1", 304_700),
+            relay_node([45, 77, 32, 236], "relay-sgp-1", 45_500),
+            relay_node([95, 179, 164, 138], "relay-fra", 200_200),
+            relay_node([167, 179, 77, 127], "relay-nrt", 120_900),
+            relay_node([65, 20, 92, 201], "relay-bom-1", 95_500),
+            relay_node([65, 20, 99, 61], "relay-mad-1", 196_100),
+            relay_node([45, 76, 114, 93], "relay-syd-1", 138_400),
+        ];
+        let ranked = rank_at_with_direct(server, (36.2, 138.3), &candidates, Some(direct_us));
+        let floored: Vec<&ScoredRelay> = ranked
+            .iter()
+            .filter(|scored| scored.dest_source == DestLegSource::GeometricFloor)
+            .collect();
+        assert!(
+            floored.len() >= 3,
+            "the live ping floors several candidates, got {}",
+            floored.len()
+        );
+        assert_eq!(ranked[0].dest_source, DestLegSource::GeometricFloor);
+        assert_eq!(
+            ranked[0].dest_leg_prior_us,
+            floored
+                .iter()
+                .map(|scored| scored.dest_leg_prior_us)
+                .min()
+                .expect("at least one floored candidate"),
+            "the winner must be the floored candidate nearest the destination point"
+        );
+        // The old key picked the smallest relay address among the floored set
+        // (relay-syd-1, 45.76.114.93); that must no longer be what wins.
+        let smallest_address = floored
+            .iter()
+            .min_by(|a, b| a.relay.cmp(&b.relay))
+            .expect("at least one floored candidate");
+        assert_ne!(
+            ranked[0].relay, smallest_address.relay,
+            "the numerical relay address must not decide a floor tie"
+        );
     }
 
     #[test]

@@ -82,6 +82,17 @@ struct TestServer {
 
 impl TestServer {
     fn start(close_first_after_ack: bool) -> Self {
+        Self::start_inner(close_first_after_ack, None)
+    }
+
+    /// A server that also pushes one relay-measured server-leg report for
+    /// `game_server` right after the registration ack, the way a relay with the
+    /// R2 prober does.
+    fn start_with_server_leg(game_server: Ipv4Addr) -> Self {
+        Self::start_inner(false, Some(game_server))
+    }
+
+    fn start_inner(close_first_after_ack: bool, server_leg_server: Option<Ipv4Addr>) -> Self {
         let endpoint = server_endpoint();
         let control_port = endpoint.local_addr().expect("local addr").port();
         let registrations = Arc::new(AtomicUsize::new(0));
@@ -113,6 +124,7 @@ impl TestServer {
                             connection,
                             index,
                             close_first_after_ack,
+                            server_leg_server,
                             registrations,
                             tokens,
                         )
@@ -148,6 +160,7 @@ async fn serve_connection(
     connection: quinn::Connection,
     connection_index: usize,
     close_first_after_ack: bool,
+    server_leg_server: Option<Ipv4Addr>,
     registrations: Arc<AtomicUsize>,
     tokens: Arc<Mutex<Vec<u32>>>,
 ) {
@@ -172,6 +185,34 @@ async fn serve_connection(
                     };
                     let _ = ack.write_to(&mut send).await;
                     let _ = send.finish();
+                    // The R2 shape: the relay pushes a server-leg report on its
+                    // own unidirectional stream after the ack.
+                    if let Some(server) = server_leg_server {
+                        if let Ok(mut uni) = connection.open_uni().await {
+                            let report = ControlMessage::ServerLeg {
+                                server,
+                                median_us: 148_000,
+                                jitter_us: 3_000,
+                                samples: 3,
+                                age_ms: 10,
+                            };
+                            let _ = report.write_to(&mut uni).await;
+                            let _ = uni.finish();
+                        }
+                        // The passive app-RTT report rides the same path as a
+                        // separate message; a client that predates it ignores
+                        // the unknown tag.
+                        if let Ok(mut uni) = connection.open_uni().await {
+                            let report = ControlMessage::ServerLegApp {
+                                server,
+                                passive_median_us: 47_000,
+                                passive_samples: 9,
+                                age_ms: 300,
+                            };
+                            let _ = report.write_to(&mut uni).await;
+                            let _ = uni.finish();
+                        }
+                    }
                     if close_first_after_ack && connection_index == 0 {
                         // Give the client time to read the ack, then sever the
                         // control connection to force a supervised reconnect.
@@ -317,6 +358,120 @@ async fn supervisor_stopped_on_disconnect() {
         session_token(),
         0,
         "a normal disconnect must not zero the session token"
+    );
+
+    let _ = stop_supervisor(data_addr);
+}
+
+// ── Relay-measured server leg (R2) ─────────────────────────────────────
+
+/// A relay-pushed `MSG_SERVER_LEG` reaches the client, is stored under the
+/// relay whose control connection delivered it and the server it names, and is
+/// served by the public accessor for that pair only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pushed_server_leg_report_is_stored_under_its_own_relay_and_server() {
+    isolate_fingerprint_store();
+    let game_server: Ipv4Addr = "91.199.82.166".parse().expect("game server");
+    let server = TestServer::start_with_server_leg(game_server);
+    let data_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41301);
+    let _ = stop_supervisor(data_addr);
+
+    let token = register_session(data_addr, server.control_port, HARD_CAP_PATH_MTU)
+        .await
+        .expect("registration must return a token");
+    assert!(token > 0);
+
+    // The push arrives on a separate stream after the ack; give the reader a
+    // bounded window rather than assuming it lands in the first poll.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut report = None;
+    while Instant::now() < deadline {
+        report = lightspeed_client::server_leg_report(data_addr, game_server);
+        if report.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let report = report.expect("the pushed report must be stored for its own pair");
+    assert_eq!(report.median_us, 148_000);
+    assert_eq!(report.jitter_us, 3_000);
+    assert_eq!(report.samples, 3);
+    assert!(
+        report.age >= Duration::from_millis(10),
+        "the relay-reported age must travel with the value, got {:?}",
+        report.age
+    );
+
+    // Pair binding: the same frame must not serve a different relay or a
+    // different server.
+    let other_relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41399);
+    let other_server = Ipv4Addr::new(91, 199, 82, 167);
+    assert!(
+        lightspeed_client::server_leg_report(other_relay, game_server).is_none(),
+        "another relay must not inherit this report"
+    );
+    assert!(
+        lightspeed_client::server_leg_report(data_addr, other_server).is_none(),
+        "another server must not inherit this report"
+    );
+
+    let _ = stop_supervisor(data_addr);
+}
+
+/// A relay-pushed `MSG_SERVER_LEG_APP` reaches the client, is stored under the
+/// relay whose control connection delivered it and the server it names, and is
+/// served by its own public accessor for that pair only. TEST-NET fixtures: no
+/// real game server address appears in this test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pushed_passive_report_is_stored_under_its_own_relay_and_server() {
+    isolate_fingerprint_store();
+    let game_server: Ipv4Addr = "198.51.100.23".parse().expect("TEST-NET game server");
+    let server = TestServer::start_with_server_leg(game_server);
+    let data_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41302);
+    let _ = stop_supervisor(data_addr);
+
+    let token = register_session(data_addr, server.control_port, HARD_CAP_PATH_MTU)
+        .await
+        .expect("registration must return a token");
+    assert!(token > 0);
+
+    // The push arrives on a separate stream after the ack; give the reader a
+    // bounded window rather than assuming it lands in the first poll.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut report = None;
+    while Instant::now() < deadline {
+        report = lightspeed_client::server_leg_app_report(data_addr, game_server);
+        if report.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let report = report.expect("the pushed passive report must be stored for its own pair");
+    assert_eq!(report.passive_median_us, 47_000);
+    assert_eq!(report.samples, 9);
+    assert!(
+        report.age >= Duration::from_millis(300),
+        "the relay-reported age must travel with the passive value, got {:?}",
+        report.age
+    );
+
+    // Pair binding: the same frame must not serve a different relay or server.
+    let other_relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41399);
+    let other_server = Ipv4Addr::new(198, 51, 100, 24);
+    assert!(
+        lightspeed_client::server_leg_app_report(other_relay, game_server).is_none(),
+        "another relay must not inherit this passive report"
+    );
+    assert!(
+        lightspeed_client::server_leg_app_report(data_addr, other_server).is_none(),
+        "another server must not inherit this passive report"
+    );
+
+    // The ICMP S report is independent: its own accessor still serves its own
+    // value for the same pair.
+    assert!(
+        lightspeed_client::server_leg_report(data_addr, game_server).is_some(),
+        "the passive report must not displace the ICMP report"
     );
 
     let _ = stop_supervisor(data_addr);

@@ -13,6 +13,7 @@ pub mod handoff;
 pub mod health;
 pub mod metrics;
 pub mod notify;
+pub mod ping;
 pub mod rate_limit;
 pub mod relay;
 pub mod update_state;

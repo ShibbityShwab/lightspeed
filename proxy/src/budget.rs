@@ -18,10 +18,14 @@
 //!
 //! ## Accounting scope
 //!
-//! The counter is process-lifetime and resets on restart. For month-accurate
-//! enforcement the operator script `infra/scripts/egress-budget.sh` combines
-//! this process counter with the reset-safe history collected by
-//! `collect-metrics.sh`.
+//! The data-plane counter is process-lifetime and resets on restart. The relay's
+//! own measurement traffic (the server-leg ICMP prober) is charged through the
+//! same guard with [`BudgetGuard::try_charge_probe`], so a probe can never push
+//! egress past the hard threshold it is meant to protect; the charged probe
+//! bytes are added to the data-plane total wherever the guard is evaluated
+//! ([`BudgetGuard::metered_total`]). For month-accurate enforcement the operator
+//! script `infra/scripts/egress-budget.sh` combines this process counter with the
+//! reset-safe history collected by `collect-metrics.sh`.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -75,6 +79,12 @@ pub struct BudgetGuard {
     hard_latched: AtomicBool,
     month_key: AtomicU64,
     month_baseline: AtomicU64,
+    /// Egress charged on behalf of the relay's own measurement traffic (the
+    /// server-leg ICMP prober), counted against the same ceiling as relayed
+    /// traffic. Kept separate from the data-plane counter so the relayed-bytes
+    /// series keeps its meaning; [`Self::metered_total`] is the sum the guard
+    /// evaluates.
+    probe_egress_bytes: AtomicU64,
 }
 
 impl BudgetGuard {
@@ -87,6 +97,7 @@ impl BudgetGuard {
             hard_latched: AtomicBool::new(false),
             month_key: AtomicU64::new(0),
             month_baseline: AtomicU64::new(0),
+            probe_egress_bytes: AtomicU64::new(0),
         }
     }
 
@@ -165,6 +176,60 @@ impl BudgetGuard {
             })
         } else {
             Ok(())
+        }
+    }
+
+    /// Egress charged through this guard on behalf of the relay's own
+    /// measurement traffic (the server-leg prober).
+    pub fn probe_egress_bytes(&self) -> u64 {
+        self.probe_egress_bytes.load(Ordering::Relaxed)
+    }
+
+    /// The cumulative egress the guard accounts against: the caller's
+    /// data-plane total plus the probe egress this guard has charged.
+    ///
+    /// Every budget evaluation must pass this sum rather than the data-plane
+    /// counter alone, or probe traffic would be invisible to the ceiling.
+    pub fn metered_total(&self, data_used: u64) -> u64 {
+        data_used.saturating_add(self.probe_egress_bytes())
+    }
+
+    /// Charge `bytes` of prober egress before the probe is sent.
+    ///
+    /// `data_used` is the process-lifetime data-plane egress the guard accounts
+    /// against; the probe egress already charged through this guard is added to
+    /// it. Returns `false` when the charge would reach the hard threshold, in
+    /// which case nothing is charged and the caller must not send. On success
+    /// the bytes are recorded in [`Self::probe_egress_bytes`].
+    ///
+    /// The compare-exchange loop is what makes this safe to call from more than
+    /// one prober: two chargers cannot both spend the same headroom, so a tight
+    /// budget saturates just below the ceiling instead of over-sending. An
+    /// inert guard charges unconditionally (metering still happens, nothing is
+    /// refused), exactly like [`Self::check_new_session`].
+    pub fn try_charge_probe(&self, data_used: u64, bytes: u64, month_key: u64) -> bool {
+        if !self.is_enabled() {
+            self.probe_egress_bytes.fetch_add(bytes, Ordering::Relaxed);
+            return true;
+        }
+        loop {
+            let charged = self.probe_egress_bytes.load(Ordering::Acquire);
+            let prospective = data_used.saturating_add(charged).saturating_add(bytes);
+            if self.evaluate(prospective, month_key).hard_exceeded {
+                return false;
+            }
+            if self
+                .probe_egress_bytes
+                .compare_exchange_weak(
+                    charged,
+                    charged.saturating_add(bytes),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return true;
+            }
         }
     }
 
@@ -287,6 +352,62 @@ mod tests {
         assert_eq!(err.limit, 1000);
         assert_eq!(err.used, 1000);
         assert_eq!(err.pct, 100);
+    }
+
+    #[test]
+    fn probe_charge_is_allowed_and_recorded_while_under_the_limit() {
+        let guard = enabled(10_000, 80, 100);
+
+        let first = guard.try_charge_probe(0, 64, 0);
+        let second = guard.try_charge_probe(0, 64, 0);
+        assert!(first && second, "64-byte probes are far under 10 kB");
+        assert_eq!(guard.probe_egress_bytes(), 128);
+        // The data-plane total the guard accounts against includes the charges.
+        assert_eq!(guard.metered_total(1_000), 1_128);
+    }
+
+    #[test]
+    fn probe_charge_is_refused_at_the_hard_threshold_and_stays_put() {
+        let guard = enabled(1_000, 80, 100);
+
+        // 960 used + 64 would be 102 %: refused, nothing charged.
+        assert!(!guard.try_charge_probe(960, 64, 0));
+        assert_eq!(guard.probe_egress_bytes(), 0);
+        // 896 + 64 is 96 %: allowed.
+        assert!(guard.try_charge_probe(896, 64, 0));
+        assert_eq!(guard.probe_egress_bytes(), 64);
+        // The charged bytes are part of the next evaluation: 896 + 64 + 64.
+        assert!(!guard.try_charge_probe(896, 64, 0));
+        assert_eq!(guard.probe_egress_bytes(), 64);
+    }
+
+    #[test]
+    fn a_tight_probe_budget_saturates_instead_of_oversending() {
+        let guard = enabled(256, 0, 100);
+        // 64-byte charges against 256 bytes: 64/128/192 fit (75 %), the fourth
+        // would be exactly 100 % and is refused.
+        for expected in 1..=3u64 {
+            assert!(guard.try_charge_probe(0, 64, 0));
+            assert_eq!(guard.probe_egress_bytes(), expected * 64);
+        }
+        for _ in 0..10 {
+            assert!(
+                !guard.try_charge_probe(0, 64, 0),
+                "a saturated budget must keep refusing, never over-send"
+            );
+        }
+        assert_eq!(guard.probe_egress_bytes(), 192);
+        assert!(
+            guard.probe_egress_bytes() < 256,
+            "saturates below the ceiling"
+        );
+    }
+
+    #[test]
+    fn an_inert_guard_still_counts_probe_egress_without_refusing() {
+        let guard = BudgetGuard::new(BudgetConfig::default());
+        assert!(guard.try_charge_probe(u64::MAX, 64, 0));
+        assert_eq!(guard.probe_egress_bytes(), 64);
     }
 
     #[test]

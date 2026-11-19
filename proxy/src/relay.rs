@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -52,6 +52,32 @@ use lightspeed_protocol::{
 /// listener task is sized at compile time.
 const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 
+/// While a session's server-leg interest is live, refresh it once per this many
+/// successful forwards, so the registry's interest TTL cannot expire under a
+/// slow but active session without a lock on every packet.
+const SERVER_LEG_REFRESH_PACKETS: u64 = 32;
+
+/// Slots in one TCP connection's client→server command channel.
+///
+/// The channel is small on purpose: the inbound path must never wait on a game
+/// server that has stopped reading. The gate in [`process_tcp_packet`] refuses
+/// new segments once every slot is taken, before the reliability receiver sees
+/// them, so the client's retransmit timer recovers the refused bytes.
+const TCP_CMD_QUEUE_SLOTS: usize = 64;
+
+/// Byte budget for one TCP connection's client→server command queue (~256 KiB).
+///
+/// The slot cap alone bounds a queue of full-sized segments; this bounds a
+/// queue whose batches each carry many chunks released from the reorder
+/// window. It is per connection, never global, so one stalled game server
+/// cannot consume another connection's budget.
+const TCP_CMD_QUEUE_BYTES: usize = 256 * 1024;
+
+/// How long the connection task may spend writing one queued chunk upstream
+/// without completing it. A game server that stops reading must cost at most
+/// this connection: on expiry the task resets only this connection.
+const TCP_WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(60);
+
 use super::abuse::{AbuseCheckResult, AbuseDetector};
 use super::auth::Authenticator;
 use super::budget::{BudgetExceeded, BudgetGuard};
@@ -59,6 +85,7 @@ use super::geo::{GeoResolver, GeoSide};
 #[cfg(target_os = "linux")]
 use super::handoff::SessionSnapshot;
 use super::metrics::{upstream_lag, DropReason, ProxyMetrics};
+use super::ping::{passive_app_rtt, ServerLegRegistry, FORWARD_THRESHOLD};
 use super::rate_limit::{RateLimitResult, RateLimiter};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -448,6 +475,19 @@ pub struct ClientSession {
     /// Number of times [`ClientSession::claim_response_listener`] has won.
     /// Always 0 or 1; used by tests to prove single registration.
     listeners_spawned: AtomicU64,
+    /// Successful forwards to the game server, for the relay-measured
+    /// server-leg probe gate.
+    ///
+    /// Separate from [`Self::packets_relayed`] because that field is a handoff
+    /// snapshot value and is never incremented on the hot path, while this one
+    /// must be atomic and is read on every forward. Only once it reaches
+    /// [`FORWARD_THRESHOLD`] may the relay probe this session's game server.
+    forwarded_packets: AtomicU64,
+    /// The data-plane session token whose server-leg interest is currently
+    /// registered (0 = none). A token rotation changes it, and the forward path
+    /// re-registers on change and periodically thereafter so the interest stays
+    /// live without a lock on every packet.
+    server_leg_token: AtomicU32,
 }
 
 impl ClientSession {
@@ -506,8 +546,13 @@ impl ClientSession {
 /// task buffers these until the upstream dial completes, then applies them in
 /// arrival order.
 enum TcpCmd {
-    /// A game stream payload to write to the real server.
-    Data(bytes::Bytes),
+    /// One batch of in-order game stream payloads to write to the real server.
+    ///
+    /// Batches are enqueued once per accepted inbound packet with `try_send`,
+    /// so the inbound path never blocks on a stalled game server: the
+    /// per-connection gate in [`process_tcp_packet`] refuses a segment instead
+    /// of waiting for a slot.
+    Data(Vec<bytes::Bytes>),
     /// The client finished sending; shut the write half toward the server.
     Fin,
 }
@@ -530,11 +575,21 @@ pub struct TcpConnState {
     /// Mutex-protected because the inbound path and the connection task each
     /// hold one side.
     pub reliable: tokio::sync::Mutex<TcpReliable>,
-    /// Outbound command channel toward the connection task. `None` once the
-    /// task has been spawned and taken its receiver.
-    conn_tx: std::sync::Mutex<Option<mpsc::Sender<TcpCmd>>>,
+    /// Outbound command channel toward the connection task. The connection
+    /// task owns the receiver; this side is cloned for each send and kept for
+    /// the life of the connection, so the channel only closes when the state
+    /// is dropped.
+    conn_tx: mpsc::Sender<TcpCmd>,
     /// Inbound command channel receiver, owned by the connection task.
     conn_rx: std::sync::Mutex<Option<mpsc::Receiver<TcpCmd>>>,
+    /// Bytes accepted into the command queue but not yet written upstream.
+    ///
+    /// The inbound path reserves this budget before `on_segment` (so a refusal
+    /// never advances the cumulative ACK) and the connection task releases it
+    /// after each successful `write_all`. `Relaxed` is enough: the budget is
+    /// advisory backpressure, and losing a race only costs one extra segment of
+    /// queueing.
+    queued_bytes: AtomicUsize,
     /// Cancellation token: fired on RST, idle expiry, or upstream teardown.
     cancel: CancellationToken,
     /// FEC decoder for inbound v5 packets on this connection. A block's data
@@ -548,6 +603,19 @@ pub struct TcpConnState {
     established: AtomicBool,
     /// Last client packet sequence seen (echoed in responses for dedup).
     pub last_client_seq: AtomicU16,
+    /// Data packets accepted for forwarding to the game server, for the
+    /// relay-measured server-leg probe gate.
+    ///
+    /// The TCP data path has no [`ClientSession`], so this is the connection's
+    /// own count; it is otherwise the same gate as the UDP path's
+    /// [`ClientSession::forwarded_packets`]. Only once it reaches
+    /// [`FORWARD_THRESHOLD`] may the relay probe this connection's game server.
+    forwarded_packets: AtomicU64,
+    /// The data-plane session token whose server-leg interest is currently
+    /// registered for this connection (0 = none). A token rotation changes it,
+    /// and the forwarding path re-registers on change and periodically
+    /// thereafter, exactly as the UDP path does.
+    server_leg_token: AtomicU32,
 }
 
 impl TcpConnState {
@@ -559,30 +627,58 @@ impl TcpConnState {
         fec_k: u8,
         cancel: CancellationToken,
     ) -> Self {
-        let (tx, rx) = mpsc::channel(64);
+        let (tx, rx) = mpsc::channel(TCP_CMD_QUEUE_SLOTS);
         Self {
             tuple,
             owner,
             reliable: tokio::sync::Mutex::new(TcpReliable::new(2, 2)),
-            conn_tx: std::sync::Mutex::new(Some(tx)),
+            conn_tx: tx,
             conn_rx: std::sync::Mutex::new(Some(rx)),
+            queued_bytes: AtomicUsize::new(0),
             cancel,
             fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
             last_activity: std::sync::Mutex::new(Instant::now()),
             fec_k,
             established: AtomicBool::new(false),
             last_client_seq: AtomicU16::new(0),
+            forwarded_packets: AtomicU64::new(0),
+            server_leg_token: AtomicU32::new(0),
         }
-    }
-
-    /// Take the command channel sender, returning `None` once taken.
-    fn take_conn_tx(&self) -> Option<mpsc::Sender<TcpCmd>> {
-        self.conn_tx.lock().unwrap().take()
     }
 
     /// Take the command channel receiver, returning `None` once taken.
     fn take_conn_rx(&self) -> Option<mpsc::Receiver<TcpCmd>> {
         self.conn_rx.lock().unwrap().take()
+    }
+
+    /// Whether the command queue has a free slot for one more batch.
+    ///
+    /// Only [`process_tcp_packet`] sends `Data` on this channel and it runs one
+    /// packet at a time per connection, so a free slot observed here is still
+    /// free when the batch is enqueued a few instructions later (the only other
+    /// sender, the FIN path, runs in the same task).
+    fn has_command_capacity(&self) -> bool {
+        self.conn_tx.capacity() > 0
+    }
+
+    /// Reserve `bytes` of this connection's queue byte budget.
+    ///
+    /// Returns `false` when the budget is exhausted. The caller must not touch
+    /// the reliability receiver in that case: a segment the relay refuses must
+    /// also be one the cumulative ACK does not claim, so the client resends it.
+    fn try_reserve_queued_bytes(&self, bytes: usize) -> bool {
+        self.queued_bytes
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |queued| {
+                queued
+                    .checked_add(bytes)
+                    .filter(|next| *next <= TCP_CMD_QUEUE_BYTES)
+            })
+            .is_ok()
+    }
+
+    /// Release `bytes` of queue budget once the writer forwarded them upstream.
+    fn release_queued_bytes(&self, bytes: usize) {
+        self.queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
     }
 
     /// The authenticated client that opened this connection.
@@ -653,6 +749,13 @@ pub struct RelayEngine {
     /// Optional egress budget guard. `None` (the default) disables the guard
     /// entirely, so a relay with no budget behaves exactly as before.
     budget: Option<Arc<BudgetGuard>>,
+    /// Relay-measured server-leg prober, shared with the control plane.
+    ///
+    /// `None` (the default) means probing is disabled: no session registers
+    /// interest, no probe is issued and the control plane never pushes a
+    /// server-leg report. Production attaches the process registry with
+    /// [`RelayEngine::with_server_leg`].
+    server_leg: Option<Arc<ServerLegRegistry>>,
 }
 
 impl RelayEngine {
@@ -677,6 +780,7 @@ impl RelayEngine {
             geo: None,
             socket_metrics: Arc::new(ProxyMetrics::new()),
             budget: None,
+            server_leg: None,
         }
     }
 
@@ -700,6 +804,90 @@ impl RelayEngine {
         self
     }
 
+    /// Attach the relay-measured server-leg prober.
+    ///
+    /// Omitted by default; when absent no session ever registers probe interest.
+    pub fn with_server_leg(mut self, registry: Arc<ServerLegRegistry>) -> Self {
+        self.server_leg = Some(registry);
+        self
+    }
+
+    /// Tell the server-leg prober that `session` forwarded one more packet.
+    ///
+    /// Runs on the hot path, so it is two atomics and no lock in the common
+    /// case: the registry is only touched once the session has crossed
+    /// [`FORWARD_THRESHOLD`], when its token changes, and then once every
+    /// [`SERVER_LEG_REFRESH_PACKETS`] forwards to keep the interest live.
+    fn note_server_leg_forward(&self, session: &ClientSession, session_token: u32) {
+        let Some(registry) = self.server_leg.as_ref() else {
+            return;
+        };
+        // Relaxed is enough: the count only gates a probe and a lost increment
+        // costs at most one packet of delay, never correctness.
+        let forwarded = session
+            .forwarded_packets
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.note_server_leg_progress(
+            registry,
+            forwarded,
+            session_token,
+            *session.client_addr.ip(),
+            *session.game_server.ip(),
+            &session.server_leg_token,
+        );
+    }
+
+    /// Tell the server-leg prober that a TCP-tunnelled connection accepted one
+    /// more data packet for its game server.
+    ///
+    /// This is the TCP analogue of [`Self::note_server_leg_forward`]. A TCP
+    /// connection is tracked by [`TcpConnState`] rather than [`ClientSession`]
+    /// (separate lifetimes, a byte stream instead of datagrams), but the
+    /// reported interest is keyed by the same control-plane session token, so a
+    /// report arrives on the client's control connection exactly as a UDP
+    /// report does. Counting happens at the inbound v5 data path, where every
+    /// accepted data packet passes; no restructuring was needed.
+    fn note_server_leg_forward_tcp(&self, conn: &TcpConnState, session_token: u32) {
+        let Some(registry) = self.server_leg.as_ref() else {
+            return;
+        };
+        let forwarded = conn
+            .forwarded_packets
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        self.note_server_leg_progress(
+            registry,
+            forwarded,
+            session_token,
+            *conn.owner().ip(),
+            conn.tuple.dst_ip,
+            &conn.server_leg_token,
+        );
+    }
+
+    /// Register or refresh probe interest once a measured source has crossed
+    /// [`FORWARD_THRESHOLD`] and its token changed or the refresh cadence came
+    /// due. Shared by the UDP session path and the TCP connection path.
+    fn note_server_leg_progress(
+        &self,
+        registry: &ServerLegRegistry,
+        forwarded: u64,
+        session_token: u32,
+        client_ip: Ipv4Addr,
+        server_ip: Ipv4Addr,
+        registered_token: &AtomicU32,
+    ) {
+        if forwarded < FORWARD_THRESHOLD {
+            return;
+        }
+        let token_changed =
+            registered_token.swap(session_token, Ordering::Relaxed) != session_token;
+        if token_changed || forwarded.is_multiple_of(SERVER_LEG_REFRESH_PACKETS) {
+            registry.note_forward(session_token, client_ip, server_ip, forwarded);
+        }
+    }
+
     /// Evaluate the egress budget against `metrics` and publish the result.
     ///
     /// Called periodically by the session manager so the soft threshold is
@@ -709,7 +897,7 @@ impl RelayEngine {
         let Some(budget) = &self.budget else {
             return;
         };
-        let used = metrics.bytes_relayed.load(Ordering::Relaxed);
+        let used = budget.metered_total(metrics.bytes_relayed.load(Ordering::Relaxed));
         budget.observe(used, super::budget::current_month_key(), metrics);
     }
 
@@ -807,7 +995,8 @@ impl RelayEngine {
         // fast path above already returned any existing session, so live
         // traffic is never interrupted.
         if let Some(budget) = &self.budget {
-            let used = self.socket_metrics.bytes_relayed.load(Ordering::Relaxed);
+            let used =
+                budget.metered_total(self.socket_metrics.bytes_relayed.load(Ordering::Relaxed));
             budget
                 .check_new_session(used, super::budget::current_month_key())
                 .map_err(anyhow::Error::from)?;
@@ -856,6 +1045,8 @@ impl RelayEngine {
             fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
             listener_started: AtomicBool::new(false),
             listeners_spawned: AtomicU64::new(0),
+            forwarded_packets: AtomicU64::new(0),
+            server_leg_token: AtomicU32::new(0),
         });
 
         let mut sessions = self.sessions.write().await;
@@ -967,7 +1158,8 @@ impl RelayEngine {
             anyhow::bail!("handoff in progress: refusing to create a TCP connection");
         }
         if let Some(budget) = &self.budget {
-            let used = self.socket_metrics.bytes_relayed.load(Ordering::Relaxed);
+            let used =
+                budget.metered_total(self.socket_metrics.bytes_relayed.load(Ordering::Relaxed));
             budget
                 .check_new_session(used, super::budget::current_month_key())
                 .map_err(anyhow::Error::from)?;
@@ -1193,6 +1385,8 @@ impl RelayEngine {
                 fec_decoder: tokio::sync::Mutex::new(FecDecoder::new()),
                 listener_started: AtomicBool::new(false),
                 listeners_spawned: AtomicU64::new(0),
+                forwarded_packets: AtomicU64::new(0),
+                server_leg_token: AtomicU32::new(0),
             });
 
             {
@@ -1207,8 +1401,9 @@ impl RelayEngine {
             if session.claim_response_listener() {
                 let session_clone = Arc::clone(&session);
                 let metrics_clone = Arc::clone(&metrics);
+                let server_leg = self.server_leg.clone();
                 let handle = tokio::spawn(async move {
-                    run_session_response_listener(session_clone, metrics_clone).await;
+                    run_session_response_listener(session_clone, metrics_clone, server_leg).await;
                 });
                 self.register_listener_handle(client_addr, handle).await;
             }
@@ -1580,8 +1775,9 @@ async fn process_inbound_packet(
         if session.claim_response_listener() {
             let session_clone = Arc::clone(&session);
             let metrics_clone = Arc::clone(metrics);
+            let server_leg = engine.server_leg.clone();
             let handle = tokio::spawn(async move {
-                run_session_response_listener(session_clone, metrics_clone).await;
+                run_session_response_listener(session_clone, metrics_clone, server_leg).await;
             });
             engine.register_listener_handle(client_addr, handle).await;
             info!(client = %client_addr, fec = is_fec, "Response listener spawned immediately");
@@ -1663,6 +1859,10 @@ async fn process_inbound_packet(
                 .last_client_seq
                 .store(header.sequence, Ordering::Relaxed);
             session.touch();
+            // Relay-measured server leg: once this session has forwarded
+            // enough to its game server, register probe interest for that
+            // address. The prober only ever learns targets from here.
+            engine.note_server_leg_forward(&session, header.session_token);
 
             let mut abuse = abuse_detector.lock().await;
             abuse.record_outbound(*client_addr.ip(), sent as u64);
@@ -1860,7 +2060,6 @@ async fn process_tcp_packet(
 
     conn.last_client_seq
         .store(client_header.sequence, Ordering::Relaxed);
-    conn.touch();
 
     if tcp_ext.flags & tcp_flags::RST != 0 {
         info!(client = %client_addr, "TCP RST, tearing down connection");
@@ -1868,27 +2067,114 @@ async fn process_tcp_packet(
         return;
     }
 
-    if tcp_ext.flags & tcp_flags::FIN != 0 {
-        if let Some(tx) = conn.take_conn_tx() {
-            let _ = tx.send(TcpCmd::Fin).await;
-        }
-    }
-
+    // ── Data: non-blocking handoff with a pre-reliability drop valve ──
+    //
+    // The gate runs BEFORE `on_segment`, so a refused segment never advances
+    // the reliability receiver's cumulative ACK: the client sees it as path
+    // loss and retransmits on its RTO. Gating after `on_segment` would ACK
+    // bytes this relay never enqueued, which is silent byte-stream corruption.
+    //
+    // A full queue must not block the inbound path either: this function runs
+    // in the shared receive loop, so waiting for a slot on one stalled game
+    // server would stall every client's traffic.
     if !stream_payload.is_empty() {
+        if !conn.has_command_capacity() || !conn.try_reserve_queued_bytes(stream_payload.len()) {
+            metrics.record_drop(DropReason::TcpQueueFull);
+            return;
+        }
+
+        // Relay-measured server leg: a TCP-tunnelled connection has no
+        // `ClientSession`, so its forward count lives on the connection. This is
+        // the registration point (the same one the UDP path uses below
+        // `send_to`); a report reaches the client on the control connection keyed
+        // by the same session token. TCP is not excluded from probing. Counted
+        // here, after the gate, so a refused segment is not a forwarded one.
+        engine.note_server_leg_forward_tcp(&conn, client_header.session_token);
+        conn.touch();
+
         let ordered = conn
             .reliable
             .lock()
             .await
             .receiver
             .on_segment(tcp_ext.tcp_seq, stream_payload);
-        if let Some(tx) = conn.take_conn_tx() {
-            for chunk in ordered {
-                if tx.send(TcpCmd::Data(chunk)).await.is_err() {
-                    break;
+
+        if ordered.is_empty() {
+            // Out of order: buffered in the reorder window, nothing queued.
+            conn.release_queued_bytes(stream_payload.len());
+        } else {
+            let batch_bytes: usize = ordered.iter().map(bytes::Bytes::len).sum();
+            // Filling a reorder gap can release more bytes than this packet
+            // carried. The budget is a backpressure bound, not a hard memory
+            // fence, so that headroom is admitted; the excess is bounded by the
+            // receiver's reorder window.
+            let released_extra = batch_bytes.saturating_sub(stream_payload.len());
+            if released_extra > 0 {
+                conn.queued_bytes
+                    .fetch_add(released_extra, Ordering::Relaxed);
+            }
+
+            // One `try_send` per inbound packet. This function is the single
+            // producer of `Data` batches for this connection and the capacity
+            // check above guarantees a free slot; `Full` is unreachable unless
+            // that invariant breaks.
+            match conn.conn_tx.try_send(TcpCmd::Data(ordered)) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // A post-ACK enqueue failure cannot be dropped silently:
+                    // reset the client so it never believes the refused bytes
+                    // were delivered.
+                    conn.release_queued_bytes(batch_bytes);
+                    metrics.record_drop(DropReason::TcpQueueFull);
+                    reset_tcp_connection(engine, sender, client_header, &tuple, client_addr, fec_k)
+                        .await;
+                    return;
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    // The connection task is already gone; drop the stale entry.
+                    conn.release_queued_bytes(batch_bytes);
+                    metrics.record_drop(DropReason::TcpQueueFull);
+                    engine.remove_tcp_connection(&tuple).await;
+                    return;
                 }
             }
         }
     }
+
+    if tcp_ext.flags & tcp_flags::FIN != 0 {
+        conn.touch();
+        // A FIN cannot be ordered behind unsent chunks: if the queue has no room
+        // for it, reset only this connection instead of stalling the inbound
+        // path or closing the write half ahead of unfetched data.
+        if conn.conn_tx.try_send(TcpCmd::Fin).is_err() {
+            reset_tcp_connection(engine, sender, client_header, &tuple, client_addr, fec_k).await;
+        }
+    }
+}
+
+/// Tear down exactly one TCP connection: send its client a RST and drop the
+/// connection. Used when the per-connection handoff cannot accept another
+/// command; every other connection is unaffected.
+async fn reset_tcp_connection(
+    engine: &Arc<RelayEngine>,
+    sender: &ClientSender,
+    client_header: &TunnelHeader,
+    tuple: &Tcp5Tuple,
+    client_addr: SocketAddrV4,
+    fec_k: u8,
+) {
+    warn!(
+        client = %client_addr,
+        src = %tuple.src_ip,
+        src_port = tuple.src_port,
+        dst = %tuple.dst_ip,
+        dst_port = tuple.dst_port,
+        "TCP command queue full: resetting only this connection"
+    );
+    let _ = sender
+        .send(&build_tcp_rst_packet(client_header, fec_k))
+        .await;
+    engine.remove_tcp_connection(tuple).await;
 }
 
 /// The per-connection task: dials the real server, splices buffered client
@@ -1945,18 +2231,45 @@ async fn run_tcp_connection(
             _ = conn.cancel.cancelled() => break,
             cmd = rx.recv() => {
                 match cmd {
-                    Some(TcpCmd::Data(payload)) => {
-                        if write_half.write_all(&payload).await.is_err() {
+                    Some(TcpCmd::Data(chunks)) => {
+                        let mut abort = false;
+                        for payload in chunks {
+                            match write_upstream_chunk(&conn, &mut write_half, &payload).await {
+                                TcpWriteEnd::Written => {}
+                                TcpWriteEnd::Cancelled | TcpWriteEnd::Closed => {
+                                    abort = true;
+                                    break;
+                                }
+                                TcpWriteEnd::Stalled => {
+                                    warn!(
+                                        client = %client_addr,
+                                        dst = %dst,
+                                        "TCP upstream write stalled; resetting only this connection"
+                                    );
+                                    let _ = sender
+                                        .send(&build_tcp_rst_packet(&client_header, conn.fec_k))
+                                        .await;
+                                    abort = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if abort {
                             break;
                         }
-                        conn.touch();
                     }
                     Some(TcpCmd::Fin) => {
                         let _ = write_half.shutdown().await;
                         // Keep reading until the server closes, then exit.
                         continue;
                     }
-                    None => break,
+                    None => {
+                        // The state keeps its sender for the connection's
+                        // life, so this only fires if the state itself was
+                        // dropped; cancel, upstream EOF and write errors are
+                        // the normal teardown paths.
+                        break;
+                    }
                 }
             }
             res = read_half.read(&mut buf) => {
@@ -2039,6 +2352,47 @@ async fn run_tcp_connection(
 
     conn.cancel.cancel();
     engine.remove_tcp_connection(&tuple).await;
+}
+
+/// Outcome of one write of a queued chunk toward the game server.
+enum TcpWriteEnd {
+    /// The chunk was fully written; its queue budget is released.
+    Written,
+    /// The connection was cancelled while the write was in flight.
+    Cancelled,
+    /// The upstream write failed or the socket closed.
+    Closed,
+    /// The write made no progress for [`TCP_WRITE_STALL_TIMEOUT`].
+    Stalled,
+}
+
+/// Write one queued chunk to the game server, concurrently polling connection
+/// cancellation and the per-connection stall watchdog.
+///
+/// The queue byte budget is released only after `write_all` succeeds, so the
+/// inbound gate keeps refusing new segments until the upstream has actually
+/// accepted the bytes. A write that cannot complete within
+/// [`TCP_WRITE_STALL_TIMEOUT`] costs only this connection: the caller sends the
+/// client a RST and the task exits.
+async fn write_upstream_chunk(
+    conn: &TcpConnState,
+    write_half: &mut OwnedWriteHalf,
+    payload: &[u8],
+) -> TcpWriteEnd {
+    tokio::select! {
+        _ = conn.cancel.cancelled() => TcpWriteEnd::Cancelled,
+        result = tokio::time::timeout(TCP_WRITE_STALL_TIMEOUT, write_half.write_all(payload)) => {
+            match result {
+                Ok(Ok(())) => {
+                    conn.release_queued_bytes(payload.len());
+                    conn.touch();
+                    TcpWriteEnd::Written
+                }
+                Ok(Err(_)) => TcpWriteEnd::Closed,
+                Err(_) => TcpWriteEnd::Stalled,
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2163,6 +2517,32 @@ pub async fn run_relay_inbound(
     }
 }
 
+/// Record the passive relay→server app-RTT sample for one completed
+/// forward/first-response exchange.
+///
+/// The data path already stored the forward time in
+/// [`ClientSession::pending_forward_us`]; this adds no packet and no socket
+/// option. The sample is attributed to the session's current data-plane token
+/// only: before the session has forwarded enough for a server-leg interest that
+/// token is zero and there is no `(session, server)` pair to report against, so
+/// a passive figure can never name a server this session has not forwarded to.
+/// Bounds and the per-server match are enforced again by
+/// [`ServerLegRegistry::record_passive`].
+fn record_passive_server_leg(
+    registry: &ServerLegRegistry,
+    session: &ClientSession,
+    now_us: u64,
+    marker_us: u64,
+) {
+    let token = session.server_leg_token.load(Ordering::Relaxed);
+    if token == 0 {
+        return;
+    }
+    if let Some(rtt_us) = passive_app_rtt(now_us, marker_us) {
+        registry.record_passive(token, *session.game_server.ip(), rtt_us);
+    }
+}
+
 /// Run the response listener for a single client session.
 ///
 /// Listens on the session's outbound socket for responses from the game
@@ -2170,9 +2550,15 @@ pub async fn run_relay_inbound(
 /// the client via the data plane socket.
 ///
 /// If the client uses FEC, responses are also FEC-encoded.
+///
+/// `server_leg` is the relay's server-leg registry when probing is enabled. On
+/// the first response after a forward the listener records the passive
+/// relay→server app-RTT sample from the forward timestamp the data path already
+/// stored - no packet is added, it is a timestamp difference.
 pub async fn run_session_response_listener(
     session: Arc<ClientSession>,
     metrics: Arc<ProxyMetrics>,
+    server_leg: Option<Arc<ServerLegRegistry>>,
 ) {
     let mut buf = vec![0u8; 2048];
 
@@ -2212,6 +2598,14 @@ pub async fn run_session_response_listener(
                             match upstream_lag(now, marker) {
                                 Some(lag) => metrics.record_latency(lag),
                                 None => metrics.record_latency_discarded(),
+                            }
+                            // The same gap feeds the passive relay→server
+                            // app-RTT sample. It is only attributable to a
+                            // session token once the session has forwarded
+                            // enough to register a server-leg interest; before
+                            // that there is no pair to report against.
+                            if let Some(registry) = &server_leg {
+                                record_passive_server_leg(registry, &session, now, marker);
                             }
                         }
                         len
@@ -2445,9 +2839,10 @@ pub async fn run_session_manager(
             if !known_sessions.contains_key(addr) && session.claim_response_listener() {
                 let session = Arc::clone(session);
                 let metrics = Arc::clone(&metrics);
+                let server_leg = engine.server_leg.clone();
 
                 let handle = tokio::spawn(async move {
-                    run_session_response_listener(session, metrics).await;
+                    run_session_response_listener(session, metrics, server_leg).await;
                 });
 
                 known_sessions.insert(*addr, handle);
@@ -3105,6 +3500,168 @@ mod tests {
         SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 2), port)
     }
 
+    /// Build the `[TcpExtHeader][stream payload]` body a v5 packet carries
+    /// after its tunnel and FEC headers: exactly the slice
+    /// [`process_tcp_packet`] receives from the inbound pipeline.
+    fn tcp_body(tcp_seq: u32, flags: u8, payload: &[u8]) -> bytes::Bytes {
+        let ext = TcpExtHeader {
+            tcp_seq,
+            tcp_ack: 2,
+            flags,
+            window: 0,
+            reserved: [0, 0],
+        };
+        let mut buf = BytesMut::new();
+        ext.encode(&mut buf);
+        buf.extend_from_slice(payload);
+        buf.freeze()
+    }
+
+    /// A client-side UDP receiver plus the relay→client sender socket.
+    ///
+    /// Production sends client traffic from the relay's data socket, never from
+    /// the client's own socket. The two must stay separate here: Windows drops
+    /// a substantial fraction of UDP datagrams looped from a socket back to its
+    /// own bound address, which would make these tests flaky. Returns the
+    /// receiving socket, the client address the relay sends to, and the sender.
+    async fn test_client_and_sender() -> (Arc<UdpSocket>, SocketAddrV4, ClientSender) {
+        let client_sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let client_addr = match client_sock.local_addr().unwrap() {
+            SocketAddr::V4(v4) => v4,
+            SocketAddr::V6(_) => panic!("expected an IPv4 socket"),
+        };
+        let sender_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sender = ClientSender::Udp {
+            socket: Arc::new(sender_sock),
+            addr: client_addr,
+        };
+        (client_sock, client_addr, sender)
+    }
+
+    /// A v5 TCP-tunnel header and the 5-tuple [`process_tcp_packet`] derives
+    /// from it. Distinct `src_port`s model distinct connections.
+    fn tcp_tunnel(src_port: u16, dst: SocketAddrV4) -> (TunnelHeader, Tcp5Tuple) {
+        let game_src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), src_port);
+        let mut header = TunnelHeader::new_fec(1, 1_000_000, game_src, dst);
+        header.version = lightspeed_protocol::PROTOCOL_VERSION_TCP;
+        let tuple = Tcp5Tuple {
+            src_ip: *game_src.ip(),
+            src_port: game_src.port(),
+            dst_ip: *dst.ip(),
+            dst_port: dst.port(),
+        };
+        (header, tuple)
+    }
+
+    /// A game-server stand-in that completes the relay's dial and then never
+    /// reads, with a tiny receive buffer so the relay's upstream writes stall
+    /// after a few KiB instead of a few MiB of kernel buffering.
+    ///
+    /// Returns the address to dial; the spawned task holds the accepted socket
+    /// open for the rest of the test.
+    async fn stalled_tcp_server() -> SocketAddr {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        // A best-effort request: even where the platform ignores it, the
+        // never-read socket closes its window and the relay writer still
+        // blocks; the request just makes the stall quick and deterministic.
+        let _ = socket.set_recv_buffer_size(8 * 1024);
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listener = socket.listen(1).unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            // Hold the socket open without ever reading from it.
+            std::future::pending::<()>().await;
+        });
+        addr
+    }
+
+    /// A loopback echo server standing in for the game server. Returns its
+    /// address and the task handle the caller aborts.
+    async fn echo_tcp_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 256];
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(n) if n > 0 => {
+                        if stream.write_all(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        });
+        (addr, handle)
+    }
+
+    /// A game-server stand-in that records every byte the connection task
+    /// forwards, for ordered-delivery assertions.
+    async fn recording_tcp_server() -> (
+        SocketAddr,
+        Arc<tokio::sync::Mutex<Vec<u8>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let received = Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+        let received_for_task = Arc::clone(&received);
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 512];
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(n) if n > 0 => received_for_task.lock().await.extend_from_slice(&buf[..n]),
+                    _ => break,
+                }
+            }
+        });
+        (addr, received, handle)
+    }
+
+    /// Wait until `received` holds at least `expected` bytes, or fail.
+    async fn wait_for_bytes(received: &tokio::sync::Mutex<Vec<u8>>, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while received.lock().await.len() < expected {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the game server must receive every forwarded byte");
+    }
+
+    /// Receive one v5 packet on the client's UDP socket and decode its TCP
+    /// extension and stream payload.
+    async fn recv_tcp_response(socket: &UdpSocket) -> (TunnelHeader, TcpExtHeader, Vec<u8>) {
+        let mut buf = [0u8; 1024];
+        let (n, _) = tokio::time::timeout(Duration::from_secs(1), socket.recv_from(&mut buf))
+            .await
+            .expect("a packet must reach the client within 1 s")
+            .unwrap();
+        let (header, payload) = TunnelHeader::decode_with_payload(&buf[..n]).unwrap();
+        assert!(header.has_tcp());
+        let (ext, game) = decode_tcp_payload(&payload[FEC_HEADER_SIZE..]).expect("tcp ext");
+        (header, ext, game.to_vec())
+    }
+
+    /// A v5 TCP-tunneled connection with no connection task: SYN through the
+    /// real inbound path would spawn one, so create the state directly.
+    async fn create_taskless_connection(
+        engine: &Arc<RelayEngine>,
+        client_addr: SocketAddrV4,
+        tuple: Tcp5Tuple,
+    ) -> Arc<TcpConnState> {
+        let (conn, is_new) = engine
+            .get_or_create_tcp_connection(tuple, client_addr, 4)
+            .await
+            .unwrap();
+        assert!(is_new);
+        conn
+    }
+
     #[tokio::test]
     async fn tcp_connection_creation_counts_against_the_session_budget() {
         let engine = RelayEngine::new(1);
@@ -3174,8 +3731,164 @@ mod tests {
         assert_eq!(engine.tcp_connection_count().await, 0);
     }
 
+    /// A prober that never answers; registration tests never run a burst.
+    struct SilentProber;
+
+    impl crate::ping::EchoProber for SilentProber {
+        fn echo(&self, _target: Ipv4Addr, _seq: u16) -> Option<u32> {
+            None
+        }
+    }
+
+    fn server_leg_registry() -> Arc<ServerLegRegistry> {
+        Arc::new(ServerLegRegistry::new(
+            crate::ping::ServerLegConfig::default(),
+            Arc::new(crate::ping::SystemClock),
+            Arc::new(SilentProber),
+        ))
+    }
+
+    /// Both data paths register probe interest for their game server through the
+    /// same registry and the same session-token key: the UDP session path and
+    /// the TCP-tunnelled connection path. Nothing is registered before
+    /// [`crate::ping::FORWARD_THRESHOLD`], and a refresh at the same token does
+    /// not duplicate the interest.
+    #[tokio::test]
+    async fn udp_and_tcp_forwarding_both_register_server_leg_interest() {
+        let registry = server_leg_registry();
+        let engine = RelayEngine::new(10).with_server_leg(Arc::clone(&registry));
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+
+        // UDP: nothing before the threshold, one interest at it.
+        let (session, _) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        for _ in 0..crate::ping::FORWARD_THRESHOLD - 1 {
+            engine.note_server_leg_forward(&session, 0xAB);
+        }
+        assert_eq!(
+            registry.interest_count(),
+            0,
+            "UDP must not register probe interest before the threshold"
+        );
+        engine.note_server_leg_forward(&session, 0xAB);
+        assert_eq!(
+            registry.interest_count(),
+            1,
+            "UDP forwarding must register the game server as a probe target"
+        );
+        engine.note_server_leg_forward(&session, 0xAB);
+        assert_eq!(
+            registry.interest_count(),
+            1,
+            "a refresh at the same token must not duplicate the UDP interest"
+        );
+
+        // TCP: the same threshold and token plumbing on the connection state.
+        // A distinct token because the registry keys interest by control-plane
+        // session token: this test's UDP session already owns the 0xAB key.
+        let tuple = tcp_tuple(12345);
+        let (conn, _) = engine
+            .get_or_create_tcp_connection(tuple, tcp_client(40000), 4)
+            .await
+            .unwrap();
+        for _ in 0..crate::ping::FORWARD_THRESHOLD - 1 {
+            engine.note_server_leg_forward_tcp(&conn, 0xCD);
+        }
+        assert_eq!(
+            registry.interest_count(),
+            1,
+            "TCP must not register probe interest before the threshold"
+        );
+        engine.note_server_leg_forward_tcp(&conn, 0xCD);
+        assert_eq!(
+            registry.interest_count(),
+            2,
+            "a TCP-tunnelled connection must register its game server too"
+        );
+
+        // The registry's public-unicast gate applies to TCP exactly as to UDP.
+        let private_tuple = Tcp5Tuple {
+            src_ip: Ipv4Addr::new(192, 168, 1, 100),
+            src_port: 12345,
+            dst_ip: Ipv4Addr::new(192, 168, 1, 10),
+            dst_port: 25565,
+        };
+        let (private_conn, _) = engine
+            .get_or_create_tcp_connection(private_tuple, tcp_client(40000), 4)
+            .await
+            .unwrap();
+        for _ in 0..crate::ping::FORWARD_THRESHOLD {
+            engine.note_server_leg_forward_tcp(&private_conn, 0xAB);
+        }
+        assert_eq!(
+            registry.interest_count(),
+            2,
+            "a TCP connection to a private address must never be probed"
+        );
+        assert!(registry.skip_count() >= 1);
+    }
+
+    /// The response listener turns the forward timestamp the data path already
+    /// stores into a passive relay→server app-RTT sample: one sample per
+    /// forward/first-response exchange, attributed to the session's token, and
+    /// nothing for a session with no forwarding history.
+    #[tokio::test]
+    async fn the_first_response_after_a_forward_feeds_the_passive_app_rtt_window() {
+        let registry = server_leg_registry();
+        let engine = RelayEngine::new(10).with_server_leg(Arc::clone(&registry));
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let server = SocketAddrV4::new(Ipv4Addr::new(91, 199, 82, 166), 7777);
+        let (session, _) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+
+        // Before the forward threshold there is no interest and the session
+        // token is zero, so a response contributes nothing.
+        record_passive_server_leg(&registry, &session, 150_000, 50_000);
+        assert_eq!(registry.passive_sample_count(), 0);
+
+        for _ in 0..crate::ping::FORWARD_THRESHOLD {
+            engine.note_server_leg_forward(&session, 0xAB);
+        }
+        // Exchange 1: forwarded at 50 ms on the session clock, first response
+        // at 150 ms -> a 100 ms passive sample for (session, server).
+        record_passive_server_leg(&registry, &session, 150_000, 50_000);
+        // Exchange 2: 25 ms.
+        record_passive_server_leg(&registry, &session, 175_000, 150_000);
+        assert_eq!(registry.passive_sample_count(), 2);
+
+        let pushes = registry.due_pushes();
+        assert_eq!(pushes.len(), 1, "one app report for this session");
+        assert_eq!(pushes[0].0, 0xAB);
+        match &pushes[0].1 {
+            lightspeed_protocol::control::ControlMessage::ServerLegApp {
+                server: reported,
+                passive_median_us,
+                passive_samples,
+                ..
+            } => {
+                assert_eq!(*reported, *server.ip());
+                assert_eq!(*passive_samples, 2);
+                assert_eq!(*passive_median_us, 62_500, "median of 100 ms and 25 ms");
+            }
+            other => panic!("expected a passive server-leg message, got {other:?}"),
+        }
+
+        // A response with no packet awaiting one (marker 0) is not a sample.
+        record_passive_server_leg(&registry, &session, 200_000, 0);
+        assert_eq!(registry.passive_sample_count(), 2);
+    }
+
     /// The connector dials the real server, splices client payloads into it,
     /// and relays server bytes back to the client as v5 packets.
+    ///
+    /// The packets are fed through [`process_tcp_packet`], the real inbound
+    /// routing path, so the connection task's command channel is exercised
+    /// exactly as production uses it.
     #[tokio::test]
     async fn tcp_connection_dials_buffers_and_splices() {
         // A local echo server stands in for the game server.
@@ -3196,65 +3909,47 @@ mod tests {
             }
         });
 
-        let client_addr = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 39000);
-        let client_sock = Arc::new(UdpSocket::bind(client_addr).await.unwrap());
-        let sender = ClientSender::Udp {
-            socket: Arc::clone(&client_sock),
-            addr: client_addr,
-        };
+        let (client_sock, client_addr, sender) = test_client_and_sender().await;
 
+        let game_src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let game_dst = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), server_addr.port());
         let tuple = Tcp5Tuple {
-            src_ip: Ipv4Addr::new(192, 168, 1, 100),
-            src_port: 12345,
-            dst_ip: Ipv4Addr::new(127, 0, 0, 1),
-            dst_port: server_addr.port(),
+            src_ip: *game_src.ip(),
+            src_port: game_src.port(),
+            dst_ip: *game_dst.ip(),
+            dst_port: game_dst.port(),
         };
-        let mut header = TunnelHeader::new_fec(
-            1,
-            1_000_000,
-            SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345),
-            SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), server_addr.port()),
-        );
+        let mut header = TunnelHeader::new_fec(1, 1_000_000, game_src, game_dst);
         header.version = lightspeed_protocol::PROTOCOL_VERSION_TCP;
         let engine = Arc::new(RelayEngine::new(10));
-        let conn = Arc::new(TcpConnState::new(
-            tuple,
+        let metrics = Arc::new(ProxyMetrics::new());
+
+        // SYN opens the connection and spawns the connection task.
+        process_tcp_packet(
+            &header,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(1, tcp_flags::SYN, b""),
             client_addr,
-            4,
-            CancellationToken::new(),
-        ));
-        engine
-            .tcp_table()
-            .write()
-            .await
-            .insert(tuple, Arc::clone(&conn));
+            &sender,
+            &engine,
+            &metrics,
+        )
+        .await;
+        assert_eq!(engine.tcp_connection_count().await, 1);
 
-        let sender_for_task = sender.clone();
-        let engine_for_task = Arc::clone(&engine);
-        let conn_for_task = Arc::clone(&conn);
-        let header_for_task = header.clone();
-        tokio::spawn(async move {
-            run_tcp_connection(
-                conn_for_task,
-                client_addr,
-                sender_for_task,
-                header_for_task,
-                engine_for_task,
-                Arc::new(ProxyMetrics::new()),
-            )
-            .await;
-        });
-
-        // Data arriving before the dial completes is buffered and written once
-        // connected. The command channel sender must stay alive (as it does on
-        // the real `TcpConnState`) so the task's recv arm does not see a
-        // closed channel and tear down before reading the echo.
+        // The first data segment is buffered until the dial completes and then
+        // written to the game server.
         let payload = b"hello minecraft";
-        let cmd_tx = conn.take_conn_tx().unwrap();
-        cmd_tx
-            .send(TcpCmd::Data(bytes::Bytes::copy_from_slice(payload)))
-            .await
-            .unwrap();
+        process_tcp_packet(
+            &header,
+            Some(&FecHeader::data(0, 1, 4)),
+            &tcp_body(2, tcp_flags::ACK | tcp_flags::PSH, payload),
+            client_addr,
+            &sender,
+            &engine,
+            &metrics,
+        )
+        .await;
 
         // The server's echo comes back as a v5 packet on the client socket.
         let mut recv_buf = [0u8; 512];
@@ -3272,13 +3967,637 @@ mod tests {
         let (tcp_ext, game) =
             decode_tcp_payload(&resp_payload[FEC_HEADER_SIZE..]).expect("tcp ext");
         assert_eq!(
-            tcp_ext.tcp_ack, 2,
-            "the ACK acknowledges the first data byte"
+            tcp_ext.tcp_ack,
+            2 + payload.len() as u32,
+            "the ACK acknowledges the forwarded data bytes"
         );
         assert_eq!(game, payload);
 
         server.abort();
         engine.remove_tcp_connection(&tuple).await;
+    }
+
+    /// Regression (found in R2 review): a TCP-tunnelled connection must keep
+    /// forwarding after its first data-bearing packet.
+    ///
+    /// [`process_tcp_packet`] used to move the command-channel sender out of
+    /// [`TcpConnState`] with `take_conn_tx` and drop it, which closed the
+    /// channel. The connection task's `rx.recv()` then returned `None`, so it
+    /// tore the connection down and dropped every later packet: the connection
+    /// survived only its first data-bearing packet.
+    #[tokio::test]
+    async fn tcp_connection_forwards_every_data_packet_and_stays_alive() {
+        // A local server stands in for the game server and records every byte
+        // the connection task's writer half actually forwards.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let received = Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+        let received_for_task = Arc::clone(&received);
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 256];
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(n) if n > 0 => {
+                        received_for_task.lock().await.extend_from_slice(&buf[..n]);
+                    }
+                    _ => break,
+                }
+            }
+        });
+
+        let (_client_sock, client_addr, sender) = test_client_and_sender().await;
+
+        let game_src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let game_dst = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), server_addr.port());
+        let tuple = Tcp5Tuple {
+            src_ip: *game_src.ip(),
+            src_port: game_src.port(),
+            dst_ip: *game_dst.ip(),
+            dst_port: game_dst.port(),
+        };
+        let mut header = TunnelHeader::new_fec(1, 1_000_000, game_src, game_dst);
+        header.version = lightspeed_protocol::PROTOCOL_VERSION_TCP;
+        let engine = Arc::new(RelayEngine::new(10));
+        let metrics = Arc::new(ProxyMetrics::new());
+
+        // SYN opens the connection and spawns the connection task.
+        process_tcp_packet(
+            &header,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(1, tcp_flags::SYN, b""),
+            client_addr,
+            &sender,
+            &engine,
+            &metrics,
+        )
+        .await;
+
+        // Three data-bearing packets on the same connection, in sequence.
+        let payloads: [&[u8]; 3] = [b"first", b"-second", b"-third"];
+        let mut expected = Vec::new();
+        let mut tcp_seq = 2u32;
+        for (index, payload) in payloads.iter().enumerate() {
+            expected.extend_from_slice(payload);
+            process_tcp_packet(
+                &header,
+                Some(&FecHeader::data(0, index as u8 + 1, 4)),
+                &tcp_body(tcp_seq, tcp_flags::ACK | tcp_flags::PSH, payload),
+                client_addr,
+                &sender,
+                &engine,
+                &metrics,
+            )
+            .await;
+            tcp_seq += payload.len() as u32;
+        }
+
+        // The writer must receive every payload, in order: not just the first.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while received.lock().await.len() < expected.len() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the writer must receive every data-bearing packet, not only the first");
+        assert_eq!(*received.lock().await, expected);
+
+        // The connection must still be alive: a forwarded packet may not tear
+        // it down.
+        assert_eq!(
+            engine.tcp_connection_count().await,
+            1,
+            "forwarding data must not tear the TCP connection down"
+        );
+
+        engine.remove_tcp_connection(&tuple).await;
+        server.abort();
+    }
+
+    /// A FIN shuts the client→server write half but must not tear the whole
+    /// connection down: [`run_tcp_connection`] keeps reading server bytes until
+    /// the server closes.
+    ///
+    /// This is the shutdown half of the same lifetime bug: taking and dropping
+    /// the sender on FIN closed the command channel, so `rx.recv()` returned
+    /// `None` and the connection died before the server could finish.
+    #[tokio::test]
+    async fn tcp_fin_keeps_the_connection_until_the_server_closes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let (server_eof_tx, server_eof_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 64];
+            // Read until the relay shuts its write half (the forwarded FIN).
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+            let _ = server_eof_tx.send(());
+            // Keep the connection open until the test releases it, so only the
+            // relay's own lifetime decision can end the connection.
+            let _ = release_rx.await;
+            drop(stream);
+        });
+
+        let (_client_sock, client_addr, sender) = test_client_and_sender().await;
+
+        let game_src = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let game_dst = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), server_addr.port());
+        let mut header = TunnelHeader::new_fec(1, 1_000_000, game_src, game_dst);
+        header.version = lightspeed_protocol::PROTOCOL_VERSION_TCP;
+        let engine = Arc::new(RelayEngine::new(10));
+        let metrics = Arc::new(ProxyMetrics::new());
+
+        process_tcp_packet(
+            &header,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(1, tcp_flags::SYN, b""),
+            client_addr,
+            &sender,
+            &engine,
+            &metrics,
+        )
+        .await;
+        process_tcp_packet(
+            &header,
+            Some(&FecHeader::data(0, 1, 4)),
+            &tcp_body(2, tcp_flags::ACK | tcp_flags::FIN, b""),
+            client_addr,
+            &sender,
+            &engine,
+            &metrics,
+        )
+        .await;
+
+        // The FIN reached the writer: the game server sees EOF on its read half.
+        tokio::time::timeout(Duration::from_secs(2), server_eof_rx)
+            .await
+            .expect("the FIN must be forwarded to the game server")
+            .expect("the game server task must observe EOF");
+
+        // With the server still holding the connection open, the relay task
+        // must stay alive after the FIN.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            engine.tcp_connection_count().await,
+            1,
+            "a FIN must not tear the connection down before the server closes"
+        );
+
+        // Once the server closes, the task ends and removes the connection.
+        let _ = release_tx.send(());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while engine.tcp_connection_count().await != 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the connection must be torn down after the server closes");
+        server.abort();
+    }
+
+    /// A game server that stops reading must never stall the shared inbound
+    /// path: connection A's queue fills and refuses segments pre-ACK while a
+    /// healthy connection B still forwards and gets its echo.
+    ///
+    /// The failing-before behavior is the blocking per-chunk `send().await`:
+    /// once A's 64-slot channel is full, `process_tcp_packet` waits for a slot
+    /// and the whole receive loop (every client) stops with it.
+    #[tokio::test]
+    async fn tcp_stalled_upstream_does_not_block_other_sessions() {
+        let stalled_addr = stalled_tcp_server().await;
+        let (echo_addr, echo_task) = echo_tcp_server().await;
+        let engine = Arc::new(RelayEngine::new(10));
+        let metrics = Arc::new(ProxyMetrics::new());
+
+        // Connection A dials a game server that accepts and never reads.
+        let (_client_a, client_addr_a, sender_a) = test_client_and_sender().await;
+        let (header_a, _tuple_a) = tcp_tunnel(
+            12345,
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, stalled_addr.port()),
+        );
+        process_tcp_packet(
+            &header_a,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(1, tcp_flags::SYN, b""),
+            client_addr_a,
+            &sender_a,
+            &engine,
+            &metrics,
+        )
+        .await;
+        assert_eq!(engine.tcp_connection_count().await, 1);
+
+        // Feed far more than one queue's worth of ordered segments. Each call
+        // must return promptly: a stalled game server may cost segments (the
+        // client retransmits), never the receive loop.
+        let payload = [0x5Au8; 1024];
+        let mut tcp_seq = 2u32;
+        for index in 0..4096u32 {
+            let started = Instant::now();
+            let call = tokio::time::timeout(
+                Duration::from_millis(50),
+                process_tcp_packet(
+                    &header_a,
+                    Some(&FecHeader::data(0, (index % 4) as u8, 4)),
+                    &tcp_body(tcp_seq, tcp_flags::ACK | tcp_flags::PSH, &payload),
+                    client_addr_a,
+                    &sender_a,
+                    &engine,
+                    &metrics,
+                ),
+            )
+            .await;
+            let elapsed = started.elapsed();
+            assert!(
+                call.is_ok(),
+                "process_tcp_packet blocked for {elapsed:?} (>= 50 ms) at segment {index}: \
+                 a stalled upstream must never stall the inbound path"
+            );
+            assert!(
+                elapsed < Duration::from_millis(50),
+                "process_tcp_packet took {elapsed:?} (>= 50 ms) at segment {index}"
+            );
+            tcp_seq = tcp_seq.wrapping_add(payload.len() as u32);
+        }
+
+        let drops = metrics.drops_tcp_queue_full.load(Ordering::Relaxed);
+        assert!(
+            drops > 0,
+            "a stalled upstream must exhaust the per-connection queue and record TcpQueueFull, got 0 drops"
+        );
+
+        // Connection B is independent: its writer is not blocked, its queue has
+        // room, and its echo must arrive while A is still stalled.
+        let (client_b, client_addr_b, sender_b) = test_client_and_sender().await;
+        let (header_b, _tuple_b) = tcp_tunnel(
+            12346,
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, echo_addr.port()),
+        );
+        process_tcp_packet(
+            &header_b,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(1, tcp_flags::SYN, b""),
+            client_addr_b,
+            &sender_b,
+            &engine,
+            &metrics,
+        )
+        .await;
+        let healthy = b"healthy-connection-still-forwards";
+        process_tcp_packet(
+            &header_b,
+            Some(&FecHeader::data(0, 1, 4)),
+            &tcp_body(2, tcp_flags::ACK | tcp_flags::PSH, healthy),
+            client_addr_b,
+            &sender_b,
+            &engine,
+            &metrics,
+        )
+        .await;
+
+        let (_resp_header, _ext, echoed) = recv_tcp_response(&client_b).await;
+        assert_eq!(
+            echoed.as_slice(),
+            healthy,
+            "a healthy connection must forward and echo within 1 s while another connection's upstream is stalled"
+        );
+
+        echo_task.abort();
+    }
+
+    /// A segment refused by the pre-ACK gate must not advance the reliability
+    /// receiver's cumulative ACK; after the writer drains, re-injecting that
+    /// sequence delivers its bytes exactly once and contiguously.
+    ///
+    /// The failing-before behavior is gating after `on_segment`: the receiver
+    /// ACKs the refused bytes and the client never resends them, so the stream
+    /// silently loses them.
+    #[tokio::test]
+    async fn ingress_drop_is_retransmit_recoverable() {
+        let engine = Arc::new(RelayEngine::new(10));
+        let metrics = Arc::new(ProxyMetrics::new());
+        let (_client_sock, client_addr, sender) = test_client_and_sender().await;
+        let (header, tuple) = tcp_tunnel(
+            12345,
+            SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 25565),
+        );
+        // No connection task: nothing drains the queue, so it fills
+        // deterministically after exactly one channel's worth of batches.
+        let conn = create_taskless_connection(&engine, client_addr, tuple).await;
+
+        let payload = [0xA7u8; 64];
+        let step = payload.len() as u32;
+        let mut tcp_seq = 2u32;
+        for index in 0..TCP_CMD_QUEUE_SLOTS {
+            process_tcp_packet(
+                &header,
+                Some(&FecHeader::data(0, (index % 4) as u8, 4)),
+                &tcp_body(tcp_seq, tcp_flags::ACK | tcp_flags::PSH, &payload),
+                client_addr,
+                &sender,
+                &engine,
+                &metrics,
+            )
+            .await;
+            tcp_seq = tcp_seq.wrapping_add(step);
+        }
+        assert!(
+            !conn.has_command_capacity(),
+            "the queue must be full after one channel of batches"
+        );
+        assert_eq!(
+            metrics.drops_tcp_queue_full.load(Ordering::Relaxed),
+            0,
+            "nothing may be refused while the queue still has a free slot"
+        );
+
+        let ack_before = conn.reliable.lock().await.receiver.ack();
+        assert_eq!(
+            ack_before, tcp_seq,
+            "the accepted prefix must be ACKed contiguously"
+        );
+
+        // The next in-order segment is refused by the gate.
+        let dropped_seq = tcp_seq;
+        process_tcp_packet(
+            &header,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(dropped_seq, tcp_flags::ACK | tcp_flags::PSH, &payload),
+            client_addr,
+            &sender,
+            &engine,
+            &metrics,
+        )
+        .await;
+        assert_eq!(
+            metrics.drops_tcp_queue_full.load(Ordering::Relaxed),
+            1,
+            "the refused segment must be recorded as TcpQueueFull"
+        );
+        let ack_after = conn.reliable.lock().await.receiver.ack();
+        assert_eq!(
+            ack_after, ack_before,
+            "a pre-ACK queue drop must not advance the cumulative ACK: \
+             the client would otherwise never resend the lost bytes"
+        );
+
+        // Drain the accepted prefix, as the connection task's writer would.
+        let mut rx = conn.take_conn_rx().expect("connection receiver");
+        let mut delivered = Vec::new();
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                TcpCmd::Data(chunks) => {
+                    for chunk in chunks {
+                        delivered.extend_from_slice(&chunk);
+                    }
+                }
+                TcpCmd::Fin => panic!("no FIN was queued"),
+            }
+        }
+        assert_eq!(delivered.len(), TCP_CMD_QUEUE_SLOTS * payload.len());
+        conn.release_queued_bytes(delivered.len());
+        assert_eq!(
+            conn.queued_bytes.load(Ordering::Relaxed),
+            0,
+            "draining the queue must release its byte budget"
+        );
+        assert!(
+            conn.has_command_capacity(),
+            "draining the queue must free a slot for the retransmission"
+        );
+
+        // The client's RTO retransmits the refused sequence: accepted now,
+        // bytes delivered exactly once and contiguous with the prefix.
+        process_tcp_packet(
+            &header,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(dropped_seq, tcp_flags::ACK | tcp_flags::PSH, &payload),
+            client_addr,
+            &sender,
+            &engine,
+            &metrics,
+        )
+        .await;
+        let ack_recovered = conn.reliable.lock().await.receiver.ack();
+        assert_eq!(
+            ack_recovered,
+            ack_before.wrapping_add(step),
+            "the retransmitted segment must advance the ACK exactly once"
+        );
+
+        let mut recovered = Vec::new();
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                TcpCmd::Data(chunks) => {
+                    for chunk in chunks {
+                        recovered.extend_from_slice(&chunk);
+                    }
+                }
+                TcpCmd::Fin => panic!("no FIN was queued"),
+            }
+        }
+        assert_eq!(
+            recovered,
+            payload.to_vec(),
+            "the retransmitted segment must deliver its bytes exactly once"
+        );
+
+        let mut stream = delivered;
+        stream.extend_from_slice(&recovered);
+        let mut expected = Vec::new();
+        for _ in 0..TCP_CMD_QUEUE_SLOTS + 1 {
+            expected.extend_from_slice(&payload);
+        }
+        assert_eq!(
+            stream, expected,
+            "the recovered stream must be byte-identical and contiguous"
+        );
+        assert_eq!(
+            metrics.packets_dropped.load(Ordering::Relaxed),
+            1,
+            "only the one refused segment may be counted dropped"
+        );
+    }
+
+    /// A FIN that cannot be queued behind 64 unsent chunks is not stale data
+    /// ordering: only that connection is reset, and a healthy one is untouched.
+    #[tokio::test]
+    async fn fin_under_congestion_tears_down_only_that_connection() {
+        let (echo_addr, echo_task) = echo_tcp_server().await;
+        let engine = Arc::new(RelayEngine::new(10));
+        let metrics = Arc::new(ProxyMetrics::new());
+
+        // Connection A: its queue is full and nothing is draining it.
+        let (client_a, client_addr_a, sender_a) = test_client_and_sender().await;
+        let (header_a, tuple_a) = tcp_tunnel(
+            12345,
+            SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 25565),
+        );
+        let conn_a = create_taskless_connection(&engine, client_addr_a, tuple_a).await;
+        let payload = [0xB4u8; 64];
+        let step = payload.len() as u32;
+        let mut tcp_seq = 2u32;
+        for index in 0..TCP_CMD_QUEUE_SLOTS {
+            process_tcp_packet(
+                &header_a,
+                Some(&FecHeader::data(0, (index % 4) as u8, 4)),
+                &tcp_body(tcp_seq, tcp_flags::ACK | tcp_flags::PSH, &payload),
+                client_addr_a,
+                &sender_a,
+                &engine,
+                &metrics,
+            )
+            .await;
+            tcp_seq = tcp_seq.wrapping_add(step);
+        }
+        assert!(
+            !conn_a.has_command_capacity(),
+            "the congested connection's queue must be full before the FIN"
+        );
+        assert_eq!(
+            metrics.drops_tcp_queue_full.load(Ordering::Relaxed),
+            0,
+            "data still fits the queue; only the FIN must not"
+        );
+
+        // FIN with a full queue: reset A only.
+        process_tcp_packet(
+            &header_a,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(tcp_seq, tcp_flags::ACK | tcp_flags::FIN, b""),
+            client_addr_a,
+            &sender_a,
+            &engine,
+            &metrics,
+        )
+        .await;
+
+        assert!(
+            engine.tcp_table().read().await.get(&tuple_a).is_none(),
+            "a FIN that cannot be queued must remove its own connection"
+        );
+        let (_rst_header, rst_ext, _) = recv_tcp_response(&client_a).await;
+        assert!(
+            rst_ext.flags & tcp_flags::RST != 0,
+            "the client whose connection was reset must see a RST"
+        );
+
+        // Connection B is healthy before and after A's reset.
+        let (client_b, client_addr_b, sender_b) = test_client_and_sender().await;
+        let (header_b, _tuple_b) = tcp_tunnel(
+            12346,
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, echo_addr.port()),
+        );
+        process_tcp_packet(
+            &header_b,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(1, tcp_flags::SYN, b""),
+            client_addr_b,
+            &sender_b,
+            &engine,
+            &metrics,
+        )
+        .await;
+        let healthy = b"still-alive";
+        process_tcp_packet(
+            &header_b,
+            Some(&FecHeader::data(0, 1, 4)),
+            &tcp_body(2, tcp_flags::ACK | tcp_flags::PSH, healthy),
+            client_addr_b,
+            &sender_b,
+            &engine,
+            &metrics,
+        )
+        .await;
+        let (_resp_header, _ext, echoed) = recv_tcp_response(&client_b).await;
+        assert_eq!(
+            echoed.as_slice(),
+            healthy,
+            "the FIN reset must not disturb another connection"
+        );
+        assert_eq!(
+            engine.tcp_connection_count().await,
+            1,
+            "only the congested connection may be torn down"
+        );
+
+        echo_task.abort();
+    }
+
+    /// Healthy invariance: 200 clean, in-order packets produce zero drops and
+    /// arrive in order. The gate must never fire when the writer keeps up.
+    #[tokio::test]
+    async fn clean_tcp_stream_produces_no_drops_and_ordered_delivery() {
+        let (server_addr, received, server_task) = recording_tcp_server().await;
+        let engine = Arc::new(RelayEngine::new(10));
+        let metrics = Arc::new(ProxyMetrics::new());
+        let (_client_sock, client_addr, sender) = test_client_and_sender().await;
+        let (header, _tuple) = tcp_tunnel(
+            12345,
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, server_addr.port()),
+        );
+
+        process_tcp_packet(
+            &header,
+            Some(&FecHeader::data(0, 0, 4)),
+            &tcp_body(1, tcp_flags::SYN, b""),
+            client_addr,
+            &sender,
+            &engine,
+            &metrics,
+        )
+        .await;
+
+        let mut expected = Vec::new();
+        let mut tcp_seq = 2u32;
+        for index in 0..200u32 {
+            let payload = [index as u8; 64];
+            expected.extend_from_slice(&payload);
+            process_tcp_packet(
+                &header,
+                Some(&FecHeader::data(0, (index % 4) as u8, 4)),
+                &tcp_body(tcp_seq, tcp_flags::ACK | tcp_flags::PSH, &payload),
+                client_addr,
+                &sender,
+                &engine,
+                &metrics,
+            )
+            .await;
+            // Give the connection task a chance to drain, as the real receive
+            // loop does between packets.
+            tokio::task::yield_now().await;
+            tcp_seq = tcp_seq.wrapping_add(payload.len() as u32);
+        }
+
+        wait_for_bytes(&received, expected.len()).await;
+        assert_eq!(
+            *received.lock().await,
+            expected,
+            "clean in-order bytes must reach the game server in order"
+        );
+        assert_eq!(
+            metrics.drops_tcp_queue_full.load(Ordering::Relaxed),
+            0,
+            "200 clean packets must produce zero TcpQueueFull drops"
+        );
+        assert_eq!(
+            metrics.packets_dropped.load(Ordering::Relaxed),
+            0,
+            "clean TCP traffic must record no drops at all"
+        );
+        assert_eq!(
+            engine.tcp_connection_count().await,
+            1,
+            "clean traffic must not tear the connection down"
+        );
+
+        server_task.abort();
     }
 
     // ── Proxy-side geo session recording ────────────────────────

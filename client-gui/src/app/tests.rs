@@ -1,7 +1,7 @@
 use super::{
     lock_or_recover, relay_reply_fault, relay_reply_fault_message, relay_reply_window_message,
-    relay_switch_allowed, retest_is_about, RelayReplyFault, ReplyFaultStreak, RetestTarget,
-    RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_STREAK, RELAY_REPLY_TIMEOUT,
+    relay_switch_allowed, retest_is_about, RelayChangeSource, RelayReplyFault, ReplyFaultStreak,
+    RetestTarget, RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_STREAK, RELAY_REPLY_TIMEOUT,
 };
 
 #[test]
@@ -259,7 +259,7 @@ fn a_re_test_stays_on_the_relay_it_was_abandoned_on() {
 }
 
 #[test]
-fn a_background_rank_never_moves_the_session_under_a_re_test() {
+fn a_client_leg_race_never_moves_the_session_under_a_re_test() {
     let server = addr("91.199.82.166:36704");
     let locked = Some(*server.ip());
     let abandoned = addr("207.246.106.36:4434");
@@ -269,29 +269,89 @@ fn a_background_rank_never_moves_the_session_under_a_re_test() {
         relay: Some(abandoned),
     });
     assert!(
-        !relay_switch_allowed(chain, locked, other),
-        "a re-test owns the route; a re-rank must not hop mid-session"
+        !relay_switch_allowed(RelayChangeSource::ClientLegRace, chain, locked, other),
+        "the client-leg race has no server evidence; a re-test still owns the route for it"
     );
     assert!(
-        relay_switch_allowed(chain, locked, abandoned),
-        "only the relay under test is legal while the chain is open"
+        relay_switch_allowed(RelayChangeSource::ClientLegRace, chain, locked, abandoned),
+        "only the relay under test is legal for the race while the chain is open"
     );
     let new_server = addr("198.51.100.7:36704");
     assert!(
-        relay_switch_allowed(chain, Some(*new_server.ip()), other),
+        relay_switch_allowed(
+            RelayChangeSource::ClientLegRace,
+            chain,
+            Some(*new_server.ip()),
+            other
+        ),
         "the chain is per server: a new game server may be ranked"
     );
     assert!(
-        relay_switch_allowed(None, locked, other),
-        "with no chain open, background selection is unchanged"
+        relay_switch_allowed(RelayChangeSource::ClientLegRace, None, locked, other),
+        "with no chain open, the race is unchanged"
     );
     let unproven = Some(RetestTarget {
         server,
         relay: None,
     });
     assert!(
-        !relay_switch_allowed(unproven, locked, other),
-        "a chain with no known relay still owns the route"
+        !relay_switch_allowed(RelayChangeSource::ClientLegRace, unproven, locked, other),
+        "a chain with no known relay still owns the route for the race"
+    );
+}
+
+#[test]
+fn a_re_test_chain_does_not_block_the_destination_ranking_from_leaving() {
+    // The live starvation loop: the session was on relay-sgp-1, the watchdog kept
+    // re-testing SGP, and `relay_switch_allowed` vetoed every ranking that
+    // preferred another relay - so the session could not leave the relay that was
+    // starving it. The destination ranking now always may move the session; the
+    // starvation verdict it ranks on is what makes the move sensible, and the
+    // chain is dropped as stale once the session is elsewhere.
+    let server = addr("178.107.14.59:36600");
+    let locked = Some(*server.ip());
+    let starving = addr("45.77.32.236:4434");
+    let lac = addr("207.246.106.36:4434");
+    let chain = Some(RetestTarget {
+        server,
+        relay: Some(starving),
+    });
+    assert!(
+        relay_switch_allowed(RelayChangeSource::DestinationRanking, chain, locked, lac),
+        "a ranking that prefers another relay must be allowed to leave the starving one"
+    );
+    assert!(
+        relay_switch_allowed(
+            RelayChangeSource::DestinationRanking,
+            chain,
+            locked,
+            starving
+        ),
+        "the chain may keep re-testing its own relay: selecting it again is a no-op"
+    );
+    assert!(
+        relay_switch_allowed(RelayChangeSource::DestinationRanking, None, locked, lac),
+        "with no chain open the ranking is unchanged"
+    );
+}
+
+#[test]
+fn only_a_confirmed_no_reply_chain_is_a_starvation_verdict() {
+    assert!(
+        starvation_verdict(RelayReplyFault::NoReplyFromRelay, true),
+        "the first confirmed NoReplyFromRelay window is the finding to remember"
+    );
+    assert!(
+        !starvation_verdict(RelayReplyFault::NoReplyFromRelay, false),
+        "the rest of the chain repeats a finding already published"
+    );
+    assert!(
+        !starvation_verdict(RelayReplyFault::TooFewReplies, true),
+        "a low return share is normal game UDP, not a starvation finding"
+    );
+    assert!(
+        !starvation_verdict(RelayReplyFault::InjectionFailed, true),
+        "a local injection fault says nothing about the relay"
     );
 }
 
@@ -637,15 +697,15 @@ use super::{
     apply_discovery_result, apply_target_choice, close_decision, compare_to_direct,
     direct_claim_label, direct_us_for, draft_reasons, early_triangle_floor, fresh_direct_us,
     game_editor_body, game_pick_rows, games, monitor_local_top, pair_relay_legs, picker_status,
-    ping_for_server, primary_action, process_picker, proxy_index_for, ranking_state_label,
-    refreshed_server_ping, relay_cannot_beat_direct, relay_health_verdict, same_relay_endpoint,
-    save_user_profiles, scored_for_relay, server_from_fields, server_leg_state, should_apply_race,
-    should_race, switch_is_safe, target_for_pick, target_front_door, target_summary,
-    validate_draft, window_height_limit, CloseDecision, EditorActions, GameEditorDraft,
-    GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
-    RelayHealthVerdict, ServerLegState, ServerPing, ShadowWindowCounters, TargetRowAction,
-    MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT, PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE,
-    SERVER_PING_FRESH_SECS, TITLE_BAR_ALLOWANCE,
+    ping_for_server, primary_action, process_picker, proxy_index_for, rank_without_destination,
+    ranking_state_label, refreshed_server_ping, relay_cannot_beat_direct, relay_health_verdict,
+    same_relay_endpoint, save_user_profiles, scored_for_relay, server_from_fields,
+    server_leg_state, should_apply_race, should_race, starvation_verdict, switch_is_safe,
+    target_for_pick, target_front_door, target_summary, validate_draft, window_height_limit,
+    CloseDecision, EditorActions, GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus,
+    ProcessListState, ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ServerPing,
+    ShadowWindowCounters, TargetRowAction, MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT,
+    PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE, SERVER_PING_FRESH_SECS, TITLE_BAR_ALLOWANCE,
 };
 use crate::config::ProxyEntry;
 use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -925,7 +985,7 @@ fn a_pinned_relay_a_live_connection_or_a_known_server_beats_a_late_race_result()
     );
 }
 
-// ── The server leg on the route surface ──────────────────────────────
+// â”€â”€ The server leg on the route surface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// A scored relay as the ranking composes it: `total_leg_us` is the client
 /// leg plus the destination leg plus the prior's uncertainty charge, exactly
@@ -946,6 +1006,8 @@ fn scored_relay(
         relay: SocketAddrV4::new(std::net::Ipv4Addr::from(ip), 4434),
         total_leg_us: client_leg_us + dest_leg_us + penalty,
         dest_leg_us,
+        dest_leg_prior_us: dest_leg_us,
+        client_leg_us,
         dest_source: source,
         jitter_us,
     }
@@ -980,12 +1042,169 @@ fn shadow_window(
     }
 }
 
+// â”€â”€ The no-position fallback (live 2026-11-19 replay) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/// The candidate rows the live 2026-11-19 session ranked, with its measured
+/// client legs (one-RTT `/health` probes) and the relay names the GUI builds.
+///
+/// The server was a G-Core address (`178.107.14.0/24`) that R1's hosting index
+/// reports as "hosting network - location unknown", so `chooser_point()` is
+/// `None` and the destination-aware ranking has no exact server position.
+fn live_gcore_candidates() -> Vec<lightspeed_client::RelayCandidate> {
+    let row = |ip: &str, node: &str, client_us: u64| lightspeed_client::RelayCandidate {
+        relay: ip.parse().expect("relay address"),
+        region: Some(crate::discovery::friendly_label(node)),
+        node_id: Some(node.to_string()),
+        client_leg_us: Some(client_us),
+        client_jitter_us: 0,
+    };
+    vec![
+        row("207.246.106.36:4434", "relay-lax-1", 216_500),
+        row("207.246.124.117:4434", "relay-ewr-1", 304_700),
+        row("45.77.32.236:4434", "relay-sgp-1", 45_500),
+        row("95.179.164.138:4434", "relay-fra", 200_200),
+        row("167.179.77.127:4434", "relay-nrt", 120_900),
+        row("65.20.92.201:4434", "relay-bom-1", 95_500),
+        row("65.20.99.61:4434", "relay-mad-1", 196_100),
+        row("45.76.114.93:4434", "relay-syd-1", 138_400),
+    ]
+}
+
+#[test]
+fn the_live_g_core_server_with_no_position_falls_back_from_sgp_to_lax() {
+    use std::net::Ipv4Addr;
+    // The live ROB RUN server. R1's ladder finds it on a hosting network and says
+    // "location unknown", so there is no point to rank on.
+    let server = Ipv4Addr::new(178, 107, 14, 59);
+    let candidates = live_gcore_candidates();
+    // The session's measured direct ICMP ping.
+    let direct_us = Some(315_000);
+
+    // With no record, the measured client leg decides (all destination priors are
+    // unknown): SGP is 45.5 ms from the client. This is the defect being replayed,
+    // and it is also the required fallback order - never the relay address.
+    let before = rank_without_destination(
+        server,
+        &candidates,
+        direct_us,
+        &crate::relay_history::RelayHistory::default(),
+    );
+    assert_eq!(before.proven, 0, "nothing is proven without records");
+    assert_eq!(
+        before.ranked.len(),
+        candidates.len(),
+        "an unproven relay is still a candidate"
+    );
+    let client_legs: Vec<u64> = before.ranked.iter().map(|row| row.client_leg_us).collect();
+    let mut sorted = client_legs.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        client_legs, sorted,
+        "with no records the fallback orders by measured client leg"
+    );
+    assert_eq!(
+        before.ranked[0].relay.ip(),
+        &Ipv4Addr::new(45, 77, 32, 236),
+        "the live defect: relay-sgp-1 won on the shortest client leg"
+    );
+
+    // The live session's carry records: SGP starved this server (enough forwards,
+    // no reply at all) and the two North-America relays are proven to have
+    // carried it, while the rest are unknown. A proven record is the one piece of
+    // real evidence a position-less choice has.
+    let mut history = crate::relay_history::RelayHistory::default();
+    history.record_starvation(addr("45.77.32.236:4434"), server);
+    history.record(addr("207.246.106.36:4434"), server, 500, 400);
+    history.record(addr("207.246.124.117:4434"), server, 500, 400);
+
+    let after = rank_without_destination(server, &candidates, direct_us, &history);
+    assert_eq!(
+        after.ranked[0].relay.ip(),
+        &Ipv4Addr::new(207, 246, 106, 36),
+        "with SGP demoted and LAX/EWR proven, the ranking must pick LAX - not SGP \
+         on the client leg and not anything on the relay address"
+    );
+    assert_eq!(
+        after.ranked[0].client_leg_us, 216_500,
+        "LAX wins the proven pair on the measured client leg"
+    );
+    assert_eq!(
+        after.proven, 2,
+        "LAX and EWR are the relays proven to carry this server"
+    );
+    assert_eq!(
+        after.skipped_starved, 1,
+        "the starved SGP record is excluded"
+    );
+}
+
+#[test]
+fn a_starved_carry_record_demotes_a_relay_without_the_watchdogs_failed_flag() {
+    use std::net::Ipv4Addr;
+    let server = Ipv4Addr::new(178, 107, 14, 59);
+    let candidates = live_gcore_candidates();
+    let mut history = crate::relay_history::RelayHistory::default();
+    // The signature case: the relay carried traffic and nothing came back, but no
+    // exhausted-chain verdict was written, so `is_starved` (which reads `failed`)
+    // stays false. The no-position fallback still must not re-select it.
+    history.record(addr("45.77.32.236:4434"), server, 4_522, 0);
+    assert!(
+        !history.is_starved(addr("45.77.32.236:4434"), server),
+        "the watchdog-verdict semantics are unchanged"
+    );
+    let ranking = rank_without_destination(server, &candidates, Some(315_000), &history);
+    assert_eq!(ranking.skipped_starved, 1);
+    assert_eq!(ranking.proven, 0, "nobody proved anything in this variant");
+    assert_ne!(
+        ranking.ranked[0].relay.ip(),
+        &Ipv4Addr::new(45, 77, 32, 236),
+        "a starved record must not be re-selected just because `failed` is false"
+    );
+}
+
+#[test]
+fn the_no_position_fallback_ignores_the_untrusted_region_prior() {
+    use std::net::Ipv4Addr;
+    let server = Ipv4Addr::new(178, 107, 14, 59);
+    let candidates = live_gcore_candidates();
+    // The relay's registration ack resolves this hosting range through the free
+    // DB-IP data to JP, so the engine's region prior believes the server is in
+    // APAC. With no exact server position that prior must not order the relays:
+    // it is the guess that picked relay-sgp-1 in the live session. The fallback
+    // is the measured client legs.
+    let estimator = lightspeed_client::ensure_destination_estimator();
+    estimator.set_destination_region(server, "apac");
+    let mut history = crate::relay_history::RelayHistory::default();
+    history.record_starvation(addr("45.77.32.236:4434"), server);
+    let ranking = rank_without_destination(server, &candidates, Some(315_000), &history);
+    // If the APAC prior ranked, it would floor SGP/NRT/BOM/SYD at the 315 ms
+    // direct ping and then put NRT (the nearest APAC relay in that map) first.
+    // The fallback ignores it and takes the shortest measured client leg after
+    // the starved SGP - BOM at 95.5 ms.
+    assert_eq!(
+        ranking.ranked[0].relay.ip(),
+        &Ipv4Addr::new(65, 20, 92, 201),
+        "the untrusted region prior must not rank when the server position is unknown"
+    );
+    assert_eq!(
+        ranking.ranked[0].client_leg_us, 95_500,
+        "the order is the measured client leg, not the region prior"
+    );
+    assert_eq!(
+        ranking.ranked[0].dest_source,
+        lightspeed_client::DestinationLegSource::Unknown,
+        "no destination leg was used as evidence"
+    );
+}
+
 // The ranking-order tests that used to live here were moved to the engine
 // suite when the interim re-rank was removed (task-17): the order is
 // `client/src/route/relay_choice.rs`'s, so its regression tests live beside
 // it - `the_whole_path_total_outranks_the_destination_bucket`,
 // `a_measured_destination_leg_is_compared_on_the_whole_path` and
-// `ties_are_deterministic_and_jitter_breaks_an_exact_total_tie`.
+// `ties_are_deterministic_and_jitter_breaks_an_exact_total_tie`, plus the
+// client-leg tie-break
+// `a_floor_tie_with_equal_priors_is_broken_by_the_client_leg_not_the_address`.
 
 #[test]
 fn the_server_leg_state_says_how_the_leg_was_obtained() {
@@ -1175,7 +1394,7 @@ fn the_triangle_verdict_needs_two_fresh_client_measurements() {
     );
 }
 
-// ── The direct ping is keyed to the server it measured (task-25) ─────
+// â”€â”€ The direct ping is keyed to the server it measured (task-25) â”€â”€â”€â”€â”€
 //
 // The live defect: `follow_game_server` runs before `poll_relay_health`
 // refreshes `server_ping`, so a choice for a NEW game server could consume the
@@ -2488,4 +2707,89 @@ fn an_unelevated_app_still_asks_for_elevation_when_a_process_is_targeted() {
         primary_action(false, false, false, true),
         ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
     );
+}
+// â”€â”€ Relay-measured server leg (R2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/// The relay-measured `Server leg` row states the measurement, its sample
+/// count and its age, and the `Expected path` row adds the displayed client
+/// leg to it. Both are the only claims the two measured legs support. A report
+/// accepted fail-open (the triangle floor could not run) is shown with
+/// `measured, unvalidated` rather than plainly `measured`.
+#[test]
+fn the_relay_measured_server_leg_rows_state_both_measured_terms() {
+    use super::{expected_path_text, relay_measured_leg_text};
+    use std::time::Duration;
+
+    let _guard = crate::i18n::test_lock();
+    crate::i18n::set_language(Some("en"));
+
+    let report = lightspeed_client::ServerLegReport {
+        median_us: 148_000,
+        jitter_us: 3_000,
+        samples: 4,
+        age: Duration::from_secs(7),
+        validated: true,
+    };
+    assert_eq!(
+        relay_measured_leg_text(&report),
+        "Relay→server 148 ms · measured n=4 · 7s ago"
+    );
+
+    // The same figure accepted fail-open must not present itself as validated.
+    let unvalidated = lightspeed_client::ServerLegReport {
+        validated: false,
+        ..report
+    };
+    assert_eq!(
+        relay_measured_leg_text(&unvalidated),
+        "Relay→server 148 ms · measured, unvalidated n=4 · 7s ago"
+    );
+
+    // L (90 ms, the Relay RTT the card already shows) + S (148 ms) = 238 ms.
+    assert_eq!(
+        expected_path_text(90.0, report.median_us).as_deref(),
+        Some("Expected path ~238 ms (L + S)")
+    );
+
+    // No displayed client leg means no path total: S alone is not a path.
+    assert_eq!(expected_path_text(0.0, report.median_us), None);
+    assert_eq!(expected_path_text(f64::NAN, report.median_us), None);
+
+    crate::i18n::set_language(None);
+}
+
+/// The passive app-RTT row is a display-only secondary figure: it states the
+/// relay's forward→first-response median and sample count, with no validity or
+/// ranking claim of its own. A flagged (invalid passive) sample still renders
+/// because the number is data while the flag is for the E1 harvest, and the
+/// window adds no second rule of its own.
+#[test]
+fn the_relay_measured_app_row_states_the_passive_sample_and_count() {
+    use super::relay_measured_app_leg_text;
+    use std::time::Duration;
+
+    let _guard = crate::i18n::test_lock();
+    crate::i18n::set_language(Some("en"));
+
+    let report = lightspeed_client::ServerLegAppReport {
+        passive_median_us: 47_250,
+        samples: 9,
+        age: Duration::from_secs(2),
+        floor_ok: true,
+    };
+    assert_eq!(relay_measured_app_leg_text(&report), "47 ms · n=9");
+
+    // A below-floor sample is marked invalid by the client, not dropped; the
+    // row must still render the relay's number and make no validity claim.
+    let flagged = lightspeed_client::ServerLegAppReport {
+        floor_ok: false,
+        ..report
+    };
+    assert_eq!(
+        relay_measured_app_leg_text(&flagged),
+        "47 ms · n=9",
+        "the floor flag is harvest data, not a different number or a hidden row"
+    );
+
+    crate::i18n::set_language(None);
 }

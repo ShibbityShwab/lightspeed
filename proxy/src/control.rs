@@ -30,13 +30,38 @@ mod inner {
     use crate::config::{ControlAlpn, ProxyConfig};
     use crate::geo::{self, GeoResolver};
     use crate::metrics::{ControlHandshakeOutcome, ProxyMetrics};
+    use crate::ping::ServerLegRegistry;
 
     // ── Types ───────────────────────────────────────────────────────
+
+    /// How often the control plane looks for a due server-leg report to push.
+    ///
+    /// The prober's own report cadence is 5 s per session; a 1 s sweep keeps a
+    /// fresh measurement from sitting unsent for most of that interval.
+    const SERVER_LEG_PUSH_INTERVAL: Duration = Duration::from_secs(1);
+
+    /// Bound on one server-leg push, so a slow or half-dead connection cannot
+    /// stall the sweep.
+    const SERVER_LEG_PUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
     /// The data-plane token issued to a QUIC connection, shared across the
     /// connection's streams so keepalive refresh and close-time revoke reach
     /// the same token the Register handler issued.
     type ConnectionToken = Arc<tokio::sync::Mutex<Option<u32>>>;
+
+    /// One control connection that may receive server-leg reports.
+    #[derive(Clone)]
+    struct ServerLegPeer {
+        /// Stable id of the owning connection, for cleanup when it closes.
+        connection_id: usize,
+        /// The live connection; the report is a server-initiated uni stream on
+        /// it, so it reaches exactly this client.
+        connection: quinn::Connection,
+        /// Capabilities the client advertised on this connection
+        /// ([`ControlMessage::ClientCaps`]); zero until it says otherwise, which
+        /// is how a pre-R2 client is never sent a report stream it cannot read.
+        client_caps: u8,
+    }
 
     /// Bound on distinct source IPs tracked by the control-plane telemetry
     /// limiter, so a client cannot grow the map without bound.
@@ -112,6 +137,15 @@ mod inner {
         /// Geo resolver used to place a client's registered destination, when
         /// the operator has an MMDB enabled.
         pub geo: Option<Arc<dyn GeoResolver>>,
+        /// Relay-measured server-leg prober, shared with the data plane. `None`
+        /// when probing is disabled for this relay, in which case no server-leg
+        /// message is ever pushed.
+        pub server_leg: Option<Arc<ServerLegRegistry>>,
+        /// Control connections that may receive server-leg reports, keyed by
+        /// the data-plane session token they were issued. The push writes only
+        /// to the connection that owns the token, which is what binds a report
+        /// to the client it was measured for.
+        server_leg_peers: RwLock<HashMap<u32, ServerLegPeer>>,
         /// Per-IP limiter for control-plane telemetry reports.
         telemetry_rate: tokio::sync::Mutex<TelemetryRateLimiter>,
         /// When the server started.
@@ -136,9 +170,73 @@ mod inner {
                 authenticator,
                 metrics,
                 geo,
+                server_leg: None,
+                server_leg_peers: RwLock::new(HashMap::new()),
                 telemetry_rate: tokio::sync::Mutex::new(TelemetryRateLimiter::default()),
                 started_at: Instant::now(),
             }
+        }
+
+        /// Attach the relay-measured server-leg prober.
+        ///
+        /// Called once at startup, before the state is shared, so a relay with
+        /// probing disabled never pushes a report and a client falls back to
+        /// the prior exactly as it would against a relay that predates the
+        /// message.
+        pub fn set_server_leg(&mut self, registry: Arc<ServerLegRegistry>) {
+            self.server_leg = Some(registry);
+        }
+
+        /// Bind a freshly issued data-plane token to the connection that owns
+        /// it, so a server-leg report for that session reaches this client and
+        /// no other.
+        async fn bind_server_leg_peer(&self, token: u32, connection: &quinn::Connection) {
+            if self.server_leg.is_none() || token == 0 {
+                return;
+            }
+            self.server_leg_peers.write().await.insert(
+                token,
+                ServerLegPeer {
+                    connection_id: connection.stable_id(),
+                    connection: connection.clone(),
+                    client_caps: 0,
+                },
+            );
+        }
+
+        /// Record the capabilities a client advertised on its control
+        /// connection. The bitmap is data from the client, so it can only ever
+        /// *remove* pushes: [`run_server_leg_pusher`] requires
+        /// [`caps::SERVER_LEG`] before writing a report.
+        async fn note_client_caps(&self, token: u32, client_caps: u8) {
+            if self.server_leg.is_none() || token == 0 {
+                return;
+            }
+            if let Some(peer) = self.server_leg_peers.write().await.get_mut(&token) {
+                peer.client_caps = client_caps;
+            }
+        }
+
+        /// Move a server-leg peer to a rotated token. The old token's entry is
+        /// dropped: in-flight data packets with it still authenticate, but the
+        /// data path re-registers its interest under the new token on the next
+        /// forward, so nothing is reported to a stale binding.
+        async fn rotate_server_leg_peer(&self, old_token: u32, new_token: u32) {
+            if self.server_leg.is_none() || new_token == 0 {
+                return;
+            }
+            let mut peers = self.server_leg_peers.write().await;
+            if let Some(peer) = peers.remove(&old_token) {
+                peers.insert(new_token, peer);
+            }
+        }
+
+        /// Remove every server-leg peer owned by a closed connection.
+        async fn drop_server_leg_peers(&self, connection_id: usize) {
+            self.server_leg_peers
+                .write()
+                .await
+                .retain(|_, peer| peer.connection_id != connection_id);
         }
 
         /// Generate a random, collision-free session ID.
@@ -466,6 +564,14 @@ mod inner {
             let conn_limit = self.state.config.server.max_clients.max(1);
             let semaphore = Arc::new(tokio::sync::Semaphore::new(conn_limit));
 
+            // Relay-measured server-leg reports are pushed on their own timer;
+            // without a prober there is nothing to push and no task is spawned.
+            let server_leg_pusher = self.state.server_leg.as_ref().map(|_| {
+                let state = Arc::clone(&self.state);
+                let shutdown = shutdown.clone();
+                tokio::spawn(async move { run_server_leg_pusher(state, shutdown).await })
+            });
+
             loop {
                 tokio::select! {
                     biased;
@@ -512,6 +618,9 @@ mod inner {
                 }
             }
 
+            if let Some(pusher) = &server_leg_pusher {
+                pusher.abort();
+            }
             self.announce_shutdown().await;
             self.endpoint.close(0u32.into(), b"server shutdown");
             info!("QUIC control plane shutting down");
@@ -580,6 +689,68 @@ mod inner {
         Ok(())
     }
 
+    /// Push due relay-measured server-leg reports to the control sessions that
+    /// asked for them.
+    ///
+    /// Each sweep takes the registry's due reports (the registry owns the
+    /// per-server cache and the per-session report interval), routes each one
+    /// by its data-plane session token to the control connection that owns that
+    /// token, and writes it as one server-initiated unidirectional stream. The
+    /// client reads those streams on its control connection; a client that
+    /// predates the message never opens one and ignores the frame, so no
+    /// capability gate is needed for safety.
+    async fn run_server_leg_pusher(
+        state: Arc<ControlState>,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
+        let Some(registry) = state.server_leg.clone() else {
+            return;
+        };
+        let mut interval = tokio::time::interval(SERVER_LEG_PUSH_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => return,
+                _ = interval.tick() => {
+                    for (token, message) in registry.due_pushes() {
+                        let peer = state.server_leg_peers.read().await.get(&token).cloned();
+                        let Some(peer) = peer else {
+                            // No live connection owns this token (closed or
+                            // rotated since registration): the report is
+                            // dropped, and the next one is at least a report
+                            // interval away.
+                            continue;
+                        };
+                        if peer.client_caps & caps::SERVER_LEG == 0 {
+                            // The client did not advertise that it can read a
+                            // server-leg frame (a pre-R2 build, or one whose
+                            // advertisement has not arrived yet). Skipping is
+                            // what keeps an old client from being sent streams
+                            // it would never consume.
+                            continue;
+                        }
+                        let push = async {
+                            let Ok(mut send) = peer.connection.open_uni().await else {
+                                return;
+                            };
+                            if message.write_to(&mut send).await.is_err() {
+                                return;
+                            }
+                            let _ = send.finish();
+                        };
+                        if tokio::time::timeout(SERVER_LEG_PUSH_TIMEOUT, push)
+                            .await
+                            .is_err()
+                        {
+                            debug!("Server-leg push timed out for one control session");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Handle a single client QUIC connection.
     ///
     /// The handshake already completed here, so this is the one place the
@@ -615,8 +786,10 @@ mod inner {
                 Ok((send, recv)) => {
                     let state = Arc::clone(&state);
                     let issued_token = Arc::clone(&issued_token);
+                    let connection = conn.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_stream(send, recv, remote, state, issued_token).await
+                        if let Err(e) =
+                            handle_stream(send, recv, remote, state, issued_token, connection).await
                         {
                             debug!("Stream handler error for {}: {}", remote, e);
                         }
@@ -632,6 +805,11 @@ mod inner {
                 }
             }
         }
+
+        // No server-leg report may target this connection any more: dropping
+        // the peers here also stops a report being pushed to a client that has
+        // already gone away.
+        state.drop_server_leg_peers(conn.stable_id()).await;
 
         // Collect every token issued to this connection before dropping its
         // sessions, then revoke with a reconnect grace instead of deleting, so
@@ -668,9 +846,28 @@ mod inner {
         remote: SocketAddr,
         state: Arc<ControlState>,
         issued_token: ConnectionToken,
+        connection: quinn::Connection,
     ) -> anyhow::Result<()> {
         while let Some(msg) = ControlMessage::read_from(&mut recv).await? {
             let response = process_message(msg, remote, &state, &issued_token).await;
+            // Bind the connection to the token it was issued (and to the
+            // rotated token after a rotation). This is the routing table a
+            // server-leg report is delivered through: a token is unique to one
+            // control session, so the report reaches exactly its client.
+            match &response {
+                Some(ControlMessage::RegisterAck { session_token, .. }) => {
+                    state
+                        .bind_server_leg_peer(*session_token, &connection)
+                        .await;
+                }
+                Some(ControlMessage::RotateAck {
+                    new_token,
+                    old_token,
+                }) => {
+                    state.rotate_server_leg_peer(*old_token, *new_token).await;
+                }
+                _ => {}
+            }
             if let Some(resp) = response {
                 resp.write_to(&mut send).await?;
             }
@@ -782,8 +979,11 @@ mod inner {
                         geo::destination_region(geo, ip)
                     }),
                     // This proxy implements the v5 TCP splice; advertise it so
-                    // clients can offer TCP game profiles.
-                    caps: caps::TCP_TUNNEL,
+                    // clients can offer TCP game profiles. It also implements
+                    // relay-measured server-leg reports, which a client may use
+                    // to know the capability exists (the push itself is gated
+                    // on the client's own advertisement).
+                    caps: caps::TCP_TUNNEL | caps::SERVER_LEG,
                 })
             }
 
@@ -875,6 +1075,16 @@ mod inner {
                 match crate::health::ingest_telemetry(&state.metrics, &report_json, remote.ip()) {
                     Ok(()) => debug!("Telemetry from {} ingested over control plane", remote),
                     Err(e) => warn!("Telemetry from {} rejected: {}", remote, e),
+                }
+                None
+            }
+
+            ControlMessage::ClientCaps { caps } => {
+                // Best-effort advertisement, answered with nothing. It gates
+                // whether this session may be pushed a server-leg report.
+                let token = *issued_token.lock().await;
+                if let Some(token) = token {
+                    state.note_client_caps(token, caps).await;
                 }
                 None
             }
@@ -1190,16 +1400,36 @@ mod inner {
 
         impl TestRelay {
             async fn start(mode: ControlAlpn) -> Self {
+                Self::start_inner(mode, None).await
+            }
+
+            /// A relay with the server-leg prober attached, so the push path is
+            /// exercised end to end rather than only compiled.
+            async fn start_with_server_leg(
+                mode: ControlAlpn,
+                registry: Arc<ServerLegRegistry>,
+            ) -> Self {
+                Self::start_inner(mode, Some(registry)).await
+            }
+
+            async fn start_inner(
+                mode: ControlAlpn,
+                server_leg: Option<Arc<ServerLegRegistry>>,
+            ) -> Self {
                 isolate_tls_dir();
                 let mut config = ProxyConfig::default();
                 config.network.control_alpn = mode;
                 let metrics = Arc::new(ProxyMetrics::new());
-                let state = Arc::new(ControlState::new(
+                let mut state = ControlState::new(
                     config,
                     Arc::new(RwLock::new(Authenticator::new(true))),
                     Arc::clone(&metrics),
                     None,
-                ));
+                );
+                if let Some(registry) = server_leg {
+                    state.set_server_leg(registry);
+                }
+                let state = Arc::new(state);
                 let server = ControlServer::bind("127.0.0.1:0".parse().expect("bind addr"), state)
                     .expect("bind the control server");
                 let addr = server.local_addr().expect("bound control address");
@@ -1486,6 +1716,126 @@ mod inner {
                 0,
                 "row E: a failed revision negotiation must not be counted as negotiated"
             );
+            drop(endpoint);
+            relay.shutdown().await;
+        }
+
+        /// A prober that always answers three plausible echoes: the push path
+        /// is what this test exercises, not ICMP.
+        struct FixedEcho;
+
+        impl crate::ping::EchoProber for FixedEcho {
+            fn echo(&self, _target: Ipv4Addr, _seq: u16) -> Option<u32> {
+                Some(72_000)
+            }
+        }
+
+        /// Register over the established connection and return its data-plane
+        /// token.
+        async fn register_token(conn: &quinn::Connection) -> u32 {
+            match register_over_connection(conn).await {
+                ControlMessage::RegisterAck { session_token, .. } => session_token,
+                other => panic!("expected a RegisterAck, got {other:?}"),
+            }
+        }
+
+        /// Advertise client capabilities over an established connection.
+        async fn advertise_caps(conn: &quinn::Connection, caps: u8) {
+            let (mut send, _recv) = conn.open_bi().await.expect("capability stream");
+            ControlMessage::ClientCaps { caps }
+                .write_to(&mut send)
+                .await
+                .expect("write ClientCaps");
+            send.finish().expect("finish capability stream");
+        }
+
+        /// A relay-measured server-leg report reaches exactly the control
+        /// session whose token the prober registered interest for, and no
+        /// other session on the same relay — including a session that has
+        /// interest but never advertised it can read a report.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_server_leg_report_is_pushed_only_to_its_own_session() {
+            let registry = Arc::new(crate::ping::ServerLegRegistry::new(
+                crate::ping::ServerLegConfig::default(),
+                Arc::new(crate::ping::SystemClock),
+                Arc::new(FixedEcho),
+            ));
+            let relay =
+                TestRelay::start_with_server_leg(ControlAlpn::Off, Arc::clone(&registry)).await;
+            let endpoint = client_endpoint(Vec::new());
+            let watched = connect(&endpoint, relay.addr)
+                .await
+                .expect("the session the report belongs to");
+            let other = connect(&endpoint, relay.addr)
+                .await
+                .expect("a second session on the same relay");
+            let watched_token = register_token(&watched).await;
+            let other_token = register_token(&other).await;
+            advertise_caps(&watched, caps::SERVER_LEG).await;
+            // A pre-R2 client would send nothing at all; advertising an
+            // explicit zero bitmap is the same fact and pins the gate.
+            advertise_caps(&other, 0).await;
+            // The relay handles capability streams asynchronously and does not
+            // acknowledge them; give it a moment before asking for a push.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            // Both sessions have real interest in a server the prober will
+            // measure; only the advertised one may receive a stream.
+            let watched_server: Ipv4Addr = "91.199.82.166".parse().expect("game server");
+            let other_server: Ipv4Addr = "91.199.82.167".parse().expect("game server");
+            registry.note_forward(
+                watched_token,
+                Ipv4Addr::LOCALHOST,
+                watched_server,
+                crate::ping::FORWARD_THRESHOLD,
+            );
+            registry.note_forward(
+                other_token,
+                Ipv4Addr::LOCALHOST,
+                other_server,
+                crate::ping::FORWARD_THRESHOLD,
+            );
+            assert_eq!(
+                registry.probe_due().bursts,
+                2,
+                "both active servers are due one burst"
+            );
+
+            // The push is a server-initiated uni stream on the owning session.
+            let accepted = tokio::time::timeout(Duration::from_secs(5), watched.accept_uni())
+                .await
+                .expect("the owning session must receive a report stream")
+                .expect("a uni stream");
+            let mut recv = accepted;
+            let message = ControlMessage::read_from(&mut recv)
+                .await
+                .expect("read the pushed frame")
+                .expect("a pushed message");
+            match message {
+                ControlMessage::ServerLeg {
+                    server: reported,
+                    median_us,
+                    samples,
+                    ..
+                } => {
+                    assert_eq!(reported, watched_server, "the report names its own server");
+                    assert_eq!(median_us, 72_000);
+                    assert_eq!(samples, 1);
+                }
+                other => panic!("expected a server-leg message, got {other:?}"),
+            }
+
+            // The second session has a due measurement too, but never
+            // advertised the capability: nothing may be written to it. And a
+            // report measured for the first session must never leak here.
+            let leak = tokio::time::timeout(Duration::from_millis(800), other.accept_uni()).await;
+            assert!(
+                leak.is_err(),
+                "a report must not reach a session that cannot read it"
+            );
+
+            watched.close(0u32.into(), b"done");
+            other.close(0u32.into(), b"done");
             drop(endpoint);
             relay.shutdown().await;
         }

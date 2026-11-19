@@ -207,22 +207,40 @@ pub(super) fn retest_is_about(
     }
 }
 
+/// What asked for a background relay change; the no-reply re-test chain treats
+/// the two sources differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RelayChangeSource {
+    /// The destination-aware ranking. It knows the client legs, the carry history
+    /// and whether the server position is known, and its starvation demotion is
+    /// what ends a starvation loop, so a re-test chain must never veto it.
+    DestinationRanking,
+    /// The client-leg re-race. It ranks on the half of the path that says nothing
+    /// about the server, so a chain still vetoes a move it would make.
+    ClientLegRace,
+}
+
 /// Whether a background relay change may move the live session onto `target`.
 ///
-/// A watchdog fallback opens a re-test of one relay. Moving the session
-/// underneath it would test a different relay, restart interception under the
-/// player and reproduce the mid-session hopping the owner reported, so while the
-/// chain is open for the locked server only the relay being re-tested is legal.
-/// The chain is per server, so the game server changing closes it; a user pick
-/// is not a background change and never asks this question.
+/// A watchdog fallback opens a re-test of one relay. The destination ranking may
+/// always move the session: leaving the relay that is starving it is exactly the
+/// move a starvation loop needs, and the chain is dropped as stale on the
+/// watchdog's next tick once the session is elsewhere. The client-leg re-race has
+/// no server evidence, so while the chain is open for the locked server only the
+/// relay being re-tested is legal for it - that is what keeps one relay's
+/// re-test from becoming LAX -> EWR -> FRA hopping.
 pub(super) fn relay_switch_allowed(
+    source: RelayChangeSource,
     chain: Option<RetestTarget>,
     locked_server: Option<std::net::Ipv4Addr>,
     target: std::net::SocketAddrV4,
 ) -> bool {
-    match chain {
-        Some(chain) if Some(*chain.server.ip()) == locked_server => chain.relay == Some(target),
-        _ => true,
+    match source {
+        RelayChangeSource::DestinationRanking => true,
+        RelayChangeSource::ClientLegRace => match chain {
+            Some(chain) if Some(*chain.server.ip()) == locked_server => chain.relay == Some(target),
+            _ => true,
+        },
     }
 }
 
@@ -297,6 +315,30 @@ pub(super) fn zero_return_window(
 ) -> bool {
     fault == RelayReplyFault::NoReplyFromRelay && from_proxy_since == 0 && injected_since == 0
 }
+
+/// Whether a confirmed fault is the starvation finding the relay history must
+/// remember for this (relay, server) pair.
+///
+/// Only `NoReplyFromRelay` qualifies. `InjectionFailed` is the local path's
+/// fault, and `TooFewReplies` is a low share, which asymmetric game UDP
+/// produces normally - neither says anything about the relay's path to the
+/// server. The finding is published once per chain (`starting_chain`): the
+/// following windows of the same chain repeat it, and the chain already owns
+/// the re-test cadence.
+pub(super) fn starvation_verdict(fault: RelayReplyFault, starting_chain: bool) -> bool {
+    starting_chain && fault == RelayReplyFault::NoReplyFromRelay
+}
+
+/// A (server, relay) pair the watchdog has just found starving, and the relay it
+/// saw (`None` when the relay was not known at that moment).
+///
+/// The GUI owns the relay history (the watchdog thread cannot borrow `self`), so
+/// the finding is published here for the GUI's next poll: the verdict is written,
+/// the relay is demoted for the next ranking, and the session leaves it while the
+/// watchdog's hold still makes the move free. `server` is `SocketAddrV4` so the
+/// GUI keys the record on the full address the watchdog judged, exactly like
+/// [`RelayRejection`].
+pub(super) type StarvationVerdict = (std::net::SocketAddrV4, Option<std::net::SocketAddrV4>);
 
 /// The trace line for a fault. Kept beside the decision so the wording cannot
 /// drift from the counters it quotes.
@@ -460,7 +502,9 @@ pub(super) fn relay_reply_window_message(
 /// relay it is re-testing, so the window does not move the session out from
 /// under the re-test; `rejected` carries the chain's verdict, including whether
 /// it was a confirmed zero-return chain, so the history is written from proof
-/// rather than from one low window.
+/// rather than from one low window; `starved` publishes the first confirmed
+/// `NoReplyFromRelay` of a chain, so the GUI can demote the pair and leave the
+/// relay while the hold still makes that switch free.
 pub(super) fn spawn_relay_reply_watchdog(
     engine: Arc<Mutex<LightSpeedEngine>>,
     quit: QuitFlag,
@@ -468,6 +512,7 @@ pub(super) fn spawn_relay_reply_watchdog(
     retry_enabled: Arc<std::sync::atomic::AtomicBool>,
     retry_at: Arc<Mutex<Option<std::time::Instant>>>,
     retest: Arc<Mutex<Option<RetestTarget>>>,
+    starved: Arc<Mutex<Option<StarvationVerdict>>>,
 ) {
     std::thread::spawn(move || {
         let mut watch: Option<RelayReplyWatch> = None;
@@ -498,6 +543,7 @@ pub(super) fn spawn_relay_reply_watchdog(
                 // A countdown from the previous server says nothing about this one.
                 *lock_or_recover(&retry_at) = None;
                 *lock_or_recover(&retest) = None;
+                *lock_or_recover(&starved) = None;
             }
             // A chain is about one relay. If the session has been moved off it
             // (a user pick, a reconnect), the chain is stale: re-enabling the
@@ -633,6 +679,7 @@ pub(super) fn spawn_relay_reply_watchdog(
                     fallback = None;
                     *lock_or_recover(&retry_at) = None;
                     *lock_or_recover(&retest) = None;
+                    *lock_or_recover(&starved) = None;
                     tracing::info!(
                         server = %server,
                         "The relay is returning this server's traffic again; the fallback chain is closed"
@@ -646,6 +693,10 @@ pub(super) fn spawn_relay_reply_watchdog(
                 .filter(|f| f.server == server)
                 .map(|f| f.retries)
                 .unwrap_or(0);
+            // A finding is published for the first window of a chain only; the
+            // following windows of the same chain repeat it and the chain already
+            // owns the re-test cadence.
+            let starting_chain = fallback.as_ref().is_none_or(|f| f.server != server);
             // Only a chain in which every window returned nothing at all is a
             // confirmed zero-return chain, and only that may become a history
             // verdict. A low share (TooFewReplies), or any window with an
@@ -667,6 +718,13 @@ pub(super) fn spawn_relay_reply_watchdog(
                     Duration::from_secs(60 * 60 * 24)
                 };
                 let abandoned_relay = lightspeed_client::current_relay();
+                // Publish the finding before the hold, so the GUI's next poll can
+                // write the verdict and leave this relay while the hold makes the
+                // move free. Only a NoReplyFromRelay chain is a starvation
+                // finding; the other faults are not evidence about the relay.
+                if starvation_verdict(fault, starting_chain) {
+                    *lock_or_recover(&starved) = Some((server, abandoned_relay));
+                }
                 *lock_or_recover(&rejected) =
                     retry_delay(retries).is_none().then_some(RelayRejection {
                         server,
