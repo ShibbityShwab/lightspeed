@@ -1,0 +1,639 @@
+//! Persistent application configuration (`config.toml`) — the shared model.
+//!
+//! MOVED from `client-gui/src/config.rs` at WF-081 W2-1 stage S1
+//! (`docs/design/gui-core-boundary.md` §5.1/§6). The model, the parser, the
+//! serializer, the tolerant loader and the reset/merge helpers are engine/app
+//! logic; the GUI keeps only the file path (`client-gui/src/paths.rs`) and a
+//! re-export shell. The CLI will adopt the same model at S6.
+//!
+//! Loading is tolerant by contract: a missing or malformed file yields defaults
+//! instead of an error, and the file is only ever written by an explicit user
+//! action or a successful discovery refresh — never on startup with placeholder
+//! data. The tolerant loader's diagnostic is [`ConfigRecovery`], which is the
+//! fact behind the GUI's `error.config` sentence (§2.1/§2.8); a missing file is
+//! a first run, not a recovery.
+//!
+//! Legacy keys: the file written by older builds carries
+//! `retry_after_fallback`, retired with the automatic direct fallback on
+//! 2026-11-20. The parser ignores unknown keys (deliberately, so the retired key
+//! is tolerated on read) and the serializer never writes it again. A test pins
+//! both directions.
+
+use std::net::SocketAddrV4;
+use std::path::{Path, PathBuf};
+
+use toml::{Table, Value};
+
+/// A proxy relay entry shown in the relay selector and the proxy manager.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProxyEntry {
+    /// The relay's advertised data-plane address.
+    pub addr: SocketAddrV4,
+    /// The label the selector shows (registry-friendly label or the user's).
+    pub label: String,
+    /// Registry node id (`relay-lax-1`) for discovered relays; `None` for
+    /// user-added custom proxies.
+    pub node_id: Option<String>,
+}
+
+impl ProxyEntry {
+    /// A user-added proxy (kept across discovery refreshes).
+    pub fn custom(addr: SocketAddrV4, label: impl Into<String>) -> Self {
+        Self {
+            addr,
+            label: label.into(),
+            node_id: None,
+        }
+    }
+
+    /// A relay discovered through the signed registry.
+    pub fn discovered(
+        node_id: impl Into<String>,
+        addr: SocketAddrV4,
+        label: impl Into<String>,
+    ) -> Self {
+        Self {
+            addr,
+            label: label.into(),
+            node_id: Some(node_id.into()),
+        }
+    }
+
+    /// Whether this entry came from the registry (and may be refreshed).
+    pub fn is_discovered(&self) -> bool {
+        self.node_id.is_some()
+    }
+}
+
+/// The persisted application configuration.
+///
+/// One model for every front end (GUI today, CLI at S6). The fields stay flat
+/// at S1 so the serialized file is byte-identical to the GUI's shipped
+/// `config.toml`; the `RoutePrefs`/`GamePrefs`/`UiPrefs` grouping in the
+/// boundary's DTO sketch arrives with the code-only unification at S5, where a
+/// reader/writer both change at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppConfig {
+    /// Selected relay address (`"ip:port"`), if any.
+    pub selected: Option<String>,
+    /// Every relay the selector can choose from.
+    pub proxies: Vec<ProxyEntry>,
+    /// When true, the GUI connects to the lowest-latency relay it can reach and
+    /// reconsiders on each discovery, so newly added relays are picked up.
+    pub auto_select: bool,
+    /// When true, share anonymous aggregate latency statistics with the relay.
+    /// On by default; no IP address, identifier, or packet content is sent.
+    pub share_latency_stats: bool,
+    /// When true, the GUI follows the auto-detected game instead of a pinned
+    /// pick — the Game field's "Auto (detect)" entry, on like the relay's.
+    pub game_auto: bool,
+    /// The pinned game registry key (used when `game_auto` is false).
+    pub selected_game: Option<String>,
+    /// The Game field's "Manual / Custom…" mode: relay an explicit server.
+    pub manual_mode: bool,
+    /// UI language: a BCP-47 tag (`"en"`, `"de"`, `"pt-BR"`), or `None` to
+    /// follow the operating system locale on every start.
+    pub language: Option<String>,
+    /// The Manual / Custom mode's server field, persisted so a typed address is
+    /// still there after a restart. Empty means nothing was entered.
+    pub manual_server: String,
+    /// The Manual / Custom mode's port-range field, persisted for the same
+    /// reason. Empty means the profile's default range is used.
+    pub manual_port_range: String,
+    /// Effective path-MTU cap for the tunnel, in bytes (1280-1500). The default
+    /// 1492 is the PPPoE-safe clamp; lower it when the local path is smaller
+    /// (VPN, DPI shim such as Zapret, reduced-MTU adapter), which otherwise
+    /// fails with `WSAEMSGSIZE` (Windows 10040). The data plane also lowers it
+    /// automatically when the OS rejects a send.
+    pub tunnel_mtu: usize,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            selected: None,
+            proxies: Vec::new(),
+            auto_select: true,
+            share_latency_stats: true,
+            game_auto: true,
+            selected_game: None,
+            manual_mode: false,
+            language: None,
+            manual_server: String::new(),
+            manual_port_range: String::new(),
+            tunnel_mtu: 1492,
+        }
+    }
+}
+
+/// Why the tolerant loader could not use the file it found.
+///
+/// The GUI turns this into the localized `error.config` sentence and keeps the
+/// verbatim reason behind `Details` (§2.8): a recovery is a user-visible fact,
+/// not a silent default. `path` is the file that was attempted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigRecovery {
+    /// The config file that could not be read or parsed.
+    pub path: PathBuf,
+    /// The verbatim diagnostic (parse error or I/O error).
+    pub reason: String,
+}
+
+/// A configuration plus the diagnostic of a tolerant load.
+///
+/// `recovery` is `None` when the file loaded cleanly or does not exist yet: a
+/// first run is not a recovery, and must not raise a settings-error sentence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedAppConfig {
+    /// The configuration to run with (defaults when recovery is `Some`).
+    pub config: AppConfig,
+    /// The diagnostic when defaults were substituted for an unreadable file.
+    pub recovery: Option<ConfigRecovery>,
+}
+
+/// Load the config at `path`, falling back to defaults on any error.
+pub fn load(path: &Path) -> AppConfig {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match parse(&text) {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::warn!("Ignoring malformed config {}: {e}", path.display());
+                AppConfig::default()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => AppConfig::default(),
+        Err(e) => {
+            tracing::warn!("Could not read config {}: {e}", path.display());
+            AppConfig::default()
+        }
+    }
+}
+
+/// Load the config at `path`, keeping the recovery diagnostic the GUI surfaces.
+///
+/// Same tolerated behaviour as [`load`], but the caller learns *why* defaults
+/// were used so the window can say so (`error.config`) instead of looking like
+/// a fresh install. A missing file is a first run: `recovery` stays `None`.
+pub fn load_or_default(path: &Path) -> LoadedAppConfig {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match parse(&text) {
+            Ok(config) => LoadedAppConfig {
+                config,
+                recovery: None,
+            },
+            Err(reason) => {
+                tracing::warn!("Ignoring malformed config {}: {reason}", path.display());
+                LoadedAppConfig {
+                    config: AppConfig::default(),
+                    recovery: Some(ConfigRecovery {
+                        path: path.to_path_buf(),
+                        reason,
+                    }),
+                }
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => LoadedAppConfig {
+            config: AppConfig::default(),
+            recovery: None,
+        },
+        Err(e) => {
+            tracing::warn!("Could not read config {}: {e}", path.display());
+            LoadedAppConfig {
+                config: AppConfig::default(),
+                recovery: Some(ConfigRecovery {
+                    path: path.to_path_buf(),
+                    reason: e.to_string(),
+                }),
+            }
+        }
+    }
+}
+
+/// Parse a `config.toml` body. Unknown keys are ignored; entries with an
+/// unparseable `addr` are skipped rather than failing the whole file.
+pub fn parse(text: &str) -> Result<AppConfig, String> {
+    let table: Table = toml::from_str(text).map_err(|e| e.to_string())?;
+    let selected = table
+        .get("selected")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let auto_select = table
+        .get("auto_select")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let share_latency_stats = table
+        .get("share_latency_stats")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let manual_mode = table
+        .get("manual_mode")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // Absent means "follow the OS locale", so an empty or malformed value is
+    // treated as absent rather than as a broken tag.
+    let language = table
+        .get("language")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string);
+    // A blank field is the same as an absent one: the app falls back to the
+    // profile default rather than to an unusable empty string.
+    let manual_server = table
+        .get("manual_server")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let manual_port_range = table
+        .get("manual_port_range")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    // A hand-edited path-MTU cap is clamped into the range the tunnel supports;
+    // an absent key keeps the PPPoE-safe 1492 default.
+    let tunnel_mtu = table
+        .get("tunnel_mtu")
+        .and_then(Value::as_integer)
+        .map(|value| value.clamp(1280, 1500) as usize)
+        .unwrap_or(1492);
+
+    let game_auto = table
+        .get("game_auto")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let selected_game = table
+        .get("selected_game")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let mut proxies = Vec::new();
+    if let Some(items) = table.get("proxies").and_then(Value::as_array) {
+        for item in items {
+            let Some(entry) = item.as_table() else {
+                continue;
+            };
+            let Some(addr_str) = entry.get("addr").and_then(Value::as_str) else {
+                continue;
+            };
+            let Ok(addr) = addr_str.parse::<SocketAddrV4>() else {
+                tracing::warn!("Skipping proxy with invalid address: {addr_str}");
+                continue;
+            };
+            let label = entry
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or(addr_str)
+                .to_string();
+            let node_id = entry
+                .get("node_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            proxies.push(ProxyEntry {
+                addr,
+                label,
+                node_id,
+            });
+        }
+    }
+    Ok(AppConfig {
+        selected,
+        proxies,
+        auto_select,
+        share_latency_stats,
+        game_auto,
+        selected_game,
+        manual_mode,
+        language,
+        manual_server,
+        manual_port_range,
+        tunnel_mtu,
+    })
+}
+
+/// Serialize a config to TOML.
+pub fn render(config: &AppConfig) -> String {
+    let mut table = Table::new();
+    if let Some(selected) = &config.selected {
+        table.insert("selected".into(), Value::String(selected.clone()));
+    }
+    table.insert("auto_select".into(), Value::Boolean(config.auto_select));
+    table.insert("game_auto".into(), Value::Boolean(config.game_auto));
+    table.insert("manual_mode".into(), Value::Boolean(config.manual_mode));
+    if let Some(game) = &config.selected_game {
+        table.insert("selected_game".into(), Value::String(game.clone()));
+    }
+    table.insert(
+        "share_latency_stats".into(),
+        Value::Boolean(config.share_latency_stats),
+    );
+    if let Some(language) = &config.language {
+        table.insert("language".into(), Value::String(language.clone()));
+    }
+    if !config.manual_server.is_empty() {
+        table.insert(
+            "manual_server".into(),
+            Value::String(config.manual_server.clone()),
+        );
+    }
+    if !config.manual_port_range.is_empty() {
+        table.insert(
+            "manual_port_range".into(),
+            Value::String(config.manual_port_range.clone()),
+        );
+    }
+    table.insert(
+        "tunnel_mtu".into(),
+        Value::Integer(config.tunnel_mtu as i64),
+    );
+    let entries: Vec<Value> = config
+        .proxies
+        .iter()
+        .map(|proxy| {
+            let mut entry = Table::new();
+            entry.insert("label".into(), Value::String(proxy.label.clone()));
+            entry.insert("addr".into(), Value::String(proxy.addr.to_string()));
+            if let Some(node_id) = &proxy.node_id {
+                entry.insert("node_id".into(), Value::String(node_id.clone()));
+            }
+            Value::Table(entry)
+        })
+        .collect();
+    table.insert("proxies".into(), Value::Array(entries));
+    toml::to_string(&table).unwrap_or_default()
+}
+
+/// Write the config, creating the parent directory when needed.
+pub fn save(path: &Path, config: &AppConfig) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, render(config)).map_err(|e| e.to_string())?;
+    tracing::info!("Saved config to {}", path.display());
+    Ok(())
+}
+
+/// Remove the persisted config ("Reset to defaults"). A missing file is fine.
+pub fn reset(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            tracing::info!("Removed config {}", path.display());
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Replace registry-discovered relays with a fresh set, keeping user-added
+/// custom proxies untouched.
+pub fn merge_discovered(existing: &[ProxyEntry], discovered: Vec<ProxyEntry>) -> Vec<ProxyEntry> {
+    let mut merged = discovered;
+    merged.extend(existing.iter().filter(|p| !p.is_discovered()).cloned());
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        load, load_or_default, merge_discovered, parse, render, reset, save, AppConfig, ProxyEntry,
+    };
+    use std::net::SocketAddrV4;
+
+    fn addr(s: &str) -> SocketAddrV4 {
+        s.parse().expect("test address")
+    }
+
+    fn sample() -> AppConfig {
+        AppConfig {
+            selected: Some("207.246.106.36:4434".into()),
+            proxies: vec![
+                ProxyEntry::discovered(
+                    "relay-lax-1",
+                    addr("207.246.106.36:4434"),
+                    "LAX - Los Angeles",
+                ),
+                ProxyEntry::custom(addr("127.0.0.1:4434"), "Local proxy"),
+            ],
+            auto_select: true,
+            share_latency_stats: true,
+            game_auto: true,
+            selected_game: None,
+            manual_mode: false,
+            language: Some("de".into()),
+            manual_server: "203.0.113.7:28015".into(),
+            manual_port_range: "27000-27050".into(),
+            tunnel_mtu: 1400,
+        }
+    }
+
+    fn temp_path(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "lightspeed-appconfig-{tag}-{}.toml",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn tunnel_mtu_is_clamped_from_the_config_file() {
+        let lowered = parse("tunnel_mtu = 900\n").expect("parse");
+        assert_eq!(
+            lowered.tunnel_mtu, 1280,
+            "a cap below the floor is raised to it"
+        );
+
+        let raised = parse("tunnel_mtu = 9000\n").expect("parse");
+        assert_eq!(
+            raised.tunnel_mtu, 1500,
+            "a cap above the Ethernet hard cap is refused"
+        );
+
+        let absent = parse("").expect("parse");
+        assert_eq!(absent.tunnel_mtu, 1492, "the default is the PPPoE clamp");
+    }
+
+    #[test]
+    fn config_round_trips_through_toml() {
+        let parsed = parse(&render(&sample())).expect("rendered config parses");
+        assert_eq!(parsed, sample());
+    }
+
+    #[test]
+    fn config_round_trips_without_a_pinned_language() {
+        let mut config = sample();
+        config.language = None;
+        let parsed = parse(&render(&config)).expect("rendered config parses");
+        assert_eq!(parsed.language, None);
+    }
+
+    /// Discussion #146: the Manual / Custom fields must still be there after a
+    /// restart. `sample()` carries both, so the round-trip test above covers the
+    /// written case; this covers the untouched case, where an empty field must
+    /// not be written out and must parse back as empty rather than as missing.
+    #[test]
+    fn an_untouched_manual_entry_is_neither_written_nor_lost() {
+        let mut config = sample();
+        config.manual_server = String::new();
+        config.manual_port_range = String::new();
+        let text = render(&config);
+        assert!(!text.contains("manual_server"), "{text}");
+        assert!(!text.contains("manual_port_range"), "{text}");
+        let parsed = parse(&text).expect("config without the fields parses");
+        assert_eq!(parsed.manual_server, "");
+        assert_eq!(parsed.manual_port_range, "");
+    }
+
+    #[test]
+    fn config_parse_tolerates_missing_and_unknown_keys() {
+        let parsed = parse("selected = \"1.2.3.4:4434\"\nunknown = 7\n").expect("parse");
+        assert_eq!(parsed.selected.as_deref(), Some("1.2.3.4:4434"));
+        assert!(parsed.proxies.is_empty());
+    }
+
+    /// The automatic direct fallback and its re-test setting were removed on
+    /// 2026-11-20. A config file written by an older build still carries
+    /// `retry_after_fallback`; the key must be ignored rather than failing the
+    /// whole load, and a later save must not write it back.
+    #[test]
+    fn config_from_before_the_warn_only_mode_still_loads() {
+        let parsed = parse("retry_after_fallback = false\nshare_latency_stats = false\n")
+            .expect("a config with the retired key parses");
+        assert!(
+            !parsed.share_latency_stats,
+            "the keys around the retired one still load"
+        );
+        let rendered = render(&parsed);
+        assert!(
+            !rendered.contains("retry_after_fallback"),
+            "the retired key must not be written back: {rendered}"
+        );
+    }
+
+    /// The tolerant loader keeps the diagnostic the GUI needs for `error.config`;
+    /// a first run (no file) is not a recovery and must not raise a sentence.
+    #[test]
+    fn load_or_default_reports_a_recovery_only_for_an_unusable_file() {
+        let missing = temp_path("missing");
+        let _ = std::fs::remove_file(&missing);
+        let loaded = load_or_default(&missing);
+        assert_eq!(loaded.config, AppConfig::default());
+        assert_eq!(loaded.recovery, None, "a first run is not a settings error");
+
+        let broken = temp_path("broken");
+        std::fs::write(&broken, "this is not = toml [").expect("write");
+        let loaded = load_or_default(&broken);
+        assert_eq!(loaded.config, AppConfig::default());
+        let recovery = loaded.recovery.expect("a malformed file is a recovery");
+        assert_eq!(recovery.path, broken);
+        assert!(
+            !recovery.reason.is_empty(),
+            "the diagnostic must say why defaults were used"
+        );
+        let _ = std::fs::remove_file(&broken);
+    }
+
+    #[test]
+    fn config_parse_skips_invalid_proxy_addresses() {
+        let parsed = parse(
+            "[[proxies]]\nlabel = \"bad\"\naddr = \"not-an-addr\"\n\n\
+             [[proxies]]\nlabel = \"good\"\naddr = \"5.6.7.8:4434\"\n",
+        )
+        .expect("parse");
+        assert_eq!(parsed.proxies.len(), 1);
+        assert_eq!(parsed.proxies[0].addr, addr("5.6.7.8:4434"));
+        assert_eq!(parsed.proxies[0].node_id, None);
+    }
+
+    #[test]
+    fn config_parse_rejects_malformed_toml() {
+        assert!(parse("this is not = toml [").is_err());
+    }
+
+    #[test]
+    fn config_language_absent_means_follow_the_system_locale() {
+        let parsed = parse("auto_select = true\n").expect("parse");
+        assert_eq!(parsed.language, None);
+    }
+
+    #[test]
+    fn config_language_blank_is_treated_as_absent() {
+        for body in ["language = \"\"\n", "language = \"   \"\n"] {
+            let parsed = parse(body).expect("parse");
+            assert_eq!(parsed.language, None, "{body:?} should not pin a language");
+        }
+    }
+
+    #[test]
+    fn config_load_missing_file_yields_defaults() {
+        let path = temp_path("load-missing");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(load(&path), AppConfig::default());
+    }
+
+    #[test]
+    fn config_save_then_load_round_trips() {
+        let path = temp_path("roundtrip");
+        let _ = std::fs::remove_file(&path);
+        save(&path, &sample()).expect("save");
+        assert_eq!(load(&path), sample());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn config_reset_removes_file_and_is_idempotent() {
+        let path = temp_path("reset");
+        save(&path, &sample()).expect("save");
+        assert!(path.exists());
+        reset(&path).expect("reset");
+        assert!(!path.exists());
+        reset(&path).expect("reset again");
+    }
+
+    #[test]
+    fn config_auto_select_defaults_to_true_and_parses_false() {
+        assert!(
+            parse("selected = \"1.2.3.4:4434\"\n")
+                .expect("parse")
+                .auto_select
+        );
+        assert!(!parse("auto_select = false\n").expect("parse").auto_select);
+        assert!(parse("auto_select = true\n").expect("parse").auto_select);
+    }
+
+    #[test]
+    fn config_share_latency_stats_defaults_on_and_parses_false() {
+        assert!(
+            parse("selected = \"1.2.3.4:4434\"\n")
+                .expect("parse")
+                .share_latency_stats
+        );
+        assert!(
+            !parse("share_latency_stats = false\n")
+                .expect("parse")
+                .share_latency_stats
+        );
+        assert!(
+            parse("share_latency_stats = true\n")
+                .expect("parse")
+                .share_latency_stats
+        );
+    }
+
+    #[test]
+    fn merge_discovered_refreshes_relays_and_keeps_custom_entries() {
+        let existing = vec![
+            ProxyEntry::discovered("relay-old", addr("9.9.9.9:4434"), "Old relay"),
+            ProxyEntry::custom(addr("127.0.0.1:4434"), "Local proxy"),
+        ];
+        let discovered = vec![ProxyEntry::discovered(
+            "relay-lax-1",
+            addr("207.246.106.36:4434"),
+            "LAX - Los Angeles",
+        )];
+        let merged = merge_discovered(&existing, discovered);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].node_id.as_deref(), Some("relay-lax-1"));
+        assert_eq!(merged[1].label, "Local proxy");
+        assert!(!merged[1].is_discovered());
+    }
+}

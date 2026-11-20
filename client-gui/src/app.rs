@@ -16,7 +16,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::config::{self, GuiConfig, ProxyEntry};
+use crate::config::{self, AppConfig, ConfigRecovery, ProxyEntry};
 use crate::design::*;
 use crate::discovery::{self, DiscoveryOutcome, RelayHealth};
 use crate::globe;
@@ -308,6 +308,11 @@ pub struct LightSpeedApp<P: Platform> {
     manager_label_input: String,
     manager_addr_input: String,
     config_error: Option<String>,
+    /// The tolerant loader's diagnostic when an existing `config.toml` could
+    /// not be used (the window is running on defaults). `None` on a clean load
+    /// and on a first run. Read by the W2-1 status DTO for `error.config`.
+    #[allow(dead_code)] // read by the status DTO assembly (W2-1 S3a)
+    config_recovery: Option<ConfigRecovery>,
 
     // ── Game routing ──────────────────────────────────────────────────────
     selected_game_idx: usize,
@@ -502,7 +507,13 @@ impl<P: Platform> LightSpeedApp<P> {
 
         let is_admin = P::is_admin();
 
-        let saved = config::load(&paths::config_file());
+        let loaded = config::load_or_default(&paths::config_file());
+        // Keep the tolerant loader's diagnostic: the status DTO turns it into
+        // the localized settings-error sentence instead of looking like a fresh
+        // install. Only an unusable existing file produces one; a first run is
+        // not an error.
+        let config_recovery = loaded.recovery;
+        let saved = loaded.config;
         // Apply the persisted path-MTU cap before any boost can start; the data
         // plane also lowers it on an EMSGSIZE rejection, so this is the user's
         // explicit floor rather than the only protection.
@@ -617,6 +628,7 @@ impl<P: Platform> LightSpeedApp<P> {
             manager_label_input: String::new(),
             manager_addr_input: String::new(),
             config_error: None,
+            config_recovery,
             selected_game_idx,
             game_auto,
             game_manual,
@@ -807,7 +819,7 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     fn persist_config(&self) {
-        let config = GuiConfig {
+        let config = AppConfig {
             selected: self.selected_entry().map(|entry| entry.addr.to_string()),
             proxies: self.proxies.clone(),
             auto_select: self.auto_select,

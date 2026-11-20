@@ -2187,7 +2187,7 @@ fn group_digits_thousands_groups_counters() {
 #[test]
 fn a_stored_manual_port_range_reaches_the_interceptor_config() {
     // As the loader restores it from disk.
-    let saved = crate::config::GuiConfig {
+    let saved = crate::config::AppConfig {
         manual_port_range: "27000-27050".to_string(),
         ..Default::default()
     };

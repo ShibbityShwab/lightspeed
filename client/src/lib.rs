@@ -6,6 +6,11 @@
 //! library's perspective while being actively used by the binary crate.
 #![allow(dead_code)]
 
+/// The shared application facade the GUI wraps (WF-081 core boundary).
+///
+/// Owns logic, not rendering: `docs/design/gui-core-boundary.md` §6 stages the
+/// migration into it, and `client/tests/gui_boundary.rs` guards the seam.
+pub mod app;
 pub mod engine;
 pub mod games;
 pub mod interceptor;
