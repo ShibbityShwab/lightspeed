@@ -12,6 +12,20 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-3a checkpoint) - WF-081: warn-only runtime extracted into the core; R16 streak closed; QA verifying
+
+**Agent:** lead + `rust-dev` (task-43), `qa-engineer-2` (task-44).
+
+- **W2-3a landed and committed (`c80bf97`).** Three new core modules: `client/src/app/watchdog.rs` (1,216 lines, 11 tests — the full warn-only runtime, `WatchdogPlan` with `switch_to_direct` always false, `ReplyFaultStreak`, demotion, the background thread, relay-health hysteresis), `client/src/app/history.rs` (809 lines, 24 tests — `RelayHistory` with unchanged disk format, `CarryVerdict`, the `CarryLookup` impl), `client/src/app/commands.rs` (279 lines, 3 tests — S3b `AppCore` with `select_relay`/`disconnect`/MTU/start/stop/redirect/hold, one `SessionCommandState`, every fallible command returning `AppError` + `last_error`). **R16 closes:** `WatchdogStatus.streak` publishes the real judged-window count from `WatchdogSnapshot` (`None→Some(1)→Some(2)+warning+verdict→None`, different-fault restart, clear-keeps-verdict, never a fabricated zero); the deferral note is gone.
+- **GUI thinned:** `app/watchdog.rs` 719→31, `relay_history.rs` 790→15, `app/relay_choice.rs` 144→60 (re-export shells); `race_watch.rs` deleted and `decide_switch` moved to core `status.rs`; `app.rs` 4,397→4,371 orchestration only (all hunks before `ui()`, zero `route_surface` diff); `app/tests.rs` 3,121→2,853. Test movement: GUI 250→213 (−37 = 24 history + 9 warn/health + 4 race), client +42 (37 moved + 2 streak + 3 command), workspace 1927.
+- **Lead gate: PASS.** fmt clean; workspace clippy 0; workspace **1927 / 0 / 7** (client 1565/0/3); GUI clippy 0; GUI **213 / 0 / 0**. Guard ratchet G2 50→95 with both mutation rounds (5/3 and 7/1 fail → revert 8/8); behaviour-freeze re-derived 7/7 identical with `switch_to_direct_always_false: true`; `route_surface` fixtures 23/23 identical and the file has no diff.
+- **Scope deviations to rule:** `client-gui/src/app/choice.rs` (the obsolete GUI `CarryLookup` adapter removed + `decide_switch` re-exported) and `client-gui/src/main.rs` (the `race_watch` mod line) are outside task-43's named scope but are necessary consequences of moving history/race into the core; QA is ruling on them.
+- **Named unverified:** live starvation-warning fixture (needs a live relay session; decision/streak/publication/demotion/rendering are fixture-covered), Linux CI not run from this host, `AppCore`'s engine-invocation error path covered by mapping tests not an engine-backed integration test, and some pure fault/log tests still in the GUI harness (mechanical relocation follow-up). No fresh screenshots — the shell is byte-identical (diff-proven).
+- **Next:** QA task-44 → W2-3b (location/trace/CLI) which is **blocked on Q13** (traceroute disclosure), then W2-4 parity. Branch 19 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts; commit `c80bf97`; freeze/route_surface/guard evidence in `wat/evidence/2026-11-20/w2-3a/`. **Not verified:** W2-3a by an independent verifier (task-44 in progress); live starvation session; Linux CI.
+**Open:** Q13 traceroute disclosure decision before W2-3b; QA W2-3a verdict; scope ruling.
+
 ### 2026-11-20 (W2-2 ACCEPTED, W2-3a start) - WF-081: shell accepted; warn-only runtime extraction begins
 
 **Agent:** lead + `qa-engineer-2` (task-42), `rust-dev` (task-43 start).
