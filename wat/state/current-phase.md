@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-1 complete) - WF-081: Spine implemented, Lead-gated, committed; independent QA running
+
+**Agent:** lead + `rust-dev` (task-29 checkpoint, task-35 S3a), on the owner's go-ahead.
+
+- **W2-1 "Spine" is feature-complete and committed (`4458c30`, on `c9ee49d`).** S3a added `client/src/app/dto.rs` (653 lines, 4 tests: `AppStatus`, `RelayStatus`, `WatchdogStatus`, `StarvationWarning`, `LocationStatus`, `ServerLegStatus`, `ClientRoute`, `RelayedPair`, `TrayState`, `AppError`, `SessionCommandState`, `Capabilities`, `CarryLookup`), `client/src/app/status.rs` (923 lines, 21 tests: moved `tray_state_for`, action slot, counters, ping/triangle readers, relay-measured + estimator leg readers, starvation filter over the `CarryLookup` seam), and `client-gui/src/app/route_surface.rs` (1,448 lines, 17 tests: pure `AppStatus → §2 word/rows` adapter, 7 words/9 rows, fault-keyed warning, elevation overlay, `STARTING…` slot, ledger + `Details`, location ladder, trace, tray, `relay_recovered: false`). GUI rule halves thinned (`choice 540→147`, `ledger 284→212`, `relay_choice 198→144`, `window 198→174`); `app.rs` **+371/−0 with zero `ui()`/drawing edits** (four fact paths + `app_status()` assembly). Guard ratcheted (G2 15→50 identifiers, budgets, new module).
+- **Lead gate on the final tree: PASS.** fmt clean; workspace clippy 0; workspace tests **1884 / 0 / 7** (client 1522/0/3, protocol 104, proxy 257 + integration suites); GUI clippy 0; GUI **243 / 0 / 0**. Guard 8/8 with both mutation rounds (inject → 5/3 and 7/1 fail → revert → 8/8).
+- **No-visual-change proof re-checked.** Connected: **0 px outside the live-metric mask** (0.000000 % of 277,120); disconnected: **0 px outside** (bound 30 px caption band only); UIA trees identical (30/25 elements). `route_surface` imports only `lightspeed_client::app::{dto,status}` — no egui/eframe. No forbidden path touched (design.rs/locales/platform/workflows/interface.md).
+- **Independent QA started** (task-36, `qa-engineer-2`): re-verifies (a)-(h), re-runs the guard mutation and the repo gate, maps every §2 row to its DTO field + fixture, re-derives the pixel-mask justification, and returns ACCEPT/REVISE. **W2-2 is blocked on that verdict.**
+- **Named unverified/remaining (not defects).** `WatchdogStatus.streak` is `None` in assembly until S4 publishes it (field is fixture-tested; no fabricated zero); the moved rules' old GUI tests still live in `app/tests.rs` and exercise the shared code (physical relocation is mechanical); `route_surface` is not rendered yet (W2-2 occupies `ui()` and must land its catalogue keys); gates ran Windows-only (Linux CI unverified here); captures used the `glow` escape hatch on both sides (pre-existing wgpu panic, #178 class). $0.00; no fleet/release/public change.
+
+**Verified:** Lead gate counts and guard mutation logs; `compare2-*.json` pixel/UIA verdicts; commit `4458c30`; branch 7 ahead / 0 behind `origin/master 76aba5d`. **Not verified:** W2-1 by an independent verifier (task-36 in progress); Linux CI/first-run of the moved tests; the shell (W2-2).
+**Open:** QA W2-1 verdict → W2-2 shell; then W2-3a/3b and W2-4; Q13 trace disclosure with W2-3b; ES/PT copy in W2-2; owner hardware for runtime parity.
+
 ### 2026-11-20 (W2-1 checkpoint) - WF-081: Spine S0-S2 green and committed; S3a continuing
 
 **Agent:** lead + `rust-dev` (task-29 checkpoint, task-35 continuation), on the owner's go-ahead after the rebase and mobile-only decision.
