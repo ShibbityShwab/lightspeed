@@ -1698,9 +1698,29 @@ mod supervisor {
                         samples,
                         age_ms,
                     }))) => {
-                        if generation_is_current(data_addr, generation) {
-                            crate::server_leg::record(
+                        // `record` returns whether the report was accepted;
+                        // exactly one stable info line is emitted per accepted
+                        // report for the E1 harvest.
+                        if generation_is_current(data_addr, generation)
+                            && crate::server_leg::record(
                                 data_addr, server, median_us, jitter_us, samples, age_ms,
+                            )
+                        {
+                            let at_unix_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis();
+                            info!(
+                                "{}",
+                                crate::server_leg::server_leg_log_line(
+                                    data_addr,
+                                    server,
+                                    u64::from(median_us),
+                                    u64::from(jitter_us),
+                                    samples,
+                                    age_ms,
+                                    at_unix_ms,
+                                )
                             );
                         }
                     }

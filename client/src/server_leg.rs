@@ -172,7 +172,9 @@ fn lock_store() -> MutexGuard<'static, HashMap<(SocketAddrV4, Ipv4Addr), Stored>
 ///
 /// Shape validation happens here so a malformed frame is never stored; the
 /// freshness and triangle-floor rules run at read time, because they depend on
-/// clocks and on measurements the client may only get later. Kept crate-private:
+/// clocks and on measurements the client may only get later. Returns `true` when
+/// the report was stored: the control-plane handler emits exactly one info line
+/// per accepted report, so a rejected frame must not log one. Kept crate-private:
 /// the control-plane handler is the only producer, and it passes the relay of
 /// the connection the frame arrived on, which is the pair-binding guarantee.
 pub(crate) fn record(
@@ -182,7 +184,7 @@ pub(crate) fn record(
     jitter_us: u32,
     samples: u8,
     age_ms: u16,
-) {
+) -> bool {
     record_at(
         relay,
         server,
@@ -191,7 +193,7 @@ pub(crate) fn record(
         samples,
         Duration::from_millis(u64::from(age_ms)),
         Instant::now(),
-    );
+    )
 }
 
 /// [`record`] with the receive instant supplied, so the freshness rules are
@@ -204,9 +206,9 @@ fn record_at(
     samples: u8,
     wire_age: Duration,
     received_at: Instant,
-) {
+) -> bool {
     if !is_plausible_median(median_us) || !is_plausible_jitter(jitter_us) || samples == 0 {
-        return;
+        return false;
     }
     let stored = Stored {
         median_us,
@@ -228,6 +230,7 @@ fn record_at(
         }
     }
     entries.insert((relay, server), stored);
+    true
 }
 
 /// The latest relay-measured server leg for `(relay, server)`.
@@ -321,6 +324,33 @@ fn is_plausible_median(median_us: u32) -> bool {
 /// A jitter above the median ceiling is not a spread, it is a bad field.
 fn is_plausible_jitter(jitter_us: u32) -> bool {
     jitter_us <= MAX_PLAUSIBLE_MEDIAN_US
+}
+
+/// The one stable info line emitted per accepted ICMP report.
+///
+/// Format (pinned for the E1 harvest; do not reorder or rename fields):
+///
+/// ```text
+/// SERVER_LEG_REPORT relay=<ip:port> server=<ip> median_us=<u64> jitter_us=<u64> samples=<u8> age_ms=<u16> at_unix_ms=<u128>
+/// ```
+///
+/// `server` is the wire's IPv4 destination only: the report message carries no
+/// port, so none is invented. `relay` is the control connection's address and
+/// `at_unix_ms` the client's receipt time, both needed to match the relay ICMP
+/// value to its passive peer sample and the client floor terms in the E1 epoch.
+pub fn server_leg_log_line(
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+    median_us: u64,
+    jitter_us: u64,
+    samples: u8,
+    age_ms: u16,
+    at_unix_ms: u128,
+) -> String {
+    format!(
+        "SERVER_LEG_REPORT relay={relay} server={server} median_us={median_us} \
+         jitter_us={jitter_us} samples={samples} age_ms={age_ms} at_unix_ms={at_unix_ms}"
+    )
 }
 
 // ── Passive app-RTT reports (F4 peer reference) ─────────────────────
@@ -748,7 +778,7 @@ mod tests {
         let _guard = store_test_guard();
         clear();
         let now = Instant::now();
-        record_at(
+        assert!(record_at(
             relay(4433),
             server(10),
             100_000,
@@ -756,11 +786,20 @@ mod tests {
             3,
             Duration::ZERO,
             now,
-        );
+        ));
         // A zero median, an absurd median, a bad jitter and zero samples are
-        // all refused, so the good entry stays.
-        record_at(relay(4433), server(10), 0, 2_000, 3, Duration::ZERO, now);
-        record_at(
+        // all refused (the status is what gates the one info line), so the good
+        // entry stays.
+        assert!(!record_at(
+            relay(4433),
+            server(10),
+            0,
+            2_000,
+            3,
+            Duration::ZERO,
+            now
+        ));
+        assert!(!record_at(
             relay(4433),
             server(10),
             u32::MAX,
@@ -768,8 +807,8 @@ mod tests {
             3,
             Duration::ZERO,
             now,
-        );
-        record_at(
+        ));
+        assert!(!record_at(
             relay(4433),
             server(10),
             100_000,
@@ -777,8 +816,8 @@ mod tests {
             3,
             Duration::ZERO,
             now,
-        );
-        record_at(
+        ));
+        assert!(!record_at(
             relay(4433),
             server(10),
             100_000,
@@ -786,7 +825,7 @@ mod tests {
             0,
             Duration::ZERO,
             now,
-        );
+        ));
         let held = *store()
             .lock()
             .expect("store")
@@ -1063,6 +1102,38 @@ mod tests {
         assert!(server_leg_app_report(testnet_relay(4433), testnet_server(11)).is_none());
         assert!(server_leg_app_report(testnet_relay(4433), testnet_server(10)).is_some());
         clear_app();
+    }
+
+    #[test]
+    fn the_report_log_line_round_trips() {
+        // TEST-NET-3 / TEST-NET-2 fixtures only: the line must be reproducible
+        // from neutral addresses, never a real game server.
+        let relay = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), 4433);
+        let server = Ipv4Addr::new(198, 51, 100, 23);
+        let line = server_leg_log_line(relay, server, 64_250, 3_100, 6, 850, 1_765_000_000_456);
+        assert_eq!(
+            line,
+            "SERVER_LEG_REPORT relay=203.0.113.7:4433 server=198.51.100.23 \
+             median_us=64250 jitter_us=3100 samples=6 age_ms=850 at_unix_ms=1765000000456"
+        );
+
+        // Round-trip: the whitespace-separated field list decodes back to the
+        // exact inputs, so a reordered or renamed field fails here.
+        let mut fields = std::collections::HashMap::new();
+        let mut parts = line.split_whitespace();
+        assert_eq!(parts.next(), Some("SERVER_LEG_REPORT"));
+        for part in parts {
+            let (key, value) = part.split_once('=').expect("key=value field");
+            fields.insert(key, value);
+        }
+        assert_eq!(fields.get("relay"), Some(&"203.0.113.7:4433"));
+        assert_eq!(fields.get("server"), Some(&"198.51.100.23"));
+        assert_eq!(fields.get("median_us"), Some(&"64250"));
+        assert_eq!(fields.get("jitter_us"), Some(&"3100"));
+        assert_eq!(fields.get("samples"), Some(&"6"));
+        assert_eq!(fields.get("age_ms"), Some(&"850"));
+        assert_eq!(fields.get("at_unix_ms"), Some(&"1765000000456"));
+        assert_eq!(fields.len(), 7, "exactly the pinned fields");
     }
 
     #[test]
