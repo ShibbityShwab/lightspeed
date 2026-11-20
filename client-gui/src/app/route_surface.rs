@@ -24,13 +24,13 @@
 //! rendered copy: `i18n` stays a shell concern, so the same fixture asserts the
 //! same contract in all nine locales.
 //!
-//! Nothing is wired into `impl eframe::App::ui` in this slice (W2-2 owns the
-//! shell and is the first consumer), hence the module-wide `dead_code` allow.
-#![allow(dead_code)]
+//! Every item here is consumed by the W2-2 shell in `app.rs` (or by the
+//! contract fixtures in this module); there is no module-wide `dead_code`
+//! allowance. W2-4b retired the last duplicate copy builders and removed the
+//! blanket, annotating only the genuine platform exemptions elsewhere.
 
 use lightspeed_client::app::dto::{
-    AppErrorKind, AppStatus, CarryVerdict, ClientRoute, LocationRung, RelayedPair, ServerLegState,
-    TrayState,
+    AppErrorKind, AppStatus, ClientRoute, LocationRung, RelayedPair, ServerLegState, TrayState,
 };
 use lightspeed_client::app::status::{action_slot, ActionSlot};
 
@@ -818,12 +818,6 @@ fn last_hop_provider(route: &ClientRoute) -> Option<String> {
     }
 }
 
-/// The `error.config` sentence and its Details detail for the Error row.
-pub fn error_surface(status: &AppStatus) -> Option<(Line, Option<String>)> {
-    let error = status.error.as_ref()?;
-    Some((error_line(error), error.detail.clone()))
-}
-
 /// The taxonomy sentence for one error kind: one kind, one sentence (§2.8).
 fn error_line(error: &lightspeed_client::app::dto::AppError) -> Line {
     let key = match error.kind {
@@ -835,12 +829,6 @@ fn error_line(error: &lightspeed_client::app::dto::AppError) -> Line {
         AppErrorKind::Unsupported => "error.unsupported",
     };
     Line::new(key)
-}
-
-/// The carry fact for the route: a starved record never changes the word or the
-/// route (warn-only); it only informs the next ranking (A7).
-pub fn carry_is_starved(status: &AppStatus) -> bool {
-    status.relay.carry == Some(CarryVerdict::Starved)
 }
 
 #[cfg(test)]
@@ -1003,8 +991,15 @@ mod tests {
             .find(|row| row.label_key == "route.relayed")
             .expect("relayed row");
         assert!(
-            matches!(relayed.value, RowValue::Copy(ref line) if line.key == "route.sent_returned"),
-            "healthy pair renders as copy data"
+            matches!(&relayed.value, RowValue::Copy(line)
+            if line.key == "route.sent_returned"
+                && line.args
+                    == vec![
+                        ("sent", "120".to_string()),
+                        ("returned", "30".to_string()),
+                    ]),
+            "the row states both counters from the one source pair: {:?}",
+            relayed.value
         );
 
         let mut idle = boosting_status();
@@ -1031,7 +1026,41 @@ mod tests {
             .iter()
             .find(|row| row.label_key == "route.relayed")
             .expect("relayed row");
-        assert!(matches!(relayed.value, RowValue::Warn(_)));
+        assert!(
+            matches!(&relayed.value, RowValue::Warn(line)
+            if line.key == "route.sent_returned"
+                && line.args
+                    == vec![
+                        ("sent", "54".to_string()),
+                        ("returned", "0".to_string()),
+                    ]),
+            "the warning still states both counters, including the zero: {:?}",
+            relayed.value
+        );
+
+        // The one source pair decides the flag (W2-4b moved the retired
+        // `relayed_row_text` rule here): a relay that answers is not starving,
+        // and an idle pair has nothing to warn about.
+        for (sent, returned) in [(54, 50), (0, 0)] {
+            let mut answered = boosting_status();
+            answered.relayed = Some(RelayedPair { sent, returned });
+            let surface = route_surface(&answered);
+            let relayed = surface
+                .ledger
+                .iter()
+                .find(|row| row.label_key == "route.relayed")
+                .expect("relayed row");
+            assert!(
+                matches!(&relayed.value, RowValue::Copy(line)
+                if line.args
+                    == vec![
+                        ("sent", sent.to_string()),
+                        ("returned", returned.to_string()),
+                    ]),
+                "{sent} sent / {returned} returned must render as data, not a warning: {:?}",
+                relayed.value
+            );
+        }
     }
 
     #[test]
@@ -1071,7 +1100,6 @@ mod tests {
     fn carry_and_streak_are_provenance_never_a_word() {
         let mut starved = boosting_status();
         starved.relay.carry = Some(CarryVerdict::Starved);
-        assert!(carry_is_starved(&starved));
         assert_eq!(
             route_surface(&starved).word,
             RouteWord::Optimizing,
@@ -1171,30 +1199,33 @@ mod tests {
         assert_eq!(surface.word, RouteWord::Error);
         assert_eq!(surface.word.key(), "state.error");
         // R7: the Error state's sub-line is the taxonomy sentence, not a route
-        // sub-line left over from the previous state.
+        // sub-line left over from the previous state. The verbatim engine detail
+        // stays on the error record the disclosure renders from: the seam never
+        // folds it into the sentence (W2-4b deleted the duplicate accessor that
+        // used to carry it).
         assert_eq!(
             surface.subline.as_ref().map(|line| line.key),
             Some("error.tunnel")
         );
-        let (line, detail) = error_surface(&failed).expect("the Error row carries its sentence");
-        assert_eq!(line.key, "error.tunnel");
-        assert_eq!(detail.as_deref(), Some("WSAEMSGSIZE"));
+        fn detail(status: &AppStatus) -> Option<String> {
+            status.error.as_ref().and_then(|error| error.detail.clone())
+        }
+        assert_eq!(detail(&failed).as_deref(), Some("WSAEMSGSIZE"));
 
         let config = AppStatus {
             error: Some(AppError::for_kind(AppErrorKind::Config, "not toml [")),
             ..status()
         };
         assert_eq!(
-            error_surface(&config).expect("config error").0.key,
-            "error.config"
-        );
-        assert_eq!(
             route_surface(&config).subline.as_ref().map(|line| line.key),
             Some("error.config")
         );
+        assert_eq!(detail(&config).as_deref(), Some("not toml ["));
 
+        // A healthy snapshot has no Error word and no error sentence.
         let healthy = status();
-        assert!(error_surface(&healthy).is_none());
+        assert_ne!(route_surface(&healthy).word, RouteWord::Error);
+        assert!(detail(&healthy).is_none());
     }
 
     #[test]
@@ -1320,6 +1351,115 @@ mod tests {
             "the value is the expected-path template with its ms arg: {:?}",
             expected.value
         );
+
+        // W2-4b moved the retired GUI copy builders' rules into this fixture: the
+        // seam states the same measurement, sample count and age, and the rows
+        // that are data only (passive app RTT, trace, expected path) claim
+        // exactly the terms the shared status carries.
+        let copy_line = |surface: &RouteSurface, label: &str| -> Line {
+            let row = surface
+                .details
+                .iter()
+                .find(|row| row.label_key == label)
+                .unwrap_or_else(|| panic!("missing details row {label}"));
+            match &row.value {
+                RowValue::Copy(line) => line.clone(),
+                other => panic!("{label} must render catalogued copy, got {other:?}"),
+            }
+        };
+        let leg_row = surface
+            .ledger
+            .iter()
+            .find(|row| row.label_key == "route.server_leg")
+            .expect("measured leg is the default row");
+        assert!(
+            matches!(&leg_row.value, RowValue::Copy(line)
+            if line.key == "route.server_leg_relay_measured"
+                && line.args
+                    == vec![
+                        ("ms", "41".to_string()),
+                        ("n", "4".to_string()),
+                        ("secs", "3".to_string()),
+                    ]),
+            "the measured leg states ms, n and age: {:?}",
+            leg_row.value
+        );
+        // A report accepted fail-open must not present as validated: the key
+        // says so, and the number with its n stays the relay's measurement.
+        let mut fail_open = measured.clone();
+        if let Some(report) = fail_open.server_leg.icmp.as_mut() {
+            report.validated = false;
+        }
+        let fail_open_leg = route_surface(&fail_open)
+            .ledger
+            .into_iter()
+            .find(|row| row.label_key == "route.server_leg")
+            .expect("fail-open measured leg");
+        assert!(
+            matches!(&fail_open_leg.value, RowValue::Copy(line)
+            if line.key == "route.server_leg_relay_measured_unvalidated"
+                && line.args
+                    == vec![
+                        ("ms", "41".to_string()),
+                        ("n", "4".to_string()),
+                        ("secs", "3".to_string()),
+                    ]),
+            "a fail-open report says measured, unvalidated: {:?}",
+            fail_open_leg.value
+        );
+
+        let app = copy_line(&surface, "route.server_leg_app");
+        assert_eq!(app.key, "route.server_leg_app_measured");
+        assert_eq!(
+            app.args,
+            vec![("ms", "47".to_string()), ("n", "9".to_string())],
+            "the passive app row states the median and its sample count, no age"
+        );
+        // The below-floor flag is harvest data, not a different number or a
+        // hidden row: the same figure still renders.
+        let mut flagged = measured.clone();
+        if let Some(report) = flagged.server_leg.app.as_mut() {
+            report.floor_ok = false;
+        }
+        assert_eq!(
+            copy_line(&route_surface(&flagged), "route.server_leg_app"),
+            app,
+            "an invalid passive sample is flagged by the client, not re-formed here"
+        );
+
+        let trace = copy_line(&surface, "route.route_trace");
+        assert_eq!(trace.key, "route.route_trace_hops");
+        assert_eq!(
+            trace.args,
+            vec![("hops", "9".to_string()), ("ms", "12".to_string())],
+            "the trace row states hops and the last router RTT"
+        );
+        // A trace with no responding router still states the hops it measured,
+        // never a fabricated anchor.
+        let mut no_router = measured.clone();
+        no_router.server_leg.trace = Some(lightspeed_client::ServerTraceReport {
+            hops: 7,
+            last_hop: None,
+            last_hop_rtt_us: None,
+            complete: false,
+            age: std::time::Duration::from_secs(1),
+        });
+        let no_router_trace = copy_line(&route_surface(&no_router), "route.route_trace");
+        assert_eq!(no_router_trace.key, "route.route_trace_hops_only");
+        assert_eq!(no_router_trace.args, vec![("hops", "7".to_string())]);
+
+        // No displayed client leg means no path total: `S` alone is not a path.
+        // (The zero/NaN arithmetic itself is shared core and tested there.)
+        let mut no_total = measured.clone();
+        no_total.server_leg.expected_path_ms = None;
+        assert!(
+            !route_surface(&no_total)
+                .details
+                .iter()
+                .any(|row| row.label_key == "route.expected_path_label"),
+            "no client leg, no Expected path row"
+        );
+
         // The best Server leg row is on the default surface; the estimator
         // fallback is not rendered when the relay has a report.
         assert!(
@@ -1363,6 +1503,189 @@ mod tests {
             .ledger
             .iter()
             .any(|row| row.label_key == "route.server_leg"));
+    }
+
+    // ── Rendered copy: rules moved from the retired copy builders (W2-4b) ──
+
+    /// The shell renders a seam [`Line`] through `i18n::t_with` (`app.rs`
+    /// `line_text`) and the action label through `i18n::t(..).to_uppercase()`.
+    /// These assertions take the seam's own output and render it exactly that
+    /// way, so the user-visible sentences the W2-4b deletion retired stay pinned
+    /// where the rows are built — no second caption implementation returns.
+    #[test]
+    fn the_rendered_rows_state_the_copy_rules_of_the_retired_helpers() {
+        use std::time::Duration;
+
+        fn rendered(line: &Line) -> String {
+            let args: Vec<(&str, &str)> = line
+                .args
+                .iter()
+                .map(|(key, value)| (*key, value.as_str()))
+                .collect();
+            crate::i18n::t_with(line.key, &args)
+        }
+        fn copy_line(surface: &RouteSurface, label: &str) -> Line {
+            let row = surface
+                .details
+                .iter()
+                .find(|row| row.label_key == label)
+                .unwrap_or_else(|| panic!("missing details row {label}"));
+            match &row.value {
+                RowValue::Copy(line) => line.clone(),
+                other => panic!("{label} must render catalogued copy, got {other:?}"),
+            }
+        }
+
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(Some("en"));
+
+        let report = lightspeed_client::ServerLegReport {
+            median_us: 148_000,
+            jitter_us: 3_000,
+            samples: 4,
+            age: Duration::from_secs(7),
+            validated: true,
+        };
+        let mut measured = boosting_status();
+        measured.server_leg.icmp = Some(report);
+        // L (90 ms, the Relay RTT the card shows) + S (148 ms) = 238 ms.
+        measured.server_leg.expected_path_ms = Some(238.0);
+        measured.server_leg.app = Some(lightspeed_client::ServerLegAppReport {
+            passive_median_us: 47_250,
+            samples: 9,
+            age: Duration::from_secs(2),
+            floor_ok: true,
+        });
+        measured.server_leg.trace = Some(lightspeed_client::ServerTraceReport {
+            hops: 12,
+            last_hop: Some(std::net::Ipv4Addr::new(8, 8, 8, 8)),
+            last_hop_rtt_us: Some(14_250),
+            complete: false,
+            age: Duration::from_secs(3),
+        });
+        let surface = route_surface(&measured);
+
+        // The retired `relay_measured_leg_text`: median, n, age; fail-open says
+        // so instead of presenting the figure as validated.
+        let leg = surface
+            .ledger
+            .iter()
+            .find(|row| row.label_key == "route.server_leg")
+            .expect("measured leg");
+        match &leg.value {
+            RowValue::Copy(line) => assert_eq!(
+                rendered(line),
+                "Relay→server 148 ms · measured n=4 · 7s ago"
+            ),
+            other => panic!("the measured leg is copy, got {other:?}"),
+        }
+        let unvalidated = lightspeed_client::ServerLegReport {
+            validated: false,
+            ..report
+        };
+        let mut fail_open = measured.clone();
+        fail_open.server_leg.icmp = Some(unvalidated);
+        let fail_open_leg = route_surface(&fail_open)
+            .ledger
+            .into_iter()
+            .find(|row| row.label_key == "route.server_leg")
+            .expect("fail-open leg");
+        match &fail_open_leg.value {
+            RowValue::Copy(line) => assert_eq!(
+                rendered(line),
+                "Relay→server 148 ms · measured, unvalidated n=4 · 7s ago"
+            ),
+            other => panic!("the fail-open leg is copy, got {other:?}"),
+        }
+
+        // The retired `relay_measured_app_leg_text`: median and sample count.
+        assert_eq!(
+            rendered(&copy_line(&surface, "route.server_leg_app")),
+            "47 ms · n=9"
+        );
+
+        // The retired `relay_measured_trace_text`: hops + last router RTT; a
+        // trace with no router answer still reports the measured distance.
+        assert_eq!(
+            rendered(&copy_line(&surface, "route.route_trace")),
+            "12 hops · last router RTT 14 ms"
+        );
+        let mut no_router = measured.clone();
+        no_router.server_leg.trace = Some(lightspeed_client::ServerTraceReport {
+            hops: 7,
+            last_hop: None,
+            last_hop_rtt_us: None,
+            complete: false,
+            age: Duration::from_secs(1),
+        });
+        assert_eq!(
+            rendered(&copy_line(&route_surface(&no_router), "route.route_trace")),
+            "7 hops · no router answered"
+        );
+
+        // The retired `expected_path_text`: the §2.7 B form, no placeholder
+        // leak (M15).
+        assert_eq!(
+            rendered(&copy_line(&surface, "route.expected_path_label")),
+            "~238 ms (relay leg + server leg)"
+        );
+
+        // The retired `relayed_row_text`: both counters, and the starving pair is
+        // the warning branch of the same one source pair.
+        let mut starving = boosting_status();
+        starving.relayed = Some(RelayedPair {
+            sent: 54,
+            returned: 0,
+        });
+        let relayed = route_surface(&starving)
+            .ledger
+            .into_iter()
+            .find(|row| row.label_key == "route.relayed")
+            .expect("relayed row");
+        match &relayed.value {
+            RowValue::Warn(line) => assert_eq!(rendered(line), "54 up · 0 down"),
+            other => panic!("the starving pair is the warning branch, got {other:?}"),
+        }
+        let mut answered = starving.clone();
+        answered.relayed = Some(RelayedPair {
+            sent: 54,
+            returned: 50,
+        });
+        let relayed = route_surface(&answered)
+            .ledger
+            .into_iter()
+            .find(|row| row.label_key == "route.relayed")
+            .expect("relayed row");
+        match &relayed.value {
+            RowValue::Copy(line) => assert_eq!(rendered(line), "54 up · 50 down"),
+            other => panic!("an answered pair is data, got {other:?}"),
+        }
+
+        // The retired `primary_action`: the four gate labels, drawn in caps by the
+        // shell exactly like this assertion.
+        let caps = |label_key: &str| crate::i18n::t(label_key).to_uppercase();
+        assert_eq!(
+            caps(route_surface(&status()).action.label_key),
+            "OPTIMIZE MY ROUTE"
+        );
+        assert_eq!(
+            caps(route_surface(&boosting_status()).action.label_key),
+            "STOP OPTIMIZING"
+        );
+        let mut unelevated = status();
+        unelevated.capabilities = Capabilities { elevated: false };
+        assert_eq!(
+            caps(route_surface(&unelevated).action.label_key),
+            "RESTART AS ADMINISTRATOR TO OPTIMIZE"
+        );
+        let mut not_ready = unelevated;
+        not_ready.engine.connected = false;
+        assert_eq!(
+            caps(route_surface(&not_ready).action.label_key),
+            "OPTIMIZE MY ROUTE"
+        );
+
+        crate::i18n::set_language(None);
     }
 
     #[test]
@@ -1626,6 +1949,36 @@ mod tests {
         assert_eq!(action.label_key, "action.starting");
         assert!(!action.enabled);
         assert!(action.in_flight);
+
+        // W2-4b moved the retired `primary_action` copy rule here: the four gate
+        // outcomes map to the catalogued labels, and only the boosting slot is
+        // the quiet destructive control.
+        let ready = route_surface(&status()).action;
+        assert_eq!(ready.label_key, "action.optimize_route");
+        assert!(ready.enabled);
+        assert!(!ready.danger);
+
+        let stop = route_surface(&boosting_status()).action;
+        assert_eq!(stop.label_key, "action.stop_optimizing");
+        assert!(stop.enabled);
+        assert!(
+            stop.danger,
+            "the stop action is the quiet destructive control, never the bright accent"
+        );
+
+        let mut unelevated = status();
+        unelevated.capabilities = Capabilities { elevated: false };
+        let invite = route_surface(&unelevated).action;
+        assert_eq!(invite.label_key, "action.restart_admin_optimize");
+        assert!(invite.enabled);
+
+        // M1: an unelevated app that cannot boost is not invited to elevate; the
+        // slot stays the ordinary disabled start.
+        let mut unelevated_not_ready = unelevated;
+        unelevated_not_ready.engine.connected = false;
+        let blocked_invite = route_surface(&unelevated_not_ready).action;
+        assert_eq!(blocked_invite.label_key, "action.optimize_route");
+        assert!(!blocked_invite.enabled);
     }
 
     // ── (d) Relay-recovered absence + WatchdogPlan transitions ─────────────

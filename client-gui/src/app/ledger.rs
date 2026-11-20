@@ -33,34 +33,6 @@ pub(super) fn parse_custom_port_range(s: &str) -> Option<(u16, u16)> {
     }
 }
 
-/// The one action slot, as a pure function of the gates.
-///
-/// The *decision* is [`lightspeed_client::app::status::action_slot`] (shared
-/// with the CLI); this is only its copy: the three labels plus the disabled
-/// case. Copy stays a front-end concern by the boundary rules, so the wording
-/// can change without touching the gate arithmetic.
-///
-/// Returned upper-case because the action slot draws in caps; `to_uppercase`
-/// leaves a locale without letter case (ja, ko, zh-Hans) untouched.
-#[allow(dead_code)] // copy rule pinned by tests; the seam chooses the label in W2-2
-pub(super) fn primary_action(
-    is_admin: bool,
-    boosting: bool,
-    connected: bool,
-    has_relay: bool,
-) -> (String, bool) {
-    use lightspeed_client::app::status::{action_slot, ActionSlot};
-    match action_slot(is_admin, boosting, connected, has_relay) {
-        ActionSlot::StopOptimizing => (i18n::t("action.stop_optimizing").to_uppercase(), true),
-        ActionSlot::RestartElevated => (
-            i18n::t("action.restart_admin_optimize").to_uppercase(),
-            true,
-        ),
-        ActionSlot::StartReady => (i18n::t("action.optimize_route").to_uppercase(), true),
-        ActionSlot::StartBlocked => (i18n::t("action.optimize_route").to_uppercase(), false),
-    }
-}
-
 /// The two treatments the action slot takes. Accent is the one bright fill;
 /// Danger is the quiet destructive control.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -172,23 +144,4 @@ pub(super) fn game_caption(
     } else {
         Some("game.none_detected_hint")
     }
-}
-
-/// The `Relayed` row: what left this host, and what the relay sent back.
-///
-/// The starving flag is decided by the shared [`RelayedPair`] rule (one source
-/// pair, one decision), never by this formatter.
-#[allow(dead_code)] // one-source-pair rule pinned by tests
-pub(super) fn relayed_row_text(sent: u64, returned: u64) -> (String, bool) {
-    let text = i18n::t_with(
-        "route.sent_returned",
-        &[
-            ("sent", group_digits(sent).as_str()),
-            ("returned", group_digits(returned).as_str()),
-        ],
-    );
-    (
-        text,
-        lightspeed_client::app::dto::RelayedPair { sent, returned }.starving(),
-    )
 }

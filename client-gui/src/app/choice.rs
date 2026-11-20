@@ -2,8 +2,9 @@ use super::*;
 
 // The rules moved to the shared crate at W2-1 S3a (`lightspeed_client::app`).
 // They are re-exported so the window's call sites and the existing test suite
-// address the same names they always did; the copy builders below are the only
-// presentation left in this module (`i18n` lookups, never a decision).
+// address the same names they always did; the surviving label builders below are
+// presentation only (`i18n` lookups, never a decision). W2-4b retired the
+// duplicate relay-measured copy helpers that `route_surface` had replaced.
 pub(super) use lightspeed_client::app::dto::FallbackRanking;
 #[allow(unused_imports)] // re-exported for the in-crate tests and the W2-2 shell
 pub(super) use lightspeed_client::app::status::{
@@ -52,65 +53,7 @@ pub(super) fn ranking_state_label(
     }
 }
 
-/// The `Server leg` row for a relay-measured figure.
-///
-/// One label, one number: the value is the relay's ICMP median and the sample
-/// count behind it, never a derived or rounded-up claim. A report the client
-/// accepted fail-open - the triangle floor could not be checked - is still
-/// shown, but its label says `measured, unvalidated` instead of plainly
-/// `measured`: the figure is the relay's measurement, the validation is absent.
-#[allow(dead_code)]
-pub(super) fn relay_measured_leg_text(report: &lightspeed_client::ServerLegReport) -> String {
-    let ms = format!("{:.0}", f64::from(report.median_us) / 1000.0);
-    let samples = report.samples.to_string();
-    let secs = report.age.as_secs().to_string();
-    let key = if report.validated {
-        "route.server_leg_relay_measured"
-    } else {
-        "route.server_leg_relay_measured_unvalidated"
-    };
-    i18n::t_with(key, &[("ms", &ms), ("n", &samples), ("secs", &secs)])
-}
-
-/// The `Relay→server (app)` value: the passive median in ms and its sample
-/// count, never the age or a blended figure.
-#[allow(dead_code)]
-pub(super) fn relay_measured_app_leg_text(
-    report: &lightspeed_client::ServerLegAppReport,
-) -> String {
-    let ms = format!("{:.0}", f64::from(report.passive_median_us) / 1000.0);
-    let samples = report.samples.to_string();
-    i18n::t_with(
-        "route.server_leg_app_measured",
-        &[("ms", &ms), ("n", &samples)],
-    )
-}
-
-/// The `Route` row for a relay-measured traceroute: hops and last router RTT.
-#[allow(dead_code)]
-pub(super) fn relay_measured_trace_text(report: &lightspeed_client::ServerTraceReport) -> String {
-    let hops = report.hops.to_string();
-    match report.last_hop_rtt_us {
-        Some(rtt_us) => {
-            let ms = format!("{:.0}", f64::from(rtt_us) / 1000.0);
-            i18n::t_with(
-                "route.route_trace_hops",
-                &[("hops", hops.as_str()), ("ms", ms.as_str())],
-            )
-        }
-        None => i18n::t_with("route.route_trace_hops_only", &[("hops", hops.as_str())]),
-    }
-}
-
-/// The `Server leg` row: the one measurement the two measured legs support,
-/// `L + S`. The arithmetic moved to the shared crate; only the copy stays here.
-#[allow(dead_code)]
-pub(super) fn expected_path_text(client_leg_ms: f64, server_leg_us: u32) -> Option<String> {
-    let total_ms = lightspeed_client::app::dto::expected_path_ms(client_leg_ms, server_leg_us)?;
-    let ms = format!("{total_ms:.0}");
-    Some(i18n::t_with("route.expected_path", &[("ms", &ms)]))
-}
-
+/// The catalogue key of the running game, when the shared detector finds one.
 pub(super) fn try_auto_detect_game() -> Option<String> {
     match lightspeed_client::games::auto_detect() {
         Ok(game) => {

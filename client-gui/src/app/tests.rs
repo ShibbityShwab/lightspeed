@@ -760,7 +760,7 @@ use super::{
     apply_discovery_result, apply_target_choice, close_decision, compare_to_direct,
     direct_claim_label, direct_us_for, draft_reasons, early_triangle_floor, fresh_direct_us,
     game_editor_body, game_pick_rows, games, monitor_local_top, pair_relay_legs, picker_status,
-    ping_for_server, primary_action, process_picker, proxy_index_for, rank_without_destination,
+    ping_for_server, process_picker, proxy_index_for, rank_without_destination,
     ranking_state_label, refreshed_server_ping, relay_cannot_beat_direct, same_relay_endpoint,
     save_user_profiles, scored_for_relay, server_from_fields, server_leg_state, should_apply_race,
     should_race, target_for_pick, target_front_door, target_summary, validate_draft,
@@ -1740,53 +1740,6 @@ fn discovery_success_refreshes_relays_and_keeps_custom_entries() {
 }
 
 #[test]
-fn primary_action_names_the_three_states() {
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(None);
-    // Boosting: the only destructive control.
-    assert_eq!(
-        primary_action(true, true, true, true),
-        ("STOP OPTIMIZING".to_string(), true)
-    );
-    assert_eq!(
-        primary_action(false, true, false, false),
-        ("STOP OPTIMIZING".to_string(), true)
-    );
-    // Unelevated **and able to boost otherwise**: the action is elevation.
-    assert_eq!(
-        primary_action(false, false, true, true),
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
-    );
-    // Unelevated but not ready (no relay / disconnected): M1 forbids the
-    // elevation invite here; the slot is the ordinary disabled boost action.
-    assert_eq!(
-        primary_action(false, false, false, false),
-        ("OPTIMIZE MY ROUTE".to_string(), false)
-    );
-    // Elevated and ready: the product's action.
-    assert_eq!(
-        primary_action(true, false, true, true),
-        ("OPTIMIZE MY ROUTE".to_string(), true)
-    );
-}
-
-#[test]
-fn primary_action_disables_the_action_until_connected_and_relayed() {
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(None);
-    // Elevated but disconnected: keep the label, but the slot cannot act.
-    assert_eq!(
-        primary_action(true, false, false, true),
-        ("OPTIMIZE MY ROUTE".to_string(), false)
-    );
-    // Elevated and connected, but no relay is selected.
-    assert_eq!(
-        primary_action(true, false, true, false),
-        ("OPTIMIZE MY ROUTE".to_string(), false)
-    );
-}
-
-#[test]
 fn auto_mode_starts_the_detected_game_not_the_first_entry() {
     // The GUI can start before the game, so the picker's index is fixed at
     // construction and falls back to the first entry. Auto mode must follow
@@ -1889,23 +1842,6 @@ fn a_hold_is_normal_and_never_a_starvation_warning() {
 }
 
 #[test]
-fn a_starving_relay_is_not_reported_as_a_healthy_row() {
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(None);
-    let (text, starving) = super::relayed_row_text(54, 0);
-    assert!(starving, "54 sent and nothing back is the starving case");
-    assert!(text.contains("54"), "the sent count must survive: {text}");
-    assert!(
-        text.contains(" 0 "),
-        "the zero return must be visible, not implied: {text}"
-    );
-    let (_, starving) = super::relayed_row_text(54, 50);
-    assert!(!starving, "a relay that answers is not starving");
-    let (_, starving) = super::relayed_row_text(0, 0);
-    assert!(!starving, "an idle session has nothing to warn about");
-}
-
-#[test]
 fn the_game_caption_never_contradicts_a_pinned_game() {
     assert_eq!(
         super::game_caption(true, false, None),
@@ -1923,15 +1859,6 @@ fn the_game_caption_never_contradicts_a_pinned_game() {
         None,
         "manual mode names its server elsewhere"
     );
-}
-
-#[test]
-fn group_digits_thousands_groups_counters() {
-    use super::group_digits;
-    assert_eq!(group_digits(0), "0");
-    assert_eq!(group_digits(41), "41");
-    assert_eq!(group_digits(12412), "12,412");
-    assert_eq!(group_digits(1_234_567), "1,234,567");
 }
 
 /// Discussion #146's first ask, closed end to end: the "Custom Port Range"
@@ -2687,167 +2614,5 @@ fn the_shared_picker_draws_loading_empty_and_no_match_honestly() {
         "a finished table draws its rows:\n{ready}"
     );
     assert!(ready.contains('7'), "the row names the PID:\n{ready}");
-    crate::i18n::set_language(None);
-}
-
-/// The elevation gate is unchanged by targeting: an unelevated app asks for
-/// a restart, never a start, whether or not a process is picked. The target
-/// is not an input to the action slot at all, which is exactly why the
-/// requirement stays honest.
-#[test]
-fn an_unelevated_app_still_asks_for_elevation_when_a_process_is_targeted() {
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(None);
-    // The arguments the frame passes with a target set and nothing boosting:
-    // unelevated, and ready (connected with a relay).
-    assert_eq!(
-        primary_action(false, false, true, true),
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
-    );
-    // Unelevated but not ready: no elevation invite (M1 — the invite answers
-    // "this would run with rights"); the slot stays the disabled boost label.
-    assert_eq!(
-        primary_action(false, false, false, true),
-        ("OPTIMIZE MY ROUTE".to_string(), false)
-    );
-}
-// â”€â”€ Relay-measured server leg (R2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-/// The relay-measured `Server leg` row states the measurement, its sample
-/// count and its age, and the `Expected path` row adds the displayed client
-/// leg to it. Both are the only claims the two measured legs support. A report
-/// accepted fail-open (the triangle floor could not run) is shown with
-/// `measured, unvalidated` rather than plainly `measured`.
-#[test]
-fn the_relay_measured_server_leg_rows_state_both_measured_terms() {
-    use super::{expected_path_text, relay_measured_leg_text};
-    use std::time::Duration;
-
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(Some("en"));
-
-    let report = lightspeed_client::ServerLegReport {
-        median_us: 148_000,
-        jitter_us: 3_000,
-        samples: 4,
-        age: Duration::from_secs(7),
-        validated: true,
-    };
-    assert_eq!(
-        relay_measured_leg_text(&report),
-        "Relay→server 148 ms · measured n=4 · 7s ago"
-    );
-
-    // The same figure accepted fail-open must not present itself as validated.
-    let unvalidated = lightspeed_client::ServerLegReport {
-        validated: false,
-        ..report
-    };
-    assert_eq!(
-        relay_measured_leg_text(&unvalidated),
-        "Relay→server 148 ms · measured, unvalidated n=4 · 7s ago"
-    );
-
-    // L (90 ms, the Relay RTT the card already shows) + S (148 ms) = 238 ms.
-    // The label owns "Expected path"; the value is the §2.7 B form with no
-    // placeholder leak (M15).
-    assert_eq!(
-        expected_path_text(90.0, report.median_us).as_deref(),
-        Some("~238 ms (relay leg + server leg)")
-    );
-
-    // No displayed client leg means no path total: S alone is not a path.
-    assert_eq!(expected_path_text(0.0, report.median_us), None);
-    assert_eq!(expected_path_text(f64::NAN, report.median_us), None);
-
-    crate::i18n::set_language(None);
-}
-
-/// The passive app-RTT row is a display-only secondary figure: it states the
-/// relay's forward→first-response median and sample count, with no validity or
-/// ranking claim of its own. A flagged (invalid passive) sample still renders
-/// because the number is data while the flag is for the E1 harvest, and the
-/// window adds no second rule of its own.
-#[test]
-fn the_relay_measured_app_row_states_the_passive_sample_and_count() {
-    use super::relay_measured_app_leg_text;
-    use std::time::Duration;
-
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(Some("en"));
-
-    let report = lightspeed_client::ServerLegAppReport {
-        passive_median_us: 47_250,
-        samples: 9,
-        age: Duration::from_secs(2),
-        floor_ok: true,
-    };
-    assert_eq!(relay_measured_app_leg_text(&report), "47 ms · n=9");
-
-    // A below-floor sample is marked invalid by the client, not dropped; the
-    // row must still render the relay's number and make no validity claim.
-    let flagged = lightspeed_client::ServerLegAppReport {
-        floor_ok: false,
-        ..report
-    };
-    assert_eq!(
-        relay_measured_app_leg_text(&flagged),
-        "47 ms · n=9",
-        "the floor flag is harvest data, not a different number or a hidden row"
-    );
-
-    crate::i18n::set_language(None);
-}
-
-/// The relay-measured route row is the placement anchor for a server whose
-/// geolocation is unknown: it states the hop count and the last router's RTT,
-/// and nothing else. It claims no city (the product has no hop-geolocation
-/// data) and no path verdict; a trace with no router answer still reports the
-/// hops it measured rather than inventing an anchor.
-#[test]
-fn the_relay_measured_route_row_states_hops_and_last_router_rtt() {
-    use super::relay_measured_trace_text;
-    use std::net::Ipv4Addr;
-    use std::time::Duration;
-
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(Some("en"));
-
-    let report = lightspeed_client::ServerTraceReport {
-        hops: 12,
-        last_hop: Some(Ipv4Addr::new(8, 8, 8, 8)),
-        last_hop_rtt_us: Some(14_250),
-        complete: false,
-        age: Duration::from_secs(3),
-    };
-    assert_eq!(
-        relay_measured_trace_text(&report),
-        "12 hops · last router RTT 14 ms"
-    );
-
-    // A complete trace shows the same anchor: the destination answering does
-    // not turn the row into a different claim.
-    let complete = lightspeed_client::ServerTraceReport {
-        complete: true,
-        ..report
-    };
-    assert_eq!(
-        relay_measured_trace_text(&complete),
-        "12 hops · last router RTT 14 ms"
-    );
-
-    // No router answered: report the measured distance, never a fabricated one.
-    let no_router = lightspeed_client::ServerTraceReport {
-        hops: 7,
-        last_hop: None,
-        last_hop_rtt_us: None,
-        complete: false,
-        age: Duration::from_secs(1),
-    };
-    assert_eq!(
-        relay_measured_trace_text(&no_router),
-        "7 hops · no router answered"
-    );
-
     crate::i18n::set_language(None);
 }

@@ -80,7 +80,14 @@ pub(crate) fn silent_command(program: &str) -> std::process::Command {
 ///
 /// Show-window and Quit actions are handled inside the tray (they only need
 /// the `egui::Context` and the shared [`QuitFlag`) and never appear here.
-#[allow(dead_code)] // Connect/Disconnect only constructed on Windows (real tray)
+///
+/// **Platform exemption (documented in W2-4b):** the two variants are
+/// constructed only by the Windows tray backend; the Linux and macOS stub trays
+/// never return them, so a non-Windows build would warn that the variants are
+/// never constructed. The enum itself is used on every target (it is the
+/// `poll_events` return type and `app.rs` matches both arms), so this is one
+/// named platform exemption, not a blanket allowance.
+#[allow(dead_code)] // Windows tray constructs Connect/Disconnect; the stub trays never do
 #[derive(Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Connect,

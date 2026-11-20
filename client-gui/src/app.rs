@@ -2660,10 +2660,9 @@ impl<P: Platform> LightSpeedApp<P> {
     /// Assembled from the engine snapshot, the facts the app already derives for
     /// its own readouts and the watchdog's published warning; nothing here is a
     /// second derivation of a displayed value. The W2-2 shell consumes this via
-    /// `route_surface::route_surface` and derives no state itself. Until then the
-    /// legacy readouts above stay authoritative for the pixels, which is why the
-    /// slice is visually unchanged.
-    #[allow(dead_code)] // consumed by the W2-2 shell (route_surface is its seam)
+    /// `route_surface::route_surface` and derives no state itself (W2-4b
+    /// confirmed the single call at the frame's one-snapshot seam and removed
+    /// the stale W2-1 `dead_code` allowance).
     fn app_status(&self) -> app_dto::AppStatus {
         let boosting = self.run_boosting();
         let server = self.game_server_addr();

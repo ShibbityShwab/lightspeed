@@ -285,6 +285,17 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     // location-index fact. The retired client_trace helpers must not return.
     "caption",
     "network_label",
+    // W2-4b (task-63) — the last GUI-side copy builders are retired. The rendered
+    // rows come from `route_surface` (the one caption implementation), so the
+    // duplicate copy helpers must not come back: their copy/one-source rules now
+    // live in the route-surface fixtures that own the rendered rows.
+    "relay_measured_leg_text",
+    "relay_measured_app_leg_text",
+    "relay_measured_trace_text",
+    "expected_path_text",
+    "primary_action",
+    "relayed_row_text",
+    "group_digits",
     // W2-3b (S6) — the pure update rules. Network, download verification and
     // elevation stay in the GUI adapter; the comparison/asset/checksum logic is
     // shared core so the CLI and the GUI cannot drift.
@@ -321,24 +332,40 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
 /// S0. A new source file must be added deliberately, with a measured budget.
 const MODULE_BUDGET: &[(&str, usize)] = &[
-    ("client-gui/src/app/choice.rs", 130),
+    // W2-4b (task-63): the four dead relay-measured/app/RTT copy helpers and the
+    // `expected_path_text` builder were deleted (the rendered rows come from
+    // `route_surface`), so the two text modules shrink to their label survivors.
+    ("client-gui/src/app/choice.rs", 73),
     ("client-gui/src/app/editor.rs", 243),
     ("client-gui/src/app/games.rs", 105),
-    ("client-gui/src/app/ledger.rs", 194),
+    // W2-4b: `primary_action` and `relayed_row_text` were deleted (their rules
+    // are pinned by the route-surface fixtures that render the slot and row).
+    ("client-gui/src/app/ledger.rs", 147),
     ("client-gui/src/app/picker.rs", 98),
     ("client-gui/src/app/presence.rs", 482),
     ("client-gui/src/app/relay_choice.rs", 60),
     // W2-1b (S3a): the pure presentation seam + its contract fixtures; grown by
     // the W2-1c QA fixes (R1-R15) inside the same slice.
-    ("client-gui/src/app/route_surface.rs", 1915),
-    ("client-gui/src/app/tests.rs", 2853),
+    // W2-4b: the retired copy helpers' pinned rules MOVED here (per the task),
+    // so the deliberate growth is the fixture move, not new logic: 1915 -> 2268.
+    // `route_surface` stays unfrozen for this cleanup only: no `ui()`/drawing
+    // change, no new rendered state, no second caption implementation.
+    ("client-gui/src/app/route_surface.rs", 2268),
+    // W2-4b: the eight retired helper tests left (six moved into the route-surface
+    // fixtures, one dead formatter and one duplicate targeting test retired), and
+    // one rendered-copy fixture arrived with them. 2853 -> 2618.
+    ("client-gui/src/app/tests.rs", 2618),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 31),
-    ("client-gui/src/app/widgets.rs", 535),
+    // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
+    // helper) is deleted; the rendered counters come from the one `RelayedPair`.
+    ("client-gui/src/app/widgets.rs", 521),
     ("client-gui/src/app/window.rs", 213),
     // W2-1b: +315 lines of DTO assembly/getters. It is the one file scheduled to
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
-    ("client-gui/src/app.rs", 4424),
+    // W2-4b: the stale `app_status` dead_code allowance is gone (the frame's
+    // one-snapshot seam calls it); one line net removed. 4424 -> 4423.
+    ("client-gui/src/app.rs", 4423),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -364,7 +391,9 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/paths.rs", 91),
     ("client-gui/src/platform/linux.rs", 106),
     ("client-gui/src/platform/macos.rs", 98),
-    ("client-gui/src/platform/mod.rs", 220),
+    // W2-4b: the `TrayAction` platform exemption is documented in place, so the
+    // module grows by the explanation, not by code. 220 -> 227.
+    ("client-gui/src/platform/mod.rs", 227),
     ("client-gui/src/platform/windows.rs", 481),
     ("client-gui/src/processes.rs", 282),
     ("client-gui/src/relay_history.rs", 15),

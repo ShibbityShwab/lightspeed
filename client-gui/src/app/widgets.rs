@@ -519,17 +519,3 @@ pub(super) fn disclosure_row(ui: &mut egui::Ui, label: &str, open: &mut bool) ->
     focus_ring(ui, &response, R_INLINE);
     response.clicked()
 }
-
-/// Group a counter's thousands with commas, so `12412` reads `12,412`.
-pub(super) fn group_digits(n: u64) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
