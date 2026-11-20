@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-4b landed) - WF-081: last dead code retired; W2-2 condition resolved; close-out next
+
+**Agent:** lead + `interface-designer-2` (task-63), `qa-engineer-2` (task-66).
+
+- **W2-4b committed (`518dd3d`, 8 files +435/−400).** The W2-2 `allow(dead_code)` condition is **resolved**: the four `choice.rs` copy builders, two `ledger.rs` helpers, collateral `group_digits`, and the two dead accessors hidden by the **`route_surface` module-wide allowance** are deleted; every deleted helper's pinned copy/one-source rule **moved into the `route_surface` fixture that owns the rendered row** (exact keys+args plus the rendered EN sentence, validated/unvalidated, floor invariant, both trace keys/no-router, expected-path None⇒no-row, four action outcomes, relayed counters healthy/starving/idle). `app_status` was confirmed genuinely wired at the frame seam — only its stale attribute removed. Remaining allowance inventory is exactly **three, all documented**: `elevation.rs` `cfg_attr(not(windows))`, `platform/mod.rs` `TrayAction` (Windows-tray exemption), and `autostart.rs`'s module-wide allowance over six not-yet-called writers — accepted as **named debt (task-67)** because the Settings autostart surface is out of W2 scope. No copy-key or `ui()` change.
+- **Guard:** G2 183→**190** forbidden identifiers, G3 seven budgets re-measured exactly, G2/G3 mutation rounds with SHA-256-identical restores; gate **1981/0/7**, GUI **191/0/0** (198 − 8 retired + 1 routed rendered-copy fixture), cli_compat 11/11, guard 8/8.
+- **Debt register now actionable:** task-67 (autostart Settings toggle + allowance narrowing), task-65 (declined-prompt notice + A11 `update.disclosure`), task-57 (live-mode engine surface), plus Q5 translation pipeline and Q19 font regeneration. The close-out report will list these with the named-U items (Linux/macOS runtime + CI runner execution, interactive UAC, live tray captures, autostart login cycle, real reduced-motion Off, non-Windows updater/trace).
+- **Final verification queued** (task-66): retirement + rule preservation, allowance inventory, guard mutation, scope, independent gate. **On ACCEPT: program close-out** — W2 acceptance matrix per unit, U/debt register, commit/evidence index, $0.00 statement. Commits `518dd3d`; branch 54 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts on `518dd3d`; allow(dead_code) inventory (3 documented); app.rs one-hunk diff; route_surface fixture growth; guard budgets; no copy/locale edits. **Not verified:** W2-4b by QA (task-66); non-Windows build/runtime; no screenshots needed (no UI/copy change).
+**Open:** W2-4b QA → program close-out; post-W2 tasks 57/65/67 unscheduled; Q5/Q19 debt.
+
 ### 2026-11-20 (W2-4 ACCEPTED) - WF-081: parity accepted; W2-4b cleanup running; close-out next
 
 **Agent:** lead + `qa-engineer-2` (task-64), `interface-designer-2` (task-63 start).
