@@ -40,6 +40,12 @@ pub mod history;
 /// CLI's default build enables neither.
 #[cfg(feature = "server-location")]
 pub mod location;
+/// The engine-backed composition root shared by front ends (S6b).
+///
+/// Installs the core seams, creates the engine and wraps it in
+/// [`commands::AppCore`] in that order, so a front end does not re-implement the
+/// construction sequence (`client/src/main.rs --check` adopts it first).
+pub mod runtime;
 pub mod status;
 /// The client-vantage route trace runtime and its stable log line (S5b).
 ///

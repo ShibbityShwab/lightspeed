@@ -27,16 +27,35 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// **G1** allowlist: direct `lightspeed_client::` item paths (not under `app`)
-/// that the GUI may still name at W2-1 S0. Each stage removes its own rows.
+/// **G1** named adapter exceptions: the complete, **item-level** list of direct
+/// `lightspeed_client::` paths the GUI may still name (W2-3b S6b ratchet).
+///
+/// Everything under `lightspeed_client::app` is the shared facade and always
+/// allowed; the table below is only the engine/games/profiles/latency plumbing
+/// that is still GUI-side adapter work (the W2-4 parity slice owns moving the
+/// rest). **No module-prefix blanket rows are permitted**: each row names one
+/// item, and a row also admits `Item::method` (the prefix rule), which is how the
+/// GUI uses these types.
+///
+/// Adapter map, so every exception is named rather than anonymous:
+/// * **engine + session snapshot** — `app.rs`, `main.rs`, `app/tests.rs`
+/// * **relay status / chosen relay** — `app.rs`, `app/choice.rs`,
+///   `app/route_surface.rs`, `app/relay_choice.rs` (server-leg reports, the
+///   triangle floor, the current relay, the destination estimator, ranking)
+/// * **game catalogue** — `app/games.rs`, `app/editor.rs`, `app/choice.rs`,
+///   `app/presence.rs`, `app/tests.rs`
+/// * **user profiles** — `app.rs`, `app/games.rs`, `app/tests.rs`
+/// * **latency counters** — `app.rs` (whole-loop + shadow-direct counters)
+/// * **process list** — `processes.rs` (the one-shot worker input)
+/// * **interception config** — `app.rs`, `app/tests.rs` (target/config handed to
+///   the boost command)
 const ALLOWED_CLIENT_PATHS: &[&str] = &[
-    "DestinationLegSource",
-    "DestinationLegSource::GeometricFloor",
-    "DestinationLegSource::Unknown",
+    // engine + session snapshot
     "EngineStatus",
     "LightSpeedEngine",
-    "LightSpeedEngine::new",
     "PRIOR_UNCERTAINTY_US",
+    // relay status / chosen relay
+    "DestinationLegSource",
     "RelayCandidate",
     "ScoredRelay",
     "ServerLegAppReport",
@@ -44,17 +63,23 @@ const ALLOWED_CLIENT_PATHS: &[&str] = &[
     "ServerTraceReport",
     "current_relay",
     "ensure_destination_estimator",
-    "games",
+    "rank_relays_at_with_direct",
+    // game catalogue
     "games::all_game_keys",
     "games::auto_detect",
     "games::process_names_for_name",
     "games::resolve",
-    "interceptor::ProcessTarget",
-    "interceptor::build_config_for_game_with_port_range",
-    "interceptor::build_config_for_process_target",
-    "interceptor::resolve_process_target",
-    "interceptor::traits::ProcessInfo",
-    "latency",
+    // user profiles
+    "profiles::ProfileStore",
+    "profiles::UserGameProfile",
+    "profiles::UserServer",
+    "profiles::global",
+    "profiles::schema::PortRange",
+    "profiles::schema::is_valid_key",
+    "profiles::schema::parse_port_range",
+    "profiles::schema::slugify",
+    "profiles::schema::validate_for_save",
+    // latency counters
     "latency::direct_jitter",
     "latency::direct_sample",
     "latency::like_for_like",
@@ -65,18 +90,15 @@ const ALLOWED_CLIENT_PATHS: &[&str] = &[
     "latency::shadow_direct_jitter_ms",
     "latency::shadow_direct_p50_ms",
     "latency::shadow_direct_samples",
+    // process list
     "processes::ProcessEntry",
     "processes::list_running_processes",
-    "profiles::ProfileStore",
-    "profiles::UserGameProfile",
-    "profiles::UserServer",
-    "profiles::global",
-    "profiles::schema::PortRange",
-    "profiles::schema::is_valid_key",
-    "profiles::schema::parse_port_range",
-    "profiles::schema::slugify",
-    "profiles::schema::validate_for_save",
-    "rank_relays_at_with_direct",
+    // interception config
+    "interceptor::ProcessTarget",
+    "interceptor::build_config_for_game_with_port_range",
+    "interceptor::build_config_for_process_target",
+    "interceptor::resolve_process_target",
+    "interceptor::traits::ProcessInfo",
 ];
 
 /// **G2** identifiers that may not be *defined* in `client-gui/src`. An
@@ -269,6 +291,11 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     // W2-4 parity DTO: one capability fact set; a front end fills it, it does not
     // define its own shape.
     "CapabilityFacts",
+    // W2-3b S6b — the shared engine-backed composition root. A front end builds
+    // it (seams → engine → AppCore); it must not re-implement the sequence.
+    "SessionCore",
+    "install_core_seams",
+    "is_clean_start",
 ];
 
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
