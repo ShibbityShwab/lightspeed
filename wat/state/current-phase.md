@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-4a landed, W2-4 start) - WF-081: R10 closed; final parity slice running in parallel
+
+**Agent:** lead + `rust-dev-2` (task-53), `qa-engineer-2` (task-60), `desktop-platform-2` (task-61), `dev-ops` (task-62).
+
+- **W2-4a committed (`2b3fd04`, 4 files).** The trace caption's **provider/hosting suffix** is now rendered from the **last responding hop** through the shared `app::location::place` fact (Cloud → upper-cased provider, Geofeed → published operator, Hosting → network name; Country/Unknown → none; never a city), with the shell already appending it — **no `ui()`/`app.rs` drawing change**. The 0-hop timeout still renders no row. The two `#[allow(dead_code)]` helpers and their 4 GUI tests are **deleted**; `client_trace.rs` is a 22-line re-export adapter and G2 forbids a second caption implementation. **The W2-2 `allow(dead_code)` decision condition is resolved.** Fixtures 25/25 (AWS / G-Core / unknown / no-router / timeout-no-row); guard G1 42, G2 +2, G3 exact, four mutation rounds with byte-identical restores; gate **1981/0/7**, GUI **153/0/0**, cli_compat 11/11, goldens hash-identical.
+- **Mutation harness hardened:** all five `mutate-guard.ps1` scripts now walk upward to `Cargo.toml` (instead of a fixed parent count), so they fail loudly from any directory and are depth-robust (QA S6 R1 follow-through).
+- **W2-4 parity started in parallel, disjoint write scopes:** **task-61 `desktop-platform-2`** — tray/menu incl. the fifth `RelayStarved` state, shortcut keymaps, elevation handshake state machine (UAC decline U), autostart writers, updater-channel decision, three-tier statements, reduced-motion `SPI_GETCLIENTAREAANIMATION` (spinner only On; Off/Unknown static; macOS/Linux Unknown gaps), trace runtime dependency note; guard re-ratchet + mutation; **no workflows**. **task-62 `dev-ops`** — `linux-gui`/`macos-gui` PR jobs with per-OS counts, headless `xvfb-run` smoke, localization-sync gate; **no Rust code, no push/dispatch**. Both must name Linux/macOS runtime as **U** until the owner names hardware.
+- **W2-4a QA queued** (task-60): suffix/fixtures, dead-code retirement, guard/mutation, spec errata, scope, independent gate.
+- **Named unverified:** no live trace/GUI launch; Linux/macOS CI and runtime; interactive UAC decline. Commits `2b3fd04`; branch 46 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts on `2b3fd04`; fixture snapshot; guard mutation; spec diff; no forbidden diffs. **Not verified:** W2-4a by QA (task-60); W2-4 platform/CI (in progress); Linux/macOS runtime.
+**Open:** W2-4a QA → W2-4 task-61 + task-62 → final W2-4 QA → program close-out; Q5 translations/Q19 font remain post-W2 debt; post-W2 task-57 unscheduled.
+
 ### 2026-11-20 (S6 ACCEPTED, W2-4a start) - WF-081: W2-3b complete; pre-parity trace fix begins
 
 **Agent:** lead + `qa-engineer-2` (task-59), `rust-dev-2` (task-53 start).
