@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-2 checkpoint) - WF-081: Instrument 2.0 shell implemented, Lead-gated, committed; QA verifying
+
+**Agent:** lead + `interface-designer` (task-39), `qa-engineer-2` (task-40).
+
+- **W2-2 shell landed and committed (`c1cbb09`).** One 320 px column driven by a single `route_surface()` snapshot: rail word row (`STATE` 30, no shrink) + metric on its **own row** (`METRIC` 30 + `relay leg` caption) + sub-line; short (<560) folds the card/sub-line into the scroll region, compact (<480) footer at 24 px; route card = danger warning line, map (132/430), location block, trace caption, ≤6 ledger rows + focusable `Details`; error = taxonomy sentence + `Details` + Open log; action wraps to `ACTION_H_WRAPPED` 56 with a 2 px focus ring and an AccessKit Button name; **auto-resize removed**, height restored once/clamped 420–1400 and persisted; static reduced-motion seam (no OS read in the GUI). Tokens: 9 added (incl. `ACTION_H_WRAPPED`, `HERO_H`, `RAIL_EDGE`, `HIT_MIN`), 9 dead deleted, 7 re-roled; sparkline removed; map literals tokenized; contrast test with the mutation-failing 1.35 before-state and 6.70 floor. **`interface.md` A1–A14 applied** (16 anchors; nine route rows, warn-only story, relay-measured/location/trace/update rules, mobile-only layout). 22 shell keys added to all 9 catalogs; RU/ES/PT shortened words landed; C7 record = **67** ja/ko/zh English-identical keys.
+- **Lead gate: PASS.** fmt clean; workspace clippy 0; workspace **1885 / 0 / 7**; GUI clippy 0; GUI **249 / 0 / 0**. Scope: `route_surface`/client core/platform/workflows untouched; 22 files, +1,373/−1,190.
+- **Honest partial acceptance (self-reported):** (a),(c),(f),(h),(i),(k) PASS; (b) PARTIAL — 6 captures EN/DE/RU at 320×420/760, **200 % = U**, chrome not pixel-measured, the RU capture caught and fixed a ledger label/value collision; (d) PARTIAL — location/trace/live-warning states U; (e) PARTIAL/PASS; (g) PARTIAL — Tab→action ring captured, sheet Tab/Esc not hand-exercised; (j) PARTIAL — reachable capture state is ERROR, other states U.
+- **Lead-noticed items for QA:** copy-deck drift (`route.place_hint`/`count_hint` still old copy in `en.toml` vs spec §2.5); English fallbacks visible in DE/RU captures (`relay leg`, `No traffic relayed yet`, `Not connected`, error sentence) against the 67-key C7 record; footer "Hide to tray" absent in W2-2 captures while W2-1 had it (tray rule vs regression); scope deviations (`#[allow(dead_code)]` on 3 out-of-scope files, guard MODULE_BUDGET ratcheted); new font-subset finding (KR/SC lack `국`/`简`/`体`).
+- **Not done.** QA verdict/fix wave; W2-3a/3b; W2-4; 200 % capture; live non-error states; sheet keyboard; S4 streak; Q13 trace disclosure. $0.00; no fleet/release/public change.
+
+**Verified:** Lead gate counts; commit `c1cbb09`; captures in `wat/evidence/2026-11-20/w2-2/` (EN/DE/RU 420/760 + RU focus); interface.md valid UTF-8 after the A1–A14 edit; branch 13 ahead / 0 behind `origin/master 76aba5d`. **Not verified:** W2-2 by an independent verifier (task-40 in progress); 200 %/long-word/live non-error states; sheet keyboard; translation completeness.
+**Open:** QA W2-2 verdict → fix wave/W2-3a → W2-3b → W2-4; copy deck and localization residuals; footer tray check; scope ruling.
+
 ### 2026-11-20 (W2-1 ACCEPTED, W2-2 start) - WF-081: Spine accepted by QA; Instrument 2.0 shell begins
 
 **Agent:** lead + `qa-engineer-2` (task-38), `interface-designer` (task-39 start).
