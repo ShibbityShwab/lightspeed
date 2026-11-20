@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-2 QA) - WF-081: QA REVISE on the copy deck/Settings/location block; W2-2b fixing
+
+**Agent:** lead + `qa-engineer-2` (task-40), `interface-designer` (task-41 fix).
+
+- **QA verdict on W2-2: REVISE — 3 Major / 7 Minor.** The shell, geometry, tokens, a11y/contrast work, guard and evidence are **real**: QA re-derived the ≤276 px word gate in all 9 locales (worst DE 275.1), the 6.70/1.35 contrast test, the 67-key C7 fallback record, and re-ran the gate (fmt 0, clippy 0, **1885/0/7**, GUI **249/0/0** — exactly the Lead's). Captures genuine; no forbidden-area changes.
+- **QA corrected two of the Lead's initial calls:** `place_hint`/`count_hint` were **not** drift (they match the spec's current §2 ledger; "No traffic relayed yet" is the Holding copy) and the footer "Hide to tray" absence is **not** a regression (the rule is `tray.is_some() && has_system_tray()`; the capture env/affordance must be recorded). The real Majors are: **R1** the §2.7 B warning/route rows unapplied (`relay_not_returning`, `injection_failed_warning`, `expected_path` "(L + S)", `route_trace` label); **R2** `settings.hold_policy` renders `LOCK_SETTLE` 3 s instead of `HOLD_FALLBACK` 120 s (the C5 40× number) and `starvation_policy` copy; **R3** the location block's rung values still say "Server location: …" under the new `Location` label (duplication).
+- **Scope deviations formally accepted** (decision logged): seven `#[allow(dead_code)]` attributes on seam copy helpers in `choice.rs`/`watchdog.rs`/`client_trace.rs` (attributes only, move targets for S4/S5b, must be resolved there) and the guard's measured `MODULE_BUDGET` ratchet (several budgets shrank; QA re-derived all 39; non-weakening).
+- **W2-2b running** (task-41): apply §2.7 B copy exactly, fix the `HOLD_FALLBACK` value path, de-duplicate the location rungs, fix `interface.md:76/:236-237` stale prose, record the footer capture env/affordance, hand-exercise sheet keyboard, key the hardcoded "Routing"/trace hover, correct the report anchor; re-run the gate and re-capture the affected EN/DE/RU states.
+- **Named U/unverified:** 200 % capture, 239/181 chrome pixel measurement, live non-error states, keyboard/UIA transcript, cross-launch height restore, translation debt (Q5/Q20), font subset gap (`국`/`简`/`体`, Q19), S4 streak, Q13 trace disclosure. **Commits:** W2-2 `c1cbb09`, state `460fc04`; branch 14 ahead / 0 behind. $0.00.
+
+**Verified:** QA's independent gate and evidence; the three Majors are confirmed in the document/code text; commit `c1cbb09`. **Not verified:** W2-2b (in progress); 200 %/live states; translation completeness.
+**Open:** W2-2b → QA re-review → W2-3a → W2-3b → W2-4.
+
 ### 2026-11-20 (W2-2 checkpoint) - WF-081: Instrument 2.0 shell implemented, Lead-gated, committed; QA verifying
 
 **Agent:** lead + `interface-designer` (task-39), `qa-engineer-2` (task-40).
