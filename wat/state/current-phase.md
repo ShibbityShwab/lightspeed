@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-3b split) - WF-081: N1/R3 checkpoint committed; S5a/S5b/S6 split; rust-dev-2 and infra-dev engaged
+
+**Agent:** lead + `infra-dev` (task-47), `rust-dev-2` (task-48 re-dispatch).
+
+- **W2-3b checkpoint committed (`dc08029`):** **N1** closed — `command_error_kind(SessionCommand)` maps `SelectRelay → AppErrorKind::Route`, `SetPathMtu → Validation`, `Disconnect/StartBoost/StopBoost/Hold → Tunnel`; `record_command_result` builds the typed error (verbatim detail behind `Details`) and a table-driven test covers all six commands. **R3** closed — `WatchdogStatus.streak` docs now state the real publication semantics (live judged-window count from the first fault window, `None` when none observed, never a fabricated zero). Lead gate: fmt/clippy clean, workspace **1927/0/7**, GUI **213/0/0**; only `commands.rs` + `dto.rs` changed.
+- **The slice was split into coherent units** after the S5a instance hit its turn limit before any edit (released cleanly, zero partial changes): **S5a** task-48 (location ladder/data/features/provider seam/paths), **S5b** task-49 (client trace + Q13 disclosure), **S6** task-50 (CLI adoption + config unification + update rules + capabilities + guard-to-zero). Task-48 re-dispatched to **`rust-dev-2`** with the prior instance's measured pre-research (file sizes/tests, four consumer sites, six assets to `git mv`, both Cargo dependency occurrences, G6/G7/guard plan, feature-off ladder rule).
+- **`infra-dev` engaged** (task-47): update the three generators (`build-server-location.py:44,46,47`; `build-server-city.py:104,105` + doc pins; `build-geo-ipv4.py:38,39`) and `infra/geo` path references to the new `client/data` + `client/src/app/location` outputs. Generators own paths only; committed artifact bytes move unchanged; no client code/workflow edits from infra.
+- **Stale path references outside the code move** flagged for the Lead integration pass after S5a: `README.md:49,147,149` and `docs/privacy.md:218` still name `client-gui/data` paths.
+- **Not done:** S5a/S5b/S6 implementation; W2-4 parity. Commit `dc08029`; branch 24 ahead / 0 behind `origin/master 76aba5d`; $0.00; no fleet/release/public change.
+
+**Verified:** Lead gate counts on `dc08029`; N1/R3 tests; checkpoint scope exactly two files. **Not verified:** any S5a/S5b/S6 code (in progress); Linux CI; feature-off build; live states.
+**Open:** S5a → S5b → S6 → QA per slice → W2-4; stale README/privacy path references; Q5/Q19; runtime parity hardware.
+
 ### 2026-11-20 (W2-3a ACCEPTED, W2-3b start) - WF-081: runtime accepted; location/trace/CLI slice begins
 
 **Agent:** lead + `qa-engineer-2` (task-45), `rust-dev` (task-46 start).
