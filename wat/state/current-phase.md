@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-4 CI parity landed) - WF-081: linux/macOS GUI jobs + headless smoke committed; platform slice still running
+
+**Agent:** lead + `dev-ops` (task-62), `desktop-platform-2` (task-61, still running).
+
+- **W2-4 CI parity committed** (`ci.yml` +215 lines, additions-only; `scripts/headless-gui-smoke.sh` new, 164 lines): three new independent PR jobs — **`linux-gui`** (`ubuntu-latest`, toolchain 1.100.0 + clippy, cache, the `dist-workspace.toml` apt set + OpenSSL; build, clippy `--all-targets`, test), **`macos-gui`** (same gate commands, advisory smoke), and **`gui-headless-smoke`** (`xvfb-run` + xdotool title probe, `continue-on-error: true` advisory until ~10 green runs). Each test step keeps cargo's `PIPESTATUS`, prints per-OS `test result:` lines and a `[linux-gui]`/`[macos-gui]` step summary, and **fails unless the two `#[cfg(not(windows))]` single-instance tests are ok** and at least one `ok.` line exists (a zero-test or shorter list is red, not green). No new actions, no `needs` edits, read-only permissions, standard runners ($0.00); the localization gate at `ci.yml:216-217` is unchanged and the local equivalent passes (`localization is in step with English`).
+- **Lead validation:** YAML parses to the expected 15 jobs (`linux-gui`, `macos-gui`, `gui-headless-smoke` present), the diff is additions-only inside the CI write scope, the script is LF, and the local localization gate exits 0. The first Linux/macOS runner execution is the real evidence and is **named unverified** (this Windows host cannot run Linux/bash/xvfb); the smoke uses the documented G0.2 `LIGHTSPEED_GUI_SMOKE=1` hook once task-61 lands and the fallback probe until then.
+- **`desktop-platform-2` is still running** (task-61) in the shared worktree; its platform changes are uncommitted and will be gated together with the W2-4 finish. **W2-4b (task-63)** stays blocked behind task-61.
+- **Next:** platform slice completes → Lead gate on the combined W2-4 tree → final W2-4 QA (task-64 once opened) → W2-4b → program close-out. Commits this round: CI parity commit (above); branch 49 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** YAML/job set; additions-only CI diff; local localization gate; dev-ops' 107-check validator (claim). **Not verified:** any Linux/macOS runner run; smoke script execution; G0.2 hook until task-61 lands; platform slice (in progress).
+**Open:** task-61 → combined gate → W2-4 QA → W2-4b → close-out.
+
 ### 2026-11-20 (W2-4a ACCEPTED) - WF-081: R10 closed; remaining dead-code condition named (W2-4b); W2-4 owners running
 
 **Agent:** lead + `qa-engineer-2` (task-60), `desktop-platform-2` (task-61), `dev-ops` (task-62).
