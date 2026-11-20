@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (S6 ACCEPTED, W2-4a start) - WF-081: W2-3b complete; pre-parity trace fix begins
+
+**Agent:** lead + `qa-engineer-2` (task-59), `rust-dev-2` (task-53 start).
+
+- **W2-3b S6 is ACCEPTED.** QA verified the whole slice independently: the four goldens are **blob-identical to the seed commit** and were seeded from the pre-S6 tree before any path change; `cli_compat` = 11 (4 goldens + 7 config fixtures) with exit-code/text gating; update rules moved; `CapabilityFacts` + Q9 canon; `SessionCore` ordering (seams → engine → `AppCore`, provider before engine, typed MTU) and `--check`/`--status` adoption; **G1 = 42 item-level rows** (no blankets) with the four-round mutation reproduced, including the golden-caught CLI text drift; live-mode adapters + owner decision consistent with post-W2 task-57; config unification (canonical `lightspeed.toml`, read-only legacy `config.toml`, Q10 per-key precedence, 28/28 core + CLI matrix); real Reset (marker only for explicit `false`, `save_canonical` preserves it, legacy byte-identical, no re-import). QA's gate matches the Lead exactly: fmt/clippy clean, **1981/0/7**, GUI **155/0/0**.
+- **QA's two evidence-tooling residuals fixed by the Lead:** R1 — all five `mutate-guard.ps1` scripts now resolve the repo root from `$PSScriptRoot` and **throw if `Cargo.toml` is absent**, so running from the wrong directory can no longer silently no-op and report a false pass; R2 — the summary count is corrected to **11 on-tree `cli_compat` tests** (4 goldens + 7 config fixtures; core config 28/28), not 13.
+- **W2-4a started** (`rust-dev-2`, task-53): wire the trace caption's provider/hosting suffix for a known last responding hop (never a city; never Country/Unknown) using the moved core location facts, remove the two `#[allow(dead_code)]` helpers (wire or delete with their 4 GUI tests, no duplicate caption implementation), add known/unknown/0-hop `route_surface` fixtures, re-ratchet G2/G3 + mutation, land the spec errata, and report the W2-2 decision condition as resolved. This is the last pre-parity change; **W2-4 parity follows**.
+- **Named unverified:** Linux/macOS CI; no GUI launch (no shell change); live modes deliberately unchanged; known-host `--features full` `wpcap.lib` link limit not rerun; post-W2 task-57 unscheduled. Commits `b74ed97`; branch 44 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** QA S6 ACCEPT (whole slice); Lead gate counts; golden blob identity; mutation; config/reset matrix. **Not verified:** W2-4a (in progress); GUI launch; Linux/macOS CI.
+**Open:** W2-4a → QA → W2-4 parity → final verification/state.
+
 ### 2026-11-20 (S6 COMPLETE) - WF-081: Reset fixed; full S6 QA queued; W2-4a next
 
 **Agent:** lead + `rust-dev-2` (task-58), `qa-engineer-2` (task-59).
