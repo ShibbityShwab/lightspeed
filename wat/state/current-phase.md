@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-1 ACCEPTED, W2-2 start) - WF-081: Spine accepted by QA; Instrument 2.0 shell begins
+
+**Agent:** lead + `qa-engineer-2` (task-38), `interface-designer` (task-39 start).
+
+- **W2-1 "Spine" is ACCEPTED.** QA's independent re-review returned **ACCEPT** (`wat/evidence/2026-11-20/team/qa-w2-1/review-r2.md`): every R1–R16 closed, gate reproduced (fmt/clippy clean, **1885/0/7**, GUI **249/0/0**), guard mutation and grouped-import injection re-run, compare3 re-derived (connected 9,926 changed / **0 outside mask**; disconnected 9,364 / **0 outside**; UIA identical), no regressions and no forbidden paths. **R16 accepted as a named S4 deferral** — the streak is stack-local in the watchdog thread with no handle and `app/watchdog.rs` is S4's file; the field is fixture-tested, stays `None`, and W2-2 may not claim a live streak. Named unverified: R17 CONNECTING→Error live fixture (W2-2), R18 host limits (no Linux CI, no 200 %/locale captures, glow renderer, `windivert-redirect` not re-run).
+- **Commits:** W2-1 `4458c30`, W2-1c `cbefdfc`, state `7a9d8d1`; branch 11 ahead / 0 behind `origin/master 76aba5d`.
+- **W2-2 started** (`interface-designer`, task-39): the mobile-only Instrument 2.0 shell consuming the verified `route_surface` — 320 px pinned single column, rail metric on its own row, all §2 rows/copy (NO RETURN PATH warning, location ladder, route trace, ledger + `Details`, update disclosure), component states/focus ring/contrast 6.70:1, `interface.md` **A1–A14**, EN+DE+RU captures at 320×420 / 320×760 / 320@200 %, 239/181 chrome budget, ≤276 px state-word gate, 21 new catalogue keys + RU/ES/PT copy (Q20), reduced-motion static seam and glyph gate. One-writer rule holds: W2-2 owns `ui()`/drawing; `route_surface` and the core are frozen for it.
+- **Not done.** W2-2 implementation; W2-3a/3b; W2-4 parity; S4 streak; Q13 trace disclosure (W2-3b); ES/PT copy (lands in W2-2). $0.00; no fleet/release/public change.
+
+**Verified:** QA review-r2 ACCEPT; Lead gate on `cbefdfc` (1885/0/7, 249/0/0); compare3/UIA; commits `4458c30`/`cbefdfc`/`7a9d8d1`; tree clean before task-39. **Not verified:** any W2-2 shell output (in progress); live GUI/200 %/Linux; R16 live streak.
+**Open:** W2-2 → QA → W2-3a/3b → W2-4; Q13 privacy disclosure; owner hardware for runtime parity.
+
 ### 2026-11-20 (W2-1c) - WF-081: QA majors fixed, Lead re-gated; QA re-verification queued
 
 **Agent:** lead + `rust-dev` (task-37), `qa-engineer-2` (task-36/38).
