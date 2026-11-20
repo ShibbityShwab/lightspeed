@@ -334,11 +334,11 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/app/tests.rs", 2853),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 31),
-    ("client-gui/src/app/widgets.rs", 553),
+    ("client-gui/src/app/widgets.rs", 535),
     ("client-gui/src/app/window.rs", 213),
     // W2-1b: +315 lines of DTO assembly/getters. It is the one file scheduled to
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
-    ("client-gui/src/app.rs", 4366),
+    ("client-gui/src/app.rs", 4424),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -359,13 +359,13 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/discovery.rs", 78),
     ("client-gui/src/globe.rs", 198),
     ("client-gui/src/i18n.rs", 506),
-    ("client-gui/src/main.rs", 250),
+    ("client-gui/src/main.rs", 377),
     // W2-3b S6c: `config_file` becomes the canonical/legacy path pair. 81 -> 91.
     ("client-gui/src/paths.rs", 91),
-    ("client-gui/src/platform/linux.rs", 99),
-    ("client-gui/src/platform/macos.rs", 90),
-    ("client-gui/src/platform/mod.rs", 138),
-    ("client-gui/src/platform/windows.rs", 322),
+    ("client-gui/src/platform/linux.rs", 106),
+    ("client-gui/src/platform/macos.rs", 98),
+    ("client-gui/src/platform/mod.rs", 220),
+    ("client-gui/src/platform/windows.rs", 481),
     ("client-gui/src/processes.rs", 282),
     ("client-gui/src/relay_history.rs", 15),
     // W2-3b S6: the default-features update check moved to
@@ -379,7 +379,18 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/single_instance.rs", 331),
     // W2-3b S6: `compare_versions` + `ReleaseAsset` moved; the GUI keeps the
     // network check, the `UpdateStatus` type and the asset resolution. 322 -> 224.
-    ("client-gui/src/update.rs", 224),
+    ("client-gui/src/update.rs", 269),
+    // W2-4 (task-61) platform parity: the reduced-motion signal, the opt-in
+    // autostart writers, the elevation handshake, the canonical shortcut
+    // keymap, the Windows tray presentation and the updater channel decision.
+    // Added deliberately with measured budgets; the modules are platform
+    // integration (GUI-owned by the skill), not the shared core.
+    ("client-gui/src/platform/animations.rs", 104),
+    ("client-gui/src/platform/autostart.rs", 433),
+    ("client-gui/src/platform/elevation.rs", 421),
+    ("client-gui/src/platform/shortcuts.rs", 413),
+    ("client-gui/src/platform/tray_menu.rs", 280),
+    ("client-gui/src/platform/updater.rs", 226),
 ];
 
 /// Tokens that mean UI/framework coupling and may never appear in the shared

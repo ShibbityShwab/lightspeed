@@ -4,7 +4,7 @@
 //! and capture check via `tcpdump`/`dumpcap`.
 
 use crate::app::TrayState;
-use crate::platform::{Platform, QuitFlag, TrayHandle};
+use crate::platform::{Animations, Platform, QuitFlag, TrayHandle};
 use eframe::egui;
 
 /// No-op tray handle for Linux (no standard system-tray on modern DEs).
@@ -67,6 +67,13 @@ impl Platform for LinuxPlatform {
         // Emoji, which renders the UI emojis consistently on every platform.
         // Color-emoji fonts cannot be rasterized by egui, so nothing else is
         // loaded here.
+    }
+
+    /// **Named gap:** no reduced-motion source is wired on Linux (a gsettings
+    /// or KDE read is the target, cross-platform plan G2.1). `Unknown` renders
+    /// static text; it never animates. Verify with a Linux runtime session.
+    fn animations() -> Animations {
+        Animations::Unknown
     }
 
     fn relaunch_as_admin() {

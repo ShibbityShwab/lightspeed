@@ -209,6 +209,9 @@ install = "更新をインストール"
 install_hint = "最新版をダウンロードして検証し、インストールします"
 available = "更新があります"
 up_to_date = "最新です"
+channel_release = "Download the newest release from the LightSpeed releases page."
+channel_shell = "Update with the LightSpeed installer or its updater."
+channel_package = "Update through your package manager (AUR lightspeed-bin) or install the newest release."
 
 [window]
 hide_to_tray = "トレイに隠す"
@@ -231,6 +234,8 @@ not_connected = "Not connected"
 
 [notice]
 needs_admin = "Restart LightSpeed as Administrator to optimize."
+restarting = "Restarting as administrator..."
+elevation_declined = "Administrator rights were declined. LightSpeed is still open; start the boost again to retry."
 
 [error]
 tunnel = "The tunnel could not be started"
@@ -239,3 +244,10 @@ config = "The config file could not be read"
 game = "The game profile could not be loaded"
 io = "A file operation failed"
 unsupported = "Not supported on this system"
+
+[tray]
+show = "Show window"
+connect = "Connect"
+disconnect = "Disconnect"
+quit = "Quit"
+starved = "relay is not returning your game traffic"

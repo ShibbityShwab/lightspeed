@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::platform::Animations;
+
 /// What the custom-game editor asked for this frame.
 ///
 /// The sheet cannot mutate the app while the body holds a `&mut` on the draft,
@@ -436,33 +438,13 @@ pub(super) fn focus_ring(ui: &egui::Ui, response: &egui::Response, radius: u8) {
     );
 }
 
-/// What the OS says about motion. The GUI crate never reads the OS (W2-4 owns
-/// that probe); W2-2 passes [`Animations::Unknown`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Animations {
-    /// OS animations are explicitly enabled.
-    On,
-    /// Reduced motion is requested.
-    #[allow(dead_code)] // W2-4 wires the OS probe; the seam is tested today
-    Off,
-    /// No OS signal wired yet — the conservative default.
-    Unknown,
-}
-
-impl Animations {
-    /// Whether motion is allowed. Only an explicit `On` permits it: `Off` and
-    /// `Unknown` both render static text (WCAG 2.2.2's pause/stop alternative).
-    fn allows_motion(self) -> bool {
-        self == Self::On
-    }
-}
-
 /// One waiting indicator for every wait in the shell.
 ///
 /// Motion policy: a spinner is shown **only** when the caller's
 /// [`Animations`] is explicitly `On`; `Off` and `Unknown` render the static
-/// text. W2-2 always passes `Unknown` (no OS read in the GUI crate) so every
-/// wait is static until W2-4 (i) supplies the real value.
+/// text (the WCAG 2.2.2 pause/stop alternative). The signal is the platform's
+/// one OS read (W2-4 (i): Windows `SPI_GETCLIENTAREAANIMATION`, macOS/Linux
+/// `Unknown` gaps), held on the app for the process lifetime.
 pub(super) fn progress_indicator(ui: &mut egui::Ui, text: &str, animations: Animations) -> bool {
     if animations.allows_motion() {
         ui.add(egui::Spinner::new().size(16.0));

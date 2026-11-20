@@ -2,19 +2,29 @@
 
 > **Status:** W1 design deliverable for WF-081 — documentation only. This document
 > changes no workflow, packaging, platform code or engine code.
-> **Revision:** r23 (2026-11-20, task-34 errata) — refreshes the cross-document
-> revision references to the current design set (**spec r18, 579 lines**;
-> **design-system r14**; **UX audit r16**) and re-pins the brief line anchors to the
-> current brief (384 lines), then re-runs the refs checker. No claim changed: the
-> mobile-only geometry, the platform matrix and the three-tier evidence rule are
-> unchanged from r17. r17 (task-26 delta-fix) removed the stale "other docs still
-> carry the old plan" sentence (QA r4 **F21**), re-anchored the geometry to the
-> re-baselined design set, re-derived the citations into the rebased GUI sources, and
-> re-ran the refs checker. r4 (task-20) folded in the owner's
-> **mobile-only viewport** decision (width pinned 320 px, single column, height
-> 420–1400 / initial 760; captures 320×420, 320×760, 320 @ 200 %) and re-baselined
-> the evidence to `origin/master` `76aba5d`; r3 (2026-11-19) reconciled QA findings
-> R12/R15/R4(ii)/R8. Evidence:
+> **Revision:** r24 (2026-11-20, task-61 W2-4 platform parity landing) — records the
+> **code half** of the W2-4 slice on the clean accepted tree (`2b3fd04`): the tray
+> fifth state and state-aware menu, the canonical shortcut keymap, the elevation
+> handshake (decline path included; interactive UAC decline stays **U**), the
+> autostart temp-dir writers, the updater install-channel decision, the Windows
+> `SPI_GETCLIENTAREAANIMATION` reduced-motion signal, the G0.2 `LIGHTSPEED_GUI_SMOKE`
+> headless hook and the `client_trace` runtime-dependency note (§3.5). It adds **no
+> tier**: Linux/macOS remain **B**/`—` and Windows runtime claims are unchanged
+> except where named. The CI jobs (§6.1) are `dev-ops` task-62, not this document.
+> Evidence: `wat/evidence/2026-11-20/w2-4/platform/`. r23 (task-34 errata) refreshed
+> the cross-document revision references to the current design set
+> (**spec r18, 579 lines**; **design-system r14**; **UX audit r16**) and re-pinned
+> the brief line anchors to the current brief (384 lines), then re-ran the refs
+> checker. No claim changed: the mobile-only geometry, the platform matrix and the
+> three-tier evidence rule are unchanged from r17. r17 (task-26 delta-fix) removed
+> the stale "other docs still carry the old plan" sentence (QA r4 **F21**),
+> re-anchored the geometry to the re-baselined design set, re-derived the citations
+> into the rebased GUI sources, and re-ran the refs checker. r4 (task-20) folded in
+> the owner's **mobile-only viewport** decision (width pinned 320 px, single column,
+> height 420–1400 / initial 760; captures 320×420, 320×760, 320 @ 200 %) and
+> re-baselined the evidence to `origin/master` `76aba5d`; r3 (2026-11-19) reconciled
+> QA findings R12/R15/R4(ii)/R8. Evidence:
+> `wat/evidence/2026-11-20/w2-4/platform/` (r24),
 > `wat/evidence/2026-11-20/team/desktop-platform/errata-r23.md` (r23),
 > `wat/evidence/2026-11-20/team/desktop-platform/delta-r17.md` (r17),
 > `wat/evidence/2026-11-20/team/desktop-platform/delta-r12.md` (r4),
@@ -25,10 +35,9 @@
 > gate 3. This plan turns that decision into a surface × OS matrix, a stub
 > inventory, an ordered gap-closure plan and an exact external-verification ask.
 > It does **not** grant parity to anything.
-> **Date:** 2026-11-20. **Baseline:** `origin/master` `76aba5d` (16 commits since the
-> W1 first pass; the W1 design set is commit `0df57ce` and the committed delta
-> re-baseline is `e950b36`, with the r23 errata edits uncommitted), worktree
-> `dsh-b74d064d-6fe5`.
+> **Date:** 2026-11-20. **Baseline:** the W2-4 slice tree — accepted W2-4a
+> committed at `2b3fd04` with the W2-4 platform changes in the same worktree, on top
+> of `origin/master` `76aba5d`; worktree `dsh-b74d064d-6fe5`.
 > **Companion docs:** [interface.md](interface.md) (binding state contract),
 > [gui-refresh-brief.md](gui-refresh-brief.md) (program contract).
 > **Skill:** `.dsh/skills/lightspeed-gui-design/SKILL.md` §2 (2026 floor).
@@ -94,8 +103,8 @@ in a real session (the repo's own screenshots/UIA per
 | Surface | Windows (current · tier) | Linux (current · tier) | macOS (current · tier) |
 |---|---|---|---|
 | **Window chrome / decorations** | Native Win11 decorations from winit; app sets only title, fixed 320 px width, 420–1400 height (`client-gui/src/main.rs:109-115`; the 320 px pinned single-column width is the owner-confirmed product form, 2026-11-20 — G2.2); `windows_subsystem = "windows"` (`client-gui/src/main.rs:6`); brand exe icon compiled by `client-gui/build.rs:45-77`. **R** | Native decorations follow the DE (nothing is overridden in `client-gui/src/main.rs:109-120`); same pinned viewport; Wayland/monitor placement is handled heuristically with a documented `TITLE_BAR_ALLOWANCE` (`client-gui/src/app/window.rs:41-113`). **B** only | Native traffic lights (decorations default on); **no `.app` bundle in the release** — v1.11.3 ships a bare tarball, so no `CFBundleName`/bundle identity; the `.app`/`.dmg` builder `tools/package-macos.sh` (Info.plist template `packaging/macos/Info.plist:11-14`) is manual and invoked by no workflow. **B** only |
-| **Tray / menu bar** | Real `tray-icon 0.26.1`: Show / Connect / Disconnect / Quit menu, per-state icon + tooltip, double-click restore, X hides to tray (`client-gui/src/platform/windows.rs:51-165`); `has_system_tray()` reflects real creation (`client-gui/src/platform/windows.rs:177-184,248-250`). The delta adds a fifth state — `TrayState::RelayStarved` (amber-orange, "relay is not returning your game traffic") so a starving relay never paints the green optimizing icon (`client-gui/src/app.rs:70-81`, `client-gui/src/platform/windows.rs:137-158`, pure selector `client-gui/src/app/window.rs:133-159`). **R** | **Stub.** `LinuxTray` is a no-op: `poll_events` returns empty, `set_state` does nothing (`client-gui/src/platform/linux.rs:10-19`), but `new_tray` returns `Some(LinuxTray)` (`client-gui/src/platform/linux.rs:30-32`); `has_system_tray()` keeps the trait default `false` (`client-gui/src/platform/mod.rs:104-106`), so close exits instead of hiding (`client-gui/src/app/window.rs:161-178`) and the "Hide to tray" button is not drawn (`client-gui/src/app.rs:4178-4186`). No menu-bar/application menu is defined anywhere. **B** only | **Stub.** Identical no-op shape (`client-gui/src/platform/macos.rs:13-21,29-34`), documented "no menu-bar integration yet" (`client-gui/src/platform/macos.rs:4,12`), untested (`client-gui/src/platform/macos.rs:3,25`; `client-gui/src/platform/mod.rs:7`). No status item, no application menu, no Dock menu. **B** only |
-| **Shortcuts** | No shortcut layer: no `KeyboardShortcut`, no menu accelerators, no global hotkey (grep over `client-gui/src`: zero hits). Keyboard state comes only from egui's own focus/tab handling; sheets close on backdrop click via `response.should_close()` (`client-gui/src/app.rs:3340,3637,3770,3983`), with no explicit Esc/Enter binding. **R** (for the absence) | Same code, same absence. **—** (nothing run) | Same code, same absence. No ⌘Q/⌘, handled by the app, no menu bar to carry them. **B** only |
+| **Tray / menu bar** | Real `tray-icon 0.26.1`: Show / Connect / Disconnect / Quit menu, per-state icon + tooltip, double-click restore, X hides to tray (`client-gui/src/platform/windows.rs:54-179`); `has_system_tray()` reflects real creation (`client-gui/src/platform/windows.rs:255-260,368-370`). W2-4 moved the fifth state's colour/tooltip/menu mapping into one pure table — `TrayState::RelayStarved` is amber-orange with the `tray.starved` sentence and never the green optimizing square (`client-gui/src/platform/tray_menu.rs:79-118`, applied at `client-gui/src/platform/windows.rs:210-252`; state re-export `client-gui/src/app.rs:82-90`, selector `client/src/app/status.rs:45`). **R** | **Stub.** `LinuxTray` is a no-op: `poll_events` returns empty, `set_state` does nothing (`client-gui/src/platform/linux.rs:10-19`), but `new_tray` returns `Some(LinuxTray)` (`client-gui/src/platform/linux.rs:30-32`); `has_system_tray()` keeps the trait default `false` (`client-gui/src/platform/mod.rs:104-106` → after W2-4 `:175-177`), so close exits instead of hiding (`client-gui/src/app/window.rs:176-193`) and the "Hide to tray" button is not drawn (`client-gui/src/app.rs:4283-4298`). No menu-bar/application menu is defined anywhere. **B** only | **Stub.** Identical no-op shape (`client-gui/src/platform/macos.rs:13-21,29-34`), documented "no menu-bar integration yet" (`client-gui/src/platform/macos.rs:4,12`), untested (`client-gui/src/platform/macos.rs:3,25`; `client-gui/src/platform/mod.rs:7`). No status item, no application menu, no Dock menu. **B** only |
+| **Shortcuts** | **W2-4 landed the keymap.** One canonical table per OS (`client-gui/src/platform/shortcuts.rs:144-219`): `Ctrl+Q`, `Ctrl+,`, `Ctrl+H` (hide-to-tray only with a real tray), `Esc` closes the top sheet, `Enter` confirms its primary action, no OS-global hotkey; the Windows tray carries `Ctrl+Q` as the Quit accelerator (`client-gui/src/platform/windows.rs:151-179`). App-level Settings/Hide handlers are still shell wiring, and sheets keep egui's `should_close()` behaviour (`client-gui/src/app.rs:3462,3760,3893,4103`). **H** for the table (unit-tested in the GUI job); runtime keyboard pass **U** | Same table compiled (Ctrl chords), no real tray to carry them. **—** (nothing run) | `⌘` table compiled (`client-gui/src/platform/shortcuts.rs:182-219`); no menu bar yet, so nothing carries it. **B** only |
 | **DPI / scaling** | Per-monitor DPI via winit/egui; the auto-size reads monitor height and client-area top in physical pixels then scales (`client-gui/src/app/window.rs:61-113`), and the shell adapts at narrow/short breakpoints (`client-gui/src/app.rs:3998-4000`). 200 % is a design requirement (`docs/design/gui-refresh-brief.md:67`); the mobile-only decision keeps the 320 px width, so the 200 % proof is a **320 px @ 200 %** capture (G2.2). No saved 200 % evidence exists in this repo's design docs. **R** at 100 %; **—** at 200 % | Same code; Wayland/fractional scaling is acknowledged only as an assumption in comments (`client-gui/src/app/window.rs:45-48`). **B** only | Same code; no macOS-specific scaling work. **B** only |
 | **Notifications** | **None.** No notification crate or API in `client-gui/Cargo.toml:14-41` and no notification call site; status changes reach the user only through the window and the tray tooltip (`client-gui/src/platform/windows.rs:130-165`). **R** (for the absence) | None, and no tray to fall back on. **—** | None. **—** |
 | **Autostart** | **Not implemented** (C2). Launch arguments: only `--force` is parsed, by the single-instance guard (`client-gui/src/single_instance.rs:38-46`); there is no `--autostart`/`--hidden` launch mode. **R** (for the absence) | Not implemented. The brief's "systemd user unit (unimplemented)" is accurate in direction but there is no unit file either. **—** | Not implemented; no LaunchAgent. **—** |
@@ -138,7 +147,7 @@ and platform shell**, not engine work:
 | Game detection | Cross-platform scanner: Windows `tasklist`/`netstat`, Linux `/proc` + `ss`, macOS `ps` + `lsof` (`client/src/interceptor/process_scanner.rs:9-18`); process enumeration likewise (`client/src/processes.rs:7-22`) | Presence worker is a GUI wrapper (`client-gui/src/app/presence.rs`); verify one scan on Linux/macOS in a headless run with a synthetic game process (H) |
 | Config / status / commands | Shared engine API consumed today (`client/src/lib.rs`); the GUI owns a second config schema (`client-gui/src/config.rs`) which `architect` is removing (task-1) | Platform work must not entrench the GUI-owned schema; admin/updater/platform capability facts should be published by the shared core (dependency §8) |
 | Capture / boost | Engine backends exist per OS: WinDivert (Windows), nftables/iptables + `CAP_NET_ADMIN` (Linux), `pfctl` + root (macOS) (`client/src/interceptor/mod.rs:110-130`; `client/src/interceptor/linux.rs:24-27`; `client/src/interceptor/macos.rs:13-16`) | Boost parity follows the engine and needs an elevated runtime run per OS; **not** promised by this plan (brief §4, §13.3) |
-| Client route trace (delta) | New portable module `client-gui/src/client_trace.rs` (1,326 lines) spawns the OS tool — `tracert` on Windows, `traceroute -n -q 1` elsewhere (`client-gui/src/client_trace.rs:20-29,349-375`); display-only location hint, bounded run, never feeds relay ranking | Both arms implemented; Linux/macOS runtime needs `traceroute` in PATH and is **B** only until a headless/runtime run. The two target-conditional arms are process invocations, not a gated module (delta note §3.4) |
+| Client route trace (delta) | The portable runtime lives in the shared core (`client/src/app/trace.rs`, 1,235 lines; moved at S5b); the GUI keeps a 22-line re-export shell. The OS tool is a **runtime branch**, not a target gate: `tracert -d -h <n> -w 1000` on Windows, `traceroute -n -m <n> -q 1 -w 1` elsewhere (`client/src/app/trace.rs:352-384`), both through `crate::process::silent_command`; display-only location hint, bounded run, never feeds relay ranking | Both arms implemented; Linux/macOS runtime needs `traceroute` in `PATH` and is **B** only until a runtime run. **W2-4 (j): that runtime dependency is the parity note** — no Linux/macOS run exists, so the dependency and its no-binary failure path remain **U** there |
 
 ### 3.4 Delta check — rebase onto `origin/master` `76aba5d` (2026-11-20)
 
@@ -155,30 +164,34 @@ and no shortcut, notification or autostart code appeared (grep: zero hits). Two
 deltas touch a platform surface, and neither changes a matrix row's capability:
 
 - `client-gui/src/platform/windows.rs` gains the `TrayState::RelayStarved` colour
-  and tooltip (`client-gui/src/platform/windows.rs:137-158`) so a starving relay
-  never shows the green optimizing icon. The tray mechanism and menu are
-  unchanged; the state vocabulary grows by one (`client-gui/src/app.rs:70-81`,
-  pure selector `client-gui/src/app/window.rs:133-159`). The Linux/macOS stubs
-  still ignore `set_state` (S1/S3), so the §3.1 tiers stand.
+  and tooltip so a starving relay never shows the green optimizing icon. At r24
+  that mapping is pure data in `client-gui/src/platform/tray_menu.rs:79-118` and
+  is applied by `client-gui/src/platform/windows.rs:210-252`; the state re-export
+  is `client-gui/src/app.rs:82-90` and the selector
+  `client/src/app/status.rs:45`. The tray mechanism and menu order are unchanged;
+  the state vocabulary grows by one. The Linux/macOS stubs still ignore
+  `set_state` (S1/S3), so the §3.1 tiers stand.
 - the engine's Windows data-plane work (`client/src/interceptor/windows.rs`,
   `client/src/interceptor/order.rs`, the starvation counters) is **Windows-only**
   and adds no Linux/macOS backend; capture/boost parity stays reported separately
   and unclaimed (§3.3).
 
-**New GUI modules are portable Rust.** `server_place` (595 lines),
-`server_tables` (139), `server_geofeed_tables` (327), `client_trace` (1,326),
-`detection_provider` (184) and `app/choice` (540) are ordinary modules registered
-in `client-gui/src/main.rs:9-27` and `client-gui/src/app.rs:36`; five carry no
-target `cfg` at all beyond `#[cfg(test)]`. The one exception is `client_trace`,
-which has two `#[cfg]` arms around the OS-tool invocation only — `tracert` on
-Windows, `traceroute -n -q 1` elsewhere (`client-gui/src/client_trace.rs:349-375`),
-both implemented and using the cross-platform `silent_command` wrapper. That is a
-platform-conditional process call, **not** a target-gated module: the module
-compiles and runs on every target, and the Linux/macOS runtime dependency is only
-that `traceroute` exists in `PATH` (B only until run, §3.3). The
-detection-provider classifier is installed cross-platform through the engine hook
-(`client-gui/src/main.rs:85-86`); the location tables are static data with no OS
-calls.
+**The delta's new GUI modules were portable Rust; the r24 tree has since moved
+them.** At r17 the new modules were `server_place` (595 lines), `server_tables`
+(139), `server_geofeed_tables` (327), `client_trace` (1,326),
+`detection_provider` (184) and `app/choice` (540), all registered in
+`client-gui/src/main.rs:9-27` and `client-gui/src/app.rs:36`; five carried no
+target `cfg` at all beyond `#[cfg(test)]`. The one platform-conditional piece was
+`client_trace`, and it has since moved to the core (S5b): the dispatch is a
+**runtime** OS branch (`client/src/app/trace.rs:352-384` — `tracert` on Windows,
+`traceroute -n -q 1` elsewhere), not a target-gated module, and the Linux/macOS
+runtime dependency is only that `traceroute` exists in `PATH` (B only until run,
+§3.3). Current at r24: `server_place` is an 11-line GUI shell over
+`client/src/app/location.rs`; `client_trace` is a 22-line GUI shell over
+`client/src/app/trace.rs`; the detection-provider classifier is installed
+cross-platform before engine creation (`client-gui/src/main.rs:93`, before
+`LightSpeedEngine::new` at `client-gui/src/main.rs:102`); the location tables are
+static data with no OS calls.
 
 **CI and packaging: unchanged.** `.github/workflows/` and `client-gui/Cargo.toml`
 did not change between `62c6cf6` and `76aba5d`, and neither did `dist-workspace.toml`
@@ -208,6 +221,42 @@ the spec's mobile-only amendments, so this plan still names the owner decision
 re-baselined spec. Revision numbers and line counts above are the 2026-11-20 final
 delta set as of this r23 check; the section names stay authoritative if the docs
 move again.
+
+---
+
+### 3.5 What W2-4 landed (the platform code half), surface by surface
+
+W2-4 (task-61) implements the platform side of the spec's §5 acceptance list on the
+clean accepted tree. This subsection is the **three-tier statement per surface**
+asked for by W2-4 (h): what the code now does, which tier that reaches, and what
+stays named-unverified. Evidence for every row:
+`wat/evidence/2026-11-20/w2-4/platform/` (report, gate logs, platform test output,
+smoke log, guard mutation log).
+
+| Surface | Code now (files) | Tier reached today | Named unverified / gap |
+|---|---|---|---|
+| **Tray/menu incl. the fifth state** (c) | Windows tray keeps its four reachable states and now builds its icon colour, tooltip and menu enablement from one pure mapping (`client-gui/src/platform/tray_menu.rs`): `RelayStarved` is amber-orange with the short `tray.starved` sentence, **never** the green optimizing square, and Connect/Disconnect are never both offered. Labels/tooltips are catalogued (`tray.*`, `state.*`) and built after the language is pinned; the Quit item carries the canonical `Ctrl+Q` accelerator. | **R** for the four pre-existing states (earlier waves); fifth-state **mapping** unit-tested | Live fifth-state icon/tooltip **U** (needs a starving relay fixture); no fresh tray capture this wave. macOS/Linux tray backends remain stubs → fifth state unobservable there (**U**, Q14). |
+| **Shortcut keymaps** (d) | One canonical table per OS (`platform/shortcuts.rs`, unit-tested on every host): `Ctrl+Q`/`⌘Q`, `Ctrl+,`/`⌘,`, `Ctrl+H`/`⌘H` (hide-to-tray only when a real tray exists), `Esc` closes the top sheet, `Enter` confirms its primary action; no OS-global hotkey. The startup trace logs the table and the tray menu consumes the Quit chord. | **H** (pure table + Windows menu accelerator; tests run in the GUI job) | App-level handlers for Settings/Hide-to-tray are shell wiring outside W2-4; a runtime keyboard pass on any OS is **U** this wave. |
+| **Elevation handshake** (e) | `platform/elevation.rs`: a pure state machine (`Ready → Restarting → Confirmed / Declined / Failed`), with the C8 rule enforced — the current process may exit **only** on `Confirmed`. Windows now launches the hidden elevation helper, keeps the window open while the prompt resolves, and returns to the Needs-elevation overlay on decline instead of exiting; a declined prompt names `notice.elevation_declined`. | **H** (state machine + exit-code classification unit-tested; 43-test platform suite) | **Interactive UAC accept/decline is U** — this agent shell is elevated and the prompt is on the secure desktop. Fixture: an interactive verifier on a non-elevated standard-user session presses the boost action and clicks **No**, then confirms the window stays open. The decline copy's rendering is shell wiring (named residual). |
+| **Autostart writers** (f) | `platform/autostart.rs`: opt-in entry builders for all three OSes (`HKCU\…\Run`, `~/.config/autostart/lightspeed-gui.desktop` with `X-GNOME-Autostart-enabled=true`, `~/Library/LaunchAgents/dev.lightspeed.gui.plist`), plus temp-dir `write_file`/`remove_file`/`is_installed` with surfaced I/O failures and idempotent disable; the `--autostart` launch mode is the contract. Registry writer is `reg.exe` argument data (never executed in tests). | **H** (temp-dir create/read/remove/failure tests; registry command builders) | No Settings toggle ships (needs a config field + control outside W2-4's frozen shell), so the user-visible enable flow and the log-out/in check are **U**. |
+| **Updater channel** (g) | `platform/updater.rs`: one decision — `WindowsInPlace` (the only channel with an install action), `ShellInstaller`, `PackageManager`, `BareTarball`, `WindowsNoAsset`. A channel that cannot install appends its catalogued instruction to the update result line (`update.channel_*`), so a dead install button is impossible by construction; the Windows in-place path is unchanged. | **H** (channel × asset × receipt matrix unit-tested; copy keys in all 9 catalogs, English pending Q5) | Runtime click-through on Linux/macOS is **U**; the A11 disclosure sentence (`update.disclosure`, a W2-2/Q18 item) is still unshipped and named — it is not this wave's copy. |
+| **Reduced motion Windows signal** (i) | `platform/animations.rs` + `windows.rs`: `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)` sampled once at startup; non-zero means animations **enabled**, so only an explicit `On` shows the spinner and `Off`/`Unknown` render static text. The smoke log on this host observed `reduced-motion=On source=windows:SPI_GETCLIENTAREAANIMATION`. | **R** for the probe on this host (log line); `Off`/`Unknown` static behaviour unit-tested | Producing an OS-level `Off` requires changing the Windows animation setting (owner action) → **U**; the resulting static wait is test-covered. macOS (`NSWorkspace…`) and Linux (gsettings/KDE) are **named `Unknown` gaps** in code — always static, never animated. |
+| **Headless smoke G0.2** (b) | `LIGHTSPEED_GUI_SMOKE=1` in `main.rs`: skips engine/tokio/classifier/discovery/tray, opens the real window, logs `GUI_SMOKE window_created title="LightSpeed" pixels_per_point=… backend=… renderer=…` then `GUI_SMOKE exit=0 frames=3`, closes itself and exits 0. | **H** equivalent on Windows (local run: exit 0 + both markers) | Linux (`xvfb-run`) / macOS runs are **U** until the `dev-ops` task-62 jobs' first logs; the smoke stays advisory until proven per §6.1. |
+| **`client_trace` runtime dependency** (j) | The runtime dispatch moved to the shared core (`client/src/app/trace.rs`, S5b): `tracert -d -h … -w …` on Windows, `traceroute -n -q 1 -m … -w …` on Linux/macOS through `process::silent_command`. The trace runs only while a game server is locked, is local, and the Q13 disclosure is shipped in `docs/privacy.md`/`docs/data-dictionary.md`. | **B** on Linux/macOS | **Runtime dependency: Linux/macOS need `traceroute` in `PATH`.** No Linux/macOS run exists, so the dependency, its failure path (no binary → no row) and the caption are **U** there; on Windows the live `tracert` path was already named U in S5b (tests use fake children/runners). |
+
+**What W2-4 did not do (unchanged gaps, same tiers):** macOS/Linux tray backends are
+still honest stubs (G1.4/G1.5); the non-Windows single-instance tests still never run
+(they wait for the task-62 jobs, G1.8); the capability probe still shells
+`sc`/`which` (S9–S12, G1.1); the crash/fatal dialog is still Windows-only (S14,
+G0.3); locale detection is still env-only (S17, G1.9); remember/restore geometry
+stays shell work (G2.2, delivered with the shell, not W2-4). **No row may be
+reported as "parity"**: §7.3's never-collapse rule governs this list unchanged.
+
+**One honest over-claim to avoid.** The Windows `R` tier in the rows above is the
+existing product surface plus this wave's unit-tested mapping. Nothing in W2-4 adds
+a *new live interaction capture* on any OS: the tray fifth state, the elevation
+accept/decline clicks, the autostart login cycle, the updater click-through, the
+reduced-motion `Off` state and every Linux/macOS runtime flow are named **U** above.
 
 ---
 
@@ -241,6 +290,15 @@ truth that exists only for Windows. Ordered by the surface it breaks.
 | S21 | No `.app`/`.dmg` in CI | `tools/package-macos.sh:1-38`; `packaging/macos/Info.plist`; no workflow references `package-macos` | Release ships a bare macOS binary in a tarball; the bundle builder is manual and version-argumented (`docs/user-guide.md:112-114` still shows `1.6.5`) |
 | S22 | Stale platform comments/doc | `client-gui/Cargo.toml:8,74-78`; `dist-workspace.toml:16-17`; `client-gui/src/main.rs:1-4`; `client-gui/src/paths.rs:9-16,34-43`; `AGENTS.md:99` | Say "Windows app", "no macOS module", "Linux stub", "~/.local/share elsewhere" where the tree/release disagrees |
 | S23 | User docs claim unverified runtime | `docs/user-guide.md:31` ("GUI works on Linux") | Must be tiered per §7 until a Linux run exists |
+
+**W2-4 status (r24).** S13 (updater), S19 (shortcuts) and S20 (autostart) now have
+their **platform halves** implemented and unit-tested (§3.5). The rows above
+describe the pre-W2-4 shipped tree and remain the honest **user-facing** state until
+the shell/CI wiring lands: no install action on Linux/macOS (the update line now
+names the channel instead), no shortcut layer in the shipped shell beyond the tray
+Quit accelerator, and no autostart toggle. S16 (the non-Windows single-instance
+tests never executed) is unchanged until the task-62 Linux/macOS GUI jobs run;
+S1–S12, S14, S15, S17, S18 and S21–S23 are untouched by W2-4.
 
 ---
 
@@ -411,6 +469,13 @@ Notes for `dev-ops`:
 - **Test count is the evidence:** report the per-OS GUI test count on the first
   run; a Linux run with zero tests is a red flag (the non-Windows
   single-instance tests are the ones that must appear).
+
+**W2-4 status (r24):** `dev-ops` task-62 is adding these jobs in a separate
+write scope; the W2-4 slice did not edit `.github/workflows/`. The G0.2 hook they
+depend on now exists: `LIGHTSPEED_GUI_SMOKE=1` (§3.5), with the stable marker
+contract `GUI_SMOKE window_created title="LightSpeed" …` then
+`GUI_SMOKE exit=0 frames=…`, process exit 0. Until their first logs, acceptance
+(a) and the Linux/macOS part of (b) stay **U** and are reported as such.
 
 ### 6.2 Is a headless smoke path feasible on GitHub-hosted runners?
 
@@ -622,17 +687,24 @@ Paths are relative to the worktree root; line numbers are at the r4 baseline —
   `client-gui/src/main.rs:9-27` and `client-gui/src/app.rs:36`
   (`server_place` — `client-gui/src/server_place.rs`, `server_tables`,
   `server_geofeed_tables`, `client_trace`, `detection_provider`, `app/choice`);
-  portability evidence `client-gui/src/client_trace.rs:349-375` (only target
-  `cfg` in the six modules, both OS-tool arms implemented);
-  cross-platform provider hook `client-gui/src/main.rs:85-86`; tray state
-  addition `client-gui/src/app.rs:70-81`, `client-gui/src/platform/windows.rs:137-158`,
-  `client-gui/src/app/window.rs:133-159`; packaging version bumps
+  portability evidence at r24 `client/src/app/trace.rs:352-384` (runtime OS-tool
+  branch, both arms implemented; the trace moved to the core at S5b, so the r17
+  citation into `client-gui/src/client_trace.rs` (lines 349-375) no longer
+  resolves — that GUI shell is 22 lines);
+  cross-platform provider hook `client-gui/src/main.rs:93`; tray state
+  addition `client-gui/src/app.rs:82-90`, `client-gui/src/platform/tray_menu.rs:79-118`,
+  `client-gui/src/app/window.rs:172-176`; packaging version bumps
   `dist/aur/PKGBUILD:26`, `dist/chocolatey/lightspeed.nuspec:5`,
   `dist/scoop/lightspeed.json:2`; release assets
   `wat/evidence/2026-11-20/team/desktop-platform/release-assets-1114.txt`;
   **r17 citation re-derivation** — every anchor into the delta-changed GUI files
   (`app.rs`, `main.rs`, `app/window.rs`, `platform/windows.rs`) was re-derived
   against `0df57ce`; unchanged files keep their W1-era anchors.
+  **r24 re-derivation (W2-4):** anchors into `app.rs`, `main.rs`,
+  `platform/windows.rs`, `platform/mod.rs` and `update.rs` moved with this slice;
+  the citations above are the r24 values, and the W2-4 platform modules
+  (`animations`, `autostart`, `elevation`, `shortcuts`, `tray_menu`, `updater`)
+  are new files (§3.5).
 - Delta re-baseline (r17; revision references refreshed by r23): the design set was
   re-cut to the mobile-only form — `docs/design/gui-refresh-spec.md:45-55`
   (spec r18 §1.1: width pinned 320 px, one `narrow` column, height user-resizable

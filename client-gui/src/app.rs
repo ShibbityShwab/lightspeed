@@ -21,7 +21,10 @@ use crate::discovery::{self, DiscoveryOutcome, RelayHealth};
 use crate::globe;
 use crate::i18n;
 use crate::paths;
-use crate::platform::{default_port_range, Platform, QuitFlag, TrayAction, TrayHandle};
+use crate::platform::{
+    default_port_range, Animations, ElevationAttempt, ElevationPhase, Platform, QuitFlag,
+    TrayAction, TrayHandle,
+};
 use crate::processes::{self, ProcessEntry};
 use crate::update::UpdateStatus;
 use eframe::egui;
@@ -335,6 +338,12 @@ pub struct LightSpeedApp<P: Platform> {
 
     // ── System state ──────────────────────────────────────────────────────
     is_admin: bool,
+    /// The OS reduced-motion signal, sampled once at startup (spec W2-4 (i)).
+    /// Only an explicit `On` animates; `Off`/`Unknown` render static text.
+    animations: Animations,
+    /// An in-flight elevation handshake, if any (spec §2.2 row 7 / C8). The
+    /// frame loop polls it; the process exits only once it is `Confirmed`.
+    elevation: Option<ElevationAttempt>,
     fonts_setup: bool,
     header_icon: Option<egui::TextureHandle>,
 
@@ -426,8 +435,6 @@ fn spawn_rtt_probe(addr: SocketAddrV4) -> Receiver<Option<u64>> {
 
 impl<P: Platform> LightSpeedApp<P> {
     pub fn new(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) -> Self {
-        let tray = P::new_tray(Arc::clone(&quit));
-        tracing::info!("system tray created: {}", tray.is_some());
         let status = lock_or_recover(&engine).snapshot();
 
         // Detection is deliberately not run here: `new()` executes on the thread
@@ -505,6 +512,21 @@ impl<P: Platform> LightSpeedApp<P> {
         let language = saved.language.clone();
         i18n::set_language(language.as_deref());
 
+        // The tray is created **after** the language is pinned: its menu labels
+        // and tooltip are catalogued copy (`tray.*`/`state.*`), so building it
+        // earlier would leave English labels behind a German config (W2-4 (c)).
+        let tray = P::new_tray(Arc::clone(&quit));
+        tracing::info!("system tray created: {}", tray.is_some());
+
+        // One OS read for the whole process: the reduced-motion signal gates
+        // every spinner (W2-4 (i)). A failed probe is `Unknown` = static.
+        let animations = P::animations();
+        tracing::info!(
+            "reduced-motion signal: {:?} ({})",
+            animations,
+            animations.source()
+        );
+
         // The shared watchdog publishes one coherent snapshot: warning, live
         // judged-window streak (R16) and the one-shot demotion finding.
         let watchdog_publication = Arc::new(Mutex::new(WatchdogSnapshot::default()));
@@ -574,6 +596,8 @@ impl<P: Platform> LightSpeedApp<P> {
             share_latency_stats,
             auto_detected_game,
             is_admin,
+            animations,
+            elevation: None,
             fonts_setup: false,
             header_icon: None,
             details_open: false,
@@ -1898,8 +1922,46 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     /// Relaunch with elevated privileges so the interceptor can start.
+    ///
+    /// Starts the handshake instead of exiting: the frame loop polls it and the
+    /// process only exits once the elevated instance confirms (spec §2.2 row 7,
+    /// C8). A second click while a prompt is open is ignored.
     fn restart_elevated(&mut self) {
-        P::relaunch_as_admin();
+        if self.elevation.is_some() {
+            return;
+        }
+        let attempt = P::begin_elevation();
+        tracing::info!("elevation handshake: {:?}", attempt.phase());
+        self.elevation = Some(attempt);
+    }
+
+    /// Poll an in-flight elevation handshake.
+    ///
+    /// The exit rule is the fix: only `Confirmed` may terminate this
+    /// (unelevated) process. `Declined` and `Failed` keep the window alive and
+    /// drop the attempt so the user can retry; the declined notice copy is
+    /// named by the handshake (`notice.elevation_declined`) and its rendering is
+    /// shell work outside this wave.
+    fn poll_elevation(&mut self) {
+        let Some(attempt) = self.elevation.as_mut() else {
+            return;
+        };
+        let phase = attempt.poll();
+        if phase.is_pending() {
+            return;
+        }
+        // The exit rule is the fix: only a confirmed elevated instance may
+        // terminate this process (C8). Declined/failed/ready keep the window.
+        if phase.may_exit() {
+            tracing::info!("elevated instance confirmed; exiting the unelevated process");
+            std::process::exit(0);
+        }
+        if phase != ElevationPhase::Ready {
+            let notice = phase.notice_key().unwrap_or("elevation failed");
+            tracing::warn!("elevation handshake ended in {phase:?} ({notice}); staying open");
+        }
+        attempt.reset();
+        self.elevation = None;
     }
 
     /// Apply the background game-presence watcher's latest result.
@@ -2949,14 +3011,9 @@ impl<P: Platform> LightSpeedApp<P> {
         if self.proxies.is_empty() {
             match &self.discovery {
                 DiscoveryState::InFlight(_) => {
-                    // W2-2 (i): one wait indicator, static text until the OS
-                    // reduced-motion probe is wired (W2-4); the GUI crate reads
-                    // no OS setting itself.
-                    progress_indicator(
-                        ui,
-                        i18n::t("relay.discovering").as_ref(),
-                        Animations::Unknown,
-                    );
+                    // One wait indicator; motion only when the platform's OS
+                    // reduced-motion read is explicitly `On` (W2-4 (i)).
+                    progress_indicator(ui, i18n::t("relay.discovering").as_ref(), self.animations);
                 }
                 DiscoveryState::Done => {
                     ui.horizontal_wrapped(|ui| {
@@ -3984,7 +4041,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     .show(ui, |ui| {
                         match &self.update_check {
                             UpdateCheckState::Checking => {
-                                progress_indicator(ui, i18n::t("update.checking").as_ref(), Animations::Unknown);
+                                progress_indicator(ui, i18n::t("update.checking").as_ref(), self.animations);
                             }
                             UpdateCheckState::Done(result) => {
                                 let current = match result {
@@ -4028,7 +4085,7 @@ impl<P: Platform> LightSpeedApp<P> {
                                 }
                             }
                             UpdateCheckState::Installing => {
-                                progress_indicator(ui, i18n::t("update.installing").as_ref(), Animations::Unknown);
+                                progress_indicator(ui, i18n::t("update.installing").as_ref(), self.animations);
                                 ui.label(
                                     "Approve the UAC prompt if one appears; LightSpeed will restart.",
                                 );
@@ -4131,6 +4188,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         self.release_stale_hold();
         self.poll_client_trace();
         self.poll_relay_health();
+        self.poll_elevation();
 
         // Collect a finished update check from the background thread.
         if matches!(self.update_check, UpdateCheckState::Checking) {
