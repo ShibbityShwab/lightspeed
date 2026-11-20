@@ -209,9 +209,13 @@ Some servers — for example G-Core's — are on hosting ranges where free IP
 databases name the wrong country. To be honest about those, the GUI ships a
 small **operator geofeed** table built into the application:
 
-- The data comes from network operators' public RFC 8805 geofeeds. The first
-  one is G-Core Labs S.A.'s public feed at
-  <https://geofeed.gcore.lu/IP-Range.csv>.
+- The data comes from network operators' public RFC 8805 geofeeds. The
+  configured operators include G-Core Labs S.A.
+  (<https://geofeed.gcore.lu/IP-Range.csv>), Hetzner Online GmbH,
+  DigitalOcean, LLC, The Constant Company (Vultr), Akamai Connected Cloud
+  (Linode), Contabo GmbH and Equinix Metal; the exact list with each feed URL
+  and as-of date is the source manifest
+  (`client-gui/data/server-geofeed.sources.json`).
 - It is downloaded **at build time on the maintainer's machine**, not by your
   client. The GUI only reads the table embedded in the binary; it makes no
   request for it and sends nothing anywhere.

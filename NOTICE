@@ -12,11 +12,19 @@ identify a server's provider region.
 Hosting-network prefixes: derived at build time from the RIPE Stat API
 (https://stat.ripe.net, RIPE NCC) for a curated list of hosting ASNs.
 
-Server city labels: operator geofeed data published by G-Core Labs S.A. in its
-public RFC 8805 geofeed (https://geofeed.gcore.lu/IP-Range.csv), shown as-is
-with attribution and the feed's as-of date. No MaxMind/GeoLite2 data is used or
-redistributed. An operator can request removal of its feed or prefixes through
-the takedown list in infra/geo/geofeeds/deny.txt; the build drops them and the
-shipped table is regenerated without them.
+Server city labels: operator geofeed data published by the operators below in
+their public RFC 8805 geofeeds, each shown as-is with attribution and the feed's
+as-of date. No MaxMind/GeoLite2 data is used or redistributed. An operator can
+request removal of its feed or prefixes through the takedown list in
+infra/geo/geofeeds/deny.txt; the build drops them and the shipped table is
+regenerated without them.
+
+  * G-Core Labs S.A. - https://geofeed.gcore.lu/IP-Range.csv
+  * Hetzner Online GmbH - https://www.hetzner.com/geofeed.csv
+  * DigitalOcean, LLC - https://www.digitalocean.com/geo/google.csv
+  * The Constant Company, LLC (Vultr) - https://geofeed.constant.com/
+  * Akamai Connected Cloud (Linode) - https://ipgeo.akamai.com/linode-geofeed.csv
+  * Contabo GmbH - https://geofeed.contabo.de/geofeed.csv
+  * Equinix Metal (Equinix, Inc.) - https://geofeed.equinixmetal.com/geofeed.csv
 
 Uses the maxminddb crate (MIT licensed).

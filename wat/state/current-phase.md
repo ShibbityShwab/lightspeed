@@ -12,6 +12,17 @@
 
 ## Recent entries
 
+### 2026-11-20 (geofeed due diligence) - 7 verified operator feeds (G-Core + 6), table 603 -> 11,948 ranges; live label verified; committed
+
+**Agent:** `geofeed-diligence` + lead (gates/commit). Committed.
+
+- **G-Core source verified against the RIR**: RIPE Stat whois for `178.107.0.0/19` returns `geofeed: https://geofeed.gcore.lu/IP-Range.csv`, and RIPE RDAP returns `rel=geofeed` (conformance `geofeed1`). Snapshot (2026-11-19, sha `a5fdac6f…`) reproduces the old committed blob exactly; the live re-fetch 2026-11-20 differs only in the `generated at` header line.
+- **Added 6 verified operator-owned RFC 8805 feeds** (own domain and/or RIR-declared `geofeed:`): Hetzner (17,038 IPv4 rows), DigitalOcean (1,092, own domain only - weakest provenance, 3 malformed rows skipped), Vultr (441), Linode/Akamai (5,409), Contabo (540), Equinix Metal (177). Rejected with reasons recorded: OVH, Leaseweb, Scaleway, Oracle Cloud (no operator-owned feed / RIR attribute; RFC 9632 defines the RPSL attribute and RDAP rel, not a DNS record).
+- **Table after `--ship`:** 603 -> **11,948 ranges / 237 places / 7 sources**, blob 119,480 B, generated Rust 29,505 B with per-source attribution/as-of; manifest shipped; selftest **109 checks**. Sanity lookups pass (G-Core Manassas, one address per new feed resolves to that feed's city); deny-list/overlap checks pass.
+- **Live GUI verified:** rebuilt release (exe 27,964,928 B), launched pid 10884; UIA shows a locked G-Core server `178.107.13.173:36602` with `Server location: operator geofeed — Manassas, US-VA` / `(G-Core, as-of 2026-11-19)` / `Shown as-is…`, persisting on a second snapshot.
+- **Gates:** fmt clean; workspace clippy 0; workspace **1,811 / 0 / 6** (one transient `control_reconnect::supervisor_stopped_on_disconnect` port-race failure on the first run; isolated re-run and full rerun passed); GUI clippy 0; GUI **259 / 0 / 1**; selftest 109.
+- **Residual:** refresh is manual (as-of 2026-11-13..20; G-Core daily; refresh shifts the as-of pinned in a GUI test); DigitalOcean provenance weakest; coverage gaps for customer space (Hetzner 82.4 %, G-Core 80.7 %, Vultr 68.6 %; others 97-99 %); IPv6 rows counted/skipped; no RPKI signed-geofeed check; blob/exe grows ~119 KB/~123 KB.
+
 ### 2026-11-20 (own dataset + detection fix) - G-Core geofeed labels (display-only) and flow-aware server locking; committed
 
 **Agent:** `rust-dev-12` (geofeed pipeline/labels) + `rust-dev-13` (detection fix) + lead (final gates/commit). Committed.

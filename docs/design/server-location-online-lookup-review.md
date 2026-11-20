@@ -103,6 +103,17 @@ data (GeoLite2/geojs) and the operator feed got Manassas right.
   per-operator attribution, the "shown as-is" statement and the takedown
   policy. The table covers the G-Core US-Virginia server whose DB-IP country
   was JP.
+- **Done - dataset expanded to 7 verified operator feeds (2026-11-20):** a
+  due-diligence pass added Hetzner (AS24940), DigitalOcean (AS14061), Vultr
+  (AS20473), Linode/Akamai (AS63949), Contabo (AS51167) and Equinix Metal
+  (AS54825) next to G-Core. Every feed is declared in the operator's RIR object
+  (RIPE RDAP `rel=geofeed` / ARIN `Geofeed` remark) or served on the operator's
+  own domain (DigitalOcean, no RIR declaration), parses as RFC 8805, and is
+  recorded in `sources.json` with URL, as-of, row counts and announced-prefix
+  coverage; OVH, Leaseweb, Scaleway and Oracle were rejected (no operator-owned
+  feed) with reasons. The committed table is now **7 sources / 237 places /
+  11,948 ranges** (119,480-byte blob) and its generated Rust header and manifest
+  carry every attribution line and per-source as-of date.
 - **Still open:** measured sources (relay/client traceroute, hop geolocation)
   joining the same table once one is validated; more operators' geofeeds need a
   `sources.json` entry plus a local feed; and the table remains IPv4-only until

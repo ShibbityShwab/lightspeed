@@ -11,13 +11,37 @@
 //     operator: G-Core Labs S.A.; as-of 2026-11-19; redistributed: true
 //     licence/status: public operator geofeed; the feed states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).
 //     attribution: Server city data published by G-Core Labs S.A. in its public RFC 8805 geofeed (https://geofeed.gcore.lu/IP-Range.csv); shown as-is.
+//   * Hetzner (AS24940): https://www.hetzner.com/geofeed.csv
+//     operator: Hetzner Online GmbH; as-of 2026-11-17; redistributed: true
+//     licence/status: public operator geofeed; the feed has no header and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).
+//     attribution: Server city data published by Hetzner Online GmbH in its public RFC 8805 geofeed (https://www.hetzner.com/geofeed.csv); shown as-is.
+//   * DigitalOcean (AS14061): https://www.digitalocean.com/geo/google.csv
+//     operator: DigitalOcean, LLC; as-of 2026-11-20; redistributed: true
+//     licence/status: public operator geofeed; the feed has no header and states no licence, and DigitalOcean does not declare it in its RIR records. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).
+//     attribution: Server city data published by DigitalOcean, LLC in its publicly served RFC 8805 geofeed (https://www.digitalocean.com/geo/google.csv); shown as-is.
+//   * Vultr (AS20473): https://geofeed.constant.com/
+//     operator: The Constant Company, LLC (Vultr); as-of 2026-11-19; redistributed: true
+//     licence/status: public operator geofeed; the feed header names Vultr/Constant.com and a support address and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).
+//     attribution: Server city data published by The Constant Company, LLC (Vultr) in its public RFC 8805 geofeed (https://geofeed.constant.com/); shown as-is.
+//   * Linode/Akamai (AS63949): https://ipgeo.akamai.com/linode-geofeed.csv
+//     operator: Akamai Connected Cloud (Linode); as-of 2026-11-19; redistributed: true
+//     licence/status: public operator geofeed; the feed header identifies itself as an RFC 8805 self-published geofeed and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).
+//     attribution: Server city data published by Akamai Connected Cloud (Linode) in its public RFC 8805 geofeed (https://ipgeo.akamai.com/linode-geofeed.csv); shown as-is.
+//   * Contabo (AS51167): https://geofeed.contabo.de/geofeed.csv
+//     operator: Contabo GmbH; as-of 2026-11-13; redistributed: true
+//     licence/status: public operator geofeed; the feed has no header and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).
+//     attribution: Server city data published by Contabo GmbH in its public RFC 8805 geofeed (https://geofeed.contabo.de/geofeed.csv); shown as-is.
+//   * Equinix Metal (AS54825): https://geofeed.equinixmetal.com/geofeed.csv
+//     operator: Equinix Metal (Equinix, Inc.); as-of 2026-11-20; redistributed: true
+//     licence/status: public operator geofeed; the feed has no header and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).
+//     attribution: Server city data published by Equinix Metal (Equinix, Inc.) in its public RFC 8805 geofeed (https://geofeed.equinixmetal.com/geofeed.csv); shown as-is.
 // Deny/takedown list applied: 0 entries from infra/geo/geofeeds/deny.txt (0 feed rows dropped, 0 operator(s) removed).
 //
 // Precedence: longest prefix wins; at equal length the earlier source in
 // infra/geo/geofeeds/sources.json wins. Ranges never overlap.
 // Destination: client-gui/src/server_geofeed_tables.rs (committed, display-only).
-// Generated: 2026-11-20T05:19:04Z
-// Blob: server-geofeed.bin (6030 bytes, sha256 5aa31ab59c2f147f9258d8d188db3d8d2220ab15dc1fc6695d195e68e7e760a9)
+// Generated: 2026-11-20T06:22:37Z
+// Blob: server-geofeed.bin (119480 bytes, sha256 c3ee6b8c911515dfe04487f623db025edca6a2ef378f3d38d0ab5a553bae89db)
 // Record format: start u32 LE | end u32 LE | place-index u16 LE (10 bytes)
 // Display-only: this data never feeds chooser_point, relay ranking or any
 // measured claim. The route card shows it as the operator's own statement.
@@ -39,6 +63,12 @@ pub struct GeofeedSource {
 #[rustfmt::skip]
 pub const SERVER_GEOFEED_SOURCES: &[GeofeedSource] = &[
     GeofeedSource { provider: "G-Core", url: "https://geofeed.gcore.lu/IP-Range.csv", as_of: "2026-11-19" },
+    GeofeedSource { provider: "Hetzner", url: "https://www.hetzner.com/geofeed.csv", as_of: "2026-11-17" },
+    GeofeedSource { provider: "DigitalOcean", url: "https://www.digitalocean.com/geo/google.csv", as_of: "2026-11-20" },
+    GeofeedSource { provider: "Vultr", url: "https://geofeed.constant.com/", as_of: "2026-11-19" },
+    GeofeedSource { provider: "Linode/Akamai", url: "https://ipgeo.akamai.com/linode-geofeed.csv", as_of: "2026-11-19" },
+    GeofeedSource { provider: "Contabo", url: "https://geofeed.contabo.de/geofeed.csv", as_of: "2026-11-13" },
+    GeofeedSource { provider: "Equinix Metal", url: "https://geofeed.equinixmetal.com/geofeed.csv", as_of: "2026-11-20" },
 ];
 
 /// One place a geofeed range can resolve to, as the operator publishes it.
@@ -149,4 +179,149 @@ pub const SERVER_GEOFEED_PLACES: &[GeofeedPlace] = &[
     GeofeedPlace { country: "VN", region: Some("VN-SG"), city: Some("Ho Chi Minh City"), source: 0 },
     GeofeedPlace { country: "MY", region: Some("MY-14"), city: Some("Kuala Lumpur"), source: 0 },
     GeofeedPlace { country: "BR", region: Some("BR-RJ"), city: Some("Rio de Janeiro"), source: 0 },
+    GeofeedPlace { country: "DE", region: Some("DE-SN"), city: Some("Falkenstein"), source: 1 },
+    GeofeedPlace { country: "DE", region: Some("DE-BY"), city: Some("Nuremberg"), source: 1 },
+    GeofeedPlace { country: "FI", region: Some("FI-18"), city: Some("Helsinki"), source: 1 },
+    GeofeedPlace { country: "US", region: Some("US-OR"), city: Some("Hillsboro"), source: 1 },
+    GeofeedPlace { country: "US", region: Some("US-VA"), city: Some("Ashburn"), source: 1 },
+    GeofeedPlace { country: "SG", region: Some("SG-01"), city: Some("Singapore"), source: 1 },
+    GeofeedPlace { country: "NL", region: Some("NL-NH"), city: Some("Amsterdam"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-NJ"), city: Some("North Bergen"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("Santa Clara"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("San Francisco"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-NJ"), city: Some("Clifton"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-NJ"), city: Some("Secaucus"), source: 2 },
+    GeofeedPlace { country: "GB", region: Some("GB-SLG"), city: Some("London"), source: 2 },
+    GeofeedPlace { country: "DE", region: Some("DE-HE"), city: Some("Frankfurt"), source: 2 },
+    GeofeedPlace { country: "IN", region: Some("IN-KA"), city: Some("Bangalore"), source: 2 },
+    GeofeedPlace { country: "SG", region: Some("SG-05"), city: Some("Singapore"), source: 2 },
+    GeofeedPlace { country: "CA", region: Some("CA-ON"), city: Some("Toronto"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-GA"), city: Some("Douglasville"), source: 2 },
+    GeofeedPlace { country: "AU", region: Some("AU-NSW"), city: Some("Sydney"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-VA"), city: Some("Sandston"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-MO"), city: Some("Kansas City"), source: 2 },
+    GeofeedPlace { country: "US", region: Some("US-MEM"), city: Some("Memphis"), source: 2 },
+    GeofeedPlace { country: "JP", region: Some("JP-13"), city: Some("Shinagawa-ku"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-NJ"), city: Some("Piscataway"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("Los Angeles"), source: 3 },
+    GeofeedPlace { country: "SG", region: Some("SG-05"), city: Some("Singapore"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("Santa Clara"), source: 3 },
+    GeofeedPlace { country: "FR", region: Some("FR-93"), city: Some("AUBERVILLIERS"), source: 3 },
+    GeofeedPlace { country: "DE", region: Some("DE-HE"), city: Some("Frankfurt"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-FL"), city: Some("Miami"), source: 3 },
+    GeofeedPlace { country: "GB", region: Some("GB-LND"), city: Some("London"), source: 3 },
+    GeofeedPlace { country: "NL", region: Some("NL-NH"), city: Some("Amsterdam"), source: 3 },
+    GeofeedPlace { country: "AU", region: Some("AU-NSW"), city: Some("Alexandria"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-TX"), city: Some("Dallas"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-GA"), city: Some("Atlanta"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-WA"), city: Some("Kent"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-IL"), city: Some("Elk Grove Village"), source: 3 },
+    GeofeedPlace { country: "CL", region: Some("CL-RM"), city: Some("Santiago"), source: 3 },
+    GeofeedPlace { country: "JP", region: Some("JP-27"), city: Some("Osaka"), source: 3 },
+    GeofeedPlace { country: "PL", region: Some("PL-14"), city: Some("Warsaw"), source: 3 },
+    GeofeedPlace { country: "IN", region: Some("IN-KA"), city: Some("Bangalore"), source: 3 },
+    GeofeedPlace { country: "IL", region: Some("IL-TA"), city: Some("Rosh HaAyin"), source: 3 },
+    GeofeedPlace { country: "GB", region: Some("GB-MAN"), city: Some("Swinton"), source: 3 },
+    GeofeedPlace { country: "KR", region: Some("KR-11"), city: Some("Seoul"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-MN"), city: Some("Eagan"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-MO"), city: Some("Kansas City"), source: 3 },
+    GeofeedPlace { country: "ES", region: Some("ES-M"), city: Some("Madrid"), source: 3 },
+    GeofeedPlace { country: "MX", region: Some("MX-CMX"), city: Some("Santiago de Queretaro"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-OH"), city: Some("Springfield"), source: 3 },
+    GeofeedPlace { country: "IN", region: Some("IN-MH"), city: Some("Mumbai"), source: 3 },
+    GeofeedPlace { country: "SE", region: Some("SE-AB"), city: Some("Spanga"), source: 3 },
+    GeofeedPlace { country: "IT", region: Some("IT-MI"), city: Some("Milan"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-MO"), city: Some("Maryland Heights"), source: 3 },
+    GeofeedPlace { country: "AU", region: Some("AU-VIC"), city: Some("Port Melbourne"), source: 3 },
+    GeofeedPlace { country: "CA", region: Some("CA-ON"), city: Some("Toronto"), source: 3 },
+    GeofeedPlace { country: "IN", region: Some("IN-DL"), city: Some("Noida"), source: 3 },
+    GeofeedPlace { country: "ZA", region: Some("ZA-GP"), city: Some("Isando Gauteng"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-HI"), city: Some("Honolulu"), source: 3 },
+    GeofeedPlace { country: "BR", region: Some("BR-SP"), city: Some("Osasco"), source: 3 },
+    GeofeedPlace { country: "US", region: Some("US-TX"), city: Some("Richardson"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-GA"), city: Some("Atlanta"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-NJ"), city: Some("Cedar Knolls"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("Fremont"), source: 4 },
+    GeofeedPlace { country: "GB", region: Some("GB-ENG"), city: Some("London"), source: 4 },
+    GeofeedPlace { country: "SG", region: Some("SG-04"), city: Some("Singapore"), source: 4 },
+    GeofeedPlace { country: "DE", region: Some("DE-HE"), city: Some("Frankfurt"), source: 4 },
+    GeofeedPlace { country: "CA", region: Some("CA-ON"), city: Some("Toronto"), source: 4 },
+    GeofeedPlace { country: "IN", region: Some("IN-MH"), city: Some("Mumbai"), source: 4 },
+    GeofeedPlace { country: "AU", region: Some("AU-NSW"), city: Some("Sydney"), source: 4 },
+    GeofeedPlace { country: "JP", region: Some("JP-13"), city: Some("Tokyo"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-VA"), city: Some("Ashburn"), source: 4 },
+    GeofeedPlace { country: "FR", region: Some("FR-IDF"), city: Some("Paris"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-IL"), city: Some("Chicago"), source: 4 },
+    GeofeedPlace { country: "IN", region: Some("IN-TN"), city: Some("Chennai"), source: 4 },
+    GeofeedPlace { country: "SE", region: Some("SE-AB"), city: Some("Stockholm"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-WA"), city: Some("Tukwila"), source: 4 },
+    GeofeedPlace { country: "IT", region: Some("IT-MI"), city: Some("Milan"), source: 4 },
+    GeofeedPlace { country: "ID", region: Some("ID-JK"), city: Some("Jakarta"), source: 4 },
+    GeofeedPlace { country: "BR", region: Some("BR-SP"), city: Some("Sao Paulo"), source: 4 },
+    GeofeedPlace { country: "NL", region: Some("NL-NH"), city: Some("Amsterdam"), source: 4 },
+    GeofeedPlace { country: "JP", region: Some("JP-27"), city: Some("Osaka"), source: 4 },
+    GeofeedPlace { country: "ES", region: Some("ES-MD"), city: Some("Madrid"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("Los Angeles"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-FL"), city: Some("Miami"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-CO"), city: Some("Denver"), source: 4 },
+    GeofeedPlace { country: "DE", region: Some("DE-HH"), city: Some("Hamburg"), source: 4 },
+    GeofeedPlace { country: "ZA", region: Some("ZA-GP"), city: Some("Johannesburg"), source: 4 },
+    GeofeedPlace { country: "MY", region: Some("MY-14"), city: Some("Kuala Lumpur"), source: 4 },
+    GeofeedPlace { country: "MX", region: Some("MX-QUE"), city: Some("Queretaro"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-TX"), city: Some("Houston"), source: 4 },
+    GeofeedPlace { country: "CL", region: Some("CL-RM"), city: Some("Santiago"), source: 4 },
+    GeofeedPlace { country: "AU", region: Some("AU-VIC"), city: Some("Melbourne"), source: 4 },
+    GeofeedPlace { country: "SG", region: Some("SG-SIN"), city: Some("Singapore"), source: 4 },
+    GeofeedPlace { country: "NZ", region: Some("NZ-AUK"), city: Some("Auckland"), source: 4 },
+    GeofeedPlace { country: "DE", region: Some("DE-BE"), city: Some("Berlin"), source: 4 },
+    GeofeedPlace { country: "NO", region: Some("NO-03"), city: Some("Oslo"), source: 4 },
+    GeofeedPlace { country: "CO", region: Some("CO-DC"), city: Some("Bogota"), source: 4 },
+    GeofeedPlace { country: "FR", region: Some("FR-13"), city: Some("Marseille"), source: 4 },
+    GeofeedPlace { country: "US", region: Some("US-NV"), city: Some("Reno"), source: 4 },
+    GeofeedPlace { country: "IN", region: Some("IN-MH"), city: Some("Mumbai"), source: 5 },
+    GeofeedPlace { country: "JP", region: Some("JP-13"), city: Some("Tokyo"), source: 5 },
+    GeofeedPlace { country: "SG", region: Some("SG-02"), city: Some("Singapore"), source: 5 },
+    GeofeedPlace { country: "AU", region: Some("AU-NSW"), city: Some("Sydney"), source: 5 },
+    GeofeedPlace { country: "GB", region: Some("GB-POR"), city: Some("Portsmouth"), source: 5 },
+    GeofeedPlace { country: "US", region: Some("US-MO"), city: Some("St. Louis"), source: 5 },
+    GeofeedPlace { country: "US", region: Some("US-WA"), city: Some("Seattle"), source: 5 },
+    GeofeedPlace { country: "US", region: Some("US-NJ"), city: Some("Carlstadt"), source: 5 },
+    GeofeedPlace { country: "DE", region: Some("DE-BW"), city: Some("Karlsruhe"), source: 5 },
+    GeofeedPlace { country: "FR", region: Some("FR-6AE"), city: Some("Lauterbourg"), source: 5 },
+    GeofeedPlace { country: "NL", region: Some("NL-NH"), city: Some("Amsterdam"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-GA"), city: Some("Atlanta"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-IL"), city: Some("Chicago"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-TX"), city: Some("Dallas"), source: 6 },
+    GeofeedPlace { country: "IE", region: Some("IE-L"), city: Some("Dublin"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-VA"), city: Some("Ashburn"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-NJ"), city: Some("Parsippany"), source: 6 },
+    GeofeedPlace { country: "DE", region: Some("DE-HE"), city: Some("Frankfurt"), source: 6 },
+    GeofeedPlace { country: "FI", region: Some("FI-18"), city: Some("Espoo"), source: 6 },
+    GeofeedPlace { country: "HK", region: Some("HK-NT"), city: Some("Kwai Chung"), source: 6 },
+    GeofeedPlace { country: "ZA", region: Some("ZA-GP"), city: Some("Johannesburg"), source: 6 },
+    GeofeedPlace { country: "CA", region: Some("CA-BC"), city: Some("Kamloops"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("Los Angeles"), source: 6 },
+    GeofeedPlace { country: "GB", region: Some("GB-ENG"), city: Some("London"), source: 6 },
+    GeofeedPlace { country: "GB", region: Some("GB-ENG"), city: Some("Manchester"), source: 6 },
+    GeofeedPlace { country: "IN", region: Some("IN-MH"), city: Some("Mumbai"), source: 6 },
+    GeofeedPlace { country: "ES", region: Some("ES-M"), city: Some("Madrid"), source: 6 },
+    GeofeedPlace { country: "AU", region: Some("AU-VIC"), city: Some("Melbourne"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-FL"), city: Some("Miami"), source: 6 },
+    GeofeedPlace { country: "IT", region: Some("IT-25"), city: Some("Milan"), source: 6 },
+    GeofeedPlace { country: "CA", region: Some("CA-QC"), city: Some("Montreal"), source: 6 },
+    GeofeedPlace { country: "MX", region: Some("MX-QUE"), city: Some("El Marqués"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-NJ"), city: Some("Secaucus"), source: 6 },
+    GeofeedPlace { country: "JP", region: Some("JP-27"), city: Some("Osaka City"), source: 6 },
+    GeofeedPlace { country: "FR", region: Some("FR-75"), city: Some("Pantin"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-WA"), city: Some("Seattle"), source: 6 },
+    GeofeedPlace { country: "SG", region: Some("SG-01"), city: Some("Queenstown"), source: 6 },
+    GeofeedPlace { country: "SG", region: Some("SG-01"), city: Some("Kampong Ubi"), source: 6 },
+    GeofeedPlace { country: "SE", region: Some("SE-AB"), city: Some("Stockholm"), source: 6 },
+    GeofeedPlace { country: "KR", region: Some("KR-11"), city: Some("Seoul"), source: 6 },
+    GeofeedPlace { country: "BR", region: Some("BR-SP"), city: Some("Sao Paulo"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("San Jose"), source: 6 },
+    GeofeedPlace { country: "US", region: Some("US-CA"), city: Some("Santa Clara"), source: 6 },
+    GeofeedPlace { country: "AU", region: Some("AU-NSW"), city: Some("Sydney"), source: 6 },
+    GeofeedPlace { country: "CA", region: Some("CA-ON"), city: Some("Toronto"), source: 6 },
+    GeofeedPlace { country: "JP", region: Some("JP-13"), city: Some("Tokyo"), source: 6 },
 ];

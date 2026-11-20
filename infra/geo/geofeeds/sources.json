@@ -1,6 +1,19 @@
 {
   "format": "rfc8805-operator-geofeed",
   "owner_decision": "2026-11-20: no MaxMind/GeoLite2 data (CC BY-SA 4.0 declined). Consume public operator RFC 8805 geofeeds only, per-operator with attribution, shown as-is, with a takedown/deny list. No licensed database is used or redistributed. The derived table is display-only and never feeds the relay chooser or the ranking.",
+  "verification": {
+    "checked_as_of": "2026-11-20",
+    "checker": "geofeed-diligence",
+    "method": [
+      "HTTP GET with a descriptive User-Agent (LightSpeed-geofeed-diligence/1.0); robots.txt checked on every feed host (none disallows the feed paths; JSON API hosts have no robots file).",
+      "RFC 8805 five-column parse with the same parser the build uses: prefix,country,region,city,postal; malformed/cityless/IPv6 rows counted, not trusted.",
+      "RIR declaration: RIPE RDAP geofeed link relation (RFC 9632, rdapConformance geofeed1) or the RIPE inetnum geofeed: attribute via the RIPE Stat whois data call; ARIN RDAP 'Geofeed <url>' remarks for ARIN-registered space.",
+      "Coverage spot-check: the feed's IPv4 ranges are compared with RIPE Stat announced-prefixes for the operator's ASN (prefix count and address-weighted overlap).",
+      "A sample address per source is re-resolved through the committed blob after the build (see wat/evidence for the run log)."
+    ],
+    "rfc9632_note": "RFC 9632 'Finding and Using Geofeed Data' defines discovery through the RPSL inetnum/inet6num geofeed attribute and the RDAP link relation rel=geofeed (plus an optional RPKI signed geofeed object). It defines no DNS geofeed record; its only DNS mention is that other geographic hints (DNS geoloc RRsets, country:, geoloc:) are to be ignored when geofeed data exist. There is therefore no 'RFC 9632 DNS record' to query; the RIR attribute / RDAP link is the authoritative declaration used here.",
+    "as_of_rule": "A source's as-of is the feed's own generation or last-update statement when it has one (G-Core header, Vultr/Linode headers, HTTP Last-Modified preserved on the local copy); otherwise it is the local copy's UTC fetch date. The build records the exact local hash and timestamps in client-gui/data/server-geofeed.sources.json."
+  },
   "sources": [
     {
       "name": "G-Core",
@@ -11,7 +24,324 @@
       "attribution": "Server city data published by G-Core Labs S.A. in its public RFC 8805 geofeed (https://geofeed.gcore.lu/IP-Range.csv); shown as-is.",
       "license_status": "public operator geofeed; the feed states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).",
       "redistributed": true,
-      "status": "active"
+      "status": "active",
+      "verified": {
+        "checked": "2026-11-20",
+        "as_of": "2026-11-19",
+        "http_status": 200,
+        "http_last_modified": "2026-11-20T00:00:32Z",
+        "bytes": 32695,
+        "sha256": "a5fdac6f7aee7379451a490b1bf568ff191811d1629be5cc353eaa75dc12bba4",
+        "rows": 803,
+        "ipv4_rows": 679,
+        "ipv6_rows": 124,
+        "malformed": 0,
+        "cityless": 0,
+        "countries": 53,
+        "places": 92,
+        "announced_ipv4": 455,
+        "weighted_coverage": 0.807,
+        "rir_evidence": [
+          {
+            "rir": "RIPE",
+            "rdap": "https://rdap.db.ripe.net/ip/178.107.0.0/19",
+            "object": "178.107.0.0 - 178.107.31.255 (LU-GCORELABS-20091118)",
+            "attribute": "geofeed: https://geofeed.gcore.lu/IP-Range.csv",
+            "confirmed_by": "RIPE Stat whois data call, data.records[0].geofeed; RIPE RDAP link rel=geofeed, rdapConformance geofeed1"
+          },
+          {
+            "rir": "RIPE",
+            "rdap": "https://rdap.db.ripe.net/ip/78.111.103.0/24",
+            "object": "78.111.103.0/24 (G-Core range sampled from the feed)",
+            "attribute": "link rel=geofeed -> https://geofeed.gcore.lu/IP-Range.csv"
+          }
+        ],
+        "note": "The committed table is built from the verified 2026-11-19 snapshot (sha256 a5fdac6f...; header '#AS199524 Geofeed. Was generated at 2026-11-19 00:00:27 UTC'). The live URL was re-fetched on 2026-11-20, when it served the next daily regeneration (sha256 985b850a...): every data row is byte-identical to the snapshot and only the generated-at header line differs, so refreshing would move the label date without changing the table. Feed regenerated daily at 00:00 UTC."
+      }
+    },
+    {
+      "name": "Hetzner",
+      "operator": "Hetzner Online GmbH",
+      "asn": 24940,
+      "url": "https://www.hetzner.com/geofeed.csv",
+      "local": "infra/geo/geofeeds/hetzner.csv",
+      "attribution": "Server city data published by Hetzner Online GmbH in its public RFC 8805 geofeed (https://www.hetzner.com/geofeed.csv); shown as-is.",
+      "license_status": "public operator geofeed; the feed has no header and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).",
+      "redistributed": true,
+      "status": "active",
+      "verified": {
+        "checked": "2026-11-20",
+        "as_of": "2026-11-17",
+        "http_status": 200,
+        "http_last_modified": "2026-11-17T09:26:17Z",
+        "bytes": 7483209,
+        "sha256": "0a75a208c4ab606301b282ac655f49b8397536d7293f5c4a975c2ddf7022d5ab",
+        "rows": 168937,
+        "ipv4_rows": 17038,
+        "ipv6_rows": 151899,
+        "malformed": 0,
+        "cityless": 0,
+        "countries": 4,
+        "places": 6,
+        "announced_ipv4": 95,
+        "weighted_coverage": 0.824,
+        "rir_evidence": [
+          {
+            "rir": "RIPE",
+            "rdap": "https://rdap.db.ripe.net/ip/5.222.78.148",
+            "object": "5.222.0.0 - 5.222.255.255 (HOA-EU-DC)",
+            "attribute": "link rel=geofeed -> https://www.hetzner.com/geofeed.csv",
+            "confirmed_by": "RIPE RDAP, rdapConformance geofeed1; the 2.28.0.0/16 inetnum has no geofeed attribute, so the declaration is per-object"
+          }
+        ],
+        "note": "Large feed: 151,899 IPv6 rows are counted and skipped (the shipped range format is IPv4-only); 17,038 IPv4 rows resolve to 6 distinct cities (Falkenstein, Nuremberg, Helsinki, Ashburn, Singapore, Hillsboro). Coverage is 82.4% of Hetzner's announced IPv4 address space; the remainder is mostly customer/other-ASN space. Hetzner also announces through AS212317/AS213230/AS215859; the feed covers the group."
+      }
+    },
+    {
+      "name": "DigitalOcean",
+      "operator": "DigitalOcean, LLC",
+      "asn": 14061,
+      "url": "https://www.digitalocean.com/geo/google.csv",
+      "local": "infra/geo/geofeeds/digitalocean.csv",
+      "attribution": "Server city data published by DigitalOcean, LLC in its publicly served RFC 8805 geofeed (https://www.digitalocean.com/geo/google.csv); shown as-is.",
+      "license_status": "public operator geofeed; the feed has no header and states no licence, and DigitalOcean does not declare it in its RIR records. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).",
+      "redistributed": true,
+      "status": "active",
+      "verified": {
+        "checked": "2026-11-20",
+        "as_of": "2026-11-20",
+        "http_status": 200,
+        "http_last_modified": null,
+        "bytes": 53437,
+        "sha256": "22fb7b8c53650a7edec6ae3b5dbf6e93107b397b870899f9faca0f402a0e76c9",
+        "rows": 1243,
+        "ipv4_rows": 1092,
+        "ipv6_rows": 148,
+        "malformed": 3,
+        "cityless": 0,
+        "countries": 8,
+        "places": 16,
+        "announced_ipv4": 881,
+        "weighted_coverage": 0.994,
+        "rir_evidence": [],
+        "note": "Weakest provenance of the accepted set: the URL serves a 5-column RFC 8805 CSV on DigitalOcean's own domain (digitalocean.com/geo/google.csv, redirect to www.), robots.txt allows it, and the file is publicly linked from DigitalOcean's community site, but no RIR geofeed attribute/remark declares it (ARIN RDAP checked on 104.131.0.0/16, 159.203.0.0/16, 165.232.32.0-191.255) and no provider documentation page names it. Three rows are two-column 'prefix,None' lines that are not RFC 8805; the parser counts them malformed and skips them. Fetch date is the as-of because the server sends no Last-Modified."
+      }
+    },
+    {
+      "name": "Vultr",
+      "operator": "The Constant Company, LLC (Vultr)",
+      "asn": 20473,
+      "url": "https://geofeed.constant.com/",
+      "local": "infra/geo/geofeeds/vultr.csv",
+      "attribution": "Server city data published by The Constant Company, LLC (Vultr) in its public RFC 8805 geofeed (https://geofeed.constant.com/); shown as-is.",
+      "license_status": "public operator geofeed; the feed header names Vultr/Constant.com and a support address and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).",
+      "redistributed": true,
+      "status": "active",
+      "verified": {
+        "checked": "2026-11-20",
+        "as_of": "2026-11-19",
+        "http_status": 200,
+        "http_last_modified": null,
+        "bytes": 20991,
+        "sha256": "63881a2fe17b62490063d6969079514f2d8c5a2873afa20d718e65047a02ab3c",
+        "rows": 493,
+        "ipv4_rows": 441,
+        "ipv6_rows": 52,
+        "malformed": 0,
+        "cityless": 0,
+        "countries": 20,
+        "places": 37,
+        "announced_ipv4": 1866,
+        "weighted_coverage": 0.686,
+        "rir_evidence": [
+          {
+            "rir": "ARIN",
+            "rdap": "https://rdap.arin.net/registry/ip/45.32.0.0/16",
+            "object": "NET-45-32-0-0-1 (CONSTANT)",
+            "attribute": "remark: Geofeed https://geofeed.constant.com/"
+          },
+          {
+            "rir": "ARIN",
+            "rdap": "https://rdap.arin.net/registry/ip/108.61.0.0/16",
+            "object": "NET-108-61-0-0-1 (CONSTANT)",
+            "attribute": "remark: Geofeed https://geofeed.constant.com/"
+          }
+        ],
+        "note": "Published in Vultr's documentation (https://docs.vultr.com/vultr-ip-space.md lists the CSV URL) and declared in ARIN remarks. Feed header states 'Last Updated: 2026-11-19 21:56:44'. Coverage is 68.6% of AS20473 announced address space: the feed does not cover every prefix AS20473 announces (customer/anycast space)."
+      }
+    },
+    {
+      "name": "Linode/Akamai",
+      "operator": "Akamai Connected Cloud (Linode)",
+      "asn": 63949,
+      "url": "https://ipgeo.akamai.com/linode-geofeed.csv",
+      "local": "infra/geo/geofeeds/linode-akamai.csv",
+      "attribution": "Server city data published by Akamai Connected Cloud (Linode) in its public RFC 8805 geofeed (https://ipgeo.akamai.com/linode-geofeed.csv); shown as-is.",
+      "license_status": "public operator geofeed; the feed header identifies itself as an RFC 8805 self-published geofeed and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).",
+      "redistributed": true,
+      "status": "active",
+      "verified": {
+        "checked": "2026-11-20",
+        "as_of": "2026-11-19",
+        "http_status": 200,
+        "http_last_modified": "2026-11-19T10:00:04Z",
+        "bytes": 192744,
+        "sha256": "a3e3d138378f216951b31716390dad714bb14a0d7d7918984b68fdd33173bb99",
+        "rows": 5505,
+        "ipv4_rows": 5409,
+        "ipv6_rows": 96,
+        "malformed": 0,
+        "cityless": 0,
+        "countries": 22,
+        "places": 40,
+        "announced_ipv4": 355,
+        "weighted_coverage": 0.975,
+        "rir_evidence": [
+          {
+            "rir": "RIPE",
+            "rdap": "https://rdap.db.ripe.net/ip/212.71.248.0/21",
+            "object": "212.71.244.0 - 212.71.255.255 (US-LINODE-20000518)",
+            "attribute": "link rel=geofeed -> https://ipgeo.akamai.com/linode-geofeed.csv"
+          },
+          {
+            "rir": "ARIN",
+            "rdap": "https://rdap.arin.net/registry/ip/45.79.0.0/16",
+            "object": "NET-45-79-0-0-2 (LINODE)",
+            "attribute": "remark: Geofeed https://ipgeo.akamai.com/linode-geofeed.csv"
+          }
+        ],
+        "note": "Feed header: '# This file contains a self-published geofeed as defined in RFC 8805', 'Last modified: 2026-11-19 10:00:04'. AS63949 is Linode's ASN, now operated by Akamai; the host is ipgeo.akamai.com."
+      }
+    },
+    {
+      "name": "Contabo",
+      "operator": "Contabo GmbH",
+      "asn": 51167,
+      "url": "https://geofeed.contabo.de/geofeed.csv",
+      "local": "infra/geo/geofeeds/contabo.csv",
+      "attribution": "Server city data published by Contabo GmbH in its public RFC 8805 geofeed (https://geofeed.contabo.de/geofeed.csv); shown as-is.",
+      "license_status": "public operator geofeed; the feed has no header and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).",
+      "redistributed": true,
+      "status": "active",
+      "verified": {
+        "checked": "2026-11-20",
+        "as_of": "2026-11-13",
+        "http_status": 200,
+        "http_last_modified": "2026-11-13T15:41:01Z",
+        "bytes": 23392,
+        "sha256": "9e4e6e145f319350cb7c1a2ea8b564480e42a0bf0663c5e341bb0b0fcf6ad49f",
+        "rows": 552,
+        "ipv4_rows": 540,
+        "ipv6_rows": 12,
+        "malformed": 0,
+        "cityless": 0,
+        "countries": 8,
+        "places": 10,
+        "announced_ipv4": 606,
+        "weighted_coverage": 0.98,
+        "rir_evidence": [
+          {
+            "rir": "RIPE",
+            "rdap": "https://rdap.db.ripe.net/ip/213.136.79.45",
+            "object": "213.136.64.0 - 213.136.79.255 (CONTABO)",
+            "attribute": "link rel=geofeed -> https://geofeed.contabo.de/geofeed.csv"
+          }
+        ],
+        "note": "Only some Contabo inetnums carry the geofeed attribute (144.91.64.0/18 and 5.189.128.0/18, netname DE-GIGA-HOSTING, do not), but the declared object is Contabo's own and the feed host is geofeed.contabo.de. 98.0% of AS51167 announced address space is covered."
+      }
+    },
+    {
+      "name": "Equinix Metal",
+      "operator": "Equinix Metal (Equinix, Inc.)",
+      "asn": 54825,
+      "url": "https://geofeed.equinixmetal.com/geofeed.csv",
+      "local": "infra/geo/geofeeds/equinix-metal.csv",
+      "attribution": "Server city data published by Equinix Metal (Equinix, Inc.) in its public RFC 8805 geofeed (https://geofeed.equinixmetal.com/geofeed.csv); shown as-is.",
+      "license_status": "public operator geofeed; the feed has no header and states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).",
+      "redistributed": true,
+      "status": "active",
+      "verified": {
+        "checked": "2026-11-20",
+        "as_of": "2026-11-20",
+        "http_status": 200,
+        "http_last_modified": "2026-11-20T06:00:11Z",
+        "bytes": 8456,
+        "sha256": "6174b2c229c9b752be715283fab445376c2599af3835450e27b6170e59b06ac6",
+        "rows": 238,
+        "ipv4_rows": 177,
+        "ipv6_rows": 61,
+        "malformed": 0,
+        "cityless": 0,
+        "countries": 20,
+        "places": 36,
+        "announced_ipv4": 109,
+        "weighted_coverage": 0.981,
+        "rir_evidence": [
+          {
+            "rir": "RIPE",
+            "rdap": "https://rdap.db.ripe.net/ip/147.28.206.0/23",
+            "object": "147.28.128.0 - 147.28.255.255 (EQUINIX-SERVICES-147-128-0-0)",
+            "attribute": "link rel=geofeed -> https://geofeed.equinixmetal.com/geofeed.csv"
+          },
+          {
+            "rir": "ARIN",
+            "rdap": "https://rdap.arin.net/registry/ip/147.75.110.0/23",
+            "object": "147.75.96.0 - 147.75.111.255 (PACKET-NET-96-20)",
+            "attribute": "link rel=geofeed -> https://geofeed.equinixmetal.com/geofeed.csv"
+          }
+        ],
+        "note": "Declared in both RIPE and ARIN objects for Equinix/Packet space. The feed was regenerated on 2026-11-20 06:00:11 UTC (HTTP Last-Modified), so the as-of is that date. 98.1% of AS54825 announced address space is covered."
+      }
+    }
+  ],
+  "rejected": [
+    {
+      "name": "OVH",
+      "operator": "OVH SAS",
+      "asn": 16276,
+      "candidates": ["https://geo.ovh.net/ (NXDOMAIN)", "https://geofeed.ipxo.com/geofeed.txt", "https://server.pro/api/geofeed/csv", "https://goodtec.lv/geofeed.csv", "https://acedatacenter.com/geofeed.csv"],
+      "reason": "No operator-owned RFC 8805 geofeed found. RIPE RDAP whois on sampled OVH inetnums (51.38.0.0/16, 137.74.0.0/16, 2.26.0.0/15) shows no geofeed attribute on OVH's own object; the only geofeed attributes on OVH-announced space are on customer sub-allocations (IPXO, server.pro, goodtec.lv, Acedatacenter) that cover those customers' /24s. Adding them under OVH would misattribute customer space.",
+      "checked": "2026-11-20"
+    },
+    {
+      "name": "Leaseweb",
+      "operator": "Leaseweb Deutschland GmbH",
+      "asn": 28753,
+      "candidates": ["https://geofeed.ipxo.com/geofeed.txt", "https://my.rustelekom.net/manimg/common/geofeed.csv", "https://dnsprotection.me/geofeed.csv", "https://aventice.com/geofeed/geofeed.csv"],
+      "reason": "No operator-owned RFC 8805 geofeed found. RIPE RDAP whois on sampled AS28753 inetnums shows geofeed attributes only on customer sub-allocations (IPXO, Rustelekom/Gtelcom, DNS Protection, Aventice), not on Leaseweb's own objects. AS16265 (Leaseweb Netherlands) was not found to publish a feed either.",
+      "checked": "2026-11-20"
+    },
+    {
+      "name": "Scaleway",
+      "operator": "Scaleway SAS",
+      "asn": 12876,
+      "candidates": [],
+      "reason": "No geofeed attribute on any of the 22 announced IPv4 prefixes (RIPE RDAP checked all 22) and no public RFC 8805 feed discovered in provider docs or search.",
+      "checked": "2026-11-20"
+    },
+    {
+      "name": "Oracle Cloud",
+      "operator": "Oracle Cloud Infrastructure",
+      "asn": 31898,
+      "candidates": ["https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json"],
+      "reason": "No RFC 8805 geofeed found. ARIN RDAP on sampled OCI inetnums (130.61.0.0/16, 141.147.0.0/16, 158.101.0.0/16) has no geofeed link or remark. Oracle publishes the cloud public-IP JSON feed (public_ip_ranges.json, 57 regions) but that is a cloud region list, not an RFC 8805 operator geofeed.",
+      "checked": "2026-11-20"
+    },
+    {
+      "name": "Hetzner customer feed (Hiden Enterprises)",
+      "operator": "customer of Hetzner Online GmbH",
+      "asn": 24940,
+      "candidates": ["https://geofeed.hidenenterprises.com/geofeed.txt"],
+      "reason": "RIR attribute sits on a customer sub-allocation (31.58.88.0/24) inside Hetzner's ASN, not on the operator's range; adding it as 'Hetzner' would misattribute the customer's data and cover only one /24.",
+      "checked": "2026-11-20"
+    },
+    {
+      "name": "IPXO customer feed",
+      "operator": "customer space inside OVH/Leaseweb ASNs",
+      "asn": null,
+      "candidates": ["https://geofeed.ipxo.com/geofeed.txt"],
+      "reason": "Third-party IP-leasing marketplace geofeed declared on customer sub-allocations of OVH/Leaseweb; not operator-owned, and attribution to the hosting provider would be wrong.",
+      "checked": "2026-11-20"
     }
   ]
 }
