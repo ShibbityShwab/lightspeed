@@ -740,7 +740,8 @@ rail, word-only:
 | ES | `SIN RUTA DE VUELTA` | 309.0 | **overflows** (−21.0) |
 | PT-BR | `SEM CAMINHO DE VOLTA` | 328.4 | **overflows** (−40.4) |
 | DE | `OPTIMIERUNG LÄUFT` | 275.1 | fits, 12.9 px slack (thin) |
-| every other locale/key | ≤ 249.0 | fits (EN worst 221.1) |
+| ja | `state.idle` (retired by A2) | 270.0 | fits 288 by 18.0; over the 276 cap — **retires with A2** |
+| all other W2-set locale/keys | ≤ 249.0 | fit (EN worst 221.1) |
 
 These widths are the **HEAD catalogs** — the basis the QA r4 F1 finding
 measured. After this revision's `client-gui/locales/ru.toml` edit the current
@@ -1313,7 +1314,7 @@ M5 density, M14 trace disclosure, M15 placeholder leak).
 | T18 | Stale/duplicate counters | boosting with a quiet game | compare `Relayed` up/down with the warning state; watch for `0 up · N down` | both directions from the same source; no impossible pair; banner and row agree | FAIL today (C3) |
 | T19 | i18n sweep (new copy) | EN/DE/ja/ko/zh | per locale: warning banner, location labels, expected path, trace caption, settings policy | no English left on a translated surface (documented exemptions only) | FAIL today (C7: 45 keys in ja/ko/zh = 26 pre-delta + 19 delta; hardcoded `Routing` in DE) |
 | T20 | Destructive actions | custom relay added; settings changed | `×` delete a relay; `Reset to defaults` | confirmation or undo; recoverable | FAIL today (M11) |
-| T21 | **30 px state-word + RU restart-label fit** (r16) | 320 px window in EN, DE, RU (plus ES/PT-BR once shortened) | force each state word (connecting/connected/not-connected/holding/optimizing/no-return-path/error) and the unelevated restart action; screenshot the rail and action bar | every state word is one line at 30 px with ≥12 px slack (≤276 px measured); RU restart label wraps to exactly **2 lines** and the action bar stays on-screen; no 9 px shrink | RU/ES/PT words overflow today (342.8/309.0/328.4 px @30); RU restart was 3 lines — `ru.toml` r16 shortens both (2 lines), needs a rendered capture |
+| T21 | **30 px state-word + RU restart-label fit** (r16) | 320 px window in EN, DE, RU (plus ES/PT-BR once shortened) | force each state word (connecting/connected/not-connected/holding/optimizing/no-return-path/error) and the unelevated restart action; screenshot the rail and action bar | every state word is one line at 30 px with ≥12 px slack (≤276 px measured); RU restart label wraps to exactly **2 lines** and the action bar stays on-screen; no 9 px shrink | **at HEAD** RU overflowed 342.8 px and the restart was 3 lines; **RU is landed** on the current tree (222.9 px / 2 lines via `ru.toml` r16) and the capture proves it — **ES 309.0 / PT-BR 328.4 remain open** until their copy lands |
 
 Pass/fail is per the acceptance line, not "it looked fine". A case that cannot be
 set up is **unverified** with the missing fixture named.
@@ -1344,8 +1345,9 @@ consume:
    home; the W1 spec already names `AppStatus.error`.
 8. **The 30 px state-word fit** (Q15, r16): one line ≤276 px per locale in the
    installed chain; shortened RU/ES/PT words; the RU restart label at two lines
-   (`ACTION_H_WRAPPED` 56). Do not carry the spec's "281.1 px of 288 fits" claim
-   forward — that is a **@24.6 px** number (§4.4a).
+   (`ACTION_H_WRAPPED` 56). The spec **retired the old 24.6 px fit number in r18**
+   (`gui-refresh-spec.md:63`), so the “281.1 px of 288 fits” figure is no longer
+   a live claim — do not reinstate it (§4.4a).
 
 ---
 

@@ -2,15 +2,20 @@
 
 > **Status:** W1 design deliverable for WF-081 — documentation only. This document
 > changes no workflow, packaging, platform code or engine code.
-> **Revision:** r17 (2026-11-20, task-26 delta-fix) — removes the stale
-> "other docs still carry the old plan" sentence (QA review r4 finding **F21**),
-> re-anchors the geometry to the **re-baselined** design set (spec §1.1,
-> design-system §5.4), re-derives the citations into the rebased GUI sources, and
-> re-runs the refs checker. r4 (task-20) folded in the owner's
+> **Revision:** r23 (2026-11-20, task-34 errata) — refreshes the cross-document
+> revision references to the current design set (**spec r18, 579 lines**;
+> **design-system r14**; **UX audit r16**) and re-pins the brief line anchors to the
+> current brief (384 lines), then re-runs the refs checker. No claim changed: the
+> mobile-only geometry, the platform matrix and the three-tier evidence rule are
+> unchanged from r17. r17 (task-26 delta-fix) removed the stale "other docs still
+> carry the old plan" sentence (QA r4 **F21**), re-anchored the geometry to the
+> re-baselined design set, re-derived the citations into the rebased GUI sources, and
+> re-ran the refs checker. r4 (task-20) folded in the owner's
 > **mobile-only viewport** decision (width pinned 320 px, single column, height
 > 420–1400 / initial 760; captures 320×420, 320×760, 320 @ 200 %) and re-baselined
 > the evidence to `origin/master` `76aba5d`; r3 (2026-11-19) reconciled QA findings
 > R12/R15/R4(ii)/R8. Evidence:
+> `wat/evidence/2026-11-20/team/desktop-platform/errata-r23.md` (r23),
 > `wat/evidence/2026-11-20/team/desktop-platform/delta-r17.md` (r17),
 > `wat/evidence/2026-11-20/team/desktop-platform/delta-r12.md` (r4),
 > `wat/evidence/2026-11-19/team/desktop-platform/revision-r3.md` (r3).
@@ -21,7 +26,8 @@
 > inventory, an ordered gap-closure plan and an exact external-verification ask.
 > It does **not** grant parity to anything.
 > **Date:** 2026-11-20. **Baseline:** `origin/master` `76aba5d` (16 commits since the
-> W1 first pass; the W1 design set is commit `0df57ce` on top), worktree
+> W1 first pass; the W1 design set is commit `0df57ce` and the committed delta
+> re-baseline is `e950b36`, with the r23 errata edits uncommitted), worktree
 > `dsh-b74d064d-6fe5`.
 > **Companion docs:** [interface.md](interface.md) (binding state contract),
 > [gui-refresh-brief.md](gui-refresh-brief.md) (program contract).
@@ -29,9 +35,9 @@
 
 Read §1 first: this plan was measured against the brief's **pre-W1** §13 parity
 baseline. That draft was wrong in both directions; the Lead has since folded the
-corrections into the brief (`docs/design/gui-refresh-brief.md:336-359`) and added
+corrections into the brief (`docs/design/gui-refresh-brief.md:340-363`) and added
 the 2026-11-20 owner decisions, including the mobile-only viewport that supersedes
-the 360/440/1120 plan (`docs/design/gui-refresh-brief.md:318-334`). §1 keeps the
+the 360/440/1120 plan (`docs/design/gui-refresh-brief.md:320-338`). §1 keeps the
 record of what changed, with the old text labelled as the pre-W1 draft.
 
 ---
@@ -49,8 +55,8 @@ section is authoritative, cite the section as well as the lines.
 
 | # | Baseline claim | What the tree and the published release prove |
 |---|---|---|
-| C1 | **Pre-W1 draft:** "GUI build/lint/test in CI: Linux excluded everywhere; macOS excluded in `macos-smoke`" (the brief text this document checked in its first pass). The corrected brief records the replacement at `docs/design/gui-refresh-brief.md:307-316` (owner implication) and in its corrected baseline table `docs/design/gui-refresh-brief.md:336-359` (PR-CI row `:343`, release-artifact row `:344`). | **True as a PR gate, incomplete as a build fact.** `ci.yml` excludes the GUI from every Linux job (`.github/workflows/ci.yml:36,39,42,258,264,346,349,352,368`) and from `macos-smoke` (`.github/workflows/ci.yml:219-233`). But the **release** pipeline builds the GUI for Linux x86_64 and both macOS targets: `dist-workspace.toml:18-24` and `client-gui/Cargo.toml:79-84` list them, and the published v1.11.3 release contains `lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz` (10,312,360 B), `lightspeed-gui-x86_64-apple-darwin.tar.xz` (7,880,000 B) and `lightspeed-gui-aarch64-apple-darwin.tar.xz` (7,118,384 B) — `wat/evidence/2026-11-19/team/desktop-platform/release-assets-1113.txt`. The rebase baseline keeps the same asset shape: v1.11.4 publishes `lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz` (10,445,168 B), both macOS GUI tarballs, the shell installer and the Windows MSI/zip — `wat/evidence/2026-11-20/team/desktop-platform/release-assets-1114.txt`. Builds are tag-time only: the build matrix runs when `publishing == 'true'` (`.github/workflows/release.yml:129`), cargo-dist 0.32's documented `pr-run-mode` default is `plan` ([cargo-dist config reference](https://axodotdev.github.io/cargo-dist/book/reference/config.html#pr-run-mode)), and this repo does not override it — so a Linux/macOS GUI build break surfaces at release, never on the PR. **Never linted or tested off Windows.** |
-| C2 | **Pre-W1 draft:** "Autostart / updater UX: Windows start-menu/registry + axoupdater; Linux systemd unit (unimplemented); macOS LaunchAgent (unimplemented)" (same pre-W1 draft). The corrected brief now records "Autostart | **not implemented** | **not implemented** | **not implemented**" (`docs/design/gui-refresh-brief.md:348`). | **Autostart is unimplemented on all three OSes.** No code writes a Run key, Startup-folder item, XDG autostart desktop file or LaunchAgent (grep of `client-gui/src` and `client/src` for `autostart|HKCU|shell:startup|LaunchAgent|systemd --user`: zero hits). The MSI's Start Menu shortcut (`docs/install-windows.md:13`) is an install shortcut, not launch-at-login. Only the updater half of the row is real on Windows (`client-gui/src/update.rs`, `client-gui/src/self_update.rs`). |
+| C1 | **Pre-W1 draft:** "GUI build/lint/test in CI: Linux excluded everywhere; macOS excluded in `macos-smoke`" (the brief text this document checked in its first pass). The corrected brief records the replacement at `docs/design/gui-refresh-brief.md:309-318` (owner implication) and in its corrected baseline table `docs/design/gui-refresh-brief.md:340-363` (PR-CI row `:347`, release-artifact row `:348`). | **True as a PR gate, incomplete as a build fact.** `ci.yml` excludes the GUI from every Linux job (`.github/workflows/ci.yml:36,39,42,258,264,346,349,352,368`) and from `macos-smoke` (`.github/workflows/ci.yml:219-233`). But the **release** pipeline builds the GUI for Linux x86_64 and both macOS targets: `dist-workspace.toml:18-24` and `client-gui/Cargo.toml:79-84` list them, and the published v1.11.3 release contains `lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz` (10,312,360 B), `lightspeed-gui-x86_64-apple-darwin.tar.xz` (7,880,000 B) and `lightspeed-gui-aarch64-apple-darwin.tar.xz` (7,118,384 B) — `wat/evidence/2026-11-19/team/desktop-platform/release-assets-1113.txt`. The rebase baseline keeps the same asset shape: v1.11.4 publishes `lightspeed-gui-x86_64-unknown-linux-gnu.tar.xz` (10,445,168 B), both macOS GUI tarballs, the shell installer and the Windows MSI/zip — `wat/evidence/2026-11-20/team/desktop-platform/release-assets-1114.txt`. Builds are tag-time only: the build matrix runs when `publishing == 'true'` (`.github/workflows/release.yml:129`), cargo-dist 0.32's documented `pr-run-mode` default is `plan` ([cargo-dist config reference](https://axodotdev.github.io/cargo-dist/book/reference/config.html#pr-run-mode)), and this repo does not override it — so a Linux/macOS GUI build break surfaces at release, never on the PR. **Never linted or tested off Windows.** |
+| C2 | **Pre-W1 draft:** "Autostart / updater UX: Windows start-menu/registry + axoupdater; Linux systemd unit (unimplemented); macOS LaunchAgent (unimplemented)" (same pre-W1 draft). The corrected brief now records "Autostart | **not implemented** | **not implemented** | **not implemented**" (`docs/design/gui-refresh-brief.md:352`). | **Autostart is unimplemented on all three OSes.** No code writes a Run key, Startup-folder item, XDG autostart desktop file or LaunchAgent (grep of `client-gui/src` and `client/src` for `autostart|HKCU|shell:startup|LaunchAgent|systemd --user`: zero hits). The MSI's Start Menu shortcut (`docs/install-windows.md:13`) is an install shortcut, not launch-at-login. Only the updater half of the row is real on Windows (`client-gui/src/update.rs`, `client-gui/src/self_update.rs`). |
 | C3 | "macOS is untested" (`client-gui/src/platform/mod.rs:7`, `client-gui/src/platform/macos.rs:3,25`; `docs/user-guide.md:32,105`; `docs/install-macos.md:3`) | Still true **at runtime**, but not "unbuilt": the macOS GUI tarballs in v1.11.3 (and again in v1.11.4 at the rebase baseline) are real outputs, and `.github/workflows/release.yml:256-262` gates the release on every build-local matrix job succeeding. Build evidence exists; run evidence does not. |
 | C4 | "the GUI has no macOS platform module, so restrict its release targets to Linux and Windows" (`client-gui/Cargo.toml:74-75`, repeated at `dist-workspace.toml:16-17`) | **False comment.** `client-gui/src/platform/macos.rs` exists and is selected at `client-gui/src/platform/mod.rs:118,133-136`; the release-target list in the same manifest includes both Apple targets (`client-gui/Cargo.toml:79-84`). Stale comments only — no behaviour depends on them, but they mislead every reader about installed-versus-unbuilt. |
 | C5 | "The GUI works on Linux (the system tray is a stub)" (`docs/user-guide.md:31`) | **Unverified user-facing claim.** Linux evidence today is a release artifact, not a run; no Linux run appears under `wat/evidence/`. Downgrade per §7 until a run exists. |
@@ -107,7 +113,7 @@ raise the OS from its current tier; nothing here counts as evidence until it run
 
 | Surface | Target behaviour (all OSes unless stated) | Verify with | Tier required | Gap |
 |---|---|---|---|---|
-| **Window chrome** | One product, native frame: Win11 caption/snap, macOS traffic lights + app menu, DE decorations on Linux. **Mobile-only shipped form (owner decision 2026-11-20):** width **pinned 320 px**, single column, height **user-resizable 420–1400** with initial **760**; remember height + position across restarts and restore to a visible monitor; survive live DPI/monitor change; no clipping at 320 px and at **320 px @ 200 %** (`docs/design/gui-refresh-spec.md:45-55`; `docs/design/design-system-2026.md` §5.4; owner decision `docs/design/gui-refresh-brief.md:323`) | Screenshot matrix per OS: **320×420**, **320×760** and **320 px @ 200 %**, plus a restart-geometry check | **R** each OS | G2.2 |
+| **Window chrome** | One product, native frame: Win11 caption/snap, macOS traffic lights + app menu, DE decorations on Linux. **Mobile-only shipped form (owner decision 2026-11-20):** width **pinned 320 px**, single column, height **user-resizable 420–1400** with initial **760**; remember height + position across restarts and restore to a visible monitor; survive live DPI/monitor change; no clipping at 320 px and at **320 px @ 200 %** (`docs/design/gui-refresh-spec.md:45-55`; `docs/design/design-system-2026.md` §5.4; owner decision `docs/design/gui-refresh-brief.md:325`) | Screenshot matrix per OS: **320×420**, **320×760** and **320 px @ 200 %**, plus a restart-geometry check | **R** each OS | G2.2 |
 | Tray / menu bar | Windows tray unchanged (state set now includes `RelayStarved`); macOS NSStatusItem + application menu (Show / Connect / Disconnect / Quit, state word in the title/tooltip, template icon per HIG); Linux StatusNotifierItem where the DE supports it (GNOME without the AppIndicator extension has no tray) with an honest no-tray mode: close exits, no "Hide to tray" copy, documented per DE | Unit test: `has_system_tray()` reflects real creation; headless smoke: process stays alive with a status item (no crash); runtime: icon + menu interaction on each OS/DE | **R** (tray interaction); **H** minimum for creation | G1.4, G1.5 |
 | Shortcuts | Platform conventions: macOS ⌘Q quit, ⌘, settings, ⌘H hide-to-tray (only when a tray exists), menu-bar items carry them; Windows/Linux Ctrl+Q / Ctrl+, plus Alt menu on Windows; Esc closes the top sheet, Enter confirms its primary action; shortcuts discoverable in tooltips or the sheet footer; no global hotkey in this wave | Unit-test the pure keymap tables; runtime: keyboard-only pass on each OS; screenshots of the focused sheet | **R** each OS | G2.1 |
 | **DPI / scaling** | One mobile column stays usable at 100 % and **200 %** on each OS; fractional Wayland scaling; no clipped controls or off-screen action bar at the pinned 320 px width; window constraints in points, not pixels | Screenshots at **320 px @ 200 %** per OS (and 100 % for comparison); headless smoke can assert `pixels_per_point` when a scale is forced | **R** each OS | G2.2 |
@@ -185,20 +191,23 @@ Windows MSI/zip — `wat/evidence/2026-11-20/team/desktop-platform/release-asset
 **Design set re-baselined (delta wave; fix tasks 23/25).** The committed set
 carried the W1 360/440/1120 plan only until the delta wave re-cut it. The spec is
 now **mobile-only** — width pinned 320 px, one `narrow` column, height
-user-resizable 420–1400 (initial 760) — in §1.1 (spec `docs/design/gui-refresh-spec.md:45-55`,
-the 559-line delta revision; evidence
-`wat/evidence/2026-11-20/team/interface-designer/delta-r13.md`), and
+user-resizable 420–1400 (initial 760) — in §1.1 (spec
+`docs/design/gui-refresh-spec.md:45-55`, **revision r18, 579 lines**; evidence
+`wat/evidence/2026-11-20/team/interface-designer/delta-r18.md`), and
 `design-system-2026.md` §5.4 re-cuts the metrics and breakpoints to the single
-320 px layout (evidence
-`wat/evidence/2026-11-20/team/design-system/delta-r11.md`). The UX audit is
-re-baselined in the same wave (`wat/evidence/2026-11-20/team/ux-lead/delta-r10.md`).
-The follow-up fix tasks 23 (design-system measurements/citations) and 25 (RU copy
-+ audit count) correct measurement and copy only: **neither changes the
+320 px layout (**revision r14**, 1,587 lines; evidence
+`wat/evidence/2026-11-20/team/design-system/delta-r14.md`). The UX audit is
+re-baselined in the same wave (**revision r16**, 1,451 lines; evidence
+`wat/evidence/2026-11-20/team/ux-lead/delta-r16.md`).
+The fix tasks 23 (design-system r14 measurements/citations) and 25 (UX audit r16 /
+RU copy) corrected measurement and copy only: **neither changed the
 `linux-gui`/`macos-gui` CI ask (§6.1) nor the three-tier rule (§2, §7)** — both
 stand exactly as written. `interface.md` remains pre-decision until W2-2 applies
 the spec's mobile-only amendments, so this plan still names the owner decision
-(`docs/design/gui-refresh-brief.md:323`) as the geometry authority beside the
-re-baselined spec.
+(`docs/design/gui-refresh-brief.md:325`) as the geometry authority beside the
+re-baselined spec. Revision numbers and line counts above are the 2026-11-20 final
+delta set as of this r23 check; the section names stay authoritative if the docs
+move again.
 
 ---
 
@@ -252,18 +261,18 @@ out are named where they land here, so no item is silently unsequenced:
   not with W2-4. Per the owner's 2026-11-20 decision the target is the **shipped
   mobile-only form**: width pinned **320 px**, single column, height user-resizable
   **420–1400** with initial **760** — the 360/440/1120 two-column plan is
-  withdrawn (owner decision `docs/design/gui-refresh-brief.md:323`; current spec
+  withdrawn (owner decision `docs/design/gui-refresh-brief.md:325`; current spec
   `docs/design/gui-refresh-spec.md:45-55`). The shell slice owns
   remembered/clamped geometry and the parity captures **320×420, 320×760 and
   320 @ 200 %** (spec §5 W2-2, §4 shell row — re-baselined to mobile-only in
   §1.1; §3.4), and `desktop-platform` co-owns the per-OS proof.
 - **G2.3** (notifications) is an owner **no-claim decision**
   (`docs/design/gui-refresh-spec.md` §7 Q7; owner confirmed 2026-11-20,
-  `docs/design/gui-refresh-brief.md:327`) — no W2 slice.
+  `docs/design/gui-refresh-brief.md:329`) — no W2 slice.
 - **G2.4** (`.app`/`.dmg`, aarch64 Linux GUI, channel truth) is an owner/
   `dev-ops` decision **outside W2 v1 unless the owner opts in**
   (`docs/design/gui-refresh-spec.md` §7 Q6; owner confirmed the bare
-  tarball/shell-installer path on 2026-11-20, `docs/design/gui-refresh-brief.md:326`).
+  tarball/shell-installer path on 2026-11-20, `docs/design/gui-refresh-brief.md:328`).
 
 Windows elevation evidence follows the same rule: the needs-elevation **overlay**
 and the **UAC-decline** branch are **U** on this host (fixture in §3.2), the spec's
@@ -275,7 +284,7 @@ The spec's `W2-4` scope list (G0.1, G0.2, G1.1–G1.9, G2.1 plus the reduced-mot
 Windows signal) is unchanged by the rebase. The delta wave has now re-baselined
 the spec's §1.1 to the mobile-only form (`docs/design/gui-refresh-spec.md:45-55`),
 so the geometry has a current design-set citation as well as the owner decision
-(`docs/design/gui-refresh-brief.md:323`); §5 stays authoritative for scope, and
+(`docs/design/gui-refresh-brief.md:325`); §5 stays authoritative for scope, and
 where a doc is still moving the section name is cited beside the line (§1
 quote-drift caveat).
 
@@ -307,7 +316,7 @@ quote-drift caveat).
 | ID | Gap | Implementation approach | Verification method | Tier target | Owner / dependency |
 |---|---|---|---|---|---|
 | **G2.1** | No shortcut layer, no menu accelerators, no Esc/Enter rules (S19) | One keymap table per OS (pure data): ⌘Q/⌘,/⌘H vs Ctrl+Q/Ctrl+,; menu-bar items carry the accelerators (macOS/Windows); Esc closes the top sheet, Enter confirms the sheet's primary action; shortcut hints in tooltips/footer | Unit-test the keymap tables + Esc/Enter decision per OS; runtime keyboard-only pass with screenshots | **R** | `desktop-platform` + `interface-designer` |
-| **G2.2** | Window geometry not remembered, no monitor restore, no 200 % proof (S18) | Keep the **owner-confirmed mobile-only shipped form** (`docs/design/gui-refresh-spec.md:45-55`; `docs/design/design-system-2026.md` §5.4; owner decision `docs/design/gui-refresh-brief.md:323`): width pinned **320 px**, single column, height user-resizable **420–1400** with initial **760**; add remembered height + position in UI preferences, clamp to the visible monitor work area on restore, and prove **320 px @ 200 %** with no clipping. The 360/440/1120 two-column plan is withdrawn; parity captures are **320×420, 320×760 and 320 @ 200 %**. The re-baselined design set states the same numbers (spec §1.1, design-system §5.4) | Unit-test clamp/persistence logic (pure); headless: smoke asserts remembered geometry; runtime three captures per OS — 320×420, 320×760, 320 @ 200 % | **R** | `interface-designer` (shell, W2-2) + `desktop-platform`; delivered with the shell parity, not W2-4 (§5 sequencing) |
+| **G2.2** | Window geometry not remembered, no monitor restore, no 200 % proof (S18) | Keep the **owner-confirmed mobile-only shipped form** (`docs/design/gui-refresh-spec.md:45-55`; `docs/design/design-system-2026.md` §5.4; owner decision `docs/design/gui-refresh-brief.md:325`): width pinned **320 px**, single column, height user-resizable **420–1400** with initial **760**; add remembered height + position in UI preferences, clamp to the visible monitor work area on restore, and prove **320 px @ 200 %** with no clipping. The 360/440/1120 two-column plan is withdrawn; parity captures are **320×420, 320×760 and 320 @ 200 %**. The re-baselined design set states the same numbers (spec §1.1, design-system §5.4) | Unit-test clamp/persistence logic (pure); headless: smoke asserts remembered geometry; runtime three captures per OS — 320×420, 320×760, 320 @ 200 % | **R** | `interface-designer` (shell, W2-2) + `desktop-platform`; delivered with the shell parity, not W2-4 (§5 sequencing) |
 | **G2.3** | Notifications surface (none) | **Decision needed (recommended: explicit no-claim)** — no OS notifications in this refresh; the window + tray state is the notification. If implemented later: actionable only + opt-in; macOS needs a signed bundle; Linux D-Bus; Windows toast. A no-claim must be written down so no copy promises notifications | No-claim: reviewed copy + docs; implementation: runtime per OS | — / **R** | lead/owner decision; `desktop-platform` |
 | **G2.4** | macOS packaging has no bundle; aarch64 Linux GUI absent; Linux channels are AUR-only (S21) | `dev-ops` decision with the owner: (a) keep bare tarball + shell installer, document Gatekeeper (`docs/install-macos.md:106-114`); or (b) build an ad-hoc-signed `.app`/`.dmg` in the macOS job from `tools/package-macos.sh` (no paid cert; users right-click-Open). Add an aarch64 Linux GUI target or document the gap; keep AUR in sync via the release bump jobs | Artifact existence + install/launch per OS (B + R); `dist plan` diff reviewed by `dev-ops` | **B** + **R** | `dev-ops`; owner gate for any channel decision |
 
@@ -624,22 +633,27 @@ Paths are relative to the worktree root; line numbers are at the r4 baseline —
   **r17 citation re-derivation** — every anchor into the delta-changed GUI files
   (`app.rs`, `main.rs`, `app/window.rs`, `platform/windows.rs`) was re-derived
   against `0df57ce`; unchanged files keep their W1-era anchors.
-- Delta re-baseline (r17): the design set was re-cut to the mobile-only form —
-  `docs/design/gui-refresh-spec.md:45-55` (spec §1.1: width pinned 320 px, one
-  `narrow` column, height user-resizable 420–1400, initial 760) and
-  `docs/design/design-system-2026.md:656-705` (design-system §5.4 metrics and
-  breakpoints at 320; the line range is the r17 snapshot — task-23 is re-cutting
-  that table, so the plan cites §5.4 by section in the body); the delta fix
-  tasks 23 (measurements/citations) and 25 (RU copy + audit counts) do not touch
-  CI, packaging or the three-tier rule.
+- Delta re-baseline (r17; revision references refreshed by r23): the design set was
+  re-cut to the mobile-only form — `docs/design/gui-refresh-spec.md:45-55`
+  (spec r18 §1.1: width pinned 320 px, one `narrow` column, height user-resizable
+  420–1400, initial 760) and `docs/design/design-system-2026.md:683-739`
+  (design-system r14 §5.4 metrics and breakpoints at 320; the line range is the r14
+  snapshot, so the plan cites §5.4 by section in the body); the fix tasks 23
+  (design-system r14 measurements/citations) and 25 (UX audit r16 / RU copy) do not
+  touch CI, packaging or the three-tier rule.
 - Policies: `wat/rules.md:10-24` (`[COST_STUB]`), `wat/rules.md:130-148`
   (`[SHELL_STUB]`); `AGENTS.md:63-65,99`; owner decisions
-  `docs/design/gui-refresh-brief.md:294-334` (incl. the 2026-11-20 mobile-only
-  viewport at `:323`); corrected parity baseline
-  `docs/design/gui-refresh-brief.md:336-359`.
+  `docs/design/gui-refresh-brief.md:296-338` (incl. the 2026-11-20 mobile-only
+  viewport at `:325`); corrected parity baseline
+  `docs/design/gui-refresh-brief.md:340-363`.
 
 ## Appendix B — evidence written for this task
 
+- `wat/evidence/2026-11-20/team/desktop-platform/errata-r23.md` — revision r23
+  errata log: QA review-r5 finding **R5** (cross-document revision-reference
+  drift) closed — spec/design-system/audit references refreshed to r18/r14/r16, the
+  brief line anchors re-pinned to the current 384-line brief, and the refs checker
+  re-run.
 - `wat/evidence/2026-11-20/team/desktop-platform/delta-r17.md` — revision r17
   change log: QA review-r4 finding **F21** (stale delta sentence) removal, the
   geometry re-anchor to the re-baselined design set, the citation re-derivation
@@ -665,8 +679,9 @@ Paths are relative to the worktree root; line numbers are at the r4 baseline —
   check run against this document: every relative Markdown link resolves from
   `docs/design/`, and every `path:line` citation resolves to an existing file and
   valid line; it also flags non-repo-root (short) paths. Last run after revision
-  r17 (output:
-  `wat/evidence/2026-11-20/team/desktop-platform/verify-refs-output-r17.txt`):
-  **ALL REFERENCES RESOLVE** (the exact count is in `delta-r17.md`). It cannot
+  r23 (output:
+  `wat/evidence/2026-11-20/team/desktop-platform/verify-refs-output-r23.txt`):
+  **ALL REFERENCES RESOLVE** (the exact count is in `errata-r23.md`). It cannot
   detect changed prose at a resolved line (§7.3); r17 therefore re-read the
-  delta-changed source anchors instead of trusting the path-level gate.
+  delta-changed source anchors, and r23 re-read the cross-document revision and
+  evidence references, instead of trusting the path-level gate.

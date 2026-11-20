@@ -1,7 +1,7 @@
 # LightSpeed desktop 2026 — the visual and component system
 
-**Status:** W1 design set **ACCEPTED** (QA + owner), revised by delta **r11**
-(2026-11-20): the owner chose the **mobile-only viewport** — the shipped
+**Status:** W1 design set **ACCEPTED** (QA + owner), revised by delta **r14**
+(2026-11-20; errata r19 closes QA r5): the owner chose the **mobile-only viewport** — the shipped
 `client-gui/src/main.rs` geometry of a 320 px pinned width, one `narrow` column
 and a user-resizable 420–1400 px height (initial 760) — and the set was
 re-baselined onto master `76aba5d` (warn-only relay starvation, honest location
@@ -23,7 +23,8 @@ REVISE, 16 required changes) — used here as a defect checklist (§13).
 docstrings and are re-runnable with `py -3`; no number here is an estimate.
 The mobile-only delta adds `wat/evidence/2026-11-20/team/design-system/`:
 `delta-copy.py` → `delta-copy.md` (320 px copy budgets, wrap-line counts and the
-fallback-face audit), plus `delta-r11.md` (finding → change map) and snapshots
+fallback-face audit), plus `delta-r14.md` (finding → change map) and
+`errata-r19.md` (QA r5 residuals), and snapshots
 of the re-run outputs (`contrast-results.md`, `fonts-and-glyphs.md`,
 `token-usage.md`). **Citation baseline:** every repo `file:line` below is verified
 against worktree HEAD `0df57ce` (master `76aba5d` + the W1 docs); the delta
@@ -571,29 +572,30 @@ Consequences, stated as rules rather than tweaks:
 3. **The ledger/value rows wrap to 2–3 lines in RU** because the mono value is
    17 px in a 264 px column. The row grows in height; the value is never shrunk
    and no truncation-without-hover is allowed for a value the player needs.
-4. **The state word at the mandated 30 px overflows the 288 px rail in three
-   current-tree cases; the metric must move to its own row.** Dropping the
-   shipped `0.82` multiplier renders the word at `STATE` 30 px. Measured in the
-   current tree (`delta-copy.md` §5): **PT-BR `NO RETURN PATH` 328.4 px**
-   (+40.4 over the 288 px column), **RU `IDLE` 326.8 px** (+38.8), **ES
-   `NO RETURN PATH` 309.0 px** (+21.0); DE `OPTIMIZING` 275.1 px fits 288 with
-   12.9 px but is over the proposed 276 px acceptance cap. RU `NO RETURN PATH`
-   was 342.8 px at HEAD and is **already shortened to 222.9 px** by `ux-lead`'s
-   landed `ru.toml` copy, so that case is fixed in the worktree. The metric
-   cannot share the row either: word + S2 8 + metric 90 ≥ 366 px even at the
-   shipped 24.6 px. **Acceptance proposed to the spec owner: every locale's
-   uppercased state word at `STATE` 30 px measures ≤276 px in its installed
-   chain (12 px / 4 % safety under 288, ±2 px measurement tolerance).**
-   **Recommended remedy: shorten the remaining over-budget words** — ES
-   `SIN RETORNO` 176.8 px and PT-BR `SEM RETORNO` 178.7 px (proposed strings,
-   pending the copy owner), RU `IDLE` contingency `НЕ АКТИВНО` 193.9 px (only if
-   A2 keeps `idle`; `НЕ ПОДКЛЮЧЕНО` 268.0 px for the A2 `not_connected` row), and
-   optionally DE `OPTIMIERUNG` 167.2 px for slack — keeping the 30 px type role,
-   the 40 px hero band and the spec's 239/181 compact budget. Fallbacks: a
-   measured 24/25 px effective word size (the type role would no longer be
-   30 px), or a two-line hero, which prices the compact worst at 275 chrome →
-   145 scroll, below the 180 floor (it needs an owner-approved floor change).
-   Nothing else: the word must never be occluded. The RU width is a
+4. **At the mandated 30 px three current-tree words overflow the 288 px rail;
+   the metric must move to its own row, and DE `OPTIMIZING` passes the 276 cap.**
+   Dropping the shipped `0.82` multiplier renders the word at `STATE` 30 px.
+   **At HEAD four words exceeded 288 px** — RU `NO RETURN PATH` 342.8, RU `IDLE`
+   326.8, ES `NO RETURN PATH` 309.0, PT-BR `NO RETURN PATH` 328.4. **On the
+   current tree RU `NO RETURN PATH` is landed at 222.9 px** (`ux-lead`'s
+   `ru.toml` copy), so the remaining three are **ES 309.0 px and PT-BR 328.4 px
+   (copy-owner proposals, pending)** plus **RU `IDLE` 326.8 px (retired by the
+   A2 word set)**; DE `OPTIMIZING` **275.1 px is inside the ≤276 px acceptance
+   cap by 0.9 px** (thin — the optional `OPTIMIERUNG` 167.2 px slack stays
+   available). The metric cannot share the row either: word + S2 8 + metric 90
+   ≥ 366 px even at the shipped 24.6 px. **Acceptance proposed to the spec
+   owner: every locale's uppercased state word at `STATE` 30 px measures ≤276 px
+   in its installed chain (12 px / 4 % safety under 288, ±2 px measurement
+   tolerance).** **Recommended remedy: shorten the remaining over-budget words**
+   — ES `SIN RETORNO` 176.8 px and PT-BR `SEM RETORNO` 178.7 px (proposed
+   strings, pending the copy owner), RU `IDLE` contingency `НЕ АКТИВНО` 193.9 px
+   (only if A2 keeps `idle`; `НЕ ПОДКЛЮЧЕНО` 268.0 px for the A2 `not_connected`
+   row), with the DE `OPTIMIERUNG` 167.2 px slack as an option — keeping the
+   30 px type role, the 40 px hero band and the spec's 239/181 compact budget.
+   Fallbacks: a measured 24/25 px effective word size (the type role would no
+   longer be 30 px), or a two-line hero, which prices the compact worst at
+   275 chrome → 145 scroll, below the 180 floor (it needs an owner-approved floor
+   change). Nothing else: the word must never be occluded. The RU width is a
    Cyrillic-fallback symptom (Ubuntu-Light, not Inter SemiBold; ES/PT accents
    also fall back) — re-subsetting the bundled fonts (Q19) is the long-term fix,
    copy shortening is the v1 fix.
@@ -714,7 +716,7 @@ on its own row (the state word and the metric cannot share it, §4.4 item 4):
 
 | band | compact / short mode | normal |
 |---|---|---|
-| rail | **108** = 2×S3 24 + `HERO_H` 40 + S1 4 + metric row 40 + S1 4 | **128** = + S1 4 + BODY 16 (sub-line) |
+| rail | **108** = 2×S3 24 + `HERO_H` 40 + S1 4 + metric row 40 | **128** = short + S1 4 + BODY 16 (sub-line) |
 | action bar, wrapped label | 72 = `ACTION_H_WRAPPED` 56 + 2×S2 16 | 72 |
 | action bar, single-line label | 64 = `ACTION_H` 48 + 2×S2 16 | 64 |
 | disabled-reason line (when shown) | 18 = CAPTION row 14 + S1 4 | 18 |
@@ -991,8 +993,8 @@ fabricated city or latency.
 | 8 | Major | disabled action vs ready action fill contrast 2.77:1 (state is carried by ink + block, so not colour-only, but the fill cue is below 3:1) | §3.3 |
 | 9 | Major | dense proxy row cannot contain its own control (16 px allocation, 40 px control minimum) | `app.rs:3808`, `theme.rs:189` |
 | 10 | Minor | update failure line is plain text_1, not danger | `app.rs:3938` (line moved on master `76aba5d`) |
-| 11 | Critical | at the mandated `STATE` 30 px the current tree overflows the 288 px rail for PT-BR `NO RETURN PATH` (328.4 px), RU `IDLE` (326.8 px) and ES `NO RETURN PATH` (309.0 px); DE `OPTIMIZING` 275.1 px fits 288 but is over the proposed 276 px acceptance cap; RU `NO RETURN PATH` is already shortened (342.8→222.9 px). The metric must move to its own row too (word + S2 + metric ≥366 px even at 24.6 px). Recommended remedy: shorten the remaining over-budget words to ≤276 px at 30 px; fallbacks priced in §4.4 item 4 | `app.rs:2153-2181`; `delta-copy.md` §5; fix under §4.4 item 4 (W2 shell owner) |
-| 12 | Major | the starvation banner copy is 3 lines EN / 4 lines worst locale in its 248 px column, not the 1–2 line target; the shipped frame grows to 64–80 px in the card | `locales/en.toml:184-185`; `app.rs:2261-2277`; contract §6.10 |
+| 11 | Critical | at the mandated `STATE` 30 px the current tree overflows the 288 px rail for PT-BR `NO RETURN PATH` (328.4 px), RU `IDLE` (326.8 px) and ES `NO RETURN PATH` (309.0 px); DE `OPTIMIZING` 275.1 px is inside the ≤276 px acceptance cap by 0.9 px (passes); RU `NO RETURN PATH` is already shortened (342.8→222.9 px). The metric must move to its own row too (word + S2 + metric ≥366 px even at 24.6 px). Recommended remedy: shorten the remaining over-budget words to ≤276 px at 30 px; fallbacks priced in §4.4 item 4 | `app.rs:2153-2181`; `delta-copy.md` §5; fix under §4.4 item 4 (W2 shell owner) |
+| 12 | Major | the starvation banner copy is 3 lines EN / 4 lines worst locale in its 248 px column, not the 1–2 line target; the shipped frame grows to 64–80 px in the card | `client-gui/locales/en.toml:184-185`; `app.rs:2261-2277`; contract §6.10 |
 
 ### 6.10 Notice / warning line (new component contract; shipped by master `76aba5d`)
 
@@ -1266,7 +1268,7 @@ change weight/optics. Measured for the candidate marks
 | `⚡` U+26A1 | `single_instance.rs:79` message-box string | absent from the egui chain; drawn by the Win32 system font | out of scope (not egui), but do not reuse in the window |
 
 The delta's new copy adds no new typed symbol, but it does type `→` in the new
-`Relay→server ...` ledger values (`locales/en.toml:195-196`) — the same
+`Relay→server ...` ledger values (`client-gui/locales/en.toml:195-196`) — the same
 Noto-Sans-JP fallback the rail already uses. W2 should paint the arrow once and
 use it in both places (the rail sub-line and the ledger values) rather than type
 it. The shipped stop mark already follows this rule: `■` is not typed, it is a
@@ -1289,7 +1291,8 @@ swapped, subsetted or a locale picks a different CJK order.
 
 ### 8.5 Enforcement
 
-- Extend `every_catalog_glyph_is_drawable_in_every_family` (`app.rs/tests.rs:743-791`)
+- Extend `every_catalog_glyph_is_drawable_in_every_family`
+  (`client-gui/src/app/tests.rs:1076-1125`)
   to include the `native_name` strings and a fixed symbol allowlist (the type-it
   rows above); the gate then fails on any new typed symbol that no chain draws.
 - The gate must test the **installed** chains (it already asserts against the
@@ -1436,15 +1439,24 @@ are `file:line`.
       popups, so read the image. Include the warning banner, the location ladder
       rungs and a route-trace row, plus the **RU capture for the state-word
       (`IDLE`, `NO RETURN PATH`) and action-label binding cases**, with the
-      shortened RU/ES/PT strings, and the DE long-copy capture; verify no
-      state-word/metric occlusion, that each long string wraps rather than
-      shrinking, and that every locale's state word measures ≤276 px at 30 px
-      (§4.4 item 4).
+      shortened RU string; **ES/PT-BR join the captures once their shortened
+      words land** (spec §1.4/§6), and the DE capture covers the long-copy rows;
+      verify no state-word/metric occlusion, that each long string wraps rather
+      than shrinking, and that every landed locale's state word measures ≤276 px
+      at 30 px (§4.4 item 4).
 - [ ] A contrast test in the crate (not just this document) so the floors cannot
       regress.
-- [ ] A **state-word fit gate** (crate test): every locale's uppercased state
-      word at `STATE` 30 px measures ≤276 px in the installed chain (§4.4 item 4);
-      the measurement reuses the fonts module from this evidence set.
+- [ ] A **state-word fit gate, verified by the evidence measurement**: the
+      gitignored evidence-set `delta-copy.py` measures every uppercased state word
+      at `STATE` 30 px in the installed chain and asserts the ≤276 px cap
+      (§4.4 item 4), and the RU/ES/PT captures in the bullet above prove the
+      rendered fit — this is **not** a `cargo test`, because the crate has no
+      committed font-metric helper and `wat/evidence/` is not in the repo gate.
+      A committed pinned-width test inside the crate is optional follow-on work
+      (it needs the metric helper moved into the crate); if it lands, it pins
+      the same numbers. Until ES/PT copy lands, the gate is checked against the
+      landed RU string and the remaining over-budget words are named open
+      residuals, not silent passes.
 - [ ] `widgets.rs`/theme: remove the `STATE * 0.82` multiplier and render the
       metric on its own row with `HERO_H` 40 (§4.2, §11.3).
 - [ ] A focus/keyboard pass: Tab reaches every control, the ring is visible,
@@ -1579,9 +1591,10 @@ All under `wat/evidence/2026-11-19/team/design-system/` unless stated; the
 | `token-usage-raw.txt` | raw first-pass scan (includes the comment/macro noise the filtered audit removes) — kept so the filter's effect is auditable |
 | `revision-r2.md` | QA review r1 finding → change map (R6, R11, R17, R5), with before/after numbers and the re-run record |
 | `delta-copy.py` / `delta-copy.md` (`2026-11-20/…`) | mobile-only 320 px copy measurements: added/changed/banner/location/trace/update strings, per-locale wrap-line counts, action-label and state-word fit, chrome/scroll arithmetic, notice-frame budget, face-identity audit |
-| `delta-r11.md` (`2026-11-20/…`) | delta r11 finding → change map, with the re-run record and the machine-checkable summary |
+| `delta-r11.md` (`2026-11-20/…`) | delta r11 finding → change map (historical; superseded by `delta-r14.md`), with the re-run record and the machine-checkable summary |
 | `cite-check.md` (`2026-11-20/…`) | every `app.rs`/`main.rs` citation in this document re-derived against HEAD `0df57ce`: old ref → new ref → current-line content, plus the assertion that no pre-rebase citation remains |
 | `delta-r14.md` (`2026-11-20/…`) | delta-fix r14 finding → change map (F1, F2, F4, F20, Q15), the state-word measurement at 30 px, and the recommended remedy for the spec owner |
+| `errata-r19.md` (`2026-11-20/…`) | QA r5 errata map (R1-DS, R2, R5-DS, R7, R10) with before/after text and the citation re-check record |
 
 The scripts are the method; the Markdown is their output. Re-run:
 `py -3 wat/evidence/2026-11-19/team/design-system/{contrast,fonts,token_audit}.py`.
