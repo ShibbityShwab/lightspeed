@@ -1,6 +1,6 @@
 # Data Dictionary
 
-> Last updated: 2026-11-16
+> Last updated: 2026-11-20
 
 This document lists every field LightSpeed's telemetry wire report can carry, its
 type, granularity, purpose, aggregation key, suppression rule, retention, and
@@ -21,6 +21,20 @@ Source of truth: `protocol/src/telemetry.rs` (`TelemetryReport`,
   relay validates the JSON body shape but does not verify the sender.
 - The body is not encrypted in transit. Moving telemetry onto the QUIC control
   plane is a known planned change.
+
+### Non-telemetry network calls
+
+The telemetry report is not the only thing the product sends, and this
+dictionary must not imply otherwise. The Windows GUI's **Check for updates**
+button makes one user-initiated HTTPS request to
+`https://api.github.com/repos/ShibbityShwab/lightspeed/releases/latest`
+(`client-gui/src/update.rs`) and, only after a second click, downloads the
+release zip and its `.sha256` checksum from GitHub. No report field below is
+included: the request body is empty and the only app-identifying value is a
+`lightspeed-gui-updater/<version>` User-Agent. GitHub sees the client IP, as it
+does for any HTTPS request. No startup or background check runs as part of
+normal operation.
+See [Update check](privacy.md#update-check) for the full description.
 
 ---
 

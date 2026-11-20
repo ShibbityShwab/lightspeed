@@ -1,0 +1,6 @@
+# Operator-placed build inputs for infra/scripts/build-server-city.py.
+# Geofeed data can be licence-encumbered, and derived city data may not ship
+# before owner decision O1, so input files never enter git. Only this ignore
+# rule and README.md are tracked.
+*.csv
+*.mmdb

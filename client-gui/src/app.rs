@@ -419,6 +419,52 @@ fn spawn_rtt_probe(addr: SocketAddrV4) -> Receiver<Option<u64>> {
     rx
 }
 
+/// The route card's location lines for one server place.
+///
+/// `caption` names the strongest evidence the offline indexes have, `detail`
+/// names the provider region or hosting network, and `hint` is the one extra
+/// line the card shows when no free database could place the server.
+struct RouteLocationLines {
+    caption: String,
+    detail: Option<String>,
+    hint: Option<String>,
+}
+
+/// Build the route card's location block without touching a `ui`.
+///
+/// Only the two answers that could not place the server carry the hint. A
+/// hosting match deliberately has no dot and no city (a G-Core US-Virginia
+/// server publishes as JP in the shipped DB-IP data), so the card says why the
+/// location is unknown instead of drawing a false one; `Unknown` gets the same
+/// line because no database matched at all.
+fn route_location_lines(place: crate::server_place::Place) -> RouteLocationLines {
+    use crate::server_place::Place;
+    match place {
+        Place::Cloud {
+            provider, region, ..
+        } => RouteLocationLines {
+            caption: i18n::t("route.location_provider").to_string(),
+            detail: Some(format!("{} · {region}", provider.to_uppercase())),
+            hint: None,
+        },
+        Place::Hosting { asn, name } => RouteLocationLines {
+            caption: i18n::t("route.location_hosting").to_string(),
+            detail: Some(format!("AS{asn} · {name}")),
+            hint: Some(i18n::t("route.location_hosting_hint").to_string()),
+        },
+        Place::Country { .. } => RouteLocationLines {
+            caption: i18n::t("route.location_estimate").to_string(),
+            detail: None,
+            hint: None,
+        },
+        Place::Unknown => RouteLocationLines {
+            caption: i18n::t("route.location_unknown").to_string(),
+            detail: None,
+            hint: Some(i18n::t("route.location_hosting_hint").to_string()),
+        },
+    }
+}
+
 impl<P: Platform> LightSpeedApp<P> {
     pub fn new(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) -> Self {
         let tray = P::new_tray(Arc::clone(&quit));
@@ -2360,23 +2406,7 @@ impl<P: Platform> LightSpeedApp<P> {
         // backs it. This is the honest ladder: an exact provider region, a
         // hosting network whose geoIP country is not trustworthy, the country
         // estimate, or nothing. Only the cloud and country cases have a point.
-        let location_caption: Option<(String, Option<String>)> = server_place.map(|place| {
-            use crate::server_place::Place;
-            match place {
-                Place::Cloud {
-                    provider, region, ..
-                } => (
-                    i18n::t("route.location_provider").to_string(),
-                    Some(format!("{} · {region}", provider.to_uppercase())),
-                ),
-                Place::Hosting { asn, name } => (
-                    i18n::t("route.location_hosting").to_string(),
-                    Some(format!("AS{asn} · {name}")),
-                ),
-                Place::Country { .. } => (i18n::t("route.location_estimate").to_string(), None),
-                Place::Unknown => (i18n::t("route.location_unknown").to_string(), None),
-            }
-        });
+        let location_caption = server_place.map(route_location_lines);
 
         egui::Frame::new()
             .fill(bg_2)
@@ -2396,16 +2426,28 @@ impl<P: Platform> LightSpeedApp<P> {
                     // ranges are the documented weak spot (a G-Core US-Virginia
                     // server publishes as JP in the shipped DB-IP data), so such
                     // a server gets no dot at all - just its network name.
-                    if let Some((caption, detail)) = &location_caption {
+                    if let Some(lines) = &location_caption {
                         ui.add_space(S1);
                         ui.label(
-                            egui::RichText::new(caption.as_str())
+                            egui::RichText::new(lines.caption.as_str())
                                 .size(CAPTION)
                                 .color(text_3),
                         );
-                        if let Some(detail) = detail {
+                        if let Some(detail) = &lines.detail {
                             ui.label(
                                 egui::RichText::new(detail.as_str())
+                                    .size(CAPTION)
+                                    .color(text_3),
+                            );
+                        }
+                        // A hosting-range or unknown server has no dot, so the
+                        // card says why: free IP databases are the documented
+                        // weak spot for exactly these ranges. It is a caption
+                        // line, not a tooltip, because the absence of a location
+                        // is the fact the reader needs.
+                        if let Some(hint) = &lines.hint {
+                            ui.label(
+                                egui::RichText::new(hint.as_str())
                                     .size(CAPTION)
                                     .color(text_3),
                             );

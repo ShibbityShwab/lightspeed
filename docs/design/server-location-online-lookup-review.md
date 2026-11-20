@@ -50,6 +50,39 @@ data (GeoLite2/geojs) and the operator feed got Manassas right.
    connection not listed in `docs/privacy.md`.
 5. **If (3) is declined:** stay "unknown" with the caption; no online fallback.
 
+## Implementation status (2026-11-20)
+
+- **Done - honesty caption (no gate):** the route card shows a second caption
+  line, "Free IP databases are unreliable for hosting ranges.", under the
+  location line whenever the server's place is `Hosting` or `Unknown` (the two
+  cases where the client could not place it). New locale key
+  `route.location_hosting_hint` in all 9 `client-gui/locales/*.toml`; `ja`,
+  `ko` and `zh-Hans` keep the English string because the bundled CJK font
+  subsets are glyph-tested against them. Covered by a GUI test that also
+  asserts a cloud region and a country estimate carry no hint.
+- **Done - privacy honesty fix (no gate):** `docs/privacy.md` no longer claims
+  the client's only connection is the relay pair. The GUI's update check
+  (`https://api.github.com/repos/ShibbityShwab/lightspeed/releases/latest`) is
+  now listed as a user-initiated, non-blocking request that sends no
+  identifiers beyond the HTTP request itself (app User-Agent; GitHub sees the
+  client IP), with the optional release download following only a second
+  click. `docs/data-dictionary.md` states that this call is not part of the
+  telemetry report. No new online geolocation is added.
+- **Scaffolded, blocked on O1 - build-time city pipeline:**
+  `infra/scripts/build-server-city.py` ingests operator RFC 8805 geofeeds from
+  `infra/geo/geofeeds/` and/or a pre-extracted GeoLite2-City CSV
+  (`--geolite-csv`; `--mmdb` is refused because the scaffold does not decode
+  the binary format - the owner converts it), and emits a
+  `start u32 | end u32 | city-index u16` blob plus a generated city table Rust
+  file under `target/server-location-city/` (gitignored). Geofeed wins over
+  GeoLite on overlap. `--selftest` covers comments, malformed rows, prefix
+  math, merge precedence and the emitted files. It is not committed, not wired
+  into the client, and changes none of the shipped data.
+- **Still open:** shipping the derived city table (and its required
+  country/city/estimate label) is blocked on owner gate O1. Until it is
+  decided, the card stays "hosting network - unknown" with the caption and
+  there is no online fallback.
+
 ## Required labels (if a build-time table ships)
 
 - Geofeed: "Server location: operator geofeed — US-VA, Manassas (published by

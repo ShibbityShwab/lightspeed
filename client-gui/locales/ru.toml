@@ -51,6 +51,7 @@ location_estimate = "Местоположение сервера: оценка �
 location_provider = "Местоположение сервера: регион облачного провайдера"
 location_hosting = "Местоположение сервера: хостинг-сеть — неизвестно"
 location_unknown = "Местоположение сервера: неизвестно"
+location_hosting_hint = "Бесплатные базы данных IP ненадёжны для хостинговых диапазонов."
 cannot_beat_direct = "This relay cannot be faster than direct for this server"
 path_rtt = "Путь до сервера"
 path_hint = "Полный путь до игрового сервера через релей"

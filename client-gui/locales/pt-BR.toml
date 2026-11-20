@@ -51,6 +51,7 @@ location_estimate = "Localização do servidor: estimativa em nível de país pe
 location_provider = "Localização do servidor: região do provedor de nuvem"
 location_hosting = "Localização do servidor: rede de hospedagem — desconhecida"
 location_unknown = "Localização do servidor: desconhecida"
+location_hosting_hint = "Bancos de dados de IP gratuitos não são confiáveis para faixas de hospedagem."
 cannot_beat_direct = "This relay cannot be faster than direct for this server"
 path_rtt = "Caminho do jogo"
 path_hint = "Ida e volta ao servidor do jogo pelo relay"

@@ -1,6 +1,6 @@
 # Privacy Policy
 
-> Last updated: 2026-09-25
+> Last updated: 2026-11-20
 
 ---
 
@@ -181,6 +181,27 @@ LightSpeed does not integrate with any third-party analytics, advertising, or tr
 1. Your PC → the relay (UDP tunnel + optional QUIC control plane, plus plaintext HTTP telemetry to port 8080 when telemetry is on)
 2. The relay → game servers (forwarded UDP packets)
 3. Your PC → the signed relay registry over HTTPS (discovery only, no identifiers sent)
+4. Your PC → GitHub, only for the GUI's update check and only when you ask for it (see [Update check](#update-check))
+
+### Update check
+
+The Windows GUI's **Check for updates** button (Settings → Maintenance) makes
+one HTTPS request to GitHub's release API:
+
+- `GET https://api.github.com/repos/ShibbityShwab/lightspeed/releases/latest`
+  (`client-gui/src/update.rs`). The only thing sent is the HTTP request itself.
+  The request carries a User-Agent of `lightspeed-gui-updater/<version>`, which
+  names the app and version, not you. GitHub sees your IP address and the usual
+  HTTPS metadata, exactly as it does for any request to its API.
+- If you then press **Install**, the GUI downloads that release's Windows zip
+  and its `.sha256` checksum from GitHub over HTTPS. The download starts only
+  after your click.
+
+The check is **user-initiated and non-blocking**: no startup or background
+check runs as part of normal operation, so there is nothing to switch off.
+Closing the update dialog stops it, and choosing not to install leaves the
+existing binary untouched. No telemetry, identity, game data, or game-server
+address is included in either request.
 
 ---
 

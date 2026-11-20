@@ -12,6 +12,17 @@
 
 ## Recent entries
 
+### 2026-11-20 (honesty + scaffold) - Hosting-hint caption, update-check disclosure, build-time city pipeline (not wired, O1 gate)
+
+**Agent:** `rust-dev-11` + lead (final gates/commit). Committed.
+
+- **Caption:** when the place is `Place::Hosting`/`Unknown`, the route card now adds a second CAPTION line "Free IP databases are unreliable for hosting ranges." (key `route.location_hosting_hint`, all 9 locales; ja/ko/zh-Hans English for the font subset). Caption logic extracted into a pure `route_location_lines` helper; new GUI test covers hosting/unknown/cloud/country cases.
+- **Privacy honesty fix:** `docs/privacy.md` now lists the user-initiated GitHub update check (`GET api.github.com/.../releases/latest`, checked from `update.rs`: background thread, only on the Settings button, User-Agent names app/version only, download only on click) as connection 4 plus an "Update check" section; `docs/data-dictionary.md` gains a matching "Non-telemetry network calls" note. No new online geolocation was added.
+- **Build-time city pipeline scaffold:** `infra/scripts/build-server-city.py` (stdlib, `--selftest` 60 checks) ingests RFC 8805 geofeeds from `infra/geo/geofeeds/` (gitignored inputs) and/or a pre-extracted GeoLite CSV, merges geofeed-over-geolite, and emits an uncommitted `target/server-location-city/` blob + Rust table + manifest (`wired_into_client: false`). `--mmdb` is refused with conversion guidance (no mmdb crate); the header and `infra/geo/geofeeds/README.md` state the owner gate: GeoLite2 EULA + CC BY-SA 4.0 attribution/ShareAlike or written operator permission. `build-server-location.py` and R1 shipped data untouched.
+- **Design doc:** `docs/design/server-location-online-lookup-review.md` gains an implementation-status section (caption/privacy done; pipeline scaffolded, not wired; shipping data blocked on O1).
+- **Gates (lead):** fmt clean; workspace clippy 0 warnings; workspace **1,781 / 0 / 6**; GUI clippy 0; GUI **244 / 0 / 1**; selftest 60 checks. Committed.
+- **Next:** owner gate O1 (GeoLite2 licence acceptance or G-Core written permission) before any city table ships; then wire display-only with attribution/estimate labels; never feed `chooser_point`/ranking.
+
 ### 2026-11-20 (traceroute) - Relay + client TTL traceroute landed; Linux CI verified; committed
 
 **Agent:** `rust-dev-9` (relay) + `rust-dev-10` (client) + lead (final gates/commit). Committed.
