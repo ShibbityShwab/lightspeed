@@ -31,4 +31,10 @@ pub mod history;
 #[cfg(feature = "server-location")]
 pub mod location;
 pub mod status;
+/// The client-vantage route trace runtime and its stable log line (S5b).
+///
+/// The OS-tool scheduler, parser, refusal guard and bounded runner are shared
+/// with the CLI; the localized caption stays presentation over its
+/// `dto::ClientRoute` fact (`client-gui/src/client_trace.rs`).
+pub mod trace;
 pub mod watchdog;

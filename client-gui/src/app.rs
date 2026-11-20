@@ -2700,12 +2700,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 .map(|server| self.location_status(server))
                 .unwrap_or_default(),
             server_leg: self.relay_measured_status(),
-            route_trace: self.client_route.map(|route| app_dto::ClientRoute {
-                hops: route.hops,
-                last_hop: route.last_hop,
-                last_hop_rtt_ms: route.last_hop_rtt_ms,
-                complete: route.complete,
-            }),
+            route_trace: self.client_route,
             boosting,
             relayed,
             error: self.engine_error(),

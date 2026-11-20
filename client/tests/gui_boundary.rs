@@ -12,7 +12,7 @@
 //! | G3 | every `client-gui/src/**/*.rs` is budgeted at its measured line count | budgets only lower; a new file needs deliberate registration |
 //! | G4 | `client/src/app/**` is UI-free (no `egui`/`eframe`/`Color32`/`Painter`/`Platform`) | absolute |
 //! | G5 | `client/src/app/**` is portable (no `cfg(windows)`/`cfg(target_os)`) | absolute |
-//! | G6 | the location ladder feeds no ranking (module-wide, and its display-only test travels) | absolute |
+//! | G6 | the location ladder and the route trace feed no ranking (module-wide, and the display-only test travels) | absolute |
 //! | G7 | the core owns the provider seam; the GUI installs it before engine creation | absolute after S5a |
 //!
 //! The tables below are *measurements of this revision*, not aspirations: G1's
@@ -223,6 +223,40 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "start",
     "code_index",
     "geo_countries",
+    // W2-3b (S5b) — the client-trace runtime. The GUI keeps the localized
+    // caption only; the scheduler, parser, refusal guard, bounded runner and
+    // the `CLIENT_TRACE` log contract live in the core.
+    "ClientRoute",
+    "TraceHop",
+    "TraceFailure",
+    "TraceResult",
+    "AcceptedTrace",
+    "TraceTick",
+    "GuiTrace",
+    "TraceRunner",
+    "OsTraceRunner",
+    "TraceCache",
+    "InFlight",
+    "Attempted",
+    "TraceChild",
+    "ProcessChild",
+    "ChildOutcome",
+    "trace_hops",
+    "probe_allowed",
+    "summarize",
+    "parse_hops",
+    "rtt_value",
+    "rtt_ms",
+    "run_bounded",
+    "hops_from_outcome",
+    "platform_trace_command",
+    "info_line",
+    "parse_info_line",
+    "now_unix_ms",
+    "MAX_HOPS",
+    "TRACE_DEADLINE",
+    "CACHE_TTL",
+    "POLL_INTERVAL",
 ];
 
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
@@ -245,8 +279,11 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/app/window.rs", 213),
     // W2-1b: +315 lines of DTO assembly/getters. It is the one file scheduled to
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
-    ("client-gui/src/app.rs", 4371),
-    ("client-gui/src/client_trace.rs", 1328),
+    ("client-gui/src/app.rs", 4366),
+    // W2-3b S5b: the client-trace runtime moved to
+    // `lightspeed_client::app::trace`; the GUI keeps the localized caption and
+    // its re-export shell. 1328 -> 145.
+    ("client-gui/src/client_trace.rs", 145),
     // W2-1 S1: the config model + I/O + its tests moved to
     // `lightspeed_client::app::config`; the GUI keeps this re-export shell and
     // `paths::config_file`. The budget dropped 528 -> 18 with the move.
@@ -302,10 +339,12 @@ const DISPLAY_ONLY_LOCATION: &[&str] = &["display_point", "place(", "Geofeed", "
 /// The display-only proof that travels with the location data (W2-3b S5a).
 const DISPLAY_ONLY_TEST: &str = "fn a_geofeed_place_never_steers_the_ranking";
 
-/// The moved location module (`client/src/app/location.rs` + its submodules).
-/// It is display-only by contract: no ranking call may appear there.
-fn is_location_module(rel: &str) -> bool {
-    rel.starts_with("client/src/app/location")
+/// The moved display-only modules: the location ladder
+/// (`client/src/app/location*`) and the client-vantage route trace
+/// (`client/src/app/trace*`). Neither may feed the relay ranking: a ranking call
+/// appearing in one is exactly the drift G6 exists to catch.
+fn is_display_only_module(rel: &str) -> bool {
+    rel.starts_with("client/src/app/location") || rel.starts_with("client/src/app/trace")
 }
 
 fn repo_root() -> PathBuf {
@@ -642,16 +681,18 @@ fn g5_core_app_has_no_platform_conditional_behaviour() {
     );
 }
 
-/// **G6** — the location ladder feeds no ranking. Only the cloud-exact
-/// `chooser_point` may reach the chooser; geofeed/hosting/country/unknown
-/// points are display-only (spec A8, owner decision 2026-11-20).
+/// **G6** — the location ladder and the route trace feed no ranking. Only the
+/// cloud-exact `chooser_point` may reach the chooser; geofeed/hosting/country/
+/// unknown points are display-only (spec A8, owner decision 2026-11-20).
 ///
 /// W2-3b S5a moved the ladder, its data and its tests into
-/// `client/src/app/location*`, so the rule now also asserts that (a) no ranking
-/// call appears anywhere in the location module — the data cannot be wired into
-/// the chooser from its new home — and (b) the display-only proof
-/// (`a_geofeed_place_never_steers_the_ranking`, `server_place.rs:456-466` before
-/// the move) travelled with the data instead of being left behind.
+/// `client/src/app/location*`, so the rule also asserts that (a) no ranking call
+/// appears anywhere in a display-only module — neither the data nor the trace
+/// can be wired into the chooser from its new home — and (b) the display-only
+/// proof (`a_geofeed_place_never_steers_the_ranking`, `server_place.rs:456-466`
+/// before the move) travelled with the data instead of being left behind.
+/// S5b adds the client-vantage trace to the no-ranking module set: it is a
+/// placement anchor for display, never a measured leg.
 #[test]
 fn g6_location_never_steers_the_ranking() {
     let mut violations = Vec::new();
@@ -662,9 +703,9 @@ fn g6_location_never_steers_the_ranking() {
             if !RANKING_CALLS.iter().any(|call| line.contains(call)) {
                 continue;
             }
-            if is_location_module(&rel) {
+            if is_display_only_module(&rel) {
                 violations.push(format!(
-                    "{rel}:{}: the display-only location module may not rank relays: {}",
+                    "{rel}:{}: a display-only module may not rank relays: {}",
                     index + 1,
                     line.trim()
                 ));

@@ -36,6 +36,19 @@ does for any HTTPS request. No startup or background check runs as part of
 normal operation.
 See [Update check](privacy.md#update-check) for the full description.
 
+### Client route trace (local, not reported)
+
+**Client route trace.** When a game server is locked, LightSpeed may trace the network route to it using your operating system's built-in traceroute tool so it can show an expected path and diagnose routing. These are ordinary traceroute packets to routers along that path; nothing about the trace is sent to LightSpeed's relays or any third party, and only the summarized hop count and last-hop round trip appear in the app and your local log.
+
+The trace is not a telemetry source: it is not a field in `TelemetryReport`, the
+relay cannot observe it, and it runs whether or not anonymous reporting is
+enabled. Its only artifacts are one local log line per accepted trace —
+`CLIENT_TRACE server=<ip> hops=<n> last_hop=<ip|none> last_hop_rtt_ms=<n|none> complete=<true|false> at_unix_ms=<ms>`,
+defined in `client/src/app/trace.rs` — and the summarized hop count / last-hop
+round trip the app shows. No new UI or setting is added; the trace stays
+automatic while a game server is locked. Runtime dependency: the host's trace
+tool must be on `PATH` (`tracert` on Windows, `traceroute` elsewhere).
+
 ---
 
 ## Report fields
