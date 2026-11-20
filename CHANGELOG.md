@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The no-reply watchdog no longer closes its relay retry chain on a faulting
+  window.** A re-test that kept faulting was treated as recovery, resetting the
+  retry budget and producing an endless relay↔direct flap every ~46 s for a
+  starving relay (81 fallbacks in one session, 213 of 236 re-tests at attempt 1).
+  A faulting re-test now escalates 30 s → 120 s → parks the session direct, and
+  only a genuinely working return path closes the chain.
 - **Relay choice no longer lets client jitter or the numerical relay address
   decide a triangle-floor tie.** When the measured direct ping floors several
   candidates, every floored total equals the direct ping, and the old order fell

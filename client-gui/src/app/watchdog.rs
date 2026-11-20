@@ -187,6 +187,21 @@ impl ReplyFaultStreak {
     }
 }
 
+/// Whether a judged window closes an open fallback chain.
+///
+/// Only a window with a working return path closes the chain: the relay is
+/// carrying the game server again. A window that saw a fault but has not yet
+/// reached [`RELAY_REPLY_STREAK`] is **not** evidence that the relay recovered -
+/// it is the first half of the evidence that opens the next fallback. Closing
+/// the chain there reset the retry budget before a re-test could spend it: the
+/// live 2026-11-20 trace showed a fallback every 46.5 s with `attempt=1` on 213
+/// of 236 re-tests, because each re-test's first fault window "closed" the
+/// chain and the 30 s retry started over instead of backing off to 120 s and
+/// then parking direct.
+pub(super) fn chain_closes_after_window(window: Option<RelayReplyFault>) -> bool {
+    window.is_none()
+}
+
 /// Whether a pending re-test still points at the relay the chain abandoned.
 ///
 /// The re-test releases the tunnel of the interceptor that is already running,
@@ -672,10 +687,12 @@ pub(super) fn spawn_relay_reply_watchdog(
             current.baseline_flow_sent = health.flow.map(|(sent, _)| sent).unwrap_or(0);
             current.baseline_flow_replied = health.flow.map(|(_, replied)| replied).unwrap_or(0);
             let Some(fault) = fault else {
-                // The return path works. A chain that was open is over: the relay
-                // carries the server again, and keeping the leash would spend an
-                // old retry budget on a fault that has not happened.
-                if fallback.is_some() {
+                // Only a window that showed the return path working proves the
+                // relay carries this server again. A first fault window (the
+                // streak threshold not reached yet) keeps the chain: closing it
+                // there spent no retry and re-armed the same 30 s re-test
+                // forever (the live 2026-11-20 flap).
+                if chain_closes_after_window(window) && fallback.is_some() {
                     fallback = None;
                     *lock_or_recover(&retry_at) = None;
                     *lock_or_recover(&retest) = None;

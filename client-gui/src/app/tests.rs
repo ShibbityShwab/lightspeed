@@ -1,7 +1,8 @@
 use super::{
-    lock_or_recover, relay_reply_fault, relay_reply_fault_message, relay_reply_window_message,
-    relay_switch_allowed, retest_is_about, RelayChangeSource, RelayReplyFault, ReplyFaultStreak,
-    RetestTarget, RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_STREAK, RELAY_REPLY_TIMEOUT,
+    chain_closes_after_window, lock_or_recover, relay_reply_fault, relay_reply_fault_message,
+    relay_reply_window_message, relay_switch_allowed, retest_is_about, retry_delay,
+    RelayChangeSource, RelayReplyFault, ReplyFaultStreak, RetestTarget,
+    RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_STREAK, RELAY_REPLY_TIMEOUT,
 };
 
 #[test]
@@ -147,6 +148,36 @@ fn the_live_run_windows_replay_through_the_new_criterion() {
         );
         assert_eq!(verdict, run.expected, "{}", run.label);
     }
+}
+
+#[test]
+fn a_faulty_window_never_closes_an_open_retry_chain() {
+    // Live 2026-11-20 (gui-trace.log): 81 fallbacks in one session, each
+    // 46.5 s apart (30 s direct + two 8 s windows), with `attempt=1` on 213 of
+    // 236 re-tests. The first judged window after each re-test was
+    // NoReplyFromRelay at streak=1 - not yet actionable - and the watchdog
+    // treated it as "the relay is returning traffic", closed the chain and
+    // reset the retry budget, so the 30 s re-test fired forever instead of
+    // backing off to 120 s and then parking the session direct.
+    assert!(
+        chain_closes_after_window(None),
+        "a window whose return path works is what closes a chain"
+    );
+    for fault in [
+        RelayReplyFault::NoReplyFromRelay,
+        RelayReplyFault::TooFewReplies,
+        RelayReplyFault::InjectionFailed,
+    ] {
+        assert!(
+            !chain_closes_after_window(Some(fault)),
+            "{fault:?} is not proof that the relay recovered"
+        );
+    }
+    // The budget a surviving chain can spend: 30 s, then 120 s, then the relay
+    // is recorded as failing this server instead of flapping forever.
+    assert_eq!(retry_delay(0), Some(std::time::Duration::from_secs(30)));
+    assert_eq!(retry_delay(1), Some(std::time::Duration::from_secs(120)));
+    assert_eq!(retry_delay(2), None);
 }
 
 #[test]

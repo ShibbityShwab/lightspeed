@@ -12,6 +12,16 @@
 
 ## Recent entries
 
+### 2026-11-20 (watchdog fix) - Endless relay/direct flap fixed; faulting re-tests now escalate and park direct
+
+**Agent:** `geofeed-diligence` (follow-up) + lead (gates/commit/build). Committed.
+
+- **Bug (client, live-proven):** the no-reply watchdog's chain-close branch ran on `fault == None`, which is returned both for a healthy window and for the first faulting window of a streak. Each faulting re-test therefore logged "the relay is returning this server's traffic again", dropped the fallback chain and reset the retry budget - a relay↔direct flap every ~46.5 s. Evidence: 81 fallbacks today, 236 re-tests with 213 at attempt 1, 135/137 "chain closed" events after a non-healthy window.
+- **Fix:** `client-gui/src/app/watchdog.rs` - only a window with no fault may close an open chain (`chain_closes_after_window(window) = window.is_none()`); a faulting re-test escalates the existing budget (30 s -> 120 s -> exhausted, relay recorded as rejecting the server and the session parks direct). Healthy relays unchanged.
+- **Verification:** new regression test `a_faulty_window_never_closes_an_open_retry_chain` (fails on old semantics with "NoReplyFromRelay is not proof that the relay recovered", passes after; mutation revert re-fails); final lead gates: fmt clean; workspace clippy 0; workspace **1,811 / 0 / 6**; GUI clippy 0; GUI **260 / 0 / 1**.
+- **Release note:** the running GUI (pid 10884) had the pre-fix binary; a release rebuild is required to activate the fix. CHANGELOG `[Unreleased] > Fixed` updated.
+- **Residual:** a genuinely starving relay still costs one direct episode (intended safety), now bounded per episode; the underlying relay return-path starvation is a fleet/network issue, not a client bug.
+
 ### 2026-11-20 (geofeed due diligence) - 7 verified operator feeds (G-Core + 6), table 603 -> 11,948 ranges; live label verified; committed
 
 **Agent:** `geofeed-diligence` + lead (gates/commit). Committed.
