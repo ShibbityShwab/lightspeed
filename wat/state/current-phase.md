@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (rebase + delta wave) - WF-081: rebased onto master 76aba5d; mobile-only viewport; W1 deltas in flight
+
+**Agent:** lead + the existing W1 persona instances (`architect`, `ux-lead`, `design-system`, `desktop-platform`; `interface-designer`/`qa-engineer` queued), on the owner's two instructions: they preferred the mobile-only viewport, and asked to rebase off new master before continuing.
+
+- **Rebase.** The W1 commit `3648645` was rebased onto `origin/master` `76aba5d` (16 commits ahead; 1.11.4 plus routing/GUI work) and became **`0df57ce`**; only `wat/state/current-phase.md` and `wat/state/decisions/2026-11.md` conflicted, resolved by hand with both histories preserved (master's 1.11.4/geofeed/watchdog entries + the WF-081 entries). Branch is 1 ahead / 0 behind, tree clean.
+- **Master delta is material** (`62c6cf6..76aba5d`, +5,553/-789 across client-gui and client/src/route): relay starvation is now **warn-only** (`state.not_returning` = "No return path", danger; `direct`/`direct_fallback`/`retry_in`/`server_rejects_relay` keys removed; Settings `starvation_policy` says LightSpeed warns and keeps relaying, never switching path on its own); the route card gained an honest location ladder (cloud region → operator geofeed, display-only → hosting "unknown" + caption → country estimate → unknown), route trace rows, relay-measured server-leg rows and an update-check disclosure; server locking is flow-aware; the relay-leg health/data-address pairing bug was fixed; `docs/design/interface.md` was **not** changed in the delta, so the binding contract is now stale against shipped behaviour. New GUI modules: `server_place.rs`, `server_tables.rs`, `server_geofeed_tables.rs`, `client_trace.rs`, `detection_provider.rs`, `app/choice.rs`, a rewritten `app/watchdog.rs`, `relay_history.rs` +300.
+- **Owner decisions.** Mobile-only viewport: width pinned 320 px, single column, height user-resizable 420–1400 (initial 760), no 440/1120 two-column layout; W2 is authorised after the owner read the spec, subject to the delta wave passing QA.
+- **Delta wave dispatched** (docs only, tasks 17–22): boundary re-baseline, UX delta audit, design-system mobile-only/new-copy adaptation, parity-plan geometry; then spec synthesis and an independent QA delta review. The delta audit evidence is `wat/evidence/2026-11-20/rebase-delta/delta.txt`.
+- **Not done.** No GUI code change by this session (the rebase brought master's code); no W2 task executed; `$0.00` spent.
+
+**Verified:** `git log` shows `0df57ce` directly on `76aba5d`; `git status` clean after the rebase commit; the delta audit lists the 16 commits and the 32 changed GUI/route/design files; W1 docs still present at 481 / 1,137 / 1,271 / 542 / 851 lines. **Not yet re-verified:** the W1 docs' content against the new master — that is exactly what the delta wave and QA re-review (task-22) must prove; the old 93/93 refs check passes only because the cited paths still exist, not because the facts still hold.
+**Open:** delta tasks 17–22; interface.md contract amendments (warn-only starvation + location/trace) to be drafted in the spec and applied by W2-2; then W2-1.
+
 ### 2026-11-20 (readiness) - WF-081: W2 still held for owner read; readiness audit fixed a geo-path error
 
 **Agent:** lead, on the owner's "Accept, but I want to read the spec first" hold.

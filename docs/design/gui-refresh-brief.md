@@ -1,8 +1,10 @@
 # LightSpeed Desktop 2026 — GUI refresh brief (Lead-enhanced)
 
-**Status:** W1 design set **ACCEPTED by independent QA** and conditionally
-accepted by the owner on 2026-11-20; **W2 is held until the owner reads
-`docs/design/gui-refresh-spec.md`**. No GUI code changes before that read. This
+**Status:** W1 **ACCEPTED** (QA + owner) with two owner changes on 2026-11-20:
+a **mobile-only viewport** (keep the shipped 320 px pinned single-column form)
+and a **rebase onto `origin/master` `76aba5d`** before continuing. The W1 delta
+wave is reconciling the design set to the new master and the mobile-only
+decision; no GUI code changes until the delta spec passes its QA check. This
 document is the enhanced version of the owner's request; teammates receive it
 as the program contract.
 **Program:** WF-081. **Created:** 2026-11-19. **Lead:** root agent.
@@ -248,9 +250,11 @@ a separate owner gate.
   `cargo test --workspace --all --exclude lightspeed-gui`;
   `cargo clippy -p lightspeed-gui --all-targets`;
   `cargo test -p lightspeed-gui`) with counts per crate.
-- GUI: real-window screenshots at 320 px (real today) and the new default/wide
-  if the viewport changes, across disconnected/idle, connected, boosting, game
-  pick/empty, fallback/error when reachable. UIA cannot see egui popups — read
+- GUI: real-window screenshots in the mobile-only form (320 px pinned width;
+  320×420, 320×760 and 320 pt @ 200 %), in EN + DE + RU (RU is the binding
+  long-word/long-label case), across disconnected/idle, connected, boosting,
+  the `NO RETURN PATH` warning, game pick/empty, location/trace rows and
+  error when reachable. UIA cannot see egui popups — read
   the screenshot.
 - A design claim without a screenshot is a plan, not evidence. A state that
   cannot be reached is named unverified. Independent verification is `qa`,
@@ -267,7 +271,7 @@ a separate owner gate.
 | Stale Oct-2026 design docs misread as approved | This brief declares them historical; spec supersedes; skill says so |
 | Parity is required but this host cannot smoke-test Linux/macOS | W1 returns the exact CI jobs, headless-smoke path and hardware/runner ask; parity reported in three tiers; owner supplies access at the W2 gate or runtime parity stays explicitly unverified |
 | Elevation/WinDivert limits mean some states are unreachable for screenshots | Document; use logged state + forced fixtures only where honest |
-| 320 px pinned width blocks the design | Viewport change is a spec decision with evidence; not a silent tweak |
+| Narrow 320 px width constrains long copy | Retired by the owner's 2026-11-20 mobile-only decision; long copy wraps (never shrinks), the state-word fit gate is ≤276 px, and the RU/ES/PT strings are shortened |
 | Translation debt across 9 locales | New copy lands with catalog keys; English fallback only with the documented decision; localization gate on push |
 | Core extraction regresses CLI | Staged moves with tests, CLI compatibility check, no behaviour change bundled |
 | New third-party skill/tool drift | Repo-native skill is authoritative; Impeccable user-level only (no hook/engine); version recorded |
@@ -317,18 +321,21 @@ a separate owner gate.
 
 | Decision | Answer |
 |---|---|
-| W1 set | Accepted in principle; **W2 held until the owner reads `gui-refresh-spec.md`** |
-| Window geometry (Q1) | 360×420 min / 440×880 default / 1120×1400 max |
-| Locale completeness (Q5) | Translate the 26 English-identical ja/ko/zh keys + new copy through the in-repo pipeline |
+| W1 set | Accepted (owner read the spec on 2026-11-20); W2 authorised after the delta wave passes QA |
+| Window geometry (Q1) | **Mobile-only viewport**: width pinned at 320 px, single column, height user-resizable 420–1400 (initial 760), no 440/1120 two-column layouts — supersedes the 360/440/1120 plan below |
+| Base | Rebased onto `origin/master` `76aba5d` (16 commits: 1.11.4, warn-only relay starvation, honest location ladder, route trace, update disclosure); the W1 docs are being re-baselined by the delta wave |
+| Locale completeness (Q5) | Translate the English-identical ja/ko/zh keys (45 as audited on master `76aba5d`; re-verify at W2) + new copy through the in-repo pipeline |
 | Tray / packaging (Q6) | macOS menu bar + Linux StatusNotifierItem where the DE supports it; honest GNOME no-tray; bare tarball/shell installer, no paid notarization, no `.app`/`.dmg` in v1 |
 | Notifications (Q7) | Explicit no-claim |
 | Config precedence (Q10) | Canonical config wins; the legacy GUI file is preserved; one release-note line records it |
 | Parity verification | CI + headless jobs now on free runners; **runtime tier stays unverified** until hardware exists |
 
-Lead-adopted, pending the owner's read: Q2 rail metric = relay leg, labelled;
-Q3 amendments A1–A6; Q4 sparkline removed in W2 v1; Q8 CLI runtime adoption
-deferred; Q9 GUI presence policy is the product canon; Q11 geo-asset home
-decided in W2-3 with `infra-dev`/`dev-ops`.
+Lead-adopted after the owner's read: Q2 rail metric = relay leg, labelled;
+Q3 amendments **A1–A14** (A1–A13 rows; A14 non-state prose applied by W2-2);
+Q4 sparkline removed in W2 v1; Q8 CLI runtime adoption deferred; Q9 GUI
+presence policy is the product canon; Q11 geo-asset home decided in W2-3 with
+`infra-dev`/`dev-ops`; Q15/Q16 as recorded in the spec (shorten RU copy; chrome
+239/181).
 
 ### Parity baseline (corrected by W1; `docs/design/cross-platform-2026.md` is authoritative)
 

@@ -10,7 +10,7 @@ cancel = "Отмена"
 close = "Закрыть"
 stop_optimizing = "Остановить оптимизацию"
 optimize_route = "Оптимизировать маршрут"
-restart_admin_optimize = "Перезапустите от имени администратора для оптимизации"
+restart_admin_optimize = "Перезапустить от имени администратора"
 manage = "Управление"
 
 [route]
@@ -76,7 +76,7 @@ disconnected = "Отключено"
 connected = "Подключено"
 optimizing = "Оптимизация"
 holding = "Ожидание"
-not_returning = "Нет обратного пути"
+not_returning = "Нет возврата"
 error = "Ошибка"
 idle = "Не оптимизируется"
 

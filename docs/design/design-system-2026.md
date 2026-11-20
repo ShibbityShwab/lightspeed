@@ -1,8 +1,17 @@
 # LightSpeed desktop 2026 — the visual and component system
 
-**Status:** W1 proposal for owner review. Docs only: no `client-gui` code, no token
-value and no engine/config/fleet change ships with this document.
-**Program:** WF-081 (Desktop 2026), wave W1. **Owner:** `design-system` persona.
+**Status:** W1 design set **ACCEPTED** (QA + owner), revised by delta **r11**
+(2026-11-20): the owner chose the **mobile-only viewport** — the shipped
+`client-gui/src/main.rs` geometry of a 320 px pinned width, one `narrow` column
+and a user-resizable 420–1400 px height (initial 760) — and the set was
+re-baselined onto master `76aba5d` (warn-only relay starvation, honest location
+ladder, route trace, update disclosure). The W1 360×420 / 440×880 / 1120×1400
+plan and every two-column layout are **superseded**. The W1 spec's §1.1 geometry
+(360/440/1120) is superseded by the same owner decision; its owner reconciles the
+spec in the delta wave — this document states the 320 px system and is the
+authority for the tokens, type and component contracts. Docs only: no `client-gui`
+code, token value or engine/config/fleet change ships with this document.
+**Program:** WF-081 (Desktop 2026), wave W1 delta. **Owner:** `design-system` persona.
 **Canon inputs:** `docs/design/gui-refresh-brief.md` §6 (direction),
 `docs/design/interface.md` (state contract), `.dsh/skills/lightspeed-gui-design/SKILL.md`.
 **Historical input, not approved:** `docs/design/ui-design-critique.md` (pass 1,
@@ -12,6 +21,13 @@ REVISE, 16 required changes) — used here as a defect checklist (§13).
 `contrast.py` → `contrast-results.md`, `fonts.py` → `fonts-and-glyphs.md`,
 `token_audit.py` → `token-usage.md`. The scripts state their method in their
 docstrings and are re-runnable with `py -3`; no number here is an estimate.
+The mobile-only delta adds `wat/evidence/2026-11-20/team/design-system/`:
+`delta-copy.py` → `delta-copy.md` (320 px copy budgets, wrap-line counts and the
+fallback-face audit), plus `delta-r11.md` (finding → change map) and snapshots
+of the re-run outputs (`contrast-results.md`, `fonts-and-glyphs.md`,
+`token-usage.md`). **Citation baseline:** every repo `file:line` below is verified
+against worktree HEAD `0df57ce` (master `76aba5d` + the W1 docs); the delta
+re-derived all 54 `app.rs`/`main.rs` citations after the rebase (`cite-check.md`).
 
 **The system in one paragraph.** One dark palette of 53 tokens in
 `client-gui/src/design.rs`, one role-based type scale (8 roles, two bundled
@@ -19,9 +35,10 @@ weights, Inter + JetBrains Mono + locale-ordered Noto CJK), one 4-px spacing
 scale, one radius per surface role, no shadows (elevation is a plane, not a
 drop shadow), one density, a seven-state contract for every control, no motion
 except what egui animates itself, and no accessibility claim that is not backed
-by a measured ratio or a named mechanism. The window is a status instrument:
-the state word and the measurement are the loudest objects, and the single solid
-accent fill is spent on the one action that changes the session.
+by a measured ratio or a named mechanism. The window is a **mobile-only, 320 px
+status instrument**: one column, the state word and the measurement are the
+loudest objects, and the single solid accent fill is spent on the one action that
+changes the session.
 
 ---
 
@@ -35,6 +52,7 @@ accent fill is spent on the one action that changes the session.
 | measured row height | epaint 0.37's `ascent − descent + line_gap`, each term `round_ui()`-rounded, from the shipped faces' metrics (`fonts.py` docstring; `epaint-0.37.0/src/text/font_face.rs:596-624`). Computed, not rasterised. |
 | uses | code lines that reference a token as a value (comments, strings, `info!`/`warn!` macros and same-named locals excluded), `token_audit.py`. |
 | shipped | what `client-gui` at this worktree's HEAD actually does, cited by `file:line`. |
+| lines | greedy word-wrap count at the render role and column width, measured by `delta-copy.py` from the installed font chain. Type is never shrunk to fit; a string that needs more lines gets them. |
 
 The locked framework is **egui/eframe 0.37.0** (`Cargo.lock`: `egui`, `eframe`,
 `epaint`, `egui-wgpu`, `egui_glow` all `0.37.0`; `accesskit 0.25.2`). Every
@@ -50,6 +68,15 @@ pin the values). The site palette it was adopted from is not loaded at runtime;
 there is no second palette *module*. There is a second palette *in practice*:
 five inline colour literals in `globe.rs` (§1.3).
 
+**Delta re-audit on master `76aba5d`:** **no token value drift** —
+`git diff 62c6cf6..HEAD -- client-gui/src/design.rs` is empty (the token module
+was last changed before the W1 snapshot, commit `71fad63`), and the pin tests are
+unchanged. **Usage drift exists and is recorded in the tables below:** `R_INLINE`
+(cold, 0 uses at the W1 snapshot) is now used for the starvation banner's 4 px
+frame; `danger_soft` took a second call site (the banner fill); `text_3`, `warn`,
+`danger`, `S1`, `S2`, `CAPTION`, `BODY` gained call sites from the new copy
+surfaces.
+
 ### 1.1 Colour tokens
 
 | # | token | value | role (what it is for) | uses | status |
@@ -63,7 +90,7 @@ five inline colour literals in `globe.rs` (§1.3).
 | 7 | `border_2` | `#333339` | hover hairline | 1 | theme-only |
 | 8 | `text_1` | `#F2F2FA` | primary ink: labels, values, the state word when neutral | 17 | used |
 | 9 | `text_2` | `#B4B4CC` | prose: help text, sub-lines | 13 | used |
-| 10 | `text_3` | `#8A8AA8` | tertiary ink: captions, ledger keys, units, hints, disabled ink | 24 | used |
+| 10 | `text_3` | `#8A8AA8` | tertiary ink: captions, ledger keys, units, hints, disabled ink, location/trace captions | 30 | used |
 | 11 | `accent` | `#6C5CE7` | action hover fill, active map-marker ring, active control stroke; the route arc duplicates this value inline | 3 | used |
 | 12 | `accent_strong` | `#7D6FF0` | *claimed* action hover fill | 0 | **DEAD** |
 | 13 | `accent_deep` | `#5A4BD4` | action fill at rest/ pressed | 3 | used |
@@ -74,10 +101,10 @@ five inline colour literals in `globe.rs` (§1.3).
 | 18 | `signal_soft` | `rgba(0,214,143,.1216)` | *claimed* BOOSTING chip tint | 0 | **DEAD** |
 | 19 | `info` | `#00CEC9` | *claimed* neutral in-flight fact | 0 | **DEAD** |
 | 20 | `info_soft` | `rgba(0,206,201,.1216)` | *claimed* info tint | 0 | **DEAD** |
-| 21 | `warn` | `#FDCB6E` | attention: HOLDING/DIRECT word, degraded RTT, recoverable failure | 10 | used |
+| 21 | `warn` | `#FDCB6E` | attention: HOLDING word, degraded RTT, recoverable failure, warn-tone notice (contract) | 9 | used |
 | 22 | `warn_soft` | `rgba(253,203,110,.1216)` | *claimed* warn tint | 0 | **DEAD** |
-| 23 | `danger` | `#FF6B6B` | bad: error text, invalid field ink, bad RTT, STOP label | 12 | used |
-| 24 | `danger_soft` | `rgba(255,107,107,.1216)` | Danger action hover fill | 1 | used |
+| 23 | `danger` | `#FF6B6B` | bad: error text, invalid field ink, bad RTT, STOP label, `NO RETURN PATH` word, starvation-banner ink | 16 | used |
+| 24 | `danger_soft` | `rgba(255,107,107,.1216)` | Danger action hover fill; the starvation-banner fill (danger-soft over the card) | 2 | used |
 | 25 | `on_accent` | `#FFFFFF` | ink/fill placed on accent: action labels, map marker core | 3 | used |
 | 26 | `scrim` | `rgba(11,11,13,.7216)` | modal backdrop | 4 | used |
 | 27 | `grid` | `rgba(242,242,250,.0588)` | *claimed* globe graticule | 0 net | **SHADOWED** |
@@ -90,12 +117,12 @@ token itself is unused.
 
 | token | value | role | uses | status |
 |---|---|---|---|---|
-| `S1` | 4.0 | icon→label gap; label→field gap in narrow rows | 11 | used |
-| `S2` | 8.0 | default gap between related controls; theme `item_spacing`, `menu_margin` | 46 | used |
+| `S1` | 4.0 | icon→label gap; label→field gap in narrow rows; banner/spacing after a notice | 13 | used |
+| `S2` | 8.0 | default gap between related controls; theme `item_spacing`, `menu_margin`; notice frame padding | 48 | used |
 | `S3` | 12.0 | card/sheet inner gutter; button horizontal padding | 10 | used |
 | `S4` | 16.0 | panel margin; sheet inner margin; region gutter | 13 | used |
 | `S5` | 24.0 | *claimed* separation between major regions | 0 | **DEAD** (kept, see §1.4) |
-| `R_INLINE` | 4 | *claimed* chip/inline-mark radius | 0 | **DEAD** |
+| `R_INLINE` | 4 | inline-mark radius: the starvation notice's 4 px frame | 1 | used |
 | `R_CONTROL` | 8 | field, combo, tile radius | 7 | theme-only |
 | `R_CARD` | 8 | the one card radius | 2 | used |
 | `R_BUTTON` | 12 | the action slot radius | 1 | used |
@@ -107,10 +134,10 @@ token itself is unused.
 | `GLOBE_SM` | 76.0 | *claimed* narrow globe size | 0 | **DEAD** |
 | `GLOBE_XS` | 72.0 | *claimed* short-height globe size | 0 | **DEAD** |
 | `ROW_H` | 24.0 | ledger row allocation | 2 | used |
-| `LEDGER_LABEL_W` | 96.0 | wide-breakpoint ledger key column | 2 | used, unreachable at 320 px (§5.4) |
-| `CAPTION` | 11.0 | §4 | 29 | used |
-| `LABEL` | 12.0 | §4 | 11 | used |
-| `BODY` | 13.0 | §4 | 11 | used |
+| `LEDGER_LABEL_W` | 96.0 | wide-breakpoint ledger key column | 2 | used, unreachable in the mobile-only viewport; retired in W2 (§5.4) |
+| `CAPTION` | 11.0 | §4 | 35 | used |
+| `LABEL` | 12.0 | §4 | 10 | used |
+| `BODY` | 13.0 | §4 | 12 | used |
 | `EMPHASIS` | 15.0 | §4 | 3 | used |
 | `VALUE` | 17.0 | §4 | 1 | theme-only |
 | `TITLE` | 20.0 | §4 | 2 | used |
@@ -119,11 +146,13 @@ token itself is unused.
 
 ### 1.3 Findings
 
-1. **Ten dead tokens and one shadowed token** (11 of 53 = 21 %). Each carries a
+1. **Nine dead tokens and one shadowed token** (10 of 53 = 19 %). Each carries a
    role in a docstring and none is used: `accent_strong`, `signal_soft`, `info`,
-   `info_soft`, `warn_soft`, `S5`, `R_INLINE`, `GLOBE_LG`, `GLOBE_SM`,
-   `GLOBE_XS`, plus `grid` (shadowed). A token that exists, is documented and is
-   never used is drift waiting to be copied.
+   `info_soft`, `warn_soft`, `S5`, `GLOBE_LG`, `GLOBE_SM`, `GLOBE_XS`, plus
+   `grid` (shadowed). `R_INLINE` was on this list at the W1 snapshot and is now
+   used by the starvation notice (§1.2) — the delta moved one token from dead to
+   live without changing a value. A token that exists, is documented and is never
+   used is drift waiting to be copied.
 2. **One role has two values.** `design.rs:56` says `accent_strong` is "hover
    fill of the action"; the shipped action hover uses `accent` (`ledger.rs:100`).
    Two tokens claim the hover role.
@@ -132,7 +161,8 @@ token itself is unused.
    (`theme.rs:150`) and the scrollbar uses `widget_fg_stroke`
    (`scroll_area.rs:1637`), never `border_2`. `grid` is documented as the
    "globe's graticule" but the map paints a literal.
-4. **A second palette in `globe.rs`.** Five inline literals: map surface
+4. **A second palette in `globe.rs`.** Five inline literals (unchanged by the
+   delta — the re-run audit reports the same five sites): map surface
    `#111118` (`:71`), graticule `#222230` (`:72`), land `#4A4A72` (`:73`), route
    `#6C5CE7` (a byte-identical duplicate of `accent`, `:125`), marker core
    `Color32::WHITE` (`:133`), plus a corner radius of `6` (`:74`, off-scale).
@@ -141,7 +171,7 @@ token itself is unused.
    colour literals = 4 `Color32::from_rgb` + 1 `Color32::WHITE`**; the radius `6`
    is a geometry literal counted separately in §5.6.
 5. **Size drift.** The dead `GLOBE_*` tokens describe 92/76/72 px, while the
-   shipped map is 132 px tall and at most 430 px wide (`app.rs:2151-2152`) with
+   shipped map is 132 px tall and at most 430 px wide (`app.rs:2281-2282`) with
    an inline radius of 6. The token module and the renderer disagree.
 6. **The shipped state word is not its token size.** `STATE * 0.82` = 24.6 px is
    always taken because the viewport is pinned to 320 px and `narrow` is
@@ -161,9 +191,9 @@ tests in the same change):**
 | `border_control` | `#65656A` | the boundary that identifies an interactive control (field, checkbox box, combo) at rest | rest boundary today is 1.19:1; `#65656A` is the first step of the hairline hue `(v,v,v+5)` reaching 3.14:1 on `bg_2`, 3.30:1 on `bg_1`, 3.39:1 on `bg_0` (search in `contrast.py`) |
 | `map_land` | `#4A4A72` | land silhouette on the route map | the only map colour that cannot be reused from an existing role; 2.25:1 on `bg_0` is decorative (not a 1.4.11 claim) |
 | `HERO_H` | `40.0` | the state rail's hero band height | the shipped fonts lay out a 40 px row (JetBrains Mono 30); the inline 34 px cannot contain it (§4.2) |
-| `RAIL_EDGE` | `3.0` | width of the 3 px painted state edge on the rail | shipped at `app.rs:3904-3908`, inline |
-| `MAP_H` | `132.0` | route map height | shipped inline at `app.rs:2152`; replaces the dead `GLOBE_*` trio |
-| `MAP_W_MAX` | `430.0` | route map maximum width | shipped inline at `app.rs:2151` |
+| `RAIL_EDGE` | `3.0` | width of the 3 px painted state edge on the rail | shipped at `app.rs:4140-4144`, inline |
+| `MAP_H` | `132.0` | route map height | shipped inline at `app.rs:2282`; replaces the dead `GLOBE_*` trio |
+| `MAP_W_MAX` | `430.0` | route map maximum width | shipped inline at `app.rs:2281` |
 | `HIT_MIN` | `24.0` | minimum pointer target for any control (WCAG 2.5.8) | the shipped 16 px proxy rows cannot host a 24 px target (§5.5) |
 | `FOCUS_RING_W` | `2.0` | width of the keyboard-focus ring (painted outside the control) | §3.4: the shipped focus indication measures 1.22:1; a 2 px `accent_text` ring measures 7.89:1 on `bg_1` |
 | `ACTION_H_WRAPPED` | `56.0` | the action slot's height when its label wraps to two `EMPHASIS` lines | derivation: two 19 px line rows = 38 + 2 × S2 button padding = 54, rounded up to the next 8-px density step = 56; the two-line action is the adopted spec decision (D7/§1.3) and the silent 9 px shrink is deleted |
@@ -179,9 +209,12 @@ tests in the same change):**
 | `grid` | plot graticule | paint the map with `bg_0` surface + `grid` graticule + `accent` route + `on_accent` marker core + `map_land`; delete the five literals |
 | `S5` | separation between unrelated content groups inside a sheet | use it as the section break in the settings sheet (the shipped sheet uses ad-hoc `hairline + S2 + S1`) |
 | `on_accent` | the only pure-white fill/ink: action ink and map marker core | reuse in the map |
+| `R_INLINE` | inline-mark radius: the starvation notice's 4 px frame (master `76aba5d` uses it) | keep — it is live now; do not delete |
+| `danger_soft` / `danger` | danger-tone notice fill/ink (starvation banner) in addition to the Danger action | keep; the banner ink measures 5.61:1 on its own fill (§3.2) |
+| `warn` | warn-tone notice ink (contract) in addition to the HOLDING word and RTT ramp | keep; warn on the warn-tint measures 9.30:1 (§3.2) |
 
 **Delete (they duplicate a role or describe a surface that no longer exists):**
-`accent_strong`, `signal_soft`, `info`, `info_soft`, `warn_soft`, `R_INLINE`,
+`accent_strong`, `signal_soft`, `info`, `info_soft`, `warn_soft`,
 `GLOBE_LG`, `GLOBE_SM`, `GLOBE_XS`. The deletion is internal to the GUI crate
 (no public API); log it in `wat/state/decisions/2026-11.md` with this document
 as the reference. If a semantic tint or a neutral info colour is needed later,
@@ -259,7 +292,7 @@ A frame stroke is painted inside the frame (`Frame` uses `StrokeKind::Inside`,
 fill. `contrast.py` encodes this rule; the regenerated `contrast-results.md`
 records 1.35:1.
 
-### 3.2 Text pairings (37 shipped pairings)
+### 3.2 Text pairings (41 shipped pairings)
 
 | role | ink on surface | px / face | ratio | AA | AAA |
 |---|---|---|---|---|---|
@@ -288,7 +321,8 @@ records 1.35:1.
 | link / sheet | `#A29BFE` on `#0B0B0D` | 13 Inter Reg | **8.11:1** | PASS | PASS |
 | link / window plane | `#A29BFE` on `#0F0F11` | 13 Inter Reg | **7.89:1** | PASS | PASS |
 | state word BOOSTING | `#00D68F` on `#151518` | 30 Inter SemiBold (large) | **9.56:1** | PASS | PASS |
-| state word HOLDING / DIRECT | `#FDCB6E` on `#151518` | 30 Inter SemiBold (large) | **12.10:1** | PASS | PASS |
+| state word HOLDING (warn) | `#FDCB6E` on `#151518` | 30 Inter SemiBold (large) | **12.10:1** | PASS | PASS |
+| state word NO RETURN PATH (danger; shipped value `No return path`) | `#FF6B6B` on `#151518` | 30 Inter SemiBold (large; shipped 24.6 px) | **6.57:1** | PASS | PASS |
 | metric good | `#00D68F` on `#151518` | 30 JBMono (large) | **9.56:1** | PASS | PASS |
 | metric attention | `#FDCB6E` on `#151518` | 30 JBMono (large) | **12.10:1** | PASS | PASS |
 | metric bad | `#FF6B6B` on `#151518` | 30 JBMono (large) | **6.57:1** | PASS | PASS |
@@ -300,13 +334,19 @@ records 1.35:1.
 | invalid address hint | `#FDCB6E` on `#151518` | 13 Inter Reg | **12.10:1** | PASS | PASS |
 | config error | `#FF6B6B` on `#0B0B0D` | 11 Inter Reg | **7.09:1** | PASS | PASS |
 | disabled stock button ink | `#828288` on `#131316` (50 % opacity composite) | 12 Inter SemiBold | **4.85:1** | PASS | FAIL |
+| starvation-banner text (danger tone) | `#FF6B6B` on `#311F22` (danger-soft over the card) | 13 Inter SemiBold | **5.61:1** | PASS | FAIL |
+| notice warning line (warn tone, contract) | `#FDCB6E` on `#312B22` (warn-soft over the card) | 13 Inter SemiBold | **9.30:1** | PASS | PASS |
+| location / route-trace caption on card | `#8A8AA8` on `#151518` | 11 Inter Reg | **5.45:1** | PASS | FAIL |
 
-**Result: 36 of 37 shipped text pairings pass AA. The one failure is the
+**Result: 40 of 41 shipped text pairings pass AA. The one failure is the
 selected list-row label at 1.35:1 (the 28 %-alpha accent ink painted over the
 row's own selection fill, §3.1), and it is a single token decision, not a
-design mystery** (§3.4). AAA is met by 26 of 37; the AAA misses are all
+design mystery** (§3.4). AAA is met by 28 of 41; the AAA misses are all
 small-size secondary ink and coloured ink, which the canon does not claim
-(AAA is `text_1` on every plane: 15.4–17.7:1).
+(AAA is `text_1` on every plane: 15.4–17.7:1). The delta's new copy is fully
+covered by these rows: the danger-tone notice and the warn-tone notice both
+pass AA (5.61:1 / 9.30:1), and the new location/trace captions are the same
+`text_3`-on-card pairing as the ledger keys (5.45:1).
 
 Non-shipped rule-justification row: `accent` as 13 px ink on `bg_1` =
 **3.94:1** (AA fail), which is why §2 rule 1 forbids it.
@@ -335,15 +375,20 @@ Non-shipped rule-justification row: `accent` as 13 px ink on `bg_1` =
 | **checkbox box border vs sheet** | `#25252A` / `#0B0B0D` | **1.29:1** | **FAIL** (identify) |
 | checkbox check mark | `#F2F2FA` / `#1B1B1F` | 15.42:1 | PASS |
 | Danger action hairline vs fill | `#FF6B6B` / `#1B1B1F` | 6.19:1 | PASS |
+| starvation-banner fill vs card | `#311F22` / `#151518` | 1.17:1 | decorative (the frame tint is not the identifying cue) |
+| starvation-banner stroke vs its fill | `#FF6B6B` / `#311F22` | 5.61:1 | PASS (state; the word carries it, the hairline reinforces) |
+| notice warn-tone stroke vs its fill (contract) | `#FDCB6E` / `#312B22` | PASS-scale (measured in `contrast-results.md`) | PASS (contract variant) |
 | route arc vs map surface | `#6C5CE7` / `#111118` | 3.87:1 | PASS |
 | map land vs map surface | `#4A4A72` / `#111118` | 2.25:1 | decorative |
 | map graticule vs map surface | `#222230` / `#111118` | 1.20:1 | decorative |
 | hover fill delta | `#222227` / `#1B1B1F` | 1.08:1 | advisory (hover is never required to operate) |
 | hover stroke delta | `#333339` / `#25252A` | 1.22:1 | advisory |
 
-**Result: 6 of 18 claimed non-text pairings pass 3:1; 12 fail.** The failures
+**Result: 8 of 20 claimed non-text pairings pass 3:1; 12 fail.** The failures
 are one systemic defect — *the dark-on-dark control boundary is invisible* — plus
-the focus indication that inherits from it.
+the focus indication that inherits from it. The delta's notice frame passes: its
+danger stroke measures 5.61:1 against its own fill, and the tinted fill itself
+(1.17:1 vs the card) is not claimed as an identifying cue.
 
 ### 3.4 Fixes, each re-measured
 
@@ -358,6 +403,7 @@ the focus indication that inherits from it.
 | rail edge CONNECTED 1.12:1 | the edge is redundant (the word says CONNECTED); either remove the edge in that state or use `border_2`; do not claim it as a state indicator | — |
 | checkbox box invisible (1.15/1.29:1) | the box stroke becomes `border_control` (3.14:1 on the sheet plane); the check mark already passes at 15.42:1 | 3.14:1 |
 | the one action's hover ink AAA | accepted: 4.86:1 passes AA at 15 px; the rest fill (6.19:1) is the primary state and hover is transient | AA PASS |
+| notice frame (master `76aba5d`): danger-soft fill, danger hairline, danger ink, `R_INLINE` 4 px | keep the shipped treatment; it measures 5.61:1 ink and 5.61:1 stroke vs its fill, and the state is carried by the sentence, not the tint | AA PASS; do not add a fourth ink colour |
 
 The `#65656A` value is a searched minimum with a 0.10 margin over 3.0 so integer
 rounding cannot drop it below the threshold; the search is in `contrast.py`
@@ -370,8 +416,9 @@ carries text.
   `text_1` on every plane (15.42–17.66:1) and for the map/checkmark/big-word
   pairings marked PASS.
 - "AA" is claimed only for pairings in §3.2, which are the pairings that exist
-  in the shipped code. A new colour pairing needs its own measurement before it
-  ships.
+  in the shipped code (41 rows after the delta; the new notice and caption rows
+  are re-measured from the master tree). A new colour pairing needs its own
+  measurement before it ships.
 - Hover, pressed and selected *fill steps* do not make 1.4.11 claims; the
   identifying information is the boundary, the ink and the word. Focus does make
   a claim and gets the ring.
@@ -409,7 +456,7 @@ Rules:
    codified.
 2. **Mono is for data, never costume.** `VALUE`/`METRIC` carry addresses, ports,
    counters and the RTT number. Prose, labels and buttons are Inter even when
-   they contain digits (`app.rs:2381` prose uses BODY, not mono).
+   they contain digits (`app.rs:2674` prose uses BODY, not mono).
 3. **Sentence case everywhere except two strings**: the uppercase state word
    (canon, the instrument's readout) and the action label (canon: the button).
    Ledger keys are caption sentence case (`Relay`, `Game server`), never
@@ -426,7 +473,7 @@ Rules:
 
 ### 4.2 The rail's measured geometry
 
-- The rail's hero row is allocated `hero_h = 34.0` (`app.rs:2055`) but the
+- The rail's hero row is allocated `hero_h = 34.0` (`app.rs:2153`) but the
   shipped faces lay out a 40 px row for the metric (`METRIC` 30 JetBrains Mono)
   and 36 px for the state word. **The 34 px band cannot contain its contents**;
   the row grows to 40 px. W2 sets `HERO_H = 40.0`.
@@ -439,57 +486,134 @@ Rules:
   the historical "≤1 px drift" concern at the token sizes.
 - The shipped narrow multiplier breaks it: `STATE * 0.82` = 24.6 px gives a
   30 px Inter row and a measured **2.0 px** baseline drift against the 30 px
-  metric (§4.5).
+  metric (§4.5). At the mandated `STATE` 30 px the 288 px rail column overflows
+  for ES/PT-BR `NO RETURN PATH` (309.0 / 328.4 px) and RU `IDLE` (326.8 px) in
+  the current tree; RU `NO RETURN PATH` is already shortened to 222.9 px by the
+  coordinated copy fix (`delta-copy.md` §5). The metric needs its own row
+  regardless; the remedy is decided in §4.4 item 4 / §6.9 gap 11.
 
 ### 4.3 Numerals and units
 
 - JetBrains Mono is monospaced, so digits are tabular by construction; no
   `VALUE` number shifts the column when it changes. Counters are grouped with
   `group_digits` (`widgets.rs:473-484`) and the metric is padded to three digits
-  (`{reading:>3.0} ms`, `app.rs:2041`) so the rail does not jump between 9 and
+  (`{reading:>3.0} ms`, `app.rs:2139`) so the rail does not jump between 9 and
   124 ms.
 - A unit is part of the value string (`ms`, `s`), never a separate styled
   element, and never a fabricated precision: seconds ages are integer, RTT is
   integer ms, sample counts are exact `n=`.
-- `—`/`--`: an absent metric prints the literal `--` (`app.rs:2043`), never a
+- `—`/`--`: an absent metric prints the literal `--` (`app.rs:2141`), never a
   zero and never a blank. A stale measurement prints its age.
 
 ### 4.4 Localisation budgets (measured, not estimated)
 
-Nine locales. The **adopted W2 geometry is min 360×420, default 440×880**
-(spec §1.1, C-4 — the shipped 320 px pinned width is superseded and named only
-as current-state evidence). At the 360 min the content column is 328 px
-(360 − 2×S4) and the action-label budget is 304 px ((360 − 2×S4) − 24); at the
-440 default the content column is 408 px and the label budget 384 px. The shipped
-320 px figures — content 288 px, label 296 px (`available_width − 24`,
-`ledger.rs:81`) — remain the current-state measurement only.
+Nine locales, **mobile-only geometry**: the viewport is pinned to 320 px wide,
+one `narrow` column, height user-resizable 420–1400 px (initial 760)
+(`main.rs:109-115`; owner decision 2026-11-20, brief §13). At that width the padded
+content is **288 px** (320 − 2×S4), the card inner width **264 px** (288 − 2×S3),
+the notice text column **248 px** (264 − 2×S2), the sheet body **264 px**, and
+the action label column **264 px** — `action_button` reserves 24 px of the 288 px
+content (`inner_w = available_width − 24`, `ledger.rs:81`). The earlier W1 draft's
+296 px action budget was arithmetically wrong (it forgot the S4 panel margins);
+264 px is the corrected number and the one the delta's measurements use.
 
-- The three action labels are uppercased and measured at 15 px Inter SemiBold.
-  The English restart label measures **295.0 px**: against the 304 px budget at
-  the 360 min it fits with **9 px to spare**; against the shipped 320 px 296 px
-  budget it fits only within the ±2 px tolerance of un-kerning (the renderer
-  shapes with `harfrust`, so GPOS kerning can shift it a couple px).
-- **4 of 15 locale/label pairs exceed the shipped 296 px budget**, worst:
-  German `action.restart_admin_optimize` at **383.0 px**, French 359.7, Spanish
-  358.4, Portuguese 352.8; the shipped shrink path renders them at 11.6–12.6 px,
-  below the `EMPHASIS` role and outside the type scale (§4.5).
-- **Adopted decision** (spec D7/§1.3; layout owner `interface-designer`, copy
-  owner `ux-lead`): the refresh takes the **two-line action at 15 px** — it
-  deletes the 9 px shrink and does not force the copy to shrink. Two `EMPHASIS`
-  rows are 38 px, so the slot uses **`ACTION_H_WRAPPED` 56** (38 + 2 × S2 = 54,
-  rounded to the next 8-px step) instead of `ACTION_H` 48 when the label wraps.
-  At the 440 default the largest label (383.0 px) fits the 384 px budget by 1 px,
-  inside the documented kerning tolerance, so it wraps only at the 360 min.
-- CJK/Korean labels are short (2–6 glyphs) and never bind the budget. Cyrillic
-  and Latin translations are the binding cases.
+**Rule: long copy wraps; it is never shrunk.** The only shipped shrink path is
+the action label's 9 px floor (`ledger.rs:81-88`), deleted in W2. The adopted
+two-line action is `ACTION_H_WRAPPED` 56 (two 19 px `EMPHASIS` rows = 38 + 2×S2 =
+54, rounded to the next 8-px step).
+
+Measured action labels at 264 px (greedy word wrap, `EMPHASIS` 15 Inter SemiBold,
+all nine locales):
+
+| label | locales at 1 line | locales at 2 lines | locales at 3 lines | worst width |
+|---|---|---|---|---|
+| `action.stop_optimizing` | all 9 | — | — | 225.7 px (ru) |
+| `action.optimize_route` | all 9 | — | — | 220.7 px (ru) |
+| `action.restart_admin_optimize` | ja, zh-Hans | en, de, es, fr, ko, pt-BR, ru | none | 383.0 px (de); RU was 518.6 px / 3 lines at HEAD, now 356.9 px / 2 lines (landed copy) |
+
+Every label now fits the two-line slot: the largest is DE 383.0 px (2 lines), and
+the previously-broken RU string was 518.6 px / 3 lines at HEAD and is 356.9 px /
+2 lines with `ux-lead`'s landed `ru.toml` copy (`Перезапустить от имени
+администратора`, dropping the "to optimize" purpose — flagged to `ux-lead`/spec
+to carry elsewhere). `ACTION_H_WRAPPED` 56 is therefore sufficient; the 73 px
+three-line option remains priced out (compact worst 256 chrome → 164 scroll,
+below the 180 floor). The type is never reduced, and the 9 px shrink floor is
+deleted either way.
+
+**New copy from master `76aba5d` measured at the mobile-only widths**
+(`delta-copy.py`; lines = greedy wrap at the render role; worst of nine locales):
+
+| copy | site / role | column | EN lines | worst lines |
+|---|---|---|---|---|
+| `route.relay_not_returning` (banner) | card banner / BODY SemiBold 13 | 248 px | 3 | **4** (de) |
+| `route.injection_failed_warning` (banner) | card banner / BODY SemiBold 13 | 248 px | 3 | **4** (de) |
+| `settings.starvation_policy` | settings sheet / CAPTION 11 | 264 px | 5 | **6** (de) |
+| `route.location_hosting_hint` | card location ladder / CAPTION 11 | 264 px | 2 | **3** (fr) |
+| `route.location_*` captions and details | card location ladder / CAPTION 11 | 264 px | 1–2 | 2 (hosting hint 3) |
+| `route.location_geofeed_note` | card / CAPTION 11 | 264 px | 2 | 2 |
+| `route.trace_route` + `route.trace_nearest` | card trace caption / CAPTION 11 | 264 px | 1 | 1 |
+| `route.route_trace_hops` (with sample values) | ledger value / JBMono 17 | 264 px | 2 | **3** (ru) |
+| `route.server_leg_relay_measured` | ledger value / JBMono 17 | 264 px | 2 | 2 (ru) |
+| `route.server_leg_relay_measured_unvalidated` | ledger value / JBMono 17 | 264 px | 2 | **3** (ru) |
+| `route.expected_path` | ledger value / JBMono 17 | 264 px | 1 | 2 (ru) |
+| `route.server_leg_app_measured` | ledger value / JBMono 17 | 264 px | 1 | 1 |
+| update-sheet hard-coded UAC line | sheet / BODY 13 | 264 px | 2 | 2 |
+
+Consequences, stated as rules rather than tweaks:
+
+1. **The notice text is a 3–4 line banner at 320 px, not a one-or-two-line line.**
+   The component contract (§6.10) allows a measured maximum of 4 text lines
+   (80 px frame + S2 spacing, inside the scrolling card) and never shrinks the
+   type. `ux-lead` may shorten the copy toward the 2-line target (≤496 px of text
+   at 13 px semibold), which would bring the frame back to 48 px.
+2. **The setting policy paragraph is a 5–6 line caption**, which is fine for a
+   settings sheet: the sheet body scrolls; no control is displaced.
+3. **The ledger/value rows wrap to 2–3 lines in RU** because the mono value is
+   17 px in a 264 px column. The row grows in height; the value is never shrunk
+   and no truncation-without-hover is allowed for a value the player needs.
+4. **The state word at the mandated 30 px overflows the 288 px rail in three
+   current-tree cases; the metric must move to its own row.** Dropping the
+   shipped `0.82` multiplier renders the word at `STATE` 30 px. Measured in the
+   current tree (`delta-copy.md` §5): **PT-BR `NO RETURN PATH` 328.4 px**
+   (+40.4 over the 288 px column), **RU `IDLE` 326.8 px** (+38.8), **ES
+   `NO RETURN PATH` 309.0 px** (+21.0); DE `OPTIMIZING` 275.1 px fits 288 with
+   12.9 px but is over the proposed 276 px acceptance cap. RU `NO RETURN PATH`
+   was 342.8 px at HEAD and is **already shortened to 222.9 px** by `ux-lead`'s
+   landed `ru.toml` copy, so that case is fixed in the worktree. The metric
+   cannot share the row either: word + S2 8 + metric 90 ≥ 366 px even at the
+   shipped 24.6 px. **Acceptance proposed to the spec owner: every locale's
+   uppercased state word at `STATE` 30 px measures ≤276 px in its installed
+   chain (12 px / 4 % safety under 288, ±2 px measurement tolerance).**
+   **Recommended remedy: shorten the remaining over-budget words** — ES
+   `SIN RETORNO` 176.8 px and PT-BR `SEM RETORNO` 178.7 px (proposed strings,
+   pending the copy owner), RU `IDLE` contingency `НЕ АКТИВНО` 193.9 px (only if
+   A2 keeps `idle`; `НЕ ПОДКЛЮЧЕНО` 268.0 px for the A2 `not_connected` row), and
+   optionally DE `OPTIMIERUNG` 167.2 px for slack — keeping the 30 px type role,
+   the 40 px hero band and the spec's 239/181 compact budget. Fallbacks: a
+   measured 24/25 px effective word size (the type role would no longer be
+   30 px), or a two-line hero, which prices the compact worst at 275 chrome →
+   145 scroll, below the 180 floor (it needs an owner-approved floor change).
+   Nothing else: the word must never be occluded. The RU width is a
+   Cyrillic-fallback symptom (Ubuntu-Light, not Inter SemiBold; ES/PT accents
+   also fall back) — re-subsetting the bundled fonts (Q19) is the long-term fix,
+   copy shortening is the v1 fix.
+5. **CJK/Korean labels are short** and never bind the budget; the RU (Ubuntu
+   fallback) and Latin translations are the binding cases.
+6. **The update-check disclosure is documentation-only.** Master `bbc96cc` added
+   the user-initiated GitHub release-check disclosure to `docs/privacy.md`
+   (§Update check) and `docs/data-dictionary.md`; it ships **no new in-window
+   copy**. The update sheet's existing strings are measured in `delta-copy.md`
+   §3 and wrap under the same rule (the hard-coded UAC line is 2 lines at
+   264 px). If W2 adds a disclosure sentence to the sheet, it follows §6.10's
+   measured-max wrap rule and is never shrunk.
 
 ### 4.5 Shipped type-scale discrepancies (defects, not variants)
 
 | # | shipped | measured effect | W2 |
 |---|---|---|---|
-| 1 | `STATE * 0.82` (`app.rs:2063`) always taken (`narrow` is always true at 320 px) | state word renders at 24.6 px, not 30; 2.0 px baseline drift vs the metric | drop the multiplier; measured fit: widest shipped word (CONNECTED 148.0 px) + 8 px + metric (90.0 px) = **246.0 px of 288 px**, 42 px spare |
+| 1 | `STATE * 0.82` (`app.rs:2161`) always taken (`narrow` is always true at 320 px) | state word renders at 24.6 px, not 30; 2.0 px baseline drift vs the metric; at the mandated `STATE` 30 px the current tree overflows for ES/PT-BR `NO RETURN PATH` (**309.0 / 328.4 px**) and RU `IDLE` (**326.8 px**; RU `NO RETURN PATH` already shortened 342.8→222.9 px), and the metric must move to its own row | drop the multiplier; put the metric on its own row; **shorten the remaining over-budget words to ≤276 px at 30 px** (recommended, §4.4 item 4) — fallback 24/25 px effective size or a two-line hero priced against the floor |
 | 2 | action label shrink to a 9 px floor (`ledger.rs:81-88`) | 4/15 locale/label pairs render at 11.6–12.6 px | §4.4 |
-| 3 | `hero_h = 34.0` inline (`app.rs:2055`) | 40 px content row in a 34 px allocation | `HERO_H = 40.0` |
+| 3 | `hero_h = 34.0` inline (`app.rs:2153`) | 40 px content row in a 34 px allocation | `HERO_H = 40.0` |
 | 4 | `VALUE` (17 px) has no call site (`theme.rs:199` only) | the mono role in use is whatever `TextStyle::Monospace` yields plus the 30 px metric; 17 px mono is dead as a named role | either wire it for ledger data values or collapse `VALUE` into a named use; do not leave a role with no call site |
 
 ---
@@ -511,10 +635,12 @@ already uses only tokens for spacing: `token-usage.md`).
 | S5 24 | separation between unrelated groups inside a sheet (settings: Privacy / Routing / Relays / Maintenance / About) |
 
 Content column: the config region caps its content at `min(available, 560)` and
-centers it (`app.rs:4018-4020`). Cards use a single left gutter — the shipped
-left edges are not all aligned (the rail is full-bleed, the card starts at S4,
-the config card starts at S4 + S3), and the W2 shell must declare one gutter per
-band (layout owner: `interface-designer`).
+centers it (`app.rs:4254-4256`); at the mobile-only 320 px viewport the available
+width is 288, so the cap never binds and the single column is the whole content
+band. Cards use a single left gutter — the shipped left edges are not all aligned
+(the rail is full-bleed, the card starts at S4, the config card starts at
+S4 + S3), and the W2 shell must declare one gutter per band (layout owner:
+`interface-designer`).
 
 ### 5.2 Radius
 
@@ -524,7 +650,7 @@ band (layout owner: `interface-designer`).
 | `R_CARD` | 8 | the one card style | exactly one card style in the window |
 | `R_BUTTON` | 12 | the action slot | the one bright action is the only 12 px surface |
 | `R_SHEET` | 16 | in-window sheets | the only 16 px surface |
-| `R_INLINE` | — | deleted | no chips/inline marks in the instrument; the disclosure marker is painter-drawn (§8.5) |
+| `R_INLINE` | 4 | inline marks: the starvation-notice frame (master `76aba5d`) | keep — it is live now; the notice frame is the only 4 px surface. If a disclosure marker returns it is painter-drawn (§8.5), not a rounded chip |
 
 Rules: **one radius per surface role**; no radius literal at a call site (the
 shipped map uses a literal `6`, `globe.rs:74` — W2 uses `R_CONTROL`). Radius is
@@ -556,7 +682,8 @@ Rules:
 
 ### 5.4 Density and component metrics
 
-One density: a compact desktop instrument. No "comfortable/compact" toggle.
+One density: a compact **mobile-only** instrument (one column, 320 px wide). No
+"comfortable/compact" toggle.
 
 | element | value | source / rule |
 |---|---|---|
@@ -564,27 +691,51 @@ One density: a compact desktop instrument. No "comfortable/compact" toggle.
 | action height | `ACTION_H` 48; `ACTION_H_WRAPPED` 56 with the two-line label | the one action (≥44 preferred target); the wrapped height is derived in §1.4 |
 | ledger row | `ROW_H` 24 | one label/value row |
 | list row (popup option) | 40 | egui control height; do not shrink |
-| dense row (proxy list) | **24 minimum, 40 recommended** | shipped allocation is 16 px (`app.rs:3570`) while a frameless egui button has a 40 px minimum (theme `interact_size.y = 40`), so the shipped row cannot contain its own delete control; W2 rows are 40 px (label + address stacked) with a 24×24 delete target |
+| dense row (proxy list) | **24 minimum, 40 recommended** | shipped allocation is 16 px (`app.rs:3808`) while a frameless egui button has a 40 px minimum (theme `interact_size.y = 40`), so the shipped row cannot contain its own delete control; W2 rows are 40 px (label + address stacked) with a 24×24 delete target |
 | rail hero | `HERO_H` 40 | measured, §4.2 |
 | sparkline | `PLOT_H` 64 | hand-painted, no axes |
 | route map | `MAP_H` 132, `MAP_W_MAX` 430 | shipped inline values; W2 tokens |
-| sheet max width | `(content_w − 24 − 2·S4).min(420 − 2·S4)` | `widgets.rs:424-432`; shipped-current 264 px at 320 px, W2 values 304 px at 360 and 384 px at 440 |
-| sheet body max height | `max_h − 190` floored at 160 | `app.rs:3079`; the 190 px reserve is a magic number — W2 computes it from title + close + margins instead of a constant |
-| window | **shipped-current:** 320 px wide pinned, height 420–1400, initial 760 — W2 supersedes this with spec §1.1's 360×420 min / 440×880 default | `main.rs:91-99`, `window.rs:35-39`; spec §1.1, C-4 |
+| sheet max width | `(content_w − 24 − 2·S4).min(420 − 2·S4)` | `widgets.rs:424-432`; at the mobile-only 320 px viewport that is **264 px** (the 420 px cap never binds; there is no 360/440 variant in this design) |
+| sheet body max height | `max_h − 190` floored at 160 | `app.rs:3327`; the 190 px reserve is a magic number — W2 computes it from title + close + margins instead of a constant |
+| window | **mobile-only (owner decision 2026-11-20):** width **pinned at 320 px**, one `narrow` column; height user-resizable **420–1400**, initial **760** | `main.rs:109-115`, `window.rs:35-39`; brief §13. The W1 360×420 / 440×880 / 1120×1400 plan and every two-column layout are superseded |
 
-**Breakpoint reality (shipped).** `narrow = width < 380` and `short = height < 560`
-(`app.rs:3760-3761`). Because `main.rs` pins the viewport width to exactly
-320 px, **`narrow` is always true and the wide branches are unreachable**: the
-`LEDGER_LABEL_W` column, `field_row`'s side-by-side form, and `interface.md`'s
-380–619 / ≥620 px layouts are dead code at the shipped size. Consequences:
+**Breakpoints: exactly one width layout.** `narrow = width < 380` and
+`short = height < 560` (`app.rs:3998-3999`). With `main.rs` pinning the width to
+320 px, `narrow` is always true: there is **one column and one width layout**.
+The `LEDGER_LABEL_W` column and `field_row`'s side-by-side form are unreachable
+and are retired in W2 with their token; `interface.md`'s 380–619 px and ≥620 px
+two-column plans are superseded by the owner's mobile-only decision. The `short`
+height branch remains real and useful: below 560 px the route card folds into the
+scroll region.
 
-- The token `LEDGER_LABEL_W` (96) has no reachable use; keep it for the W2
-  resizable shell or delete it with the wide branch.
-- Every measurement in this document is at the *narrow, 320 px* layout, which is
-  the only layout users see today.
-- The viewport decision is now made by the spec (§1.1/C-4: 360×420 min,
-  440×880 default), so the wide layouts become reachable in W2; this document
-  provides the measured constraints for them (§4.4, §5.4 redrawn at 360/440).
+**Fixed chrome and the scroll region at 320 px — W2 uses the spec's §1.3 / C-17
+table** (measured rows, §4.1 tokens; `delta-copy.py` §6). The rail has the metric
+on its own row (the state word and the metric cannot share it, §4.4 item 4):
+
+| band | compact / short mode | normal |
+|---|---|---|
+| rail | **108** = 2×S3 24 + `HERO_H` 40 + S1 4 + metric row 40 + S1 4 | **128** = + S1 4 + BODY 16 (sub-line) |
+| action bar, wrapped label | 72 = `ACTION_H_WRAPPED` 56 + 2×S2 16 | 72 |
+| action bar, single-line label | 64 = `ACTION_H` 48 + 2×S2 16 | 64 |
+| disabled-reason line (when shown) | 18 = CAPTION row 14 + S1 4 | 18 |
+| footer | **41** = hairline 1 + S2 8 + `HIT_MIN` 24 + S2 8 | **57** = 1 + 8 + 40 + 8 |
+
+| case | chrome | scroll region at 420 / 760 / 1400 |
+|---|---|---|
+| **320×420 compact worst** (wrapped action + reason line) | **239** | **181** |
+| 320×420 compact best (single-line action, no reason line) | 213 | 207 |
+| **320×760 / 1400 normal worst** | **275** | **485 / 1125** |
+| 320×760 / 1400 normal best | 249 | 511 / 1151 |
+
+The compact worst clears the ≥180 px scrolling-region floor by **1 px — not 27**.
+The earlier table in this document (213/207/547/1187) omitted the metric row, the
+disabled-reason line and the compact footer; it is **superseded by the spec's
+239/181 worst case (C-17)** and must not be used as W2's budget. There is no slack
+to grow a band without re-pricing (the open 73 px action-label option prices at
+256 chrome → 164 scroll, below the floor). The starvation banner and the
+location/trace lines live inside the scrolling card, so they add height there and
+never push the action or footer off-screen; at 420 px the `short` branch has
+already folded the card into the scroll region.
 
 ### 5.5 Pointer targets
 
@@ -602,20 +753,20 @@ One density: a compact desktop instrument. No "comfortable/compact" toggle.
 
 | location | inline value | disposition |
 |---|---|---|
-| `app.rs:2055` | `hero_h = 34.0` | → `HERO_H` 40 (measured) |
-| `app.rs:3904-3908` | rail edge 3.0 px | → `RAIL_EDGE` |
-| `app.rs:2151-2152` | map `min(available, 430)`, `132.0` | → `MAP_W_MAX`, `MAP_H` |
+| `app.rs:2153` | `hero_h = 34.0` | → `HERO_H` 40 (measured) |
+| `app.rs:4140-4144` | rail edge 3.0 px | → `RAIL_EDGE` |
+| `app.rs:2281-2282` | map `min(available, 430)`, `132.0` | → `MAP_W_MAX`, `MAP_H` |
 | `globe.rs:74` | map corner `6` | → `R_CONTROL` |
 | `globe.rs:71-73,125,133` | five colour literals | → `bg_0`, `grid`, `map_land`, `accent`, `on_accent` |
-| `app.rs:3570-3577` | proxy row 16 px, name width `-26.0`, min `80.0` | → 40 px row, `HIT_MIN` delete target |
-| `app.rs:3565` | `item_spacing.y = 4.0` | → S1 |
+| `app.rs:3808-3815` | proxy row 16 px, name width `-26.0`, min `80.0` | → 40 px row, `HIT_MIN` delete target |
+| `app.rs:3803` | `item_spacing.y = 4.0` | → S1 |
 | `ledger.rs:81-88` | label inset 24, min width 80, font floor 9 | rule §4.4; express the 24 px inset as `S5` and delete the 9 px floor |
 | `ledger.rs:127-131` | stop mark 10×10 at 22 px from left | documented local constants (single-use painter detail, not tokens) |
 | `widgets.rs:426-430` | sheet bounds 24 / 420 / 160 | `SHEET_GUTTER` 24? keep as rule constants documented here; `420` stays a max-width constant |
-| `app.rs:3079,3676` | sheet body reserve `190.0` | → computed from title + close + margins |
-| `app.rs:4018` | content column max 560 | documented rule constant (layout owner) |
+| `app.rs:3327,3914` | sheet body reserve `190.0` | → computed from title + close + margins |
+| `app.rs:4254` | content column max 560 | documented rule; never binds at 320 px (available 288) |
 | `widgets.rs:451-469` | sparkline pad 4/1, stroke 1.5, dot 2.5 | local painter constants, documented |
-| `main.rs:95-99` | 320 / 760 / 420 / 1400 | viewport decision (`interface-designer`) |
+| `main.rs:109-115` | 320 / 760 / 420 / 1400 | **decided**: keep the shipped mobile-only geometry (owner, 2026-11-20) — no width change, no wide layouts |
 
 A token is justified only where a second call site must match the value or the
 value encodes a system rule (target sizes, hero band, focus ring). A one-off
@@ -663,14 +814,14 @@ Rules that hold across every class:
 6. **Loading text is static.** No spinner-only loading; motion is delegated to
    §7.
 
-### 6.2 Primary action (custom-painted; `ledger.rs:71-137`, used at `app.rs:3975-3999`)
+### 6.2 Primary action (custom-painted; `ledger.rs:71-137`, used at `app.rs:4211-4236`)
 
 One slot, three labels, gate-driven: `OPTIMIZE MY ROUTE` /
 `RESTART AS ADMINISTRATOR TO OPTIMIZE` / `STOP OPTIMIZING`
 (`primary_action`, `ledger.rs:39-57`). Geometry: full content width ×
 `ACTION_H` 48, `R_BUTTON` 12, `EMPHASIS` 15 SemiBold, uppercase. The slot has
 **two variants** selected by state — `ActionKind::Accent` for the affirmative
-action and `ActionKind::Danger` while boosting (`app.rs:3970-3974`) — and they
+action and `ActionKind::Danger` while boosting (`app.rs:4206-4210`) — and they
 share geometry, focus ring, measurement method and loading/error rules; only the
 fill/ink/hairline differ. **Accent variant:**
 
@@ -708,11 +859,15 @@ otherwise Accent); the focus ring is the system focus token `accent_text` for bo
 variants because focus is a system state, not the action's semantics; the stop
 square is painted (no bundled face draws `■`, §8.3) and appears only while
 `ready`; the label uses the adopted §4.4 two-line decision — it must fit the
-§4.4 width budget, and the slot uses `ACTION_H_WRAPPED` 56 when the label wraps
-(two `EMPHASIS` rows = 38 px + 2 × S2 = 54, rounded to 56).
+264 px label column, and the slot uses `ACTION_H_WRAPPED` 56 when the label wraps
+(two `EMPHASIS` rows = 38 px + 2 × S2 = 54, rounded to 56). One measured
+exception is now resolved by the landed RU copy: the RU restart label was
+3 lines at HEAD and is 2 lines (356.9 px) with `ux-lead`'s landed `ru.toml`
+string, so the two-line slot covers every locale; the 73 px option is priced out
+(§4.4) — the type is never shrunk.
 
-### 6.3 Combo (`egui::ComboBox`; three sites: relay `app.rs:2673`, game
-`app.rs:2759`, language `app.rs:3106`)
+### 6.3 Combo (`egui::ComboBox`; three sites: relay `app.rs:2921`, game
+`app.rs:3007`, language `app.rs:3354`)
 
 | state | appearance | mechanism | shipped |
 |---|---|---|---|
@@ -721,13 +876,13 @@ square is painted (no bundled face draws `■`, §8.3) and appears only while
 | focus-visible | **ring**; fill unchanged. Shipped: focus → `widgets.active` = `accent_deep` fill + `on_accent` ink + `accent` hairline (6.19:1 ink) — identical to pressed and breaks one-bright-control | `widget_state.has_focus()`; W2 `widgets.active` dark + ring helper | **no — wrong visual** |
 | active/open | open popup: fill `bg_3` (`widgets.open`), popup `bg_2` + `border_1` + `R_CONTROL`, `menu_margin` S2 | `combo_box.rs:372-381` + `Frame::popup` | yes |
 | disabled | not used in the shipped UI; rule = 50 % opacity, no pointer, label preserved | `ui.add_enabled(false, …)` → `Ui::disable()` multiplies opacity 0.5 (`ui.rs:523-527`, `style.rs:1670`) | n/a shipped, contract defined |
-| loading | in place of the combo: `text_2` line `Discovering relays…` (`app.rs:2643-2646`, 8.97:1) through the `progress_indicator()` helper — the spinner only while the reduce-motion input is an explicit `On`; `Off`/`Unknown` show the static text (§7.3–7.4) | `DiscoveryState::InFlight` | yes (motion issue only) |
-| error | in place of the combo: `warn` ink message + `retry` link (`app.rs:2648-2658`; warn = recoverable). Terminal discovery failure uses danger in the error line | `DiscoveryState::Done` + `discovery_error` | yes (recoverable case) |
+| loading | in place of the combo: `text_2` line `Discovering relays…` (`app.rs:2891-2894`, 8.97:1) through the `progress_indicator()` helper — the spinner only while the reduce-motion input is an explicit `On`; `Off`/`Unknown` show the static text (§7.3–7.4) | `DiscoveryState::InFlight` | yes (motion issue only) |
+| error | in place of the combo: `warn` ink message + `retry` link (`app.rs:2896-2907`; warn = recoverable). Terminal discovery failure uses danger in the error line | `DiscoveryState::Done` + `discovery_error` | yes (recoverable case) |
 
 Option rows inside a combo use §6.7 (list row). Popups are invisible to OS
 accessibility tooling — a screenshot is the only verification (skill §4).
 
-### 6.4 Text field (`egui::TextEdit`; `widgets.rs:333-351`, `app.rs:2892`, editor fields)
+### 6.4 Text field (`egui::TextEdit`; `widgets.rs:333-351`, `app.rs:3140`, editor fields)
 
 | state | appearance | mechanism | shipped |
 |---|---|---|---|
@@ -739,8 +894,8 @@ accessibility tooling — a screenshot is the only verification (skill §4).
 | loading | n/a | | |
 | error | ink `danger` on the whole field (`invalid_text_field`, `widgets.rs:340-345`, 7.09:1) + the word `invalid` printed beside it (`widgets.rs:348`) + the specific reason in CAPTION danger | `text_color(ink)` | yes (not colour-only: the marker text exists) |
 
-### 6.5 Checkbox / toggle (`egui::Checkbox`; settings privacy + re-test, editor
-dynamic-server; `app.rs:3136`, `app.rs:3165`, `widgets.rs:107-110`)
+### 6.5 Checkbox / toggle (`egui::Checkbox`; settings Privacy's share-latency
+stats, editor dynamic-server; `app.rs:3384`, `widgets.rs:107-110`)
 
 | state | appearance | mechanism | shipped |
 |---|---|---|---|
@@ -751,14 +906,18 @@ dynamic-server; `app.rs:3136`, `app.rs:3165`, `widgets.rs:107-110`)
 | checked | shape: `text_1` tick on `bg_3` — 15.42:1 (state is the tick, not a fill change) | `CheckboxStyle.check_stroke` | yes |
 | disabled | 50 % opacity, label preserved | `ui.add_enabled(false, …)` | contract defined (no shipped disabled checkbox) |
 | loading | n/a | | |
-| error | n/a at the control; a failed persist prints the error line below in danger ink (`app.rs:3631-3633`) | `config_error` | yes |
+| error | n/a at the control; a failed persist prints the error line below in danger ink (`app.rs:3869-3871`) | `config_error` | yes |
+
+The re-test checkbox (`retry_after_fallback`) was removed on master `76aba5d` with
+the warn-only starvation model; the remaining settings checkbox is
+share-latency stats, so the control class is unchanged but narrower.
 
 Toggle semantics: a checkbox is the only two-state control in the app; there is
 no switch. If a switch is introduced it is a new component contract, not a
 checkbox variant.
 
-### 6.6 Sheet (`egui::Modal`; settings `app.rs:3069`, game editor `:3370`, target
-picker `:3479`, update `:3669`)
+### 6.6 Sheet (`egui::Modal`; settings `app.rs:3317`, game editor `:3608`, target
+picker `:3717`, update `:3907`)
 
 | state | appearance | mechanism | shipped |
 |---|---|---|---|
@@ -767,13 +926,16 @@ picker `:3479`, update `:3669`)
 | focus-visible | buttons/fields inside follow their own class; the close button gets the ring; **keyboard focus must enter the sheet and not tab into the window behind it** | egui modal layer blocks pointer input; focus traversal is `Memory`'s (`memory/mod.rs:595-596`); focus confinement not verified | **unverified — W2 must prove Tab stays inside and Esc closes** |
 | active | drag on backdrop does not move the sheet (in-window modal) | `Modal::default_area` centered | yes |
 | disabled | n/a | | |
-| loading | update sheet: `Checking…`/`Installing…` text (`app.rs:3679-3697`, `3726-3734`) through the `progress_indicator()` helper — spinner only on an explicit `On`, otherwise static (§7.3); rule for W2 | `UpdateCheckState::Checking/Installing` | yes (motion issue) |
+| loading | update sheet: `Checking…`/`Installing…` text (`app.rs:3917-3922`, `3964-3972`) through the `progress_indicator()` helper — spinner only on an explicit `On`, otherwise static (§7.3); rule for W2 | `UpdateCheckState::Checking/Installing` | yes (motion issue) |
 | error | update sheet shows the result line; **shipped result line is plain `text_1`, not danger** — W2: failure in danger ink + the error text names the cause; the sheet stays open | `update::update_status_line` | partial |
 | dismissal | backdrop click / Esc / Close all close every sheet (`ModalResponse::should_close`) — **data-loss risk for the game editor and the update installer** | `modal.rs:151` | **defect: W2 sets a per-sheet close policy; the editor guards unsaved drafts** |
 
-Sheet geometry rule: `max_w = (content_w − 24 − 2·S4).min(420 − 2·S4)`,
-`max_h = content_h − 24` (floored 160); body `ScrollArea` height =
-`max_h − title − close − margins` computed, not the shipped 190 px constant.
+Sheet geometry rule: `max_w = (content_w − 24 − 2·S4).min(420 − 2·S4)`
+(= **264 px** at the mobile-only 320 px viewport), `max_h = content_h − 24`
+(floored 160); body `ScrollArea` height = `max_h − title − close − margins`
+computed, not the shipped 190 px constant. The update check is user-initiated;
+its privacy disclosure is documentation (`docs/privacy.md` §Update check), and
+any in-window disclosure sentence follows §6.10's wrap rule at 264 px.
 
 ### 6.7 List row (three variants)
 
@@ -789,7 +951,7 @@ Sheet geometry rule: `max_w = (content_w − 24 − 2·S4).min(420 − 2·S4)`,
 | empty | caption `text_3` (empty table / no match, `widgets.rs:208-223`) | `PickerStatus::Ready` + rows empty | yes |
 | error | no dedicated error row; an enumeration failure surfaces through the app error line (W2: row-level danger caption) | — | **missing** |
 
-Dense list (proxy manager, `app.rs:3560-3665`): the shipped 16 px allocation
+Dense list (proxy manager, `app.rs:3798-3904`): the shipped 16 px allocation
 cannot host its 40 px-minimum delete button; the row becomes 40 px (label +
 address stacked) with a 24×24 delete target; the address is `CAPTION` mono
 `text_2` (5.88:1 on `bg_0`); an empty list prints a `CAPTION text_2` sentence.
@@ -824,11 +986,92 @@ fabricated city or latency.
 | 3 | Blocker | selected list-row ink is 28 %-alpha accent painted over the 12 %-alpha accent fill → **1.35:1** | `style.rs:360-369`, `theme.rs:149-150` |
 | 4 | Critical | control boundaries and the focused field are 1.08–1.32:1 (1.4.11) | §3.3 |
 | 5 | Critical | the custom action has no `widget_info` → no accessible role/name (AccessKit), and its ring is absent | `ledger.rs:89-137` vs `button.rs:382-392` |
-| 6 | Major | no loading state on the action in the shipped app: repeated clicks re-enter the start path; the fact is now assigned (`SessionCommandState.in_flight`, W2-1) and the state renders in W2-2; the danger/stop loading is deferred because the spec defines no stop label | `app.rs:3986-3999`; spec sections 2.1 and 3 |
-| 7 | Major | sheets close on backdrop click while holding typed data (editor) or an install in progress (update) | `modal.rs:151`, `app.rs:3092`/`:3739` |
+| 6 | Major | no loading state on the action in the shipped app: repeated clicks re-enter the start path; the fact is now assigned (`SessionCommandState.in_flight`, W2-1) and the state renders in W2-2; the danger/stop loading is deferred because the spec defines no stop label | `app.rs:4222-4236`; spec sections 2.1 and 3 |
+| 7 | Major | sheets close on backdrop click while holding typed data (editor) or an install in progress (update) | `modal.rs:151`, `app.rs:3340`/`:3983` |
 | 8 | Major | disabled action vs ready action fill contrast 2.77:1 (state is carried by ink + block, so not colour-only, but the fill cue is below 3:1) | §3.3 |
-| 9 | Major | dense proxy row cannot contain its own control (16 px allocation, 40 px control minimum) | `app.rs:3570`, `theme.rs:189` |
-| 10 | Minor | update failure line is plain text_1, not danger | `app.rs:3700` |
+| 9 | Major | dense proxy row cannot contain its own control (16 px allocation, 40 px control minimum) | `app.rs:3808`, `theme.rs:189` |
+| 10 | Minor | update failure line is plain text_1, not danger | `app.rs:3938` (line moved on master `76aba5d`) |
+| 11 | Critical | at the mandated `STATE` 30 px the current tree overflows the 288 px rail for PT-BR `NO RETURN PATH` (328.4 px), RU `IDLE` (326.8 px) and ES `NO RETURN PATH` (309.0 px); DE `OPTIMIZING` 275.1 px fits 288 but is over the proposed 276 px acceptance cap; RU `NO RETURN PATH` is already shortened (342.8→222.9 px). The metric must move to its own row too (word + S2 + metric ≥366 px even at 24.6 px). Recommended remedy: shorten the remaining over-budget words to ≤276 px at 30 px; fallbacks priced in §4.4 item 4 | `app.rs:2153-2181`; `delta-copy.md` §5; fix under §4.4 item 4 (W2 shell owner) |
+| 12 | Major | the starvation banner copy is 3 lines EN / 4 lines worst locale in its 248 px column, not the 1–2 line target; the shipped frame grows to 64–80 px in the card | `locales/en.toml:184-185`; `app.rs:2261-2277`; contract §6.10 |
+
+### 6.10 Notice / warning line (new component contract; shipped by master `76aba5d`)
+
+A display-only line (or paragraph) inside the scrolling card that tells the player
+a live session fact needs attention. The shipped instance is the **relay
+starvation warning** (`danger` tone, `app.rs:2261-2277`); the contract also
+sanctions a `warn` tone for recoverable attention facts. It is not a control and
+never carries an action of its own.
+
+| state | appearance | mechanism | shipped |
+|---|---|---|---|
+| absent (default) | nothing is drawn and nothing is reserved | the driving fact is `None` | yes |
+| danger tone | `danger_soft` fill (over `bg_2` card = `#311F22`), 1 px `danger` stroke, `R_INLINE` 4 radius, S2 inner margin, BODY SemiBold 13 in `danger` — **5.61:1 AA**; frame 2×S2 + 16 px per text line; S2 space after | `starvation_warning` from the watchdog; copy key by fault (`watchdog.rs:514-516`) | yes |
+| warn tone (contract) | `warn_soft` fill (over card = `#312B22`), 1 px `warn` stroke, `R_INLINE` 4, BODY SemiBold 13 in `warn` — **9.30:1 AA** | for recoverable attention facts | not shipped; contract only |
+| loading | n/a — the line is not a control | | |
+| error | the notice *is* the error-class display for a live session fault (the error band remains for command failures) | | yes |
+
+Rules:
+
+1. **One or two lines is the target, and the measured maximum is four.** The
+   two shipped strings are 3 lines EN and 4 lines (German) in the 248 px text
+   column; the contract allows up to **4 text lines** (frame 64–80 px + S2) in
+   the scrolling card and **never shrinks the type**. If a future string exceeds
+   four lines, the copy is shortened (`ux-lead`) or the frame grows inside the
+   scroll region — the type size does not move.
+2. **The word carries the state, never the tint.** The sentence names the fault
+   and the remedy; the red/warn tint is redundant (`§2 rule 4`). The frame tint
+   itself makes no 1.4.11 claim; the ink and the sentence do.
+3. **No fabricated remedy and no route claim.** Warn-only mode never switches the
+   session direct on its own; the copy may only say what the client can do
+   (warn) and what the player can do (stop optimizing / pick another relay).
+4. **One notice at a time**, highest severity wins; it is placed above the map in
+   the route card and clears when its driving fact clears (no dismissal control,
+   no entrance animation, no motion — §7).
+5. **Accessibility:** the text is a plain `ui.label` so it is in the AccessKit
+   tree; the frame is decoration. The line is not focusable and has no keyboard
+   interaction.
+
+### 6.11 Location ladder and route-trace rows (new display rows; shipped by master `76aba5d`)
+
+Two data surfaces answer "where is the game server" without inventing a location.
+Both are display-only: they never feed the relay ranking.
+
+**Location ladder** — five mutually exclusive captions in the route card
+(`route_location_lines`, `app.rs:435-490`; rendered `app.rs:2289-2338`), CAPTION
+11 `text_3`:
+
+| state | copy (en) | source / rule |
+|---|---|---|
+| cloud region | `Server location: cloud provider region` + `{PROVIDER} · {region}` | the cloud feed's own statement; a provider region is a fact, a city is not |
+| operator geofeed | `Server location: operator geofeed — {place}` + `({provider}, as-of {date})` + `Shown as-is from the operator's published geofeed.` + hover `Source: {source}` | the operator's own published feed; shown as-is, never interpolated |
+| hosting network | `Server location: hosting network — unknown` + `AS{asn} · {name}` + hint `Free IP databases are unreliable for hosting ranges.` | no dot is drawn (the free database cannot place a hosting range reliably) |
+| country estimate | `Server location: country-level estimate from IP` | the weakest rung; says it is an estimate |
+| unknown | `Server location: unknown` + the same hint | explicit absence, never a blank or a fake dot |
+
+Rules: one source per row (`server_place::place`); captions, not tooltips, for the
+hint (the absence of a location is the fact the reader needs); the geofeed's
+source is hover-only provenance, not a displayed claim; measured wrapping at
+264 px is 1–3 lines per caption (worst: hosting hint 3 lines FR), so the card
+grows and never truncates a caption. No city is claimed for a hop or a hosting
+range the product cannot license.
+
+**Route-trace rows** — the client's own TTL trace to the server and the relay's
+trace, both display-only:
+
+| element | copy (en) | role / place |
+|---|---|---|
+| card trace caption | `Route to server: {hops} hops · nearest responding hop {ms} ms` (+ provider name when known) | CAPTION 11 `text_3`, under the map; measured 1 line at 264 px |
+| ledger label | `Route` | CAPTION 11 `text_3` |
+| ledger value | `{hops} hops · last router RTT {ms} ms` / `{hops} hops · no router answered` | JBMono 17; measured 2 lines EN / 3 worst (RU) at 264 px |
+| related values | `Relay→server {ms} ms · measured n={n} · {secs}s ago`, `Expected path ~{ms} ms (L + S)`, `Relay→server (app)` | JBMono 17 values; 1–3 lines worst (RU) |
+
+Rules: the trace is a placement anchor, **not** the game's ping and **not** a
+latency verdict; the copy never claims a city, a geolocation of a hop, or a
+measurement the client did not take; `{hops}`/`{ms}` are exact integers with
+units; the row appears only while a trace for this server exists; values wrap to
+a measured maximum of 3 lines and the row grows — no truncation without hover and
+no font-size reduction. Accessibility: labels are `ui.label`s and values are
+`ui.monospace` labels, so both are announced; the trace is never colour-only.
 
 ---
 
@@ -847,7 +1090,7 @@ non-moving alternative.
 The app contains **no animation code**: no `animate_*` call and no repaint loop;
 the only `request_repaint()` in the crate is a one-off wake-up when the tray Quit
 is pressed (`platform/windows.rs:114-118`), not animation. The GUI schedules
-frames only with `request_repaint_after` at 2 Hz / 5 Hz / 1 Hz (`app.rs:4070-4085`).
+frames only with `request_repaint_after` at 2 Hz / 5 Hz / 1 Hz (`app.rs:4307-4321`).
 The only continuous motion is what egui itself drives:
 
 | # | motion | purpose | duration | easing | mechanism | reduced-motion |
@@ -974,17 +1217,27 @@ is approximate, −18), JetBrains Mono 210, CJK subsets 388–411, Ubuntu-Light
 
 ### 8.2 Catalog coverage (measured)
 
-617 unique non-ASCII characters across the nine catalogs; the chains cover
-**all 617 with zero tofu**. But Inter is the *primary* face for only 23 of them;
-the rest come from the CJK faces (Japanese/Korean/Chinese/Russian text, expected)
-— and, unexpectedly, from a few Latin characters: **de `ß`; es `í`; fr `É ê î`;
-pt-BR `ê í` are not in the bundled Inter subset** and render in a CJK face.
-Measured per-locale gaps are in `fonts-and-glyphs.md` §4. Same size, different
-typeface: a real type-consistency finding, not a rendering failure.
+619 unique non-ASCII characters across the nine catalogs (the delta's new copy
+added two); the chains cover **all 619 with zero tofu**. But Inter is the
+*primary* face for only 23 of them. The rest come, as expected, from the Noto
+CJK faces (Japanese/Korean/Chinese) and **Ubuntu-Light for Russian** (Inter has no
+Cyrillic) — and, unexpectedly, from a few Latin characters: **de `ß`; es `í`;
+fr `É ê î`; pt-BR `ê í` are not in the bundled Inter subset** and render in a
+fallback face. Measured per-locale gaps are in `fonts-and-glyphs.md` §4.
+
+**A measured asset defect found by the delta's chain measurement:** the bundled
+**Inter subset has no lowercase `y` and no `{`**, so every English word containing
+a `y` (`your`, `relay`, `play`, `copy`) draws that glyph from a fallback face
+(Noto Sans JP / Ubuntu-Light) inside otherwise-Inter words — including the new
+starvation banner. **JetBrains Mono lacks `o`, `q`, `!`, `"`, `#`, `}` and `~`**,
+so mono values such as `~{prior} ms` mix faces too. This is a type-consistency
+defect in the bundled assets, not a rendering failure, and the fix is a
+re-subset (font asset change, OFL, W2/W3 decision in §11.5). The delta's width
+measurements already account for the substituted faces (`delta-copy.md` §8).
 
 **The language picker's own names are outside the catalog gate.** The nine
 `native_name` strings (`i18n.rs:135-172`) are drawn in the picker
-(`app.rs:3120`) but never pass through a catalog, so the repo's
+(`app.rs:3368`) but never pass through a catalog, so the repo's
 `every_catalog_glyph_is_drawable_in_every_family` test cannot see them. Measured:
 **ko `한국어` (국), zh-Hans `简体中文` (简 体) have no bundled face at all** —
 they render only through system-font discovery; pt-BR `ê` falls back to a CJK
@@ -1000,20 +1253,25 @@ change weight/optics. Measured for the candidate marks
 
 | symbol | where | bundled chain | decision |
 |---|---|---|---|
-| `·` U+00B7 | age separator, `app.rs:2210` | Inter | type |
-| `×` U+00D7 | proxy remove, `app.rs:3579` | Inter | type |
+| `·` U+00B7 | age separator, `app.rs:2413` | Inter | type |
+| `×` U+00D7 | proxy remove, `app.rs:3817` | Inter | type |
 | `—` U+2014 | copy | Inter | type |
 | `…` U+2026 | ellipsis | Inter | type |
 | `•` U+2022 | (proposed) | Inter | type |
 | `↑` `↓` U+2191/2193 | (proposed trend) | Inter | type |
-| `→` U+2192 | rail route line, `app.rs:2005` | **Noto Sans JP only** | **paint** or add to the Inter subset — today the arrow is drawn by the CJK face beside Inter text |
+| `→` U+2192 | rail route line, `app.rs:2103` | **Noto Sans JP only** | **paint** or add to the Inter subset — today the arrow is drawn by the CJK face beside Inter text |
 | `✓` U+2713 | (proposed check) | Noto Sans JP only (the checkbox uses a painted tick) | paint |
 | `←` U+2190, `↻` U+21BB, `⏵` U+23F5, `■` U+25A0, `▲` U+25B2, `▶` U+25B6, `▸` U+25B8, `▾` U+25BE, `◆` U+25C6, `✗` U+2717 | legacy/proposed marks | **absent from every chain** | paint |
 | egui-icons PUA (`U+E618`…) | egui's five special emoji | egui-icons only (not text-weight) | paint or avoid in text |
 | `⚡` U+26A1 | `single_instance.rs:79` message-box string | absent from the egui chain; drawn by the Win32 system font | out of scope (not egui), but do not reuse in the window |
 
-The shipped stop mark already follows this: `■` is not typed, it is a painted
-10×10 square (`ledger.rs:124-132`) because the glyph is in no bundled face.
+The delta's new copy adds no new typed symbol, but it does type `→` in the new
+`Relay→server ...` ledger values (`locales/en.toml:195-196`) — the same
+Noto-Sans-JP fallback the rail already uses. W2 should paint the arrow once and
+use it in both places (the rail sub-line and the ledger values) rather than type
+it. The shipped stop mark already follows this rule: `■` is not typed, it is a
+painted 10×10 square (`ledger.rs:124-132`) because the glyph is in no bundled
+face.
 
 ### 8.4 Painter-drawn marks (spec)
 
@@ -1085,8 +1343,8 @@ are `file:line`.
 | accesskit semantics | `Response::widget_info` (`response.rs:951`) + `WidgetInfo::labeled(Role::Button, enabled, label)` (`data/output.rs:694`) | accessibility is on by default in eframe (`accesskit` feature) |
 | sheets | `egui::Modal::new(Id).backdrop_color(scrim).frame(Frame…)` (`containers/modal.rs:16-95`), `ModalResponse::should_close` (`:151`) | no built-in animation; per-sheet close policy is app code |
 | sheet body scroll | `ScrollArea::vertical().max_height(…)` + `ScrollBarVisibility::AlwaysVisible` (`containers/scroll_area.rs:180-210`) | scrollbar is floating by default; see motion |
-| shell bands | `Panel::top` / `Panel::bottom` / `CentralPanel` with `.frame(...)`, all taking `&mut Ui` (`containers/panel.rs:207,268,425`) | shipped shell `app.rs:3892-4054` |
-| per-side rule | *no per-side stroke*: `Frame::stroke` draws all four sides; paint an edge with `Painter::vline` (`painter.rs:337`) | rail edge already painted, `app.rs:3904-3908` |
+| shell bands | `Panel::top` / `Panel::bottom` / `CentralPanel` with `.frame(...)`, all taking `&mut Ui` (`containers/panel.rs:207,268,425`) | shipped shell `app.rs:4128-4321` |
+| per-side rule | *no per-side stroke*: `Frame::stroke` draws all four sides; paint an edge with `Painter::vline` (`painter.rs:337`) | rail edge already painted, `app.rs:4140-4144` |
 | popup chrome | `Frame::popup` uses `window_fill`, `window_stroke`, `menu_corner_radius`, `popup_shadow` (`containers/frame.rs:214-224`); combo popup styling is global (`combo_box.rs:372-381`) | a per-widget "custom combo" claim is a no-op |
 | disabled | `Ui::add_enabled(false, …)` disables interaction and multiplies painter opacity by `disabled_alpha` (0.5; `ui.rs:523-527`, `style.rs:1670`) | measure the composite, not the token (§3.2) |
 | checkbox | `CheckboxStyle { checkbox_size = icon_width, check_stroke, checkbox_frame }` from `theme/default_style.rs`; `icon_width` 14, corner capped at ⌊0.3·14⌋ | box is 14 px; the row target is ≥ `interact_size.y` 40 |
@@ -1095,6 +1353,8 @@ are `file:line`.
 | motion | `Style::animation_time` (default 0.2 s, `style.rs:318,1550`), `Context::animate_bool*` (`context.rs:3709-3760`), `emath::easing::cubic_out` | framework-driven only; no reduced-motion API (0 hits) |
 | spinner | `egui::Spinner` sizes from `interact_size` (40 px) and requests repaint (`widgets/spinner.rs:40-52`) | continuous; see §7 |
 | scrollbars | `ScrollStyle::floating()` default (`style.rs:589-600`, `dormant_handle_opacity: 0.0`), fades via `animate_bool_responsive` (`scroll_area.rs:826-832,1607-1616`); `ScrollStyle::solid()` removes the fade | W2: solid style, also fixes hover-only affordance |
+| notice / warning line | `Frame::new().fill(danger_soft).stroke(Stroke::new(1.0, danger)).corner_radius(CornerRadius::same(R_INLINE)).inner_margin(Margin::same(S2 as i8))` around a plain `ui.label` (`container_frame` APIs; shipped `app.rs:2261-2277`) | the frame is paint-only; the word carries the state (§6.10) |
+| wrapping long copy | `egui::Label` wraps inside the available width by default; no `layout_no_wrap` for multi-line copy (`Painter::layout_no_wrap` is used only where a single line is intentional, `ledger.rs:81-88`) | the W2 action slot adds an explicit two-line layout; everything else wraps. Type size is never reduced to fit (§4.4) |
 | theme switching (light mode) | `Context::style_of`/`set_style_of`, `ThemePreference` (`context.rs:2645,2674`; `memory/theme.rs:67`) | exists but unused; no light tokens |
 | reduced motion | **not in egui** | OS signal per §7.4, assigned to spec W2-2 acceptance (i) + W2-4 acceptance (i); win32 `SPI_GETCLIENTAREAANIMATION` via hand-declared `extern "system"` (`single_instance.rs:157-179` pattern); `On` = animations enabled = spinner allowed, `Off`/`Unknown` = static text |
 | text metrics | `FontId` + `Painter::layout_no_wrap` (`painter.rs:503`) for measuring before painting (the action's shrink path does this; W2 replaces it with the type budget) | row heights come from face metrics (§4.1) |
@@ -1110,7 +1370,12 @@ are `file:line`.
       `RAIL_EDGE 3`, `MAP_H 132`, `MAP_W_MAX 430`, `HIT_MIN 24`,
       `FOCUS_RING_W 2`, `ACTION_H_WRAPPED 56` (the wrapped action height, §1.4).
 - [ ] Delete `accent_strong`, `signal_soft`, `info`, `info_soft`, `warn_soft`,
-      `R_INLINE`, `GLOBE_LG`, `GLOBE_SM`, `GLOBE_XS`.
+      `GLOBE_LG`, `GLOBE_SM`, `GLOBE_XS` — **nine** tokens. `R_INLINE` is **kept**:
+      master `76aba5d` uses it for the starvation-notice frame (§1.2).
+- [ ] No token **value** change is required by the master rebase:
+      `design.rs` is byte-identical to the W1 snapshot (`git diff
+      62c6cf6..HEAD -- client-gui/src/design.rs` is empty). Only usage and the
+      role comments move (§1).
 - [ ] Re-role `bg_4`, `border_1`, `border_2`, `accent_text`, `grid`, `S5`,
       `on_accent` and correct the module docstring (it currently documents the
       website adoption, not the roles).
@@ -1141,8 +1406,16 @@ are `file:line`.
 - [ ] `action_button`: ring on focus; a distinct pressed cue; `widget_info`;
       loading state; **both variants (Accent and Danger) per §6.2**; label fits
       §4.4 (copy or two lines); painted stop mark stays.
-- [ ] Rail: `HERO_H` 40; remove the `0.82` multiplier (measured fit 246/288 px);
-      paint the route arrow rather than typing `→`; rail edge colours §3.4.
+- [ ] Rail: `HERO_H` 40; remove the `0.82` multiplier; **move the metric to its
+      own row below the state word** or shorten the long localized words — the
+      measured RU/DE collision is `delta-copy.md` §5 — and paint the route arrow
+      rather than typing `→`; rail edge colours §3.4.
+- [ ] Notice/warning line per §6.10: frame, 4-line measured max, no shrink, one
+      notice at a time; the location ladder and route-trace rows per §6.11.
+- [ ] New copy review: `ux-lead` shortens the starvation banner toward 2 lines
+      and the RU restart label to 2 lines (§4.4); no type size changes.
+- [ ] Bundled-font decision (§8.2, §11.5): re-subset Inter to add `y`/`{` (and
+      JetBrains Mono its missing ASCII) or record the fallback mixing as accepted.
 - [ ] Text fields: `border_control`; `selection.stroke` fix; invalid treatment
       unchanged (already passes).
 - [ ] Sheets: per-sheet close policy (editor/update guard), computed body height,
@@ -1156,13 +1429,24 @@ are `file:line`.
 
 ### 11.4 Verification this design requires
 
-- [ ] Real-window screenshots at the **spec's widths** — 360×420 min, 440×880
-      default, plus the 720×880, 1120×880 and 440@200 % rows of spec §6 — for
+- [ ] Real-window screenshots at the **mobile-only widths** — **320×420** (min,
+      short mode), **320×760** (initial) and **320@200 %** (the same 320 pt window
+      rasterised at 640 px), plus the DE capture for the long-copy rows — for
       every reachable state (the skill's evidence rule); UIA cannot see egui
-      popups, so read the image. The shipped 320 px capture stays as the
-      current-state comparison baseline, not as a W2 target.
+      popups, so read the image. Include the warning banner, the location ladder
+      rungs and a route-trace row, plus the **RU capture for the state-word
+      (`IDLE`, `NO RETURN PATH`) and action-label binding cases**, with the
+      shortened RU/ES/PT strings, and the DE long-copy capture; verify no
+      state-word/metric occlusion, that each long string wraps rather than
+      shrinking, and that every locale's state word measures ≤276 px at 30 px
+      (§4.4 item 4).
 - [ ] A contrast test in the crate (not just this document) so the floors cannot
       regress.
+- [ ] A **state-word fit gate** (crate test): every locale's uppercased state
+      word at `STATE` 30 px measures ≤276 px in the installed chain (§4.4 item 4);
+      the measurement reuses the fonts module from this evidence set.
+- [ ] `widgets.rs`/theme: remove the `STATE * 0.82` multiplier and render the
+      metric on its own row with `HERO_H` 40 (§4.2, §11.3).
 - [ ] A focus/keyboard pass: Tab reaches every control, the ring is visible,
       Esc closes sheets, the primary action is announced by AccessKit.
 - [ ] Reduced motion (QA R5): W2-2's `progress_indicator()` has a static-text
@@ -1191,10 +1475,29 @@ are `file:line`.
    shipped un-gated spinners until W2-2 lands; the 2.2.2 exposure stays in the
    parity report.
 4. **Light mode: out of scope** (confirm; §9).
-5. **Viewport** — resolved outside this document: the spec (§1.1, C-4) replaces
-   the shipped pinned 320 px width with a **360×420 minimum and a 440×880
-   default**; the design system's measured constraints (§4.4, §5.4) are stated at
-   those widths, with the 320 px figures kept only as current-state evidence.
+5. **Viewport** — **decided by the owner on 2026-11-20: mobile-only.** Keep the
+   shipped geometry (320 px pinned width, one `narrow` column, height resizable
+   420–1400, initial 760); the W1 360×420 / 440×880 / 1120×1400 plan and every
+   two-column layout are superseded. No width change is in scope.
+6. **Inter subset gap (`y`, `{`; JBMono `o`, `q`, `!`, ...)** — re-subset the
+   bundled fonts or accept the measured fallback mixing (§8.2). A font-asset
+   change is cheap and OFL-clean; the alternative is documented type-mixing in
+   every English string containing `y`.
+7. **RU restart action copy — resolved by landed copy.** `ux-lead`'s
+   `ru.toml` string (`Перезапустить от имени администратора`) measures 356.9 px
+   = 2 lines at 264 px (HEAD was 518.6 px = 3 lines), so the action band stays
+   72 px and the 239/181 compact worst is unchanged; the 73 px three-line slot is
+   priced out. The dropped "to optimize" purpose must be carried elsewhere by the
+   spec/copy owner (flagged); the type is never shrunk.
+8. **Rail collision + 30 px state word (F1)** — the metric moves to its own row
+   (mandatory), and the **recommended remedy is shortening the remaining
+   over-budget state words to the proposed acceptance cap ≤276 px at `STATE`
+   30 px** (`ux-lead`; ES `SIN RETORNO`, PT-BR `SEM RETORNO`, RU `IDLE`
+   contingency, optional DE `OPTIMIERUNG`; RU `NO RETURN PATH` already landed at
+   222.9 px). It keeps the 30 px role, the hero band and the 239/181 compact
+   budget. Fallbacks: a 24/25 px effective word size (type role departs from 30)
+   or a two-line hero priced at 275 chrome → 145 scroll, below the 180 floor —
+   needs an owner-approved floor change. §4.4 item 4, §6.9 gap 11.
 
 ---
 
@@ -1210,9 +1513,17 @@ observed in a running window. The honest list:
 - **Row heights are computed** from face metrics with epaint's formula at 1.0
   pixels-per-point, not measured from a laid-out galley. At 125/150/200 % each
   `round_ui` term rounds to a different step, so a row can move ±1 px.
-- **Label widths are raw `hmtx` advances**: epaint shapes with `harfrust`
-  (GSUB/GPOS), so kerning can move a label by a couple px; the action-label
-  budget margins are stated with that tolerance.
+- **Label widths and wrap-line counts are raw `hmtx` advances** through the
+  installed font chain (`delta-copy.py`); epaint shapes with `harfrust`
+  (GSUB/GPOS), so kerning can move a line by a couple px and, at a word boundary,
+  change a line count by one. The budget margins are stated with that tolerance.
+- **The banner/location/trace line counts** are computed for the nine catalogs
+  with sample placeholder values (3-digit ms, 5-digit seconds, a long provider
+  and place name); they are not sampled from a rendered window and no live
+  starvation session was observed in the delta round.
+- **The face-identity finding** (`y`, `{`, JBMono's missing ASCII) is measured
+  from the bundled cmaps, not observed in a window; the byte-exact rendered mix
+  should be confirmed with a screenshot at W2.
 - **Dynamic states were not observed:** boosting, fallback, the watchdog
   re-tests, sheet focus confinement, AccessKit output, reduced motion (there is
   none), 200 % scaling, and the macOS/Linux OS signals. They are specified, not
@@ -1237,35 +1548,40 @@ owner, and which are already fixed in the shipped tree.
 | # | required change | status |
 |---|---|---|
 | 1 | keep an elevation path (one action slot, three labels) | shipped (`ledger.rs:39-57`); this doc fixes its focus/loading/pressed states (§6.2) |
-| 2 | disconnected card honesty | `ux-lead`/`interface-designer` (state contract); shipped card already gates the markers and the emphasised relay on `connected` (`app.rs:2093-2116`); the map itself stays drawn |
-| 3 | Privacy/Maintenance/About/Disconnect destination | shipped into the settings sheet (`app.rs:3097-3355`); copy/IA is `ux-lead` |
+| 2 | disconnected card honesty | `ux-lead`/`interface-designer` (state contract); the shipped `route_card` gates the markers and the emphasised relay on `connected`; the map itself stays drawn |
+| 3 | Privacy/Maintenance/About/Disconnect destination | shipped into the settings sheet (`app.rs` `settings_body`); copy/IA is `ux-lead` |
 | 4 | retire dashed-meta copy | `ux-lead` (copy); type roles enforce sentence case (§4.1) |
 | 5 | ledger-key case; delete `ROUTE` eyebrow | this doc: §4.1 rule 3 (only the state word and action label are uppercase) |
 | 6 | complete the token scale (radii, sizes) | this doc §1.2, §5.2, §5.4; dead/missing values resolved in §1.4 |
-| 7 | height breakpoint | `interface-designer` (layout); measured evidence in §4.2/§5.4 |
+| 7 | height breakpoint | **resolved by the mobile-only decision** (2026-11-20): one 320 px column, `short` height branch only; measured chrome/scroll arithmetic in §5.4 |
 | 8 | game choice one step / tile panel | shipped as a combo; tile contract defined in §6.8 for the W2 spec |
-| 9 | relay identity from real data | shipped (`app.rs:2391-2410` relay_value, friendly_label) |
+| 9 | relay identity from real data | shipped (`app.rs` `relay_value`, `discovery.rs` `friendly_label`) |
 | 10 | rail + sparkline one colour rule | shipped: sparkline stroke `text_3`, only the last point uses `rtt_colour` (`widgets.rs:437-470`) |
 | 11 | migrate the inline literals | 5 remain, all in `globe.rs`; §1.3/§1.4/§5.6 |
 | 12 | accent/ink contrast rule | §2 rule 1, §3.4 (rule measured: 3.94:1 accent-as-ink) |
 | 13 | do not claim reduced motion | §7.4: no user-facing claim; the mechanism is assigned to spec W2-2 acceptance (i) + W2-4 acceptance (i), with the un-gated interim and its WCAG 2.2.2 exposure recorded |
 | 14 | turn off default shadows | shipped (`theme.rs:141-142`) |
 | 15 | clamp and scroll every sheet | shipped (`sheet_bounds`, `ScrollArea`); computed-height fix in §6.6 |
-| 16 | ledger mechanics in px, not characters | token `LEDGER_LABEL_W` (wide only) + measured baseline analysis §4.2 |
+| 16 | ledger mechanics in px, not characters | measured baseline analysis §4.2; `LEDGER_LABEL_W` is retired with the wide branch in W2 |
 
 ---
 
 ## Appendix A — evidence index
 
-All under `wat/evidence/2026-11-19/team/design-system/`:
+All under `wat/evidence/2026-11-19/team/design-system/` unless stated; the
+2026-11-20 delta snapshots are in `wat/evidence/2026-11-20/team/design-system/`.
 
 | file | content |
 |---|---|
-| `contrast.py` / `contrast-results.md` | contrast method, token values and composited tints, 37 text pairings + 18 non-text claims with ratios/verdicts, proposed values (`border_control` search, focus ring, selection fix), composite states, method cross-check |
-| `fonts.py` / `fonts-and-glyphs.md` | installed font chains, face coverage, candidate-symbol coverage, 617 catalog chars, native-name gap, measured row heights, baseline drift at token and shipped sizes, rail row fit, action-label localisation budget |
+| `contrast.py` / `contrast-results.md` | contrast method, token values and composited tints, 41 text pairings + 20 non-text claims with ratios/verdicts (re-run on the master delta adds the notice/trace rows), proposed values (`border_control` search, focus ring, selection fix), composite states, method cross-check |
+| `fonts.py` / `fonts-and-glyphs.md` | installed font chains, face coverage, candidate-symbol coverage, 619 catalog chars (re-run on the delta), native-name gap, missing-glyph audit (`y`, `{`), measured row heights, rail row fit, localisation budgets |
 | `token_audit.py` / `token-usage.md` | per-token use counts and sites (semantic filter documented), dead/theme-only/shadowed tokens, the five inline literals |
 | `token-usage-raw.txt` | raw first-pass scan (includes the comment/macro noise the filtered audit removes) — kept so the filter's effect is auditable |
 | `revision-r2.md` | QA review r1 finding → change map (R6, R11, R17, R5), with before/after numbers and the re-run record |
+| `delta-copy.py` / `delta-copy.md` (`2026-11-20/…`) | mobile-only 320 px copy measurements: added/changed/banner/location/trace/update strings, per-locale wrap-line counts, action-label and state-word fit, chrome/scroll arithmetic, notice-frame budget, face-identity audit |
+| `delta-r11.md` (`2026-11-20/…`) | delta r11 finding → change map, with the re-run record and the machine-checkable summary |
+| `cite-check.md` (`2026-11-20/…`) | every `app.rs`/`main.rs` citation in this document re-derived against HEAD `0df57ce`: old ref → new ref → current-line content, plus the assertion that no pre-rebase citation remains |
+| `delta-r14.md` (`2026-11-20/…`) | delta-fix r14 finding → change map (F1, F2, F4, F20, Q15), the state-word measurement at 30 px, and the recommended remedy for the spec owner |
 
 The scripts are the method; the Markdown is their output. Re-run:
 `py -3 wat/evidence/2026-11-19/team/design-system/{contrast,fonts,token_audit}.py`.
