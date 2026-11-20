@@ -91,6 +91,35 @@ Minimal change:
 - Provenance of the front-end/anycast classifier (two flags) - evaluate on the
   first 60 destinations.
 
+## 6. Protocol-aware floor (2026-11-20, live finding)
+
+The E1 "check A" failures are partly an artefact of **mixing protocols**. Live
+evidence with R2 actually measuring on relay-lax-1 (52 paired reports):
+
+- client->relay `L1` ~= 212-220 ms, relay->server `S` (ICMP) ~= 57.3 ms
+- expected relayed path ~= 270-277 ms, and the **game HUD measured 285-291 ms
+  while relayed**
+- direct **ICMP** was 317 ms, so the triangle floor `direct - L1` ~= 101 ms
+  claims `S` must be >= 101 ms -- yet the game's relayed UDP path is *faster
+  than direct ICMP*.
+
+The triangle inequality holds per path, not across protocols: ICMP and the
+game's UDP 5-tuple can take different routes/policies, so the direct ICMP ping
+is **not** a valid lower bound on the relayed UDP path. Consequences:
+
+1. F4's peer must be an application-level (UDP) measurement - the game HUD
+   (GT-B) or a relay-side UDP-path sample - not direct ICMP.
+2. The ranking's `GeometricFloor` (direct ICMP - client leg) can be
+   conservative on such networks; it should be validated against HUD data
+   before it is allowed to veto relay choices.
+3. The HUD-screenshot sampler (`infra/scripts/sample-game-hud.ps1`) is the
+   ground-truth path: capture relayed and direct windows and compare the
+   player-visible ping.
+
+This does not change the shipped display-only status of `S`; it changes what a
+validating experiment must measure.
+
+
 ## 5. Revision after the live E1 window (2026-11-19)
 
 The live window produced **n = 0 pairs**: the client published exactly one

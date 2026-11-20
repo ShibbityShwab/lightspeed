@@ -12,6 +12,89 @@
 
 ## Recent entries
 
+### 2026-11-20 (traceroute) - Relay + client TTL traceroute landed; Linux CI verified; committed
+
+**Agent:** `rust-dev-9` (relay) + `rust-dev-10` (client) + lead (final gates/commit). Committed.
+
+- **Relay traceroute (R2 extension):** `proxy/src/trace.rs` (new, ~2,070 lines, 27 tests): unprivileged UDP TTL traceroute with `IP_TTL` + `IP_RECVERR`/`MSG_ERRQUEUE` (ICMP-echo fallback), <=20 hops, empty payload, 5 min/server cadence, 10 min cache, 1 trace/min global cap, 64 B/probe through `BudgetGuard`, only already-forwarded public-unicast interests (UDP+TCP). Protocol `MSG_SERVER_TRACE` (tag `0x0D`, 17-byte payload: server, hops, last_hop, last_hop_rtt_us, flags/COMPLETE, age) on the existing capability-gated uni stream. Client store/log `SERVER_LEG_TRACE` + GUI `Route` row/locales. Linux compile verified in CI via a check-only dispatch (run 44676196028, `LINUX_CHECK_OK` for proxy+client; branch deleted). Mutations: non-incrementing TTL -> 9 failures; first-responder last-hop -> test failure; restored.
+- **Client traceroute (location probe):** `client-gui/src/client_trace.rs` (new, 24 tests): bounded OS trace (`tracert -h 20`/`traceroute -m 20`), 30 s deadline with child kill, structural parser (timeouts/MPLS/localized prose ignored, best-of-probes), last *responding* hop + RTT, 30-min per-server cache, one concurrent trace, private/reserved refusal, `CLIENT_TRACE` INFO line, and a route-card caption "Route to server: N hops · nearest responding hop X ms" (+ R1 provider suffix when the hop's prefix matches). Live-checked against the real game: `CLIENT_TRACE ... hops=14 last_hop=195.22.195.35 rtt=356ms complete=false`.
+- **Honesty limits:** neither trace yields a city (hop geolocation/geofeed data still absent); relay trace is a lower bound on the relay->server path and display-only, never a ranking input; client trace shows the direct path, not the relayed one. Windows `tracert` has no `-q`, so the client budget is 3 probes/hop (documented).
+- **Final gates (lead):** fmt clean; workspace clippy **0 warnings**; workspace **1,781 / 0 / 6**; GUI clippy 0 warnings; GUI **243 / 0 / 1**. Linux CI check green. Committed.
+- **Residual:** relay trace not live-canaried on a relay (kernel cmsg path compile-verified only); relay cap = 60 servers/hour; fully-filtered paths cost up to ~40 s and yield `None`; multi-path routing means the last hop is one path's penultimate router; client 30 s deadline can truncate long filtered paths (complete=false), Windows `-w 500` is a follow-up decision.
+
+### 2026-11-20 (panel: geojs) - Runtime GeoJS lookup rejected; the fix is free MaxMind data at build time (owner licence gate)
+
+**Agent:** panel `sec-ops` + `net-eng-2` + `architect-2` + lead. Decision doc: `docs/design/server-location-online-lookup-review.md`. Nothing committed.
+
+- **Panel verdict: do NOT ship a runtime `get.geojs.io` call.** It contradicts `docs/privacy.md` (only three network connections; no third-party services; game-server IP explicitly not collected), sends the (user IP, server IP) pair to a third party/Cloudflare, has no SLA (single maintainer, one VM, discretionary throttling, notice has no delivery path), and fails the 2026-11-19 free-at-scale filter.
+- **Key finding: GeoJS is just MaxMind GeoLite2 City.** An offline GeoLite2-City build (2026-11-17) reproduced GeoJS exactly on 12 IPs, including `US-VA Manassas 20109` and its `accuracy` radii; MaxMind is right because it ingested G-Core's geofeed. ipwho.is and ip-api returned **Tokyo/JP** (wrong); DB-IP City Lite wrong; ipinfo keyless matched the G-Core /24s but is an account/terms decision.
+- **Offline paths:** (a) G-Core operator geofeed build-time (exact, no licence stated -> written permission needed); (b) **MaxMind GeoLite2 City build-time table** (free account; GeoLite EULA + CC BY-SA 4.0 attribution/ShareAlike; <=30 downloads/day, keep-current). Both display-only, never feeding `chooser_point` or ranking; labels must carry estimate wording + radius.
+- **No-gate deliverables:** add the caption "free IP databases are unreliable for hosting ranges"; fix the pre-existing privacy-policy gap (GUI update check to `api.github.com` is not in the policy).
+- **Other findings:** the visualizer's hop timeline is simulated (random IPs/hardcoded city graph) - only endpoints are GeoJS-geolocated; traceroute paths remain weak (ICMP/TTL filtering observed); GeoLite2 was wrong for an adjacent G-Core /24 (LU vs Amsterdam), so it improves but does not guarantee hosting accuracy.
+- **Owner gates:** O1 = approve GeoLite2 City licence acceptance (free, CC BY-SA) and/or pursue G-Core geofeed permission; otherwise stay "unknown" + caption.
+
+### 2026-11-20 (HUD toggle) - Relayed vs direct HUD: no ping win in this window; server re-lock mis-detection bug exposed
+
+**Agent:** `hud-runner` + lead. Nothing committed except the earlier sampler + doc.
+
+- **Toggle experiment:** UIA-invoked Disconnect on the GUI at 11:10:02, sampled HUD every 30 s; clean relayed window (share 73.8-85.3 %) vs clean direct window 11:10:42-11:13:12. Medians: **relayed 290 ms / 0.04 % loss (n=3) vs direct 286 ms / 0.075 % (n=4)** - delta **+4 ms** (relay marginally worse at HUD granularity). This contradicts the earlier same-morning relayed 285-291 vs direct 317-320, so the relay benefit is **session/route dependent**, not a constant; the client's own `relay_app_ms`/`direct_ms` were stale constants and were not used.
+- **Mis-detection bug found (new, important):** after re-arming interception, the client logged `Locked game server` then `Locked server stale - re-detecting` and re-locked a **different high-port UDP flow that geo-resolves to AWS sa-east-1 (Sao Paulo)** - hence a "Brazil" label the owner saw. The detection is a system-wide UDP port-range heuristic (`32768-60999`), not process/flow aware, so it can latch onto an unrelated flow. The relay then had share 0 % for that endpoint and the watchdog demoted it to direct while the GUI still showed OPTIMIZING.
+- **Resolution:** GUI restarted (pid 20652); it re-locked the real server (`178.107.14.170:36704`) and relay-lax-1 recovered to **healthy share 54.5-88.6 %**. Game untouched.
+- **Docs:** `docs/design/relay-server-leg-validation.md` §6 added: the triangle floor is **protocol-blind** - direct ICMP (317 ms) exceeded the game's relayed UDP path (285-291 ms), so ICMP cannot be a valid lower bound for the UDP path; F4's peer must be application-level (HUD/GT-B), and the floor must be validated against HUD data before vetoing relay choices.
+- **Next fix:** make game-server detection flow-aware (prefer the process's socket/flow, pin the match server the interceptor saw first, and refuse to re-lock unrelated high-port flows); then continue HUD sampling per session to quantify the real benefit.
+
+### 2026-11-20 (GT-B) - HUD screenshots vs client estimate: LAX relayed 285-291 ms; client figure stale/wrong; LAX does help
+
+**Agent:** lead (sampler + capture) - sampler committed (`infra/scripts/sample-game-hud.ps1`).
+
+- **Method:** the sampler captures the game window every 30 s and appends the client's relay state (`relay`, `server`, reply share, verdict, `direct_ms`, `relay_app_ms`) to `wat/evidence/2026-11-20/hud-samples/index.jsonl`; the agent reads the PNGs and transcribes the HUD's `Ping`/`Rtt` fields. 18 samples / 9 min while relayed through relay-lax-1.
+- **Result (relayed, LAX, healthy 25 % share):** in-game HUD **285 ms (10:54), 291 ms (10:58), 285 ms (11:02)**, loss 0.11-0.31 %. Direct-path HUD earlier the same morning: **317-320 ms**. So relayed LAX improves the player-visible RTT by **~30-35 ms** - the owner's "330 -> 280" experience is correct and the earlier "LAX is not carrying / no relay helps" claim was an over-generalization from a 29 %-of-windows starvation stretch.
+- **Client estimate is wrong/stale:** `relay_app_ms` sat at **327.5 ms** constant across all 18 samples (window p50 re-published every 10 s), ~40 ms above the HUD. The GUI currently presents this figure as the relayed path; it should be labelled an estimate and/or hidden when stale.
+- **Implication:** the game HUD is the GT-B peer E1 needs (application-level, works when ICMP is filtered). Next: sample HUD during relayed *and* direct windows to quantify the benefit, and fix the GUI's relayed-path figure (or replace it with the HUD-independent measured S when available).
+
+### 2026-11-20 (E1 final) - Destination filters ICMP: E1 INCONCLUSIVE (n=0); instrumentation proven; client logging committed
+
+**Agent:** `e1-final` + lead. Uncommitted work: none (client logging committed).
+
+- **Instrumentation added + committed:** `SERVER_LEG_REPORT relay=... server=... median_us=... jitter_us=... samples=... age_ms=... at_unix_ms=...` INFO line for every accepted relay ICMP report (pure formatter + TEST-NET test; client lib 681 -> **682 / 0 / 1**). Committed on top of `fcd958f`.
+- **Live window (run 44668650307, 12/12 rounds, 60 packets, 0 replies)**: the locked destination **filters ICMP from both sides** - relay-lax-1 prober tried 189 probes and got **100 % unavailable (+63/+63)**, and the client's direct shadow went `no_icmp` > 65 with **0 `direct_ms` floor lines** and **0 `SERVER_LEG_REPORT`** (the relay only pushes while it holds a successful measurement, so 0 client lines is expected). n = 0, gate unmet - **INCONCLUSIVE**, and Check A's calibrated tolerance was never exercised.
+- **Proven:** the relay prober is healthy after the sysctl fix (bursts increment; failures are target-side filtering), the relay->client push/read path works (`SERVER_LEG_APP` stream continuous, **129 lines in 15 min**, passive median **60.26 ms**), and the return path was **not** starving (35 healthy / 4 too-few-replies, share median 16.7 %).
+- **Structural finding for R2:** ICMP-based server-leg measurement is unavailable for ICMP-filtering destinations; the passive app-RTT remains display-only (and its earlier structural bias is unresolved). The product already treats S as display-only, so no ranking change follows.
+- **Cleanup:** secret/branch/worktree removed; no deploy (relay uptime monotonic 48,336 -> 48,973 s); GUI left running (pid 20308); `git status` only `docs/publishing-channels.md`.
+- **Next options:** re-run the same window when the match server answers ICMP; or add non-ICMP server-leg methods (TCP-SYN handshake RTT / traceroute last-hop bound) and re-derive the F4 peer; the ranking gate stays closed until one is validated.
+
+### 2026-11-20 (E1 fix) - lax prober fixed and proven usable; E1 still n=0 (client quit, relay starving)
+
+**Agent:** `e1-fix` + lead. Nothing committed.
+
+- **Sysctl applied to relay-lax-1 only (canary pattern, run 44664274403):** before `1 0` + `Permission denied`; after `61184 65519`, drop-in persisted, no restart (uptime monotonic). Unprivileged ICMP from GID 61184 answered 1.0-1.2 ms.
+- **Deployed prober now works:** relay-lax-1 `/metrics` went from **246/246 bursts unavailable** to **339 bursts / 1,017 probes / 257 unavailable**, with **82 bursts and 246 echoes since the fix and 0 new unavailable**. The earlier "0 usable" was the missing host sysctl, not the code. Relay<->live-server ICMP: **120/120 echoes at ~69.6 ms** in window 3.
+- **E1 still not evaluable:** the client `SERVER_LEG_APP` stream stopped at 02:32:31Z because the relay's return path was starving (`no_reply_from_relay`, share 0 %, direct fallback - the relay's own ICMP kept succeeding), and window 3 (run 44665081710, 24 rounds, 120/120 echoes) was empty because the **client quit at 03:05:51Z** 8 s before it started (owner action). n=0; no floor/passive medians. Harvest code was validated by reproducing E1's numbers (n=61, floor 73.2, passive 14.5) on the earlier window, so this is an empty window, not a parser miss.
+- **Findings:** (a) R2 rollout needs the `ping_group_range` drop-in on **every** relay that runs the prober; (b) relay-side ICMP success does **not** imply relayed UDP carry (ICMP 120/120 while relayed UDP had 0 replies for some destinations) - the carry record remains the stronger signal; (c) the passive app-RTT peer stays demoted (structural bias shown by E1); (d) F4 floor tolerance still needs calibration (~20-24 ms client-side inconsistency observed).
+- **Cleanup:** branches/worktrees and `SERVER_LEG_TARGETS` deleted; no commits on master; only `docs/publishing-channels.md` dirty. Evidence: `wat/evidence/2026-11-20/e1-fix.md`.
+- **Next:** relaunch the client in an active match on relay-lax-1 (return path permitting) and start a fresh window; the relay side is now fixed.
+
+### 2026-11-20 (E1 result) - n=61 gate met; design FAIL; relay prober dead on lax (missing sysctl), passive peer structurally biased
+
+**Agent:** `e1-live` + lead. Nothing committed.
+
+- **Window:** measurement-only run 44660852157 (02:27-02:48Z), relay-lax-1, 20/20 rounds, 100/100 echoes, S_icmp median **53.3 ms**, no anycast reply. Client on relay-lax-1 (pinned after the auto/SYD issue), 65 `SERVER_LEG_APP` lines in window (all samples >= 1), **n = 61 matched epochs** (gate n >= 30 satisfied).
+- **Verdict: FAIL.** Check A (S_icmp >= direct - L1 - 3 ms): **4/61 = 6.6%** (gate >= 90%). Check B (|S_icmp - passive|/passive <= 20%): **0/61** (gate >= 80%). Medians: floor 73.2, S_icmp 53.2, passive **14.5**, Delta(S-floor) -20.0.
+- **Root causes (evidence):** (1) **the deployed relay prober measured nothing**: 220 bursts / 660 probes / 220 unavailable, 0 usable, while root ping from the same host answered 100/100 - relay-lax-1 never received `net.ipv4.ping_group_range` (only relay-syd-1 was canaried), so the unprivileged ICMP socket was EPERM. (2) **passive app-RTT is not a valid peer**: 14.5 ms vs 53.2 ms from the same relay (3.7x), because forward->first-response is not an RTT on a busy flow; an earlier destination agreed (141.9 vs 142.0), so the bias is RTT/flow dependent. (3) **the client floor is internally inconsistent** by ~20-24 ms: L1 + L2 = 262.0 < L3 = 285.8, so check A's -3 ms tolerance is too tight; the Delta is that inconsistency, not an implausibly short relay leg. (4) app lines only flowed 02:26:52-02:32:31 before re-locks and 36 `no_reply_from_relay` windows ended the supply.
+- **Implications:** R2 rollout must apply the sysctl on every relay that runs the prober (not just the canary); the F4 peer must be the relay's own ICMP S (passive sample demoted to a display-only approximation); the floor check needs a tolerance calibrated to the observed client-side inconsistency (or better paired sampling). The product ranking already treats S as display-only, so no ranking change is implied by this FAIL.
+- **Cleanup:** temp branch/worktree and `SERVER_LEG_TARGETS` deleted; no deploy (lax uptime monotonic); GUI (pid 17932) left running; target IPs absent from logs; only `docs/publishing-channels.md` dirty.
+- **Next:** apply `ping_group_range` to relay-lax-1 (canary pattern, reversible), confirm `server_leg_probes` usable, re-run a window while the game is live, then re-apply the revised gate.
+
+### 2026-11-19 (E1 attempt) - R2 deployed to relay-lax-1; Linux build break fixed; E1 window n=0 (no game traffic)
+
+**Agent:** `e1-runner` + lead. HEAD `fcd958f` (committed `f988e96` plus the Linux fix). Nothing else committed.
+
+- **Linux build break (real, from `f988e96`).** `proxy/src/ping.rs` used `Duration::as_micros()` (u128) capped with `u64::from`; the linux-only ICMP module never compiles on Windows, so the Windows gates missed it. Fixed (`u128::from`) and committed **`fcd958f`**; re-verified in CI with a check-only branch: `cargo check --target x86_64-unknown-linux-gnu` for proxy (`--features quic`) and client both `LINUX_CHECK_OK` (run 44542027056); temp branch deleted.
+- **Relay-lax-1 now runs the new proxy (single node only).** Temp branch wrapping the real deploy script for `relay-lax-1`; first dispatch failed at the Linux build, second succeeded after the fix. Same-version install was worked around by relabelling only that relay's active release (`1.11.3 -> 1.11.3-pre-r2`, rollback target kept; a failed run restores it). Evidence: `/health` uptime reset (87279 s -> 29 s), `/metrics` gained **18 `server_leg_*` series**, client reconnected/registered at 14:10:50Z. Fleet otherwise still 1.11.3; branch/worktree deleted.
+- **E1 window: n = 0, INCONCLUSIVE (instrument not exercised).** Measurement-only window run 44541137646 (20m45s): 20/20 rounds, 100/100 echoes, median S_icmp **53.0 ms** (52.9-53.1), no anycast reply. But **0 `SERVER_LEG_APP` lines**, 0 in-window `QUIET_FLOW_SAMPLE`, 0 `Latency comparison` lines with `direct_ms`, and relay counters `server_leg_* = 0` - Fortnite was not running, so the client forwarded nothing and the relay had no probe interest. The gate (n >= 30) was never evaluable.
+- **Cleanup:** `SERVER_LEG_TARGETS` deleted (secret list back to the 7 pre-existing), temp branches/worktrees removed, `git status` = only the pre-existing `docs/publishing-channels.md`. Client GUI running (pid 4840) and registered on relay-lax-1.
+- **Next:** re-run `ci/e1-window` unchanged the moment an active match is underway (the relay pushes passive reports on a ~5 s cadence; ~20 min of play should produce the lines), then apply the F4/F3 gate from `docs/design/relay-server-leg-validation.md`.
+
 ### 2026-11-19 (unknown-destination choice) - Address-only floor ties fixed; starved relays demoted and left automatically
 
 **Agent:** `rust-dev-8` + lead (final gates/rebuild). Nothing committed.

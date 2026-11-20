@@ -44,6 +44,9 @@ server_leg_relay_measured_unvalidated = "Relay→server {ms} ms · measured, unv
 server_leg_app = "Relay→server (app)"
 server_leg_app_measured = "{ms} ms · n={n}"
 expected_path = "Expected path ~{ms} ms (L + S)"
+route_trace = "Route"
+route_trace_hops = "{hops} hops · last router RTT {ms} ms"
+route_trace_hops_only = "{hops} hops · no router answered"
 location_estimate = "Server location: country-level estimate from IP"
 location_provider = "Server location: cloud provider region"
 location_hosting = "Server location: hosting network — unknown"
@@ -60,6 +63,9 @@ place_hint = "-- 开始优化后显示"
 count_hint = "-- 开始优化后统计"
 port_fix_guide = "未检测到端口——修复指南"
 start_manual = "开始优化（手动）"
+
+trace_route = "Route to server: {hops} hops"
+trace_nearest = "nearest responding hop {ms} ms"
 
 [state]
 disconnected = "未连接"

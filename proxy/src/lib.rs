@@ -16,4 +16,5 @@ pub mod notify;
 pub mod ping;
 pub mod rate_limit;
 pub mod relay;
+pub mod trace;
 pub mod update_state;

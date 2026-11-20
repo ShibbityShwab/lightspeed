@@ -24,6 +24,7 @@ use lightspeed_proxy::notify;
 use lightspeed_proxy::ping;
 use lightspeed_proxy::rate_limit;
 use lightspeed_proxy::relay;
+use lightspeed_proxy::trace;
 
 #[cfg(feature = "quic")]
 use lightspeed_proxy::control;
@@ -409,6 +410,29 @@ async fn main() -> anyhow::Result<()> {
         });
     #[cfg(not(feature = "quic"))]
     let server_leg_registry: Option<Arc<ping::ServerLegRegistry>> = None;
+
+    // Relay-side TTL traceroute: the last responsible hop on the relay→server
+    // path, pushed to the client as a placement anchor when the server's geo
+    // data is unknown. It targets exactly the destinations the server-leg prober
+    // already probes (same forwarded-only gate), on its own slow cadence, with
+    // the same per-relay switch: `[server_leg] enabled = false` turns both off.
+    // `None` on a build without the QUIC control plane: there is nowhere to
+    // report a hop.
+    #[cfg(feature = "quic")]
+    let trace_registry: Option<Arc<trace::TraceRegistry>> = config.server_leg.enabled.then(|| {
+        let mut registry = trace::TraceRegistry::new(
+            trace::TraceConfig::default(),
+            Arc::new(ping::SystemClock),
+            Arc::new(trace::SystemTraceProber),
+        )
+        .with_metrics(Arc::clone(&metrics));
+        if let Some(guard) = budget_guard.clone() {
+            registry = registry.with_budget(guard);
+        }
+        Arc::new(registry)
+    });
+    #[cfg(not(feature = "quic"))]
+    let trace_registry: Option<Arc<trace::TraceRegistry>> = None;
     let public_ip = parse_public_ip(config.server.public_ip.as_deref());
     if geo_resolver.is_some() && public_ip.is_none() {
         warn!(
@@ -440,6 +464,7 @@ async fn main() -> anyhow::Result<()> {
                 geo_state.clone(),
                 budget_guard.clone(),
                 server_leg_registry.clone(),
+                trace_registry.clone(),
             )
             .await
             .map_err(|e| {
@@ -460,6 +485,9 @@ async fn main() -> anyhow::Result<()> {
             }
             if let Some(registry) = server_leg_registry.clone() {
                 relay_engine = relay_engine.with_server_leg(registry);
+            }
+            if let Some(registry) = trace_registry.clone() {
+                relay_engine = relay_engine.with_trace(registry);
             }
             let engine = Arc::new(relay_engine);
             // Bind every serving plane before spawning any task, so a bind
@@ -491,6 +519,24 @@ async fn main() -> anyhow::Result<()> {
         ),
     }
 
+    // The TTL traceroute runs on its own thread: a trace blocks on hop timeouts
+    // for up to `MAX_HOPS × HOP_TIMEOUT`, and that must never occupy an async
+    // worker. The thread is detached for the process lifetime.
+    match &trace_registry {
+        Some(registry) => match trace::TraceRegistry::spawn_prober(Arc::clone(registry)) {
+            Some(_thread) => info!(
+                "Relay-side TTL traceroute enabled: at most {} hop probes per trace, \
+                 one trace per 5 min per active server, global cap 1/min",
+                trace::MAX_HOPS
+            ),
+            None => warn!("Relay-side TTL traceroute: probe thread failed to start"),
+        },
+        None => info!(
+            "Relay-side TTL traceroute disabled (by configuration, or this build \
+             has no QUIC control plane to report on)"
+        ),
+    }
+
     #[cfg(feature = "quic")]
     let control_server = {
         let control_addr: std::net::SocketAddr = control_bind.parse()?;
@@ -502,6 +548,9 @@ async fn main() -> anyhow::Result<()> {
         );
         if let Some(registry) = server_leg_registry.clone() {
             control_state.set_server_leg(registry);
+        }
+        if let Some(registry) = trace_registry.clone() {
+            control_state.set_trace(registry);
         }
         let control_state = Arc::new(control_state);
         control::ControlServer::bind(control_addr, control_state).map_err(|e| {
@@ -790,6 +839,7 @@ async fn adopt_handoff(
     geo: Option<relay::GeoState>,
     budget_guard: Option<Arc<budget::BudgetGuard>>,
     server_leg: Option<Arc<ping::ServerLegRegistry>>,
+    trace_registry: Option<Arc<trace::TraceRegistry>>,
 ) -> anyhow::Result<(
     Arc<RwLock<auth::Authenticator>>,
     Arc<relay::RelayEngine>,
@@ -824,6 +874,9 @@ async fn adopt_handoff(
     }
     if let Some(registry) = server_leg {
         relay_engine = relay_engine.with_server_leg(registry);
+    }
+    if let Some(registry) = trace_registry {
+        relay_engine = relay_engine.with_trace(registry);
     }
     let engine = Arc::new(relay_engine);
     let installed = engine
@@ -864,6 +917,7 @@ async fn adopt_handoff(
     _geo: Option<relay::GeoState>,
     _budget_guard: Option<Arc<budget::BudgetGuard>>,
     _server_leg: Option<Arc<ping::ServerLegRegistry>>,
+    _trace_registry: Option<Arc<trace::TraceRegistry>>,
 ) -> anyhow::Result<(
     Arc<RwLock<auth::Authenticator>>,
     Arc<relay::RelayEngine>,

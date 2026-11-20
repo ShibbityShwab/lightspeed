@@ -58,7 +58,8 @@ pub fn current_relay() -> Option<std::net::SocketAddrV4> {
 /// never be shown for the one in use. `ServerLegAppReport` is the relay's
 /// passive app-RTT sample (forward→first-response), next to the ICMP `S`.
 pub use server_leg::{
-    server_leg_app_report, server_leg_report, ServerLegAppReport, ServerLegReport,
+    server_leg_app_report, server_leg_report, server_leg_trace, ServerLegAppReport,
+    ServerLegReport, ServerTraceReport,
 };
 
 pub(crate) mod capture;

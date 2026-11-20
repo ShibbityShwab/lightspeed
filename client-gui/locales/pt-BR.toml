@@ -44,6 +44,9 @@ server_leg_relay_measured_unvalidated = "Relay→servidor {ms} ms · medido, nã
 server_leg_app = "Relay→servidor (app)"
 server_leg_app_measured = "{ms} ms · n={n}"
 expected_path = "Caminho esperado ~{ms} ms (L + S)"
+route_trace = "Rota"
+route_trace_hops = "{hops} saltos · RTT do último roteador {ms} ms"
+route_trace_hops_only = "{hops} saltos · nenhum roteador respondeu"
 location_estimate = "Localização do servidor: estimativa em nível de país pelo IP"
 location_provider = "Localização do servidor: região do provedor de nuvem"
 location_hosting = "Localização do servidor: rede de hospedagem — desconhecida"
@@ -60,6 +63,9 @@ place_hint = "-- inicie a otimização para posicionar"
 count_hint = "-- inicie a otimização para contar"
 port_fix_guide = "Porta não detectada - guia"
 start_manual = "Iniciar otimização (manual)"
+
+trace_route = "Rota até o servidor: {hops} saltos"
+trace_nearest = "salto que responde mais próximo {ms} ms"
 
 [state]
 disconnected = "Desconectado"

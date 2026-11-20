@@ -246,7 +246,44 @@ pub(super) fn relay_measured_app_leg_text(
     )
 }
 
-/// The `Expected path` row: the one measurement the two measured legs support,
+/// The relay's TTL-traceroute report for the pair on screen.
+///
+/// Same validity split as [`relay_measured_server_leg`]: the client crate owns
+/// the store, the 10-minute freshness and every plausibility rule (hop count,
+/// router address class, RTT ceiling, pair binding), so the window asks for its
+/// exact `(relay, server)` pair and gets either the report or `None`. This is
+/// the **placement anchor** for a hosting-network server: the path reaches the
+/// reported router even when no geolocation is available for the server. It is
+/// not a city label and feeds no ranking decision.
+pub(super) fn relay_measured_trace(
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+) -> Option<lightspeed_client::ServerTraceReport> {
+    lightspeed_client::server_leg_trace(relay, server)
+}
+
+/// The `Route` row for a relay-measured traceroute.
+///
+/// One fact, one row: the hop count and, when a router answered, its round trip.
+/// A trace with no router answer still reports the hop count it did measure and
+/// says so rather than inventing an anchor. `complete` is not shown: it changes
+/// the path's end, not the anchor, and the row is a placement hint, not a
+/// verdict.
+pub(super) fn relay_measured_trace_text(report: &lightspeed_client::ServerTraceReport) -> String {
+    let hops = report.hops.to_string();
+    match report.last_hop_rtt_us {
+        Some(rtt_us) => {
+            let ms = format!("{:.0}", f64::from(rtt_us) / 1000.0);
+            i18n::t_with(
+                "route.route_trace_hops",
+                &[("hops", hops.as_str()), ("ms", ms.as_str())],
+            )
+        }
+        None => i18n::t_with("route.route_trace_hops_only", &[("hops", hops.as_str())]),
+    }
+}
+
+/// The `Server leg` row: the one measurement the two measured legs support,
 /// `L + S`.
 ///
 /// `L` is the one-RTT client→relay keepalive the route card already shows as

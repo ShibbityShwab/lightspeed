@@ -31,6 +31,7 @@ mod inner {
     use crate::geo::{self, GeoResolver};
     use crate::metrics::{ControlHandshakeOutcome, ProxyMetrics};
     use crate::ping::ServerLegRegistry;
+    use crate::trace::TraceRegistry;
 
     // ── Types ───────────────────────────────────────────────────────
 
@@ -43,6 +44,12 @@ mod inner {
     /// Bound on one server-leg push, so a slow or half-dead connection cannot
     /// stall the sweep.
     const SERVER_LEG_PUSH_TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// How often the control plane looks for a due TTL-traceroute report.
+    ///
+    /// Traces are slow (one per 5 min per server), so a 1 s sweep adds nothing
+    /// but keeps the same routing code path as the server-leg push.
+    const TRACE_PUSH_INTERVAL: Duration = Duration::from_secs(1);
 
     /// The data-plane token issued to a QUIC connection, shared across the
     /// connection's streams so keepalive refresh and close-time revoke reach
@@ -141,6 +148,9 @@ mod inner {
         /// when probing is disabled for this relay, in which case no server-leg
         /// message is ever pushed.
         pub server_leg: Option<Arc<ServerLegRegistry>>,
+        /// Relay-side TTL traceroute, shared with the data plane. `None` when
+        /// tracing is disabled, in which case no server-trace message is pushed.
+        pub trace: Option<Arc<TraceRegistry>>,
         /// Control connections that may receive server-leg reports, keyed by
         /// the data-plane session token they were issued. The push writes only
         /// to the connection that owns the token, which is what binds a report
@@ -171,6 +181,7 @@ mod inner {
                 metrics,
                 geo,
                 server_leg: None,
+                trace: None,
                 server_leg_peers: RwLock::new(HashMap::new()),
                 telemetry_rate: tokio::sync::Mutex::new(TelemetryRateLimiter::default()),
                 started_at: Instant::now(),
@@ -185,6 +196,15 @@ mod inner {
         /// message.
         pub fn set_server_leg(&mut self, registry: Arc<ServerLegRegistry>) {
             self.server_leg = Some(registry);
+        }
+
+        /// Attach the relay-side TTL traceroute.
+        ///
+        /// Called once at startup, before the state is shared. Tracing is
+        /// gated by the same per-relay switch as the server-leg prober, so a
+        /// relay with probing disabled pushes neither report type.
+        pub fn set_trace(&mut self, registry: Arc<TraceRegistry>) {
+            self.trace = Some(registry);
         }
 
         /// Bind a freshly issued data-plane token to the connection that owns
@@ -571,6 +591,13 @@ mod inner {
                 let shutdown = shutdown.clone();
                 tokio::spawn(async move { run_server_leg_pusher(state, shutdown).await })
             });
+            // The TTL-traceroute report rides the same peer routing table and
+            // the same capability gate; only its cadence differs.
+            let trace_pusher = self.state.trace.as_ref().map(|_| {
+                let state = Arc::clone(&self.state);
+                let shutdown = shutdown.clone();
+                tokio::spawn(async move { run_trace_pusher(state, shutdown).await })
+            });
 
             loop {
                 tokio::select! {
@@ -619,6 +646,9 @@ mod inner {
             }
 
             if let Some(pusher) = &server_leg_pusher {
+                pusher.abort();
+            }
+            if let Some(pusher) = &trace_pusher {
                 pusher.abort();
             }
             self.announce_shutdown().await;
@@ -714,40 +744,78 @@ mod inner {
                 _ = shutdown.changed() => return,
                 _ = interval.tick() => {
                     for (token, message) in registry.due_pushes() {
-                        let peer = state.server_leg_peers.read().await.get(&token).cloned();
-                        let Some(peer) = peer else {
-                            // No live connection owns this token (closed or
-                            // rotated since registration): the report is
-                            // dropped, and the next one is at least a report
-                            // interval away.
-                            continue;
-                        };
-                        if peer.client_caps & caps::SERVER_LEG == 0 {
-                            // The client did not advertise that it can read a
-                            // server-leg frame (a pre-R2 build, or one whose
-                            // advertisement has not arrived yet). Skipping is
-                            // what keeps an old client from being sent streams
-                            // it would never consume.
-                            continue;
-                        }
-                        let push = async {
-                            let Ok(mut send) = peer.connection.open_uni().await else {
-                                return;
-                            };
-                            if message.write_to(&mut send).await.is_err() {
-                                return;
-                            }
-                            let _ = send.finish();
-                        };
-                        if tokio::time::timeout(SERVER_LEG_PUSH_TIMEOUT, push)
-                            .await
-                            .is_err()
-                        {
-                            debug!("Server-leg push timed out for one control session");
-                        }
+                        push_report(&state, token, &message, "Server-leg").await;
                     }
                 }
             }
+        }
+    }
+
+    /// Push due TTL-traceroute reports over the same path as server-leg reports:
+    /// the token's owning connection and the same capability gate. A client that
+    /// predates [`ControlMessage::ServerTrace`] advertised the gateway bit for
+    /// the older reports and ignores an unknown message type on this stream, so
+    /// reusing the bit is safe and needs no new capability.
+    async fn run_trace_pusher(
+        state: Arc<ControlState>,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
+        let Some(registry) = state.trace.clone() else {
+            return;
+        };
+        let mut interval = tokio::time::interval(TRACE_PUSH_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => return,
+                _ = interval.tick() => {
+                    for (token, message) in registry.due_pushes() {
+                        push_report(&state, token, &message, "Server-trace").await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Write one server-initiated report stream to the connection that owns
+    /// `token`, if that connection advertised it can read server-leg frames.
+    ///
+    /// Each push is time-bounded so one slow or half-dead connection cannot
+    /// stall a sweep. A token with no live peer (closed or rotated since
+    /// registration) is silently dropped: the next report is at least one report
+    /// interval away.
+    async fn push_report(
+        state: &ControlState,
+        token: u32,
+        message: &ControlMessage,
+        label: &'static str,
+    ) {
+        let peer = state.server_leg_peers.read().await.get(&token).cloned();
+        let Some(peer) = peer else {
+            return;
+        };
+        if peer.client_caps & caps::SERVER_LEG == 0 {
+            // The client did not advertise that it can read a server-leg frame
+            // (a pre-R2 build, or one whose advertisement has not arrived yet).
+            // Skipping is what keeps an old client from being sent streams it
+            // would never consume.
+            return;
+        }
+        let push = async {
+            let Ok(mut send) = peer.connection.open_uni().await else {
+                return;
+            };
+            if message.write_to(&mut send).await.is_err() {
+                return;
+            }
+            let _ = send.finish();
+        };
+        if tokio::time::timeout(SERVER_LEG_PUSH_TIMEOUT, push)
+            .await
+            .is_err()
+        {
+            debug!("{label} push timed out for one control session");
         }
     }
 
@@ -1400,7 +1468,7 @@ mod inner {
 
         impl TestRelay {
             async fn start(mode: ControlAlpn) -> Self {
-                Self::start_inner(mode, None).await
+                Self::start_inner(mode, None, None).await
             }
 
             /// A relay with the server-leg prober attached, so the push path is
@@ -1409,12 +1477,23 @@ mod inner {
                 mode: ControlAlpn,
                 registry: Arc<ServerLegRegistry>,
             ) -> Self {
-                Self::start_inner(mode, Some(registry)).await
+                Self::start_inner(mode, Some(registry), None).await
+            }
+
+            /// A relay with both the server-leg prober and the TTL traceroute
+            /// attached, so both push paths share one peer routing table.
+            async fn start_with_server_leg_and_trace(
+                mode: ControlAlpn,
+                server_leg: Arc<ServerLegRegistry>,
+                trace: Arc<TraceRegistry>,
+            ) -> Self {
+                Self::start_inner(mode, Some(server_leg), Some(trace)).await
             }
 
             async fn start_inner(
                 mode: ControlAlpn,
                 server_leg: Option<Arc<ServerLegRegistry>>,
+                trace: Option<Arc<TraceRegistry>>,
             ) -> Self {
                 isolate_tls_dir();
                 let mut config = ProxyConfig::default();
@@ -1428,6 +1507,9 @@ mod inner {
                 );
                 if let Some(registry) = server_leg {
                     state.set_server_leg(registry);
+                }
+                if let Some(registry) = trace {
+                    state.set_trace(registry);
                 }
                 let state = Arc::new(state);
                 let server = ControlServer::bind("127.0.0.1:0".parse().expect("bind addr"), state)
@@ -1730,6 +1812,27 @@ mod inner {
             }
         }
 
+        /// A traceroute with one fixed path, so the push path needs no network.
+        struct FixedTrace;
+
+        impl crate::trace::TraceProber for FixedTrace {
+            fn trace(
+                &self,
+                _target: Ipv4Addr,
+                charge: &mut dyn FnMut(u64) -> bool,
+            ) -> Option<crate::trace::Trace> {
+                if !charge(crate::trace::PROBE_EGRESS_BYTES) {
+                    return None;
+                }
+                Some(crate::trace::Trace {
+                    hops: 12,
+                    last_hop: Some(Ipv4Addr::new(8, 8, 8, 8)),
+                    last_hop_rtt_us: Some(14_250),
+                    complete: false,
+                })
+            }
+        }
+
         /// Register over the established connection and return its data-plane
         /// token.
         async fn register_token(conn: &quinn::Connection) -> u32 {
@@ -1832,6 +1935,107 @@ mod inner {
             assert!(
                 leak.is_err(),
                 "a report must not reach a session that cannot read it"
+            );
+
+            watched.close(0u32.into(), b"done");
+            other.close(0u32.into(), b"done");
+            drop(endpoint);
+            relay.shutdown().await;
+        }
+
+        /// A TTL-traceroute report rides the same server-initiated uni-stream
+        /// path and the same capability gate as a server-leg report: it reaches
+        /// exactly the session whose token the trace registry holds interest
+        /// for, and a session that never advertised the capability receives
+        /// nothing - including a due trace measured for another session.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_server_trace_report_is_pushed_only_to_its_own_session() {
+            let server_leg = Arc::new(crate::ping::ServerLegRegistry::new(
+                crate::ping::ServerLegConfig::default(),
+                Arc::new(crate::ping::SystemClock),
+                Arc::new(FixedEcho),
+            ));
+            // Two servers may be traced in one minute for this test, so both
+            // sessions have a due report and the capability gate is meaningful.
+            let trace = Arc::new(TraceRegistry::new(
+                crate::trace::TraceConfig {
+                    max_traces_per_minute: 2,
+                    ..crate::trace::TraceConfig::default()
+                },
+                Arc::new(crate::ping::SystemClock),
+                Arc::new(FixedTrace),
+            ));
+            let relay = TestRelay::start_with_server_leg_and_trace(
+                ControlAlpn::Off,
+                Arc::clone(&server_leg),
+                Arc::clone(&trace),
+            )
+            .await;
+            let endpoint = client_endpoint(Vec::new());
+            let watched = connect(&endpoint, relay.addr)
+                .await
+                .expect("the session the trace report belongs to");
+            let other = connect(&endpoint, relay.addr)
+                .await
+                .expect("a second session on the same relay");
+            let watched_token = register_token(&watched).await;
+            let other_token = register_token(&other).await;
+            advertise_caps(&watched, caps::SERVER_LEG).await;
+            advertise_caps(&other, 0).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            let watched_server: Ipv4Addr = "91.199.82.166".parse().expect("game server");
+            let other_server: Ipv4Addr = "91.199.82.167".parse().expect("game server");
+            trace.note_forward(
+                watched_token,
+                Ipv4Addr::LOCALHOST,
+                watched_server,
+                crate::ping::FORWARD_THRESHOLD,
+            );
+            trace.note_forward(
+                other_token,
+                Ipv4Addr::LOCALHOST,
+                other_server,
+                crate::ping::FORWARD_THRESHOLD,
+            );
+            assert_eq!(
+                trace.probe_due().traces,
+                2,
+                "both active servers are due one trace"
+            );
+
+            let accepted = tokio::time::timeout(Duration::from_secs(5), watched.accept_uni())
+                .await
+                .expect("the owning session must receive a trace stream")
+                .expect("a uni stream");
+            let mut recv = accepted;
+            let message = ControlMessage::read_from(&mut recv)
+                .await
+                .expect("read the pushed frame")
+                .expect("a pushed message");
+            match message {
+                ControlMessage::ServerTrace {
+                    server: reported,
+                    hops,
+                    last_hop,
+                    last_hop_rtt_us,
+                    flags,
+                    age_ms,
+                } => {
+                    assert_eq!(reported, watched_server, "the trace names its own server");
+                    assert_eq!(hops, 12);
+                    assert_eq!(last_hop, Ipv4Addr::new(8, 8, 8, 8));
+                    assert_eq!(last_hop_rtt_us, 14_250);
+                    assert_eq!(flags, 0, "the destination did not answer");
+                    assert_eq!(age_ms, 0);
+                }
+                other => panic!("expected a server-trace message, got {other:?}"),
+            }
+
+            let leak = tokio::time::timeout(Duration::from_millis(800), other.accept_uni()).await;
+            assert!(
+                leak.is_err(),
+                "a trace must not reach a session that cannot read it"
             );
 
             watched.close(0u32.into(), b"done");

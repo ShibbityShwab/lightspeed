@@ -1759,6 +1759,50 @@ mod supervisor {
                             );
                         }
                     }
+                    Ok(Ok(Some(ControlMessage::ServerTrace {
+                        server,
+                        hops,
+                        last_hop,
+                        last_hop_rtt_us,
+                        flags,
+                        age_ms,
+                    }))) => {
+                        // `record_trace` validates the shape and returns whether
+                        // the report was accepted; exactly one stable info line
+                        // is emitted per accepted report.
+                        if generation_is_current(data_addr, generation)
+                            && crate::server_leg::record_trace(
+                                data_addr,
+                                server,
+                                hops,
+                                last_hop,
+                                last_hop_rtt_us,
+                                flags,
+                                age_ms,
+                            )
+                        {
+                            let at_unix_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis();
+                            let normalised_hop = (!last_hop.is_unspecified()).then_some(last_hop);
+                            let normalised_rtt = normalised_hop
+                                .and_then(|_| (last_hop_rtt_us > 0).then_some(last_hop_rtt_us));
+                            info!(
+                                "{}",
+                                crate::server_leg::server_leg_trace_log_line(
+                                    data_addr,
+                                    server,
+                                    hops,
+                                    normalised_hop,
+                                    normalised_rtt,
+                                    flags & lightspeed_protocol::control::trace_flags::COMPLETE
+                                        != 0,
+                                    at_unix_ms,
+                                )
+                            );
+                        }
+                    }
                     Ok(Ok(Some(_))) => {}
                     // A cleanly finished stream, a truncated frame or a timeout
                     // all end this stream; the connection itself is still good.

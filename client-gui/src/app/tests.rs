@@ -2793,3 +2793,56 @@ fn the_relay_measured_app_row_states_the_passive_sample_and_count() {
 
     crate::i18n::set_language(None);
 }
+
+/// The relay-measured route row is the placement anchor for a server whose
+/// geolocation is unknown: it states the hop count and the last router's RTT,
+/// and nothing else. It claims no city (the product has no hop-geolocation
+/// data) and no path verdict; a trace with no router answer still reports the
+/// hops it measured rather than inventing an anchor.
+#[test]
+fn the_relay_measured_route_row_states_hops_and_last_router_rtt() {
+    use super::relay_measured_trace_text;
+    use std::net::Ipv4Addr;
+    use std::time::Duration;
+
+    let _guard = crate::i18n::test_lock();
+    crate::i18n::set_language(Some("en"));
+
+    let report = lightspeed_client::ServerTraceReport {
+        hops: 12,
+        last_hop: Some(Ipv4Addr::new(8, 8, 8, 8)),
+        last_hop_rtt_us: Some(14_250),
+        complete: false,
+        age: Duration::from_secs(3),
+    };
+    assert_eq!(
+        relay_measured_trace_text(&report),
+        "12 hops · last router RTT 14 ms"
+    );
+
+    // A complete trace shows the same anchor: the destination answering does
+    // not turn the row into a different claim.
+    let complete = lightspeed_client::ServerTraceReport {
+        complete: true,
+        ..report
+    };
+    assert_eq!(
+        relay_measured_trace_text(&complete),
+        "12 hops · last router RTT 14 ms"
+    );
+
+    // No router answered: report the measured distance, never a fabricated one.
+    let no_router = lightspeed_client::ServerTraceReport {
+        hops: 7,
+        last_hop: None,
+        last_hop_rtt_us: None,
+        complete: false,
+        age: Duration::from_secs(1),
+    };
+    assert_eq!(
+        relay_measured_trace_text(&no_router),
+        "7 hops · no router answered"
+    );
+
+    crate::i18n::set_language(None);
+}

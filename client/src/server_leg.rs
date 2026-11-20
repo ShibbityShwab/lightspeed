@@ -512,6 +512,280 @@ pub fn server_leg_app_log_line(
     )
 }
 
+// ── TTL-traceroute reports (placement anchor) ──────────────────────
+
+/// How long a received TTL-traceroute report remains usable.
+///
+/// Ten minutes: the relay's own cache TTL for a trace. A report this old means
+/// the relay stopped measuring this server, not that the path is slightly
+/// stale; the route row must hide rather than plot an old path.
+pub const MAX_TRACE_REPORT_AGE: Duration = Duration::from_secs(600);
+
+/// Maximum hops the client will believe.
+///
+/// The protocol ceiling is shared with the relay, so a report cannot claim a
+/// path longer than any legitimate relay would measure.
+pub const MAX_TRACE_HOPS: u8 = lightspeed_protocol::control::MAX_SERVER_TRACE_HOPS;
+
+/// Largest believable round trip to the last router, microseconds (5 s).
+pub const MAX_TRACE_LAST_HOP_RTT_US: u32 = 5_000_000;
+
+/// Upper bound on stored trace reports, so the map cannot grow without bound
+/// when a client sees many relays and servers.
+const MAX_TRACE_ENTRIES: usize = 64;
+
+/// A relay-measured TTL-traceroute report, already validated.
+///
+/// This is the **placement anchor** for a server whose geo data is wrong or
+/// absent: the path reaches at least `last_hop`, so "unknown" becomes "somewhere
+/// behind that router". It is not a city label; turning the hop into a place
+/// needs hop geolocation data the product does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerTraceReport {
+    /// Highest TTL that produced a reply: the distance in hops to
+    /// [`Self::last_hop`], or to the destination when [`Self::complete`].
+    pub hops: u8,
+    /// The router that answered at the highest TTL below the destination.
+    /// `None` when no router answered (then nothing may be placed from it).
+    pub last_hop: Option<Ipv4Addr>,
+    /// Round trip to [`Self::last_hop`], microseconds. `None` exactly when
+    /// `last_hop` is `None`.
+    pub last_hop_rtt_us: Option<u32>,
+    /// Whether the destination itself answered. `false` still means the path is
+    /// bounded by `last_hop`; it does not mean the trace failed.
+    pub complete: bool,
+    /// Total staleness: relay-reported age at send plus time since receipt.
+    pub age: Duration,
+}
+
+/// One stored trace report, before validation.
+#[derive(Debug, Clone, Copy)]
+struct StoredTrace {
+    hops: u8,
+    last_hop: Option<Ipv4Addr>,
+    last_hop_rtt_us: Option<u32>,
+    complete: bool,
+    /// Staleness the relay reported at send time.
+    wire_age: Duration,
+    /// When this client received the frame.
+    received_at: Instant,
+}
+
+fn trace_store() -> &'static Mutex<HashMap<(SocketAddrV4, Ipv4Addr), StoredTrace>> {
+    static STORE: OnceLock<Mutex<HashMap<(SocketAddrV4, Ipv4Addr), StoredTrace>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_trace_store() -> MutexGuard<'static, HashMap<(SocketAddrV4, Ipv4Addr), StoredTrace>> {
+    trace_store()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Record one relay-measured traceroute received on `relay`'s control
+/// connection, for `server`.
+///
+/// Shape validation happens here so a malformed or out-of-bounds frame is never
+/// stored; freshness runs at read time because it depends on clocks. Returns
+/// `true` when the report was stored: the control-plane handler emits exactly
+/// one info line per accepted report, so a rejected frame must not log one.
+///
+/// The rules, all mandatory:
+///
+/// * `hops` is `1..=20` - a trace at hop zero is no evidence, and one past the
+///   protocol ceiling is not a path any relay may report.
+/// * `last_hop` and `last_hop_rtt_us` are either both absent (`0.0.0.0` / `0`
+///   on the wire) or both present; a present router is a **public unicast**
+///   address and its RTT is `1..=5 s`. A private or loopback "router" is a
+///   local-stack artifact, not a placement anchor, and an absurd RTT is not a
+///   measurement.
+/// * the pair is the relay whose connection delivered the frame plus the server
+///   it names, so no lookup can return another relay's path for this one.
+pub(crate) fn record_trace(
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+    hops: u8,
+    last_hop: Ipv4Addr,
+    last_hop_rtt_us: u32,
+    flags: u8,
+    age_ms: u16,
+) -> bool {
+    record_trace_at(
+        relay,
+        server,
+        hops,
+        last_hop,
+        last_hop_rtt_us,
+        flags,
+        Duration::from_millis(u64::from(age_ms)),
+        Instant::now(),
+    )
+}
+
+/// [`record_trace`] with the receive instant supplied, so freshness and the
+/// store's bounds are testable without sleeping.
+fn record_trace_at(
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+    hops: u8,
+    last_hop: Ipv4Addr,
+    last_hop_rtt_us: u32,
+    flags: u8,
+    wire_age: Duration,
+    received_at: Instant,
+) -> bool {
+    let Some((last_hop, last_hop_rtt_us)) = valid_trace_hop(last_hop, last_hop_rtt_us) else {
+        return false;
+    };
+    if !(1..=MAX_TRACE_HOPS).contains(&hops) {
+        return false;
+    }
+    let stored = StoredTrace {
+        hops,
+        last_hop,
+        last_hop_rtt_us,
+        complete: flags & lightspeed_protocol::control::trace_flags::COMPLETE != 0,
+        wire_age,
+        received_at,
+    };
+    let mut entries = lock_trace_store();
+    if entries.len() >= MAX_TRACE_ENTRIES && !entries.contains_key(&(relay, server)) {
+        // Evict the stalest entry rather than growing without bound. A stale
+        // entry is already unusable, so nothing displayable is lost.
+        if let Some(stalest) = entries
+            .iter()
+            .min_by_key(|(_, value)| value.received_at)
+            .map(|(key, _)| *key)
+        {
+            entries.remove(&stalest);
+        }
+    }
+    entries.insert((relay, server), stored);
+    true
+}
+
+/// Normalise the wire's last-hop pair: `(0.0.0.0, 0)` is "no router"; any other
+/// pair must be a public router with a plausible RTT.
+fn valid_trace_hop(
+    last_hop: Ipv4Addr,
+    last_hop_rtt_us: u32,
+) -> Option<(Option<Ipv4Addr>, Option<u32>)> {
+    if last_hop.is_unspecified() && last_hop_rtt_us == 0 {
+        return Some((None, None));
+    }
+    if !is_public_unicast(last_hop)
+        || last_hop_rtt_us == 0
+        || last_hop_rtt_us > MAX_TRACE_LAST_HOP_RTT_US
+    {
+        return None;
+    }
+    Some((Some(last_hop), Some(last_hop_rtt_us)))
+}
+
+/// Whether `addr` is a public unicast address: a router returned in a trace is
+/// a real internet hop, never a private, loopback, link-local, CGNAT,
+/// benchmarking or reserved address.
+fn is_public_unicast(addr: Ipv4Addr) -> bool {
+    if addr.is_unspecified()
+        || addr.is_broadcast()
+        || addr.is_multicast()
+        || addr.is_loopback()
+        || addr.is_private()
+        || addr.is_link_local()
+        || addr.is_documentation()
+    {
+        return false;
+    }
+    let octets = addr.octets();
+    if octets[0] == 0 || octets[0] >= 240 {
+        return false;
+    }
+    if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+        return false;
+    }
+    if octets[0] == 198 && (octets[1] == 18 || octets[1] == 19) {
+        return false;
+    }
+    if octets[0] == 192 && octets[1] == 0 && octets[2] == 0 {
+        return false;
+    }
+    if octets[0] == 192 && octets[1] == 88 && octets[2] == 99 {
+        return false;
+    }
+    true
+}
+
+/// The latest TTL-traceroute report for `(relay, server)`.
+///
+/// `None` when no report was received for this exact pair, when it is older than
+/// [`MAX_TRACE_REPORT_AGE`], or when its shape is implausible. The relay is the
+/// one whose control connection delivered the report; another relay's path is
+/// never returned here.
+pub fn server_leg_trace(relay: SocketAddrV4, server: Ipv4Addr) -> Option<ServerTraceReport> {
+    let now = Instant::now();
+    let stored = *lock_trace_store().get(&(relay, server))?;
+    validate_trace(stored, now)
+}
+
+/// Validate one stored trace at `now`: shape and freshness, in one place so
+/// every rule is testable with scripted instants.
+fn validate_trace(stored: StoredTrace, now: Instant) -> Option<ServerTraceReport> {
+    if !(1..=MAX_TRACE_HOPS).contains(&stored.hops) {
+        return None;
+    }
+    match (stored.last_hop, stored.last_hop_rtt_us) {
+        (None, None) => {}
+        (Some(last_hop), Some(rtt_us))
+            if is_public_unicast(last_hop) && rtt_us > 0 && rtt_us <= MAX_TRACE_LAST_HOP_RTT_US => {
+        }
+        _ => return None,
+    }
+    let age = stored
+        .wire_age
+        .saturating_add(now.saturating_duration_since(stored.received_at));
+    if age > MAX_TRACE_REPORT_AGE {
+        return None;
+    }
+    Some(ServerTraceReport {
+        hops: stored.hops,
+        last_hop: stored.last_hop,
+        last_hop_rtt_us: stored.last_hop_rtt_us,
+        complete: stored.complete,
+        age,
+    })
+}
+
+/// The one stable info line emitted per accepted traceroute report.
+///
+/// Format (pinned for the placement-anchor harvest; do not reorder or rename
+/// fields):
+///
+/// ```text
+/// SERVER_LEG_TRACE relay=<ip:port> server=<ip> hops=<u8> last_hop=<ip|none> last_hop_rtt_us=<u32> complete=<bool> at_unix_ms=<u128>
+/// ```
+///
+/// `server` is the wire's IPv4 destination only: the trace message carries no
+/// port, so none is invented. `last_hop` prints `none` when no router answered;
+/// `last_hop_rtt_us` prints `0` in that case, matching the wire's "no value"
+/// encoding. `at_unix_ms` is the client's receipt time, so the line can be
+/// matched to the relay's other measurements in an epoch.
+pub fn server_leg_trace_log_line(
+    relay: SocketAddrV4,
+    server: Ipv4Addr,
+    hops: u8,
+    last_hop: Option<Ipv4Addr>,
+    last_hop_rtt_us: Option<u32>,
+    complete: bool,
+    at_unix_ms: u128,
+) -> String {
+    let last_hop = last_hop.map_or_else(|| "none".to_string(), |last_hop| last_hop.to_string());
+    format!(
+        "SERVER_LEG_TRACE relay={relay} server={server} hops={hops} last_hop={last_hop} \
+         last_hop_rtt_us={} complete={complete} at_unix_ms={at_unix_ms}",
+        last_hop_rtt_us.unwrap_or(0)
+    )
+}
+
 /// Drop every stored passive report. Tests only.
 #[cfg(test)]
 fn clear_app() {
@@ -523,6 +797,12 @@ fn clear_app() {
 #[cfg(test)]
 fn clear() {
     lock_store().clear();
+}
+
+/// Drop every stored traceroute report. Tests only.
+#[cfg(test)]
+fn clear_trace() {
+    lock_trace_store().clear();
 }
 
 /// The test harness runs `#[test]`s in parallel and the report store is
@@ -1165,5 +1445,336 @@ mod tests {
         assert_eq!(fields.get("age_ms"), Some(&"900"));
         assert_eq!(fields.get("at_unix_ms"), Some(&"1765000000123"));
         assert_eq!(fields.len(), 6, "exactly the pinned fields");
+    }
+
+    // ── TTL-traceroute reports (placement anchor) ───────────────────
+
+    fn testnet_relay_addr(port: u16) -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 9), port)
+    }
+
+    fn testnet_server_addr(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(198, 51, 100, last)
+    }
+
+    fn public_server(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(91, 199, 82, last)
+    }
+
+    fn public_router(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(8, 8, 8, last)
+    }
+
+    fn stored_trace(
+        hops: u8,
+        last_hop: Option<Ipv4Addr>,
+        last_hop_rtt_us: Option<u32>,
+        complete: bool,
+        wire_age: Duration,
+        received_at: Instant,
+    ) -> StoredTrace {
+        StoredTrace {
+            hops,
+            last_hop,
+            last_hop_rtt_us,
+            complete,
+            wire_age,
+            received_at,
+        }
+    }
+
+    #[test]
+    fn a_plausible_trace_report_is_accepted_with_its_metadata() {
+        let now = Instant::now();
+        let report = validate_trace(
+            stored_trace(
+                12,
+                Some(public_router(8)),
+                Some(14_250),
+                false,
+                Duration::from_millis(900),
+                now,
+            ),
+            now,
+        )
+        .expect("a plausible trace must be accepted");
+        assert_eq!(report.hops, 12);
+        assert_eq!(report.last_hop, Some(public_router(8)));
+        assert_eq!(report.last_hop_rtt_us, Some(14_250));
+        assert!(!report.complete);
+        assert_eq!(report.age, Duration::from_millis(900));
+    }
+
+    #[test]
+    fn a_trace_without_an_answering_router_is_accepted_but_places_nothing() {
+        let now = Instant::now();
+        let report = validate_trace(stored_trace(1, None, None, true, Duration::ZERO, now), now)
+            .expect("a complete trace with no intermediate router is still evidence");
+        assert_eq!(report.hops, 1);
+        assert_eq!(report.last_hop, None);
+        assert_eq!(report.last_hop_rtt_us, None);
+        assert!(report.complete);
+    }
+
+    #[test]
+    fn out_of_bounds_trace_fields_are_rejected() {
+        let now = Instant::now();
+        // Hop count: zero or past the protocol ceiling is not a path.
+        for hops in [0, MAX_TRACE_HOPS + 1, u8::MAX] {
+            assert!(
+                validate_trace(
+                    stored_trace(
+                        hops,
+                        Some(public_router(8)),
+                        Some(1_000),
+                        false,
+                        Duration::ZERO,
+                        now
+                    ),
+                    now
+                )
+                .is_none(),
+                "hops={hops} must be rejected"
+            );
+        }
+        // Last-hop pair consistency and plausibility.
+        for (last_hop, rtt) in [
+            (Some(public_router(8)), None),
+            (None, Some(1_000)),
+            (Some(Ipv4Addr::UNSPECIFIED), Some(1_000)),
+            (Some(Ipv4Addr::new(192, 168, 1, 1)), Some(1_000)),
+            (Some(Ipv4Addr::new(127, 0, 0, 1)), Some(1_000)),
+            (Some(Ipv4Addr::new(169, 254, 1, 1)), Some(1_000)),
+            (Some(public_router(8)), Some(0)),
+            (Some(public_router(8)), Some(MAX_TRACE_LAST_HOP_RTT_US + 1)),
+        ] {
+            assert!(
+                validate_trace(
+                    stored_trace(4, last_hop, rtt, false, Duration::ZERO, now),
+                    now
+                )
+                .is_none(),
+                "last_hop={last_hop:?} rtt={rtt:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trace_older_than_the_limit_is_rejected() {
+        let now = Instant::now();
+        // Relay-reported age alone already exceeds the limit.
+        assert!(validate_trace(
+            stored_trace(
+                4,
+                Some(public_router(8)),
+                Some(1_000),
+                false,
+                MAX_TRACE_REPORT_AGE + Duration::from_secs(1),
+                now,
+            ),
+            now,
+        )
+        .is_none());
+        // A stale receive time adds up with the wire age.
+        assert!(validate_trace(
+            stored_trace(
+                4,
+                Some(public_router(8)),
+                Some(1_000),
+                false,
+                Duration::from_secs(30),
+                now - MAX_TRACE_REPORT_AGE,
+            ),
+            now,
+        )
+        .is_none());
+        // Just inside the limit is still usable.
+        assert!(validate_trace(
+            stored_trace(
+                4,
+                Some(public_router(8)),
+                Some(1_000),
+                false,
+                Duration::from_secs(30),
+                now - (MAX_TRACE_REPORT_AGE - Duration::from_secs(31)),
+            ),
+            now,
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn record_trace_rejects_malformed_frames_and_keeps_the_last_good_one() {
+        let _guard = store_test_guard();
+        clear_trace();
+        let now = Instant::now();
+        assert!(record_trace_at(
+            testnet_relay_addr(4433),
+            public_server(10),
+            12,
+            public_router(8),
+            14_250,
+            0,
+            Duration::ZERO,
+            now,
+        ));
+        // A zero hop count, a private router, a zero RTT and an absurd RTT are
+        // all refused (the status gates the one info line), so the good entry
+        // stays.
+        for (hops, last_hop, rtt) in [
+            (0u8, public_router(8), 14_250u32),
+            (12, Ipv4Addr::new(192, 168, 1, 1), 14_250),
+            (12, public_router(8), 0),
+            (12, public_router(8), MAX_TRACE_LAST_HOP_RTT_US + 1),
+        ] {
+            assert!(!record_trace_at(
+                testnet_relay_addr(4433),
+                public_server(10),
+                hops,
+                last_hop,
+                rtt,
+                0,
+                Duration::ZERO,
+                now,
+            ));
+        }
+        let held = *lock_trace_store()
+            .get(&(testnet_relay_addr(4433), public_server(10)))
+            .expect("the good report survived");
+        assert_eq!(held.hops, 12);
+        assert_eq!(held.last_hop, Some(public_router(8)));
+        clear_trace();
+    }
+
+    #[test]
+    fn a_trace_is_bound_to_its_relay_and_server_pair() {
+        let _guard = store_test_guard();
+        clear_trace();
+        assert!(record_trace_at(
+            testnet_relay_addr(4433),
+            public_server(10),
+            12,
+            public_router(8),
+            14_250,
+            0,
+            Duration::ZERO,
+            Instant::now(),
+        ));
+        // Both non-matching pairs are absent: a report is stored under the
+        // relay whose control connection delivered it and the server it names.
+        assert!(server_leg_trace(testnet_relay_addr(4434), public_server(10)).is_none());
+        assert!(server_leg_trace(testnet_relay_addr(4433), public_server(11)).is_none());
+        assert!(server_leg_trace(testnet_relay_addr(4433), public_server(10)).is_some());
+        clear_trace();
+    }
+
+    #[test]
+    fn the_trace_store_is_bounded() {
+        let _guard = store_test_guard();
+        clear_trace();
+        for port in 0..(MAX_TRACE_ENTRIES as u16 + 8) {
+            assert!(record_trace_at(
+                testnet_relay_addr(1_000 + port),
+                public_server(1),
+                4,
+                public_router(8),
+                1_000,
+                0,
+                Duration::ZERO,
+                Instant::now(),
+            ));
+        }
+        assert!(lock_trace_store().len() <= MAX_TRACE_ENTRIES);
+        clear_trace();
+    }
+
+    #[test]
+    fn the_trace_complete_bit_is_decoded_and_unknown_bits_are_ignored() {
+        let _guard = store_test_guard();
+        clear_trace();
+        let now = Instant::now();
+        assert!(record_trace_at(
+            testnet_relay_addr(4433),
+            public_server(20),
+            4,
+            public_router(8),
+            1_000,
+            lightspeed_protocol::control::trace_flags::COMPLETE,
+            Duration::ZERO,
+            now,
+        ));
+        assert!(
+            server_leg_trace(testnet_relay_addr(4433), public_server(20))
+                .expect("stored")
+                .complete
+        );
+
+        // A later revision may define other flag bits; only COMPLETE is
+        // meaningful now, so an unknown bit must not clear it.
+        assert!(record_trace_at(
+            testnet_relay_addr(4433),
+            public_server(20),
+            4,
+            public_router(8),
+            1_000,
+            u8::MAX,
+            Duration::ZERO,
+            now,
+        ));
+        assert!(
+            server_leg_trace(testnet_relay_addr(4433), public_server(20))
+                .expect("stored")
+                .complete
+        );
+        clear_trace();
+    }
+
+    #[test]
+    fn the_trace_log_line_round_trips() {
+        // TEST-NET-3 / TEST-NET-2 fixtures only: the line must be reproducible
+        // from neutral addresses, never a real game server.
+        let relay = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), 4433);
+        let server = Ipv4Addr::new(198, 51, 100, 23);
+        let line = server_leg_trace_log_line(
+            relay,
+            server,
+            12,
+            Some(Ipv4Addr::new(198, 51, 100, 1)),
+            Some(14_250),
+            false,
+            1_765_000_000_789,
+        );
+        assert_eq!(
+            line,
+            "SERVER_LEG_TRACE relay=203.0.113.7:4433 server=198.51.100.23 hops=12 \
+             last_hop=198.51.100.1 last_hop_rtt_us=14250 complete=false \
+             at_unix_ms=1765000000789"
+        );
+
+        // Round-trip: the whitespace-separated field list decodes back to the
+        // exact inputs, so a reordered or renamed field fails here.
+        let mut fields = std::collections::HashMap::new();
+        let mut parts = line.split_whitespace();
+        assert_eq!(parts.next(), Some("SERVER_LEG_TRACE"));
+        for part in parts {
+            let (key, value) = part.split_once('=').expect("key=value field");
+            fields.insert(key, value);
+        }
+        assert_eq!(fields.get("relay"), Some(&"203.0.113.7:4433"));
+        assert_eq!(fields.get("server"), Some(&"198.51.100.23"));
+        assert_eq!(fields.get("hops"), Some(&"12"));
+        assert_eq!(fields.get("last_hop"), Some(&"198.51.100.1"));
+        assert_eq!(fields.get("last_hop_rtt_us"), Some(&"14250"));
+        assert_eq!(fields.get("complete"), Some(&"false"));
+        assert_eq!(fields.get("at_unix_ms"), Some(&"1765000000789"));
+        assert_eq!(fields.len(), 7, "exactly the pinned fields");
+
+        // The no-router shape prints `none` and a zero RTT, matching the wire.
+        let none = server_leg_trace_log_line(relay, server, 3, None, None, true, 1);
+        assert_eq!(
+            none,
+            "SERVER_LEG_TRACE relay=203.0.113.7:4433 server=198.51.100.23 hops=3 \
+             last_hop=none last_hop_rtt_us=0 complete=true at_unix_ms=1"
+        );
     }
 }

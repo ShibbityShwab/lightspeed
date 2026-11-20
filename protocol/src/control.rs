@@ -29,6 +29,7 @@ const MSG_ROTATE_ACK: u8 = 0x09;
 const MSG_SERVER_LEG: u8 = 0x0A;
 const MSG_CLIENT_CAPS: u8 = 0x0B;
 const MSG_SERVER_LEG_APP: u8 = 0x0C;
+const MSG_SERVER_TRACE: u8 = 0x0D;
 
 // ── Game IDs ────────────────────────────────────────────────────────
 
@@ -167,6 +168,22 @@ pub mod caps {
     /// a client built before this feature never receives a report stream it
     /// would not consume. That gate is why no version bump is needed.
     pub const SERVER_LEG: u8 = 0b0000_0010;
+}
+
+/// Maximum hops a relay-side traceroute may report.
+///
+/// The relay never sends a probe past this TTL, and the client rejects a
+/// reported hop count above it: a trace that claims more is not a path anyone
+/// can be shown, it is a malformed or hostile frame.
+pub const MAX_SERVER_TRACE_HOPS: u8 = 20;
+
+/// Bit flags carried in [`ControlMessage::ServerTrace`]'s `flags` byte.
+pub mod trace_flags {
+    /// The destination itself answered, so the trace reached the server rather
+    /// than ending at the last router that would reply. A trace without this
+    /// bit still has a truthful last hop: the path is bounded by it, not fully
+    /// enumerated.
+    pub const COMPLETE: u8 = 0b0000_0001;
 }
 
 // ── QUIC control-plane ALPN ─────────────────────────────────────────
@@ -328,6 +345,42 @@ pub enum ControlMessage {
         /// How many passive samples the relay's window holds.
         passive_samples: u8,
         /// Staleness of the newest sample at send time, milliseconds.
+        age_ms: u16,
+    },
+
+    /// Proxy → Client: the relay's TTL-limited traceroute towards the game
+    /// server.
+    ///
+    /// The relay sends small, empty UDP probes with increasing IP TTL and reads
+    /// the ICMP time-exceeded errors from the socket error queue, so it learns
+    /// the last router on the relay→server path without `CAP_NET_RAW`. That
+    /// router is the placement anchor when the hosting network's geo data is
+    /// unknown: the client can say "the path reaches <router>" instead of
+    /// nothing. It is **not** a city label by itself - turning a hop address
+    /// into a place still needs hop geolocation data the product does not have.
+    ///
+    /// Additive: a client that predates this message decodes the type byte as
+    /// [`ControlDecodeError::UnknownMessageType`] and ignores the frame. It
+    /// rides the same server-initiated unidirectional stream path as
+    /// [`ControlMessage::ServerLeg`], gated by the same [`caps::SERVER_LEG`]
+    /// capability, so an old client is never sent a stream it would not read.
+    ServerTrace {
+        /// The game server address this trace was for.
+        server: Ipv4Addr,
+        /// Highest TTL that produced any reply: the distance in hops to
+        /// `last_hop`, or to the destination when `complete` is set. Silent
+        /// intermediate hops do not lower it.
+        hops: u8,
+        /// The router that answered at the highest TTL below the destination
+        /// (the penultimate router of the measured path). [`Ipv4Addr::UNSPECIFIED`]
+        /// means no router answered: nothing may be placed from this trace.
+        last_hop: Ipv4Addr,
+        /// Round trip to `last_hop`, microseconds. `0` when `last_hop` is
+        /// unspecified; a router reply always has a measured RTT.
+        last_hop_rtt_us: u32,
+        /// Bit flags, see [`trace_flags`].
+        flags: u8,
+        /// Staleness of the trace at send time, milliseconds.
         age_ms: u16,
     },
 
@@ -506,6 +559,22 @@ impl ControlMessage {
                 buf.put_u8(*passive_samples);
                 buf.put_u16(*age_ms);
             }
+            Self::ServerTrace {
+                server,
+                hops,
+                last_hop,
+                last_hop_rtt_us,
+                flags,
+                age_ms,
+            } => {
+                buf.put_u8(MSG_SERVER_TRACE);
+                buf.put_slice(&server.octets());
+                buf.put_u8(*hops);
+                buf.put_slice(&last_hop.octets());
+                buf.put_u32(*last_hop_rtt_us);
+                buf.put_u8(*flags);
+                buf.put_u16(*age_ms);
+            }
             Self::ClientCaps { caps } => {
                 buf.put_u8(MSG_CLIENT_CAPS);
                 buf.put_u8(*caps);
@@ -665,6 +734,27 @@ impl ControlMessage {
                     server,
                     passive_median_us,
                     passive_samples,
+                    age_ms,
+                })
+            }
+            MSG_SERVER_TRACE => {
+                // Fixed-width payload: server IPv4 (4) + hops (1) + last-hop
+                // IPv4 (4) + last-hop RTT (4) + flags (1) + age (2). Trailing
+                // bytes are ignored, so a later revision may append fields
+                // without breaking this reader.
+                ensure_remaining(buf, 4 + 1 + 4 + 4 + 1 + 2)?;
+                let server = Ipv4Addr::from(buf.get_u32());
+                let hops = buf.get_u8();
+                let last_hop = Ipv4Addr::from(buf.get_u32());
+                let last_hop_rtt_us = buf.get_u32();
+                let flags = buf.get_u8();
+                let age_ms = buf.get_u16();
+                Ok(Self::ServerTrace {
+                    server,
+                    hops,
+                    last_hop,
+                    last_hop_rtt_us,
+                    flags,
                     age_ms,
                 })
             }
@@ -1235,8 +1325,8 @@ mod tests {
 
         // An unknown tag is still unknown: nothing is defaulted or guessed.
         assert!(matches!(
-            ControlMessage::decode(&[0x0D]),
-            Err(ControlDecodeError::UnknownMessageType(0x0D))
+            ControlMessage::decode(&[0x0E]),
+            Err(ControlDecodeError::UnknownMessageType(0x0E))
         ));
     }
 
@@ -1364,9 +1454,167 @@ mod tests {
 
         // An unknown tag is still unknown: nothing is defaulted or guessed.
         assert!(matches!(
-            ControlMessage::decode(&[0x0D]),
-            Err(ControlDecodeError::UnknownMessageType(0x0D))
+            ControlMessage::decode(&[0x0E]),
+            Err(ControlDecodeError::UnknownMessageType(0x0E))
         ));
+    }
+
+    #[test]
+    fn test_server_trace_roundtrip() {
+        let msg = ControlMessage::ServerTrace {
+            server: Ipv4Addr::new(91, 199, 82, 166),
+            hops: 12,
+            last_hop: Ipv4Addr::new(8, 8, 8, 8),
+            last_hop_rtt_us: 14_250,
+            flags: trace_flags::COMPLETE,
+            age_ms: 900,
+        };
+        let encoded = msg.encode();
+        // Type tag + IPv4 + u8 + IPv4 + u32 + u8 + u16 = 17 bytes.
+        assert_eq!(encoded.len(), 17);
+        assert_eq!(ControlMessage::decode(&encoded).unwrap(), msg);
+
+        // Boundary values survive the fixed-width fields; the client applies
+        // the plausibility rules, the codec only has to round-trip them.
+        for (hops, last_hop, last_hop_rtt_us, flags, age_ms) in [
+            (0, Ipv4Addr::UNSPECIFIED, 0, 0, 0),
+            (
+                MAX_SERVER_TRACE_HOPS,
+                Ipv4Addr::new(203, 0, 113, 1),
+                u32::MAX,
+                u8::MAX,
+                u16::MAX,
+            ),
+        ] {
+            let msg = ControlMessage::ServerTrace {
+                server: Ipv4Addr::UNSPECIFIED,
+                hops,
+                last_hop,
+                last_hop_rtt_us,
+                flags,
+                age_ms,
+            };
+            assert_eq!(ControlMessage::decode(&msg.encode()).unwrap(), msg);
+        }
+    }
+
+    #[test]
+    fn test_server_trace_wire_form_is_pinned_by_hardcoded_bytes() {
+        // Hand-built frame: tag 0x0D, server 91.199.82.166, hops 12, last hop
+        // 8.8.8.8, last-hop RTT 0x0000_37AA (14 250 µs), flags 0x01 (complete),
+        // age 0x0384 (900 ms). The bytes are literals on purpose - a reordered,
+        // resized or re-tagged field fails here instead of silently decoding a
+        // different hop.
+        let frame: [u8; 17] = [
+            0x0D, 91, 199, 82, 166, 12, 8, 8, 8, 8, 0x00, 0x00, 0x37, 0xAA, 0x01, 0x03, 0x84,
+        ];
+        let decoded = ControlMessage::decode(&frame).unwrap();
+        assert_eq!(
+            decoded,
+            ControlMessage::ServerTrace {
+                server: Ipv4Addr::new(91, 199, 82, 166),
+                hops: 12,
+                last_hop: Ipv4Addr::new(8, 8, 8, 8),
+                last_hop_rtt_us: 14_250,
+                flags: trace_flags::COMPLETE,
+                age_ms: 900,
+            }
+        );
+        assert_eq!(decoded.encode().as_ref(), frame.as_slice());
+    }
+
+    #[test]
+    fn test_server_trace_truncated_payloads_are_rejected() {
+        // Every shorter length is malformed: the fixed-width payload needs 16
+        // bytes after the tag.
+        for len in 0..16usize {
+            let mut frame = vec![MSG_SERVER_TRACE];
+            frame.extend_from_slice(&vec![0u8; len]);
+            assert!(
+                matches!(
+                    ControlMessage::decode(&frame),
+                    Err(ControlDecodeError::BufferTooSmall { got, need: 16 }) if got == len
+                ),
+                "a {len}-byte server-trace payload must be rejected"
+            );
+        }
+        // The full payload decodes.
+        let mut frame = vec![MSG_SERVER_TRACE];
+        frame.extend_from_slice(&[0u8; 16]);
+        assert!(ControlMessage::decode(&frame).is_ok());
+    }
+
+    #[test]
+    fn test_server_trace_trailing_bytes_are_ignored_for_forward_compatibility() {
+        // A later revision may append fields; this reader must decode the frame
+        // it understands rather than dropping it.
+        let mut frame = vec![MSG_SERVER_TRACE];
+        frame.extend_from_slice(&Ipv4Addr::new(198, 51, 100, 9).octets());
+        frame.push(7);
+        frame.extend_from_slice(&Ipv4Addr::new(203, 0, 113, 1).octets());
+        frame.extend_from_slice(&3_250u32.to_be_bytes());
+        frame.push(trace_flags::COMPLETE);
+        frame.extend_from_slice(&42u16.to_be_bytes());
+        frame.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(
+            ControlMessage::decode(&frame).unwrap(),
+            ControlMessage::ServerTrace {
+                server: Ipv4Addr::new(198, 51, 100, 9),
+                hops: 7,
+                last_hop: Ipv4Addr::new(203, 0, 113, 1),
+                last_hop_rtt_us: 3_250,
+                flags: trace_flags::COMPLETE,
+                age_ms: 42,
+            }
+        );
+    }
+
+    #[test]
+    fn test_server_trace_tag_is_a_new_unknown_to_an_old_reader() {
+        // Compatibility claim: a build without `ServerTrace` decodes tag 0x0D
+        // as `UnknownMessageType` and ignores the frame. Pinned by asserting
+        // the tag is distinct from every tag such a build already knew, and
+        // that the unknown-tag path itself still behaves that way.
+        assert_eq!(MSG_SERVER_TRACE, 0x0D);
+        for known in [
+            MSG_PING,
+            MSG_PONG,
+            MSG_REGISTER,
+            MSG_REGISTER_ACK,
+            MSG_DISCONNECT,
+            MSG_SERVER_INFO,
+            MSG_TELEMETRY,
+            MSG_ROTATE_REQUEST,
+            MSG_ROTATE_ACK,
+            MSG_SERVER_LEG,
+            MSG_CLIENT_CAPS,
+            MSG_SERVER_LEG_APP,
+        ] {
+            assert_ne!(
+                MSG_SERVER_TRACE, known,
+                "the server-trace tag must not reuse an existing message type"
+            );
+        }
+
+        let mut payload = vec![MSG_SERVER_TRACE];
+        payload.extend(std::iter::repeat_n(0u8, 16));
+        let decoded = ControlMessage::decode(&payload).expect("a current reader decodes it");
+        assert!(matches!(decoded, ControlMessage::ServerTrace { .. }));
+
+        // A tag after this one is still unknown: nothing is defaulted or guessed.
+        assert!(matches!(
+            ControlMessage::decode(&[0x0E]),
+            Err(ControlDecodeError::UnknownMessageType(0x0E))
+        ));
+    }
+
+    #[test]
+    fn test_server_trace_constants_are_pinned() {
+        // The hop ceiling is a shared bound: the relay stops at it and the
+        // client refuses anything above it. The complete bit is the only flag
+        // defined so far.
+        assert_eq!(MAX_SERVER_TRACE_HOPS, 20);
+        assert_eq!(trace_flags::COMPLETE, 0b0000_0001);
     }
 
     #[test]
@@ -1408,8 +1656,8 @@ mod tests {
             assert_ne!(MSG_CLIENT_CAPS, known);
         }
         assert!(matches!(
-            ControlMessage::decode(&[0x0D]),
-            Err(ControlDecodeError::UnknownMessageType(0x0D))
+            ControlMessage::decode(&[0x0E]),
+            Err(ControlDecodeError::UnknownMessageType(0x0E))
         ));
     }
 

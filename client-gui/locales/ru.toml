@@ -44,6 +44,9 @@ server_leg_relay_measured_unvalidated = "Ретранслятор→сервер
 server_leg_app = "Ретранслятор→сервер (прил.)"
 server_leg_app_measured = "{ms} ms · n={n}"
 expected_path = "Ожидаемый путь ~{ms} ms (L + S)"
+route_trace = "Маршрут"
+route_trace_hops = "{hops} переходов · RTT последнего маршрутизатора {ms} мс"
+route_trace_hops_only = "{hops} переходов · ни один маршрутизатор не ответил"
 location_estimate = "Местоположение сервера: оценка на уровне страны по IP"
 location_provider = "Местоположение сервера: регион облачного провайдера"
 location_hosting = "Местоположение сервера: хостинг-сеть — неизвестно"
@@ -60,6 +63,9 @@ place_hint = "-- запустите оптимизацию, чтобы опре�
 count_hint = "-- запустите оптимизацию, чтобы посчитать"
 port_fix_guide = "Порт не обнаружен — руководство"
 start_manual = "Запустить оптимизацию (вручную)"
+
+trace_route = "Маршрут до сервера: {hops} переходов"
+trace_nearest = "ближайший ответивший узел {ms} ms"
 
 [state]
 disconnected = "Отключено"

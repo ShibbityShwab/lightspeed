@@ -222,6 +222,16 @@ pub struct LightSpeedApp<P: Platform> {
     /// or region prior) instead of presenting a relayed path as fully measured.
     route_ranking: Option<RouteRanking>,
 
+    /// The client-side server-location trace: one background trace at a time, a
+    /// server-keyed cache, and at most one attempt per (server, relay session).
+    /// It runs from the client's own vantage, so it locates the server; it never
+    /// contributes to relay ranking.
+    client_trace: crate::client_trace::GuiTrace,
+    /// The route the card captions, refreshed each frame by
+    /// [`Self::poll_client_trace`]; `None` while there is no fresh route for the
+    /// locked server.
+    client_route: Option<crate::client_trace::ClientRoute>,
+
     /// The game server the current relay was chosen for, so a new raid's server
     /// triggers a fresh choice and a repeated tick does not.
     chosen_for_server: Option<Ipv4Addr>,
@@ -521,6 +531,8 @@ impl<P: Platform> LightSpeedApp<P> {
             relay_legs: None,
             destination_winner: None,
             route_ranking: None,
+            client_trace: crate::client_trace::GuiTrace::new(),
+            client_route: None,
             relay_measurement: None,
             chosen_for_server: None,
             locked_addr: None,
@@ -1200,6 +1212,51 @@ impl<P: Platform> LightSpeedApp<P> {
         let raw = self.status.interceptor_server.as_str();
         let host = raw.split(':').next()?;
         host.parse::<Ipv4Addr>().ok()
+    }
+
+    /// The game server the interceptor has locked, whichever mode is running.
+    ///
+    /// This mirrors the route card's own address extraction so the client trace
+    /// and the card can never describe different servers: the card reads the
+    /// interceptor, redirect and WinDivert fields, and `game_server_addr` reads
+    /// only the interceptor, which is the wrong subject for a location probe
+    /// when the session is carried by another mode.
+    fn locked_server_ip(&self) -> Option<Ipv4Addr> {
+        [
+            self.status.interceptor_server.as_str(),
+            self.status.redirect_server.as_str(),
+            self.status.windivert_server.as_str(),
+        ]
+        .into_iter()
+        .find_map(|server| server.split(':').next()?.parse::<Ipv4Addr>().ok())
+    }
+
+    /// Ask the client-traceroute scheduler for the locked server's route and
+    /// log the one line each accepted trace produces.
+    ///
+    /// Never blocks the UI thread: the OS tool runs on its own worker thread, a
+    /// finished route is cached, and the scheduler starts at most one run at a
+    /// time. The session argument is the engine's keepalive generation, which is
+    /// a new id every time a relay connection is established, so a failed trace
+    /// is retried for a new session rather than on every frame.
+    fn poll_client_trace(&mut self) {
+        let server = self.locked_server_ip();
+        let tick = self.client_trace.update(
+            server,
+            self.status.keepalive_generation,
+            std::time::Instant::now(),
+        );
+        if let Some(accepted) = tick.accepted {
+            tracing::info!(
+                "{}",
+                crate::client_trace::info_line(
+                    accepted.server,
+                    &accepted.route,
+                    crate::client_trace::now_unix_ms(),
+                )
+            );
+        }
+        self.client_route = tick.route;
     }
 
     /// Apply a finished latency race: connect to the winner when auto-select is
@@ -2278,14 +2335,10 @@ impl<P: Platform> LightSpeedApp<P> {
             .unwrap_or((30.0, 0.0));
 
         // The game server comes from whichever mode is running; its address is
-        // "ip:port", and only an IPv4 literal geolocates.
-        let server_ip = [
-            self.status.interceptor_server.as_str(),
-            self.status.redirect_server.as_str(),
-            self.status.windivert_server.as_str(),
-        ]
-        .into_iter()
-        .find_map(|s| s.split(':').next()?.parse::<std::net::Ipv4Addr>().ok());
+        // "ip:port", and only an IPv4 literal geolocates. The same helper feeds
+        // the client trace, so the caption and the dot cannot describe different
+        // servers.
+        let server_ip = self.locked_server_ip();
         let server_place = server_ip.map(crate::server_place::place);
         let server_at = server_ip.and_then(crate::server_place::display_point);
         if let Some(at) = server_at {
@@ -2357,6 +2410,30 @@ impl<P: Platform> LightSpeedApp<P> {
                                     .color(text_3),
                             );
                         }
+                    }
+                    // The client's own trace reaches the game server directly,
+                    // so it locates the *server*, not the relay: the last hop
+                    // that answered is the closest point to it this host can
+                    // observe, and its RTT is not the game's ping. The caption
+                    // states only that, plus a provider name when the shipped R1
+                    // indexes know the prefix. A city would need hop-geolocation
+                    // data the product does not have, so none is claimed.
+                    if let Some(caption) = self
+                        .client_route
+                        .as_ref()
+                        .and_then(crate::client_trace::caption)
+                    {
+                        ui.add_space(S1);
+                        ui.label(
+                            egui::RichText::new(caption.as_str())
+                                .size(CAPTION)
+                                .color(text_3),
+                        )
+                        .on_hover_text(
+                            "The last hop that answered the client's own traceroute to the \
+                             game server: a location hint, not a measurement of the server's \
+                             game RTT.",
+                        );
                     }
                 });
                 ui.add_space(S2);
@@ -2444,6 +2521,13 @@ impl<P: Platform> LightSpeedApp<P> {
         if let Some(app) = self.relay_measured_app_server_leg_row() {
             self.ledger_row(ui, narrow, &i18n::t("route.server_leg_app"), &app);
         }
+        // The relay's TTL traceroute, when it has one for this pair: a
+        // placement anchor for a hosting-network server whose geolocation is
+        // unknown. The row names the hop count and the last router's RTT only;
+        // it claims no city and feeds no ranking decision.
+        if let Some(trace) = self.relay_measured_trace_row() {
+            self.ledger_row(ui, narrow, &i18n::t("route.route_trace"), &trace);
+        }
         if self.status.connected && self.status.latest_rtt_ms > 0.0 {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
             self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
@@ -2515,6 +2599,25 @@ impl<P: Platform> LightSpeedApp<P> {
         let relay = self.selected_entry()?.addr;
         let report = relay_measured_app_server_leg(relay, server)?;
         Some(LedgerValue::Data(relay_measured_app_leg_text(&report)))
+    }
+
+    /// The relay's TTL-traceroute row for the route on screen: the last router
+    /// on the relay→server path and its round trip.
+    ///
+    /// This is the placement anchor for a hosting-network server whose
+    /// geolocation is unknown: "the path reaches this router" instead of
+    /// nothing. The client crate owns the plausibility and 10-minute freshness
+    /// rules and binds the report to this exact `(relay, server)` pair, so
+    /// `Some` here is always a fresh, well-formed relay trace. It feeds no
+    /// ranking decision and claims no city.
+    fn relay_measured_trace_row(&self) -> Option<LedgerValue> {
+        if !self.run_boosting() || self.direct_fallback {
+            return None;
+        }
+        let server = self.game_server_addr()?;
+        let relay = self.selected_entry()?.addr;
+        let report = relay_measured_trace(relay, server)?;
+        Some(LedgerValue::Data(relay_measured_trace_text(&report)))
     }
 
     /// The route surface's `Server leg` row: the relay-to-server leg for the
@@ -4101,6 +4204,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         self.poll_game_presence();
         self.follow_game_server();
         self.release_stale_hold();
+        self.poll_client_trace();
         self.poll_relay_health();
 
         // Collect a finished update check from the background thread.

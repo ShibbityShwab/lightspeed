@@ -87,6 +87,7 @@ use super::handoff::SessionSnapshot;
 use super::metrics::{upstream_lag, DropReason, ProxyMetrics};
 use super::ping::{passive_app_rtt, ServerLegRegistry, FORWARD_THRESHOLD};
 use super::rate_limit::{RateLimitResult, RateLimiter};
+use super::trace::TraceRegistry;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Socket hygiene: bounded buffers and Linux receive busy-poll
@@ -756,6 +757,13 @@ pub struct RelayEngine {
     /// server-leg report. Production attaches the process registry with
     /// [`RelayEngine::with_server_leg`].
     server_leg: Option<Arc<ServerLegRegistry>>,
+    /// Relay-side TTL traceroute, shared with the control plane.
+    ///
+    /// It rides the same data-path interest as [`Self::server_leg`]: a session
+    /// that has forwarded [`FORWARD_THRESHOLD`] packets to a public game server
+    /// also becomes a trace target, on a much slower cadence. `None` means no
+    /// trace is ever issued.
+    trace: Option<Arc<TraceRegistry>>,
 }
 
 impl RelayEngine {
@@ -781,6 +789,7 @@ impl RelayEngine {
             socket_metrics: Arc::new(ProxyMetrics::new()),
             budget: None,
             server_leg: None,
+            trace: None,
         }
     }
 
@@ -809,6 +818,17 @@ impl RelayEngine {
     /// Omitted by default; when absent no session ever registers probe interest.
     pub fn with_server_leg(mut self, registry: Arc<ServerLegRegistry>) -> Self {
         self.server_leg = Some(registry);
+        self
+    }
+
+    /// Attach the relay-side TTL traceroute.
+    ///
+    /// Omitted by default; when absent no trace is ever issued. Production
+    /// attaches it together with the server-leg registry under the same
+    /// per-relay switch: both measurements target exactly the same set of
+    /// already-forwarded destinations.
+    pub fn with_trace(mut self, registry: Arc<TraceRegistry>) -> Self {
+        self.trace = Some(registry);
         self
     }
 
@@ -885,6 +905,11 @@ impl RelayEngine {
             registered_token.swap(session_token, Ordering::Relaxed) != session_token;
         if token_changed || forwarded.is_multiple_of(SERVER_LEG_REFRESH_PACKETS) {
             registry.note_forward(session_token, client_ip, server_ip, forwarded);
+            // The TTL traceroute rides the same interest: same forwarded-only
+            // target gate, same token, its own (much slower) cadence.
+            if let Some(trace) = self.trace.as_ref() {
+                trace.note_forward(session_token, client_ip, server_ip, forwarded);
+            }
         }
     }
 
@@ -3829,6 +3854,97 @@ mod tests {
             "a TCP connection to a private address must never be probed"
         );
         assert!(registry.skip_count() >= 1);
+    }
+
+    /// A traceroute that never runs: the registration tests never trace.
+    struct SilentTraceProber;
+
+    impl crate::trace::TraceProber for SilentTraceProber {
+        fn trace(
+            &self,
+            _target: Ipv4Addr,
+            _charge: &mut dyn FnMut(u64) -> bool,
+        ) -> Option<crate::trace::Trace> {
+            None
+        }
+    }
+
+    fn trace_registry() -> Arc<TraceRegistry> {
+        Arc::new(TraceRegistry::new(
+            crate::trace::TraceConfig::default(),
+            Arc::new(crate::ping::SystemClock),
+            Arc::new(SilentTraceProber),
+        ))
+    }
+
+    /// The TTL traceroute rides the same data-path interest as the server-leg
+    /// prober: the same forward threshold, the same session-token key, the same
+    /// public-unicast gate, on both the UDP session and TCP connection paths.
+    #[tokio::test]
+    async fn udp_and_tcp_forwarding_also_register_trace_interest() {
+        let server_leg = server_leg_registry();
+        let trace = trace_registry();
+        let engine = RelayEngine::new(10)
+            .with_server_leg(Arc::clone(&server_leg))
+            .with_trace(Arc::clone(&trace));
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+
+        let (session, _) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        for _ in 0..crate::ping::FORWARD_THRESHOLD - 1 {
+            engine.note_server_leg_forward(&session, 0xAB);
+        }
+        assert_eq!(
+            trace.interest_count(),
+            0,
+            "no trace target before the forward threshold"
+        );
+        engine.note_server_leg_forward(&session, 0xAB);
+        assert_eq!(
+            trace.interest_count(),
+            1,
+            "crossing the threshold must register the game server for tracing too"
+        );
+
+        let tuple = tcp_tuple(12345);
+        let (conn, _) = engine
+            .get_or_create_tcp_connection(tuple, tcp_client(40000), 4)
+            .await
+            .unwrap();
+        for _ in 0..crate::ping::FORWARD_THRESHOLD - 1 {
+            engine.note_server_leg_forward_tcp(&conn, 0xCD);
+        }
+        assert_eq!(trace.interest_count(), 1);
+        engine.note_server_leg_forward_tcp(&conn, 0xCD);
+        assert_eq!(
+            trace.interest_count(),
+            2,
+            "a TCP-tunnelled connection must register its server for tracing too"
+        );
+
+        // The public-unicast gate applies to tracing exactly as to probing.
+        let private_tuple = Tcp5Tuple {
+            src_ip: Ipv4Addr::new(192, 168, 1, 100),
+            src_port: 12345,
+            dst_ip: Ipv4Addr::new(192, 168, 1, 10),
+            dst_port: 25565,
+        };
+        let (private_conn, _) = engine
+            .get_or_create_tcp_connection(private_tuple, tcp_client(40000), 4)
+            .await
+            .unwrap();
+        for _ in 0..crate::ping::FORWARD_THRESHOLD {
+            engine.note_server_leg_forward_tcp(&private_conn, 0xAB);
+        }
+        assert_eq!(
+            trace.interest_count(),
+            2,
+            "a private destination must never be traced"
+        );
+        assert!(trace.skip_count() >= 1);
     }
 
     /// The response listener turns the forward timestamp the data path already

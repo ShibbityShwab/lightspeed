@@ -545,6 +545,22 @@ pub struct ProxyMetrics {
     /// has not forwarded to are not counted.
     pub server_leg_passive_samples: AtomicU64,
 
+    // ── Relay-side TTL traceroute (placement anchor) ────────────
+    /// TTL-limited traceroutes started towards a game server a live session
+    /// forwards to.
+    pub server_trace_traces: AtomicU64,
+    /// Probe datagrams sent for TTL traceroutes (the relay's own measurement
+    /// egress; charged through the egress budget guard).
+    pub server_trace_probes: AtomicU64,
+    /// Traceroutes that produced no usable path (no hop answered, or every
+    /// answer was unusable).
+    pub server_trace_unavailable: AtomicU64,
+    /// Traceroute opportunities skipped: global cap, refused destination,
+    /// interest capacity, or tracing disabled.
+    pub server_trace_skips: AtomicU64,
+    /// Traceroutes cut short because the egress budget refused the next probe.
+    pub server_trace_budget_denied: AtomicU64,
+
     // ── Session metrics ─────────────────────────────────────────
     /// Total sessions created (lifetime).
     pub sessions_created: AtomicU64,
@@ -651,6 +667,11 @@ impl ProxyMetrics {
             server_leg_unavailable: AtomicU64::new(0),
             server_leg_skips: AtomicU64::new(0),
             server_leg_passive_samples: AtomicU64::new(0),
+            server_trace_traces: AtomicU64::new(0),
+            server_trace_probes: AtomicU64::new(0),
+            server_trace_unavailable: AtomicU64::new(0),
+            server_trace_skips: AtomicU64::new(0),
+            server_trace_budget_denied: AtomicU64::new(0),
             sessions_created: AtomicU64::new(0),
             sessions_expired: AtomicU64::new(0),
             control_handshakes_negotiated_v1: AtomicU64::new(0),
@@ -1126,6 +1147,28 @@ impl ProxyMetrics {
             .store(budget_denied, Ordering::Relaxed);
     }
 
+    /// Publish the relay-side traceroute counters.
+    ///
+    /// Absolute values from the registry's own state, like
+    /// [`Self::set_server_leg_counters`]: one lock holds the counts, and an
+    /// absolute write cannot double-count a trace observed between two ticks.
+    pub fn set_server_trace_counters(
+        &self,
+        traces: u64,
+        probes: u64,
+        unavailable: u64,
+        skips: u64,
+        budget_denied: u64,
+    ) {
+        self.server_trace_traces.store(traces, Ordering::Relaxed);
+        self.server_trace_probes.store(probes, Ordering::Relaxed);
+        self.server_trace_unavailable
+            .store(unavailable, Ordering::Relaxed);
+        self.server_trace_skips.store(skips, Ordering::Relaxed);
+        self.server_trace_budget_denied
+            .store(budget_denied, Ordering::Relaxed);
+    }
+
     /// Count one accepted passive relay→server app-RTT sample.
     ///
     /// Called by the server-leg registry on the response path once a sample has
@@ -1242,6 +1285,57 @@ impl ProxyMetrics {
             "lightspeed_server_leg_passive_samples_total{{{}}} {}\n",
             labels,
             self.server_leg_passive_samples.load(Ordering::Relaxed)
+        ));
+
+        // ── Relay-side TTL traceroute (placement anchor) ────────
+        out.push_str(
+            "# HELP lightspeed_server_trace_traces_total TTL-limited traceroutes started towards a game server a live session forwards to\n",
+        );
+        out.push_str("# TYPE lightspeed_server_trace_traces_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_trace_traces_total{{{}}} {}\n",
+            labels,
+            self.server_trace_traces.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_trace_probes_total Probe datagrams sent for relay-side TTL traceroutes (relay measurement egress, charged to the egress budget)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_trace_probes_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_trace_probes_total{{{}}} {}\n",
+            labels,
+            self.server_trace_probes.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_trace_unavailable_total Traceroutes that produced no usable path (no hop answered or every answer was unusable)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_trace_unavailable_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_trace_unavailable_total{{{}}} {}\n",
+            labels,
+            self.server_trace_unavailable.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_trace_skips_total Traceroute opportunities skipped (global cap, refused destination, capacity, or tracing disabled)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_trace_skips_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_trace_skips_total{{{}}} {}\n",
+            labels,
+            self.server_trace_skips.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_trace_budget_denied_total Traceroutes cut short by the egress budget (no probe sent after the refusal)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_trace_budget_denied_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_trace_budget_denied_total{{{}}} {}\n",
+            labels,
+            self.server_trace_budget_denied.load(Ordering::Relaxed)
         ));
 
         // ── Gauges ──────────────────────────────────────────────
