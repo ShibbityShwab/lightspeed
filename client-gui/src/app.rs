@@ -9,7 +9,6 @@
 //! region, and a pinned footer - the `scroll-body-shell`. Every colour comes
 //! from [`crate::design`]; there are no inline colour literals here.
 
-use std::borrow::Cow;
 use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
@@ -57,6 +56,7 @@ use ledger::*;
 use picker::*;
 use presence::*;
 use relay_choice::*;
+use route_surface::{Line, LocationBlock, RouteSurface, RouteWord, Row, RowValue, Tone};
 use theme::*;
 use watchdog::*;
 use widgets::*;
@@ -340,6 +340,15 @@ pub struct LightSpeedApp<P: Platform> {
     fonts_setup: bool,
     header_icon: Option<egui::TextureHandle>,
 
+    // ── Instrument 2.0 shell state (W2-2) ────────────────────
+    /// Whether the route card's `Details` disclosure is open. Presentation
+    /// state only; never persisted.
+    details_open: bool,
+    /// Whether the remembered window height has been applied this launch.
+    height_restored: bool,
+    /// The height last written to the GUI window-state file.
+    persisted_height: f32,
+
     // ── Sheets and pickers ────────────────────────────────────────────────
     show_settings: bool,
     /// The custom-game editor sheet.
@@ -415,86 +424,6 @@ fn spawn_rtt_probe(addr: SocketAddrV4) -> Receiver<Option<u64>> {
         let _ = tx.send(rtt);
     });
     rx
-}
-
-/// The route card's location lines for one server place.
-///
-/// `caption` names the strongest evidence the offline indexes have, `detail`
-/// names the provider region, operator place or hosting network, `note` is the
-/// operator-geofeed "shown as-is" line (with `source` as its hover provenance),
-/// and `hint` is the one extra line the card shows when no free database could
-/// place the server.
-struct RouteLocationLines {
-    caption: String,
-    detail: Option<String>,
-    note: Option<String>,
-    source: Option<String>,
-    hint: Option<String>,
-}
-
-/// Build the route card's location block without touching a `ui`.
-///
-/// Only the two answers that could not place the server carry the hint. A
-/// hosting match deliberately has no dot and no city, so the card says why the
-/// location is unknown instead of drawing a false one; `Unknown` gets the same
-/// line because no database matched at all. An operator geofeed is the
-/// operator's own statement: it gets the place plus attribution and the as-of
-/// date, no free-database caveat, and still no map dot (the feed has no
-/// coordinate).
-fn route_location_lines(place: crate::server_place::Place) -> RouteLocationLines {
-    use crate::server_place::Place;
-    match place {
-        Place::Cloud {
-            provider, region, ..
-        } => RouteLocationLines {
-            caption: i18n::t("route.location_provider").to_string(),
-            detail: Some(format!("{} · {region}", provider.to_uppercase())),
-            note: None,
-            source: None,
-            hint: None,
-        },
-        Place::Geofeed {
-            provider,
-            country,
-            region,
-            city,
-            source,
-            as_of,
-        } => {
-            let place = crate::server_place::geofeed_place_text(country, region, city);
-            RouteLocationLines {
-                caption: i18n::t_with("route.location_geofeed", &[("place", place.as_str())]),
-                detail: Some(i18n::t_with(
-                    "route.location_geofeed_detail",
-                    &[("provider", provider), ("date", as_of)],
-                )),
-                note: Some(i18n::t("route.location_geofeed_note").to_string()),
-                source: Some(source.to_string()),
-                hint: None,
-            }
-        }
-        Place::Hosting { asn, name } => RouteLocationLines {
-            caption: i18n::t("route.location_hosting").to_string(),
-            detail: Some(format!("AS{asn} · {name}")),
-            note: None,
-            source: None,
-            hint: Some(i18n::t("route.location_hosting_hint").to_string()),
-        },
-        Place::Country { .. } => RouteLocationLines {
-            caption: i18n::t("route.location_estimate").to_string(),
-            detail: None,
-            note: None,
-            source: None,
-            hint: None,
-        },
-        Place::Unknown => RouteLocationLines {
-            caption: i18n::t("route.location_unknown").to_string(),
-            detail: None,
-            note: None,
-            source: None,
-            hint: Some(i18n::t("route.location_hosting_hint").to_string()),
-        },
-    }
 }
 
 impl<P: Platform> LightSpeedApp<P> {
@@ -647,6 +576,9 @@ impl<P: Platform> LightSpeedApp<P> {
             is_admin,
             fonts_setup: false,
             header_icon: None,
+            details_open: false,
+            height_restored: false,
+            persisted_height: 0.0,
             show_settings: std::env::var_os("LIGHTSPEED_OPEN_SETTINGS").is_some(),
             show_game_editor: false,
             game_editor: GameEditorDraft::new_profile(),
@@ -2125,129 +2057,225 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    // ── Rail / route readouts ──────────────────────────────────────────────
+    // ── Instrument 2.0 shell (W2-2) ───────────────────────────────────────
 
-    /// The full-bleed state rail: the state word, the live round trip, and the
-    /// one-line description of what is happening.
-    fn state_rail(&self, ui: &mut egui::Ui, boosting: bool, narrow: bool) {
-        // The state word describes the route, not the intent. The live ROB RUN
-        // run read "OPTIMIZING" in green while the ledger underneath said the
-        // relay had returned nothing; the tray must not repeat that lie. The
-        // warning outranks OPTIMIZING while the return path is failing, and a
-        // hold is the normal start-of-match wait for a relay choice, never a
-        // route that failed.
-        let warning = self.starvation_warning.filter(|_| boosting);
-        let (word, word_color) = if boosting && warning.is_some() {
-            (i18n::t("state.not_returning").to_uppercase(), danger)
-        } else if boosting && self.holding {
-            (i18n::t("state.holding").to_uppercase(), warn)
-        } else if boosting {
-            (i18n::t("state.optimizing").to_uppercase(), signal)
-        } else if self.status.connected {
-            (i18n::t("state.connected").to_uppercase(), text_1)
-        } else {
-            (i18n::t("state.idle").to_uppercase(), text_1)
-        };
-
-        let sub_line = if boosting && self.holding {
-            i18n::t("route.choosing").into_owned()
-        } else if boosting {
-            // The route stays named while the warning is up: the player is still
-            // relayed through this relay, and the route card carries the warning
-            // and the remedy.
-            let relay = self
-                .selected_entry()
-                .and_then(|e| e.node_id.as_deref())
-                .map(discovery::friendly_label)
-                .unwrap_or_else(|| self.status.proxy_addr.clone());
-            format!("{}  \u{2192}  {}", self.selected_game().display, relay)
-        } else if self.status.connected {
-            match &self.auto_detected_game {
-                Some(name) => i18n::t_with("route.relay_ready_named", &[("name", name)]),
-                None => i18n::t("route.relay_ready_pick").into_owned(),
-            }
-        } else {
-            i18n::t("route.no_relay").into_owned()
-        };
-
-        // The live round trip. On a narrow window it moves to its own row:
-        // sharing the headline's row made the value overlap the state word at
-        // 320px, and the state word must never be occluded (skill: state
-        // legibility first).
-        let metric = if self.status.connected {
-            // The headline is the player's ping, which is the whole loop through
-            // the relay when a quiet-flow probe has measured it; the relay leg is
-            // only what is left to show when nothing has been attributed yet.
-            // The headline is the game-server ping when a direct measurement is
-            // fresh: that is the figure a player compares with the one their game
-            // shows, and ICMP is the only latency here with real correlation.
-            // Otherwise the relay leg, which is always measured. Freshness is one
-            // rule ([`SERVER_PING_FRESH_SECS`]), shared with the ranking's floor
-            // and the triangle verdict; the ping is also keyed to the server it
-            // measured (task-25), so a stale record from a previous server is
-            // never shown as this server's ping.
-            let direct_ping = self
-                .game_server_addr()
-                .and_then(|server| self.server_ping_for(server));
-            let (reading, hint) = match direct_ping {
-                Some(ping) if fresh_direct_us(Some((ping.ms, ping.age_secs))).is_some() => {
-                    (ping.ms as f64, i18n::t("route.server_ping_hint"))
-                }
-                _ => (self.status.latest_rtt_ms, i18n::t("route.rtt_hint")),
-            };
-            let text = if reading > 0.0 {
-                format!("{reading:>3.0} ms")
-            } else {
-                "-- ms".to_string()
-            };
-            let color = if reading > 0.0 {
-                rtt_colour(reading)
-            } else {
-                text_3
-            };
-            Some((text, color, hint))
-        } else {
-            None
-        };
-
-        let hero_h = 34.0;
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), hero_h),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.set_min_height(hero_h);
-                ui.label(
-                    egui::RichText::new(word)
-                        .size(if narrow { STATE * 0.82 } else { STATE })
-                        .family(semibold())
-                        .color(word_color),
-                );
-                if let Some((text, color, hint)) = &metric {
-                    {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(text.as_str())
-                                    .size(METRIC)
-                                    .family(egui::FontFamily::Monospace)
-                                    .color(*color),
-                            )
-                            .on_hover_text(hint.clone());
-                        });
-                    }
-                }
-            },
-        );
-
-        ui.add_space(S1);
-        ui.label(egui::RichText::new(sub_line).size(BODY).color(text_2));
+    /// Render a catalogue line (`i18n` stays a shell concern; the seam returns
+    /// keys plus placeholders).
+    fn line_text(&self, line: &Line) -> String {
+        let args: Vec<(&str, &str)> = line
+            .args
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
+        i18n::t_with(line.key, &args)
     }
 
-    /// The one true card: the route globe and the label/value ledger. No
-    /// heading - it is identified by its position, the only rounded card in
-    /// the window.
-    fn route_card(&self, ui: &mut egui::Ui, narrow: bool) {
-        // The emphasised relay marker is only ever live while connected; with
-        // the tunnel down the globe stays at rest and nothing is highlighted.
+    /// The full-bleed state rail: word row, then the metric on **its own row**
+    /// with its leg caption, then the one-line description (§1.2, A13). The
+    /// word is never occluded by the metric: at 320 px the two cannot share a
+    /// row (measured RU/DE collisions), so they do not try.
+    fn shell_rail(&self, ui: &mut egui::Ui, surface: &RouteSurface, short: bool) {
+        let (word, tone) = (
+            i18n::t(surface.word.key()).to_uppercase(),
+            surface.word.tone(),
+        );
+        let edge = match tone {
+            Tone::Signal => signal,
+            Tone::Warn => warn,
+            Tone::Danger => danger,
+            Tone::Muted => {
+                if surface.word == RouteWord::Connected {
+                    accent_soft
+                } else {
+                    border_1
+                }
+            }
+        };
+        let frame = egui::Frame::new()
+            .fill(bg_2)
+            .inner_margin(egui::Margin::symmetric(S3 as i8, S3 as i8));
+        let response = frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            // Painted 3 px state edge: redundant with the word, never the only
+            // state cue (`design-system` §3.4). Painted, not laid out, so it
+            // costs no horizontal space.
+            let rect = ui.available_rect_before_wrap();
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left() - S3, rect.top() - S3),
+                    egui::vec2(RAIL_EDGE, rect.height() + 2.0 * S3),
+                ),
+                0.0,
+                edge,
+            );
+            // Row 1: the state word (`HERO_H` 40, `STATE` 30 — the retired 0.82
+            // shrink is gone).
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), HERO_H),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_height(HERO_H);
+                    ui.label(
+                        egui::RichText::new(word)
+                            .size(STATE)
+                            .family(semibold())
+                            .color(match tone {
+                                Tone::Signal => signal,
+                                Tone::Warn => warn,
+                                Tone::Danger => danger,
+                                Tone::Muted => text_1,
+                            }),
+                    );
+                },
+            );
+            // Row 2: the metric, always labelled with the leg it measures.
+            ui.add_space(S1);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), HERO_H),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.set_min_height(HERO_H);
+                    ui.label(
+                        egui::RichText::new(i18n::t(surface.metric.caption_key))
+                            .size(CAPTION)
+                            .color(text_3),
+                    );
+                    let value = match surface.metric.value_ms {
+                        Some(ms) => format!("{ms:>3} ms"),
+                        None => "-- ms".to_string(),
+                    };
+                    let ink = match surface.metric.value_ms {
+                        Some(ms) => rtt_colour(f64::from(ms)),
+                        None => text_3,
+                    };
+                    ui.label(
+                        egui::RichText::new(value)
+                            .size(METRIC)
+                            .family(egui::FontFamily::Monospace)
+                            .color(ink),
+                    );
+                },
+            );
+            // Row 3: the sub-line. In short mode it moves into the scrolling
+            // region so the fixed rail keeps the ≥180 px scrolling floor.
+            if !short {
+                if let Some(line) = &surface.subline {
+                    ui.add_space(S1);
+                    ui.label(
+                        egui::RichText::new(self.line_text(line))
+                            .size(BODY)
+                            .color(text_2),
+                    );
+                }
+            }
+        });
+        focus_ring(ui, &response.response, R_INLINE);
+    }
+
+    /// The one true card: warning line, map, location ladder, trace caption,
+    /// ledger + `Details`. Every fact comes from `route_surface`; the shell
+    /// derives nothing (`§5 W2-2 (c)`).
+    fn shell_route_card(&mut self, ui: &mut egui::Ui, surface: &RouteSurface, with_map: bool) {
+        egui::Frame::new()
+            .fill(bg_2)
+            .stroke(egui::Stroke::new(1.0, border_1))
+            .corner_radius(egui::CornerRadius::same(R_CARD))
+            .inner_margin(egui::Margin::same(S3 as i8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                // The warning line: one at a time, danger tone, above the map
+                // (`design-system` §6.10). The tint is redundant with the words.
+                if let Some(warning) = &surface.warning {
+                    let text = self.line_text(warning);
+                    notice_frame(ui, true, |ui| {
+                        ui.label(
+                            egui::RichText::new(text)
+                                .size(BODY)
+                                .family(semibold())
+                                .color(danger),
+                        );
+                    });
+                    ui.add_space(S2);
+                }
+                if with_map {
+                    let (markers, route) = self.map_markers();
+                    globe::draw_map(
+                        ui,
+                        ui.available_width().min(MAP_W_MAX),
+                        MAP_H,
+                        &markers,
+                        route,
+                    );
+                    ui.add_space(S2);
+                }
+                // The location ladder is display-only and left-aligned on the
+                // one gutter (M9); it claims no city a source cannot produce.
+                if let Some(location) = &surface.location {
+                    self.shell_location(ui, location);
+                    ui.add_space(S1);
+                }
+                if let Some(trace) = &surface.trace {
+                    let mut text = self.line_text(&trace.caption);
+                    if let Some(nearest) = &trace.nearest {
+                        text.push_str(" · ");
+                        text.push_str(&self.line_text(nearest));
+                    }
+                    if let Some(provider) = &trace.provider {
+                        text.push_str(" · ");
+                        text.push_str(provider);
+                    }
+                    ui.label(egui::RichText::new(text).size(CAPTION).color(text_3));
+                    ui.add_space(S1);
+                }
+                self.shell_ledger(ui, surface);
+            });
+    }
+
+    /// The location ladder block: caption lines + detail + provenance. The
+    /// geofeed source is the only hover fact (M8); everything decision-changing
+    /// is visible text.
+    fn shell_location(&self, ui: &mut egui::Ui, location: &LocationBlock) {
+        ui.label(
+            egui::RichText::new(i18n::t(location.label_key))
+                .size(CAPTION)
+                .color(text_3),
+        );
+        ui.label(
+            egui::RichText::new(self.line_text(&location.rung))
+                .size(CAPTION)
+                .color(text_2),
+        );
+        for value in [&location.detail, &location.note].into_iter().flatten() {
+            self.shell_row_value(ui, value, false);
+        }
+        if let Some(as_is) = location.as_is {
+            ui.label(
+                egui::RichText::new(i18n::t(as_is))
+                    .size(CAPTION)
+                    .color(text_3),
+            );
+        }
+        if let Some(hint) = location.hint {
+            ui.label(
+                egui::RichText::new(i18n::t(hint))
+                    .size(CAPTION)
+                    .color(text_3),
+            );
+        }
+        if let Some(source) = &location.source {
+            let text = self.line_text(source);
+            ui.label(
+                egui::RichText::new(i18n::t("route.location_geofeed_note"))
+                    .size(CAPTION)
+                    .color(text_3),
+            )
+            .on_hover_text(text);
+        }
+    }
+
+    /// Build the map markers and route from the current session (the map is
+    /// decoration over the same facts the ledger states; it derives no state).
+    fn map_markers(&self) -> (Vec<globe::Marker>, Option<(globe::LatLon, globe::LatLon)>) {
         let active_node = if self.status.connected {
             self.selected_entry()
                 .and_then(|e| e.node_id.clone())
@@ -2276,408 +2304,268 @@ impl<P: Platform> LightSpeedApp<P> {
             .as_deref()
             .and_then(globe::relay_coords)
             .unwrap_or((30.0, 0.0));
-
-        // The game server comes from whichever mode is running; its address is
-        // "ip:port", and only an IPv4 literal geolocates. The same helper feeds
-        // the client trace, so the caption and the dot cannot describe different
-        // servers.
         let server_ip = self.locked_server_ip();
-        let server_place = server_ip.map(crate::server_place::place);
         let server_at = server_ip.and_then(crate::server_place::display_point);
         if let Some(at) = server_at {
-            let label = match server_place {
-                Some(crate::server_place::Place::Cloud {
-                    provider, region, ..
-                }) => format!("{} {region}", provider.to_uppercase()),
-                Some(crate::server_place::Place::Country { code, .. }) => code.to_string(),
-                _ => String::new(),
-            };
             markers.push(globe::Marker {
                 at,
                 colour: warn,
-                label,
+                label: String::new(),
             });
         }
-        let route = server_at.map(|to| (centre, to));
-        // What the card may say about the server's place, and the source that
-        // backs it. This is the honest ladder: an exact provider region, a
-        // hosting network whose geoIP country is not trustworthy, the country
-        // estimate, or nothing. Only the cloud and country cases have a point.
-        let location_caption = server_place.map(route_location_lines);
-
-        egui::Frame::new()
-            .fill(bg_2)
-            .stroke(egui::Stroke::new(1.0, border_1))
-            .corner_radius(egui::CornerRadius::same(R_CARD))
-            .inner_margin(egui::Margin::same(S3 as i8))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                // The unmissable warning: the relay is carrying the session but
-                // has been judged not to be returning the game's traffic. It is
-                // drawn above the map, in the danger tint, because the old
-                // surface showed a green OPTIMIZING rail while the ledger said
-                // the relay returned nothing. The banner names the remedy - the
-                // player's own decision - and never claims a route change.
-                if let Some(warning) = self.starvation_warning.filter(|_| self.run_boosting()) {
-                    egui::Frame::new()
-                        .fill(danger_soft)
-                        .stroke(egui::Stroke::new(1.0, danger))
-                        .corner_radius(egui::CornerRadius::same(R_INLINE))
-                        .inner_margin(egui::Margin::same(S2 as i8))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.label(
-                                egui::RichText::new(i18n::t(warning_message_key(warning.fault)))
-                                    .size(BODY)
-                                    .family(semibold())
-                                    .color(danger),
-                            );
-                        });
-                    ui.add_space(S2);
-                }
-                ui.vertical_centered(|ui| {
-                    // A flat map instead of the globe: legible at a glance and it
-                    // spends the card's width rather than its height.
-                    let map_w = ui.available_width().min(430.0);
-                    globe::draw_map(ui, map_w, 132.0, &markers, route);
-                    // The dot's position comes from free databases, not from a
-                    // measurement: say which source backs it under the map
-                    // instead of letting it read as a verified location. Hosting
-                    // ranges are the documented weak spot (a G-Core US-Virginia
-                    // server publishes as JP in the shipped DB-IP data), so such
-                    // a server gets no dot at all - just its network name.
-                    if let Some(lines) = &location_caption {
-                        ui.add_space(S1);
-                        ui.label(
-                            egui::RichText::new(lines.caption.as_str())
-                                .size(CAPTION)
-                                .color(text_3),
-                        );
-                        if let Some(detail) = &lines.detail {
-                            ui.label(
-                                egui::RichText::new(detail.as_str())
-                                    .size(CAPTION)
-                                    .color(text_3),
-                            );
-                        }
-                        // An operator geofeed row is the operator's own
-                        // statement, so the card says it is shown as-is and
-                        // keeps the feed URL on hover as the provenance.
-                        if let Some(note) = &lines.note {
-                            let response = ui.label(
-                                egui::RichText::new(note.as_str())
-                                    .size(CAPTION)
-                                    .color(text_3),
-                            );
-                            if let Some(source) = &lines.source {
-                                response.on_hover_text(i18n::t_with(
-                                    "route.location_geofeed_source",
-                                    &[("source", source)],
-                                ));
-                            }
-                        }
-                        // A hosting-range or unknown server has no dot, so the
-                        // card says why: free IP databases are the documented
-                        // weak spot for exactly these ranges. It is a caption
-                        // line, not a tooltip, because the absence of a location
-                        // is the fact the reader needs.
-                        if let Some(hint) = &lines.hint {
-                            ui.label(
-                                egui::RichText::new(hint.as_str())
-                                    .size(CAPTION)
-                                    .color(text_3),
-                            );
-                        }
-                    }
-                    // The client's own trace reaches the game server directly,
-                    // so it locates the *server*, not the relay: the last hop
-                    // that answered is the closest point to it this host can
-                    // observe, and its RTT is not the game's ping. The caption
-                    // states only that, plus a provider name when the shipped R1
-                    // indexes know the prefix. A city would need hop-geolocation
-                    // data the product does not have, so none is claimed.
-                    if let Some(caption) = self
-                        .client_route
-                        .as_ref()
-                        .and_then(crate::client_trace::caption)
-                    {
-                        ui.add_space(S1);
-                        ui.label(
-                            egui::RichText::new(caption.as_str())
-                                .size(CAPTION)
-                                .color(text_3),
-                        )
-                        .on_hover_text(
-                            "The last hop that answered the client's own traceroute to the \
-                             game server: a location hint, not a measurement of the server's \
-                             game RTT.",
-                        );
-                    }
-                });
-                ui.add_space(S2);
-                self.ledger_rows(ui, narrow, false);
-                // The one whole-path claim the client can prove from its own
-                // measurements: when the one-RTT client leg already reaches the
-                // direct ping, adding the relay hop cannot shorten the path. It
-                // is stated only while both figures are fresh, and never as a
-                // latency verdict on the server leg, which the client cannot see.
-                if let Some((client_leg_us, direct_us)) = self.cannot_beat_direct() {
-                    ui.add_space(S2);
-                    ui.label(
-                        egui::RichText::new(i18n::t("route.cannot_beat_direct"))
-                            .size(CAPTION)
-                            .color(warn),
-                    )
-                    .on_hover_text(format!(
-                        "Client leg {:.0} ms to the relay is at least the direct ping {:.0} ms, \
-                         so a path through this relay cannot be shorter than going direct.",
-                        client_leg_us as f64 / 1000.0,
-                        direct_us as f64 / 1000.0
-                    ));
-                }
-                // A chart of nothing is worse than no chart: while the client is
-                // merely connected, the sparkline draws a flat line across an empty
-                // band and reads as data. It is drawn only while a session is
-                // actually relaying.
-                let relaying = self.status.interceptor_active || self.status.redirect_active;
-                if relaying && !self.status.rtt_history.is_empty() {
-                    ui.add_space(S2);
-                    sparkline(ui, &self.status.rtt_history);
-                }
-            });
+        (markers, server_at.map(|to| (centre, to)))
     }
 
-    /// The label/value ledger. At the short-height breakpoint the `Game server`
-    /// row is dropped and the values move into the scrolling region. The
-    /// `Target` row is drawn only while a process is targeted, so the ledger is
-    /// unchanged on the built-in path.
-    fn ledger_rows(&self, ui: &mut egui::Ui, narrow: bool, short_mode: bool) {
-        let relay = self.relay_value();
-        self.ledger_row(ui, narrow, &i18n::t("route.relay"), &relay);
-        // The hero number is the keepalive round trip to the relay node, not the
-        // game's own ping, and only a hover said so. Naming it in the card makes
-        // the difference legible without pointing at it.
-        // The whole-loop figure, measured only when the flow went quiet enough
-        // for a reply to be attributable to one send. It carries its own age,
-        // because the relay leg beside it is instantaneous and swings: a stale
-        // probe can legitimately read below the current leg without either
-        // number being wrong.
-        // The direct ping is shown only for the server it was measured against;
-        // the age is part of the value so staleness is visible without a second
-        // rule. A record for a previous server is not this server's ping
-        // (task-25), so it is hidden rather than relabelled.
-        if let Some(ping) = self
-            .game_server_addr()
-            .and_then(|server| self.server_ping_for(server))
+    /// The ledger: the default rows the seam emits (≤6) plus one `Details`
+    /// disclosure holding the secondary leg/ping/trace rows (M5 density).
+    fn shell_ledger(&mut self, ui: &mut egui::Ui, surface: &RouteSurface) {
+        for row in &surface.ledger {
+            self.shell_row(ui, row);
+        }
+        if surface.details.is_empty() {
+            return;
+        }
+        let label = i18n::t("route.details");
+        let mut open = self.details_open;
+        let rect = ui.available_rect_before_wrap();
+        let response = ui.allocate_rect(
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), HIT_MIN)),
+            egui::Sense::click(),
+        );
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, open, label.as_ref()));
+        let ink = if response.hovered() { text_1 } else { text_2 };
+        let painter = ui.painter();
+        let cx = rect.left() + S2;
+        let cy = response.rect.center().y;
+        let dir = if open { 1.0 } else { -1.0 };
+        painter.add(egui::Shape::line(
+            vec![
+                egui::pos2(cx - 3.0, cy - 2.0 * dir),
+                egui::pos2(cx + 3.0, cy + 2.0 * dir),
+            ],
+            egui::Stroke::new(1.5, ink),
+        ));
+        painter.text(
+            egui::pos2(rect.left() + S2 + S3, cy),
+            egui::Align2::LEFT_CENTER,
+            label.as_ref(),
+            egui::FontId::new(BODY, semibold()),
+            ink,
+        );
+        focus_ring(ui, &response, R_INLINE);
+        if response.clicked()
+            || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
         {
-            let value = LedgerValue::Data(format!("{:.0} ms \u{00b7} {}s", ping.ms, ping.age_secs));
-            self.ledger_row(ui, narrow, &i18n::t("route.server_ping"), &value);
+            open = !open;
+            self.details_open = open;
         }
-        // The relay-to-server leg is the half of the path LightSpeed cannot see
-        // without a measurement, and the surface used to present it as if it were
-        // known. The relay's own ICMP measurement is the strongest evidence
-        // available, so it leads: the row states the measured leg and, beside it,
-        // the only whole-path figure the two measured legs support (`L + S`).
-        // Only while this route is the relay actually carrying traffic.
-        if let Some((leg, expected)) = self.relay_measured_server_leg_rows() {
-            self.ledger_row(ui, narrow, &i18n::t("route.server_leg"), &leg);
-            if let Some(expected) = expected {
-                self.ledger_row(ui, narrow, &i18n::t("route.expected_path"), &expected);
+        if open {
+            for row in &surface.details {
+                self.shell_row(ui, row);
             }
-        } else if let Some(value) = self.server_leg_value() {
-            // The row states how the choice obtained the leg - measured with its
-            // sample count, a triangle bound, or the region prior with its
-            // uncertainty - and appears only while that choice is the route
-            // actually carrying traffic.
-            self.ledger_row(ui, narrow, &i18n::t("route.server_leg"), &value);
         }
-        // The relay's passive app-RTT sample rides beside the ICMP `S` as a
-        // secondary, display-only figure. It is available even when ICMP is
-        // blocked (ordinary game responses still time it), which is exactly why
-        // the F4 revision uses it as the relay-side peer reference; it never
-        // feeds the ranking and nothing is drawn when no fresh sample exists.
-        if let Some(app) = self.relay_measured_app_server_leg_row() {
-            self.ledger_row(ui, narrow, &i18n::t("route.server_leg_app"), &app);
+    }
+
+    /// One label/value row. Mobile-only: the label and value share the row when
+    /// the measured pair fits the 288/264 px column; otherwise the value moves
+    /// to its own line instead of painting over the label (the RU
+    /// `Ретранслятор` + `207.246.124.117:4434` capture caught that collision).
+    fn shell_row(&self, ui: &mut egui::Ui, row: &Row) {
+        let label = i18n::t(row.label_key).into_owned();
+        let (value_text, mono, ink, size) = self.row_value_parts(&row.value);
+        let label_w = ui
+            .painter()
+            .layout_no_wrap(label.clone(), egui::FontId::proportional(CAPTION), text_3)
+            .size()
+            .x;
+        let value_font = if mono {
+            egui::FontId::monospace(size)
+        } else {
+            egui::FontId::proportional(size)
+        };
+        let value_w = ui
+            .painter()
+            .layout_no_wrap(value_text.clone(), value_font, ink)
+            .size()
+            .x;
+        if label_w + value_w + S3 > ui.available_width() {
+            ui.label(egui::RichText::new(label).size(CAPTION).color(text_3));
+            self.paint_row_value(ui, value_text, mono, ink, size);
+        } else {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(label).size(CAPTION).color(text_3));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.paint_row_value(ui, value_text, mono, ink, size);
+                });
+            });
         }
-        // The relay's TTL traceroute, when it has one for this pair: a
-        // placement anchor for a hosting-network server whose geolocation is
-        // unknown. The row names the hop count and the last router's RTT only;
-        // it claims no city and feeds no ranking decision.
-        if let Some(trace) = self.relay_measured_trace_row() {
-            self.ledger_row(ui, narrow, &i18n::t("route.route_trace"), &trace);
+    }
+
+    /// The rendered text, type and ink of a row value.
+    fn row_value_parts(&self, value: &RowValue) -> (String, bool, egui::Color32, f32) {
+        match value {
+            RowValue::Data(text) => (text.clone(), true, text_1, VALUE),
+            RowValue::Copy(line) => (self.line_text(line), true, text_1, VALUE),
+            RowValue::Hint(key) => (i18n::t(key).into_owned(), false, text_3, BODY),
+            RowValue::Warn(line) => (self.line_text(line), false, warn, BODY),
         }
-        if self.status.connected && self.status.latest_rtt_ms > 0.0 {
-            let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
-            self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
+    }
+
+    fn paint_row_value(
+        &self,
+        ui: &mut egui::Ui,
+        text: String,
+        mono: bool,
+        ink: egui::Color32,
+        size: f32,
+    ) {
+        let mut rich = egui::RichText::new(text).size(size).color(ink);
+        if mono {
+            rich = rich.family(egui::FontFamily::Monospace);
         }
-        // The path row exists only for the start-of-match hold now: the watchdog
-        // never takes the session direct, so there is no fallback state to name.
-        if self.holding {
-            self.ledger_row(
-                ui,
-                narrow,
-                &i18n::t("route.path"),
-                &LedgerValue::Warn(i18n::t("state.holding")),
+        ui.label(rich);
+    }
+
+    fn shell_row_value(&self, ui: &mut egui::Ui, value: &RowValue, inline: bool) {
+        // `inline` = the value shares a 24 px label/value row; otherwise it is a
+        // full-width caption line (location details/notes).
+        match value {
+            RowValue::Data(text) => {
+                if inline {
+                    ui.label(
+                        egui::RichText::new(text.as_str())
+                            .size(VALUE)
+                            .family(egui::FontFamily::Monospace)
+                            .color(text_1),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(text.as_str())
+                            .size(CAPTION)
+                            .color(text_2),
+                    );
+                }
+            }
+            RowValue::Copy(line) => {
+                let text = self.line_text(line);
+                if inline {
+                    ui.label(
+                        egui::RichText::new(text)
+                            .size(VALUE)
+                            .family(egui::FontFamily::Monospace)
+                            .color(text_1),
+                    );
+                } else {
+                    ui.label(egui::RichText::new(text).size(CAPTION).color(text_2));
+                }
+            }
+            RowValue::Hint(key) => {
+                ui.label(
+                    egui::RichText::new(i18n::t(key))
+                        .size(if inline { BODY } else { CAPTION })
+                        .color(text_3),
+                );
+            }
+            RowValue::Warn(line) => {
+                ui.label(
+                    egui::RichText::new(self.line_text(line))
+                        .size(if inline { BODY } else { CAPTION })
+                        .color(warn),
+                );
+            }
+        }
+    }
+
+    /// The command-error panel (`§2.2` row 8 / `§2.9`): the taxonomy sentence,
+    /// the verbatim engine detail behind `Details`, and an `Open log file` link.
+    fn shell_error_panel(&mut self, ui: &mut egui::Ui, surface: &RouteSurface) {
+        if surface.word != RouteWord::Error {
+            return;
+        }
+        let detail = self
+            .engine_error()
+            .and_then(|error| error.detail.clone())
+            .unwrap_or_default();
+        notice_frame(ui, true, |ui| {
+            if let Some(subline) = &surface.subline {
+                ui.label(
+                    egui::RichText::new(self.line_text(subline))
+                        .size(BODY)
+                        .family(semibold())
+                        .color(danger),
+                );
+            }
+            let mut open = self.details_open;
+            disclosure_row(ui, i18n::t("route.details").as_ref(), &mut open);
+            self.details_open = open;
+            if open && !detail.is_empty() {
+                ui.label(
+                    egui::RichText::new(&detail)
+                        .size(CAPTION)
+                        .family(egui::FontFamily::Monospace)
+                        .color(text_2),
+                );
+            }
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(i18n::t("settings.open_log")).size(CAPTION),
+                    )
+                    .min_size(egui::vec2(0.0, HIT_MIN)),
+                )
+                .clicked()
+            {
+                self.reveal_log_file();
+            }
+        });
+    }
+
+    /// The one action slot + the disabled-reason line under it when the slot
+    /// cannot act (`§2.9`, M6). Returns the click, if any.
+    fn shell_action(&mut self, ui: &mut egui::Ui, surface: &RouteSurface) {
+        let action = &surface.action;
+        let label = i18n::t(action.label_key).to_uppercase();
+        let kind = if action.danger {
+            ActionKind::Danger
+        } else {
+            ActionKind::Accent
+        };
+        let response = action_button(ui, &label, kind, action.enabled, action.in_flight);
+        focus_ring(ui, &response, R_BUTTON);
+        if response.clicked() && action.enabled && !action.in_flight {
+            self.apply_action(surface);
+        }
+        if let Some(reason) = &action.disabled_reason {
+            ui.add_space(S1);
+            ui.label(
+                egui::RichText::new(self.line_text(reason))
+                    .size(CAPTION)
+                    .color(text_3),
             );
         }
-        if let Some(target) = &self.target_process {
-            let target = LedgerValue::Data(target.describe());
-            self.ledger_row(ui, narrow, &i18n::t("route.target"), &target);
-        }
-        if !short_mode {
-            let game_server = self.game_server_value();
-            self.ledger_row(ui, narrow, &i18n::t("route.game_server"), &game_server);
-        }
-        let routed = self.routed_value();
-        self.ledger_row(ui, narrow, &i18n::t("route.relayed"), &routed);
     }
 
-    /// The relay-measured server-leg rows for the route on screen.
-    ///
-    /// The relay measures the relay→server leg (`S`) with unprivileged ICMP and
-    /// reports it over the control plane; the client validates it before this
-    /// crate ever sees it and says whether the triangle-floor check actually
-    /// ran, so a fail-open report is labelled `measured, unvalidated`. `L` is
-    /// the one-RTT client→relay keepalive already displayed as `Relay RTT`, so
-    /// `L + S` is the first whole-path figure whose both terms are measured. It
-    /// is a floor, not the real path, and the locale string says so with `~`.
-    ///
-    /// Present only while this client is tunnelling through the relay (a held
-    /// session's own row already says the relay is not in use) and only for the
-    /// pair the card is describing: the report is keyed by `(relay, server)` in
-    /// the client crate, so another relay's or another server's measurement can
-    /// never be rendered here.
-    fn relay_measured_server_leg_rows(&self) -> Option<(LedgerValue, Option<LedgerValue>)> {
-        if !self.run_boosting() || self.holding {
-            return None;
+    /// Map the one slot to the session command (the shell changes no route
+    /// itself; each branch is the existing command).
+    fn apply_action(&mut self, surface: &RouteSurface) {
+        if surface.action.danger {
+            self.stop_boost();
+            return;
         }
-        let server = self.game_server_addr()?;
-        let relay = self.selected_entry()?.addr;
-        let report = relay_measured_server_leg(relay, server)?;
-        let leg = LedgerValue::Data(relay_measured_leg_text(&report));
-        let expected =
-            expected_path_text(self.status.latest_rtt_ms, report.median_us).map(LedgerValue::Data);
-        Some((leg, expected))
-    }
-
-    /// The relay's passive app-RTT row for the route on screen.
-    ///
-    /// Display-only and secondary: it is the relay's own
-    /// forward→first-response median for the same `(relay, server)` pair, shown
-    /// beside the ICMP `S`. The client crate already refused a stale, zero or
-    /// absurd report, so `Some` here is always a presentable relay measurement;
-    /// it feeds no ranking decision (the F4 revision keeps `S` non-steering
-    /// until the experiment passes) and disappears when the passive window goes
-    /// quiet rather than showing an old number.
-    fn relay_measured_app_server_leg_row(&self) -> Option<LedgerValue> {
-        if !self.run_boosting() || self.holding {
-            return None;
+        if !self.is_admin {
+            self.restart_elevated();
+            return;
         }
-        let server = self.game_server_addr()?;
-        let relay = self.selected_entry()?.addr;
-        let report = relay_measured_app_server_leg(relay, server)?;
-        Some(LedgerValue::Data(relay_measured_app_leg_text(&report)))
-    }
-
-    /// The relay's TTL-traceroute row for the route on screen: the last router
-    /// on the relay→server path and its round trip.
-    ///
-    /// This is the placement anchor for a hosting-network server whose
-    /// geolocation is unknown: "the path reaches this router" instead of
-    /// nothing. The client crate owns the plausibility and 10-minute freshness
-    /// rules and binds the report to this exact `(relay, server)` pair, so
-    /// `Some` here is always a fresh, well-formed relay trace. It feeds no
-    /// ranking decision and claims no city.
-    fn relay_measured_trace_row(&self) -> Option<LedgerValue> {
-        if !self.run_boosting() || self.holding {
-            return None;
-        }
-        let server = self.game_server_addr()?;
-        let relay = self.selected_entry()?.addr;
-        let report = relay_measured_trace(relay, server)?;
-        Some(LedgerValue::Data(relay_measured_trace_text(&report)))
-    }
-
-    /// The route surface's `Server leg` row: the relay-to-server leg for the
-    /// relay in use, and how the relay choice obtained it.
-    ///
-    /// Present only while this client is tunnelling and the route is the relay (a
-    /// held session's own row already says the relay is not in use), and only
-    /// for a game server the chooser ranked with a relay it ranked. A row with no
-    /// fact behind it would be exactly the invented state this surface exists to
-    /// stop.
-    ///
-    /// Units: microseconds in the model, milliseconds on screen. One metric, one
-    /// label (`route.server_leg`); the hover carries no separate number.
-    fn server_leg_value(&self) -> Option<LedgerValue> {
-        if !self.run_boosting() || self.holding {
-            return None;
-        }
-        let server = self.game_server_addr()?;
-        let ranking = self
-            .route_ranking
-            .as_ref()
-            .filter(|ranking| ranking.server == server)?;
-        let relay = self.selected_entry()?.addr;
-        let scored = scored_for_relay(&ranking.scored, relay);
-        let measured = measured_server_leg(relay, server);
-        // The ping may have landed after the choice: state the triangle floor it
-        // proves now rather than leaving the row on the prior until the 600 s
-        // re-rank. Same verdict, same inputs the ranking would use - no re-rank.
-        // The ping is keyed to `server`, so the previous server's sample is
-        // refused here too (task-25).
-        let early_floor_us =
-            early_triangle_floor(self.server_ping, server, self.ranked_client_leg_us(relay));
-        match server_leg_state(scored, measured, early_floor_us) {
-            ServerLegState::Measured(measured) => {
-                let ms = format!("{:.0}", measured.dest_leg_us as f64 / 1000.0);
-                let samples = measured.samples.to_string();
-                let text = match measured.age {
-                    // Only the estimator may say how old the newest sample is.
-                    // `None` (no age reported) is rendered as no age, never as
-                    // zero and never estimated from the choice's own clock.
-                    Some(age) => {
-                        let secs = age.as_secs().to_string();
-                        i18n::t_with(
-                            "route.server_leg_measured_age",
-                            &[("ms", &ms), ("n", &samples), ("secs", &secs)],
-                        )
-                    }
-                    None => {
-                        i18n::t_with("route.server_leg_measured", &[("ms", &ms), ("n", &samples)])
-                    }
-                };
-                Some(LedgerValue::Data(text))
-            }
-            ServerLegState::Bounded { floor_us } => {
-                let ms = format!("{:.0}", floor_us as f64 / 1000.0);
-                Some(LedgerValue::Data(i18n::t_with(
-                    "route.server_leg_bounded",
-                    &[("ms", &ms)],
-                )))
-            }
-            ServerLegState::Prior { prior_us } => {
-                let prior = format!("{:.0}", prior_us as f64 / 1000.0);
-                let uncertainty = format!("{:.0}", PRIOR_UNCERTAINTY_US as f64 / 1000.0);
-                Some(LedgerValue::Hint(
-                    i18n::t_with(
-                        "route.server_leg_prior",
-                        &[("prior", &prior), ("unc", &uncertainty)],
-                    )
-                    .into(),
-                ))
-            }
-            ServerLegState::Unknown => Some(LedgerValue::Hint(i18n::t("route.server_leg_unknown"))),
+        if self.run_boosting() {
+            self.stop_boost();
+        } else if self.game_manual && !self.server_input.trim().is_empty() {
+            self.start_manual_redirect();
+        } else {
+            self.start_boost();
         }
     }
 
-    /// The triangle-inequality verdict for the relay in use, when it holds.
-    ///
-    /// The client leg is the keepalive echo - the one-RTT leg the client measures
-    /// continuously - falling back to the ranking's probe median before the first
-    /// echo arrives. Both are one-RTT measurements of the same leg, which is what
-    /// the triangle inequality needs; the old two-RTT HTTP wall time would have
-    /// made this verdict wrong in the other direction.
     fn cannot_beat_direct(&self) -> Option<(u64, u64)> {
         if !self.run_boosting() || self.holding {
             return None;
@@ -2702,6 +2590,15 @@ impl<P: Platform> LightSpeedApp<P> {
     ///
     /// One definition, because the rail, the tray and the route surface must not
     /// disagree about whether the client is "on".
+    fn session_sent(&self) -> Option<u64> {
+        routed_count(
+            self.status.redirect_active,
+            self.status.redirect_pkts_out,
+            self.status.interceptor_active,
+            self.status.interceptor_tunnel_sent,
+        )
+    }
+
     fn run_boosting(&self) -> bool {
         self.status.interceptor_active
             || self.status.windivert_active
@@ -2976,136 +2873,7 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    fn ledger_row(&self, ui: &mut egui::Ui, narrow: bool, label: &str, value: &LedgerValue) {
-        if narrow {
-            ui.label(egui::RichText::new(label).size(CAPTION).color(text_3));
-            self.ledger_value(ui, value);
-        } else {
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), ROW_H),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ledger_label(ui, LEDGER_LABEL_W, label);
-                    self.ledger_value(ui, value);
-                },
-            );
-        }
-    }
-
-    fn ledger_value(&self, ui: &mut egui::Ui, value: &LedgerValue) {
-        match value {
-            LedgerValue::Data(text) => {
-                ui.monospace(text.as_str());
-            }
-            LedgerValue::Hint(text) => {
-                ui.label(egui::RichText::new(text.as_ref()).size(BODY).color(text_3));
-            }
-            LedgerValue::Warn(text) => {
-                ui.label(egui::RichText::new(text.as_ref()).size(BODY).color(warn));
-            }
-        }
-    }
-
-    /// `Relay` = the human-readable label the app actually has, or the raw
-    /// proxy address as a last resort. Never a fabricated city.
-    fn relay_value(&self) -> LedgerValue {
-        if !self.status.connected {
-            return LedgerValue::Hint("--".into());
-        }
-        let node_id = self
-            .selected_entry()
-            .and_then(|e| e.node_id.as_deref())
-            .or(self.status.node_id.as_deref());
-        let base = if let Some(id) = node_id {
-            LedgerValue::Data(discovery::friendly_label(id))
-        } else if self.status.proxy_addr.is_empty() {
-            LedgerValue::Hint("--".into())
-        } else {
-            LedgerValue::Data(self.status.proxy_addr.clone())
-        };
-        // Direct fallback used to be glued onto this value, which made a relay
-        // name and a routing state read as one string. It has its own row now.
-        base
-    }
-
-    fn game_server_value(&self) -> LedgerValue {
-        let server = [
-            self.status.interceptor_server.as_str(),
-            self.status.redirect_server.as_str(),
-            self.status.windivert_server.as_str(),
-        ]
-        .into_iter()
-        .find(|s| !s.is_empty());
-        match server {
-            Some(s) => LedgerValue::Data(s.to_string()),
-            None => LedgerValue::Hint(i18n::t("route.place_hint")),
-        }
-    }
-
-    /// Packets THIS session has pushed through the relay. The relay's own
-    /// `/health` counters are lifetime totals for the whole fleet node, not our
-    /// session, so they must never be shown as if they were ours.
-    ///
-    /// Outbound datagrams this session handed to the relay, in whichever mode
-    /// is running.
-    fn session_sent(&self) -> Option<u64> {
-        routed_count(
-            self.status.redirect_active,
-            self.status.redirect_pkts_out,
-            self.status.interceptor_active,
-            self.status.interceptor_tunnel_sent,
-        )
-    }
-
-    fn routed_value(&self) -> LedgerValue {
-        let sent = self.session_sent();
-        let returned = returned_count(
-            self.status.redirect_active,
-            self.status.redirect_pkts_in,
-            self.status.interceptor_active,
-            self.status.interceptor_from_proxy,
-        );
-        // The engine's counters are cumulative for the interceptor, so a relay
-        // switch or a held session carried the old traffic into the new session's
-        // numbers. The row is about this session, so the delta from where it
-        // started is what it shows.
-        let base = self
-            .relayed_base
-            .as_ref()
-            .filter(|(key, _, _)| *key == self.session_key())
-            .map(|(_, sent, returned)| (*sent, *returned));
-        let (sent, returned) = match (sent, returned) {
-            (Some(sent), Some(returned)) => {
-                let (sent, returned) = session_delta(sent, returned, base);
-                (Some(sent), Some(returned))
-            }
-            other => other,
-        };
-        match (sent, returned) {
-            (Some(sent), Some(returned)) => {
-                let (text, starving) = relayed_row_text(sent, returned);
-                if starving {
-                    LedgerValue::Warn(text.into())
-                } else {
-                    LedgerValue::Data(text)
-                }
-            }
-            _ => LedgerValue::Hint(i18n::t("route.count_hint")),
-        }
-    }
-
-    // ── Config region (the only scrolling part) ────────────────────────────
-
-    /// Configuration section: relay, game, and the optional game picker, in the
-    /// one scroll region. At the short-height breakpoint the route values fold
-    /// in at the top.
-    fn config_body(&mut self, ui: &mut egui::Ui, narrow: bool, short: bool) {
-        if short {
-            section_label(ui, &i18n::t("route.title"));
-            self.ledger_rows(ui, narrow, true);
-            ui.add_space(S3);
-        }
-
+    fn config_body(&mut self, ui: &mut egui::Ui, narrow: bool, _short: bool) {
         // Boost server: which relay carries the game traffic.
         field_row(ui, narrow, &i18n::t("route.relay"), |ui| {
             ui.horizontal(|ui| {
@@ -3215,10 +2983,14 @@ impl<P: Platform> LightSpeedApp<P> {
         if self.proxies.is_empty() {
             match &self.discovery {
                 DiscoveryState::InFlight(_) => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(egui::RichText::new(i18n::t("relay.discovering")).color(text_2));
-                    });
+                    // W2-2 (i): one wait indicator, static text until the OS
+                    // reduced-motion probe is wired (W2-4); the GUI crate reads
+                    // no OS setting itself.
+                    progress_indicator(
+                        ui,
+                        i18n::t("relay.discovering").as_ref(),
+                        Animations::Unknown,
+                    );
                 }
                 DiscoveryState::Done => {
                     ui.horizontal_wrapped(|ui| {
@@ -4242,10 +4014,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     .show(ui, |ui| {
                         match &self.update_check {
                             UpdateCheckState::Checking => {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label(i18n::t("update.checking"));
-                                });
+                                progress_indicator(ui, i18n::t("update.checking").as_ref(), Animations::Unknown);
                             }
                             UpdateCheckState::Done(result) => {
                                 let current = match result {
@@ -4289,10 +4058,7 @@ impl<P: Platform> LightSpeedApp<P> {
                                 }
                             }
                             UpdateCheckState::Installing => {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label(i18n::t("update.installing"));
-                                });
+                                progress_indicator(ui, i18n::t("update.installing").as_ref(), Animations::Unknown);
                                 ui.label(
                                     "Approve the UAC prompt if one appears; LightSpeed will restart.",
                                 );
@@ -4322,7 +4088,6 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // The full window rect, read before any panel claims space, drives the
         // narrow (width) and short (height) breakpoints.
         let viewport = ui.available_rect_before_wrap();
-        let narrow = viewport.width() < 380.0;
         let short = viewport.height() < 560.0;
         // Where the window sits on its monitor, for the auto-size cap below.
         let (monitor_height, window_top) = monitor_geometry(frame, &ctx);
@@ -4414,63 +4179,46 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             }
         }
 
-        // ── Tray icon state machine ───────────────────────────────────────
-        {
-            let has_error = self.status.windivert_error.is_some()
-                || self.status.capture_error.is_some()
-                || self.status.redirect_error.is_some()
-                || self.status.interceptor_error.is_some();
-            let boosting = self.run_boosting();
-            let warning_active = self.starvation_warning.is_some() && boosting;
-            let new_tray_state =
-                tray_state_for(has_error, warning_active, boosting, self.status.connected);
+        // ── One status snapshot for the whole frame (W2-1 seam) ─────────────
+        let surface = route_surface::route_surface(&self.app_status());
 
-            if let Some(tray) = &self.tray {
-                tray.set_state(new_tray_state, self.status.latest_rtt_ms);
-            }
+        // ── Tray icon state machine ─────────────────────────────────────────
+        // The tray projects the same snapshot, so `RelayStarved` can never be
+        // painted as `Optimizing` (`app/window.rs` ordering).
+        if let Some(tray) = &self.tray {
+            tray.set_state(surface.tray, self.status.latest_rtt_ms);
         }
 
-        // ── Status window shell ──────────────────────────────────────────
-        // The "scroll-body-shell": rail, action bar, and (at normal height)
-        // route card are fixed; the config region is the only scrolling part;
-        // the footer stays pinned. At a short height the route card folds into
-        // the scroll region so the fixed chrome never crowds out the footer.
-        let boosting = self.run_boosting();
+        // ── Geometry: remember the player's height, never auto-resize ───────
+        // W2-2 removed the content-driven resize. The height belongs to the
+        // player: restore the remembered value once, then persist changes.
+        if !self.height_restored {
+            self.height_restored = true;
+            let height = load_window_height(monitor_height, window_top);
+            self.persisted_height = height;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(320.0, height)));
+        }
+        if (viewport.height() - self.persisted_height).abs() > 8.0 {
+            let clamped = viewport.height().clamp(
+                MIN_WINDOW_HEIGHT,
+                window_height_limit(monitor_height, window_top),
+            );
+            save_window_height(clamped);
+            self.persisted_height = clamped;
+        }
+        let compact = viewport.height() < 480.0;
 
-        let rail_edge = if boosting {
-            // The rail's left edge carries the same honesty as the state word:
-            // a failing return path paints it in the danger colour, not green.
-            if self.starvation_warning.is_some() {
-                danger
-            } else {
-                signal
-            }
-        } else if self.status.connected {
-            accent_soft
-        } else {
-            text_3
-        };
-
-        // Rail: full-bleed, no radius, no side margin.
-        let rail = egui::Panel::top("state_rail")
-            .frame(egui::Frame::new().fill(bg_2).inner_margin(egui::Margin {
-                left: S4 as i8,
-                right: S4 as i8,
-                top: S3 as i8,
-                bottom: S3 as i8,
-            }))
+        // ── Status window shell ─────────────────────────────────────────────
+        // Instrument 2.0: one 320 px column, no width breakpoints. R1 rail
+        // (word row + metric row) is fixed; the route card is fixed at normal
+        // height and folds into the single scrolling region in short mode
+        // (height < 560); the one action slot and the footer are always pinned.
+        egui::Panel::top("state_rail")
+            .frame(egui::Frame::new().fill(bg_2))
             .show(ui, |ui| {
-                self.state_rail(ui, boosting, narrow);
+                self.shell_rail(ui, &surface, short);
             });
-        // The 3 px left edge is painted after the frame, so it is never
-        // rounded or inset; `signal` only when actually boosting.
-        ui.painter().vline(
-            rail.response.rect.left() + 1.5,
-            rail.response.rect.y_range(),
-            egui::Stroke::new(3.0, rail_edge),
-        );
 
-        // Route card: fixed at normal height.
         if !short {
             egui::Panel::top("route_card")
                 .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
@@ -4480,11 +4228,12 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     bottom: S2 as i8,
                 }))
                 .show(ui, |ui| {
-                    self.route_card(ui, narrow);
+                    self.shell_route_card(ui, &surface, true);
                 });
         }
 
-        // Footer: pinned, with a hairline above it.
+        // Footer: pinned, one hairline above, a 40 px button row (24 px target
+        // tier in the compact mode below 480 px height).
         egui::Panel::bottom("footer")
             .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
                 left: S4 as i8,
@@ -4503,39 +4252,45 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     border_1,
                 );
                 ui.add_space(S2);
+                let button_h = if compact { HIT_MIN } else { CONTROL_H };
                 ui.horizontal_wrapped(|ui| {
                     if self.tray_available()
                         && std::env::var_os("LIGHTSPEED_KEEP_VISIBLE").is_none()
-                        && ui.button(i18n::t("window.hide_to_tray")).clicked()
+                        && ui
+                            .add(
+                                egui::Button::new(i18n::t("window.hide_to_tray"))
+                                    .min_size(egui::vec2(0.0, button_h)),
+                            )
+                            .clicked()
                     {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     }
-                    if ui.button(i18n::t("settings.title")).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(i18n::t("settings.title"))
+                                .min_size(egui::vec2(0.0, button_h)),
+                        )
+                        .clicked()
+                    {
                         self.show_settings = true;
                     }
-                    if ui.button(i18n::t("action.quit")).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(i18n::t("action.quit"))
+                                .min_size(egui::vec2(0.0, button_h)),
+                        )
+                        .clicked()
+                    {
+                        save_window_height(viewport.height());
                         self.quit.store(true, Ordering::SeqCst);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
             });
 
-        // Action bar: one slot, three gate-driven labels. It sits below the
-        // inputs it acts on - the relay and the game are choices, this is their
-        // outcome - and above the footer, where a thumb reaches it on a phone.
-        let has_relay = self.selected_entry().is_some();
-        let (action_label, action_ready) =
-            primary_action(self.is_admin, boosting, self.status.connected, has_relay);
-        // In Manual mode the action applies the server typed into the form, so it
-        // is only ready once that address parses.
-        let action_ready =
-            action_ready && (!self.game_manual || parse_server_addr(&self.server_input).is_some());
-        let action_kind = if boosting {
-            ActionKind::Danger
-        } else {
-            ActionKind::Accent
-        };
-        let action = egui::Panel::bottom("action_bar")
+        // Action bar: the one slot + its disabled-reason line, always above the
+        // footer and never off-screen.
+        egui::Panel::bottom("action_bar")
             .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
                 left: S4 as i8,
                 right: S4 as i8,
@@ -4544,24 +4299,13 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             }))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                action_button(ui, &action_label, action_kind, action_ready)
+                self.shell_action(ui, &surface);
             });
-        if action.inner.clicked() && action_ready {
-            if boosting {
-                self.stop_boost();
-            } else if !self.is_admin {
-                self.restart_elevated();
-            } else if self.game_manual {
-                // Manual mode's typed server is applied through the redirect path;
-                // it used to have its own Start button inside the form, which read
-                // as a second, redundant optimize control.
-                self.start_manual_redirect();
-            } else {
-                self.start_boost();
-            }
-        }
 
-        // Config: the only scrolling region.
+        // Config: the only scrolling region. At short height the route card
+        // folds in here (above the inputs) and the rail's sub-line moves in
+        // too, which is what keeps the fixed chrome at its measured height and
+        // the scrolling region at ≥181 px at the 420 minimum.
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
                 left: S4 as i8,
@@ -4570,50 +4314,52 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 bottom: S3 as i8,
             }))
             .show(ui, |ui| {
-                let out = egui::ScrollArea::vertical()
+                egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        // Cap and centre the column. `set_max_width` alone left the
-                        // child measuring against an unbounded width inside this
-                        // scroll area, so the ledger lost its label column; setting
-                        // the width explicitly gives the row layout a number to work
-                        // from.
-                        let target = ui.available_width().min(560.0);
-                        ui.vertical_centered(|ui| {
-                            ui.set_width(target);
-                            // Same surface, radius, border and padding as the map
-                            // card above: the pickers were bare fields on the panel
-                            // while the status sat on a card, which is the style
-                            // split the review called out.
-                            egui::Frame::new()
-                                .fill(bg_2)
-                                .stroke(egui::Stroke::new(1.0, border_1))
-                                .corner_radius(egui::CornerRadius::same(R_CARD))
-                                .inner_margin(egui::Margin::same(S3 as i8))
-                                .show(ui, |ui| {
-                                    ui.set_width((target - 2.0 * S3).max(200.0));
-                                    self.config_body(ui, narrow, short);
-                                });
-                        });
+                        ui.set_width(ui.available_width());
+                        // Error state: the taxonomy sentence + verbatim detail +
+                        // Open log file, at the top of the scroll region.
+                        if surface.word == RouteWord::Error {
+                            self.shell_error_panel(ui, &surface);
+                            ui.add_space(S2);
+                        }
+                        // Elevation / precondition notice (warn tone), above the
+                        // inputs it explains.
+                        if let Some(notice) = &surface.notice {
+                            let text = self.line_text(notice);
+                            notice_frame(ui, false, |ui| {
+                                ui.label(
+                                    egui::RichText::new(text)
+                                        .size(BODY)
+                                        .family(semibold())
+                                        .color(warn),
+                                );
+                            });
+                            ui.add_space(S2);
+                        }
+                        if short {
+                            if let Some(subline) = &surface.subline {
+                                ui.label(
+                                    egui::RichText::new(self.line_text(subline))
+                                        .size(BODY)
+                                        .color(text_2),
+                                );
+                                ui.add_space(S1);
+                            }
+                            self.shell_route_card(ui, &surface, !compact);
+                            ui.add_space(S2);
+                        }
+                        egui::Frame::new()
+                            .fill(bg_2)
+                            .stroke(egui::Stroke::new(1.0, border_1))
+                            .corner_radius(egui::CornerRadius::same(R_CARD))
+                            .inner_margin(egui::Margin::same(S3 as i8))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                self.config_body(ui, true, short);
+                            });
                     });
-
-                // Fixed width, content height: the window grows and shrinks with
-                // what is drawn, so nothing is hidden and nothing is left empty.
-                // The 8 px deadband keeps a one-pixel text re-wrap from becoming a
-                // resize loop.
-                //
-                // The growth stops at the bottom of the screen. Past it, the pinned
-                // action bar and footer were drawn off-screen - in Manual mode, the
-                // tallest form, that hid the only button that applies the typed
-                // server. Capped, this region scrolls instead, as the shell intends.
-                let chrome = (viewport.height() - out.inner_rect.height()).max(0.0);
-                let limit = window_height_limit(monitor_height, window_top);
-                let needed = (chrome + out.content_size.y + 2.0).clamp(MIN_WINDOW_HEIGHT, limit);
-                if (needed - viewport.height()).abs() > 8.0 {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                        320.0, needed,
-                    )));
-                }
             });
 
         // ── In-window sheets ─────────────────────────────────────────────

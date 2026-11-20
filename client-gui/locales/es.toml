@@ -12,6 +12,7 @@ stop_optimizing = "Detener la optimizacion"
 optimize_route = "Optimizar mi ruta"
 restart_admin_optimize = "Reiniciar como administrador para optimizar"
 manage = "Gestionar"
+starting = "Starting..."
 
 [route]
 target = "Objetivo"
@@ -70,15 +71,25 @@ start_manual = "Iniciar optimización (manual)"
 
 trace_route = "Ruta al servidor: {hops} saltos"
 trace_nearest = "salto que responde más cercano {ms} ms"
+connecting = "Connecting to {relay}"
+details = "Details"
+expected_path_label = "Expected path"
+holding = "Holding traffic until the route is chosen"
+holding_scan = "Holding - scanning for the game server"
+leg_relay = "relay leg"
+location_label = "Location"
+relayed_hold = "No traffic relayed yet"
+relaying_route = "Relaying via {relay} for {game}"
 
 [state]
 disconnected = "Desconectado"
 connected = "Conectado"
 optimizing = "Optimizando"
 holding = "Esperando"
-not_returning = "Sin ruta de vuelta"
+not_returning = "SIN RETORNO"
 error = "Error"
 idle = "Sin optimizar"
+connecting = "Connecting"
 
 [settings]
 relays = "Relays"
@@ -207,3 +218,21 @@ enjoying = "¿Te gusta?"
 star_github = "Danos una estrella en GitHub"
 version = "Versión {version}"
 blurb = "Libre y de código abierto, sin cuentas y sin telemetría que no puedas desactivar."
+
+
+[action_reason]
+missing_relay = "No relay selected yet"
+waiting_relay = "Waiting for the relay link"
+registration = "Registration is not ready"
+not_connected = "Not connected"
+
+[notice]
+needs_admin = "Restart LightSpeed as Administrator to optimize."
+
+[error]
+tunnel = "The tunnel could not be started"
+registration = "Registration failed"
+config = "The config file could not be read"
+game = "The game profile could not be loaded"
+io = "A file operation failed"
+unsupported = "Not supported on this system"

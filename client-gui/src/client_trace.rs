@@ -605,6 +605,7 @@ impl Default for GuiTrace {
 /// fact, but a city for an arbitrary hop needs hop-geolocation data the product
 /// does not license. An operator geofeed match names the operator - the same
 /// display-only provenance the route card uses - and never a city for a hop.
+#[allow(dead_code)] // S5b moves the trace into the core; W2-2 renders the seam's caption
 fn network_label(address: Ipv4Addr) -> Option<String> {
     match crate::server_place::place(address) {
         crate::server_place::Place::Cloud { provider, .. } => Some(provider.to_ascii_uppercase()),
@@ -621,6 +622,7 @@ fn network_label(address: Ipv4Addr) -> Option<String> {
 /// plus the provider/hosting address when the last responding hop's prefix is
 /// in one of the shipped indexes. No city is ever appended — that needs hop
 /// geolocation data, and this feature deliberately does not claim it.
+#[allow(dead_code)] // see network_label: the W2-2 shell renders the seam's caption
 pub fn caption(route: &ClientRoute) -> Option<String> {
     if route.hops == 0 {
         return None;

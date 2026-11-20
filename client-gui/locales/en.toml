@@ -146,13 +146,14 @@ version = "Version {version}"
 blurb = "Free and open source, with no accounts and no telemetry you cannot turn off."
 
 [state]
-disconnected = "Disconnected"
+disconnected = "Not connected"
 connected = "Connected"
 optimizing = "Optimizing"
 holding = "Holding"
 not_returning = "No return path"
 error = "Error"
 idle = "Not optimizing"
+connecting = "Connecting"
 
 [action]
 connect = "Connect"
@@ -165,6 +166,7 @@ stop_optimizing = "Stop optimizing"
 optimize_route = "Optimize my route"
 restart_admin_optimize = "Restart as Administrator to optimize"
 manage = "Manage"
+starting = "Starting..."
 
 [route]
 target = "Target"
@@ -222,3 +224,30 @@ port_fix_guide = "Port not detected - fix guide"
 start_manual = "Start optimizing (manual)"
 trace_route = "Route to server: {hops} hops"
 trace_nearest = "nearest responding hop {ms} ms"
+connecting = "Connecting to {relay}"
+details = "Details"
+expected_path_label = "Expected path"
+holding = "Holding traffic until the route is chosen"
+holding_scan = "Holding - scanning for the game server"
+leg_relay = "relay leg"
+location_label = "Location"
+relayed_hold = "No traffic relayed yet"
+relaying_route = "Relaying via {relay} for {game}"
+
+
+[action_reason]
+missing_relay = "No relay selected yet"
+waiting_relay = "Waiting for the relay link"
+registration = "Registration is not ready"
+not_connected = "Not connected"
+
+[notice]
+needs_admin = "Restart LightSpeed as Administrator to optimize."
+
+[error]
+tunnel = "The tunnel could not be started"
+registration = "Registration failed"
+config = "The config file could not be read"
+game = "The game profile could not be loaded"
+io = "A file operation failed"
+unsupported = "Not supported on this system"

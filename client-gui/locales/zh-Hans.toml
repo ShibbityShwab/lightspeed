@@ -12,6 +12,7 @@ stop_optimizing = "停止优化"
 optimize_route = "优化我的路由"
 restart_admin_optimize = "以管理员身份重启以优化"
 manage = "管理"
+starting = "Starting..."
 
 [route]
 target = "指定"
@@ -70,6 +71,15 @@ start_manual = "开始优化（手动）"
 
 trace_route = "Route to server: {hops} hops"
 trace_nearest = "nearest responding hop {ms} ms"
+connecting = "Connecting to {relay}"
+details = "Details"
+expected_path_label = "Expected path"
+holding = "Holding traffic until the route is chosen"
+holding_scan = "Holding - scanning for the game server"
+leg_relay = "relay leg"
+location_label = "Location"
+relayed_hold = "No traffic relayed yet"
+relaying_route = "Relaying via {relay} for {game}"
 
 [state]
 disconnected = "未连接"
@@ -79,6 +89,7 @@ holding = "Holding"
 not_returning = "No return path"
 error = "错误"
 idle = "未优化"
+connecting = "Connecting"
 
 [settings]
 relays = "Relays"
@@ -207,3 +218,21 @@ enjoying = "喜欢吗？"
 star_github = "在 GitHub 上加星"
 version = "版本 {version}"
 blurb = "免费开源，无需帐户，也没有无法关闭的遥测。"
+
+
+[action_reason]
+missing_relay = "No relay selected yet"
+waiting_relay = "Waiting for the relay link"
+registration = "Registration is not ready"
+not_connected = "Not connected"
+
+[notice]
+needs_admin = "Restart LightSpeed as Administrator to optimize."
+
+[error]
+tunnel = "The tunnel could not be started"
+registration = "Registration failed"
+config = "The config file could not be read"
+game = "The game profile could not be loaded"
+io = "A file operation failed"
+unsupported = "Not supported on this system"

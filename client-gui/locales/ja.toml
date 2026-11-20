@@ -12,6 +12,7 @@ stop_optimizing = "最適化を停止"
 optimize_route = "ルートを最適化"
 restart_admin_optimize = "最適化するには管理者として再起動"
 manage = "管理"
+starting = "Starting..."
 
 [route]
 target = "ターゲット"
@@ -70,6 +71,15 @@ start_manual = "最適化を開始（手動）"
 
 trace_route = "Route to server: {hops} hops"
 trace_nearest = "nearest responding hop {ms} ms"
+connecting = "Connecting to {relay}"
+details = "Details"
+expected_path_label = "Expected path"
+holding = "Holding traffic until the route is chosen"
+holding_scan = "Holding - scanning for the game server"
+leg_relay = "relay leg"
+location_label = "Location"
+relayed_hold = "No traffic relayed yet"
+relaying_route = "Relaying via {relay} for {game}"
 
 [state]
 disconnected = "未接続"
@@ -79,6 +89,7 @@ holding = "Holding"
 not_returning = "No return path"
 error = "エラー"
 idle = "最適化していません"
+connecting = "Connecting"
 
 [settings]
 relays = "Relays"
@@ -207,3 +218,21 @@ enjoying = "気に入りましたか？"
 star_github = "GitHub でスターを付ける"
 version = "バージョン {version}"
 blurb = "無料のオープンソース。アカウント不要で、オフにできないテレメトリーもありません。"
+
+
+[action_reason]
+missing_relay = "No relay selected yet"
+waiting_relay = "Waiting for the relay link"
+registration = "Registration is not ready"
+not_connected = "Not connected"
+
+[notice]
+needs_admin = "Restart LightSpeed as Administrator to optimize."
+
+[error]
+tunnel = "The tunnel could not be started"
+registration = "Registration failed"
+config = "The config file could not be read"
+game = "The game profile could not be loaded"
+io = "A file operation failed"
+unsupported = "Not supported on this system"

@@ -42,6 +42,7 @@ pub(super) fn parse_custom_port_range(s: &str) -> Option<(u16, u16)> {
 ///
 /// Returned upper-case because the action slot draws in caps; `to_uppercase`
 /// leaves a locale without letter case (ja, ko, zh-Hans) untouched.
+#[allow(dead_code)] // copy rule pinned by tests; the seam chooses the label in W2-2
 pub(super) fn primary_action(
     is_admin: bool,
     boosting: bool,
@@ -69,37 +70,50 @@ pub(super) enum ActionKind {
 }
 
 /// The one bright control: a custom-painted button so it never reads as
-/// default egui chrome. Accent uses `accent-deep` at rest (white ink on it is
-/// AA-safe) and brightens to `accent` on hover; Danger uses `bg-3` with a
-/// danger hairline and ink, tinting with `danger-soft` on hover.
+/// default egui chrome. Accent uses `accent_deep` at rest (white ink on it is
+/// AA-safe) and `accent` on hover; Danger uses `bg-3` with a danger hairline and
+/// ink, tinting with `danger-soft` on hover.
+///
+/// **Wrap, never shrink** (`design-system` §4.4): a label wider than the column
+/// wraps to two `EMPHASIS` lines in `ACTION_H_WRAPPED`; the old 9 px shrink
+/// floor is deleted. Focus paints a 2 px `accent_text` ring *outside* the rect
+/// and never changes the fill; a pressed cue is darker than hover. The control
+/// registers an AccessKit role/name through `widget_info` (the shipped action
+/// was a `Custom` element with an empty name — Blocker B1).
 pub(super) fn action_button(
     ui: &mut egui::Ui,
     text: &str,
     kind: ActionKind,
     ready: bool,
+    in_flight: bool,
 ) -> egui::Response {
-    // Shrink to fit rather than wrap: "RESTART AS ADMINISTRATOR TO OPTIMIZE" is
-    // wider than a 320 px window at the emphasis size, and a two-line button
-    // pushed the rest of the column down. The type scales down until the line
-    // fits, with a floor so it stays readable.
-    let inner_w = (ui.available_width() - 24.0).max(80.0);
-    let mut size = EMPHASIS;
-    let measured =
-        ui.painter()
-            .layout_no_wrap(text.to_owned(), egui::FontId::new(size, semibold()), text_1);
-    if measured.size().x > inner_w {
-        size = (EMPHASIS * inner_w / measured.size().x).max(9.0);
-    }
+    let inner_w = (ui.available_width() - 2.0 * S3).max(80.0);
+    let font = egui::FontId::new(EMPHASIS, semibold());
+    let galley = ui
+        .painter()
+        .layout(text.to_owned(), font.clone(), text_1, inner_w);
+    let lines = galley.rows.len().max(1);
+    let two_line = lines > 1;
+    let height = if two_line {
+        ACTION_H_WRAPPED + (lines.saturating_sub(2) as f32) * 19.0
+    } else {
+        ACTION_H
+    };
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), ACTION_H),
+        egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
     );
-    let hovered = response.hovered() && ready;
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ready && !in_flight, text));
+    let hovered = response.hovered() && ready && !in_flight;
+    let pressed = response.is_pointer_button_down_on() && ready && !in_flight;
 
     let (fill, stroke, ink) = match kind {
         ActionKind::Accent => {
-            if !ready {
+            if !ready || in_flight {
                 (bg_3, border_1, text_3)
+            } else if pressed {
+                (accent_deep, accent_deep, on_accent)
             } else if hovered {
                 (accent, accent, on_accent)
             } else {
@@ -107,9 +121,9 @@ pub(super) fn action_button(
             }
         }
         ActionKind::Danger => {
-            if !ready {
+            if !ready || in_flight {
                 (bg_3, border_1, text_3)
-            } else if hovered {
+            } else if pressed || hovered {
                 (danger_soft, danger, danger)
             } else {
                 (bg_3, danger, danger)
@@ -125,29 +139,20 @@ pub(super) fn action_button(
         egui::Stroke::new(1.0, stroke),
         egui::StrokeKind::Inside,
     );
-    if kind == ActionKind::Danger && ready {
+    if kind == ActionKind::Danger && ready && !in_flight {
         // A painted stop square: U+25A0 lives only in the icon font, so the
-        // mark is drawn rather than typed (DESIGN.md rule 1).
+        // mark is drawn rather than typed.
         let square = egui::Rect::from_center_size(
             egui::pos2(rect.left() + 22.0, rect.center().y),
             egui::vec2(10.0, 10.0),
         );
         painter.rect_filled(square, 0.0, danger);
     }
-    let galley = painter.layout_no_wrap(text.to_owned(), egui::FontId::new(size, semibold()), ink);
+    let galley = painter.layout(text.to_owned(), font.clone(), ink, inner_w);
     let pos = rect.center() - galley.size() / 2.0;
     painter.galley(pos, galley, ink);
+    focus_ring(ui, &response, R_BUTTON);
     response
-}
-
-/// One value in the label/value ledger.
-pub(super) enum LedgerValue {
-    /// Genuine data (addresses, ports, counters): JetBrains Mono.
-    Data(String),
-    /// A dim prose hint where there is no value to show.
-    Hint(Cow<'static, str>),
-    /// Data that is working as designed but degraded, in the warning colour.
-    Warn(Cow<'static, str>),
 }
 
 /// Whether the Game row should explain that nothing is selected yet, and which
@@ -173,6 +178,7 @@ pub(super) fn game_caption(
 ///
 /// The starving flag is decided by the shared [`RelayedPair`] rule (one source
 /// pair, one decision), never by this formatter.
+#[allow(dead_code)] // one-source-pair rule pinned by tests
 pub(super) fn relayed_row_text(sent: u64, returned: u64) -> (String, bool) {
     let text = i18n::t_with(
         "route.sent_returned",
@@ -185,28 +191,4 @@ pub(super) fn relayed_row_text(sent: u64, returned: u64) -> (String, bool) {
         text,
         lightspeed_client::app::dto::RelayedPair { sent, returned }.starving(),
     )
-}
-
-/// The ledger's label cell: caption ink, fixed width, left-aligned.
-pub(super) fn ledger_label(ui: &mut egui::Ui, width: f32, text: &str) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, ROW_H), egui::Sense::hover());
-    ui.painter().text(
-        rect.left_center(),
-        egui::Align2::LEFT_CENTER,
-        text,
-        egui::FontId::proportional(CAPTION),
-        text_3,
-    );
-}
-
-/// A config field's label cell: `label` ink, fixed width at the wide breakpoint.
-pub(super) fn field_label(ui: &mut egui::Ui, width: f32, text: &str) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, CONTROL_H), egui::Sense::hover());
-    ui.painter().text(
-        rect.left_center(),
-        egui::Align2::LEFT_CENTER,
-        text,
-        egui::FontId::new(LABEL, semibold()),
-        text_1,
-    );
 }

@@ -509,6 +509,7 @@ pub(super) fn warning_is_about(
 ///
 /// The relay faults keep the same sentence; an injection failure is the local
 /// path's fault, so it must not blame the relay.
+#[allow(dead_code)] // the seam owns the warning copy in W2-2; kept for the S4 move
 pub(super) fn warning_message_key(fault: RelayReplyFault) -> &'static str {
     match fault {
         RelayReplyFault::InjectionFailed => "route.injection_failed_warning",

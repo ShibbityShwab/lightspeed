@@ -148,31 +148,31 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
 /// S0. A new source file must be added deliberately, with a measured budget.
 const MODULE_BUDGET: &[(&str, usize)] = &[
-    ("client-gui/src/app/choice.rs", 147),
+    ("client-gui/src/app/choice.rs", 151),
     ("client-gui/src/app/editor.rs", 243),
     ("client-gui/src/app/games.rs", 105),
-    ("client-gui/src/app/ledger.rs", 212),
+    ("client-gui/src/app/ledger.rs", 194),
     ("client-gui/src/app/picker.rs", 98),
     ("client-gui/src/app/presence.rs", 482),
     ("client-gui/src/app/relay_choice.rs", 144),
     // W2-1b (S3a): the pure presentation seam + its contract fixtures; grown by
     // the W2-1c QA fixes (R1-R15) inside the same slice.
     ("client-gui/src/app/route_surface.rs", 1831),
-    ("client-gui/src/app/tests.rs", 3094),
-    ("client-gui/src/app/theme.rs", 233),
-    ("client-gui/src/app/watchdog.rs", 718),
-    ("client-gui/src/app/widgets.rs", 484),
-    ("client-gui/src/app/window.rs", 174),
+    ("client-gui/src/app/tests.rs", 3044),
+    ("client-gui/src/app/theme.rs", 247),
+    ("client-gui/src/app/watchdog.rs", 719),
+    ("client-gui/src/app/widgets.rs", 553),
+    ("client-gui/src/app/window.rs", 213),
     // W2-1b: +315 lines of DTO assembly/getters. It is the one file scheduled to
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
-    ("client-gui/src/app.rs", 4650),
-    ("client-gui/src/client_trace.rs", 1326),
+    ("client-gui/src/app.rs", 4396),
+    ("client-gui/src/client_trace.rs", 1328),
     // W2-1 S1: the config model + I/O + its tests moved to
     // `lightspeed_client::app::config`; the GUI keeps this re-export shell and
     // `paths::config_file`. The budget dropped 528 -> 18 with the move.
     ("client-gui/src/config.rs", 18),
     ("client-gui/src/crash.rs", 210),
-    ("client-gui/src/design.rs", 264),
+    ("client-gui/src/design.rs", 362),
     ("client-gui/src/detection_provider.rs", 184),
     // W2-1 S2: the discovery/probe/measurement rules and 20 of their tests
     // moved to `lightspeed_client::app::discovery`; only the one-shot `mpsc`
@@ -180,7 +180,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/discovery.rs", 78),
     ("client-gui/src/geo.rs", 108),
     ("client-gui/src/geo_countries.rs", 243),
-    ("client-gui/src/globe.rs", 197),
+    ("client-gui/src/globe.rs", 198),
     ("client-gui/src/i18n.rs", 506),
     ("client-gui/src/main.rs", 258),
     ("client-gui/src/paths.rs", 81),

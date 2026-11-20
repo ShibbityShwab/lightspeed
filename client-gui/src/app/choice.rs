@@ -80,6 +80,7 @@ pub(super) fn ranking_state_label(
 /// accepted fail-open - the triangle floor could not be checked - is still
 /// shown, but its label says `measured, unvalidated` instead of plainly
 /// `measured`: the figure is the relay's measurement, the validation is absent.
+#[allow(dead_code)]
 pub(super) fn relay_measured_leg_text(report: &lightspeed_client::ServerLegReport) -> String {
     let ms = format!("{:.0}", f64::from(report.median_us) / 1000.0);
     let samples = report.samples.to_string();
@@ -94,6 +95,7 @@ pub(super) fn relay_measured_leg_text(report: &lightspeed_client::ServerLegRepor
 
 /// The `Relay→server (app)` value: the passive median in ms and its sample
 /// count, never the age or a blended figure.
+#[allow(dead_code)]
 pub(super) fn relay_measured_app_leg_text(
     report: &lightspeed_client::ServerLegAppReport,
 ) -> String {
@@ -106,6 +108,7 @@ pub(super) fn relay_measured_app_leg_text(
 }
 
 /// The `Route` row for a relay-measured traceroute: hops and last router RTT.
+#[allow(dead_code)]
 pub(super) fn relay_measured_trace_text(report: &lightspeed_client::ServerTraceReport) -> String {
     let hops = report.hops.to_string();
     match report.last_hop_rtt_us {
@@ -122,6 +125,7 @@ pub(super) fn relay_measured_trace_text(report: &lightspeed_client::ServerTraceR
 
 /// The `Server leg` row: the one measurement the two measured legs support,
 /// `L + S`. The arithmetic moved to the shared crate; only the copy stays here.
+#[allow(dead_code)]
 pub(super) fn expected_path_text(client_leg_ms: f64, server_leg_us: u32) -> Option<String> {
     let total_ms = lightspeed_client::app::dto::expected_path_ms(client_leg_ms, server_leg_us)?;
     let ms = format!("{total_ms:.0}");

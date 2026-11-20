@@ -882,11 +882,11 @@ use super::{
     game_editor_body, game_pick_rows, games, monitor_local_top, pair_relay_legs, picker_status,
     ping_for_server, primary_action, process_picker, proxy_index_for, rank_without_destination,
     ranking_state_label, refreshed_server_ping, relay_cannot_beat_direct, relay_health_verdict,
-    route_location_lines, same_relay_endpoint, save_user_profiles, scored_for_relay,
-    server_from_fields, server_leg_state, should_apply_race, should_race, switch_is_safe,
-    target_for_pick, target_front_door, target_summary, validate_draft, window_height_limit,
-    CloseDecision, EditorActions, GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus,
-    ProcessListState, ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ServerPing,
+    same_relay_endpoint, save_user_profiles, scored_for_relay, server_from_fields,
+    server_leg_state, should_apply_race, should_race, switch_is_safe, target_for_pick,
+    target_front_door, target_summary, validate_draft, window_height_limit, CloseDecision,
+    EditorActions, GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState,
+    ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ServerPing,
     ShadowWindowCounters, TargetRowAction, MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT,
     PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE, SERVER_PING_FRESH_SECS, TITLE_BAR_ALLOWANCE,
 };
@@ -975,97 +975,6 @@ fn a_localized_frame_draws_the_translated_string() {
     assert_ne!(german, english, "both languages drew identical frames");
 }
 
-/// The route card must say *why* a hosting-range server has no location: the
-/// caption alone ("hosting network — unknown") leaves the reader guessing, and
-/// the panel's no-gate deliverable is the second line. A backed answer (cloud
-/// region, country estimate) must not carry the caveat.
-#[test]
-fn a_hosting_place_gets_the_free_database_honesty_hint() {
-    use crate::server_place::Place;
-
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(Some("en"));
-
-    let hosting = route_location_lines(Place::Hosting {
-        asn: 199524,
-        name: "G-Core Labs",
-    });
-    assert_eq!(
-        hosting.caption, "Server location: hosting network — unknown",
-        "the caption still names the hosting network"
-    );
-    assert_eq!(hosting.detail.as_deref(), Some("AS199524 · G-Core Labs"));
-    assert_eq!(
-        hosting.hint.as_deref(),
-        Some("Free IP databases are unreliable for hosting ranges."),
-        "a hosting range must carry the honesty caption"
-    );
-
-    let unknown = route_location_lines(Place::Unknown);
-    assert_eq!(unknown.caption, "Server location: unknown");
-    assert_eq!(
-        unknown.hint.as_deref(),
-        Some("Free IP databases are unreliable for hosting ranges."),
-        "an unplaceable server carries the same explanation"
-    );
-
-    let geofeed = route_location_lines(Place::Geofeed {
-        provider: "G-Core",
-        country: "US",
-        region: Some("US-VA"),
-        city: Some("Manassas"),
-        source: "https://geofeed.gcore.lu/IP-Range.csv",
-        as_of: "2026-11-19",
-    });
-    assert_eq!(
-        geofeed.caption, "Server location: operator geofeed — Manassas, US-VA",
-        "the operator's place is stated in the caption"
-    );
-    assert_eq!(
-        geofeed.detail.as_deref(),
-        Some("(G-Core, as-of 2026-11-19)"),
-        "the operator and the feed's as-of date are the detail line"
-    );
-    assert_eq!(
-        geofeed.note.as_deref(),
-        Some("Shown as-is from the operator's published geofeed."),
-        "an operator geofeed is presented as-is"
-    );
-    assert_eq!(
-        geofeed.source.as_deref(),
-        Some("https://geofeed.gcore.lu/IP-Range.csv"),
-        "the feed URL is kept as the hover provenance"
-    );
-    assert_eq!(
-        geofeed.hint, None,
-        "an operator geofeed is not a failed lookup, so it must not carry the \
-         free-database caveat"
-    );
-
-    let cloud = route_location_lines(Place::Cloud {
-        provider: "aws",
-        region: "us-east-1",
-        at: Some((39.0, -77.5)),
-    });
-    assert_eq!(cloud.hint, None, "a provider region is backed evidence");
-    assert_eq!(cloud.detail.as_deref(), Some("AWS · us-east-1"));
-
-    let country = route_location_lines(Place::Country {
-        code: "US",
-        at: (39.0, -77.5),
-    });
-    assert_eq!(
-        country.hint, None,
-        "a country estimate is already labelled as an estimate"
-    );
-    assert_eq!(
-        country.caption,
-        "Server location: country-level estimate from IP"
-    );
-
-    crate::i18n::set_language(None);
-}
-
 /// Every character in every catalog must be drawable by the families the app
 /// installs.
 ///
@@ -1116,6 +1025,47 @@ fn every_catalog_glyph_is_drawable_in_every_family() {
             }
         }
     }
+    // The language picker prints each locale's own name; those strings are not
+    // in a catalog, so a face that cannot draw `ũ`/`简体中文` would still fail in
+    // the Settings sheet. Assert them with the same chains. (`·`, `→`, `…` are
+    // the only non-ASCII marks the shell types; every other mark is painted.)
+    //
+    // Known bundled-subset gaps (recorded, not hidden): the Noto Sans KR/SC
+    // faces are subset to the catalog characters, so the picker's own names use
+    // three codepoints no installed subset carries. Regenerating those subsets
+    // is a font-asset change (design-system/infra, Q19); the exemption below
+    // fails if the gap ever becomes drawable, so it cannot outlive the fix.
+    const KNOWN_SUBSET_GAPS: &[char] = &['국', '简', '体'];
+    let mut exempted: Vec<char> = Vec::new();
+    for (family, chain) in &defs.families {
+        for locale in crate::i18n::LOCALES {
+            for ch in locale.native_name.chars().filter(|ch| !ch.is_ascii()) {
+                let drawable = chain.iter().any(|name| {
+                    faces
+                        .iter()
+                        .find(|(face_name, _)| face_name == name)
+                        .is_some_and(|(_, face)| face.glyph_id(ch).0 != 0)
+                });
+                if !drawable {
+                    if KNOWN_SUBSET_GAPS.contains(&ch) {
+                        exempted.push(ch);
+                    } else {
+                        undrawable.push(format!(
+                            "{family:?} / native_name {}: U+{:04X} {ch}",
+                            locale.tag, ch as u32
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for gap in KNOWN_SUBSET_GAPS {
+        assert!(
+            exempted.contains(gap),
+            "the {gap:?} subset gap is fixed: drop it from KNOWN_SUBSET_GAPS"
+        );
+    }
+
     undrawable.sort();
     undrawable.dedup();
     assert!(

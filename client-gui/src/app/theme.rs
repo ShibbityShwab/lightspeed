@@ -147,9 +147,17 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     v.warn_fg_color = warn;
     v.error_fg_color = danger;
     v.selection.bg_fill = accent_soft;
-    v.selection.stroke = egui::Stroke::new(1.0, accent_line);
+    // Opaque accent ink: the shipped translucent stroke measured 1.22:1 (AA
+    // fail); `accent_text` opaque reads 7.51:1 on `bg_2` (`design-system` §3.4).
+    v.selection.stroke = egui::Stroke::new(1.0, accent_text);
+    v.hyperlink_color = accent_text;
+    v.warn_fg_color = warn;
+    v.error_fg_color = danger;
 
     let line = egui::Stroke::new(1.0, border_1);
+    // A control's identifying boundary is `border_control` (3:1 on every plane,
+    // WCAG 1.4.11); decorative hairlines stay `border_1`.
+    let control_line = egui::Stroke::new(1.0, border_control);
     v.widgets.noninteractive.bg_fill = bg_2;
     v.widgets.noninteractive.weak_bg_fill = bg_2;
     v.widgets.noninteractive.bg_stroke = line;
@@ -158,25 +166,31 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
 
     v.widgets.inactive.bg_fill = bg_3;
     v.widgets.inactive.weak_bg_fill = bg_3;
-    v.widgets.inactive.bg_stroke = line;
+    v.widgets.inactive.bg_stroke = control_line;
     v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text_1);
     v.widgets.inactive.corner_radius = egui::CornerRadius::same(R_CONTROL);
 
     v.widgets.hovered.bg_fill = bg_4;
     v.widgets.hovered.weak_bg_fill = bg_4;
+    // Hover is a transient, non-identifying cue: the boundary does not have to
+    // make a 1.4.11 claim, but the control keeps its identifying `bg_4` step.
     v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, border_2);
     v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text_1);
     v.widgets.hovered.corner_radius = egui::CornerRadius::same(R_CONTROL);
 
-    v.widgets.active.bg_fill = accent_deep;
-    v.widgets.active.weak_bg_fill = accent_deep;
-    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, accent);
-    v.widgets.active.fg_stroke = egui::Stroke::new(1.0, on_accent);
+    // Pressed must differ from hover by a cue that is *not* the action fill:
+    // egui's default maps focus to this state, so using `accent_deep` here made
+    // a focused control read as pressed and stole the one-bright-control canon
+    // (`design-system` §6.1 rule 1). Pressed = highest plane + hairline.
+    v.widgets.active.bg_fill = bg_3;
+    v.widgets.active.weak_bg_fill = bg_3;
+    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, text_3);
+    v.widgets.active.fg_stroke = egui::Stroke::new(1.0, text_1);
     v.widgets.active.corner_radius = egui::CornerRadius::same(R_CONTROL);
 
     v.widgets.open.bg_fill = bg_3;
     v.widgets.open.weak_bg_fill = bg_3;
-    v.widgets.open.bg_stroke = line;
+    v.widgets.open.bg_stroke = control_line;
     v.widgets.open.fg_stroke = egui::Stroke::new(1.0, text_1);
     v.widgets.open.corner_radius = egui::CornerRadius::same(R_CONTROL);
 

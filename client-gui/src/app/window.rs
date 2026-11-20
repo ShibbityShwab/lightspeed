@@ -112,6 +112,45 @@ pub(super) fn window_height_limit(monitor_height: Option<f32>, window_top: Optio
     (monitor_height - SCREEN_BOTTOM_RESERVE - top).clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT)
 }
 
+/// The GUI-owned window geometry state (presentation state, not settings).
+///
+/// The height belongs to the player, not to the status snapshot: W2-2 removed
+/// the content-driven auto-resize and remembers the last height across
+/// launches. It is kept beside — not inside — the shared `config.toml` because
+/// the core schema has no UI-geometry fields and W2-2's write scope excludes
+/// the core crate.
+const WINDOW_STATE_FILE: &str = "ui-window-state.toml";
+
+/// The remembered window height, clamped to the launched window's bounds.
+pub(super) fn load_window_height(monitor_height: Option<f32>, window_top: Option<f32>) -> f32 {
+    let limit = window_height_limit(monitor_height, window_top);
+    let saved = std::fs::read_to_string(crate::paths::config_dir().join(WINDOW_STATE_FILE))
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.trim().strip_prefix("height =").map(str::trim))
+                .and_then(|value| value.parse::<f32>().ok())
+        });
+    saved
+        .filter(|height| height.is_finite())
+        .unwrap_or(MIN_WINDOW_HEIGHT)
+        .clamp(MIN_WINDOW_HEIGHT, limit)
+}
+
+/// Persist the window height for the next launch. Failures are ignored: a
+/// read-only config directory must not break the window.
+pub(super) fn save_window_height(height: f32) {
+    if !height.is_finite() {
+        return;
+    }
+    let dir = crate::paths::config_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(
+        dir.join(WINDOW_STATE_FILE),
+        format!("height = {height:.0}\n"),
+    );
+}
+
 /// Whether discovery should start a latency race instead of connecting to the
 /// first relay: only when auto-select is on, disconnected, and relays exist.
 pub fn should_race(auto_select: bool, connected: bool, proxy_count: usize) -> bool {
