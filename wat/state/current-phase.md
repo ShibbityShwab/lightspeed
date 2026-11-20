@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (S6 COMPLETE) - WF-081: Reset fixed; full S6 QA queued; W2-4a next
+
+**Agent:** lead + `rust-dev-2` (task-58), `qa-engineer-2` (task-59).
+
+- **S6d committed (`f46972c`).** Reset-to-defaults is now a real reset: the canonical `lightspeed.toml` records an **explicit-defaults marker** (`[meta] legacy_import = false`) that `load_unified` honours by **skipping the legacy import entirely** (the legacy file is not even read), while only an explicit boolean `false` suppresses it (missing/`true`/malformed keeps ordinary precedence, four-case test). Reset writes typed defaults + marker; `save_canonical` **preserves** an existing marker so later settings saves can't silently re-enable the legacy import; the legacy file stays byte-identical (Q10). Tests: config suite 28/28, cli_compat **11/11** (+2 CLI reset fixtures), and the four frozen goldens hash-identical to HEAD. CHANGELOG + spec errata updated; guard G2 +5, G3 `config.rs` 24. Gate **1981 / 0 / 7**, GUI **155 / 0 / 0**.
+- **S6 is complete** across four units: frozen CLI goldens (before any path change), `SessionCore` + `--check`/`--status` adoption, update rules/capability DTO/presence canon, G1 item-level 42-row adapter map with the four-round mutation proof (including a golden-caught text drift), the documented live-mode adapters (owner decision + post-W2 task-57), and unified config with a real reset.
+- **Full-S6 QA queued** (task-59): whole-slice verification (goldens hash/seed, guards/mutation, SessionCore ordering, config matrix, reset semantics, adapter docs, scope) + independent gate. **On ACCEPT: W2-4a (task-53)** — trace provider suffix + dead-code retirement — **then W2-4 parity**, which closes the objective.
+- **Named unverified:** no GUI launch for the config/reset change (logic covered via the shared loader/writer, call site one line); Linux/macOS CI; the three live modes deliberately unchanged; post-W2 task-57 unscheduled. Commits `f46972c`; branch 43 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts on `f46972c`; reset marker tests; golden hashes; no forbidden diffs. **Not verified:** full S6 by QA (task-59 in progress); GUI launch; Linux/macOS CI.
+**Open:** QA S6 → W2-4a → W2-4 parity; post-W2 task-57 unscheduled.
+
 ### 2026-11-20 (S6c landed, S6d) - WF-081: config unified; Reset-to-defaults fix opened; full S6 QA next
 
 **Agent:** lead + `rust-dev-2` (task-55), `rust-dev-2` (task-58 start).
