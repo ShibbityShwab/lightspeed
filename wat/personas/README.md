@@ -4,7 +4,7 @@
 > Canonical copy: this directory. `wat/personas/personas.json` is the
 > machine-readable roster (with `personas.schema.json`) so tooling and checks can
 > read it without parsing prose.
-> Last updated: 2026-11-16
+> Last updated: 2026-11-19
 
 ## What a persona is (and is not)
 
@@ -29,6 +29,9 @@ says who *should*, and the write scope on the shared task says who *is*.
 | `sec-ops` | SecOps | threat model, `deny.toml`, advisories, auth/anti-abuse review | `rust-dev`, `dev-ops` |
 | `dev-ops` | DevOps | `.github/workflows/`, `dist/`, `packaging/`, releases | `infra-dev`, `qa-engineer` |
 | `interface-designer` | InterfaceDesigner | `client-gui/` surfaces, `docs/design/interface.md` | `rust-dev` |
+| `ux-lead` | UXLead | UX research, information architecture, flows, usability, microcopy (`docs/design/gui-ux-*.md`) | `interface-designer`, `qa-engineer` |
+| `design-system` | DesignSystem | design tokens, type, colour, motion, component contracts, a11y floors (`docs/design/design-system-*.md`, `client-gui/src/design.rs`) | `interface-designer`, `desktop-platform` |
+| `desktop-platform` | DesktopPlatform | cross-platform native conventions and parity (`docs/design/cross-platform-*.md`, `client-gui/src/platform/`) | `interface-designer`, `dev-ops` |
 
 Slugs are the subagent `name` and the task `owner`. They are lowercase with
 hyphens because that is what `subagent` accepts. A second instance of the same

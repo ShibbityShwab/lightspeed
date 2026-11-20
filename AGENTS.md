@@ -5,7 +5,7 @@
 > optimizer for multiplayer games: a Rust workspace (`client/`, `proxy/`,
 > `protocol/`, `client-gui/`) plus `infra/`, `web/`, `dist/`, `packaging/` and
 > GitHub Actions.
-> Last updated: 2026-11-17
+> Last updated: 2026-11-19
 
 ## Start every session here
 
@@ -31,13 +31,15 @@ DSH automatically. Load the one that matches the job:
 | `lightspeed-team` | multi-agent work, personas, Agent Teams, parallel tasks |
 | `lightspeed-windows` | running commands, builds, tests or the GUI on this host |
 | `lightspeed-verify` | before claiming anything is verified; evidence rules |
+| `lightspeed-gui-design` | designing, auditing or implementing the GUI; 2026 desktop floor, state/token canon, egui traps, and the GUI-as-wrapper rule |
 
 ## Team mode and personas
 
 Personas are delegation contracts in `wat/personas/` (roster:
-`wat/personas/README.md`). There are eight: `architect`, `rust-dev`,
+`wat/personas/README.md`). There are eleven: `architect`, `rust-dev`,
 `infra-dev`, `net-eng`, `qa-engineer`, `sec-ops`, `dev-ops`,
-`interface-designer`.
+`interface-designer`, and the UI/UX specialists `ux-lead`, `design-system`,
+`desktop-platform`.
 
 Multi-persona work runs through **Agent Teams** — enable *Use Agent Teams* in the
 root conversation's model & reasoning menu (per-Session, off by default). Then:

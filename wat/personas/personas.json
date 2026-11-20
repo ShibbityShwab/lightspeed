@@ -1,7 +1,7 @@
 {
   "$schema": "./personas.schema.json",
   "version": 1,
-  "updated": "2026-11-16",
+  "updated": "2026-11-19",
   "lead": {
     "slug": "lead",
     "display": "Lead",
@@ -72,6 +72,30 @@
       "owns": ["client-gui/src/app.rs", "docs/design/"],
       "when_to_use": "Any client-gui surface, the state contract, wording, layout, screenshot-verified UX.",
       "pairs_with": ["rust-dev"]
+    },
+    {
+      "slug": "ux-lead",
+      "display": "UXLead",
+      "file": "ux-lead.md",
+      "owns": ["docs/design/gui-ux-audit-2026.md", "wat/evidence/"],
+      "when_to_use": "User research, jobs-to-be-done, task flows, information architecture, usability, microcopy, and the flows behind a refresh.",
+      "pairs_with": ["interface-designer", "qa-engineer"]
+    },
+    {
+      "slug": "design-system",
+      "display": "DesignSystem",
+      "file": "design-system.md",
+      "owns": ["docs/design/design-system-2026.md", "client-gui/src/design.rs"],
+      "when_to_use": "Tokens, type, colour, spacing, motion, component contracts, accessibility floors, or a second style system trying to appear.",
+      "pairs_with": ["interface-designer", "desktop-platform"]
+    },
+    {
+      "slug": "desktop-platform",
+      "display": "DesktopPlatform",
+      "file": "desktop-platform.md",
+      "owns": ["docs/design/cross-platform-2026.md", "client-gui/src/platform/"],
+      "when_to_use": "Cross-platform native conventions, tray/menu, window chrome, shortcuts, DPI, autostart, updater UX, admin/elevation semantics, or a parity claim that needs evidence.",
+      "pairs_with": ["interface-designer", "dev-ops"]
     }
   ],
   "task_conventions": {
