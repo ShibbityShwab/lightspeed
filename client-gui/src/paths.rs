@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use lightspeed_client::app::config::ConfigPaths;
+
 /// Per-machine GUI data directory (`%LOCALAPPDATA%\Lightspeed` on Windows,
 /// `~/.local/share/Lightspeed` elsewhere). Holds the trace log and the
 /// single-instance lock file.
@@ -37,9 +39,15 @@ pub fn config_dir() -> PathBuf {
     dirs::config_dir().unwrap_or_default().join("light-speed")
 }
 
-/// `config.toml` - persisted proxy list + selected relay.
-pub fn config_file() -> PathBuf {
-    config_dir().join("config.toml")
+/// The shared config files (WF-081 W2-3b S6c / owner Q10).
+///
+/// The canonical file (`lightspeed.toml`, the same name the CLI uses) is the one
+/// the GUI reads and writes; the pre-unification GUI file (`config.toml`) is
+/// imported **read-only** and never written, renamed or deleted. Both live in the
+/// per-user config directory above.
+pub fn config_paths() -> ConfigPaths {
+    let dir = config_dir();
+    ConfigPaths::in_dir(&dir)
 }
 
 /// Open `path` in the OS default handler (Explorer, Finder, xdg-open).
@@ -62,7 +70,7 @@ pub fn open_in_os(path: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_file, crash_log, log_file};
+    use super::{config_paths, crash_log, log_file};
 
     #[test]
     fn log_file_lives_under_the_data_dir() {
@@ -70,8 +78,10 @@ mod tests {
     }
 
     #[test]
-    fn config_file_lives_under_the_config_dir() {
-        assert!(config_file().ends_with("light-speed/config.toml"));
+    fn config_paths_are_canonical_and_legacy_in_the_config_dir() {
+        let paths = config_paths();
+        assert!(paths.canonical.ends_with("light-speed/lightspeed.toml"));
+        assert!(paths.legacy.ends_with("light-speed/config.toml"));
     }
 
     #[test]

@@ -296,6 +296,14 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "SessionCore",
     "install_core_seams",
     "is_clean_start",
+    // W2-3b S6c — the canonical/legacy config reader (Q10). The GUI names the
+    // pair and the two entry points; it must not re-implement the merge.
+    "ConfigPaths",
+    "load_unified",
+    "load_unified_in_dir",
+    "save_canonical",
+    "CANONICAL_FILE_NAME",
+    "LEGACY_FILE_NAME",
 ];
 
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
@@ -326,7 +334,8 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // W2-1 S1: the config model + I/O + its tests moved to
     // `lightspeed_client::app::config`; the GUI keeps this re-export shell and
     // `paths::config_file`. The budget dropped 528 -> 18 with the move.
-    ("client-gui/src/config.rs", 18),
+    // W2-3b S6c: the shell re-exports the canonical/legacy reader too. 18 -> 23.
+    ("client-gui/src/config.rs", 23),
     ("client-gui/src/crash.rs", 210),
     ("client-gui/src/design.rs", 362),
     // W2-1 S2: the discovery/probe/measurement rules and 20 of their tests
@@ -336,7 +345,8 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/globe.rs", 198),
     ("client-gui/src/i18n.rs", 506),
     ("client-gui/src/main.rs", 250),
-    ("client-gui/src/paths.rs", 81),
+    // W2-3b S6c: `config_file` becomes the canonical/legacy path pair. 81 -> 91.
+    ("client-gui/src/paths.rs", 91),
     ("client-gui/src/platform/linux.rs", 99),
     ("client-gui/src/platform/macos.rs", 90),
     ("client-gui/src/platform/mod.rs", 138),

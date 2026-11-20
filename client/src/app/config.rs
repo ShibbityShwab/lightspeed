@@ -18,6 +18,17 @@
 //! 2026-11-20. The parser ignores unknown keys (deliberately, so the retired key
 //! is tolerated on read) and the serializer never writes it again. A test pins
 //! both directions.
+//!
+//! ## Canonical and legacy files (S6c / owner Q10)
+//!
+//! The canonical per-user file is `lightspeed.toml` in the config directory both
+//! front ends resolve ([`ConfigPaths`]). The GUI's pre-unification file
+//! `config.toml` is imported **read-only**: it is never written, renamed or
+//! deleted, the canonical values win on a per-key basis, and it only fills keys
+//! the canonical file does not set. [`load_unified`] is the one reader both front
+//! ends use; [`save_canonical`] is the only writer. `retry_after_fallback` keeps
+//! its tolerated-on-read / never-written contract across the merge (the key sits
+//! in the merged table only as an ignored unknown).
 
 use std::net::SocketAddrV4;
 use std::path::{Path, PathBuf};
@@ -209,10 +220,158 @@ pub fn load_or_default(path: &Path) -> LoadedAppConfig {
     }
 }
 
+// ── Canonical + legacy config files (WF-081 W2-3b S6c / boundary S5) ───────
+//
+// One canonical per-user file is read/written through this model; the GUI's
+// pre-unification file is imported **read-only** (Q10), never deleted and never
+// mutated. The merge is per key: canonical wins, legacy fills the unset keys.
+
+/// The canonical per-user config file name.
+///
+/// It is the CLI's native file name in the per-OS config directory both front
+/// ends resolve (`crate::paths::config_dir`), so "one config file" is literally
+/// one name in one directory.
+pub const CANONICAL_FILE_NAME: &str = "lightspeed.toml";
+
+/// The GUI's pre-unification file name (legacy, read-only import).
+pub const LEGACY_FILE_NAME: &str = "config.toml";
+
+/// The pair of config files a front end reads: the canonical file it writes and
+/// the legacy GUI file it only imports.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigPaths {
+    /// Canonical file: written by the GUI, read first, wins on conflicts.
+    pub canonical: PathBuf,
+    /// Legacy GUI file: imported read-only; never written, never deleted.
+    pub legacy: PathBuf,
+}
+
+impl ConfigPaths {
+    /// The pair inside one per-user config directory.
+    pub fn in_dir(dir: &Path) -> Self {
+        Self {
+            canonical: dir.join(CANONICAL_FILE_NAME),
+            legacy: dir.join(LEGACY_FILE_NAME),
+        }
+    }
+}
+
+/// One config file as read by the tolerant loader, before any merge.
+enum FileTable {
+    Missing,
+    Parsed(Table),
+    Unusable(String),
+}
+
+fn read_table(path: &Path) -> FileTable {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match toml::from_str::<Table>(&text) {
+            Ok(table) => FileTable::Parsed(table),
+            Err(error) => FileTable::Unusable(error.to_string()),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => FileTable::Missing,
+        Err(error) => FileTable::Unusable(error.to_string()),
+    }
+}
+
+/// Load the canonical config, importing the legacy GUI file read-only (Q10).
+///
+/// Precedence is per key: the legacy file is the base table, the canonical table
+/// overrides it, and defaults apply only to keys neither file carries — exactly
+/// "canonical wins, legacy fills unset". Recovery rules:
+///
+/// * neither file exists → defaults, no recovery (a first run is not an error);
+/// * canonical exists but is unusable → defaults + [`ConfigRecovery`] naming the
+///   canonical file; the legacy file is **not** mixed in, so a broken canonical
+///   file can never be silently half-applied;
+/// * legacy unusable → logged and ignored (it is a retired, read-only migration
+///   source and must never block startup);
+/// * legacy alone → its values load as the config (the one-time migration read).
+///
+/// This function only ever **reads** the legacy file; no function in this module
+/// writes, renames or deletes it.
+pub fn load_unified(paths: &ConfigPaths) -> LoadedAppConfig {
+    let canonical_table = match read_table(&paths.canonical) {
+        FileTable::Missing => None,
+        FileTable::Parsed(table) => Some(table),
+        FileTable::Unusable(reason) => {
+            tracing::warn!(
+                "Ignoring unusable canonical config {}: {reason}",
+                paths.canonical.display()
+            );
+            return LoadedAppConfig {
+                config: AppConfig::default(),
+                recovery: Some(ConfigRecovery {
+                    path: paths.canonical.clone(),
+                    reason,
+                }),
+            };
+        }
+    };
+    let legacy_table = match read_table(&paths.legacy) {
+        FileTable::Missing => None,
+        FileTable::Parsed(table) => Some(table),
+        FileTable::Unusable(reason) => {
+            tracing::warn!(
+                "Ignoring unusable legacy config {}: {reason}",
+                paths.legacy.display()
+            );
+            None
+        }
+    };
+    let merged = match (canonical_table, legacy_table) {
+        (None, None) => {
+            return LoadedAppConfig {
+                config: AppConfig::default(),
+                recovery: None,
+            }
+        }
+        (Some(canonical), None) => canonical,
+        (None, Some(legacy)) => legacy,
+        (Some(canonical), Some(legacy)) => {
+            let mut merged = legacy;
+            for (key, value) in canonical {
+                merged.insert(key, value);
+            }
+            merged
+        }
+    };
+    LoadedAppConfig {
+        config: parse_table(merged),
+        recovery: None,
+    }
+}
+
+/// Load the shared config from a per-user config directory.
+///
+/// Convenience for front ends that resolve the directory through
+/// [`crate::paths::config_dir`] (the CLI) rather than keeping a path pair.
+pub fn load_unified_in_dir(dir: &Path) -> LoadedAppConfig {
+    load_unified(&ConfigPaths::in_dir(dir))
+}
+
+/// Write the canonical file only; the legacy GUI file is never touched.
+///
+/// The canonical write is the migration step: after it, the values it carries
+/// override the legacy read for every key it emits. The legacy file stays on
+/// disk exactly as the user left it (Q10: preserved).
+pub fn save_canonical(paths: &ConfigPaths, config: &AppConfig) -> Result<(), String> {
+    save(&paths.canonical, config)
+}
+
 /// Parse a `config.toml` body. Unknown keys are ignored; entries with an
 /// unparseable `addr` are skipped rather than failing the whole file.
 pub fn parse(text: &str) -> Result<AppConfig, String> {
     let table: Table = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(parse_table(table))
+}
+
+/// Interpret an already-merged TOML table as an [`AppConfig`].
+///
+/// Separate from [`parse`] so the canonical/legacy merge ([`load_unified`]) can
+/// combine two raw tables *before* defaults are applied — that is what makes
+/// "canonical wins, legacy fills unset" per key rather than per file.
+fn parse_table(table: Table) -> AppConfig {
     let selected = table
         .get("selected")
         .and_then(Value::as_str)
@@ -296,7 +455,7 @@ pub fn parse(text: &str) -> Result<AppConfig, String> {
             });
         }
     }
-    Ok(AppConfig {
+    AppConfig {
         selected,
         proxies,
         auto_select,
@@ -308,7 +467,7 @@ pub fn parse(text: &str) -> Result<AppConfig, String> {
         manual_server,
         manual_port_range,
         tunnel_mtu,
-    })
+    }
 }
 
 /// Serialize a config to TOML.
@@ -396,9 +555,27 @@ pub fn merge_discovered(existing: &[ProxyEntry], discovered: Vec<ProxyEntry>) ->
 #[cfg(test)]
 mod tests {
     use super::{
-        load, load_or_default, merge_discovered, parse, render, reset, save, AppConfig, ProxyEntry,
+        load, load_or_default, load_unified, load_unified_in_dir, merge_discovered, parse, render,
+        reset, save, save_canonical, AppConfig, ConfigPaths, ProxyEntry, CANONICAL_FILE_NAME,
+        LEGACY_FILE_NAME,
     };
     use std::net::SocketAddrV4;
+    use std::path::PathBuf;
+
+    /// A unique scratch directory for one test, removed first if a previous run
+    /// left it behind. The gate points `TEMP`/`TMP` inside the workspace, so the
+    /// low-integrity test binary can write here (see `lightspeed-windows`).
+    fn scratch(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("lightspeed-config-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn read(path: &std::path::Path) -> String {
+        std::fs::read_to_string(path).expect("read fixture")
+    }
 
     fn addr(s: &str) -> SocketAddrV4 {
         s.parse().expect("test address")
@@ -635,5 +812,190 @@ mod tests {
         assert_eq!(merged[0].node_id.as_deref(), Some("relay-lax-1"));
         assert_eq!(merged[1].label, "Local proxy");
         assert!(!merged[1].is_discovered());
+    }
+
+    // ── Canonical + legacy fixture matrix (S6c / Q10) ──────────────────────
+
+    /// The pair carries the canonical and legacy names in the given directory.
+    #[test]
+    fn config_paths_use_the_canonical_and_legacy_names() {
+        let dir = scratch("names");
+        let paths = ConfigPaths::in_dir(&dir);
+        assert_eq!(
+            paths.canonical.file_name().and_then(|n| n.to_str()),
+            Some(CANONICAL_FILE_NAME)
+        );
+        assert_eq!(
+            paths.legacy.file_name().and_then(|n| n.to_str()),
+            Some(LEGACY_FILE_NAME)
+        );
+    }
+
+    /// `old-only`: the legacy GUI file loads as the config, is byte-identical
+    /// after the read, and no canonical file is created by a read.
+    #[test]
+    fn legacy_only_config_is_imported_read_only() {
+        let dir = scratch("legacy-only");
+        let paths = ConfigPaths::in_dir(&dir);
+        let legacy_body = "selected = \"207.246.106.36:4434\"\nshare_latency_stats = false\n\
+                           tunnel_mtu = 1400\nretry_after_fallback = true\n";
+        std::fs::write(&paths.legacy, legacy_body).expect("write legacy");
+
+        let loaded = load_unified(&paths);
+        assert!(
+            loaded.recovery.is_none(),
+            "a legacy import is not a recovery"
+        );
+        assert_eq!(
+            loaded.config.selected.as_deref(),
+            Some("207.246.106.36:4434")
+        );
+        assert!(!loaded.config.share_latency_stats);
+        assert_eq!(loaded.config.tunnel_mtu, 1400);
+        assert_eq!(
+            read(&paths.legacy),
+            legacy_body,
+            "the legacy file must be read-only (byte-identical after the import)"
+        );
+        assert!(
+            !paths.canonical.exists(),
+            "reading must not create the canonical file"
+        );
+    }
+
+    /// `new-only`: the canonical file loads; the legacy path is not required.
+    #[test]
+    fn canonical_only_config_loads() {
+        let dir = scratch("canonical-only");
+        let paths = ConfigPaths::in_dir(&dir);
+        std::fs::write(
+            &paths.canonical,
+            "auto_select = false\nshare_latency_stats = true\ntunnel_mtu = 1450\n",
+        )
+        .expect("write canonical");
+
+        let loaded = load_unified(&paths);
+        assert!(loaded.recovery.is_none());
+        assert!(!loaded.config.auto_select);
+        assert!(loaded.config.share_latency_stats);
+        assert_eq!(loaded.config.tunnel_mtu, 1450);
+        assert!(!paths.legacy.exists());
+    }
+
+    /// `both`: per-key precedence — canonical wins where it sets a key, legacy
+    /// fills every key the canonical file does not carry (Q10).
+    #[test]
+    fn both_files_canonical_wins_per_key_and_legacy_fills_unset() {
+        let dir = scratch("both");
+        let paths = ConfigPaths::in_dir(&dir);
+        std::fs::write(
+            &paths.legacy,
+            "selected = \"1.1.1.1:4434\"\nshare_latency_stats = false\n\
+             tunnel_mtu = 1400\nlanguage = \"de\"\ngame_auto = false\n",
+        )
+        .expect("write legacy");
+        std::fs::write(
+            &paths.canonical,
+            "selected = \"2.2.2.2:4434\"\nshare_latency_stats = true\ngame_auto = true\n",
+        )
+        .expect("write canonical");
+
+        let loaded = load_unified(&paths);
+        assert!(loaded.recovery.is_none());
+        assert_eq!(
+            loaded.config.selected.as_deref(),
+            Some("2.2.2.2:4434"),
+            "canonical wins on a key it sets"
+        );
+        assert!(loaded.config.share_latency_stats, "canonical wins");
+        assert!(loaded.config.game_auto, "canonical wins");
+        assert_eq!(
+            loaded.config.tunnel_mtu, 1400,
+            "legacy fills a key the canonical file does not set"
+        );
+        assert_eq!(
+            loaded.config.language.as_deref(),
+            Some("de"),
+            "legacy fills a key the canonical file does not set"
+        );
+    }
+
+    /// A broken canonical file is a recovery and must not be mixed with legacy
+    /// values (no silently half-applied config).
+    #[test]
+    fn malformed_canonical_is_a_recovery_and_never_mixes_legacy() {
+        let dir = scratch("malformed-canonical");
+        let paths = ConfigPaths::in_dir(&dir);
+        std::fs::write(&paths.legacy, "selected = \"1.1.1.1:4434\"\n").expect("write legacy");
+        std::fs::write(&paths.canonical, "this is not = = valid {{ toml\n")
+            .expect("write malformed canonical");
+
+        let loaded = load_unified(&paths);
+        let recovery = loaded.recovery.expect("malformed canonical is a recovery");
+        assert_eq!(recovery.path, paths.canonical);
+        assert!(!recovery.reason.is_empty());
+        assert_eq!(loaded.config, AppConfig::default());
+        assert_eq!(
+            loaded.config.selected, None,
+            "the legacy value must not leak into a broken-canonical load"
+        );
+    }
+
+    /// A broken legacy file is ignored (it is a retired read-only source and must
+    /// not block startup); the canonical file still loads cleanly.
+    #[test]
+    fn malformed_legacy_is_ignored_and_canonical_loads() {
+        let dir = scratch("malformed-legacy");
+        let paths = ConfigPaths::in_dir(&dir);
+        std::fs::write(&paths.legacy, "{ not toml").expect("write malformed legacy");
+        std::fs::write(&paths.canonical, "share_latency_stats = false\n").expect("write canonical");
+
+        let loaded = load_unified(&paths);
+        assert!(
+            loaded.recovery.is_none(),
+            "a retired legacy file must never raise the GUI settings error"
+        );
+        assert!(!loaded.config.share_latency_stats);
+    }
+
+    /// Neither file (first run) is defaults and **not** a recovery.
+    #[test]
+    fn no_files_is_a_first_run_not_a_recovery() {
+        let dir = scratch("none");
+        let loaded = load_unified_in_dir(&dir);
+        assert!(loaded.recovery.is_none());
+        assert_eq!(loaded.config, AppConfig::default());
+    }
+
+    /// The writer touches the canonical file only: the legacy file keeps its
+    /// bytes, the retired key is never re-written, and the canonical file
+    /// round-trips the merged values.
+    #[test]
+    fn save_canonical_never_touches_or_rewrites_the_legacy_file() {
+        let dir = scratch("save");
+        let paths = ConfigPaths::in_dir(&dir);
+        let legacy_body = "selected = \"1.1.1.1:4434\"\nretry_after_fallback = true\n\
+                           language = \"de\"\n";
+        std::fs::write(&paths.legacy, legacy_body).expect("write legacy");
+
+        let loaded = load_unified(&paths);
+        save_canonical(&paths, &loaded.config).expect("save canonical");
+
+        assert_eq!(read(&paths.legacy), legacy_body);
+        assert!(paths.canonical.exists(), "the migration writes canonical");
+        let written = read(&paths.canonical);
+        assert!(
+            !written.contains("retry_after_fallback"),
+            "the retired key must never be written: {written}"
+        );
+        assert!(written.contains("language = \"de\""), "{written}");
+        let reparsed = parse(&written).expect("canonical round-trips");
+        assert_eq!(reparsed.selected, loaded.config.selected);
+        assert_eq!(reparsed.language, loaded.config.language);
+
+        // Second load prefers the canonical file and keeps the same values.
+        let reloaded = load_unified(&paths);
+        assert!(reloaded.recovery.is_none());
+        assert_eq!(reloaded.config.selected, loaded.config.selected);
     }
 }

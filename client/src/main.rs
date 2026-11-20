@@ -344,6 +344,16 @@ fn capability_facts() -> app_dto::CapabilityFacts {
     }
 }
 
+/// The shared per-user config both front ends read (WF-081 W2-3b S6c, Q10).
+///
+/// Canonical `lightspeed.toml` wins, the legacy GUI `config.toml` fills keys it
+/// does not set (read-only import), and a missing pair is the defaults. `None`
+/// only when the host has no per-user config directory at all.
+fn shared_app_config() -> Option<lightspeed_client::app::config::AppConfig> {
+    let dir = lightspeed_client::paths::config_dir()?;
+    Some(lightspeed_client::app::config::load_unified_in_dir(&dir).config)
+}
+
 /// Whether this process holds the authority the interceptor needs.
 ///
 /// The CLI has no elevation API of its own: on Linux/macOS it is uid 0, and the
@@ -462,10 +472,26 @@ async fn main() -> anyhow::Result<()> {
     info!("⚡ LightSpeed v{} starting", env!("CARGO_PKG_VERSION"));
 
     // ── Configuration ─────────────────────────────────────────────
-    let config = config::Config::load(&cli.config).unwrap_or_else(|e| {
-        warn!("Config not found ({}), using defaults", e);
-        config::Config::default()
-    });
+    //
+    // S6c (owner Q10): when `--config` does not point at a readable CLI config,
+    // the shared per-user `AppConfig` supplies the settings both front ends own —
+    // telemetry consent and the effective path-MTU cap. That shared config is the
+    // canonical `lightspeed.toml` in the per-OS config directory, with the
+    // legacy GUI `config.toml` imported read-only to fill unset keys. The CLI's
+    // own config file always wins when it exists, so `--config` semantics are
+    // unchanged; the legacy file is never written or deleted here.
+    let config = match config::Config::load(&cli.config) {
+        Ok(config) => config,
+        Err(e) => {
+            warn!("Config not found ({}), using defaults", e);
+            let mut defaults = config::Config::default();
+            if let Some(shared) = shared_app_config() {
+                defaults.general.telemetry = shared.share_latency_stats;
+                defaults.tunnel.mtu = shared.tunnel_mtu;
+            }
+            defaults
+        }
+    };
 
     // ── User profiles (custom games + saved servers) ────────────
     //

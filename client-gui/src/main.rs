@@ -126,7 +126,7 @@ fn run() -> anyhow::Result<()> {
         Box::new(move |cc: &eframe::CreationContext<'_>| {
             // The language is resolved here, not in the app, so the CJK faces are
             // ordered correctly on the very first painted frame.
-            let language = config::load(&paths::config_file()).language;
+            let language = config::load_unified(&paths::config_paths()).config.language;
             i18n::set_language(language.as_deref());
             app::install_fonts(&cc.egui_ctx, Some(&i18n::current()));
             let app = app::LightSpeedApp::<platform::CurrentPlatform>::new(

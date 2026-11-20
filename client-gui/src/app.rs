@@ -438,7 +438,7 @@ impl<P: Platform> LightSpeedApp<P> {
 
         let is_admin = P::is_admin();
 
-        let loaded = config::load_or_default(&paths::config_file());
+        let loaded = config::load_unified(&paths::config_paths());
         // Keep the tolerant loader's diagnostic: the status DTO turns it into
         // the localized settings-error sentence instead of looking like a fresh
         // install. Only an unusable existing file produces one; a first run is
@@ -776,7 +776,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 Some(self.selected_game().key)
             },
         };
-        if let Err(e) = config::save(&paths::config_file(), &config) {
+        if let Err(e) = config::save_canonical(&paths::config_paths(), &config) {
             tracing::warn!("Could not persist GUI config: {e}");
         }
     }
@@ -3958,7 +3958,7 @@ impl<P: Platform> LightSpeedApp<P> {
             self.persist_config();
         }
         if reset {
-            match config::reset(&paths::config_file()) {
+            match config::reset(&paths::config_paths().canonical) {
                 Ok(()) => {
                     self.proxies = env_proxies();
                     self.selected_proxy_idx = 0;

@@ -48,15 +48,54 @@ fn scratch_dir(tag: &str) -> PathBuf {
 }
 
 /// Run the shipped CLI binary in `dir` and return its captured output.
+///
+/// The per-user config base is redirected **inside** `dir` for every invocation
+/// so the goldens never depend on the machine's real `%APPDATA%`/`$XDG_CONFIG_HOME`
+/// shared config (S6c reads that file for the two settings both front ends own).
+/// Fixture tests write their shared config under the same isolated base — see
+/// [`write_shared_config`].
 fn run_cli(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_lightspeed"))
         .args(args)
         .current_dir(dir)
+        .env("APPDATA", dir.join("iso-appdata"))
+        .env("USERPROFILE", dir.join("iso-home"))
+        .env("HOME", dir.join("iso-home"))
+        .env("XDG_CONFIG_HOME", dir.join("iso-xdg"))
         // The zero-spend/telemetry notice must be identical; do not inherit a
         // caller's LIGHTSPEED_* overrides into a golden run.
         .env_remove("LIGHTSPEED_GUI_FORCE")
         .output()
         .expect("run the lightspeed binary")
+}
+
+/// The shared per-user config directories the CLI may resolve for the isolated
+/// environment [`run_cli`] sets: `<base>/light-speed` on Windows/Linux and
+/// `<base>/Library/Application Support/light-speed` on macOS. Fixtures are
+/// written to all of them so the matrix is host-independent.
+fn shared_config_dirs(dir: &Path) -> Vec<PathBuf> {
+    vec![
+        dir.join("iso-appdata").join("light-speed"),
+        dir.join("iso-xdg").join("light-speed"),
+        dir.join("iso-home")
+            .join("Library")
+            .join("Application Support")
+            .join("light-speed"),
+    ]
+}
+
+/// Write the canonical (`lightspeed.toml`) and/or legacy (`config.toml`) shared
+/// config fixtures into the isolated base. `None` leaves that file absent.
+fn write_shared_config(dir: &Path, canonical: Option<&str>, legacy: Option<&str>) {
+    for shared in shared_config_dirs(dir) {
+        std::fs::create_dir_all(&shared).expect("create shared config dir");
+        if let Some(body) = canonical {
+            std::fs::write(shared.join("lightspeed.toml"), body).expect("write canonical fixture");
+        }
+        if let Some(body) = legacy {
+            std::fs::write(shared.join("config.toml"), body).expect("write legacy fixture");
+        }
+    }
 }
 
 fn stdout_of(out: &Output) -> String {
@@ -307,5 +346,136 @@ fn probe_proxies_output_is_normalized() {
     assert!(
         out.stderr.is_empty(),
         "the plain-text proxy report goes to stdout"
+    );
+}
+
+// ── Shared per-user config fixtures (S6c / Q10) ────────────────────────────
+//
+// The frozen goldens above pass `--config absent.toml`, i.e. the CLI has no own
+// config file, so the shared per-user `AppConfig` supplies the two settings both
+// front ends own. These fixtures drive that path with an isolated config base
+// (see `run_cli`). The observable, deterministic CLI effect is the telemetry
+// notice: `share_latency_stats` is the shared consent bit, so the notice's
+// presence/absence proves which file won. No network, no new golden files.
+
+const TELEMETRY_NOTICE_FRAGMENT: &str = "Anonymous telemetry on";
+
+fn telemetry_notice(out: &Output) -> bool {
+    String::from_utf8_lossy(&out.stdout).contains(TELEMETRY_NOTICE_FRAGMENT)
+}
+
+#[test]
+fn shared_config_legacy_only_is_imported_by_the_cli() {
+    let dir = scratch_dir("shared-legacy-only");
+    // Old-only: the pre-unification GUI file carries consent=false and the
+    // retired key; the read-only import must apply it and tolerate the key.
+    write_shared_config(
+        &dir,
+        None,
+        Some("retry_after_fallback = true\nshare_latency_stats = false\n"),
+    );
+    let out = run_cli(
+        &dir,
+        &[
+            "--list-games",
+            "--no-user-profiles",
+            "--config",
+            "absent.toml",
+        ],
+    );
+    assert!(out.status.success());
+    assert!(
+        !telemetry_notice(&out),
+        "the legacy GUI file's consent=false must reach the CLI through the read-only import"
+    );
+}
+
+#[test]
+fn shared_config_canonical_wins_over_the_legacy_file() {
+    let dir = scratch_dir("shared-both");
+    // Both: canonical consent=true (the shipped default) wins over legacy false.
+    write_shared_config(
+        &dir,
+        Some("share_latency_stats = true\n"),
+        Some("share_latency_stats = false\n"),
+    );
+    let out = run_cli(
+        &dir,
+        &[
+            "--list-games",
+            "--no-user-profiles",
+            "--config",
+            "absent.toml",
+        ],
+    );
+    assert!(out.status.success());
+    assert!(
+        telemetry_notice(&out),
+        "the canonical value must win over the legacy GUI file (Q10)"
+    );
+}
+
+#[test]
+fn shared_config_new_only_sets_the_cli_defaults() {
+    let dir = scratch_dir("shared-new-only");
+    write_shared_config(&dir, Some("share_latency_stats = false\n"), None);
+    let out = run_cli(
+        &dir,
+        &[
+            "--list-games",
+            "--no-user-profiles",
+            "--config",
+            "absent.toml",
+        ],
+    );
+    assert!(out.status.success());
+    assert!(
+        !telemetry_notice(&out),
+        "canonical-only consent=false applies"
+    );
+}
+
+#[test]
+fn shared_config_malformed_canonical_keeps_the_cli_defaults() {
+    let dir = scratch_dir("shared-malformed");
+    // A broken canonical file is a GUI recovery; the CLI must keep its defaults
+    // and must not mix in the legacy values.
+    write_shared_config(
+        &dir,
+        Some("this is not = = valid {{ toml\n"),
+        Some("share_latency_stats = false\n"),
+    );
+    let out = run_cli(
+        &dir,
+        &[
+            "--list-games",
+            "--no-user-profiles",
+            "--config",
+            "absent.toml",
+        ],
+    );
+    assert!(out.status.success());
+    assert!(
+        telemetry_notice(&out),
+        "a malformed canonical file falls back to defaults, not to legacy values"
+    );
+}
+
+/// The CLI's own `--config` file still wins over the shared per-user config: the
+/// shared file is only the fallback when `--config` is unreadable.
+#[test]
+fn own_config_file_wins_over_the_shared_config() {
+    let dir = scratch_dir("own-config-wins");
+    write_shared_config(&dir, Some("share_latency_stats = false\n"), None);
+    std::fs::write(dir.join("own.toml"), "[general]\ntelemetry = true\n")
+        .expect("write own config");
+    let out = run_cli(
+        &dir,
+        &["--list-games", "--no-user-profiles", "--config", "own.toml"],
+    );
+    assert!(out.status.success());
+    assert!(
+        telemetry_notice(&out),
+        "the CLI's own config must win over the shared per-user config"
     );
 }

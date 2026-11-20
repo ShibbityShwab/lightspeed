@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One config file for both front ends.** The GUI now reads and writes
+  `lightspeed.toml` in the per-user LightSpeed config directory (the same file
+  name the CLI uses); an existing GUI `config.toml` is imported read-only — it is
+  never modified or deleted, and its values only fill keys the new file does not
+  set (the canonical file wins where both set a value). The retired
+  `retry_after_fallback` key stays ignored and is never written.
 - **Relay starvation is now warn-only: no automatic path switch.** When a relay
   stops returning the game server's traffic, LightSpeed keeps relaying and warns
   instead of silently moving the session to direct: the tray turns amber with a
