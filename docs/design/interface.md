@@ -73,9 +73,9 @@ time, and it never re-ranks from the surface.
 Rules for these states:
 
 - The row and the caption appear only while a tunnel backend is carrying traffic
-  **and** the route is the relay. On a direct fallback the `Path` row already says
-  the relay is not in use, so a server-leg row there would describe a path the
-  client is not on.
+  **and** the route is the relay. When the session is not relayed, the `Path` row
+  already says the relay is not in use, so a server-leg row there would describe a
+  path the client is not on (A7 retired the direct-fallback state).
 - The row describes the relay carrying traffic. When a better relay for this
   server is staged for the next session, the row still describes the current one.
 - `Measured` is only ever the estimator's published value. `n` is shown because
@@ -233,8 +233,9 @@ Closed on 2026-11-14:
 - Capture was described twice, once as "pcap mode: not detected" - one statement
   remains, and Npcap says what it is for.
 - The Proxy Manager row wrapped its delete button - every row is one line now.
-- Nothing let a player opt out of relay re-tests - Settings has the switch, and
-  the watchdog reads it live.
+- The old "opt out of relay re-tests" switch retired with the fallback model on
+  2026-11-20 (A7): there is no route switch left to opt out of, so Settings
+  states the warn-only behaviour instead of promising a control.
 
 Open:
 

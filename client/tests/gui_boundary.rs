@@ -158,14 +158,14 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // W2-1b (S3a): the pure presentation seam + its contract fixtures; grown by
     // the W2-1c QA fixes (R1-R15) inside the same slice.
     ("client-gui/src/app/route_surface.rs", 1831),
-    ("client-gui/src/app/tests.rs", 3044),
+    ("client-gui/src/app/tests.rs", 3121),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 719),
     ("client-gui/src/app/widgets.rs", 553),
     ("client-gui/src/app/window.rs", 213),
     // W2-1b: +315 lines of DTO assembly/getters. It is the one file scheduled to
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
-    ("client-gui/src/app.rs", 4396),
+    ("client-gui/src/app.rs", 4397),
     ("client-gui/src/client_trace.rs", 1328),
     // W2-1 S1: the config model + I/O + its tests moved to
     // `lightspeed_client::app::config`; the GUI keeps this re-export shell and

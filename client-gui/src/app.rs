@@ -3512,7 +3512,7 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
         hairline(ui);
         ui.add_space(S1);
-        section_label(ui, "Routing");
+        section_label(ui, &i18n::t("settings.routing"));
         ui.label(
             egui::RichText::new(i18n::t("settings.starvation_policy"))
                 .size(CAPTION)
@@ -3546,16 +3546,14 @@ impl<P: Platform> LightSpeedApp<P> {
             }
             if ui
                 .button(i18n::t("proxies.refresh"))
-                .on_hover_text("Fetch the latest community relay list from the registry.")
+                .on_hover_text(i18n::t("settings.refresh_hint"))
                 .clicked()
             {
                 self.start_discovery();
             }
             if ui
                 .button(i18n::t("settings.remeasure"))
-                .on_hover_text(
-                    "Probe every relay again and refresh the numbers the relay picker shows.",
-                )
+                .on_hover_text(i18n::t("settings.remeasure_hint"))
                 .clicked()
             {
                 self.start_relay_measurement();
@@ -3566,11 +3564,14 @@ impl<P: Platform> LightSpeedApp<P> {
         // Leaving a second, differently-worded line here is how "pcap mode: not
         // detected" ended up reading as broken while WinDivert was relaying.
         // The hold is a policy the client applies silently; saying it in the
-        // settings gives the wait a reason and a duration.
+        // settings gives the wait a reason and a duration. The number is
+        // generated from `HOLD_FALLBACK` (120 s) - the old row rendered
+        // `LOCK_SETTLE` (3 s), a 40x-wrong number (spec C5).
+        let hold_minutes = (HOLD_FALLBACK.as_secs() / 60).to_string();
         ui.label(
             egui::RichText::new(i18n::t_with(
                 "settings.hold_policy",
-                &[("secs", LOCK_SETTLE.as_secs().to_string().as_str())],
+                &[("minutes", hold_minutes.as_str())],
             ))
             .size(CAPTION)
             .color(text_3),

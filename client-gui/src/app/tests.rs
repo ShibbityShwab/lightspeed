@@ -439,26 +439,31 @@ fn the_settings_policy_describes_the_warn_only_behaviour() {
     }
     assert!(copy.contains("warn"), "the copy must say it warns: {copy}");
     assert!(
-        copy.contains("never switches") || copy.contains("no automatic"),
-        "the copy must say the client does not switch the path on its own: {copy}"
+        copy.contains("keeps relaying"),
+        "the copy must say the client keeps relaying: {copy}"
     );
     assert!(
         copy.contains("stop optimizing"),
         "the copy must name the manual route: {copy}"
     );
     assert!(
-        copy.contains("relay"),
+        copy.contains("pick another relay"),
         "the copy must name the alternative: {copy}"
     );
-    // The route-card banner says what the player must do while the warning is up.
+    // The route-card banner is the §2.7 B measurement, not a verdict, and names
+    // the remedy's cost (M16).
     let banner = crate::i18n::t("route.relay_not_returning").to_lowercase();
-    assert!(banner.contains("not returning"), "{banner}");
+    assert!(banner.contains("no game traffic"), "{banner}");
     assert!(banner.contains("stop optimizing"), "{banner}");
-    assert!(banner.contains("relay"), "{banner}");
+    assert!(banner.contains("pick another relay"), "{banner}");
+    assert!(
+        banner.contains("restarts"),
+        "the banner must name the cost of the remedy: {banner}"
+    );
     let injection = crate::i18n::t("route.injection_failed_warning").to_lowercase();
     assert!(
-        injection.contains("log"),
-        "a local injection fault points at the log: {injection}"
+        injection.contains("log") && injection.contains("maintenance"),
+        "a local injection fault points at the in-app log path: {injection}"
     );
     assert!(
         !injection.contains("relay is not returning"),
@@ -467,6 +472,66 @@ fn the_settings_policy_describes_the_warn_only_behaviour() {
     let state = crate::i18n::t("state.not_returning");
     assert_ne!(state.as_ref(), "state.not_returning");
     assert!(!state.trim().is_empty());
+    crate::i18n::set_language(None);
+}
+
+#[test]
+fn the_w2_copy_deck_rows_are_installed() {
+    // §2.7 B is a W2-2 deliverable, not a suggestion: the four warning/route
+    // rows, the two Settings policy rows and the bare location rung values are
+    // pinned here so a catalogue edit cannot quietly regress to the pre-W2 copy.
+    let _guard = crate::i18n::test_lock();
+    crate::i18n::set_language(Some("en"));
+    assert!(crate::i18n::t("route.relay_not_returning").contains("No game traffic is coming back"));
+    assert!(
+        crate::i18n::t("route.injection_failed_warning").contains("Settings \u{2192} Maintenance")
+    );
+    let expected = crate::i18n::t("route.expected_path");
+    assert!(
+        !expected.contains("(L + S)"),
+        "the placeholder-leaking suffix is retired: {expected}"
+    );
+    assert!(expected.contains("(relay leg + server leg)"), "{expected}");
+    assert_eq!(
+        crate::i18n::t("route.expected_path_label").as_ref(),
+        "Expected path"
+    );
+    assert_eq!(crate::i18n::t("route.route_trace").as_ref(), "Path trace");
+
+    // The hold number is generated from HOLD_FALLBACK (120 s = 2 minutes); the
+    // retired row rendered LOCK_SETTLE (3 s), the spec's 40x-wrong number (C5).
+    assert_eq!(super::HOLD_FALLBACK.as_secs() / 60, 2);
+    let minutes = (super::HOLD_FALLBACK.as_secs() / 60).to_string();
+    let hold = crate::i18n::t_with("settings.hold_policy", &[("minutes", minutes.as_str())]);
+    assert!(hold.contains("2 minutes"), "{hold}");
+    assert!(
+        !hold.contains("3s") && !hold.contains("direct path"),
+        "{hold}"
+    );
+
+    // The `Location` label owns the words "Location"; the rung value must be
+    // the bare provenance phrase, never a second "Server location: ..." (M9/m4).
+    let label = crate::i18n::t("route.location_label");
+    for key in [
+        "route.location_estimate",
+        "route.location_provider",
+        "route.location_hosting",
+        "route.location_unknown",
+    ] {
+        let value = crate::i18n::t(key);
+        assert!(
+            !value.starts_with("Server location:"),
+            "{key} repeats the Location label: {value}"
+        );
+        assert!(
+            value.as_ref() != label.as_ref(),
+            "{key} duplicates its own label"
+        );
+        assert!(!value.trim().is_empty(), "{key} is empty");
+    }
+    assert!(crate::i18n::t("route.location_geofeed").contains("{place}"));
+    // The Settings section heading stopped being a hardcoded English literal.
+    assert_eq!(crate::i18n::t("settings.routing").as_ref(), "Routing");
     crate::i18n::set_language(None);
 }
 
@@ -481,6 +546,13 @@ fn every_locale_carries_the_warn_only_strings() {
         "route.relay_not_returning",
         "route.injection_failed_warning",
         "state.not_returning",
+    ];
+    // The W2-2b §2.7 B rows are the spec's source strings in every catalog until
+    // the Q5 translation pipeline runs (translation debt, recorded).
+    let may_fallback = [
+        "settings.starvation_policy",
+        "route.relay_not_returning",
+        "route.injection_failed_warning",
     ];
     // Read the English values once, before the per-locale loop: resolving them
     // inside the loop would pin the global language back to English and make
@@ -508,7 +580,10 @@ fn every_locale_carries_the_warn_only_strings() {
                     "{} must keep the English string for {key} (font subset)",
                     locale.tag
                 );
-            } else if locale.tag != "en" {
+            } else if locale.tag != "en" && !may_fallback.contains(key) {
+                // Only the W2-2b deck rows may currently be English in a
+                // translated catalog (Q5 translation debt, recorded in
+                // `wat/evidence/2026-11-20/w2-2/locale-fallback.md`).
                 assert_ne!(
                     text.as_ref(),
                     english[index],
@@ -2942,9 +3017,11 @@ fn the_relay_measured_server_leg_rows_state_both_measured_terms() {
     );
 
     // L (90 ms, the Relay RTT the card already shows) + S (148 ms) = 238 ms.
+    // The label owns "Expected path"; the value is the §2.7 B form with no
+    // placeholder leak (M15).
     assert_eq!(
         expected_path_text(90.0, report.median_us).as_deref(),
-        Some("Expected path ~238 ms (L + S)")
+        Some("~238 ms (relay leg + server leg)")
     );
 
     // No displayed client leg means no path total: S alone is not a path.
