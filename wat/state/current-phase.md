@@ -12,6 +12,22 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-3b S5a) - WF-081: location ladder/indexes/data moved into the core; committed; QA verifying
+
+**Agent:** lead + `rust-dev-2` (task-48), `infra-dev` (task-47), `qa-engineer-2` (task-51).
+
+- **S5a landed and committed as one unit:** `32e99e4` (26 files: six data renames at 100 % identity, `server_place`→`client/src/app/location.rs` (657 lines, 18 tests), `location/{server_tables,server_geofeed_tables,provider,geo,geo_countries}.rs`, provider seam, features, guard, generators) and `8e6f7b5` (Lead doc re-path pass). GUI `server_place.rs` is an 11-line re-export shell for the frozen `route_surface.rs`; `main.rs` 250; `app.rs`/`client_trace.rs` call sites re-pointed. Features: **`server-location`** (three server indexes + tables/manifests + module) and **`geo-ip`** (country blob/table only; off ⇒ ladder ends at `Unknown`), both in `full`, both enabled in both GUI dependency occurrences, **CLI defaults off**.
+- **Display-only + seam proofs:** `chooser_point` None for Geofeed/Hosting/Country, no ranking path reads `place()`/`display_point`, `a_geofeed_place_never_steers_the_ranking` travelled; G6 strengthened; `install_provider_classifier` is core-1/GUI-0 and installed before `LightSpeedEngine::new` (G7 rewritten).
+- **Artifact deltas (measured, Q11(a)):** debug lib +2,479,164 B (`server-location`) and +9,535,976 B (both); release lib +11,413,080 B (both); **shipped CLI release exe +0 B** (debug +3,072 B); payload 352,620 B + 1,810,610 B not linked without features; manifests geofeed `9cfe65bf…` / location `e502f656…`. Committed data bytes identical after the move.
+- **Infra:** three generators re-pathed to `client/data/` + `client/src/app/location/` (and `infra/geo` docs); `py_compile` exit 0, 109-check `--selftest`, 21-check path verifier pre/post, 9/9 artifact hashes identical; `world-land.bin` correctly stays GUI-side; no feeds fetched, no artifacts regenerated.
+- **Lead integration:** fixed stale path references in `docs/privacy.md`, `gui-core-boundary.md`, `gui-refresh-spec.md`, `server-location-online-lookup-review.md`, `client/src/interceptor/order.rs` comments and the generated table's destination comment; remaining `client-gui/data` mentions are historical context or the GUI-side `world-land.bin`.
+- **Lead gate: PASS.** fmt/clippy clean; workspace **1927 / 0 / 7**; GUI **184 / 0 / 0** (−29 moved); guard **8/8**. Agent runs: feature-on client 1552/0/5, feature-off 1547/0/5; five guard mutation rounds each fail only the intended rules with byte-identical restores.
+- **Independent QA queued** (task-51): byte-identity re-derivation, module/test move, features, G6/G7, guard mutation, deltas/manifests, generators, doc re-path, full gate; ACCEPT/REVISE. **S5b (task-49) queued behind it.**
+- **Named unverified:** Linux CI, `geo-ip`-off CI leg (local only), local `--features full` link (pre-existing Npcap SDK), no fresh screenshots (no `ui()`/`route_surface` diff, so the accepted visual baseline stands). Commits `32e99e4`/`8e6f7b5`; branch 27 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts; artifact-hash and delta evidence in `wat/evidence/2026-11-20/w2-3b/s5a/`; guard mutation logs; generator verification logs. **Not verified:** S5a by an independent verifier (task-51 in progress); Linux CI; feature-off link; live states.
+**Open:** S5b (trace + Q13 disclosure) → S6 (CLI/config/update/capabilities) → QA each → W2-4 parity.
+
 ### 2026-11-20 (W2-3b split) - WF-081: N1/R3 checkpoint committed; S5a/S5b/S6 split; rust-dev-2 and infra-dev engaged
 
 **Agent:** lead + `infra-dev` (task-47), `rust-dev-2` (task-48 re-dispatch).
