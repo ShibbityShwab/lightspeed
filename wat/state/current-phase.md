@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-2 ACCEPTED, W2-3a start) - WF-081: shell accepted; warn-only runtime extraction begins
+
+**Agent:** lead + `qa-engineer-2` (task-42), `rust-dev` (task-43 start).
+
+- **W2-2 "Instrument 2.0 shell" is ACCEPTED.** QA's re-review returned **ACCEPT** (`wat/evidence/2026-11-20/team/qa-w2-2/review-r2.md`): §2.7 B copy deck exact (all 9 catalogs parity-clean, 207 keys, pinning test), Settings renders `HOLD_FALLBACK` 120 s through the code path ("for up to 2 minutes"; 3 s forbidden by test), location rungs bare/no duplication, `interface.md` anchors fixed, tray capture shows `Hide to tray`, keyboard transcript covers Tab-in-sheet/Esc/Enter, `settings.routing`/hovers keyed, C7 counts re-measured (ja/ko/zh 70, DE 51, ES/FR/PT 47, RU 45), glyph exemption unchanged. No forbidden-area changes; only two G3 budgets moved to measured lines. QA's independent gate matches the Lead's: fmt/clippy 0, workspace **1885/0/7**, GUI **250/0/0**.
+- **Named U (unchanged):** 200 % capture, 239/181 chrome pixel measurement, live non-error/warning states, exhaustive keyboard order, Q5 translations, W2-4 tray strings, Q19 font regeneration.
+- **W2-3a started** (`rust-dev`, task-43): S3b commands (`SessionCommand`/`AppCore`) + S4 warn-only watchdog/history moved into the shared core **behaviour-frozen** — `WatchdogPlan::switch_to_direct` always false, raise/clear byte-identical, `route_surface` fixtures identical before/after the `WatchdogFacts` swap, tray order preserved, commands return `AppError`. **The R16 deferral closes here:** with the watchdog in the core the thread-local barrier disappears, so `WatchdogStatus.streak` is published for real with raise/clear/streak fixtures (no fabricated value, no shell claim).
+- **Commits:** W2-2 `c1cbb09`, W2-2b `4390705`, state `19ef68e`; branch 17 ahead / 0 behind `origin/master 76aba5d`; $0.00; no fleet/release/public change.
+
+**Verified:** QA review-r2 ACCEPT; Lead gate on `4390705` (1885/0/7, 250/0/0); captures/settings/footer/keyboard evidence; commits clean. **Not verified:** any W2-3a code (in progress); 200 %/chrome/live states; translations.
+**Open:** W2-3a → QA → W2-3b (location/trace/CLI, Q13 gate) → W2-4 parity.
+
 ### 2026-11-20 (W2-2b) - WF-081: copy deck, Settings 120 s and location rungs fixed; Lead-gated; QA re-verifying
 
 **Agent:** lead + `interface-designer` (task-41), `qa-engineer-2` (task-42).
