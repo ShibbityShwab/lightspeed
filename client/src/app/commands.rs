@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::interceptor::ProcessTarget;
 use crate::LightSpeedEngine;
 
-use super::dto::{AppError, SessionCommand, SessionCommandState};
+use super::dto::{AppError, AppErrorKind, SessionCommand, SessionCommandState};
 
 /// The shared application core every front end runs commands through.
 ///
@@ -200,10 +200,29 @@ pub(crate) fn record_command_result<T>(
             Ok(value)
         }
         Err(detail) => {
-            let error = AppError::tunnel(detail);
+            let error = AppError::for_kind(command_error_kind(command), detail);
             session.fail(command, error.clone());
             Err(error)
         }
+    }
+}
+
+/// The Error-row taxonomy for one command's failure (QA W2-3a N1).
+///
+/// The taxonomy must name what failed, not default every command to "tunnel":
+/// `select_relay` failure is the relay/registration path ([`AppErrorKind::Route`]),
+/// `set_path_mtu_cap` is a refused setting value ([`AppErrorKind::Validation`]),
+/// and the traffic commands are tunnel/interception failures
+/// ([`AppErrorKind::Tunnel`]). The Error row's leading sentence comes from this
+/// kind; the verbatim engine detail stays behind `Details`.
+pub fn command_error_kind(command: SessionCommand) -> AppErrorKind {
+    match command {
+        SessionCommand::SelectRelay => AppErrorKind::Route,
+        SessionCommand::SetPathMtu => AppErrorKind::Validation,
+        SessionCommand::Disconnect
+        | SessionCommand::StartBoost
+        | SessionCommand::StopBoost
+        | SessionCommand::Hold => AppErrorKind::Tunnel,
     }
 }
 
@@ -258,22 +277,32 @@ mod tests {
     }
 
     #[test]
-    fn commands_all_report_the_shared_taxonomy_kind() {
-        // The mapping is one function: every fallible command that fails with an
-        // engine string reports the Tunnel sentence and keeps the verbatim detail.
-        for command in [
-            SessionCommand::SelectRelay,
-            SessionCommand::Disconnect,
-            SessionCommand::StartBoost,
-            SessionCommand::StopBoost,
-            SessionCommand::SetPathMtu,
-            SessionCommand::Hold,
+    fn every_command_reports_the_taxonomy_kind_that_names_what_failed() {
+        // N1 (QA W2-3a): the Error row must lead with the right sentence, not
+        // default every failure to "tunnel". One table pins the mapping.
+        for (command, expected) in [
+            (SessionCommand::SelectRelay, AppErrorKind::Route),
+            (SessionCommand::SetPathMtu, AppErrorKind::Validation),
+            (SessionCommand::Disconnect, AppErrorKind::Tunnel),
+            (SessionCommand::StartBoost, AppErrorKind::Tunnel),
+            (SessionCommand::StopBoost, AppErrorKind::Tunnel),
+            (SessionCommand::Hold, AppErrorKind::Tunnel),
         ] {
+            assert_eq!(
+                command_error_kind(command),
+                expected,
+                "command_error_kind({command:?})"
+            );
             let mut session = SessionCommandState::default();
             let error = record_command_result::<()>(&mut session, command, Err("boom".to_string()))
                 .expect_err("failure is typed");
-            assert_eq!(error.kind, crate::app::dto::AppErrorKind::Tunnel);
+            assert_eq!(error.kind, expected);
             assert_eq!(error.detail.as_deref(), Some("boom"));
+            assert_eq!(
+                session.last_error.as_ref().map(|e| e.kind),
+                Some(expected),
+                "the Error row and the caller read the same kind"
+            );
         }
     }
 }

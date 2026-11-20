@@ -137,18 +137,19 @@ pub struct RelayStatus {
 /// The watchdog's published state.
 ///
 /// The watchdog and its streak counter live in the shared core since the S4
-/// move: `WatchdogSnapshot` publishes the judged-window count alongside the
-/// warning, so [`Self::streak`] is the live count while a fault is confirmed and
-/// `None` when no fault is being observed — never a fabricated zero. The shell
-/// renders the warning from this published state and never claims a streak it
-/// did not receive; the route is never changed (warn-only).
+/// move: `WatchdogSnapshot` publishes the count alongside the warning, so
+/// [`Self::streak`] is the **live judged-window count from the first fault
+/// window** (it is `Some(1)` before the warning is raised at the streak
+/// threshold) and `None` when no fault is observed — never a fabricated zero.
+/// The shell renders the warning from this published state and never claims a
+/// streak it did not receive; the route is never changed (warn-only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WatchdogStatus {
     /// The active starvation warning, if the return path is judged faulty.
     pub warning: Option<StarvationWarning>,
-    /// Consecutive judged windows that carried the same fault while a warning is
-    /// live (published from `WatchdogSnapshot`; `None` when none is observed,
-    /// never a zero).
+    /// Live judged-window count for the same fault, from the first fault window
+    /// (`Some(1)` before the warning is confirmed); `None` when no fault is
+    /// being observed, never a zero.
     pub streak: Option<u32>,
 }
 
