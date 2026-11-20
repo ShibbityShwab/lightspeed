@@ -41,10 +41,8 @@ const ALLOWED_CLIENT_PATHS: &[&str] = &[
     "ScoredRelay",
     "ServerLegAppReport",
     "ServerLegReport",
-    "ServerLegReport::validated",
     "ServerTraceReport",
     "current_relay",
-    "destination_estimator",
     "ensure_destination_estimator",
     "games",
     "games::all_game_keys",
@@ -82,10 +80,6 @@ const ALLOWED_CLIENT_PATHS: &[&str] = &[
     "profiles::schema::slugify",
     "profiles::schema::validate_for_save",
     "rank_relays_at_with_direct",
-    "rank_relays_with_direct",
-    "server_leg_app_report",
-    "server_leg_report",
-    "server_leg_trace",
 ];
 
 /// **G2** identifiers that may not be *defined* in `client-gui/src`. An
@@ -161,9 +155,10 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/app/picker.rs", 98),
     ("client-gui/src/app/presence.rs", 482),
     ("client-gui/src/app/relay_choice.rs", 144),
-    // W2-1b (S3a): the new pure presentation seam + its contract fixtures.
-    ("client-gui/src/app/route_surface.rs", 1450),
-    ("client-gui/src/app/tests.rs", 3090),
+    // W2-1b (S3a): the pure presentation seam + its contract fixtures; grown by
+    // the W2-1c QA fixes (R1-R15) inside the same slice.
+    ("client-gui/src/app/route_surface.rs", 1831),
+    ("client-gui/src/app/tests.rs", 3094),
     ("client-gui/src/app/theme.rs", 233),
     ("client-gui/src/app/watchdog.rs", 718),
     ("client-gui/src/app/widgets.rs", 484),
@@ -174,8 +169,8 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/client_trace.rs", 1326),
     // W2-1 S1: the config model + I/O + its tests moved to
     // `lightspeed_client::app::config`; the GUI keeps this re-export shell and
-    // `paths::config_file`. The budget drops 528 -> 19 with the move.
-    ("client-gui/src/config.rs", 19),
+    // `paths::config_file`. The budget dropped 528 -> 18 with the move.
+    ("client-gui/src/config.rs", 18),
     ("client-gui/src/crash.rs", 210),
     ("client-gui/src/design.rs", 264),
     ("client-gui/src/detection_provider.rs", 184),
@@ -481,8 +476,14 @@ fn g3_gui_source_files_are_budgeted_and_do_not_grow() {
         let lines = read(&file).lines().count();
         measured.push(rel.clone());
         match MODULE_BUDGET.iter().find(|(path, _)| *path == rel) {
+            // The budget is the measured line count: growth fails, and stale
+            // slack fails too, so the table cannot drift away from the tree
+            // (QA W2-1 R13).
             Some((_, budget)) if lines > *budget => violations.push(format!(
                 "{rel}: {lines} lines, budget {budget} (reduce the module or move logic to the core)"
+            )),
+            Some((_, budget)) if lines < *budget => violations.push(format!(
+                "{rel}: {lines} lines, budget {budget} (tighten MODULE_BUDGET to the measured count)"
             )),
             Some(_) => {}
             None => violations.push(format!(

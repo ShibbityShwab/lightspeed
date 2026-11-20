@@ -1995,14 +1995,16 @@ fn primary_action_names_the_three_states() {
         primary_action(false, true, false, false),
         ("STOP OPTIMIZING".to_string(), true)
     );
-    // Unelevated: the action is elevation.
+    // Unelevated **and able to boost otherwise**: the action is elevation.
     assert_eq!(
         primary_action(false, false, true, true),
         ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
     );
+    // Unelevated but not ready (no relay / disconnected): M1 forbids the
+    // elevation invite here; the slot is the ordinary disabled boost action.
     assert_eq!(
         primary_action(false, false, false, false),
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
+        ("OPTIMIZE MY ROUTE".to_string(), false)
     );
     // Elevated and ready: the product's action.
     assert_eq!(
@@ -2940,14 +2942,16 @@ fn an_unelevated_app_still_asks_for_elevation_when_a_process_is_targeted() {
     let _guard = crate::i18n::test_lock();
     crate::i18n::set_language(None);
     // The arguments the frame passes with a target set and nothing boosting:
-    // unelevated, and either connected with a relay or not yet ready.
+    // unelevated, and ready (connected with a relay).
     assert_eq!(
         primary_action(false, false, true, true),
         ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
     );
+    // Unelevated but not ready: no elevation invite (M1 — the invite answers
+    // "this would run with rights"); the slot stays the disabled boost label.
     assert_eq!(
         primary_action(false, false, false, true),
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
+        ("OPTIMIZE MY ROUTE".to_string(), false)
     );
 }
 // â”€â”€ Relay-measured server leg (R2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

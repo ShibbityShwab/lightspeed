@@ -80,14 +80,23 @@ pub enum ActionSlot {
 /// The one action slot, as a pure function of the gates.
 ///
 /// - boosting → [`ActionSlot::StopOptimizing`].
-/// - unelevated → [`ActionSlot::RestartElevated`] (the elevation handshake).
+/// - unelevated **and able to boost otherwise** (connected, relay selected) →
+///   [`ActionSlot::RestartElevated`]. The elevation invite is an answer to
+///   "this would run if it had rights", so it must not appear on a window that
+///   could not start the boost anyway (spec M1, §2.2 row 7: "the elevation
+///   invite appears only when a relay is selected and the boost can otherwise
+///   start"). Unelevated-but-not-ready is [`ActionSlot::StartBlocked`].
 /// - elevated, connected, with a relay → [`ActionSlot::StartReady`].
-/// - elevated but not ready → [`ActionSlot::StartBlocked`].
+/// - otherwise → [`ActionSlot::StartBlocked`].
 pub fn action_slot(is_admin: bool, boosting: bool, connected: bool, has_relay: bool) -> ActionSlot {
     if boosting {
         ActionSlot::StopOptimizing
     } else if !is_admin {
-        ActionSlot::RestartElevated
+        if connected && has_relay {
+            ActionSlot::RestartElevated
+        } else {
+            ActionSlot::StartBlocked
+        }
     } else if connected && has_relay {
         ActionSlot::StartReady
     } else {
@@ -560,10 +569,6 @@ mod tests {
             action_slot(true, true, true, true),
             ActionSlot::StopOptimizing
         );
-        assert_eq!(
-            action_slot(false, false, true, true),
-            ActionSlot::RestartElevated
-        );
         assert_eq!(action_slot(true, false, true, true), ActionSlot::StartReady);
         assert_eq!(
             action_slot(true, false, false, true),
@@ -572,6 +577,35 @@ mod tests {
         assert_eq!(
             action_slot(true, false, true, false),
             ActionSlot::StartBlocked
+        );
+    }
+
+    #[test]
+    fn the_elevation_invite_needs_a_boost_that_could_otherwise_start() {
+        // M1: the invite is an answer to "this would run with rights", so it
+        // appears only when connected with a relay.
+        assert_eq!(
+            action_slot(false, false, true, true),
+            ActionSlot::RestartElevated
+        );
+        assert_eq!(
+            action_slot(false, false, false, true),
+            ActionSlot::StartBlocked,
+            "unelevated but disconnected: there is nothing to elevate for"
+        );
+        assert_eq!(
+            action_slot(false, false, true, false),
+            ActionSlot::StartBlocked,
+            "unelevated but no relay: there is nothing to elevate for"
+        );
+        assert_eq!(
+            action_slot(false, false, false, false),
+            ActionSlot::StartBlocked
+        );
+        // A running session still offers the stop action first.
+        assert_eq!(
+            action_slot(false, true, true, true),
+            ActionSlot::StopOptimizing
         );
     }
 

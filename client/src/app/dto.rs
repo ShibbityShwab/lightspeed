@@ -138,14 +138,20 @@ pub struct RelayStatus {
 ///
 /// S3a carries the warning (the only session warning the warn-only model has)
 /// and the streak evidence **when the client publishes it**. The GUI's watchdog
-/// thread keeps the streak counter internally until the S4 move publishes it
-/// with the rest of the watchdog, so [`Self::streak`] is `None` until then: it
-/// is the honest "not observed by this client yet", never a fabricated zero.
+/// thread keeps the streak counter in its own `RelayReplyWatch` value
+/// (`client-gui/src/app/watchdog.rs:602`, the thread-local `current` state) and
+/// publishes only the warning through an `Arc<Mutex<Option<…>>>`; there is no
+/// getter and no shared handle for the counter. Publishing it needs a new shared
+/// field inside `app/watchdog.rs`, which is the S4 move's file (not in the W2-1
+/// write scope), so [`Self::streak`] is `None` until S4 publishes it with the
+/// rest of the watchdog. `None` is the honest "not observed by this client
+/// yet", never a fabricated zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WatchdogStatus {
     /// The active starvation warning, if the return path is judged faulty.
     pub warning: Option<StarvationWarning>,
-    /// Consecutive judged windows that carried the same fault, once published.
+    /// Consecutive judged windows that carried the same fault, once published
+    /// (S4; `None` until then — never a zero).
     pub streak: Option<u32>,
 }
 

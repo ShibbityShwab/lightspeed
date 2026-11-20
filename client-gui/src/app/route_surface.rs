@@ -186,9 +186,10 @@ pub enum Overlay {
 pub struct LocationBlock {
     /// The value label key (`Location`; new in W2-2).
     pub label_key: &'static str,
-    /// The rung's caption key.
-    pub rung_key: &'static str,
-    /// The place/provider detail, when the rung has one.
+    /// The rung's caption: a catalogued line, so a template with a placeholder
+    /// (`route.location_geofeed` carries `{place}`) is never emitted bare.
+    pub rung: Line,
+    /// The provider region / place / network detail, when the rung has one.
     pub detail: Option<RowValue>,
     /// The attribution/as-of line (geofeed).
     pub note: Option<RowValue>,
@@ -203,10 +204,15 @@ pub struct LocationBlock {
 /// The client route trace (A10): a placement anchor, not a ping, not a city.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteTraceSurface {
-    /// The caption key (`Route to server` in W2-2's catalogue).
-    pub caption_key: &'static str,
-    /// The hops/nearest caption.
-    pub line: Line,
+    /// The caption: the shipped `route.trace_route` key with its hop count.
+    pub caption: Line,
+    /// The shipped `route.trace_nearest` suffix, when a router answered.
+    pub nearest: Option<Line>,
+    /// The last responding hop's network name, when a source that can state it
+    /// is wired. `None` today: `ClientRoute` carries no network name until the
+    /// core `client_trace` move at S5b supplies one; the adapter never invents
+    /// a provider label.
+    pub provider: Option<String>,
 }
 
 /// The whole route surface for one frame.
@@ -247,10 +253,16 @@ pub fn route_surface(status: &AppStatus) -> RouteSurface {
     let boosting = status.boosting;
     let warning = status.watchdog.warning.filter(|_| boosting);
     let word = word_for(status, boosting, warning.is_some());
+    // The Error row's sub-line is the taxonomy sentence (spec §2.2 row 8); the
+    // same sentence is repeated behind Details with its verbatim detail.
+    let subline = match status.error.as_ref() {
+        Some(error) => Some(error_line(error)),
+        None => subline_for(status, boosting, warning.is_some()),
+    };
     RouteSurface {
         word,
         metric: metric_for(status),
-        subline: subline_for(status, boosting, warning.is_some()),
+        subline,
         warning: warning.map(|warning| {
             Line::new(match warning.fault {
                 lightspeed_client::app::dto::ReturnPathFault::NoReplyFromRelay
@@ -321,13 +333,13 @@ fn subline_for(status: &AppStatus, boosting: bool, warning_active: bool) -> Opti
     }
     if boosting {
         if status.engine.tunnelling_enabled == Some(false) {
-            if status.relay.choosing {
-                return Some(Line::new("route.choosing"));
-            }
-            // A hold with no locked server is the start-of-match scan; it is the
-            // normal wait, not a failed route (§2.2 row 3).
+            // Spec §2.2 row 3 order: the scan first (no server locked yet),
+            // then the destination-aware choice, then the plain hold.
             if status.relay.server.is_none() {
                 return Some(Line::new("route.holding_scan"));
+            }
+            if status.relay.choosing {
+                return Some(Line::new("route.choosing"));
             }
             return Some(Line::new("route.holding"));
         }
@@ -371,11 +383,14 @@ fn notice_for(status: &AppStatus) -> Option<Line> {
 }
 
 /// Needs elevation is an overlay driven by `Capabilities.elevated` (A6); the
-/// invite appears only when a relay is selected and a boost could otherwise
-/// start (§2.2 row 7/M1).
+/// invite appears only when a relay is selected **and the boost can otherwise
+/// start** (spec M1, §2.2 row 7): unelevated plus disconnected, or unelevated
+/// with no relay, offers no elevation invitation because there is nothing to
+/// elevate for.
 fn overlay_for(status: &AppStatus) -> Overlay {
     if !status.capabilities.elevated
         && status.relay.relay.is_some()
+        && status.engine.connected
         && !status.boosting
         && status.error.is_none()
         && !status.relay.connecting
@@ -441,6 +456,15 @@ fn ledger_rows(status: &AppStatus) -> Vec<Row> {
         label_key: "route.relay",
         value: relay_row_value(status),
     });
+    // Spec §2.2 row 1: `Relay RTT` when measured. The rail metric shows the
+    // same relay leg, but the §3 ledger matrix keeps this row, so the seam
+    // emits it rather than leaving W2-2 to invent it.
+    if status.engine.connected && status.engine.latest_rtt_ms > 0.0 {
+        rows.push(Row {
+            label_key: "route.relay_rtt",
+            value: RowValue::Data(format!("{:.0} ms", status.engine.latest_rtt_ms)),
+        });
+    }
     if boosting && status.engine.tunnelling_enabled == Some(false) {
         rows.push(Row {
             label_key: "route.path",
@@ -482,6 +506,18 @@ fn game_server_value(status: &AppStatus) -> RowValue {
 
 /// The `Relayed` row from the DTO's one source pair (§2.2 row 5, A5).
 fn relayed_value(status: &AppStatus) -> RowValue {
+    // Spec §2.2 row 3 / §3: while the session is held before a relay is chosen
+    // the row says `No traffic relayed yet` instead of a 0 up · 0 down pair.
+    let holding = status.boosting && status.engine.tunnelling_enabled == Some(false);
+    if holding {
+        let nothing_yet = status
+            .relayed
+            .map(|pair| pair.sent == 0 && pair.returned == 0)
+            .unwrap_or(true);
+        if nothing_yet {
+            return RowValue::Hint("route.relayed_hold");
+        }
+    }
     let Some(RelayedPair { sent, returned }) = status.relayed else {
         return RowValue::Hint("route.count_hint");
     };
@@ -529,20 +565,24 @@ fn detail_rows(status: &AppStatus) -> Vec<Row> {
     // §2.3: the server-leg and trace rows exist only while a tunnel carries
     // traffic; with the tunnel down there is nothing to state and nothing to
     // invent.
-    if !status.boosting {
-        return Vec::new();
-    }
     let mut rows = Vec::new();
+    // The direct ping is a client measurement of the locked server, not a
+    // tunnel fact: the Details contents list it without a boosting condition,
+    // so a connected-but-idle window that has one still shows its age. (QA
+    // R15: the rest of the disclosure is tunnel-scoped; this row is not.)
     if let Some(ping) = status.relay.server_ping {
         rows.push(Row {
             label_key: "route.server_ping",
             value: RowValue::Data(format!("{:.0} ms \u{00b7} {}s", ping.ms, ping.age_secs)),
         });
     }
+    if !status.boosting {
+        return rows;
+    }
     // Relay-measured rows lead; the estimator rows are the fallback (§2.3/A9).
     if let Some(expected_ms) = status.server_leg.expected_path_ms {
         rows.push(Row {
-            label_key: "route.expected_path",
+            label_key: "route.expected_path_label",
             value: RowValue::Copy(Line::with(
                 "route.expected_path",
                 &[("ms", format!("{expected_ms:.0}"))],
@@ -564,24 +604,29 @@ fn detail_rows(status: &AppStatus) -> Vec<Row> {
             )),
         });
     }
+    if status.server_leg.icmp.is_none() {
+        // The four v1 estimator rows are the fallback when the relay has **no
+        // report** for this pair (A9). Keyed on the report, not on the trace: a
+        // relay can publish a trace while no ICMP leg report exists, and that
+        // reachable state must still show the fallback row.
+        rows.push(estimator_row(status.relay.server_leg));
+    }
     if let Some(trace) = status.server_leg.trace.as_ref() {
         rows.push(Row {
             label_key: "route.route_trace",
             value: relay_trace_value(trace),
         });
-    } else if status.server_leg.icmp.is_none() {
-        // The four estimator rows are the fallback when the relay has no report.
-        rows.push(estimator_row(status.relay.server_leg));
     }
     if let Some((client_us, direct_us)) = status.relay.cannot_beat_direct {
         rows.push(Row {
             label_key: "route.cannot_beat_direct",
-            value: RowValue::Copy(Line::with(
-                "route.cannot_beat_direct",
-                &[
-                    ("client", (client_us / 1000).to_string()),
-                    ("direct", (direct_us / 1000).to_string()),
-                ],
+            // Caption as the label; the provable arithmetic as the value. The
+            // shipped caption has no placeholders, so the two measurements are
+            // emitted as data rather than silently dropped into it.
+            value: RowValue::Data(format!(
+                "{} ms \u{2265} {} ms",
+                client_us / 1000,
+                direct_us / 1000
             )),
         });
     }
@@ -655,7 +700,7 @@ fn location_block(status: &AppStatus) -> Option<LocationBlock> {
     let location = &status.location;
     let mut block = LocationBlock {
         label_key: "route.location_label",
-        rung_key: "route.location_unknown",
+        rung: Line::new("route.location_unknown"),
         detail: None,
         note: None,
         as_is: None,
@@ -664,14 +709,21 @@ fn location_block(status: &AppStatus) -> Option<LocationBlock> {
     };
     match location.rung {
         LocationRung::Cloud => {
-            block.rung_key = "route.location_provider";
-            block.detail = location.provider.map(|provider| {
-                RowValue::Data(format!(
-                    "{} \u{00b7} {}",
-                    provider.to_uppercase(),
-                    location.region.unwrap_or_default()
-                ))
-            });
+            block.rung = Line::new("route.location_provider");
+            // Only what the source has: a missing region omits the separator
+            // and the empty field rather than printing a dangling dot.
+            block.detail = match (location.provider, location.region) {
+                (Some(provider), Some(region)) if !provider.is_empty() && !region.is_empty() => {
+                    Some(RowValue::Data(format!(
+                        "{} \u{00b7} {region}",
+                        provider.to_uppercase()
+                    )))
+                }
+                (Some(provider), _) if !provider.is_empty() => {
+                    Some(RowValue::Data(provider.to_uppercase()))
+                }
+                _ => None,
+            };
         }
         LocationRung::Geofeed => {
             let geofeed = location.geofeed?;
@@ -680,12 +732,11 @@ fn location_block(status: &AppStatus) -> Option<LocationBlock> {
                 geofeed.region,
                 geofeed.city,
             );
-            block.rung_key = "route.location_geofeed";
+            // The `{place}` template belongs to the rung caption, so the caption
+            // is a `Line` with its placeholder supplied instead of a bare key
+            // that would leak `{place}` into the shell.
+            block.rung = Line::with("route.location_geofeed", &[("place", place)]);
             block.detail = Some(RowValue::Copy(Line::with(
-                "route.location_geofeed",
-                &[("place", place)],
-            )));
-            block.note = Some(RowValue::Copy(Line::with(
                 "route.location_geofeed_detail",
                 &[
                     ("provider", geofeed.provider.to_string()),
@@ -699,44 +750,56 @@ fn location_block(status: &AppStatus) -> Option<LocationBlock> {
             ));
         }
         LocationRung::Hosting => {
-            block.rung_key = "route.location_hosting";
-            block.detail = Some(RowValue::Data(format!(
-                "AS{} \u{00b7} {}",
-                location.asn.unwrap_or(0),
-                location.hosting.unwrap_or_default()
-            )));
-            block.hint = Some("route.location_hosting_hint");
+            // A hosting rung without both facts cannot state its network: show
+            // the honest unknown instead of `AS0` / a blank name.
+            match (location.asn, location.hosting) {
+                (Some(asn), Some(name)) if asn > 0 && !name.is_empty() => {
+                    block.rung = Line::new("route.location_hosting");
+                    block.detail = Some(RowValue::Data(format!("AS{asn} \u{00b7} {name}")));
+                    block.hint = Some("route.location_hosting_hint");
+                }
+                _ => {
+                    block.rung = Line::new("route.location_unknown");
+                    block.hint = Some("route.location_hosting_hint");
+                }
+            }
         }
         LocationRung::Country => {
-            block.rung_key = "route.location_estimate";
+            block.rung = Line::new("route.location_estimate");
         }
         LocationRung::Unknown => {
-            block.rung_key = "route.location_unknown";
+            block.rung = Line::new("route.location_unknown");
             block.hint = Some("route.location_hosting_hint");
         }
     }
     Some(block)
 }
 
-/// The client route-trace caption (A10): hops and the nearest responding hop.
+/// The client route-trace caption (A10): the shipped `Route to server` key with
+/// hops, plus the shipped `nearest responding hop` suffix when one answered.
 fn trace_surface(status: &AppStatus) -> Option<RouteTraceSurface> {
     let route = status.route_trace?;
-    let line = match route.last_hop_rtt_ms {
-        Some(ms) => Line::with(
-            "route.trace_nearest",
-            &[("hops", route.hops.to_string()), ("ms", ms.to_string())],
-        ),
-        None => Line::with("route.trace_route", &[("hops", route.hops.to_string())]),
-    };
+    let caption = Line::with("route.trace_route", &[("hops", route.hops.to_string())]);
+    let nearest = route
+        .last_hop_rtt_ms
+        .map(|ms| Line::with("route.trace_nearest", &[("ms", ms.to_string())]));
     Some(RouteTraceSurface {
-        caption_key: "route.trace_caption",
-        line,
+        caption,
+        nearest,
+        // `ClientRoute` carries no last-hop network name until the core
+        // client-trace move (S5b); the surface never invents one.
+        provider: None,
     })
 }
 
 /// The `error.config` sentence and its Details detail for the Error row.
 pub fn error_surface(status: &AppStatus) -> Option<(Line, Option<String>)> {
     let error = status.error.as_ref()?;
+    Some((error_line(error), error.detail.clone()))
+}
+
+/// The taxonomy sentence for one error kind: one kind, one sentence (§2.8).
+fn error_line(error: &lightspeed_client::app::dto::AppError) -> Line {
     let key = match error.kind {
         AppErrorKind::Capture | AppErrorKind::Tunnel => "error.tunnel",
         AppErrorKind::Route => "error.registration",
@@ -745,7 +808,7 @@ pub fn error_surface(status: &AppStatus) -> Option<(Line, Option<String>)> {
         AppErrorKind::Io => "error.io",
         AppErrorKind::Unsupported => "error.unsupported",
     };
-    Some((Line::new(key), error.detail.clone()))
+    Line::new(key)
 }
 
 /// The carry fact for the route: a starved record never changes the word or the
@@ -1033,6 +1096,47 @@ mod tests {
     }
 
     #[test]
+    fn the_elevation_invite_needs_a_boost_that_could_otherwise_start() {
+        // R1/M1: unelevated alone is not an invitation. The invite exists only
+        // when a relay is selected and the boost is otherwise ready.
+        let mut unelevated = status();
+        unelevated.capabilities = Capabilities { elevated: false };
+        unelevated.engine.connected = false;
+        unelevated.engine.proxy_addr = String::new();
+        let surface = route_surface(&unelevated);
+        assert_eq!(surface.overlay, Overlay::None, "no elevation overlay");
+        assert_eq!(surface.notice, None, "no elevation notice");
+        assert_eq!(
+            surface.action.label_key, "action.optimize_route",
+            "not the restart invite"
+        );
+        assert!(!surface.action.enabled);
+        assert_eq!(
+            surface.action.disabled_reason.as_ref().map(|line| line.key),
+            Some("action_reason.not_connected")
+        );
+
+        // Disconnected but with no relay: still no invite; the missing relay is
+        // the first unmet gate.
+        unelevated.relay.relay = None;
+        let surface = route_surface(&unelevated);
+        assert_eq!(surface.overlay, Overlay::None);
+        assert_eq!(surface.action.label_key, "action.optimize_route");
+        assert_eq!(
+            surface.action.disabled_reason.as_ref().map(|line| line.key),
+            Some("action_reason.missing_relay")
+        );
+
+        // Connected, relay selected, unelevated: the invite is the answer.
+        let mut ready_but_unelevated = status();
+        ready_but_unelevated.capabilities = Capabilities { elevated: false };
+        let surface = route_surface(&ready_but_unelevated);
+        assert_eq!(surface.overlay, Overlay::NeedsElevation);
+        assert_eq!(surface.action.label_key, "action.restart_admin_optimize");
+        assert!(surface.action.enabled);
+    }
+
+    #[test]
     fn error_leads_the_word_and_keeps_its_details_behind_the_disclosure() {
         let mut failed = boosting_status();
         failed.error = Some(AppError::for_kind(AppErrorKind::Tunnel, "WSAEMSGSIZE"));
@@ -1040,6 +1144,12 @@ mod tests {
         let surface = route_surface(&failed);
         assert_eq!(surface.word, RouteWord::Error);
         assert_eq!(surface.word.key(), "state.error");
+        // R7: the Error state's sub-line is the taxonomy sentence, not a route
+        // sub-line left over from the previous state.
+        assert_eq!(
+            surface.subline.as_ref().map(|line| line.key),
+            Some("error.tunnel")
+        );
         let (line, detail) = error_surface(&failed).expect("the Error row carries its sentence");
         assert_eq!(line.key, "error.tunnel");
         assert_eq!(detail.as_deref(), Some("WSAEMSGSIZE"));
@@ -1051,6 +1161,10 @@ mod tests {
         assert_eq!(
             error_surface(&config).expect("config error").0.key,
             "error.config"
+        );
+        assert_eq!(
+            route_surface(&config).subline.as_ref().map(|line| line.key),
+            Some("error.config")
         );
 
         let healthy = status();
@@ -1153,7 +1267,7 @@ mod tests {
         let surface = route_surface(&measured);
         let labels: Vec<&str> = surface.details.iter().map(|row| row.label_key).collect();
         for label in [
-            "route.expected_path",
+            "route.expected_path_label",
             "route.server_leg_app",
             "route.route_trace",
         ] {
@@ -1162,6 +1276,24 @@ mod tests {
                 "missing relay-measured row {label}"
             );
         }
+        // M15: the label key is not the value template and carries no
+        // placeholder; the value is the template with its ms arg.
+        let expected = surface
+            .details
+            .iter()
+            .find(|row| row.label_key == "route.expected_path_label")
+            .expect("expected path row");
+        assert!(
+            !expected.label_key.contains('{'),
+            "a label must never render a placeholder template"
+        );
+        assert!(
+            matches!(&expected.value, RowValue::Copy(line)
+                if line.key == "route.expected_path"
+                    && line.args == vec![("ms", "61".to_string())]),
+            "the value is the expected-path template with its ms arg: {:?}",
+            expected.value
+        );
         // The best Server leg row is on the default surface; the estimator
         // fallback is not rendered when the relay has a report.
         assert!(
@@ -1176,12 +1308,31 @@ mod tests {
             "the estimator fallback does not duplicate the measured leg"
         );
 
-        // No report, no measured rows.
+        // R3: a trace report without an ICMP leg report is a reachable state;
+        // the estimator fallback (keyed on the *report*) must still be shown.
+        let mut trace_only = boosting_status();
+        trace_only.relay.server_leg = ServerLegState::Prior { prior_us: 41_000 };
+        trace_only.server_leg.trace = Some(lightspeed_client::ServerTraceReport {
+            hops: 9,
+            last_hop: None,
+            last_hop_rtt_us: Some(12_000),
+            complete: true,
+            age: std::time::Duration::from_secs(4),
+        });
+        let surface = route_surface(&trace_only);
+        let labels: Vec<&str> = surface.details.iter().map(|row| row.label_key).collect();
+        assert!(labels.contains(&"route.route_trace"), "the trace row");
+        assert!(
+            labels.contains(&"route.server_leg"),
+            "the estimator fallback is keyed on report absence, not trace absence"
+        );
+
+        // No report and no trace: still the estimator fallback, no fabricated
+        // measured row.
         let plain = route_surface(&boosting_status());
-        assert!(!plain
-            .details
-            .iter()
-            .any(|row| row.label_key == "route.expected_path"));
+        let labels: Vec<&str> = plain.details.iter().map(|row| row.label_key).collect();
+        assert!(labels.contains(&"route.server_leg"));
+        assert!(!labels.contains(&"route.expected_path_label"));
         assert!(!plain
             .ledger
             .iter()
@@ -1200,8 +1351,13 @@ mod tests {
         let mut status = boosting_status();
         status.location = cloud;
         let block = route_surface(&status).location.expect("cloud rung");
-        assert_eq!(block.rung_key, "route.location_provider");
+        assert_eq!(block.rung.key, "route.location_provider");
         assert_eq!(block.hint, None);
+        assert!(
+            matches!(&block.detail, Some(RowValue::Data(value)) if value == "GCORE · us-east-1"),
+            "the cloud detail is the provider region: {:?}",
+            block.detail
+        );
 
         let geofeed = LocationStatus {
             rung: LocationRung::Geofeed,
@@ -1217,12 +1373,40 @@ mod tests {
         };
         status.location = geofeed;
         let block = route_surface(&status).location.expect("geofeed rung");
-        assert_eq!(block.rung_key, "route.location_geofeed");
+        assert_eq!(
+            block.rung.key, "route.location_geofeed",
+            "the rung caption key"
+        );
+        assert_eq!(
+            block.rung.args,
+            vec![("place", "Manassas, US-VA".to_string())],
+            "the {{place}} template is supplied, never emitted bare"
+        );
+        assert!(
+            matches!(&block.detail, Some(RowValue::Copy(line)) if line.key == "route.location_geofeed_detail"),
+            "the provider/as-of detail line"
+        );
         assert_eq!(
             block.as_is,
             Some("route.location_geofeed_note"),
             "a geofeed is shown as-is"
         );
+        assert!(block.source.is_some(), "the source URL is the hover fact");
+
+        // A hosting rung without both facts cannot state its network: the block
+        // shows the honest unknown instead of `AS0` or a blank name (R11).
+        let mut incomplete = status.clone();
+        incomplete.location = LocationStatus {
+            rung: LocationRung::Hosting,
+            asn: Some(0),
+            hosting: None,
+            ..LocationStatus::default()
+        };
+        let block = route_surface(&incomplete)
+            .location
+            .expect("incomplete hosting rung");
+        assert_eq!(block.rung.key, "route.location_unknown");
+        assert_eq!(block.detail, None, "never AS0 / a blank network name");
 
         let hosting = LocationStatus {
             rung: LocationRung::Hosting,
@@ -1232,8 +1416,13 @@ mod tests {
         };
         status.location = hosting;
         let block = route_surface(&status).location.expect("hosting rung");
-        assert_eq!(block.rung_key, "route.location_hosting");
+        assert_eq!(block.rung.key, "route.location_hosting");
         assert_eq!(block.hint, Some("route.location_hosting_hint"));
+        assert!(
+            matches!(&block.detail, Some(RowValue::Data(value)) if value == "AS20473 · DigitalOcean"),
+            "the hosting detail: {:?}",
+            block.detail
+        );
 
         status.location = LocationStatus {
             rung: LocationRung::Country,
@@ -1244,7 +1433,8 @@ mod tests {
             route_surface(&status)
                 .location
                 .expect("country rung")
-                .rung_key,
+                .rung
+                .key,
             "route.location_estimate"
         );
         status.location = LocationStatus {
@@ -1255,7 +1445,8 @@ mod tests {
             route_surface(&status)
                 .location
                 .expect("unknown rung")
-                .rung_key,
+                .rung
+                .key,
             "route.location_unknown"
         );
 
@@ -1275,8 +1466,18 @@ mod tests {
             complete: true,
         });
         let trace = route_surface(&traced).trace.expect("trace caption");
-        assert_eq!(trace.line.key, "route.trace_nearest");
-        assert_eq!(trace.line.args[0], ("hops", "7".to_string()));
+        assert_eq!(
+            trace.caption.key, "route.trace_route",
+            "the shipped caption key carries the hops"
+        );
+        assert_eq!(trace.caption.args, vec![("hops", "7".to_string())]);
+        let nearest = trace.nearest.expect("a router answered");
+        assert_eq!(nearest.key, "route.trace_nearest");
+        assert_eq!(nearest.args, vec![("ms", "31".to_string())]);
+        assert_eq!(
+            trace.provider, None,
+            "no network name is invented for the last hop (S5b supplies one)"
+        );
 
         let no_router = route_surface(&AppStatus {
             route_trace: Some(ClientRoute {
@@ -1287,10 +1488,9 @@ mod tests {
             }),
             ..boosting_status()
         });
-        assert_eq!(
-            no_router.trace.expect("trace caption").line.key,
-            "route.trace_route"
-        );
+        let trace = no_router.trace.expect("trace caption");
+        assert_eq!(trace.caption.args, vec![("hops", "5".to_string())]);
+        assert_eq!(trace.nearest, None, "no router answered: no suffix");
 
         assert!(route_surface(&boosting_status()).trace.is_none());
     }
@@ -1345,6 +1545,189 @@ mod tests {
     }
 
     // ── (d) Relay-recovered absence + WatchdogPlan transitions ─────────────
+
+    #[test]
+    fn the_default_ledger_shows_the_rows_the_contract_names() {
+        // Connected idle: Relay, Relay RTT (measured), Game server, Relayed.
+        let surface = route_surface(&status());
+        let labels: Vec<&str> = surface.ledger.iter().map(|row| row.label_key).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "route.relay",
+                "route.relay_rtt",
+                "route.game_server",
+                "route.relayed"
+            ],
+            "R5: Relay RTT is a default row when measured"
+        );
+        assert_eq!(surface.ledger[0].value, RowValue::Data(relay().to_string()));
+        assert_eq!(
+            surface.ledger[1].value,
+            RowValue::Data("305 ms".to_string())
+        );
+        assert_eq!(
+            surface.ledger[2].value,
+            RowValue::Data(server().to_string())
+        );
+        assert_eq!(
+            surface.ledger[3].value,
+            RowValue::Hint("route.count_hint"),
+            "no session counters yet"
+        );
+
+        // No measurement, no Relay RTT row.
+        let mut no_measurement = status();
+        no_measurement.engine.latest_rtt_ms = 0.0;
+        assert!(!route_surface(&no_measurement)
+            .ledger
+            .iter()
+            .any(|row| row.label_key == "route.relay_rtt"));
+
+        // Relaying: the same rows plus the one session pair.
+        let relaying = route_surface(&boosting_status());
+        let labels: Vec<&str> = relaying.ledger.iter().map(|row| row.label_key).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "route.relay",
+                "route.relay_rtt",
+                "route.game_server",
+                "route.relayed"
+            ]
+        );
+        assert!(matches!(
+            relaying.ledger[3].value,
+            RowValue::Copy(ref line) if line.key == "route.sent_returned"
+        ));
+
+        // Holding: Path says Holding and Relayed says nothing has been relayed
+        // yet (spec §2.2 row 3 / §3), even though the pair is Some(0, 0).
+        let mut holding = boosting_status();
+        holding.engine.tunnelling_enabled = Some(false);
+        holding.relayed = Some(RelayedPair {
+            sent: 0,
+            returned: 0,
+        });
+        let surface = route_surface(&holding);
+        let labels: Vec<&str> = surface.ledger.iter().map(|row| row.label_key).collect();
+        assert!(labels.contains(&"route.path"), "the Path row while held");
+        let path = surface
+            .ledger
+            .iter()
+            .find(|row| row.label_key == "route.path")
+            .expect("path row");
+        assert!(matches!(&path.value, RowValue::Warn(line) if line.key == "state.holding"));
+        let relayed = surface
+            .ledger
+            .iter()
+            .find(|row| row.label_key == "route.relayed")
+            .expect("relayed row");
+        assert_eq!(
+            relayed.value,
+            RowValue::Hint("route.relayed_hold"),
+            "R6: the hold says no traffic relayed yet, not 0 up · 0 down"
+        );
+
+        // Disconnected: Relay is a placeholder, never the stale address.
+        let mut idle = status();
+        idle.engine.connected = false;
+        idle.engine.proxy_addr = String::new();
+        let relay_row = &route_surface(&idle).ledger[0];
+        assert_eq!(relay_row.value, RowValue::Hint("--"));
+    }
+
+    #[test]
+    fn the_details_include_the_direct_ping_before_a_session() {
+        // R15: the direct ping is not tunnel-scoped; a connected idle window
+        // that measured it still shows the row (in Details).
+        let mut pinged = status();
+        pinged.relay.server_ping = Some(ServerPing {
+            server: server(),
+            ms: 283.0,
+            age_secs: 4,
+        });
+        let surface = route_surface(&pinged);
+        let labels: Vec<&str> = surface.details.iter().map(|row| row.label_key).collect();
+        assert_eq!(labels, vec!["route.server_ping"]);
+        assert!(matches!(
+            &surface.details[0].value,
+            RowValue::Data(value) if value == "283 ms · 4s"
+        ));
+
+        // No ping measured: no row.
+        assert!(route_surface(&status()).details.is_empty());
+    }
+
+    #[test]
+    fn the_cannot_beat_direct_row_states_the_arithmetic() {
+        // R8: the shipped caption has no placeholders, so the two provable
+        // measurements are emitted as data; the caption is the label only.
+        let mut status = boosting_status();
+        status.relay.cannot_beat_direct = Some((305_840, 283_474));
+        let surface = route_surface(&status);
+        let row = surface
+            .details
+            .iter()
+            .find(|row| row.label_key == "route.cannot_beat_direct")
+            .expect("the triangle caption row");
+        assert!(
+            !row.label_key.contains('{'),
+            "the caption is not a template"
+        );
+        assert!(
+            matches!(&row.value, RowValue::Data(value)
+                if value.contains("305") && value.contains("283")),
+            "the arithmetic carries both measurements: {:?}",
+            row.value
+        );
+        assert!(!route_surface(&boosting_status())
+            .details
+            .iter()
+            .any(|row| row.label_key == "route.cannot_beat_direct"));
+    }
+
+    #[test]
+    fn the_idle_subline_names_the_game_mode() {
+        // The shipped short forms: pick-your-game with no game, named when the
+        // engine has one. (The §2.2 "Auto waits / follows / pinned" wording is
+        // a W2-2 copy decision; the fact path is the same field.)
+        assert_eq!(
+            route_surface(&status()).subline.map(|line| line.key),
+            Some("route.relay_ready_pick")
+        );
+        let mut named = status();
+        named.engine.redirect_game = "Rust".to_string();
+        let subline = route_surface(&named).subline.expect("named sub-line");
+        assert_eq!(subline.key, "route.relay_ready_named");
+        assert_eq!(subline.args, vec![("name", "Rust".to_string())]);
+    }
+
+    #[test]
+    fn disabled_reasons_follow_the_gate_order() {
+        let mut registration = status();
+        registration.engine.connected = false;
+        registration.engine.registration_error = Some("relay refused".to_string());
+        assert_eq!(
+            route_surface(&registration)
+                .action
+                .disabled_reason
+                .as_ref()
+                .map(|line| line.key),
+            Some("action_reason.registration")
+        );
+
+        let mut not_connected = status();
+        not_connected.engine.connected = false;
+        assert_eq!(
+            route_surface(&not_connected)
+                .action
+                .disabled_reason
+                .as_ref()
+                .map(|line| line.key),
+            Some("action_reason.not_connected")
+        );
+    }
 
     #[test]
     fn there_is_no_recovered_word_or_banner() {
