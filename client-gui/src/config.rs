@@ -19,5 +19,6 @@
 //! second copy of the schema.
 
 pub use lightspeed_client::app::config::{
-    load_unified, merge_discovered, reset, save_canonical, AppConfig, ConfigRecovery, ProxyEntry,
+    load_unified, merge_discovered, reset_to_defaults, save_canonical, AppConfig, ConfigRecovery,
+    ProxyEntry,
 };

@@ -236,6 +236,30 @@ pub const CANONICAL_FILE_NAME: &str = "lightspeed.toml";
 /// The GUI's pre-unification file name (legacy, read-only import).
 pub const LEGACY_FILE_NAME: &str = "config.toml";
 
+/// The canonical file's metadata table (`[meta]`).
+pub const META_TABLE: &str = "meta";
+
+/// The `[meta]` key recording an explicit "Reset to defaults" decision (S6d).
+///
+/// `legacy_import = false` in the canonical file means the user explicitly chose
+/// defaults: the read-only legacy GUI file must not be imported again. It is the
+/// only metadata key this module reads.
+pub const LEGACY_IMPORT_META_KEY: &str = "legacy_import";
+
+/// Whether a parsed canonical table records the explicit-defaults decision.
+///
+/// Only an explicit boolean `false` counts. A missing table/key, a malformed
+/// value or `legacy_import = true` all keep the ordinary import precedence
+/// unchanged (legacy fills unset keys).
+fn legacy_import_disabled(table: &Table) -> bool {
+    table
+        .get(META_TABLE)
+        .and_then(Value::as_table)
+        .and_then(|meta| meta.get(LEGACY_IMPORT_META_KEY))
+        .and_then(Value::as_bool)
+        == Some(false)
+}
+
 /// The pair of config files a front end reads: the canonical file it writes and
 /// the legacy GUI file it only imports.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -288,6 +312,12 @@ fn read_table(path: &Path) -> FileTable {
 ///   source and must never block startup);
 /// * legacy alone → its values load as the config (the one-time migration read).
 ///
+/// **Explicit defaults (S6d).** When the canonical file carries the
+/// `[meta] legacy_import = false` marker (written by
+/// [`reset_to_defaults`] and preserved by [`save_canonical`]), the legacy import
+/// is skipped **entirely**: the canonical file alone is the config. That is what
+/// makes Reset a real reset without ever touching the legacy file.
+///
 /// This function only ever **reads** the legacy file; no function in this module
 /// writes, renames or deletes it.
 pub fn load_unified(paths: &ConfigPaths) -> LoadedAppConfig {
@@ -308,16 +338,26 @@ pub fn load_unified(paths: &ConfigPaths) -> LoadedAppConfig {
             };
         }
     };
-    let legacy_table = match read_table(&paths.legacy) {
-        FileTable::Missing => None,
-        FileTable::Parsed(table) => Some(table),
-        FileTable::Unusable(reason) => {
-            tracing::warn!(
-                "Ignoring unusable legacy config {}: {reason}",
-                paths.legacy.display()
-            );
-            None
+    // A canonical file that records the explicit-defaults decision suppresses the
+    // legacy import entirely; the legacy file is then not even read.
+    let import_legacy = canonical_table
+        .as_ref()
+        .map(|table| !legacy_import_disabled(table))
+        .unwrap_or(true);
+    let legacy_table = if import_legacy {
+        match read_table(&paths.legacy) {
+            FileTable::Missing => None,
+            FileTable::Parsed(table) => Some(table),
+            FileTable::Unusable(reason) => {
+                tracing::warn!(
+                    "Ignoring unusable legacy config {}: {reason}",
+                    paths.legacy.display()
+                );
+                None
+            }
         }
+    } else {
+        None
     };
     let merged = match (canonical_table, legacy_table) {
         (None, None) => {
@@ -355,8 +395,49 @@ pub fn load_unified_in_dir(dir: &Path) -> LoadedAppConfig {
 /// The canonical write is the migration step: after it, the values it carries
 /// override the legacy read for every key it emits. The legacy file stays on
 /// disk exactly as the user left it (Q10: preserved).
+///
+/// An existing explicit-defaults marker (`[meta] legacy_import = false`) is
+/// **preserved** across an ordinary settings save: once the user has reset, a
+/// later settings change must not silently re-enable the legacy import (S6d).
 pub fn save_canonical(paths: &ConfigPaths, config: &AppConfig) -> Result<(), String> {
-    save(&paths.canonical, config)
+    let explicit_defaults = matches!(
+        read_table(&paths.canonical),
+        FileTable::Parsed(table) if legacy_import_disabled(&table)
+    );
+    write_config(&paths.canonical, config, explicit_defaults)
+}
+
+/// "Reset to defaults" — a real reset (S6d).
+///
+/// Writes the canonical file as typed defaults **plus** the
+/// `[meta] legacy_import = false` marker, so the read-only legacy GUI file can
+/// never re-populate the settings on the next load. The legacy file itself is
+/// never written, renamed or deleted (Q10). A missing/unreadable canonical file
+/// is irrelevant: the reset writes a fresh one.
+pub fn reset_to_defaults(paths: &ConfigPaths) -> Result<(), String> {
+    write_config(&paths.canonical, &AppConfig::default(), true)
+}
+
+/// Write `config` to `path`, creating the parent directory, optionally appending
+/// the explicit-defaults marker.
+fn write_config(path: &Path, config: &AppConfig, explicit_defaults: bool) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut body = render(config);
+    if explicit_defaults {
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push('[');
+        body.push_str(META_TABLE);
+        body.push_str("]\n");
+        body.push_str(LEGACY_IMPORT_META_KEY);
+        body.push_str(" = false\n");
+    }
+    std::fs::write(path, body).map_err(|e| e.to_string())?;
+    tracing::info!("Saved config to {}", path.display());
+    Ok(())
 }
 
 /// Parse a `config.toml` body. Unknown keys are ignored; entries with an
@@ -524,12 +605,7 @@ pub fn render(config: &AppConfig) -> String {
 
 /// Write the config, creating the parent directory when needed.
 pub fn save(path: &Path, config: &AppConfig) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, render(config)).map_err(|e| e.to_string())?;
-    tracing::info!("Saved config to {}", path.display());
-    Ok(())
+    write_config(path, config, false)
 }
 
 /// Remove the persisted config ("Reset to defaults"). A missing file is fine.
@@ -556,8 +632,8 @@ pub fn merge_discovered(existing: &[ProxyEntry], discovered: Vec<ProxyEntry>) ->
 mod tests {
     use super::{
         load, load_or_default, load_unified, load_unified_in_dir, merge_discovered, parse, render,
-        reset, save, save_canonical, AppConfig, ConfigPaths, ProxyEntry, CANONICAL_FILE_NAME,
-        LEGACY_FILE_NAME,
+        reset, reset_to_defaults, save, save_canonical, AppConfig, ConfigPaths, ProxyEntry,
+        CANONICAL_FILE_NAME, LEGACY_FILE_NAME, LEGACY_IMPORT_META_KEY, META_TABLE,
     };
     use std::net::SocketAddrV4;
     use std::path::PathBuf;
@@ -997,5 +1073,107 @@ mod tests {
         let reloaded = load_unified(&paths);
         assert!(reloaded.recovery.is_none());
         assert_eq!(reloaded.config.selected, loaded.config.selected);
+    }
+
+    // ── Explicit defaults / Reset (S6d) ────────────────────────────────────
+
+    /// Reset writes the marker; the next load returns typed defaults even with a
+    /// legacy file full of values present, and the legacy bytes are untouched.
+    #[test]
+    fn reset_to_defaults_is_a_real_reset_with_a_legacy_file_present() {
+        let dir = scratch("reset");
+        let paths = ConfigPaths::in_dir(&dir);
+        let legacy_body = "selected = \"1.1.1.1:4434\"\nshare_latency_stats = false\n\
+                           language = \"de\"\n";
+        std::fs::write(&paths.legacy, legacy_body).expect("write legacy");
+
+        // Before the reset the legacy file is imported (ordinary precedence).
+        assert_eq!(
+            load_unified(&paths).config.selected.as_deref(),
+            Some("1.1.1.1:4434")
+        );
+
+        reset_to_defaults(&paths).expect("reset");
+        let canonical = read(&paths.canonical);
+        assert!(
+            canonical.contains(&format!("[{META_TABLE}]")),
+            "reset writes the meta table: {canonical}"
+        );
+        assert!(
+            canonical.contains(&format!("{LEGACY_IMPORT_META_KEY} = false")),
+            "reset writes the explicit-defaults marker: {canonical}"
+        );
+
+        let loaded = load_unified(&paths);
+        assert_eq!(
+            loaded.config,
+            AppConfig::default(),
+            "reset returns typed defaults, not the legacy values"
+        );
+        assert!(loaded.recovery.is_none());
+        assert_eq!(
+            read(&paths.legacy),
+            legacy_body,
+            "the legacy file is never touched by a reset"
+        );
+    }
+
+    /// The reset decision survives a later ordinary settings save: the marker is
+    /// preserved and the legacy file still does not re-import.
+    #[test]
+    fn reset_marker_survives_a_later_settings_save() {
+        let dir = scratch("reset-roundtrip");
+        let paths = ConfigPaths::in_dir(&dir);
+        std::fs::write(
+            &paths.legacy,
+            "selected = \"1.1.1.1:4434\"\nshare_latency_stats = false\n",
+        )
+        .expect("write legacy");
+        reset_to_defaults(&paths).expect("reset");
+
+        let mut changed = load_unified(&paths).config;
+        assert_eq!(changed, AppConfig::default());
+        changed.language = Some("ru".to_string());
+        changed.tunnel_mtu = 1400;
+        save_canonical(&paths, &changed).expect("save after reset");
+
+        let written = read(&paths.canonical);
+        assert!(
+            written.contains(&format!("{LEGACY_IMPORT_META_KEY} = false")),
+            "the marker must survive an ordinary settings save: {written}"
+        );
+        let reloaded = load_unified(&paths);
+        assert_eq!(reloaded.config.language.as_deref(), Some("ru"));
+        assert_eq!(reloaded.config.tunnel_mtu, 1400);
+        assert_eq!(
+            reloaded.config.selected, None,
+            "the legacy selection must not re-import after a reset"
+        );
+        assert!(
+            reloaded.config.share_latency_stats,
+            "the legacy consent bit must not re-import after a reset"
+        );
+    }
+
+    /// Ordinary precedence is unchanged: only an explicit boolean `false`
+    /// suppresses the import; a missing/true/malformed marker keeps it.
+    #[test]
+    fn only_an_explicit_false_marker_suppresses_the_import() {
+        for canonical in [
+            format!("[{META_TABLE}]\n{LEGACY_IMPORT_META_KEY} = true\n"),
+            format!("[{META_TABLE}]\n{LEGACY_IMPORT_META_KEY} = \"no\"\n"),
+            "[meta]\nother = 1\n".to_string(),
+            "auto_select = false\n".to_string(),
+        ] {
+            let dir = scratch("marker-not-false");
+            let paths = ConfigPaths::in_dir(&dir);
+            std::fs::write(&paths.legacy, "selected = \"1.1.1.1:4434\"\n").expect("write legacy");
+            std::fs::write(&paths.canonical, &canonical).expect("write canonical");
+            assert_eq!(
+                load_unified(&paths).config.selected.as_deref(),
+                Some("1.1.1.1:4434"),
+                "canonical {canonical:?} must not suppress the legacy import"
+            );
+        }
     }
 }

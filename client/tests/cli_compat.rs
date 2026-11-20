@@ -479,3 +479,58 @@ fn own_config_file_wins_over_the_shared_config() {
         "the CLI's own config must win over the shared per-user config"
     );
 }
+
+/// A GUI "Reset to defaults" (the explicit-defaults marker) reaches the CLI: the
+/// legacy file must be skipped even though it carries old consent=false, so the
+/// CLI sees default consent (notice on).
+#[test]
+fn cli_sees_the_gui_reset_as_defaults() {
+    let dir = scratch_dir("shared-reset");
+    write_shared_config(
+        &dir,
+        Some("[meta]\nlegacy_import = false\n"),
+        Some("share_latency_stats = false\nselected = \"1.1.1.1:4434\"\n"),
+    );
+    let out = run_cli(
+        &dir,
+        &[
+            "--list-games",
+            "--no-user-profiles",
+            "--config",
+            "absent.toml",
+        ],
+    );
+    assert!(out.status.success());
+    assert!(
+        telemetry_notice(&out),
+        "the reset marker must suppress the legacy import in the CLI too"
+    );
+}
+
+/// After a reset, a canonical value the user then sets still wins: the marker
+/// suppresses only the legacy import, not the canonical file.
+#[test]
+fn cli_honours_canonical_values_after_a_reset() {
+    let dir = scratch_dir("shared-reset-canonical");
+    // NOTE the TOML scoping: the `[meta]` header starts a table, so the value
+    // the user set must come *before* it (top level).
+    write_shared_config(
+        &dir,
+        Some("share_latency_stats = false\n[meta]\nlegacy_import = false\n"),
+        Some("share_latency_stats = true\n"),
+    );
+    let out = run_cli(
+        &dir,
+        &[
+            "--list-games",
+            "--no-user-profiles",
+            "--config",
+            "absent.toml",
+        ],
+    );
+    assert!(out.status.success());
+    assert!(
+        !telemetry_notice(&out),
+        "the canonical consent=false must apply after a reset"
+    );
+}

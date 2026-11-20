@@ -3958,7 +3958,7 @@ impl<P: Platform> LightSpeedApp<P> {
             self.persist_config();
         }
         if reset {
-            match config::reset(&paths::config_paths().canonical) {
+            match config::reset_to_defaults(&paths::config_paths()) {
                 Ok(()) => {
                     self.proxies = env_proxies();
                     self.selected_proxy_idx = 0;

@@ -364,8 +364,19 @@ the extent the shared engine surface allows, and the remaining CLI surfaces are
   are the acceptance gate and run in the workspace job; `--status` adopts
   `dto::CapabilityFacts`, `--check` adopts the shared `SessionCore` composition
   root (silent on success).
+- **Config files (S6c/S6d, owner Q10):** one canonical per-user config —
+  `lightspeed.toml` in the per-user config directory (the CLI's native file name,
+  so both front ends share one name in one directory); the GUI's pre-unification
+  `config.toml` is imported **read-only** (never written, renamed or deleted) and
+  only fills keys the canonical file does not set (canonical wins per key).
+  **Reset-to-defaults is a real reset:** it writes the canonical file as typed
+  defaults plus the marker `[meta] legacy_import = false`, which
+  `load_unified` honours by skipping the legacy import entirely; ordinary
+  settings saves preserve the marker. Ordinary first-run/import/malformed
+  precedence is unchanged, and the retired `retry_after_fallback` key stays
+  tolerated on read and never written.
 - **Accepted end state for G1(b):** the allowance is not empty; it is the
-  **item-level named adapter table** (41 rows, no module-prefix blankets) in
+  **item-level named adapter table** (42 rows, no module-prefix blankets) in
   `client/tests/gui_boundary.rs`. CLI module dedup is closed for this program: no
   CLI module is unreferenced and the library counterparts are `pub(crate)`.
 - **Keepalive** stays the CLI's UDP-relay echo loop (the engine keepalive is QUIC
