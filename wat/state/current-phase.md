@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (S6b checkpoint) - WF-081: SessionCore shared, first modes adopted; keepalive/live-test deferred; S6b2 next
+
+**Agent:** lead + `rust-dev-2` (task-54).
+
+- **S6b committed (`ee6cfb7`, 5 files +297/−79).** New shared **`SessionCore`** (`client/src/app/runtime.rs`, 139 lines, 3 tests): builds **seams → engine → `AppCore`** (provider classifier before engine creation, feature-gated like the shipped CLI), applies the effective MTU **as a typed command**, and exposes `status()`/`commands_mut()`/`engine()`/`is_clean_start()`. `--check` now constructs the root and fails unless it is a clean disconnected start (silent on success, so shipped output/exit semantics are unchanged); `--status` adopts `dto::CapabilityFacts` with one privilege source, and the status golden stays **byte-identical**. **G1 ratchet:** 47 → **41 item-level named adapter rows**, no blanket prefixes, with G2 +3 (`SessionCore`, `install_core_seams`, `is_clean_start`) and the four-round S6 mutation proof — G1-only, G2-only, G3-only, and a deliberate CLI text drift **caught by the goldens (exit 101)** — all restores byte-identical. Frozen goldens stayed hash-identical; gate **1963 / 0 / 7**, GUI **155 / 0 / 0**, guard **8/8**.
+- **Two Lead-decided deferrals recorded:** keepalive stays the CLI's **UDP-relay echo loop** (the engine keepalive is QUIC control-plane; forcing adoption would change CLI behaviour) as a named front-end adapter; `--live-test` stays CLI-specific because adoption needs an engine diagnostic-phase surface that does not exist. CLI module dedup: no module is unreferenced; the item-level G1 adapter map is the accepted end state for this program.
+- **S6b2 started** (`rust-dev-2`, task-56): migrate the three feasible modes — `--game-server` redirect → `AppCore::start_redirect` + Ctrl+C/`stop_boost`; `--start-interceptor` → `start_boost`/`stop_boost` (only the discovery facts needed to keep the printed path identical); `--watch` → `start_boost`/`stop_boost` + `snapshot().intercepting` — with the frozen goldens + gate after each, then G1/G2/G3 re-ratchet and the final S6 mutation proof. **S6c (task-55) is re-blocked behind S6b2** to avoid guard/main.rs collisions; **W2-4a (task-53)** remains required before W2-4.
+- **Deviation ruled acceptable:** the one-line `client-gui/src/app/games.rs` doc-comment reword (docs-only, required to drop the G1 `games` blanket row).
+- **Named unverified:** live-mode behaviour (unchanged, not re-pointed), `--check` failure path (not golden-covered; unit-tested), Linux CI. Commits `6f72560`/`ee6cfb7`; branch 36 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts; goldens hash-identical; G1 41-row table; mutation log; `runtime.rs` UTF-8; games.rs docs-only hunk. **Not verified:** S6b2/S6c (in progress); full S6 by QA; live modes; Linux CI.
+**Open:** S6b2 → S6c → full S6 QA → W2-4a → W2-4 parity.
+
 ### 2026-11-20 (S6 checkpoint) - WF-081: CLI goldens frozen, update rules moved, capability DTO; S6b CLI adoption next
 
 **Agent:** lead + `rust-dev-2` (task-50 checkpoint).
