@@ -1,0 +1,17 @@
+{
+  "format": "rfc8805-operator-geofeed",
+  "owner_decision": "2026-11-20: no MaxMind/GeoLite2 data (CC BY-SA 4.0 declined). Consume public operator RFC 8805 geofeeds only, per-operator with attribution, shown as-is, with a takedown/deny list. No licensed database is used or redistributed. The derived table is display-only and never feeds the relay chooser or the ranking.",
+  "sources": [
+    {
+      "name": "G-Core",
+      "operator": "G-Core Labs S.A.",
+      "asn": 199524,
+      "url": "https://geofeed.gcore.lu/IP-Range.csv",
+      "local": "infra/geo/geofeeds/gcore-geofeed.csv",
+      "attribution": "Server city data published by G-Core Labs S.A. in its public RFC 8805 geofeed (https://geofeed.gcore.lu/IP-Range.csv); shown as-is.",
+      "license_status": "public operator geofeed; the feed states no licence. Consumed under the 2026-11-20 owner decision (public operator geofeeds only, attributed and shown as-is, removed on request via the takedown list).",
+      "redistributed": true,
+      "status": "active"
+    }
+  ]
+}

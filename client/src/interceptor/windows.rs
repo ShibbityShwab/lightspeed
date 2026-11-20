@@ -84,7 +84,10 @@ use std::time::Instant;
 
 // Imports only needed when WinDivert is actually compiled in:
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use super::order::{effective_seeds, Decision, ServerTracker, TrackerConfig};
+use super::order::{
+    effective_seeds, server_provider_class, Decision, Detection, FlowOwner, PacketObservation,
+    ProviderClass, RejectReason, ServerTracker, TrackerConfig,
+};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::recovery::RecvBackoff;
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -439,6 +442,36 @@ struct AttributionCounts {
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 const ATTRRIBUTION_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How often the built-in detection path re-resolves the game process, so a
+/// relaunch under a new PID is noticed while a match is being relayed.
+///
+/// The resolution is one process-table enumeration (Toolhelp), not a packet-rate
+/// cost; two seconds means a restart costs at most one window of missed
+/// attribution, and a lock earned by the dead process is dropped before the new
+/// one's match traffic needs it.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+const DETECTION_PID_RECHECK_INTERVAL: Duration = Duration::from_secs(2);
+
+/// How long the built-in path waits for one packet to be attributed to the
+/// resolved game process before it stops requiring attribution.
+///
+/// The OS socket table can lag a freshly opened socket by one snapshot interval
+/// (500 ms), and a slow join must not be judged early; twenty seconds also
+/// covers the case where the picked image is not the one doing the networking.
+/// Continuing to require attribution after that would silently stop this title
+/// from ever locking a server, so the requirement is withdrawn **once**, with a
+/// warning. The pin, the private-destination refusal and the hosting-network
+/// rule all stay: only the pid proof is given up, and the trace says so.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+const DETECTION_ATTRIBUTION_GRACE: Duration = Duration::from_secs(20);
+
+/// The most often one refused candidate (endpoint + reason) is logged.
+///
+/// A stale lock can see a busy unrelated flow every packet; the diagnostic is
+/// worth one line per few seconds, not a line per packet.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+const DETECTION_REJECTION_LOG_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Evaluation ticks with zero captured packets before the capture is called out.
 ///
 /// Ticks are `interceptor::bypass::EVAL_INTERVAL` (10 s), so this is about 30 s:
@@ -452,7 +485,8 @@ const CAPTURE_SILENCE_TICKS: u32 = 3;
 /// policy.
 ///
 /// Process mode attributes every captured packet in userspace through the
-/// bounded [`FlowMap`]; the built-in path keeps its single-server tracker.
+/// bounded [`FlowMap`]; the built-in path keeps its single-server tracker, now
+/// gated on the game process's own flows (see [`PortAttributor`]).
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 enum Attributor {
     /// A picked process: userspace attribution, capped and fail-open.
@@ -461,8 +495,9 @@ enum Attributor {
     /// tallies, while the built-in path is one tracker; without the box every
     /// stack frame holding an `Attributor` would be sized by the larger arm.
     Process(Box<ProcessAttributor>),
-    /// The built-in ports path, unchanged.
-    Ports(ServerTracker),
+    /// The built-in ports path: the single-server tracker plus the owner table
+    /// that makes its candidate acceptance flow-aware.
+    Ports(Box<PortAttributor>),
 }
 
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -596,25 +631,34 @@ impl Attributor {
                     }
                 }
             }
-            Self::Ports(tracker) => match tracker.observe(dst, now, payload_len) {
-                Decision::Tunnel(server) if held => OutboundDecision::Reinject(Some(server)),
-                Decision::Tunnel(server) => OutboundDecision::Tunnel(server),
-                Decision::ResetToDetection => OutboundDecision::Redetect,
-                // A shadow-direct sample would be the LOCKED server being sent
-                // direct for measurement, so it identifies the destination just
-                // as clearly as a tunnel does, and publishing it keeps discovery
-                // working for a server that is not being relayed.
-                //
-                // Note: nothing constructs `ShadowDirect` today (it is matched in
-                // this file and in `flows.rs` but produced nowhere), so this arm
-                // is currently unreachable. It is kept correct rather than
-                // deleted so that wiring the ports-path sampler later cannot
-                // silently reintroduce the "a held server is invisible" bug.
-                Decision::ShadowDirect => OutboundDecision::Reinject(Some(dst)),
-                Decision::PassThrough | Decision::StartDetection => {
-                    OutboundDecision::Reinject(None)
+            Self::Ports(state) => {
+                // The built-in path: the owner table turns each captured packet
+                // into a FlowOwner, and the tracker gates the lock on it. This
+                // is what stops a stray high-port flow from taking the session
+                // when the match server goes quiet (the 2026-11-20 field bug).
+                let detection = state.detect(src, dst, payload_len, now);
+                match detection.decision {
+                    Decision::Tunnel(server) if held => OutboundDecision::Reinject(Some(server)),
+                    Decision::Tunnel(server) => OutboundDecision::Tunnel(server),
+                    Decision::ResetToDetection => OutboundDecision::Redetect,
+                    // A shadow-direct sample would be the LOCKED server being
+                    // sent direct for measurement, so it identifies the
+                    // destination just as clearly as a tunnel does, and
+                    // publishing it keeps discovery working for a server that is
+                    // not being relayed.
+                    //
+                    // Note: nothing constructs `ShadowDirect` today (it is
+                    // matched here and in `flows.rs` but produced nowhere), so
+                    // this arm is currently unreachable. It is kept correct
+                    // rather than deleted so that wiring the ports-path sampler
+                    // later cannot silently reintroduce the "a held server is
+                    // invisible" bug.
+                    Decision::ShadowDirect => OutboundDecision::Reinject(Some(dst)),
+                    Decision::PassThrough | Decision::StartDetection => {
+                        OutboundDecision::Reinject(None)
+                    }
                 }
-            },
+            }
         }
     }
 }
@@ -664,6 +708,246 @@ impl ProcessAttributor {
     }
 }
 
+/// The built-in (port-scoped) path's detection state.
+///
+/// The pure state machine in [`super::order`] decides lock-versus-refuse; this
+/// struct supplies the two facts the WinDivert network layer cannot provide:
+///
+/// - **who owns the flow** - the OS UDP binding table (`GetExtendedUdpTable`,
+///   through [`OwnerCache`]) names the PID bound to a local port, and a packet
+///   whose local port belongs to the game process is the only kind the detector
+///   may use to earn or move a lock (a table miss is unproven, not foreign);
+/// - **which hosting network the destination is on** - the app installs a
+///   classifier ([`server_provider_class`]) built from the shipped indexes, and
+///   a candidate on the pinned server's network is accepted when the pid proof
+///   has not arrived yet.
+///
+/// It also re-resolves the game process on a slow tick, so a game relaunched
+/// under a new PID drops a lock earned by the old one, and it surfaces the
+/// accepted/refused reasons: the field mis-lock was undiagnosable because a
+/// lock change and its reason were invisible in the trace.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+struct PortAttributor {
+    /// The pure lock/candidate state machine (`super::order`).
+    tracker: ServerTracker,
+    /// Live local-port → PID table, so a captured datagram can be attributed.
+    owners: OwnerCache,
+    /// Image names to re-resolve the game process by.
+    process_names: Vec<String>,
+    /// The PID the owner table is matched against; `None` until resolved.
+    game_pid: Option<u32>,
+    /// When the PID was last re-resolved.
+    last_pid_check: Instant,
+    /// When the current detection PID was resolved: the attribution grace runs
+    /// from here, not from start, so a game started ten minutes after the client
+    /// still gets its full window to prove attribution before it is withdrawn.
+    pid_resolved_at: Option<Instant>,
+    /// Whether any captured packet has ever been attributed to the game process.
+    saw_game_packet: bool,
+    /// Whether the attribution requirement was withdrawn for this run.
+    relaxed: bool,
+    /// The last refusal logged, so a flood logs the transition (plus a slow
+    /// repeat) rather than every packet.
+    last_rejection: Option<(SocketAddrV4, RejectReason)>,
+    last_rejection_at: Option<Instant>,
+    /// The last destination's hosting class, cached: the classifier walks the
+    /// shipped indexes (and, for unclassified addresses, the country table), so
+    /// it must not run once per captured datagram during a live match.
+    last_provider: Option<(Ipv4Addr, Option<ProviderClass>)>,
+}
+
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+impl PortAttributor {
+    /// Build the detector for one run.
+    fn new(process_names: Vec<String>, game_pid: Option<u32>, now: Instant) -> Self {
+        let mut tracker = ServerTracker::new(TrackerConfig::default());
+        if let Some(pid) = game_pid {
+            tracker.set_game_pid(Some(pid));
+        }
+        Self {
+            tracker,
+            owners: OwnerCache::default(),
+            process_names,
+            game_pid,
+            last_pid_check: now,
+            pid_resolved_at: game_pid.map(|_| now),
+            saw_game_packet: false,
+            relaxed: false,
+            last_rejection: None,
+            last_rejection_at: None,
+            last_provider: None,
+        }
+    }
+
+    /// Pre-seed the static-game route list and the pinned server's network.
+    fn seed(&mut self, routes: &[SocketAddrV4], now: Instant) {
+        self.tracker.seed(routes, now);
+        if let Some(first) = routes.first() {
+            self.tracker
+                .note_seed_provider(server_provider_class(*first.ip()));
+        }
+    }
+
+    /// Slow tick: re-resolve the game PID and give up attribution if it never
+    /// proves itself.
+    fn maintain(&mut self, now: Instant) {
+        if now.saturating_duration_since(self.last_pid_check) >= DETECTION_PID_RECHECK_INTERVAL {
+            self.last_pid_check = now;
+            if let Some(pid) = self
+                .process_names
+                .iter()
+                .find_map(|name| super::process_scanner::find_pid_by_name(name))
+            {
+                let previous = self.game_pid;
+                // Once attribution has been withdrawn the tracker must not be
+                // re-armed: a successful resolution would otherwise undo the
+                // fallback every tick. The PID is still tracked here so owner
+                // classification keeps rejecting proven-foreign flows.
+                if !self.relaxed && self.tracker.set_game_pid(Some(pid)) {
+                    tracing::info!(
+                        "🔄 Game process restarted: detection PID is now {pid}; the previous \
+                         server lock is void and detection starts over"
+                    );
+                    self.owners.invalidate();
+                    // The new process must prove its attribution too.
+                    self.saw_game_packet = false;
+                    self.pid_resolved_at = Some(now);
+                } else if previous != Some(pid) {
+                    self.pid_resolved_at = Some(now);
+                }
+                self.game_pid = Some(pid);
+            }
+            // A process that is not found is left alone: the game may be
+            // exiting, and losing the PID is not proof the match moved.
+            if !self.relaxed
+                && !self.saw_game_packet
+                && self.game_pid.is_some()
+                && self.pid_resolved_at.is_some_and(|at| {
+                    now.saturating_duration_since(at) >= DETECTION_ATTRIBUTION_GRACE
+                })
+            {
+                self.relaxed = true;
+                let pid = self.game_pid.unwrap_or_default();
+                self.tracker.set_game_pid(None);
+                tracing::warn!(
+                    "⚠️ No captured packet was attributed to game PID {pid}; detection continues \
+                     without process attribution. Private destinations are still refused and a \
+                     stale lock is still protected by the hosting-network rule, but the lock is \
+                     less precise for this session"
+                );
+            }
+        }
+    }
+
+    /// Who owns the socket this packet left from, as far as the OS proves it.
+    ///
+    /// One snapshot lookup, no allocation: this runs for every captured datagram.
+    fn owner_of(&mut self, src: SocketAddrV4, now: Instant) -> FlowOwner {
+        let pid = self.game_pid;
+        let owners = self.owners.table(now).pids_for_port(src.port());
+        flow_owner(owners, pid)
+    }
+
+    /// The destination's hosting class, cached across the packets of one flow.
+    fn provider_of(&mut self, dst: SocketAddrV4) -> Option<ProviderClass> {
+        match self.last_provider {
+            Some((cached, class)) if cached == *dst.ip() => class,
+            _ => {
+                let class = server_provider_class(*dst.ip());
+                self.last_provider = Some((*dst.ip(), class));
+                class
+            }
+        }
+    }
+
+    /// One captured packet through the detector, with the reasons surfaced.
+    fn detect(
+        &mut self,
+        src: SocketAddrV4,
+        dst: SocketAddrV4,
+        payload_len: usize,
+        now: Instant,
+    ) -> Detection {
+        self.maintain(now);
+        let owner = self.owner_of(src, now);
+        if owner == FlowOwner::Game {
+            self.saw_game_packet = true;
+        }
+        let provider = self.provider_of(dst);
+        let detection = self.tracker.observe_attributed(
+            PacketObservation {
+                dst,
+                payload_len,
+                owner,
+                provider,
+            },
+            now,
+        );
+        self.note(detection, dst, now);
+        detection
+    }
+
+    /// Log why a candidate was accepted or refused, without flooding the trace.
+    fn note(&mut self, detection: Detection, dst: SocketAddrV4, now: Instant) {
+        if let Some(reason) = detection.accepted {
+            tracing::info!("🎯 Detector accepted candidate {dst}: {reason}");
+        }
+        let Some(reason) = detection.rejected else {
+            return;
+        };
+        // Private destinations are ordinary local traffic (LAN discovery, a
+        // media server) captured only because the profile's port range is wide:
+        // refusing them is not news and logging every one would drown the trace.
+        if reason == RejectReason::NonPublicDestination {
+            return;
+        }
+        let changed = self.last_rejection != Some((dst, reason));
+        let due = self
+            .last_rejection_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= DETECTION_REJECTION_LOG_INTERVAL);
+        if !changed && !due {
+            return;
+        }
+        self.last_rejection = Some((dst, reason));
+        self.last_rejection_at = Some(now);
+        match self.tracker.locked_server() {
+            Some(server) => tracing::info!(
+                "🎯 Detector refused candidate {dst}: {reason}; keeping the lock on {server}"
+            ),
+            None => tracing::info!("🎯 Detector refused candidate {dst}: {reason}"),
+        }
+    }
+}
+
+/// Classify a local port's owning PIDs into what detection may conclude.
+///
+/// `owners` is the PID list for the captured packet's local port from the OS UDP
+/// table. A port shared by the game process and another process is **ambiguous,
+/// not ours**: `GetExtendedUdpTable` carries no remote endpoint, so nothing
+/// proves which process sent this datagram, and accepting it would reintroduce
+/// exactly the mis-attribution the owner table exists to prevent. A table miss
+/// is likewise unproven, never hostile - the snapshot lags a fresh socket.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn flow_owner(owners: &[u32], game_pid: Option<u32>) -> FlowOwner {
+    let Some(pid) = game_pid else {
+        return FlowOwner::Unknown;
+    };
+    let mut ours = false;
+    let mut others = false;
+    for owner in owners {
+        if *owner == pid {
+            ours = true;
+        } else {
+            others = true;
+        }
+    }
+    match (ours, others) {
+        (true, false) => FlowOwner::Game,
+        (false, true) => FlowOwner::Foreign,
+        _ => FlowOwner::Unknown,
+    }
+}
+
 /// Build the attributor the intercept thread drives for this policy.
 ///
 /// Process mode seeds the map from the scanner's live routes for the target *and*
@@ -675,10 +959,17 @@ impl ProcessAttributor {
 /// port to its owning PID, which the map then accepts through its own debounce.
 /// A flow neither source attributes is UNATTRIBUTED and goes direct, visibly -
 /// fail-open, never a drop.
+///
+/// The built-in ports path gets the same owner table, but only for the *server
+/// lock*: a candidate is the game process's own flow or it is refused, and the
+/// lock is kept rather than moved by an unrelated high-port flow that the port
+/// filter happened to capture.
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 fn build_attributor(
     policy: CapturePolicy,
     target_pid: Option<u32>,
+    process_names: &[String],
+    detection_pid: Option<u32>,
     seed_routes: &[Route],
     seeds: &[SocketAddrV4],
     now: Instant,
@@ -703,9 +994,9 @@ fn build_attributor(
             }))
         }
         CapturePolicy::PortRange { .. } => {
-            let mut tracker = ServerTracker::new(TrackerConfig::default());
-            tracker.seed(seeds, now);
-            Attributor::Ports(tracker)
+            let mut ports = PortAttributor::new(process_names.to_vec(), detection_pid, now);
+            ports.seed(seeds, now);
+            Attributor::Ports(Box::new(ports))
         }
     }
 }
@@ -805,6 +1096,39 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     target.describe()
                 ),
             }
+        }
+
+        // Built-in detection resolves the game process by the profile's image
+        // names. This does NOT change the capture policy (the filter stays the
+        // profile's port range); it is the PID the ports path attributes
+        // candidates against, so a lock can only be earned or moved by the
+        // game's own traffic. The same live resolution the process-target path
+        // performs, against the same process table.
+        let detection_pid = match policy {
+            CapturePolicy::PortRange { .. } => config
+                .process_names
+                .iter()
+                .find_map(|name| crate::interceptor::process_scanner::find_pid_by_name(name)),
+            CapturePolicy::ProcessAll => None,
+        };
+        match (policy, detection_pid) {
+            (CapturePolicy::PortRange { .. }, Some(pid)) => tracing::info!(
+                "🎯 Built-in detection target: {} -> PID {pid} (candidates are gated on the \
+                 process's own flows)",
+                config.process_names.join(", ")
+            ),
+            (CapturePolicy::PortRange { .. }, None) if config.process_names.is_empty() => {
+                tracing::info!(
+                    "🎯 Built-in detection has no process names for this game; attribution is \
+                     unavailable, so candidates are gated on the hosting-network rule only"
+                );
+            }
+            (CapturePolicy::PortRange { .. }, None) => tracing::warn!(
+                "⚠️ Built-in detection could not resolve a game process from {:?}; candidates \
+                 are gated on the hosting-network rule only until it starts",
+                config.process_names
+            ),
+            (CapturePolicy::ProcessAll, _) => {}
         }
 
         // Open intercept handle (captures matching outbound packets).
@@ -953,6 +1277,10 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let seed_routes_ic = seed_routes;
             let relay_addrs_ic = relay_addrs;
             let capture_tcp_ic = config.capture_tcp_ports;
+            // Built-in detection needs the game's image names (to notice a
+            // relaunch under a new PID) and the PID resolved at start.
+            let process_names_ic = config.process_names.clone();
+            let detection_pid_ic = detection_pid;
             let ack_ic = ack_tx.clone();
 
             tracing::info!("🚀 Spawning intercept thread...");
@@ -963,10 +1291,13 @@ impl TrafficInterceptor for WinDivertInterceptor {
                 const RECV_BACKOFF_MAX: Duration = Duration::from_millis(400);
 
                 // The userspace attributor: the bounded FlowMap for a picked
-                // process, the single-server tracker for the built-in path.
+                // process, the flow-gated single-server tracker for the
+                // built-in path.
                 let mut attributor = build_attributor(
                     policy,
                     target_pid,
+                    &process_names_ic,
+                    detection_pid_ic,
                     &seed_routes_ic,
                     &seeds_ic,
                     Instant::now(),
@@ -2307,6 +2638,40 @@ mod tests {
         // destination the player is not playing on.
         assert_eq!(detected_server(OutboundDecision::Reinject(None)), None);
         assert_eq!(detected_server(OutboundDecision::Redetect), None);
+    }
+
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn the_socket_table_classifies_a_packet_owner_three_ways() {
+        // The built-in detection path's whole safety property rests on this
+        // classification: only a port the game process alone owns counts as the
+        // game's traffic. The field mis-lock was a flow the owner table could
+        // have named as foreign - if the detector had asked.
+        assert_eq!(
+            flow_owner(&[4242], Some(4242)),
+            FlowOwner::Game,
+            "a port the game owns alone is the game's flow"
+        );
+        assert_eq!(
+            flow_owner(&[4004], Some(4242)),
+            FlowOwner::Foreign,
+            "a port another process owns is not ours"
+        );
+        assert_eq!(
+            flow_owner(&[], Some(4242)),
+            FlowOwner::Unknown,
+            "a table miss is unproven, not foreign"
+        );
+        assert_eq!(
+            flow_owner(&[4242, 4004], Some(4242)),
+            FlowOwner::Unknown,
+            "a port shared with another process cannot prove which one sent the packet"
+        );
+        assert_eq!(
+            flow_owner(&[4242], None),
+            FlowOwner::Unknown,
+            "with no process resolved nothing can be attributed"
+        );
     }
 
     /// The remote port every game-server destination in these tests uses.

@@ -203,6 +203,25 @@ Closing the update dialog stops it, and choosing not to install leaves the
 existing binary untouched. No telemetry, identity, game data, or game-server
 address is included in either request.
 
+### Operator geofeed data (not a network connection)
+
+Some servers — for example G-Core's — are on hosting ranges where free IP
+databases name the wrong country. To be honest about those, the GUI ships a
+small **operator geofeed** table built into the application:
+
+- The data comes from network operators' public RFC 8805 geofeeds. The first
+  one is G-Core Labs S.A.'s public feed at
+  <https://geofeed.gcore.lu/IP-Range.csv>.
+- It is downloaded **at build time on the maintainer's machine**, not by your
+  client. The GUI only reads the table embedded in the binary; it makes no
+  request for it and sends nothing anywhere.
+- The label is shown as-is as the operator publishes it, names the operator
+  and the feed's as-of date, and never feeds relay ranking or any measurement.
+- No MaxMind/GeoLite2 or other licensed geolocation database is used or
+  redistributed. An operator can request removal of its feed or prefixes; the
+  takedown/deny list (`infra/geo/geofeeds/deny.txt`) removes them from the next
+  shipped table. Attribution is in the repository's `NOTICE`.
+
 ---
 
 ## Questions?

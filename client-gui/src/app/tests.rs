@@ -827,6 +827,39 @@ fn a_hosting_place_gets_the_free_database_honesty_hint() {
         "an unplaceable server carries the same explanation"
     );
 
+    let geofeed = route_location_lines(Place::Geofeed {
+        provider: "G-Core",
+        country: "US",
+        region: Some("US-VA"),
+        city: Some("Manassas"),
+        source: "https://geofeed.gcore.lu/IP-Range.csv",
+        as_of: "2026-11-19",
+    });
+    assert_eq!(
+        geofeed.caption, "Server location: operator geofeed — Manassas, US-VA",
+        "the operator's place is stated in the caption"
+    );
+    assert_eq!(
+        geofeed.detail.as_deref(),
+        Some("(G-Core, as-of 2026-11-19)"),
+        "the operator and the feed's as-of date are the detail line"
+    );
+    assert_eq!(
+        geofeed.note.as_deref(),
+        Some("Shown as-is from the operator's published geofeed."),
+        "an operator geofeed is presented as-is"
+    );
+    assert_eq!(
+        geofeed.source.as_deref(),
+        Some("https://geofeed.gcore.lu/IP-Range.csv"),
+        "the feed URL is kept as the hover provenance"
+    );
+    assert_eq!(
+        geofeed.hint, None,
+        "an operator geofeed is not a failed lookup, so it must not carry the \
+         free-database caveat"
+    );
+
     let cloud = route_location_lines(Place::Cloud {
         provider: "aws",
         region: "us-east-1",

@@ -603,10 +603,12 @@ impl Default for GuiTrace {
 ///
 /// Deliberately no city or region: a provider region from the cloud feed is a
 /// fact, but a city for an arbitrary hop needs hop-geolocation data the product
-/// does not license.
+/// does not license. An operator geofeed match names the operator - the same
+/// display-only provenance the route card uses - and never a city for a hop.
 fn network_label(address: Ipv4Addr) -> Option<String> {
     match crate::server_place::place(address) {
         crate::server_place::Place::Cloud { provider, .. } => Some(provider.to_ascii_uppercase()),
+        crate::server_place::Place::Geofeed { provider, .. } => Some(provider.to_string()),
         crate::server_place::Place::Hosting { name, .. } => Some(name.to_string()),
         crate::server_place::Place::Country { .. } | crate::server_place::Place::Unknown => None,
     }
@@ -1294,7 +1296,8 @@ Trace complete.
 
     #[test]
     fn a_hosting_hop_adds_the_network_name_but_never_a_city() {
-        // The live G-Core Virginia server: the label is the network, not JP.
+        // The live G-Core Virginia server: the label is the operator, not JP -
+        // and never the geofeed's city, which places the server, not a hop.
         let route = ClientRoute {
             hops: 12,
             last_hop: Some(ip("178.107.14.201")),
@@ -1305,7 +1308,7 @@ Trace complete.
             english(|| caption(&route)).as_deref(),
             Some(
                 "Route to server: 12 hops \u{00b7} nearest responding hop 40 ms \u{00b7} \
-                 G-Core Labs"
+                 G-Core"
             )
         );
     }

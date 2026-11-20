@@ -12,4 +12,11 @@ identify a server's provider region.
 Hosting-network prefixes: derived at build time from the RIPE Stat API
 (https://stat.ripe.net, RIPE NCC) for a curated list of hosting ASNs.
 
+Server city labels: operator geofeed data published by G-Core Labs S.A. in its
+public RFC 8805 geofeed (https://geofeed.gcore.lu/IP-Range.csv), shown as-is
+with attribution and the feed's as-of date. No MaxMind/GeoLite2 data is used or
+redistributed. An operator can request removal of its feed or prefixes through
+the takedown list in infra/geo/geofeeds/deny.txt; the build drops them and the
+shipped table is regenerated without them.
+
 Uses the maxminddb crate (MIT licensed).

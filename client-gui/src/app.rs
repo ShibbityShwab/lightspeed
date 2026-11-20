@@ -422,21 +422,27 @@ fn spawn_rtt_probe(addr: SocketAddrV4) -> Receiver<Option<u64>> {
 /// The route card's location lines for one server place.
 ///
 /// `caption` names the strongest evidence the offline indexes have, `detail`
-/// names the provider region or hosting network, and `hint` is the one extra
-/// line the card shows when no free database could place the server.
+/// names the provider region, operator place or hosting network, `note` is the
+/// operator-geofeed "shown as-is" line (with `source` as its hover provenance),
+/// and `hint` is the one extra line the card shows when no free database could
+/// place the server.
 struct RouteLocationLines {
     caption: String,
     detail: Option<String>,
+    note: Option<String>,
+    source: Option<String>,
     hint: Option<String>,
 }
 
 /// Build the route card's location block without touching a `ui`.
 ///
 /// Only the two answers that could not place the server carry the hint. A
-/// hosting match deliberately has no dot and no city (a G-Core US-Virginia
-/// server publishes as JP in the shipped DB-IP data), so the card says why the
+/// hosting match deliberately has no dot and no city, so the card says why the
 /// location is unknown instead of drawing a false one; `Unknown` gets the same
-/// line because no database matched at all.
+/// line because no database matched at all. An operator geofeed is the
+/// operator's own statement: it gets the place plus attribution and the as-of
+/// date, no free-database caveat, and still no map dot (the feed has no
+/// coordinate).
 fn route_location_lines(place: crate::server_place::Place) -> RouteLocationLines {
     use crate::server_place::Place;
     match place {
@@ -445,21 +451,49 @@ fn route_location_lines(place: crate::server_place::Place) -> RouteLocationLines
         } => RouteLocationLines {
             caption: i18n::t("route.location_provider").to_string(),
             detail: Some(format!("{} · {region}", provider.to_uppercase())),
+            note: None,
+            source: None,
             hint: None,
         },
+        Place::Geofeed {
+            provider,
+            country,
+            region,
+            city,
+            source,
+            as_of,
+        } => {
+            let place = crate::server_place::geofeed_place_text(country, region, city);
+            RouteLocationLines {
+                caption: i18n::t_with("route.location_geofeed", &[("place", place.as_str())]),
+                detail: Some(i18n::t_with(
+                    "route.location_geofeed_detail",
+                    &[("provider", provider), ("date", as_of)],
+                )),
+                note: Some(i18n::t("route.location_geofeed_note").to_string()),
+                source: Some(source.to_string()),
+                hint: None,
+            }
+        }
         Place::Hosting { asn, name } => RouteLocationLines {
             caption: i18n::t("route.location_hosting").to_string(),
             detail: Some(format!("AS{asn} · {name}")),
+            note: None,
+            source: None,
             hint: Some(i18n::t("route.location_hosting_hint").to_string()),
         },
         Place::Country { .. } => RouteLocationLines {
             caption: i18n::t("route.location_estimate").to_string(),
             detail: None,
+            note: None,
+            source: None,
             hint: None,
         },
         Place::Unknown => RouteLocationLines {
             caption: i18n::t("route.location_unknown").to_string(),
             detail: None,
+            note: None,
+            source: None,
             hint: Some(i18n::t("route.location_hosting_hint").to_string()),
         },
     }
@@ -2439,6 +2473,22 @@ impl<P: Platform> LightSpeedApp<P> {
                                     .size(CAPTION)
                                     .color(text_3),
                             );
+                        }
+                        // An operator geofeed row is the operator's own
+                        // statement, so the card says it is shown as-is and
+                        // keeps the feed URL on hover as the provenance.
+                        if let Some(note) = &lines.note {
+                            let response = ui.label(
+                                egui::RichText::new(note.as_str())
+                                    .size(CAPTION)
+                                    .color(text_3),
+                            );
+                            if let Some(source) = &lines.source {
+                                response.on_hover_text(i18n::t_with(
+                                    "route.location_geofeed_source",
+                                    &[("source", source)],
+                                ));
+                            }
                         }
                         // A hosting-range or unknown server has no dot, so the
                         // card says why: free IP databases are the documented

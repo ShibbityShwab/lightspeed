@@ -12,6 +12,16 @@
 
 ## Recent entries
 
+### 2026-11-20 (own dataset + detection fix) - G-Core geofeed labels (display-only) and flow-aware server locking; committed
+
+**Agent:** `rust-dev-12` (geofeed pipeline/labels) + `rust-dev-13` (detection fix) + lead (final gates/commit). Committed.
+
+- **Own dataset (no MaxMind, no CC BY-SA):** `infra/scripts/build-server-city.py` rewritten to ingest configured RFC 8805 operator geofeeds with attribution/deny-list/source manifest (`infra/geo/geofeeds/{sources.json,deny.txt,README.md}`; feeds gitignored). First source: **G-Core Labs public geofeed** `https://geofeed.gcore.lu/IP-Range.csv` (as-of 2026-11-19, sha verified) -> committed derived table `client-gui/data/server-geofeed.bin` (603 non-overlap ranges / 92 places) + attributed `server_geofeed_tables.rs` + shipped manifest. `--selftest`: **109 checks**. IPv6 feed rows counted/skipped (124).
+- **Client:** new `Place::Geofeed { provider, country, region, city, source, as_of }` in the ladder (Cloud -> Geofeed -> Hosting -> Country -> Unknown); route card reads `Server location: operator geofeed — Manassas, US-VA` / `(G-Core, as-of 2026-11-19)` / `Shown as-is from the operator's published geofeed.` (4 keys x9 locales; CJK English). `chooser_point` = None for geofeed (display-only, never ranking). NOTICE/privacy/design-doc attribution + takedown policy updated; O1 recorded as resolved via the public geofeed route (no licensed DB).
+- **Server re-lock mis-detection fixed (the fake "Brazil" bug):** detection is now flow-aware. `client/src/interceptor/order.rs` takes a `FlowOwner` (Game/Foreign/Unknown, OS UDP-table attribution) + hosting `ProviderClass`, refuses non-public destinations, never moves a stale pin to a foreign flow, keeps the pin on ambiguity, prefers the pinned network for bounded holds, clears on PID change; `interceptor/windows.rs` adds `PortAttributor`/`OwnerCache` (GetExtendedUdpTable, 2 s re-resolve) with accept/refuse INFO reasons; GUI installs `provider_class` lookup from R1 indexes (`client-gui/src/detection_provider.rs`). 22 new tests; mutations (accept-foreign, private off, restart keeps lock, preference off, mismatch accepted, collapsed owner) each fail then restore.
+- **Final gates (lead, integrated tree):** fmt clean; workspace clippy **0 warnings**; workspace **1,811 / 0 / 6**; GUI clippy 0 warnings; GUI **259 / 0 / 1**; city-script selftest **109 checks**. Committed.
+- **Residual:** detection uses the OS UDP port->PID table (no driver-level PID; shared ports are Unknown and refused); if traffic comes from a helper process the 20 s attribution fallback applies (pin/private/network rules only); live match verification of the new lock reasons is pending; geofeed refresh is a manual rebuild; other operators need a `sources.json` entry; measured sources not yet joined into the city table.
+
 ### 2026-11-20 (honesty + scaffold) - Hosting-hint caption, update-check disclosure, build-time city pipeline (not wired, O1 gate)
 
 **Agent:** `rust-dev-11` + lead (final gates/commit). Committed.

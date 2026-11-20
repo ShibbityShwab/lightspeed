@@ -68,27 +68,54 @@ data (GeoLite2/geojs) and the operator feed got Manassas right.
   client IP), with the optional release download following only a second
   click. `docs/data-dictionary.md` states that this call is not part of the
   telemetry report. No new online geolocation is added.
-- **Scaffolded, blocked on O1 - build-time city pipeline:**
-  `infra/scripts/build-server-city.py` ingests operator RFC 8805 geofeeds from
-  `infra/geo/geofeeds/` and/or a pre-extracted GeoLite2-City CSV
-  (`--geolite-csv`; `--mmdb` is refused because the scaffold does not decode
-  the binary format - the owner converts it), and emits a
-  `start u32 | end u32 | city-index u16` blob plus a generated city table Rust
-  file under `target/server-location-city/` (gitignored). Geofeed wins over
-  GeoLite on overlap. `--selftest` covers comments, malformed rows, prefix
-  math, merge precedence and the emitted files. It is not committed, not wired
-  into the client, and changes none of the shipped data.
-- **Still open:** shipping the derived city table (and its required
-  country/city/estimate label) is blocked on owner gate O1. Until it is
-  decided, the card stays "hosting network - unknown" with the caption and
-  there is no online fallback.
+- **DECIDED - owner gate O1 (2026-11-20): no MaxMind/GeoLite2.** The CC BY-SA
+  4.0 route was rejected. The accepted route is **public operator RFC 8805
+  geofeeds only**, per-operator, with attribution, shown as-is, and a
+  takedown/deny list. No licensed database is used or redistributed.
+- **Done - build-time operator-geofeed pipeline (2026-11-20):**
+  `infra/scripts/build-server-city.py` was rewritten for that decision. It
+  ingests the configured sources in `infra/geo/geofeeds/sources.json` (name,
+  operator, ASN, public URL, attribution, licence/status note, `redistributed`
+  marker), each local feed resolved with `--geofeed NAME=PATH` or the
+  conventional drop point, validates RFC 8805 rows (comments, optional header,
+  malformed/cityless accounting; valid IPv6 rows counted separately because the
+  blob is IPv4-only), applies `deny.txt`/`--deny-file` (prefixes or operators),
+  and resolves overlaps by longest prefix then source order. It emits
+  `start u32 | end u32 | place-index u16` + a generated Rust table + a manifest
+  with source URLs, hashes, as-of/fetch dates, row counts, attribution strings,
+  `redistributed` flags and the applied deny list. A source without an
+  attribution line is a hard error. `--selftest` covers parsing/comments/
+  malformed, deny handling, attribution in the output header, prefix math,
+  merge precedence, the as-of dateline and the emitted files (109 checks).
+- **Done - the G-Core table now ships, display-only (2026-11-20):** the
+  committed artifacts are `client-gui/data/server-geofeed.bin` (603 ranges),
+  `client-gui/src/server_geofeed_tables.rs` (92 places, 1 source: G-Core
+  AS199524, as-of 2026-11-19) and `client-gui/data/server-geofeed.sources.json`.
+  The client gained `Place::Geofeed { provider, country, region, city, source,
+  as_of }`, resolved in the ladder after cloud and before hosting. The route
+  card shows "Server location: operator geofeed — Manassas, US-VA" with
+  "(G-Core, as-of 2026-11-19)" and a "Shown as-is from the operator's published
+  geofeed." line (feed URL on hover); the free-database caption is unchanged
+  and only appears for `Hosting`/`Unknown`. `display_point` and
+  `chooser_point` both stay `None` for a geofeed place until a measurement
+  validates it, so ranking is untouched. Locale keys exist in all 9 catalogs
+  (`ja`, `ko`, `zh-Hans` keep English), and NOTICE/`docs/privacy.md` carry the
+  per-operator attribution, the "shown as-is" statement and the takedown
+  policy. The table covers the G-Core US-Virginia server whose DB-IP country
+  was JP.
+- **Still open:** measured sources (relay/client traceroute, hop geolocation)
+  joining the same table once one is validated; more operators' geofeeds need a
+  `sources.json` entry plus a local feed; and the table remains IPv4-only until
+  a wire format/consumer for IPv6 rows exists. There is still no online
+  geolocation fallback.
 
-## Required labels (if a build-time table ships)
+## Required labels (the shipped geofeed label)
 
-- Geofeed: "Server location: operator geofeed — US-VA, Manassas (published by
-  the network operator, shown as-is)".
-- GeoLite2: "Server location: city estimate ±20 km (MaxMind GeoLite2, build
-  DATE)". Never a bare city; never on the map as a verified dot.
+- Geofeed (implemented): caption "Server location: operator geofeed —
+  Manassas, US-VA", detail "(G-Core, as-of 2026-11-19)", note "Shown as-is
+  from the operator's published geofeed." (source URL on hover). Never a map
+  dot, never a ranking input.
+- GeoLite2: **not shipped** - rejected by the 2026-11-20 owner decision.
 
 ## Failure/quality notes
 

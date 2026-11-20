@@ -10,6 +10,7 @@ mod client_trace;
 mod config;
 mod crash;
 mod design;
+mod detection_provider;
 mod discovery;
 mod geo;
 mod geo_countries;
@@ -21,6 +22,7 @@ mod processes;
 mod race_watch;
 mod relay_history;
 mod self_update;
+mod server_geofeed_tables;
 mod server_place;
 mod server_tables;
 mod single_instance;
@@ -74,6 +76,16 @@ fn run() -> anyhow::Result<()> {
         tracing::debug!("rustls CryptoProvider was already installed");
     }
     tracing::info!("rustls provider ready");
+
+    // Server detection runs in the client's WinDivert data plane, which cannot
+    // see the shipped location indexes this crate embeds. Hand it the one fact
+    // it needs from them - which hosting network an address belongs to - so a
+    // stale server lock is never moved onto a different network by an unrelated
+    // flow (the 2026-11-20 mis-lock). Installed before any engine task exists.
+    lightspeed_client::interceptor::install_server_provider_lookup(
+        detection_provider::provider_class,
+    );
+    tracing::info!("detection provider classifier installed");
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

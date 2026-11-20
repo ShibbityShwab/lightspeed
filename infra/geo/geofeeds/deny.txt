@@ -1,0 +1,15 @@
+# Takedown / deny list for infra/scripts/build-server-city.py.
+#
+# Every non-comment, non-blank line is one of:
+#   * an IPv4 prefix (for example 203.0.113.0/24) - every feed row that
+#     intersects it is dropped from the derived table; or
+#   * an operator name exactly as it appears in sources.json `name` or
+#     `operator`, or `AS<number>` - that operator's whole feed is dropped.
+#
+# The list is applied on every build, so a removal reaches the committed table
+# on the next `--ship` run. Record the request in a comment below (date, who
+# asked, what was removed) so the removal can be audited and, if ever
+# appropriate, reversed.
+#
+# No entries are active today. This file must stay tracked; do not put feed
+# data here.

@@ -71,6 +71,14 @@ pub mod windows;
 
 // Re-export the most-used types at the module root for ergonomics.
 pub use process_scanner::find_game_process;
+// The detector's hosting-network bridge: the app layer (which owns the shipped
+// location indexes) pushes its classifier down once at startup, so the pure
+// detector can prefer candidates on the pinned server's network without the
+// client carrying a second copy of the data. `allow` because only the GUI (a
+// separate crate) calls it; the client binary's module tree re-exports it
+// without using it.
+#[allow(unused_imports)]
+pub use order::install_server_provider_lookup;
 // The transport kind a resolved profile declares lives in `games`; re-exported
 // so a config builder can name the type the config carries. `allow` because the
 // binary target's module tree reuses this module without naming the type.
