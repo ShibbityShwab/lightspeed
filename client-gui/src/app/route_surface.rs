@@ -29,7 +29,8 @@
 #![allow(dead_code)]
 
 use lightspeed_client::app::dto::{
-    AppErrorKind, AppStatus, CarryVerdict, LocationRung, RelayedPair, ServerLegState, TrayState,
+    AppErrorKind, AppStatus, CarryVerdict, ClientRoute, LocationRung, RelayedPair, ServerLegState,
+    TrayState,
 };
 use lightspeed_client::app::status::{action_slot, ActionSlot};
 
@@ -208,10 +209,9 @@ pub struct RouteTraceSurface {
     pub caption: Line,
     /// The shipped `route.trace_nearest` suffix, when a router answered.
     pub nearest: Option<Line>,
-    /// The last responding hop's network name, when a source that can state it
-    /// is wired. `None` today: `ClientRoute` carries no network name until the
-    /// core `client_trace` move at S5b supplies one; the adapter never invents
-    /// a provider label.
+    /// The last responding hop's network name, when a shipped location index
+    /// knows it: a cloud provider, an operator geofeed or a hosting network —
+    /// never a city and never a country estimate (A10 display-only provenance).
     pub provider: Option<String>,
 }
 
@@ -776,9 +776,18 @@ fn location_block(status: &AppStatus) -> Option<LocationBlock> {
 }
 
 /// The client route-trace caption (A10): the shipped `Route to server` key with
-/// hops, plus the shipped `nearest responding hop` suffix when one answered.
+/// hops, the shipped `nearest responding hop` suffix when one answered, and the
+/// last responding hop's provider/hosting name when a shipped location index
+/// knows it.
+///
+/// A trace with no responding hop (timeout / 0 hops) is **no row at all**: the
+/// shipped caption helper returned nothing for it, and rendering
+/// `Route to server: 0 hops` would claim a measurement the probe never made.
 fn trace_surface(status: &AppStatus) -> Option<RouteTraceSurface> {
     let route = status.route_trace?;
+    if route.hops == 0 {
+        return None;
+    }
     let caption = Line::with("route.trace_route", &[("hops", route.hops.to_string())]);
     let nearest = route
         .last_hop_rtt_ms
@@ -786,10 +795,27 @@ fn trace_surface(status: &AppStatus) -> Option<RouteTraceSurface> {
     Some(RouteTraceSurface {
         caption,
         nearest,
-        // `ClientRoute` carries no last-hop network name until the core
-        // client-trace move (S5b); the surface never invents one.
-        provider: None,
+        provider: last_hop_provider(&route),
     })
+}
+
+/// The provider/hosting network name for the trace's last responding hop, from
+/// the shipped location indexes ([`lightspeed_client::app::location::place`]).
+///
+/// Display-only provenance: a cloud provider, an operator geofeed or a hosting
+/// network is a fact the route card may state; a country estimate is not a
+/// provider, and a city for an arbitrary hop is never claimed (the product
+/// licenses no hop geolocation). This is the **one** caption/provider
+/// implementation in the GUI — W2-4a retired the duplicate helper.
+fn last_hop_provider(route: &ClientRoute) -> Option<String> {
+    use lightspeed_client::app::location::{place, Place};
+    let address = route.last_hop?;
+    match place(address) {
+        Place::Cloud { provider, .. } => Some(provider.to_ascii_uppercase()),
+        Place::Geofeed { provider, .. } => Some(provider.to_string()),
+        Place::Hosting { name, .. } => Some(name.to_string()),
+        Place::Country { .. } | Place::Unknown => None,
+    }
 }
 
 /// The `error.config` sentence and its Details detail for the Error row.
@@ -1476,7 +1502,7 @@ mod tests {
         assert_eq!(nearest.args, vec![("ms", "31".to_string())]);
         assert_eq!(
             trace.provider, None,
-            "no network name is invented for the last hop (S5b supplies one)"
+            "no last-hop address: no provider label is invented"
         );
 
         let no_router = route_surface(&AppStatus {
@@ -1493,6 +1519,64 @@ mod tests {
         assert_eq!(trace.nearest, None, "no router answered: no suffix");
 
         assert!(route_surface(&boosting_status()).trace.is_none());
+    }
+
+    /// A trace whose last responding hop is in a shipped location index states
+    /// the provider/hosting network name — never a city, never a country
+    /// estimate (W2-4a wired the suffix into this one caption implementation).
+    #[test]
+    fn the_trace_provider_is_a_shipped_index_fact_never_a_city() {
+        fn traced(hop: &str) -> AppStatus {
+            let mut status = boosting_status();
+            status.route_trace = Some(ClientRoute {
+                hops: 9,
+                last_hop: Some(hop.parse().expect("hop address")),
+                last_hop_rtt_ms: Some(31),
+                complete: false,
+            });
+            status
+        }
+
+        // The AWS cloud range: the provider is a stated fact, uppercased.
+        let cloud = route_surface(&traced("3.237.221.191"))
+            .trace
+            .expect("trace row");
+        assert_eq!(cloud.provider.as_deref(), Some("AWS"));
+        assert_eq!(cloud.caption.key, "route.trace_route");
+        assert!(
+            !cloud.provider.as_deref().unwrap().contains(' '),
+            "the suffix is one network name, not a place: {:?}",
+            cloud.provider
+        );
+
+        // The live G-Core hosting address: the operator's name, not the
+        // geofeed city that places the server rather than an arbitrary hop.
+        let hosting = route_surface(&traced("178.107.14.201"))
+            .trace
+            .expect("trace row");
+        assert_eq!(hosting.provider.as_deref(), Some("G-Core"));
+
+        // A documentation/unknown range: no provider label is invented.
+        let unknown = route_surface(&traced("203.0.113.9"))
+            .trace
+            .expect("trace row");
+        assert_eq!(unknown.provider, None);
+    }
+
+    /// A trace with no responding hop (timeout / 0 hops) is no row at all: the
+    /// caption would otherwise claim a measurement the probe never made.
+    #[test]
+    fn a_trace_without_a_responding_hop_is_no_row() {
+        let timeout = AppStatus {
+            route_trace: Some(ClientRoute {
+                hops: 0,
+                last_hop: None,
+                last_hop_rtt_ms: None,
+                complete: false,
+            }),
+            ..boosting_status()
+        };
+        assert!(route_surface(&timeout).trace.is_none());
     }
 
     #[test]

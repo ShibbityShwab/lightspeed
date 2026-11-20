@@ -245,9 +245,10 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "start",
     "code_index",
     "geo_countries",
-    // W2-3b (S5b) — the client-trace runtime. The GUI keeps the localized
-    // caption only; the scheduler, parser, refusal guard, bounded runner and
-    // the `CLIENT_TRACE` log contract live in the core.
+    // W2-3b (S5b) — the client-trace runtime. The GUI keeps the rendered trace
+    // row (caption/nearest/provider, now built in `route_surface`); the
+    // scheduler, parser, refusal guard, bounded runner and the `CLIENT_TRACE` log
+    // contract live in the core.
     "ClientRoute",
     "TraceHop",
     "TraceFailure",
@@ -279,6 +280,11 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "TRACE_DEADLINE",
     "CACHE_TTL",
     "POLL_INTERVAL",
+    // W2-4a (task-53, R10) — the trace caption has exactly one implementation
+    // (`route_surface::RouteTraceSurface`), and the provider suffix is a
+    // location-index fact. The retired client_trace helpers must not return.
+    "caption",
+    "network_label",
     // W2-3b (S6) — the pure update rules. Network, download verification and
     // elevation stay in the GUI adapter; the comparison/asset/checksum logic is
     // shared core so the CLI and the GUI cannot drift.
@@ -324,7 +330,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/app/relay_choice.rs", 60),
     // W2-1b (S3a): the pure presentation seam + its contract fixtures; grown by
     // the W2-1c QA fixes (R1-R15) inside the same slice.
-    ("client-gui/src/app/route_surface.rs", 1831),
+    ("client-gui/src/app/route_surface.rs", 1915),
     ("client-gui/src/app/tests.rs", 2853),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 31),
@@ -334,9 +340,11 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
     ("client-gui/src/app.rs", 4366),
     // W2-3b S5b: the client-trace runtime moved to
-    // `lightspeed_client::app::trace`; the GUI keeps the localized caption and
-    // its re-export shell. 1328 -> 145.
-    ("client-gui/src/client_trace.rs", 145),
+    // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
+    // (`route_surface`) and this re-export shell. 1328 -> 145.
+    // W2-4a (R10): the duplicate caption helper is retired; the module is the
+    // shared-runtime re-export adapter only. 145 -> 22.
+    ("client-gui/src/client_trace.rs", 22),
     // W2-1 S1: the config model + I/O + its tests moved to
     // `lightspeed_client::app::config`; the GUI keeps this re-export shell and
     // `paths::config_file`. The budget dropped 528 -> 18 with the move.
