@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (Q13 + W2-3a fixes) - WF-081: traceroute disclosure approved; QA bookkeeping fixed; W2-3b queued
+
+**Agent:** lead, on the owner's Q13 answer and QA's W2-3a review.
+
+- **Q13 — traceroute disclosure approved (owner).** The automatic client trace stays: when a game server is locked, the OS traceroute runs locally, the summary (hops, last-hop RTT) stays in the app/local log, and nothing goes to LightSpeed or third parties. W2-3b must add the approved disclosure sentence to `docs/privacy.md` and `docs/data-dictionary.md` in the same change that moves the trace into the core; no new UI/setting. Decision logged in `wat/state/decisions/2026-11.md`.
+- **W2-3a QA returned REVISE on two bookkeeping items; both fixed by the Lead** (commit `a86b2a8`): R1 the `dto.rs` `WatchdogStatus` doc comments now describe the published-streak semantics from `WatchdogSnapshot` (the false "None until S4 / thread-local" note is gone); R2 the two stale G1 allowances (`latency::probe_counters`/`shadow_counters`) were removed; the first edit left blank-line formatting that failed `cargo fmt` and was reformatted before commit. Re-gated: fmt clean, guard **8/8**, workspace clippy 0, workspace **1927 / 0 / 7**, GUI clippy 0, GUI **213 / 0 / 0**.
+- **QA micro-verification queued** (task-45) to confirm R1/R2 and to rule the N1 observation (all command failures currently map to `AppErrorKind::Tunnel`, so select_relay/disconnect produce tunnel-kind Error rows). N1 is recorded as a **named W2-3b follow-up** (per-command kind mapping: Route/Validation/Tunnel) rather than silently accepted. The W2-3a scope deviations (`choice.rs` obsolete adapter removal, `main.rs` race_watch mod line) were accepted as necessary/non-weakening.
+- **W2-3b queued** (task-46, blocked on task-45): S5a location ladder/provider/data/features + `paths.rs`, S5b client trace, S6 CLI adoption + guard ratchet to zero, update rules + capability DTO; Q11(a) asset move with measured artifact deltas; Q13 disclosure; N1 error-kind refinement; generators infra-owned (Lead will spawn `infra-dev` if the path move needs it).
+- **Commits:** W2-3a `c80bf97`, fixes `a86b2a8`, state `e54921a`; branch 21 ahead / 0 behind `origin/master 76aba5d`; $0.00; no fleet/release/public change.
+
+**Verified:** Lead gate after the fixes (counts above); fix commit scope = `dto.rs` + `gui_boundary.rs`; Q13 decision recorded. **Not verified:** QA's W2-3a final verdict (task-45 in progress); any W2-3b code; live starvation session; Linux CI.
+**Open:** QA W2-3a ACCEPT → W2-3b; Q5 translations; Q19 font regeneration; W2-4 parity.
+
 ### 2026-11-20 (W2-3a checkpoint) - WF-081: warn-only runtime extracted into the core; R16 streak closed; QA verifying
 
 **Agent:** lead + `rust-dev` (task-43), `qa-engineer-2` (task-44).
