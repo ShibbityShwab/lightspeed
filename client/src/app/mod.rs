@@ -16,7 +16,10 @@
 //! the status DTO, S3b commands, S4 the watchdog/history, S5 location/leg/trace
 //! and S6 the CLI adoption.
 
+pub mod commands;
 pub mod config;
 pub mod discovery;
 pub mod dto;
+pub mod history;
 pub mod status;
+pub mod watchdog;

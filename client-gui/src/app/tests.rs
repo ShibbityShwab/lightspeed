@@ -1,9 +1,8 @@
 use super::{
-    apply_starvation_verdict, lock_or_recover, plan_return_path_window, relay_reply_fault,
-    relay_reply_fault_message, relay_reply_window_message, starvation_verdict, tray_state_for,
-    warning_is_about, warning_message_key, RelayReplyFault, RelayStarvationWarning,
-    ReplyFaultStreak, TrayState, WindowEvent, RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_STREAK,
-    RELAY_REPLY_TIMEOUT,
+    lock_or_recover, plan_return_path_window, relay_reply_fault, relay_reply_fault_message,
+    relay_reply_window_message, starvation_verdict, tray_state_for, warning_message_key,
+    RelayReplyFault, ReplyFaultStreak, TrayState, WindowEvent, RELAY_REPLY_MIN_INTERCEPTED,
+    RELAY_REPLY_STREAK, RELAY_REPLY_TIMEOUT,
 };
 
 #[test]
@@ -152,69 +151,6 @@ fn the_live_run_windows_replay_through_the_new_criterion() {
 }
 
 #[test]
-fn a_warning_clears_only_after_a_healthy_window() {
-    // The warn-only replacement for the old retry-chain close rule. A warning
-    // stays up until a window proves the return path works again; the first
-    // fault window of a new streak is not that proof. Closing the warning there
-    // was the 2026-11-20 flap: "the relay is returning traffic again" after a
-    // window that returned nothing.
-    let server = addr("198.51.100.23:36703");
-    let relay = addr("192.0.2.10:4434");
-    let warning = RelayStarvationWarning {
-        server,
-        relay: Some(relay),
-        fault: RelayReplyFault::NoReplyFromRelay,
-    };
-    let active = Some(&warning);
-    let fault = RelayReplyFault::NoReplyFromRelay;
-    let first = plan_return_path_window(active, None, Some(fault), server, Some(relay));
-    assert_eq!(
-        first.event,
-        WindowEvent::None,
-        "a first fault window is not recovery"
-    );
-    assert_eq!(
-        first.warning,
-        Some(warning),
-        "a fault window keeps the warning up"
-    );
-    let healthy = plan_return_path_window(active, None, None, server, Some(relay));
-    assert_eq!(healthy.event, WindowEvent::Recovered);
-    assert_eq!(healthy.warning, None, "a working return path clears it");
-    assert!(!healthy.switch_to_direct);
-}
-
-#[test]
-fn a_zero_return_window_warns_only_after_the_streak() {
-    let zero = relay_reply_fault(RELAY_REPLY_TIMEOUT, 68, 0, 0, None);
-    assert_eq!(zero, Some(RelayReplyFault::NoReplyFromRelay));
-    let mut streak = ReplyFaultStreak::default();
-    assert_eq!(
-        streak.observe(zero),
-        None,
-        "one 8 s window of no return path is not evidence enough"
-    );
-    assert_eq!(
-        streak.observe(zero),
-        Some(RelayReplyFault::NoReplyFromRelay),
-        "the configured streak of consecutive zero-return windows"
-    );
-    // A healthy window in between proves the absence was not sustained.
-    let mut streak = ReplyFaultStreak::default();
-    assert_eq!(streak.observe(zero), None);
-    assert_eq!(streak.observe(None), None);
-    assert_eq!(
-        streak.observe(zero),
-        None,
-        "the streak restarted, so this is the first window again"
-    );
-    assert_eq!(
-        streak.observe(zero),
-        Some(RelayReplyFault::NoReplyFromRelay)
-    );
-}
-
-#[test]
 fn a_broken_injector_is_still_detected_after_the_streak() {
     // from_relay >= 5 with injected == 0 is the local path, not the relay.
     let window = relay_reply_fault(RELAY_REPLY_TIMEOUT, 600, 0, 40, None);
@@ -262,33 +198,6 @@ fn different_faults_do_not_share_a_streak() {
 }
 
 #[test]
-fn a_warning_belongs_to_its_server_and_relay() {
-    let server = addr("198.51.100.23:36703");
-    let relay = addr("192.0.2.10:4434");
-    let warning = RelayStarvationWarning {
-        server,
-        relay: Some(relay),
-        fault: RelayReplyFault::NoReplyFromRelay,
-    };
-    assert!(
-        warning_is_about(&warning, server, Some(relay)),
-        "the pair the watchdog judged is the pair the warning is about"
-    );
-    assert!(
-        !warning_is_about(&warning, server, Some(addr("192.0.2.11:4434"))),
-        "a new relay is a new session; the old finding says nothing about it"
-    );
-    assert!(
-        !warning_is_about(&warning, addr("198.51.100.7:36704"), Some(relay)),
-        "a new game server is a new session"
-    );
-    assert!(
-        warning_is_about(&warning, server, None),
-        "an unknown relay cannot prove the warning is stale"
-    );
-}
-
-#[test]
 fn only_a_confirmed_no_reply_window_is_a_starvation_verdict() {
     assert!(
         starvation_verdict(RelayReplyFault::NoReplyFromRelay, None),
@@ -315,110 +224,6 @@ fn only_a_confirmed_no_reply_window_is_a_starvation_verdict() {
     assert!(
         !starvation_verdict(RelayReplyFault::InjectionFailed, None),
         "a local injection fault says nothing about the relay"
-    );
-}
-
-#[test]
-fn a_confirmed_starvation_window_warns_but_never_switches_to_direct() {
-    // The owner-approved warn-only mode. Two consecutive 8 s judged windows with
-    // enough traffic and zero returned datagrams are the existing starvation
-    // condition; the plan must raise the warning and publish the demotion
-    // finding, and must never ask for the session to be taken direct. This is
-    // the mutation anchor: re-enabling the automatic switch (setting
-    // `switch_to_direct` on the confirmed branch) fails this test.
-    let server = addr("198.51.100.23:36703");
-    let relay = addr("192.0.2.10:4434");
-    let mut streak = ReplyFaultStreak::default();
-    let window = relay_reply_fault(RELAY_REPLY_TIMEOUT, 60, 0, 0, None);
-    assert_eq!(window, Some(RelayReplyFault::NoReplyFromRelay));
-    assert_eq!(streak.observe(window), None, "one window is a sample");
-    let confirmed = streak
-        .observe(window)
-        .expect("the second consecutive window confirms starvation");
-    let plan = plan_return_path_window(None, Some(confirmed), window, server, Some(relay));
-    let warning = plan
-        .warning
-        .expect("a confirmed starvation window raises the warning");
-    assert_eq!(warning.server, server);
-    assert_eq!(warning.relay, Some(relay));
-    assert_eq!(warning.fault, RelayReplyFault::NoReplyFromRelay);
-    assert_eq!(plan.event, WindowEvent::Warned);
-    assert!(
-        plan.publish_verdict,
-        "the finding still reaches the relay-history demotion path"
-    );
-    assert!(
-        !plan.switch_to_direct,
-        "warn-only: the watchdog must never take the route from the player"
-    );
-    assert_eq!(
-        warning_message_key(warning.fault),
-        "route.relay_not_returning",
-        "the route-card banner blames the relay only when the relay is at fault"
-    );
-}
-
-#[test]
-fn the_starvation_verdict_still_demotes_the_relay_for_future_ranking() {
-    // The load-bearing half of the warn-only mode: the route never changes, but
-    // the finding must still be written into the relay history so the next
-    // ranking does not re-select the relay that just starved the session.
-    use std::net::Ipv4Addr;
-    let server = Ipv4Addr::new(198, 51, 100, 23);
-    let relay = addr("192.0.2.10:4434");
-    let mut history = crate::relay_history::RelayHistory::default();
-    apply_starvation_verdict(&mut history, SocketAddrV4::new(server, 36703), relay);
-    assert_eq!(
-        history.carry_verdict(relay, server),
-        crate::relay_history::CarryVerdict::Starved,
-        "the next ranking must demote a relay that did not return the traffic"
-    );
-    assert!(
-        !history.is_starved(relay, server),
-        "the finding is the starvation signature, not the retired exhausted-chain verdict"
-    );
-}
-
-#[test]
-fn the_tray_never_reads_optimizing_while_the_return_path_fails() {
-    // The live honesty defect: the tray claimed "optimizing" in green while the
-    // relay returned nothing. Every combination must keep that word away from a
-    // failing return path, and a normal boosting session must still say
-    // Optimizing.
-    for has_error in [false, true] {
-        for warning_active in [false, true] {
-            for boosting in [false, true] {
-                for connected in [false, true] {
-                    let state = tray_state_for(has_error, warning_active, boosting, connected);
-                    if has_error {
-                        assert_eq!(state, TrayState::Error);
-                    } else if warning_active && boosting {
-                        assert_eq!(
-                            state,
-                            TrayState::RelayStarved,
-                            "a failing return path needs its own tray state"
-                        );
-                        assert_ne!(
-                            state,
-                            TrayState::Optimizing,
-                            "the tray must never claim optimization while the return path fails"
-                        );
-                    } else if boosting {
-                        assert_eq!(state, TrayState::Optimizing);
-                    } else if connected {
-                        assert_eq!(state, TrayState::Connected);
-                    } else {
-                        assert_eq!(state, TrayState::Disconnected);
-                    }
-                }
-            }
-        }
-    }
-    // A warning with no traffic flowing is not a running optimization either:
-    // the tray falls back to the connection state.
-    assert_eq!(
-        tray_state_for(false, true, false, true),
-        TrayState::Connected
     );
 }
 
@@ -956,14 +761,14 @@ use super::{
     direct_claim_label, direct_us_for, draft_reasons, early_triangle_floor, fresh_direct_us,
     game_editor_body, game_pick_rows, games, monitor_local_top, pair_relay_legs, picker_status,
     ping_for_server, primary_action, process_picker, proxy_index_for, rank_without_destination,
-    ranking_state_label, refreshed_server_ping, relay_cannot_beat_direct, relay_health_verdict,
-    same_relay_endpoint, save_user_profiles, scored_for_relay, server_from_fields,
-    server_leg_state, should_apply_race, should_race, switch_is_safe, target_for_pick,
-    target_front_door, target_summary, validate_draft, window_height_limit, CloseDecision,
-    EditorActions, GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus, ProcessListState,
-    ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ServerPing,
-    ShadowWindowCounters, TargetRowAction, MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT,
-    PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE, SERVER_PING_FRESH_SECS, TITLE_BAR_ALLOWANCE,
+    ranking_state_label, refreshed_server_ping, relay_cannot_beat_direct, same_relay_endpoint,
+    save_user_profiles, scored_for_relay, server_from_fields, server_leg_state, should_apply_race,
+    should_race, target_for_pick, target_front_door, target_summary, validate_draft,
+    window_height_limit, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
+    MeasuredServerLeg, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
+    ServerLegState, ServerPing, ShadowWindowCounters, TargetRowAction, MAX_WINDOW_HEIGHT,
+    MIN_WINDOW_HEIGHT, PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE, SERVER_PING_FRESH_SECS,
+    TITLE_BAR_ALLOWANCE,
 };
 use crate::config::ProxyEntry;
 use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -1932,79 +1737,6 @@ fn discovery_success_refreshes_relays_and_keeps_custom_entries() {
     assert_eq!(proxies[0].label, "LAX - Los Angeles");
     assert_eq!(proxies[1].label, "Local proxy");
     assert!(!proxies[1].is_discovered());
-}
-
-#[test]
-fn a_gate_off_is_the_only_safe_moment_for_a_relay_switch() {
-    // The tunnel reads `current_proxy()` on every packet
-    // (`client/src/interceptor/windows.rs`). Pointing it at a relay the new
-    // session is not registered with yet would send a live match's datagrams
-    // into a void, so a relay change has to be staged until the handover is
-    // finished. What makes it safe is the state the hold already sets:
-    // tunnelling withheld. This pins the rule where a future in-match
-    // "switch relay" would be wired, so that path cannot forget it.
-    let live_match = Some(true);
-    let held = Some(false);
-    let gate_absent = None;
-
-    assert!(
-        !switch_is_safe(live_match),
-        "a relay switch during a live match must be staged, not applied"
-    );
-    assert!(
-        switch_is_safe(held),
-        "with traffic held, the switch is what the tunnel sees"
-    );
-    assert!(
-        switch_is_safe(gate_absent),
-        "a backend with no gate is never relaying, so nothing is at risk"
-    );
-}
-
-#[test]
-fn relay_health_reads_movement_not_totals() {
-    // A run that relayed a healthy million packets and then started failing
-    // must be reported as failing: the verdict is on the window's movement.
-    assert_eq!(
-        relay_health_verdict(1_000_000, 1_000_000, 1_000_010, 1_000_002),
-        RelayHealthVerdict::Unsent {
-            unsent: 8,
-            decided: 10
-        },
-        "80% of this window never left, despite the healthy history"
-    );
-    assert_eq!(
-        relay_health_verdict(0, 0, 100, 100),
-        RelayHealthVerdict::Healthy
-    );
-    assert_eq!(
-        relay_health_verdict(0, 0, 100, 0),
-        RelayHealthVerdict::Unsent {
-            unsent: 100,
-            decided: 100
-        },
-        "nothing leaving at all is the loudest case, not an idle one"
-    );
-}
-
-#[test]
-fn relay_health_tolerates_loss_and_a_still_flow() {
-    // UDP games lose the odd datagram; one in ten is within the tolerance.
-    assert_eq!(
-        relay_health_verdict(0, 0, 100, 90),
-        RelayHealthVerdict::Healthy
-    );
-    // No new packets decided: menus, or a hold. This must not read as a fault.
-    assert_eq!(
-        relay_health_verdict(500, 500, 500, 500),
-        RelayHealthVerdict::Idle
-    );
-    // A sent count running ahead of the decided count cannot happen, and must
-    // not underflow into a wild "unsent" number if it ever does.
-    assert_eq!(
-        relay_health_verdict(0, 50, 10, 60),
-        RelayHealthVerdict::Healthy
-    );
 }
 
 #[test]

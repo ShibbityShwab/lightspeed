@@ -23,9 +23,9 @@ use crate::i18n;
 use crate::paths;
 use crate::platform::{default_port_range, Platform, QuitFlag, TrayAction, TrayHandle};
 use crate::processes::{self, ProcessEntry};
-use crate::race_watch::decide_switch;
 use crate::update::UpdateStatus;
 use eframe::egui;
+use lightspeed_client::app::commands::AppCore;
 use lightspeed_client::app::dto as app_dto;
 use lightspeed_client::interceptor::ProcessTarget;
 use lightspeed_client::profiles::schema::{is_valid_key, parse_port_range, slugify, PortRange};
@@ -181,14 +181,12 @@ pub struct LightSpeedApp<P: Platform> {
     status: EngineStatus,
     tray: Option<P::Tray>,
     quit: QuitFlag,
-    /// The server the no-reply watchdog found starving. The GUI writes it into
-    /// the relay history, which demotes the relay for the next ranking; the
-    /// session keeps relaying and the warning is the only visible action.
-    relay_starved: Arc<Mutex<Option<StarvationVerdict>>>,
-    /// The active starvation warning, published by the watchdog thread for the
-    /// window and the tray. `None` while the relay returns the session's traffic
-    /// (or nothing is being relayed).
-    relay_warning: Arc<Mutex<Option<RelayStarvationWarning>>>,
+    /// The shared watchdog's publication: the warning, the live judged-window
+    /// streak and the one-shot demotion finding (W2-3a / R16).
+    watchdog_publication: Arc<Mutex<WatchdogSnapshot>>,
+    /// The last publication the frame poll read, so the DTO and the tray show
+    /// one coherent snapshot (the verdict is consumed into the history).
+    watchdog: WatchdogSnapshot,
 
     // ── Proxy connection ─────────────────────────────────────────────────
     selected_proxy_idx: usize,
@@ -241,10 +239,9 @@ pub struct LightSpeedApp<P: Platform> {
     /// start-of-match wait, not a failed route: the watchdog no longer takes
     /// sessions direct, so this is the only hold the window can show.
     holding: bool,
-    /// The watchdog's active warning, polled each frame from the thread that
-    /// owns the detection. Shown in the rail, the route card and the tray; it
-    /// never causes a route change.
-    starvation_warning: Option<RelayStarvationWarning>,
+    /// The watchdog's active warning as last published by the shared thread.
+    /// Shown in the tray; it never causes a route change.
+    starvation_warning: Option<StarvationWarning>,
     /// Estimated whole-loop RTT to the game server through the relay, in ms;
     /// 0.0 until the sampler has enough paired round trips for this pair.
     /// How long ago the probe behind `path_rtt_ms` was taken.
@@ -311,9 +308,10 @@ pub struct LightSpeedApp<P: Platform> {
     /// The relay connect attempt the window started, until the engine's own
     /// facts end it. Feeds `RelayStatus.connecting` (the §2.1 DTO gap).
     connect_attempt: Option<ConnectAttempt>,
-    /// The command slot's in-flight/last-error state (the §2.1 DTO gap behind
-    /// the action loading state and the Error row).
-    session_command: lightspeed_client::app::dto::SessionCommandState,
+    /// The shared app core: every engine mutation is a named command here, and
+    /// its in-flight/last-error state is the DTO's action-loading and Error
+    /// source (S3b).
+    commands: AppCore,
     /// The no-position fallback ranking the chooser produced for this route,
     /// when it used one. Feeds `RelayStatus.fallback`.
     fallback_ranking: Option<lightspeed_client::app::dto::FallbackRanking>,
@@ -449,8 +447,8 @@ impl<P: Platform> LightSpeedApp<P> {
         let saved = loaded.config;
         // Apply the persisted path-MTU cap before any boost can start; the data
         // plane also lowers it on an EMSGSIZE rejection, so this is the user's
-        // explicit floor rather than the only protection.
-        lock_or_recover(&engine).set_path_mtu_cap(saved.tunnel_mtu);
+        // explicit floor rather than the only protection. It is a command, so a
+        // failure would land in the Error row like any other.
         let tunnel_mtu = saved.tunnel_mtu;
 
         // The Game field mirrors the relay's: "Auto (detect)" is the default,
@@ -507,8 +505,11 @@ impl<P: Platform> LightSpeedApp<P> {
         let language = saved.language.clone();
         i18n::set_language(language.as_deref());
 
-        let relay_starved: Arc<Mutex<Option<StarvationVerdict>>> = Arc::new(Mutex::new(None));
-        let relay_warning: Arc<Mutex<Option<RelayStarvationWarning>>> = Arc::new(Mutex::new(None));
+        // The shared watchdog publishes one coherent snapshot: warning, live
+        // judged-window streak (R16) and the one-shot demotion finding.
+        let watchdog_publication = Arc::new(Mutex::new(WatchdogSnapshot::default()));
+        let mut commands = AppCore::new(Arc::clone(&engine));
+        let _ = commands.set_path_mtu_cap(saved.tunnel_mtu);
 
         // The sampler that pairs tunnelled round trips drops every sample while
         // no estimator is installed, and the only installer was the CLI's probe
@@ -518,16 +519,15 @@ impl<P: Platform> LightSpeedApp<P> {
         spawn_relay_reply_watchdog(
             Arc::clone(&engine),
             Arc::clone(&quit),
-            Arc::clone(&relay_starved),
-            Arc::clone(&relay_warning),
+            Arc::clone(&watchdog_publication),
         );
         let mut app = Self {
             engine,
             status,
             tray,
             quit,
-            relay_starved,
-            relay_warning,
+            watchdog_publication,
+            watchdog: WatchdogSnapshot::default(),
             selected_proxy_idx,
             auto_select,
             relay_race: None,
@@ -563,7 +563,7 @@ impl<P: Platform> LightSpeedApp<P> {
             config_error: None,
             config_recovery,
             connect_attempt: None,
-            session_command: lightspeed_client::app::dto::SessionCommandState::default(),
+            commands,
             fallback_ranking: None,
             selected_game_idx,
             game_auto,
@@ -670,20 +670,16 @@ impl<P: Platform> LightSpeedApp<P> {
         };
         let addr = entry.addr;
         let node_id = entry.node_id.clone();
-        let was_intercepting = {
-            let mut engine = lock_or_recover(&self.engine);
-            let running = engine.is_intercepting();
-            engine.connect(addr);
-            engine.set_node_id(node_id);
-            running
+        let was_intercepting = match self.commands.select_relay(addr, node_id) {
+            Ok(was_intercepting) => was_intercepting,
+            Err(error) => {
+                tracing::error!("relay connect command failed: {error:?}");
+                return;
+            }
         };
         // The DTO's `connecting` fact: this window asked for the link, and the
         // engine's own facts end the attempt (see `poll_health`).
         self.connect_attempt = Some(addr);
-        self.session_command
-            .begin(lightspeed_client::app::dto::SessionCommand::SelectRelay);
-        self.session_command
-            .finish(lightspeed_client::app::dto::SessionCommand::SelectRelay);
         // Any relay change moves the data plane with it: a switch that only
         // reconnects the control plane leaves the interceptor sending to the
         // old relay while the token belongs to the new one.
@@ -707,9 +703,7 @@ impl<P: Platform> LightSpeedApp<P> {
         let game_key = self.selected_game().key;
         let port_range_override = parse_custom_port_range(&self.custom_port_input);
         let process_target = self.target_process.clone();
-        let mut engine = lock_or_recover(&self.engine);
-        engine.set_telemetry_game(&game_key);
-        match engine.start_interceptor_with_target(
+        match self.commands.start_boost(
             &game_key,
             proxy,
             self.fec_enabled,
@@ -718,7 +712,7 @@ impl<P: Platform> LightSpeedApp<P> {
             process_target,
         ) {
             Ok(()) => tracing::info!("Restarted interception on the new relay {proxy}"),
-            Err(e) => tracing::error!("relay switch could not restart interception: {e}"),
+            Err(error) => tracing::error!("relay switch could not restart interception: {error:?}"),
         }
     }
 
@@ -1501,12 +1495,8 @@ impl<P: Platform> LightSpeedApp<P> {
         // Stop the background watcher first and wait for it: a presence scan is
         // two process spawns, and the app must not go away while one runs.
         self.presence.shutdown();
-        let mut engine = lock_or_recover(&self.engine);
-        engine.stop_interceptor();
-        engine.stop_windivert();
-        engine.stop_capture();
-        engine.stop_redirect();
-        engine.disconnect();
+        let _ = self.commands.stop_boost();
+        let _ = self.commands.disconnect();
     }
 
     fn start_update_check(&mut self) {
@@ -1536,94 +1526,78 @@ impl<P: Platform> LightSpeedApp<P> {
         // thread and never silently drops a good range.
         let port_range_override = parse_custom_port_range(&self.custom_port_input);
         let process_target = self.target_process.clone();
-        let command = lightspeed_client::app::dto::SessionCommand::StartBoost;
-        self.session_command.begin(command);
 
-        if let Some(proxy) = self.selected_proxy_addr() {
-            let game_key = self.selected_game().key;
-            let mut engine = lock_or_recover(&self.engine);
-            engine.set_telemetry_game(&game_key);
-            let result = engine.start_interceptor_with_target(
-                &game_key,
-                proxy,
-                self.fec_enabled,
-                4, // default FEC K
-                port_range_override,
-                process_target,
-            );
-            if let Err(e) = result {
-                // The Error row's source (spec §2.1/§2.8): the engine message is
-                // kept verbatim behind Details, the taxonomy picks the sentence.
-                self.session_command.fail(
-                    command,
-                    lightspeed_client::app::dto::AppError::tunnel(e.clone()),
-                );
-                tracing::error!("start_interceptor failed: {}", e);
-            } else {
-                self.boost_start = Some(std::time::Instant::now());
-                self.relayed_base = None;
-
-                // Hold traffic direct until a relay has been chosen for the game
-                // server. This is the consumer-simple promise: never route a
-                // player through a relay picked before anyone knew where their
-                // server was. In the field that mistake tunnelled a match on a
-                // Sao Paulo server through a relay in Los Angeles, and the
-                // client's connect timed out.
+        let Some(proxy) = self.selected_proxy_addr() else {
+            return;
+        };
+        let game_key = self.selected_game().key;
+        // The command owns the in-flight state and the Error row's source (S3b):
+        // a failure comes back typed, with the engine's verbatim detail.
+        if let Err(error) = self.commands.start_boost(
+            &game_key,
+            proxy,
+            self.fec_enabled,
+            4, // default FEC K
+            port_range_override,
+            process_target,
+        ) {
+            tracing::error!("start_interceptor failed: {error:?}");
+            return;
+        }
+        self.boost_start = Some(std::time::Instant::now());
+        self.relayed_base = None;
+        {
+            // Hold traffic direct until a relay has been chosen for the game
+            // server. This is the consumer-simple promise: never route a
+            // player through a relay picked before anyone knew where their
+            // server was. In the field that mistake tunnelled a match on a
+            // Sao Paulo server through a relay in Los Angeles, and the
+            // client's connect timed out.
+            //
+            // The interceptor still captures and attributes while held, so
+            // the destination is discovered and the hold can be released;
+            // holding never makes the server unknowable.
+            let held = self.commands.hold_tunnelling().unwrap_or(false);
+            if held {
+                self.held_since = Some(std::time::Instant::now());
+                tracing::info!("Holding traffic on the direct path until the game server is known");
+                // The relay connected for this game can arrive on a frame the
+                // GUI's own release never sees, so the engine ends the hold
+                // itself the moment that happens. Nothing changes for a run
+                // that does find its server: `follow_game_server` releases
+                // first, and this only stops the watcher.
                 //
-                // The interceptor still captures and attributes while held, so
-                // the destination is discovered and the hold can be released;
-                // holding never makes the server unknowable.
-                let held = engine.hold_tunnelling();
-                if held {
-                    self.held_since = Some(std::time::Instant::now());
-                    tracing::info!(
-                        "Holding traffic on the direct path until the game server is known"
-                    );
-                    // The relay connected for this game can arrive on a frame the
-                    // GUI's own release never sees, so the engine ends the hold
-                    // itself the moment that happens. Nothing changes for a run
-                    // that does find its server: `follow_game_server` releases
-                    // first, and this only stops the watcher.
-                    //
-                    // The engine guard is dropped before the watcher is armed
-                    // again: arming spawns a task on the engine runtime, and
-                    // holding this mutex across that spawn is what stopped the
-                    // arming call from ever returning in a live run.
-                    let status = engine.status_watch();
-                    let chosen = Arc::clone(&self.server_chosen);
-                    drop(engine);
-                    let armed =
-                        lock_or_recover(&self.engine).release_hold_when_connected(move || {
-                            chosen.load(Ordering::Relaxed)
-                                && status.read().map(|s| s.connected).unwrap_or(false)
-                        });
-                    if !armed {
-                        tracing::warn!("No release watcher: this run is not held");
-                    }
-                } else {
-                    tracing::debug!("This backend has no tunnelling gate; starting unheld");
+                // The engine guard is dropped before the watcher is armed
+                // again: arming spawns a task on the engine runtime, and
+                // holding this mutex across that spawn is what stopped the
+                // arming call from ever returning in a live run.
+                let status = lock_or_recover(&self.engine).status_watch();
+                let chosen = Arc::clone(&self.server_chosen);
+                let armed = self
+                    .commands
+                    .release_hold_when_connected(move || {
+                        chosen.load(Ordering::Relaxed)
+                            && status.read().map(|s| s.connected).unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if !armed {
+                    tracing::warn!("No release watcher: this run is not held");
                 }
+            } else {
+                tracing::debug!("This backend has no tunnelling gate; starting unheld");
             }
-            self.session_command.finish(command);
-        } else {
-            self.session_command.finish(command);
         }
     }
 
     /// Stop every active boost backend and clear the start timestamp.
     fn stop_boost(&mut self) {
-        let command = lightspeed_client::app::dto::SessionCommand::StopBoost;
-        self.session_command.begin(command);
-        let mut engine = lock_or_recover(&self.engine);
-        engine.stop_interceptor();
-        engine.stop_windivert();
-        engine.stop_capture();
-        engine.stop_redirect();
+        if let Err(error) = self.commands.stop_boost() {
+            tracing::error!("stop command failed: {error:?}");
+        }
         self.boost_start = None;
         self.relayed_base = None;
         self.health_base = None;
         self.relay_health = None;
-        self.session_command.finish(command);
     }
 
     /// Record what each path is doing, every ten seconds.
@@ -1692,10 +1666,11 @@ impl<P: Platform> LightSpeedApp<P> {
     /// warn-only mode has no chain to exhaust, because it never retries and
     /// never switches paths. The session keeps relaying while the finding is
     /// written; only a future ranking changes.
-    fn record_starvation_verdict(&mut self) {
-        let Some((server, published_relay)) = lock_or_recover(&self.relay_starved).take() else {
-            return;
-        };
+    fn apply_watchdog_demotion(
+        &mut self,
+        server: SocketAddrV4,
+        published_relay: Option<SocketAddrV4>,
+    ) {
         let Some(relay) = published_relay.or_else(|| {
             lightspeed_client::current_relay().or_else(|| {
                 self.status
@@ -1837,19 +1812,29 @@ impl<P: Platform> LightSpeedApp<P> {
                 health.tunnelling_enabled == Some(false) && health.detected_server.is_some()
             })
             .unwrap_or(false);
-        // The watchdog publishes its warning from its own thread; the window is
-        // the consumer that shows it. Reading the slot is what keeps the tray and
-        // the card in step with the detection that produced it.
-        self.starvation_warning = *lock_or_recover(&self.relay_warning);
+        // The shared watchdog publishes from its own thread; this poll mirrors the
+        // snapshot for the shell and tray and consumes the one-shot demotion
+        // finding. The live streak is published for real now (W2-3a / R16).
+        {
+            let mut published = lock_or_recover(&self.watchdog_publication);
+            let verdict = published.verdict.take();
+            self.watchdog = WatchdogSnapshot {
+                warning: published.warning,
+                streak: published.streak,
+                verdict: None,
+            };
+            drop(published);
+            self.starvation_warning = self.watchdog.warning;
+            if let Some((server, relay)) = verdict {
+                self.apply_watchdog_demotion(server, relay);
+            }
+        }
         if let Some(server) = health.as_ref().and_then(|health| health.detected_server) {
             self.refresh_server_ping(*server.ip());
         }
         self.log_latency_comparison();
         self.record_relay_history();
-        // The finding is written into the relay history, which demotes the relay
-        // for the next ranking. The session keeps relaying: the warning, not a
-        // route change, is how the user hears about it.
-        self.record_starvation_verdict();
+
         if self.status.interceptor_active || self.status.redirect_active {
             let key = self.session_key();
             let stale = self
@@ -2048,7 +2033,7 @@ impl<P: Platform> LightSpeedApp<P> {
             if self.status.interceptor_active {
                 self.stop_boost();
             }
-            lock_or_recover(&self.engine).disconnect();
+            let _ = self.commands.disconnect();
             // A user disconnect ends any connect attempt this window started; a
             // disconnected idle window must not report CONNECTING.
             self.connect_attempt = None;
@@ -2621,7 +2606,6 @@ impl<P: Platform> LightSpeedApp<P> {
         let boosting = self.run_boosting();
         let server = self.game_server_addr();
         let relay = self.selected_entry().map(|entry| entry.addr);
-        let warning = self.starvation_warning;
         let has_error = self.engine_error().is_some();
         let relayed = if boosting {
             let flow = server.and_then(|server| {
@@ -2707,23 +2691,10 @@ impl<P: Platform> LightSpeedApp<P> {
                 fallback: self.fallback_ranking.clone(),
             },
             watchdog: app_dto::WatchdogStatus {
-                warning: warning.map(|warning| app_dto::StarvationWarning {
-                    server: warning.server,
-                    relay: warning.relay,
-                    fault: match warning.fault {
-                        RelayReplyFault::NoReplyFromRelay => {
-                            app_dto::ReturnPathFault::NoReplyFromRelay
-                        }
-                        RelayReplyFault::InjectionFailed => {
-                            app_dto::ReturnPathFault::InjectionFailed
-                        }
-                        RelayReplyFault::TooFewReplies => app_dto::ReturnPathFault::TooFewReplies,
-                    },
-                }),
-                // The watchdog thread keeps its streak counter internally until
-                // the S4 move publishes it with the rest of the watchdog; `None`
-                // is the honest "not observed by this client yet", never a zero.
-                streak: None,
+                warning: self.watchdog.warning,
+                // W2-3a closes the S4 deferral: the shared watchdog publishes the
+                // real judged-window streak, and `None` means no live streak.
+                streak: self.watchdog.streak,
             },
             location: server
                 .map(|server| self.location_status(server))
@@ -2738,13 +2709,13 @@ impl<P: Platform> LightSpeedApp<P> {
             boosting,
             relayed,
             error: self.engine_error(),
-            session: self.session_command.clone(),
+            session: self.commands.session().clone(),
             capabilities: app_dto::Capabilities {
                 elevated: self.is_admin,
             },
             tray: tray_state_for(
                 has_error,
-                warning.is_some() && boosting,
+                self.watchdog.warning.is_some() && boosting,
                 boosting,
                 self.status.connected,
             ),
@@ -2769,7 +2740,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// The current error fact (spec §2.8): the last failed command, else the
     /// tolerant loader's recovery, else a live engine/registration failure.
     fn engine_error(&self) -> Option<app_dto::AppError> {
-        if let Some(error) = &self.session_command.last_error {
+        if let Some(error) = self.commands.session().last_error.as_ref() {
             return Some(error.clone());
         }
         if let Some(recovery) = &self.config_recovery {
@@ -3880,14 +3851,17 @@ impl<P: Platform> LightSpeedApp<P> {
         let entry = self.selected_game();
         let local_port = server_addr.port().max(entry.default_port);
         if let Some(proxy) = self.selected_proxy_addr() {
-            lock_or_recover(&self.engine).start_redirect(
+            let game_name = entry.display.to_string();
+            if let Err(error) = self.commands.start_redirect(
                 server_addr,
                 local_port,
                 self.fec_enabled,
                 4,
-                entry.display.to_string(),
+                &game_name,
                 proxy,
-            );
+            ) {
+                tracing::error!("start_redirect failed: {error:?}");
+            }
         }
     }
 

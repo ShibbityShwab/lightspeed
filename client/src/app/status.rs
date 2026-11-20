@@ -104,6 +104,19 @@ pub fn action_slot(is_admin: bool, boosting: bool, connected: bool, has_relay: b
     }
 }
 
+// ── Relay-switch hysteresis ────────────────────────────────────────────────
+
+/// Whether a re-race winner is enough faster to justify switching relays.
+///
+/// Returns `true` only when `winner_rtt_ms + margin_ms` is strictly less than
+/// `current_rtt_ms`; a tie or a worse winner keeps the current relay. The
+/// addition saturates, so extreme inputs cannot wrap around and produce a
+/// spurious switch. Moved from the GUI's `race_watch.rs` at W2-3a: the rule is
+/// session logic, not presentation.
+pub fn decide_switch(current_rtt_ms: u64, winner_rtt_ms: u64, margin_ms: u64) -> bool {
+    winner_rtt_ms.saturating_add(margin_ms) < current_rtt_ms
+}
+
 // ── Session counters ───────────────────────────────────────────────────────
 
 /// The counter pair for whichever interception mode is running. Redirect wins
@@ -536,29 +549,75 @@ mod tests {
 
     #[test]
     fn the_tray_never_reads_optimizing_while_the_return_path_fails() {
-        assert_eq!(tray_state_for(true, false, false, false), TrayState::Error);
-        assert_eq!(
-            tray_state_for(false, true, true, true),
-            TrayState::RelayStarved
-        );
-        assert_eq!(
-            tray_state_for(false, false, true, true),
-            TrayState::Optimizing
-        );
-        assert_eq!(
-            tray_state_for(false, false, false, true),
-            TrayState::Connected
-        );
-        assert_eq!(
-            tray_state_for(false, false, false, false),
-            TrayState::Disconnected
-        );
-        // A stale warning must not paint a starved/healthy state over a stopped
-        // tunnel: not boosting falls through to the link state.
+        // Moved from the GUI test cluster at W2-3a (acceptance (a)/(d)). The
+        // live honesty defect: the tray claimed "optimizing" in green while the
+        // relay returned nothing. Every combination must keep that word away
+        // from a failing return path, and a normal boosting session must still
+        // say Optimizing.
+        for has_error in [false, true] {
+            for warning_active in [false, true] {
+                for boosting in [false, true] {
+                    for connected in [false, true] {
+                        let state = tray_state_for(has_error, warning_active, boosting, connected);
+                        if has_error {
+                            assert_eq!(state, TrayState::Error);
+                        } else if warning_active && boosting {
+                            assert_eq!(
+                                state,
+                                TrayState::RelayStarved,
+                                "a failing return path needs its own tray state"
+                            );
+                            assert_ne!(
+                                state,
+                                TrayState::Optimizing,
+                                "the tray must never claim optimization while the return path fails"
+                            );
+                        } else if boosting {
+                            assert_eq!(state, TrayState::Optimizing);
+                        } else if connected {
+                            assert_eq!(state, TrayState::Connected);
+                        } else {
+                            assert_eq!(state, TrayState::Disconnected);
+                        }
+                    }
+                }
+            }
+        }
+        // A warning with no traffic flowing is not a running optimization
+        // either: the tray falls back to the connection state.
         assert_eq!(
             tray_state_for(false, true, false, true),
             TrayState::Connected
         );
+    }
+
+    #[test]
+    fn switches_when_the_winner_is_clearly_better() {
+        // Moved from the GUI's race_watch.rs at W2-3a (all four cases kept).
+        assert!(decide_switch(100, 60, 20));
+        assert!(decide_switch(100, 79, 20));
+    }
+
+    #[test]
+    fn keeps_the_current_relay_within_the_margin() {
+        assert!(
+            !decide_switch(100, 80, 20),
+            "exactly at the margin is a tie"
+        );
+        assert!(!decide_switch(100, 85, 20));
+        assert!(!decide_switch(100, 100, 0));
+    }
+
+    #[test]
+    fn keeps_the_current_relay_when_the_winner_is_worse() {
+        assert!(!decide_switch(50, 90, 5));
+        assert!(!decide_switch(50, 51, 0));
+    }
+
+    #[test]
+    fn extreme_values_do_not_wrap_into_a_switch() {
+        assert!(!decide_switch(u64::MAX, u64::MAX, 1));
+        assert!(!decide_switch(u64::MAX, u64::MAX - 1, 10));
     }
 
     // ── action slot ────────────────────────────────────────────────────────

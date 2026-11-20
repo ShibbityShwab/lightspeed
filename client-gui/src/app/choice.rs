@@ -7,34 +7,13 @@ use super::*;
 pub(super) use lightspeed_client::app::dto::FallbackRanking;
 #[allow(unused_imports)] // re-exported for the in-crate tests and the W2-2 shell
 pub(super) use lightspeed_client::app::status::{
-    compare_to_direct, direct_us_for, early_triangle_floor, fresh_direct_us, measured_server_leg,
-    pair_relay_legs, ping_for_server, prefer_proven, proxy_index_for, rank_without_destination,
-    refreshed_server_ping, relay_cannot_beat_direct, relay_measured_app_server_leg,
-    relay_measured_server_leg, relay_measured_trace, same_relay_endpoint, scored_for_relay,
-    server_leg_state, session_delta, session_pair, without_starved, MAX_RELAYS_TRIED,
-    SERVER_PING_FRESH_SECS,
+    compare_to_direct, decide_switch, direct_us_for, early_triangle_floor, fresh_direct_us,
+    measured_server_leg, pair_relay_legs, ping_for_server, prefer_proven, proxy_index_for,
+    rank_without_destination, refreshed_server_ping, relay_cannot_beat_direct,
+    relay_measured_app_server_leg, relay_measured_server_leg, relay_measured_trace,
+    same_relay_endpoint, scored_for_relay, server_leg_state, session_delta, session_pair,
+    without_starved, MAX_RELAYS_TRIED, SERVER_PING_FRESH_SECS,
 };
-
-/// The carry-memory seam for the shared starvation filter.
-///
-/// `RelayHistory` (and its disk format) moves at S4; until then the GUI is its
-/// owner, but the *filter* is shared. This impl is the one adapter between the
-/// two, so the rule cannot drift: the core filter reads `CarryLookup`, and the
-/// only implementation over the GUI's memory converts its verdict once, here.
-impl lightspeed_client::app::dto::CarryLookup for crate::relay_history::RelayHistory {
-    fn carry_verdict(
-        &self,
-        relay: SocketAddrV4,
-        server: Ipv4Addr,
-    ) -> lightspeed_client::app::dto::CarryVerdict {
-        use lightspeed_client::app::dto::CarryVerdict;
-        match crate::relay_history::RelayHistory::carry_verdict(self, relay, server) {
-            crate::relay_history::CarryVerdict::Proven => CarryVerdict::Proven,
-            crate::relay_history::CarryVerdict::Starved => CarryVerdict::Starved,
-            crate::relay_history::CarryVerdict::Unproven => CarryVerdict::Unproven,
-        }
-    }
-}
 
 /// The trace half of [`compare_to_direct`], as a sentence fragment.
 pub(super) fn direct_claim_label(direct_us: Option<u64>, total_leg_us: u64) -> String {

@@ -19,7 +19,6 @@ mod i18n;
 mod paths;
 mod platform;
 mod processes;
-mod race_watch;
 mod relay_history;
 mod self_update;
 mod server_geofeed_tables;
