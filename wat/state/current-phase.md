@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-2b) - WF-081: copy deck, Settings 120 s and location rungs fixed; Lead-gated; QA re-verifying
+
+**Agent:** lead + `interface-designer` (task-41), `qa-engineer-2` (task-42).
+
+- **W2-2b committed (`4390705`).** The three QA Majors are fixed: **R1** the §2.7 B warning/route rows are exactly the spec strings in all 9 catalogs (`No game traffic is coming back from this relay yet…`, the injection warning pointing at Settings → Maintenance, `~{ms} ms (relay leg + server leg)` with the "(L + S)" leak gone, `Path trace`), with a test pinning every row; **R2** the Settings hold row now renders **`HOLD_FALLBACK` 120 s** ("for up to 2 minutes") through the code path, not `LOCK_SETTLE` 3 s — the 40×-wrong C5 number is dead, and a test forbids "3s"/"direct path"; **R3** location rung values are bare provenance phrases (country/cloud/hosting/geofeed/unknown) with a no-duplication assertion. Minors: R4 `interface.md:75-78` + the retired re-test bullet; R5 tray capture **with** `Hide to tray` from a run without `LIGHTSPEED_KEEP_VISIBLE` (env recorded); R6 keyboard transcript + 3 frames (Tab inside sheet, Esc closes/returns, Enter opens the RU language combo; all sheets `egui::Modal`); R9 `settings.routing` and hover keys; R7/R8 C7 recorded at ja/ko/zh **70**, DE 51, ES/FR/PT 47, RU 45 English-identical keys, glyph exemption unchanged; R10 report anchor fixed.
+- **Lead gate on the fixed tree: PASS.** fmt clean; workspace clippy 0; workspace **1885 / 0 / 7**; GUI clippy 0; GUI **250 / 0 / 0**. Diff 13 files, +238/−132; `route_surface`/client core/platform/workflows untouched; G3 budgets re-ratcheted (guard-owned).
+- **QA re-verification queued** (task-42): CLOSED/OPEN per residual, re-run gate, final ACCEPT/REVISE. **W2-3a starts only on ACCEPT.**
+- **Remaining U/open:** location-block live capture (needs a locked server this host cannot produce without elevation; copy is fixed and test-pinned), 200 % capture, 239/181 chrome pixel measurement, live non-error states, translation debt (Q5; 14 copy-deck rows English in non-EN until then), font-subset gap (Q19), S4 streak, Q13 trace disclosure. Branch 16 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts; commit `4390705`; captures `settings-320x1000-en-hold.png`, `footer-320x420-en-tray.png`, `settings-320x1000-ru.png`; keyboard transcript/frames. **Not verified:** W2-2b by an independent verifier (task-42 in progress); 200 %/chrome/live states; translation completeness.
+**Open:** QA W2-2 final verdict → W2-3a warn-only runtime → W2-3b → W2-4.
+
 ### 2026-11-20 (W2-2 QA) - WF-081: QA REVISE on the copy deck/Settings/location block; W2-2b fixing
 
 **Agent:** lead + `qa-engineer-2` (task-40), `interface-designer` (task-41 fix).
