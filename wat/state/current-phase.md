@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (S6c landed, S6d) - WF-081: config unified; Reset-to-defaults fix opened; full S6 QA next
+
+**Agent:** lead + `rust-dev-2` (task-55), `rust-dev-2` (task-58 start).
+
+- **S6c committed (`6b8bff6`, 9 files +611/−22).** One canonical per-user config through `AppConfig`: **canonical `lightspeed.toml`** in the per-user config dir (the CLI's native file name), **legacy GUI `config.toml` imported read-only** (never written/renamed/deleted), per-key Q10 precedence (legacy base → canonical overlay → typed defaults), malformed-canonical `ConfigRecovery` without mixing, malformed legacy logged+ignored, CLI `--config` semantics unchanged (own file wins; shared config only as fallback). 8 core/GUI model tests + 5 env-isolated CLI fixtures; the four frozen CLI goldens are **hash-identical to HEAD**; CHANGELOG entry; guard re-measured (G2 +6, `paths.rs` 81→91, `config.rs` 18→23). Gate **1976 / 0 / 7**, GUI **155 / 0 / 0**, cli_compat **9/9**, guard **8/8**.
+- **Rulings:** (a) the file naming is accepted — canonical `lightspeed.toml` (CLI name) + legacy `config.toml` read-only is the correct interpretation of the spec; recorded as errata. (b) the one-line `client-gui/src/main.rs` early-language load is accepted as the necessary consequence of the merged reader.
+- **Defect required fixed (S6d, task-58):** Reset-to-defaults removes only the canonical file, so read-only legacy values re-import — not a real reset. S6d adds an explicit-defaults marker in canonical that `load_unified` honours by skipping the legacy import (legacy untouched per Q10), with reset/defaults/round-trip/CLI tests, CHANGELOG + spec errata, guard re-measure and hash-identical goldens. Started now.
+- **Next:** after S6d → **full-S6 QA** (goldens, guard item-level, config matrix, reset, adapter docs) → **W2-4a** (task-53) → **W2-4 parity**. Post-W2 task-57 (live-mode engine surface) remains unscheduled. Commits `6b8bff6`; branch 41 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts on `6b8bff6`; golden hashes; fixture counts; guard table; no forbidden diffs. **Not verified:** S6d (in progress); full S6 by QA; no GUI launch for the config change; Linux/macOS CI.
+**Open:** S6d → full S6 QA → W2-4a → W2-4 parity; post-W2 task-57 unscheduled.
+
 ### 2026-11-20 (live-mode decision) - WF-081: owner keeps CLI live modes as named adapters; S6c closes S6
 
 **Agent:** lead, on the owner's answer to the live-mode gate.
