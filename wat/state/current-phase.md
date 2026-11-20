@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-4a ACCEPTED) - WF-081: R10 closed; remaining dead-code condition named (W2-4b); W2-4 owners running
+
+**Agent:** lead + `qa-engineer-2` (task-60), `desktop-platform-2` (task-61), `dev-ops` (task-62).
+
+- **W2-4a is ACCEPTED with no code/gate/doc residuals.** QA verified: the suffix renders from the last responding hop through the shared `place` fact (Cloud/Geofeed/Hosting only, never a city, Country/Unknown none, 0-hop no row, one caption implementation, no new copy key); `client_trace.rs` is a 22-line re-export shell with no `#[allow(dead_code)]` and G2 forbids `caption`/`network_label`; fixtures 25/25 (AWS, G-Core, unknown, no-router, timeout-no-row); guard G1 42 / G2 183 / G3 33 exact with the four mutation rounds reproduced; spec errata correct; scope exactly 4 files; QA gate matches the Lead (**1981/0/7**, GUI **153/0/0**, goldens hash-identical, cli_compat 11/11).
+- **Lead audit correction — the W2-2 `allow(dead_code)` condition was only half-closed.** The `client_trace` half is closed, but `choice.rs` still carries four dead copy helpers (`relay_measured_leg_text`, `relay_measured_app_leg_text`, `relay_measured_trace_text`, `expected_path_text`), `ledger.rs` two (`primary_action`, `relayed_row_text`), `app.rs` one (`app_status`), and `route_surface.rs` carries a **module-wide `#![allow(dead_code)]`**. Recorded as **W2-4b (task-63)**, blocked behind W2-4 (task-61), for wire-or-delete disposition with their pinned rules preserved and the module-wide allowance audited; the `platform/mod.rs` windows-only exemption and the `widgets.rs` OS-probe seam are expected to be settled by W2-4. This is bookkeeping honesty, not a W2-4a defect.
+- **W2-4 running in parallel:** `desktop-platform-2` (task-61: tray/menu fifth state, shortcuts, elevation handshake, autostart, updater channel, three-tier statements, reduced-motion SPI signal, trace runtime dependency; guard re-ratchet; no workflows) and `dev-ops` (task-62: linux-gui/macos-gui CI jobs, headless smoke, localization gate; no Rust code). Both name Linux/macOS runtime as **U** until the owner names hardware.
+- **Next:** collect W2-4 results → final W2-4 QA → **W2-4b** (task-63) → program close-out with the acceptance/limitations report. Commits `2b3fd04`/`ec232ee`; branch 47 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** QA W2-4a ACCEPT; Lead gate counts; audit of remaining dead-code attributes; W2-4 task scopes. **Not verified:** W2-4 platform/CI (in progress); Linux/macOS runtime; interactive UAC decline; live trace/GUI captures.
+**Open:** W2-4 (task-61/62) → W2-4 QA → W2-4b (task-63) → close-out; Q5/Q19 post-W2 debt; post-W2 task-57 unscheduled.
+
 ### 2026-11-20 (W2-4a landed, W2-4 start) - WF-081: R10 closed; final parity slice running in parallel
 
 **Agent:** lead + `rust-dev-2` (task-53), `qa-engineer-2` (task-60), `desktop-platform-2` (task-61), `dev-ops` (task-62).
