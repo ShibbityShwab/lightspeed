@@ -12,6 +12,20 @@
 
 ## Recent entries
 
+### 2026-11-20 (S6 checkpoint) - WF-081: CLI goldens frozen, update rules moved, capability DTO; S6b CLI adoption next
+
+**Agent:** lead + `rust-dev-2` (task-50 checkpoint).
+
+- **S6 checkpoint committed (`6f72560`, 11 files +628/−141).** The ordered first deliverable holds: **CLI goldens frozen before any S6 path change** — `client/tests/cli_compat.rs` (4 tests in the workspace gate) over `client/tests/cli_goldens/` for `--list-games` (exact), malformed-`--config` (exact, tolerant-loader block included), `--status` (normalized OS/arch/features, structural tail) and `--probe-proxies` (normalized host/latency, exact report shape/candidate/count, no network — closed loopback port + non-HTTPS registry rejection). Proof: seeded on the pristine `8de721a`, before/after goldens **byte-identical**, and the 4 tests run in the workspace gate so the adoption can't drift text/flags/exit codes.
+- **Update rules moved:** `client/src/app/update.rs` (156 lines, 9 tests — `ReleaseAsset`/`compare_versions`/`parse_sha256_file`); GUI keeps network/check/download-verification/swap (`update.rs` 322→224, `self_update.rs` 213→183). **W2-4 capability DTO** `dto::CapabilityFacts`; **Q9 presence canon** documented in `client/src/app/mod.rs` (GUI 5 s auto-only; CLI has no presence loop, named difference).
+- **Lead gate: PASS.** fmt/clippy clean; workspace **1960 / 0 / 7** (client 1599/0/5) including the 4 goldens; GUI **155 / 0 / 0**; guard **8/8**; S6 mutation rounds fail only G2 (GUI re-implements `compare_versions`), G3 (adapter growth) and G1 (new direct engine path), restores byte-identical. G1 still 47 rows pending S6b.
+- **Deviation ruled acceptable:** the two GUI update files were thinned outside task-50's listed scope — a mechanical consequence of moving the rules (W2-3a precedent, only moved items removed). Recorded in the decision log.
+- **Split for safety:** **S6b (task-54)** engine-backed CLI composition root + `AppCore` adoption, goldens as the acceptance gate, G1 ratcheted to named adapter exceptions + final S6 mutation proof; **S6c (task-55)** config-file unification (legacy read-only import, old/new/both fixtures, Q10 precedence, one release-note line), blocked by S6b. **W2-4a (task-53) remains required before W2-4.**
+- **Named unverified:** Linux CI for the new goldens (portable by construction, Windows run only); `--status` tail is structural by design; no real-network/registry-fetch path exercised. Commits `6f72560`; branch 34 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts; golden before/after byte-identical + pristine-base proof; update-rule tests; capability/presence code; S6 mutation log. **Not verified:** S6b/S6c (in progress); Linux CI; real network paths; R10 (task-53 pending).
+**Open:** S6b → S6c → full S6 QA → W2-4a → W2-4 parity; Q5/Q19; runtime hardware.
+
 ### 2026-11-20 (S5b ACCEPTED, S6 start) - WF-081: trace slice accepted; W2-4a recorded; CLI adoption begins
 
 **Agent:** lead + `qa-engineer-2` (task-52), `rust-dev-2` (task-50 start).
