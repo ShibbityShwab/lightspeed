@@ -215,7 +215,7 @@ small **operator geofeed** table built into the application:
   DigitalOcean, LLC, The Constant Company (Vultr), Akamai Connected Cloud
   (Linode), Contabo GmbH and Equinix Metal; the exact list with each feed URL
   and as-of date is the source manifest
-  (`client-gui/data/server-geofeed.sources.json`).
+  (`client/data/server-geofeed.sources.json`).
 - It is downloaded **at build time on the maintainer's machine**, not by your
   client. The GUI only reads the table embedded in the binary; it makes no
   request for it and sends nothing anywhere.

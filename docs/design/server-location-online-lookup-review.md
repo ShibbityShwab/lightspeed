@@ -88,9 +88,11 @@ data (GeoLite2/geojs) and the operator feed got Manassas right.
   malformed, deny handling, attribution in the output header, prefix math,
   merge precedence, the as-of dateline and the emitted files (109 checks).
 - **Done - the G-Core table now ships, display-only (2026-11-20):** the
-  committed artifacts are `client-gui/data/server-geofeed.bin` (603 ranges),
-  `client-gui/src/server_geofeed_tables.rs` (92 places, 1 source: G-Core
-  AS199524, as-of 2026-11-19) and `client-gui/data/server-geofeed.sources.json`.
+  committed artifacts are `client/data/server-geofeed.bin` (603 ranges;
+  moved from `client-gui/data/` at WF-081 S5a),
+  `client/src/app/location/server_geofeed_tables.rs` (92 places, 1 source:
+  G-Core AS199524, as-of 2026-11-19) and
+  `client/data/server-geofeed.sources.json`.
   The client gained `Place::Geofeed { provider, country, region, city, source,
   as_of }`, resolved in the ladder after cloud and before hosting. The route
   card shows "Server location: operator geofeed — Manassas, US-VA" with
