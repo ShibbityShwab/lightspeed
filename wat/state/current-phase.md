@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (live-mode decision) - WF-081: owner keeps CLI live modes as named adapters; S6c closes S6
+
+**Agent:** lead, on the owner's answer to the live-mode gate.
+
+- **Owner decision:** the three CLI live modes (`--game-server` redirect, `--start-interceptor`, `--watch`) remain **documented, item-level named CLI adapters** for W2 — no user-facing CLI change and no new engine risk. The shared core still owns `--status`/`--check`/session commands, and the frozen CLI goldens lock the adapters' text/flags/exit codes. The full migration is captured as **post-W2 task-57** (additive engine surface: discovery facts, adaptive policy, redirect `adaptive`/`tcp` + counters, relay-switch/reroute command; then watch → interceptor → redirect with parity fixtures) and must not start until the owner schedules it.
+- **S6 acceptance is now closed-form:** goldens frozen before any path change (done), `--status`/`--check` adoption (done), **G1 item-level named exceptions (42 rows, no blankets)** instead of zero, keepalive/live-test/live-mode adapters documented in `client/src/app/mod.rs` + spec errata, config unification via **S6c** (in progress), and the four-round S6 mutation proof including a golden-caught text drift. No CLI behaviour change.
+- **S6c running** (`rust-dev-2`, task-55): one canonical per-OS `config.toml` through `AppConfig`, legacy GUI file imported read-only (never deleted/mutated), Q10 precedence, old/new/both/malformed fixture matrix, `retry_after_fallback` read-only tolerance, one release-note line, CLI `--config` semantics preserved with byte-identical goldens. After S6c: full-S6 QA → **W2-4a** (task-53) → **W2-4 parity**.
+- **Recorded correction:** G1 = **42** item-level rows, G2 = **170** (guard table authoritative; the S6b report's 41/159 prose was an arithmetic slip). Commits `e4f40ae`/`2bd65ec`; branch 39 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** owner decision recorded; S6b2 checkpoint gate; post-W2 task-57 created; state counts corrected. **Not verified:** S6c (in progress); full S6 by QA; live modes deliberately unchanged; Linux CI.
+**Open:** S6c → full S6 QA → W2-4a → W2-4 parity; post-W2 task-57 unscheduled.
+
 ### 2026-11-20 (S6b2 finding) - WF-081: live-mode adoption blocked on engine API; owner gate opened; S6c started
 
 **Agent:** lead + `rust-dev-2` (task-56 checkpoint).
