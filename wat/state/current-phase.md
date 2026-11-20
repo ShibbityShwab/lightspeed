@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-1 checkpoint) - WF-081: Spine S0-S2 green and committed; S3a continuing
+
+**Agent:** lead + `rust-dev` (task-29 checkpoint, task-35 continuation), on the owner's go-ahead after the rebase and mobile-only decision.
+
+- **W2-1 S0-S2 landed** (`rust-dev`, commit `c9ee49d`): S0 drift guard `client/tests/gui_boundary.rs` (572 lines, 8 tests, G1–G7 with measured allowlists/budgets and inject→fail→revert→pass mutation proofs); S1 config model moved to `client/src/app/config.rs` (639 lines, 17 tests; GUI `config.rs` now an 18-line re-export shell); S2 discovery/probe/identity moved to `client/src/app/discovery.rs` (768 lines, 20 tests; GUI `discovery.rs` a 78-line `mpsc` wrapper); facade skeleton + `pub mod app;`. Tracked diff `+62/−1293`; `app.rs` diff is 18 lines of config call-site/type/getter only — **no `ui()`/drawing change**. Retired `retry_after_fallback` refused on write, tolerated on read.
+- **Lead gate (independent, PASS).** fmt clean; workspace clippy exit 0 with 0 code warnings (only the pre-existing local "no resource compiler" build-script notice); workspace tests **1859 / 0 / 7** (client 1497/0/3, protocol 104/0/0, proxy 257/0/0, plus integration suites); GUI clippy exit 0; GUI **226 / 0 / 0**. Guard mutation proofs re-read from evidence.
+- **No-visual-change proof (re-checked).** Connected 320×866: 9,561 changed pixels, **0 outside the live-metric mask (0.000000 %)**; disconnected 320×811: **0 changed pixels**; UIA trees identical (30 / 25 elements, origin-normalised, RTT masked). Evidence `wat/evidence/2026-11-20/w2-1/` (lead-gate.log, compare-*.json, UIA JSONs, guard-mutation logs).
+- **S3a continuing** (task-35): status DTO v2 (`AppStatus`/`RelayStatus`/`WatchdogStatus`/`LocationStatus`/`ServerLegStatus`/`ClientRoute`/`RelayedPair`/`TrayState`/`AppError`/`SessionCommandState`/`Capabilities`, the four §2.1 fact paths), moves of `tray_state_for`/starvation-filter ranking/measured-leg readers/ledger rules, the pure `client-gui/src/app/route_surface.rs` with row fixtures, acceptance (b)-(e), guard ratchet and the visual re-proof.
+- **Not done.** W2-1b; W2-2 shell; W2-3a/3b; W2-4 parity; `interface.md` edits (W2-2); Q13 trace disclosure (with W2-3b); ES/PT copy (W2-2). Branch is 5 ahead / 0 behind `origin/master 76aba5d`; `$0.00`.
+
+**Verified:** Lead gate counts above; guard mutation logs; pixel/UIA comparison JSONs; commit `c9ee49d`; `git status` clean before task-35 started. **Not verified:** S3a (in progress); Linux/macOS runtime; W2 acceptance for the shell.
+**Open:** W2-1b completion → independent QA of W2-1 → W2-2.
+
 ### 2026-11-20 (delta close + W2 start) - WF-081: delta set ACCEPTED, errata closed, W2-1 Spine in progress
 
 **Agent:** lead + `architect`, `ux-lead`, `design-system`, `desktop-platform`, `interface-designer`, `qa-engineer-2` (tasks 17–28), and `rust-dev` (task-29).
