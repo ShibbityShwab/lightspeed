@@ -509,6 +509,33 @@ pub struct Capabilities {
     pub elevated: bool,
 }
 
+/// The build/host capability facts W2-4 parity reports as one set.
+///
+/// `client/src/main.rs --status` and the GUI's Components view already show
+/// these facts from separate sites (`docs/design/gui-core-boundary.md` §5.6);
+/// this is the single shape both front ends fill and the parity statement is
+/// rendered from. A front end fills only what it can observe: `None` means the
+/// fact is not observable there (never a fabricated value), `features` is the
+/// compile-time feature list of the binary (`sorted`, so rendering is stable),
+/// and `elevated` is the same authority bit as [`Capabilities::elevated`].
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct CapabilityFacts {
+    /// The binary's package version (`CARGO_PKG_VERSION`).
+    pub version: String,
+    /// The host OS (`std::env::consts::OS`).
+    pub os: &'static str,
+    /// The host architecture (`std::env::consts::ARCH`).
+    pub arch: &'static str,
+    /// Compile-time features this binary was built with, sorted.
+    pub features: Vec<&'static str>,
+    /// The interceptor backend's platform name, when it can be probed.
+    pub interceptor_platform: Option<&'static str>,
+    /// Whether the interceptor backend is available on this host, when probed.
+    pub interceptor_available: Option<bool>,
+    /// Whether the process holds the authority to relay traffic.
+    pub elevated: bool,
+}
+
 /// The tray projection of the current state. `RelayStarved` exists and must
 /// never be reported as `Optimizing` (spec §2.2 row 6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

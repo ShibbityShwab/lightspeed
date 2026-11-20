@@ -1,0 +1,10 @@
+<ts>  INFO lightspeed: ⚡ LightSpeed v<version> starting
+📊 Anonymous telemetry on: aggregate latency stats only, no IPs. Disable with --no-telemetry or telemetry = false in lightspeed.toml. Policy: https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md
+<ts>  INFO lightspeed: 🛡️  Bypass gate: dry_run (measuring and logging only; tunneling unchanged)
+<ts>  INFO lightspeed: Auto-detecting running game...
+<ts>  WARN lightspeed: Registry fetch failed: registry URL must use https
+<ts>  INFO lightspeed: 🔍 Probing 1 proxy candidate(s)...
+📊 Proxy Latency Report:
+<ts>  INFO lightspeed: 📊 Proxy Latency Report:
+   unhealthy configured-0 (127.0.0.1:9) - <latency>
+<ts>  INFO lightspeed:    unhealthy configured-0 (127.0.0.1:9) - <latency>

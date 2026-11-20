@@ -1,0 +1,33 @@
+<ts>  INFO lightspeed: ⚡ LightSpeed v<version> starting
+<ts>  WARN lightspeed: Config not found (Config file not found: absent.toml), using defaults
+📊 Anonymous telemetry on: aggregate latency stats only, no IPs. Disable with --no-telemetry or telemetry = false in lightspeed.toml. Policy: https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md
+<ts>  INFO lightspeed: 🛡️  Bypass gate: dry_run (measuring and logging only; tunneling unchanged)
+<ts>  INFO lightspeed: 🎮 Built-in games:
+<ts>  INFO lightspeed:    Fortnite     ports 1024-65535 - FortniteClient-Win64-Shipping.exe
+<ts>  INFO lightspeed:    Counter-Strike 2 ports 27015-27050 - cs2.exe
+<ts>  INFO lightspeed:    Counter-Strike: Global Offensive (Legacy) ports 27000-27050 - csgo.exe, csgo
+<ts>  INFO lightspeed:    Bodycam      ports 27000-27050 - Bodycam-Win64-Shipping.exe, Bodycam.exe
+<ts>  INFO lightspeed:    Dead by Daylight ports 27000-27050 - DeadByDaylight-Win64-Shipping.exe, DeadByDaylight.exe
+<ts>  INFO lightspeed:    Dota 2       ports 27015-27050 - dota2.exe
+<ts>  INFO lightspeed:    Rust         ports 28015-28017 - RustClient.exe
+<ts>  INFO lightspeed:    Valorant     ports 7000-7500 - VALORANT-Win64-Shipping.exe, VALORANT.exe
+<ts>  INFO lightspeed:    Apex Legends ports 37000-37050 - r5apex.exe, r5apex_dx12.exe
+<ts>  INFO lightspeed:    Overwatch 2  ports 3478-6250 - Overwatch.exe, Overwatch_retail.exe
+<ts>  INFO lightspeed:    League of Legends ports 5000-5500 - League of Legends.exe, LeagueOfLegends.exe
+<ts>  INFO lightspeed:    PUBG: Battlegrounds ports 7000-17999 - TslGame.exe, PUBG.exe
+<ts>  INFO lightspeed:    MapleStory   ports 7575-8484 - MapleStory.exe
+<ts>  INFO lightspeed:    Minecraft    ports 19132-19133 - Minecraft.Windows.exe, Minecraft.exe, MinecraftLauncher.exe
+<ts>  INFO lightspeed:    Minecraft Java Edition ports 25565-25565 - javaw.exe, java.exe
+<ts>  INFO lightspeed:    Genshin Impact ports 22101-42472 - GenshinImpact.exe
+<ts>  INFO lightspeed:    Rocket League ports 7000-9000 - RocketLeague.exe
+<ts>  INFO lightspeed:    Roblox       ports 49152-65535 - RobloxPlayerBeta.exe
+<ts>  INFO lightspeed:    World of Tanks ports 12000-29999 - WorldOfTanks.exe
+<ts>  INFO lightspeed:    Project Zomboid ports 16261-16262 - ProjectZomboid64.exe, ProjectZomboid32.exe, ProjectZomboid64, ProjectZomboid
+<ts>  INFO lightspeed:    WARDOGS      ports 7777-7788 - WardogsClient-Win64-Shipping.exe, WardogsLauncher-Shipping.exe
+<ts>  INFO lightspeed:    Hunt: Showdown ports 20000-20099 - HuntGame.exe, huntgame
+<ts>  INFO lightspeed:    Rainbow Six Siege ports 10000-10099 - RainbowSix.exe, RainbowSix_BE.exe
+<ts>  INFO lightspeed:    ARC Raiders  ports 7600-7777 - PioneerGame.exe, PioneerGame
+<ts>  INFO lightspeed:    Jedi Knight II: Jedi Outcast (NWH) ports 28070-28070 - nwhmp.exe
+<ts>  INFO lightspeed:    Tibia        ports 7171-7172 - Tibia.exe, TibiaLauncher.exe
+<ts>  INFO lightspeed:    ROB RUN      ports 32768-60999 - ROB RUN.exe
+<ts>  INFO lightspeed:    EA SPORTS FC 27 ports 21000-21050 - FC27.exe

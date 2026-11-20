@@ -17,6 +17,10 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+// The checksum parser is a pure update rule and lives in the shared core
+// (WF-081 W2-3b S6); network, download verification and elevation stay here.
+use lightspeed_client::app::update::parse_sha256_file;
+
 use crate::update::ReleaseAsset;
 
 /// Progress pushed to the UI: a stage label, or a failure.
@@ -106,20 +110,6 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("download failed for {url}: {e}"))
 }
 
-/// First hex token of a `sha256sum`-style file (`<hex>  <filename>`).
-/// Tolerant of a trailing CR and of extra fields.
-pub fn parse_sha256_file(text: &str) -> Result<String, String> {
-    let token = text
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| "empty checksum file".to_string())?;
-    if token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
-        Ok(token.to_string())
-    } else {
-        Err(format!("malformed checksum file: first token is {token:?}"))
-    }
-}
-
 /// The elevated PowerShell script that performs the swap. Pure so a test can
 /// assert its contract: stop any running instance, extract the verified zip
 /// with the built-in `tar` (bsdtar reads zips), copy the new exe over the
@@ -166,28 +156,8 @@ fn spawn_elevated(script: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_sha256_file, swap_script};
+    use super::swap_script;
     use std::path::Path;
-
-    #[test]
-    fn sha256_file_parses_the_hex_token() {
-        let hex = "a".repeat(64);
-        let parsed = parse_sha256_file(&format!("{hex}  lightspeed-gui.zip\r\n")).unwrap();
-        assert_eq!(parsed, hex);
-
-        // Uppercase hex is accepted; the comparison is case-insensitive.
-        assert!(parse_sha256_file(&format!("{}  x.zip", hex.to_uppercase())).is_ok());
-    }
-
-    #[test]
-    fn sha256_file_rejects_garbage() {
-        assert!(parse_sha256_file("").is_err(), "empty input");
-        assert!(parse_sha256_file("short").is_err(), "short token");
-        assert!(
-            parse_sha256_file(&format!("{}  x.zip", "z".repeat(64))).is_err(),
-            "non-hex token"
-        );
-    }
 
     #[test]
     fn swap_script_carries_the_contract() {

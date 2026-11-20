@@ -15,6 +15,16 @@
 //! have a shared crate to point at. S1 adds the config model, S2 discovery, S3a
 //! the status DTO, S3b commands, S4 the watchdog/history, S5 location/leg/trace
 //! and S6 the CLI adoption.
+//!
+//! ## Presence-policy canon (Q9)
+//!
+//! The GUI's presence policy is the product canon: a **5-second poll interval**
+//! that follows the **auto-detected game only** (a pinned manual selection is
+//! honoured without a presence loop). The CLI has no presence loop at all — its
+//! `--watch` mode is an explicit user action that requires `--game`, and
+//! `--scan-processes` is a one-shot report — so the difference is intentional
+//! and named, not drift. A future CLI adoption must reuse this canon rather than
+//! invent a second presence policy.
 
 pub mod commands;
 pub mod config;
@@ -37,4 +47,8 @@ pub mod status;
 /// with the CLI; the localized caption stays presentation over its
 /// `dto::ClientRoute` fact (`client-gui/src/client_trace.rs`).
 pub mod trace;
+/// Pure update rules shared by every front end (S6): version comparison, the
+/// release-asset coordinates and the checksum-file parser. Network, download
+/// verification and elevation stay in the GUI adapter.
+pub mod update;
 pub mod watchdog;

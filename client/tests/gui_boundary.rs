@@ -257,6 +257,18 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "TRACE_DEADLINE",
     "CACHE_TTL",
     "POLL_INTERVAL",
+    // W2-3b (S6) — the pure update rules. Network, download verification and
+    // elevation stay in the GUI adapter; the comparison/asset/checksum logic is
+    // shared core so the CLI and the GUI cannot drift.
+    "ReleaseAsset",
+    "compare_versions",
+    "strip_v_prefix",
+    "numeric_segments",
+    "leading_number",
+    "parse_sha256_file",
+    // W2-4 parity DTO: one capability fact set; a front end fills it, it does not
+    // define its own shape.
+    "CapabilityFacts",
 ];
 
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
@@ -304,13 +316,18 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/platform/windows.rs", 322),
     ("client-gui/src/processes.rs", 282),
     ("client-gui/src/relay_history.rs", 15),
-    ("client-gui/src/self_update.rs", 213),
+    // W2-3b S6: the default-features update check moved to
+    // `lightspeed_client::app::update`; this file keeps the download,
+    // `sha2` verification and the elevated swap script. 213 -> 183.
+    ("client-gui/src/self_update.rs", 183),
     // W2-3b S5a: the location ladder, its three indexes and its classifier moved
     // to `lightspeed_client::app::location`; the GUI keeps this re-export shell
     // for the one helper the frozen route surface renders. 595 -> 11.
     ("client-gui/src/server_place.rs", 11),
     ("client-gui/src/single_instance.rs", 331),
-    ("client-gui/src/update.rs", 322),
+    // W2-3b S6: `compare_versions` + `ReleaseAsset` moved; the GUI keeps the
+    // network check, the `UpdateStatus` type and the asset resolution. 322 -> 224.
+    ("client-gui/src/update.rs", 224),
 ];
 
 /// Tokens that mean UI/framework coupling and may never appear in the shared
