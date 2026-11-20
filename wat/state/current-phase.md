@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (S5b ACCEPTED, S6 start) - WF-081: trace slice accepted; W2-4a recorded; CLI adoption begins
+
+**Agent:** lead + `qa-engineer-2` (task-52), `rust-dev-2` (task-50 start).
+
+- **S5b is ACCEPTED.** QA verified all acceptance items: core `trace.rs` 1,235 lines/20 tests, GUI 145-line presentation shell with the 4 caption tests (20 moved + 4 stayed = the 24 accounted for), exact `CLIENT_TRACE` log-line golden, `ClientRoute` reused with no duplicate struct, **zero `cfg(windows)` in `client/src/app/**`** via a runtime OS dispatch, Q13 disclosure verbatim in both privacy docs with no UI/setting, no ranking input (G6), guard G1 47 / **G2 160** / G3 33 / G7 core 1 with the three mutation rounds reproduced, and QA's gate matching the Lead's (**1947/0/7**, GUI **164/0/0**).
+- **QA's one residual is now a concrete board task:** **task-53 (W2-4a)** — wire the trace caption's provider/hosting suffix and retire the two `#[allow(dead_code)]` helpers, with fixtures, guard re-ratchet and the W2-2 decision condition marked resolved. It is required **before W2-4 starts**; S6 runs in between. QA also required the spec errata (20 moved + 4 stayed, not "24 moved") and the report G2 count (159→160) — both fixed by the Lead.
+- **S6 started** (`rust-dev-2`, task-50): CLI goldens written and run **before** any S6 path change (masked `--status`/`--probe-proxies`, exact `--list-games`/malformed-`--config`), `AppCore` adoption in `client/src/main.rs`/`modes/*` with flags and `--config` semantics unchanged, config-file unification (one canonical file, legacy read-only import, old/new/both fixtures, Q10 precedence, never delete, release-note line), update pure rules moved, capability DTO for W2-4, presence-policy canon documented, guard G1–G7 allowance ratcheted to named adapter exceptions with the **S6 mutation proof**.
+- **Named unverified:** live `tracert`/`traceroute`; Linux/macOS CI (moved tests run in the workspace job by construction); `--features full` link limitation (`wpcap.lib`); no fresh screenshots (no UI change). Commits `88298a9`/`8de721a`; branch 30 ahead / 0 behind `origin/master 76aba5d`; S6 uncommitted in progress; $0.00.
+
+**Verified:** QA S5b ACCEPT; Lead gate counts; Q13/log-line/guard evidence; spec/report errata fixed; task-53 recorded. **Not verified:** any S6 code (in progress); R10 (task-53 pending); live trace; Linux CI.
+**Open:** S6 → QA → W2-4a (task-53) → W2-4 parity; Q5 translations; Q19 font regeneration; runtime hardware.
+
 ### 2026-11-20 (W2-3b S5b) - WF-081: client trace into the core, Q13 disclosure landed; committed; QA verifying
 
 **Agent:** lead + `rust-dev-2` (task-49), `qa-engineer-2` (task-52).
