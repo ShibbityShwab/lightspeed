@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (S5a ACCEPTED, S5b start) - WF-081: location move accepted; client trace slice begins
+
+**Agent:** lead + `qa-engineer-2` (task-51), `rust-dev-2` (task-49 start).
+
+- **S5a is ACCEPTED.** QA independently verified all ten items: the six data blobs are byte-identical after the move (`git rev-parse` per artifact; only `world-land.bin` remains GUI-side); the module move carries the 17+7+5 tests, GUI `server_place.rs` is an 11-line shell and `route_surface` has zero diff; `server-location`/`geo-ip` have one meaning each, both in `full`, both GUI dependency occurrences, CLI `default = []`, and the feature-off test `the_ladder_ends_at_unknown_without_the_country_blob` passes; G6 display-only proof travelled; G7 core-1/GUI-0 with the installer before `LightSpeedEngine::new`; guard re-derived (47 allowlist / **129** G2 / **33** budgets) with the 5-round mutation reproduced and byte-identical restores; artifact deltas/manifest hashes self-consistent and re-hashed; the three generators re-path/compile/selftest claims hold with committed bytes unchanged; the doc re-path pass is complete; QA's gate matches the Lead's (fmt/clippy clean, **1927/0/7**, GUI **184/0/0**). Scope deviations (comment-only `interceptor/order.rs`, generated-table destination comment) accepted as non-weakening.
+- **QA's one Minor (report accuracy) fixed by the Lead** in the S5a evidence: G2 128→**129** (+34), G3 34→**33**, the generated header now correctly described as destination-updated (R099), and the "no `infra/` edit" wording corrected to state the committed S5a unit includes the `infra-dev` task-47 generator re-paths by design.
+- **S5b started** (`rust-dev-2`, task-49): split `client_trace.rs` — scheduler/parser/guard/`info_line` + bounded runner and 24 tests into `client/src/app/trace.rs`, caption stays presentation, no ranking input; land the **owner-approved Q13 disclosure** in `docs/privacy.md` + `docs/data-dictionary.md`; guard ratchet; full gate. S6 (CLI/config/update/capabilities) stays queued behind it.
+- **Named unverified:** Linux CI for the moved tests; `geo-ip`-off leg is local evidence only (CI runs `full`); local `--features full` link blocked by the pre-existing Npcap SDK limitation; release CLI SHA varies by build metadata (0-byte size delta proven); no screenshots (no UI change). Commits `32e99e4`/`8e6f7b5`/`4dc4b74`; branch 28 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** QA review ACCEPT; Lead gate counts; S5a evidence (`wat/evidence/2026-11-20/w2-3b/s5a/`); report-accuracy fixes. **Not verified:** any S5b code (in progress); Linux CI; feature-off link; live states.
+**Open:** S5b → QA → S6 → QA → W2-4 parity; Q5 translations; Q19 font regeneration; runtime parity hardware.
+
 ### 2026-11-20 (W2-3b S5a) - WF-081: location ladder/indexes/data moved into the core; committed; QA verifying
 
 **Agent:** lead + `rust-dev-2` (task-48), `infra-dev` (task-47), `qa-engineer-2` (task-51).
