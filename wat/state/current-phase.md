@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-3a ACCEPTED, W2-3b start) - WF-081: runtime accepted; location/trace/CLI slice begins
+
+**Agent:** lead + `qa-engineer-2` (task-45), `rust-dev` (task-46 start).
+
+- **W2-3a is ACCEPTED.** QA's re-review (`wat/evidence/2026-11-20/team/qa-w2-3a/review-r2.md`) closed R1 (the `dto.rs` published-streak documentation now matches `WatchdogSnapshot`; the false S4 note is gone) and R2 (two stale G1 allowances removed; allowlist 50→48; guard 8/8 with both mutation rounds plus an independent grouped-import injection that fails G1). Fix commit `a86b2a8` touched exactly `dto.rs` + `gui_boundary.rs`; QA's independent gate matches the Lead exactly: fmt/clippy clean, workspace **1927/0/7**, GUI **213/0/0**.
+- **QA's two non-blocking notes recorded durably** (decision log): **N1** all `AppCore` command failures map to `AppErrorKind::Tunnel` (select_relay/disconnect would show tunnel-kind Error rows) → assigned to W2-3b with per-command Route/Validation/Tunnel mapping + tests; **R3** the streak doc wording is not fully precise (`Some(1)` after the first judged window, before the warning) → folded into W2-3b. The W2-3a scope deviations (`choice.rs` obsolete `CarryLookup` adapter removal, `main.rs` race_watch mod line) were accepted as necessary/non-weakening.
+- **W2-3b started** (`rust-dev`, task-46): S5a location ladder/provider seam/data features + `paths.rs`, S5b client trace with the **owner-approved Q13 disclosure** in `docs/privacy.md` + `docs/data-dictionary.md`, S6 CLI adoption + guard ratchet to zero, update rules + capability DTO; **Q11(a)** geo-asset move with measured artifact deltas; N1/R3 folded in; generators infra-owned (the Lead spawns `infra-dev` if the artifact move needs generator edits). Large slice — a coherent compiling/gated checkpoint (e.g. S5a complete) is allowed.
+- **Remaining after W2-3b:** only W2-4 parity (CI/headless jobs, tray/menu/five states, shortcuts, elevation handshake, autostart, updater channel, three-tier statement, reduced-motion Windows signal). Named U: live starvation episode, Linux CI, 200 %/chrome pixel measurement, live non-error states, exhaustive keyboard order, Q5 translations, Q19 font regeneration, runtime parity hardware.
+- **Commits:** W2-3a `c80bf97`, fix `a86b2a8`, state `bba7a5f`; branch 22 ahead / 0 behind `origin/master 76aba5d`; $0.00; no fleet/release/public change.
+
+**Verified:** QA review-r2 ACCEPT; Lead gate on `a86b2a8` (1927/0/7, 213/0/0); guard mutation/grouped injection; Q13 decision recorded. **Not verified:** any W2-3b code (in progress); live starvation/Linux CI/engine-backed commands.
+**Open:** W2-3b → QA → W2-4 parity; Q5 translations; Q19 font regeneration; owner hardware for runtime parity.
+
 ### 2026-11-20 (Q13 + W2-3a fixes) - WF-081: traceroute disclosure approved; QA bookkeeping fixed; W2-3b queued
 
 **Agent:** lead, on the owner's Q13 answer and QA's W2-3a review.
