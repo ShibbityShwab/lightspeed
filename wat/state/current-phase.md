@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-3b S5b) - WF-081: client trace into the core, Q13 disclosure landed; committed; QA verifying
+
+**Agent:** lead + `rust-dev-2` (task-49), `qa-engineer-2` (task-52).
+
+- **S5b committed (`88298a9`).** `client-gui/src/client_trace.rs` (1,328 lines, 24 tests) split: the types, `probe_allowed`, parser (`parse_hops`/`rtt_*`), `summarize`, bounded runner/`TraceChild`, `trace_hops`, `TraceRunner`/`OsTraceRunner`, `TraceCache`, the `GuiTrace` scheduler and `info_line`/`parse_info_line` now live in `client/src/app/trace.rs` (1,235 lines, 20 tests); the localized `caption`/`network_label` stay as GUI presentation (145-line shell, 4 tests). The core reuses `app::dto::ClientRoute` (no duplicate struct); the two former `cfg(windows)` command arms became a **runtime** OS dispatch through `process::silent_command`, keeping G5 absolute (zero `cfg(windows)` in `app/**`); `app.rs` 4,371→4,366.
+- **Q13 disclosure landed verbatim:** a “Client route trace.” paragraph in `docs/privacy.md` and a “Client route trace (local, not reported)” subsection in `docs/data-dictionary.md` with the exact `CLIENT_TRACE …` log-line shape and the `tracert`/`traceroute` PATH dependency. No UI/setting; the trace stays automatic while a server is locked; summary stays local; nothing goes to LightSpeed or third parties.
+- **Lead gate: PASS.** fmt/clippy clean; workspace **1947 / 0 / 7** (client 1585/0/3 — **+20 moved tests now run in the default workspace gate, and therefore Linux CI**); GUI **164 / 0 / 0** (−20); guard **8/8** with G2 128→**159** identifiers, G3 `client_trace.rs` 1,328→**145** and `app.rs` 4,366, G6 trace-is-display-only; mutation rounds fail G2-only, G3-only, G6-only with byte-identical restores. No `ui()`/`route_surface`/platform/workflows diff.
+- **Residual for QA ruling:** the two `#[allow(dead_code)]` presentation helpers (`caption`/`network_label`) are unused because the frozen shell draws the trace row from `route_surface`, and the provider/hosting suffix is still not wired into the rendered row (R10 deferred from W2-2 to S5b and now still open). QA must accept it only as a named follow-up with a concrete task, or require a fix before ACCEPT.
+- **Named unverified:** live `tracert` against a locked server (tests use fake children/runners); Linux/macOS CI (the moved tests run in the existing workspace job by construction); no fresh screenshots (no UI diff). Commit `88298a9`; branch 30 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts; Q13 disclosure diff; log-line golden; guard mutation logs; scope check. **Not verified:** S5b by an independent verifier (task-52 in progress); live trace; Linux/macOS CI.
+**Open:** QA S5b verdict → S6 (CLI/config/update/capabilities) → QA → W2-4 parity; R10 provider-suffix wiring follow-up.
+
 ### 2026-11-20 (S5a ACCEPTED, S5b start) - WF-081: location move accepted; client trace slice begins
 
 **Agent:** lead + `qa-engineer-2` (task-51), `rust-dev-2` (task-49 start).
