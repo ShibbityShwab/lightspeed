@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-1c) - WF-081: QA majors fixed, Lead re-gated; QA re-verification queued
+
+**Agent:** lead + `rust-dev` (task-37), `qa-engineer-2` (task-36/38).
+
+- **W2-1c fix committed (`cbefdfc`, on W2-1 `4458c30`).** All QA R1–R16 addressed: R1 `action_slot` now gates `RestartElevated` on `!is_admin && connected && has_relay && !boosting` (unelevated+disconnected/no-relay fixtures added; `overlay_for` requires `engine.connected`); R2 `route.expected_path_label` for the label, `route.expected_path` only for the value; R3 server-leg estimator fallback keyed on `icmp.is_none()` only (trace=Some/icmp=None fixture); R4 six stale G1 rows removed and the guard ratcheted (`ensure_destination_estimator` is legitimately still used by the GUI); R5 `Relay RTT` default row when measured; R6–R11 copy/arithmetic/caption/location minors; R12–R15 fixture gap closed (17→23 adapter fixtures), exact G3 budgets with slack-as-failure, report corrections, Details intent resolved; R16 `WatchdogStatus.streak` **named deferral accepted** — the live streak is thread-local inside the watchdog thread with no shared handle and `app/watchdog.rs` is S4's file, so the field stays `None` until S4 publishes it (contract fixture-tested; never a fabricated zero).
+- **Lead gate on the fixed tree: PASS.** fmt clean; workspace clippy 0; workspace **1885 / 0 / 7** (client 1523/0/3); GUI clippy 0; GUI **249 / 0 / 0**. Guard 8/8 with both mutation rounds plus a grouped-import injection that fails G1. **No-visual-change (compare3):** connected 9,926 changed / **0 outside mask** (0.000000 %), disconnected 9,364 / **0 outside**; UIA identical (30/25 elements). Fix diff: 5 files, +533/−105.
+- **QA re-verification queued** (task-38): confirm each R1–R16 in the code/text, re-run the guard mutation and the gate, verify compare3 and the R16 blocker/deferral, then ACCEPT/REVISE. **W2-2 remains blocked** on that verdict.
+- **Named unverified:** R17 CONNECTING live end-condition (W2-2 fixture); R18 host-only gates, no Linux CI/200 %/RU-DE captures, `glow` escape hatch, `windivert-redirect` not re-run. Branch is 10 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts above; guard mutation and grouped-import logs; compare3 JSONs + UIA result JSONs; commit `cbefdfc`. **Not verified:** W2-1c by an independent verifier (task-38 in progress); live GUI/200 %/Linux.
+**Open:** QA final W2-1 verdict → W2-2 shell; R16 streak at S4; Q13 trace disclosure W2-3b; ES/PT copy W2-2.
+
 ### 2026-11-20 (W2-1 QA) - WF-081: independent QA returns REVISE on route_surface/guard; W2-1c fixing
 
 **Agent:** lead + `qa-engineer-2` (task-36), `rust-dev` (task-37 fix).
