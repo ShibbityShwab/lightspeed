@@ -355,6 +355,29 @@ Acceptance: (a) **normalized golden-file CLI comparison** written before S6 (`--
 Gate: repo gate + Linux CI for the moved tests; per-crate counts.
 **Blocked until Q13 (traceroute disclosure) is answered for S5b.**
 
+**S6 errata (2026-11-20, S6/S6b/S6b2 landed).** S6's CLI adoption is complete to
+the extent the shared engine surface allows, and the remaining CLI surfaces are
+**named front-end adapters**, not silent drift (recorded in
+`client/src/app/mod.rs` §"Named front-end adapters"):
+
+- **Frozen CLI goldens** (`client/tests/cli_compat.rs` + `client/tests/cli_goldens/`)
+  are the acceptance gate and run in the workspace job; `--status` adopts
+  `dto::CapabilityFacts`, `--check` adopts the shared `SessionCore` composition
+  root (silent on success).
+- **Accepted end state for G1(b):** the allowance is not empty; it is the
+  **item-level named adapter table** (41 rows, no module-prefix blankets) in
+  `client/tests/gui_boundary.rs`. CLI module dedup is closed for this program: no
+  CLI module is unreferenced and the library counterparts are `pub(crate)`.
+- **Keepalive** stays the CLI's UDP-relay echo loop (the engine keepalive is QUIC
+  control-plane) and **`--live-test`** stays CLI-specific (no engine
+  diagnostic-phase surface) — Lead-decided deferrals (S6b).
+- **`--game-server` redirect, `--start-interceptor`, `--watch`** remain on their
+  front-end session paths (S6b2 checkpoint): re-pointing them at `AppCore` needs
+  engine exposure outside that task's scope — discovery facts for the printed
+  path, an adaptive-FEC policy parameter, redirect transport/counters (`--tcp`,
+  printed stats) and a relay-reroute command preserving continuous rerouting.
+  The exact matrix is `wat/evidence/2026-11-20/w2-3b/s6b2/report.md` §2.
+
 ### W2-4 — "Parity" (owner `desktop-platform`; `dev-ops` for workflows)
 
 Scope: `cross-platform-2026.md` r4 G0.1, G0.2, G1.1–G1.9, G2.1 + reduced-motion Windows signal + the `RelayStarved` tray on real platforms + the `client_trace` runtime dependency note. Named outside W2 v1: G2.2 per-OS DPI proof (Windows proof is W2-2 (b); macOS/Linux need hardware), G2.3 no-claim (owner), G2.4 packaging (owner/`dev-ops`).

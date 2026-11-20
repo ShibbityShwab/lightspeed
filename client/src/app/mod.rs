@@ -25,6 +25,37 @@
 //! `--scan-processes` is a one-shot report — so the difference is intentional
 //! and named, not drift. A future CLI adoption must reuse this canon rather than
 //! invent a second presence policy.
+//!
+//! ## Named front-end adapters (WF-081 W2-3b S6)
+//!
+//! The CLI is a separate front end with its own engine-less data-plane model
+//! (bin-local `session`/`tunnel`/`quic` modules and its own registration). Four
+//! CLI surfaces deliberately stay front-end adapters because adopting the shared
+//! engine path would change shipped behaviour or needs an engine surface that
+//! does not exist yet. They are named here so the exception set cannot drift
+//! silently (`client/tests/gui_boundary.rs` G1 carries the import-surface map):
+//!
+//! * **keepalive (default no-`--game-server` path)** — stays the CLI's
+//!   UDP-relay echo loop (`client/src/modes/keepalive.rs`, dispatched from
+//!   `client/src/main.rs`). The engine's keepalive is the QUIC control-plane
+//!   loop (`LightSpeedEngine::connect`); forcing adoption would change the
+//!   CLI's measurement/protocol behaviour. Lead-decided deferral (S6b).
+//! * **`--live-test`** — stays CLI-specific (`client/src/modes/live_test.rs`):
+//!   it drives raw QUIC/tunnel/FEC diagnostic phases and needs an engine
+//!   diagnostic-phase surface that does not exist. Lead-decided deferral (S6b).
+//! * **live session modes `--game-server`, `--start-interceptor`, `--watch`** —
+//!   still on their front-end paths (`client/src/main.rs` redirect branch;
+//!   `client/src/modes/intercept_mode.rs`; `client/src/modes/watch_mode.rs`).
+//!   Re-pointing them at [`commands::AppCore`] needs engine exposure that S6b2's
+//!   write scope does not contain: discovery facts for the printed path, an
+//!   adaptive-FEC policy parameter (the engine derives it from `fec`), redirect
+//!   transport/counters (`--tcp`, the stats the CLI prints), and a relay-reroute
+//!   command to preserve the CLI's continuous rerouting —
+//!   `wat/evidence/2026-11-20/w2-3b/s6b2/report.md` carries the exact matrix.
+//! * **CLI module dedup is closed for this program**: no CLI module is
+//!   unreferenced, and the library counterparts are `pub(crate)`, so deleting or
+//!   reusing them needs a public core API decision; the item-level G1 adapter
+//!   map (41 rows) is the accepted end state.
 
 pub mod commands;
 pub mod config;
