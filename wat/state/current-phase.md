@@ -12,6 +12,27 @@
 
 ## Recent entries
 
+## Recent entries
+
+### 2026-11-20 (1.11.4 published) - Release verified across channels; CI rerun pending; next round scoped
+
+**Agent:** `geofeed-diligence` (release) + lead (independent verification/state). Verified by lead after the report.
+
+- **Release:** `v1.11.4` published `2026-11-20T07:28:09Z`, **39 assets**, not draft/prerelease; tag `v1.11.4 -> 32954da`; release body = the `[1.11.4]` changelog. Head release run 44692774205 succeeded through plan/build/host/announce; its `publish-aur` failed only on the expected stale PKGBUILD, and the dedicated AUR rerun 44695523751 succeeded.
+- **Master:** `origin/master` = `e83f5de` (packaging bumps: homebrew `4d0c663`, chocolatey `421fc40`, scoop `5b5694e`, AUR `e83f5de`). AUR verified by https clone earlier (`lightspeed-bin 1.11.4-1`; RPC index lag is known). Chocolatey push + scoop sync + announce succeeded; winget clean skip (not bootstrapped, documented).
+- **Master CI on the release commit:** initial run 44692769708 failed on the known timing-sensitive tests (`control_reconnect` port race + a proxy control trace test), not the bump; rerun 44695522390 was still in progress at verification.
+- **Tree:** only `docs/publishing-channels.md` (stale from the failed session) remains uncommitted; state updated and committed separately after the tag.
+- **Next round (task-2, scoping by the release agent):** safe warn-only/manual relay-starvation variant (keep detection + starvation verdict/history demotion; drop automatic hold/retry; loud warning + manual stop/relay pick), gated on relay-side per-session counters. Also queued: tray honesty (never "Optimizing" while direct-fallback), correct settings copy (30 s/120 s/park), retry-optimization control.
+### 2026-11-20 (release 1.11.4) - Owner-authorized release cut; tag v1.11.4 pushed; release.yml running
+
+**Agent:** `geofeed-diligence` (release owner) + lead (authorization gate, CI triage). Committed/pushed/tagged.
+
+- **Owner authorization verified by the Lead** before the irreversible tag: the owner confirmed "Yes - I authorized it, let it proceed" after the release runner reported its instruction. No parallel release was run.
+- **Release prep:** workspace 1.11.3 -> **1.11.4** (Cargo.toml + lock, four workspace packages), CHANGELOG `[Unreleased]` -> `[1.11.4] - 2026-11-20` with the missing entries (traceroute + relay server leg, operator geofeed dataset/7 feeds, hosting caption, flow-aware locking, Linux ICMP-probe compile; watchdog/tie/dot already present). Local commit **`32954da`** "chore(release): prepare 1.11.4"; pushed master `62c6cf6..32954da`; annotated **tag `v1.11.4` -> 32954da** pushed.
+- **Release workflow:** run [44692774205](https://github.com/ShibbityShwab/lightspeed/actions/runs/44692774205) - plan succeeded, publish self-tests succeeded, build-local-artifacts in progress (windows/linux/x86_64-darwin running, aarch64 linux/darwin completed at last check). Agent watches host publish; dist/AUR bumps only after assets exist.
+- **Master CI on the release commit:** run 44692769708 FAILED in Check & Test, Feature Matrix (quic), Code Coverage, QUIC Integration Tests; visible failures are the known `control_reconnect` port-race flake and `lightspeed-proxy --lib`. The bump commit only changes version/lock/CHANGELOG and local gates were green, so treated as flaky: **`gh run rerun --failed` started**; triage after the publish, not a release blocker unless the release workflow itself fails.
+- **Left to the lead:** wat/state (this entry) and the pre-existing dirty `docs/publishing-channels.md` (uncommitted; still needs reconciling before it can land).
+
 ### 2026-11-20 (watchdog fix) - Endless relay/direct flap fixed; faulting re-tests now escalate and park direct
 
 **Agent:** `geofeed-diligence` (follow-up) + lead (gates/commit/build). Committed.
