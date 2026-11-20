@@ -10,10 +10,7 @@ mod client_trace;
 mod config;
 mod crash;
 mod design;
-mod detection_provider;
 mod discovery;
-mod geo;
-mod geo_countries;
 mod globe;
 mod i18n;
 mod paths;
@@ -21,9 +18,7 @@ mod platform;
 mod processes;
 mod relay_history;
 mod self_update;
-mod server_geofeed_tables;
 mod server_place;
-mod server_tables;
 mod single_instance;
 mod update;
 
@@ -76,14 +71,12 @@ fn run() -> anyhow::Result<()> {
     }
     tracing::info!("rustls provider ready");
 
-    // Server detection runs in the client's WinDivert data plane, which cannot
-    // see the shipped location indexes this crate embeds. Hand it the one fact
-    // it needs from them - which hosting network an address belongs to - so a
-    // stale server lock is never moved onto a different network by an unrelated
-    // flow (the 2026-11-20 mis-lock). Installed before any engine task exists.
-    lightspeed_client::interceptor::install_server_provider_lookup(
-        detection_provider::provider_class,
-    );
+    // Server detection runs in the client's WinDivert data plane. The core owns
+    // the shipped location indexes and the one classifier seam (guard G7); the
+    // GUI only asks the core to install it, before the engine - or any engine
+    // task - exists, so a candidate endpoint is never classified without it
+    // (the 2026-11-20 mis-lock).
+    lightspeed_client::app::location::install_provider_classifier();
     tracing::info!("detection provider classifier installed");
 
     let rt = tokio::runtime::Builder::new_multi_thread()

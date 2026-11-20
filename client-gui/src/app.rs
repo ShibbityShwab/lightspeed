@@ -829,7 +829,7 @@ impl<P: Platform> LightSpeedApp<P> {
         // free databases), so the chooser now gets a point only for the exact
         // case. Without one, `rank_without_destination` ranks on measured
         // evidence and drops the region prior rather than presenting a guess.
-        let server_location = crate::server_place::chooser_point(server);
+        let server_location = lightspeed_client::app::location::chooser_point(server);
 
         let candidates: Vec<RelayCandidate> = self
             .proxies
@@ -2290,7 +2290,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .and_then(globe::relay_coords)
             .unwrap_or((30.0, 0.0));
         let server_ip = self.locked_server_ip();
-        let server_at = server_ip.and_then(crate::server_place::display_point);
+        let server_at = server_ip.and_then(lightspeed_client::app::location::display_point);
         if let Some(at) = server_at {
             markers.push(globe::Marker {
                 at,
@@ -2767,14 +2767,14 @@ impl<P: Platform> LightSpeedApp<P> {
 
     /// The honest location ladder for `server` (amendment A8).
     fn location_status(&self, server: Ipv4Addr) -> app_dto::LocationStatus {
-        use crate::server_place::Place;
         use app_dto::{GeofeedProvenance, LocationRung, LocationStatus};
+        use lightspeed_client::app::location::Place;
         let mut status = LocationStatus {
-            display_point: crate::server_place::display_point(server),
-            chooser_point: crate::server_place::chooser_point(server),
+            display_point: lightspeed_client::app::location::display_point(server),
+            chooser_point: lightspeed_client::app::location::chooser_point(server),
             ..LocationStatus::default()
         };
-        match crate::server_place::place(server) {
+        match lightspeed_client::app::location::place(server) {
             Place::Cloud {
                 provider, region, ..
             } => {

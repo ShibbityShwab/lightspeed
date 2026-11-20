@@ -158,9 +158,10 @@ pub type ProviderLookup = fn(Ipv4Addr) -> Option<ProviderClass>;
 /// The process-wide provider classifier, if the app layer installed one.
 ///
 /// A function pointer behind a `RwLock` is the same bridge shape the session
-/// globals already use: the detector (`client`) cannot reach the shipped
-/// location indexes (`client-gui`), so the app pushes the classifier down once
-/// at startup instead of the client carrying a second copy of the data.
+/// globals already use: the detector lives below the app layer that owns the
+/// location indexes (now the shared core's `app::location`), so the app pushes
+/// the classifier down once at startup instead of the client carrying a second
+/// copy of the data.
 static SERVER_PROVIDER_LOOKUP: RwLock<Option<ProviderLookup>> = RwLock::new(None);
 
 /// Install the provider classifier the process detector consults.

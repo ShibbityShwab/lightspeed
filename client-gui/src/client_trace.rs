@@ -13,7 +13,7 @@
 //! database or an owner geofeed), which the product does not have. What this
 //! module can add honestly is the provider/hosting network name when the last
 //! hop's prefix is already in one of the shipped R1 indexes
-//! ([`crate::server_place`]).
+//! ([`lightspeed_client::app::location`]).
 //!
 //! Mechanics:
 //!
@@ -598,8 +598,7 @@ impl Default for GuiTrace {
     }
 }
 
-/// The provider/hosting network name for `address` when one of the shipped R1
-/// indexes knows its prefix.
+/// The provider/hosting network name for `address` from the shared location indexes.
 ///
 /// Deliberately no city or region: a provider region from the cloud feed is a
 /// fact, but a city for an arbitrary hop needs hop-geolocation data the product
@@ -607,11 +606,12 @@ impl Default for GuiTrace {
 /// display-only provenance the route card uses - and never a city for a hop.
 #[allow(dead_code)] // S5b moves the trace into the core; W2-2 renders the seam's caption
 fn network_label(address: Ipv4Addr) -> Option<String> {
-    match crate::server_place::place(address) {
-        crate::server_place::Place::Cloud { provider, .. } => Some(provider.to_ascii_uppercase()),
-        crate::server_place::Place::Geofeed { provider, .. } => Some(provider.to_string()),
-        crate::server_place::Place::Hosting { name, .. } => Some(name.to_string()),
-        crate::server_place::Place::Country { .. } | crate::server_place::Place::Unknown => None,
+    use lightspeed_client::app::location::{place, Place};
+    match place(address) {
+        Place::Cloud { provider, .. } => Some(provider.to_ascii_uppercase()),
+        Place::Geofeed { provider, .. } => Some(provider.to_string()),
+        Place::Hosting { name, .. } => Some(name.to_string()),
+        Place::Country { .. } | Place::Unknown => None,
     }
 }
 

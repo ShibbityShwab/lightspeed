@@ -21,5 +21,14 @@ pub mod config;
 pub mod discovery;
 pub mod dto;
 pub mod history;
+/// The honest server-location ladder and its offline indexes (S5a).
+///
+/// Feature-gated, one meaning per feature (`Cargo.toml`): `server-location`
+/// compiles the ladder and the three server indexes with their tables/manifests;
+/// `geo-ip` adds only the country blob/table as the ladder's last rung (with it
+/// off the ladder ends at `Place::Unknown`). The GUI enables both; the shipped
+/// CLI's default build enables neither.
+#[cfg(feature = "server-location")]
+pub mod location;
 pub mod status;
 pub mod watchdog;

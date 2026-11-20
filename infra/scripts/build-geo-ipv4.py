@@ -8,11 +8,16 @@ Sources, both free and requiring no account:
 
 Writes two artefacts, both committed so a build never needs the network:
 
-  * client-gui/data/geo-ipv4.bin  -- every IPv4 range start (u32, little
-    endian) followed by the same number of country indices (u8). DB-IP's
-    ranges are contiguous and sorted, so the starts alone are enough: the
-    range containing an address is the last start at or below it.
-  * client-gui/src/geo_countries.rs -- the index -> (code, lat, lon) table.
+  * client/data/geo-ipv4.bin -- every IPv4 range start (u32, little endian)
+    followed by the same number of country indices (u8). DB-IP's ranges are
+    contiguous and sorted, so the starts alone are enough: the range
+    containing an address is the last start at or below it.
+  * client/src/app/location/geo_countries.rs -- the index -> (code, lat, lon)
+    table.
+
+Both live in the shared core (``client/data/`` + ``client/src/app/location/``)
+behind the ``geo-ip`` feature, so the CLI and the GUI read one committed copy;
+the generator writes there, not into the GUI crate.
 
 Usage:  python3 infra/scripts/build-geo-ipv4.py [--month YYYY-MM]
 """
@@ -35,8 +40,8 @@ CENTROIDS_URL = (
 )
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BIN = os.path.join(REPO, "client-gui", "data", "geo-ipv4.bin")
-TABLE = os.path.join(REPO, "client-gui", "src", "geo_countries.rs")
+BIN = os.path.join(REPO, "client", "data", "geo-ipv4.bin")
+TABLE = os.path.join(REPO, "client", "src", "app", "location", "geo_countries.rs")
 
 UNKNOWN = 255
 
@@ -110,6 +115,7 @@ def main() -> None:
         sys.exit(f"{len(known)} countries exceeds the u8 index space")
 
     os.makedirs(os.path.dirname(BIN), exist_ok=True)
+    os.makedirs(os.path.dirname(TABLE), exist_ok=True)
     with open(BIN, "wb") as f:
         f.write(b"".join(struct.pack("<I", s) for s, _, _ in rows))
         f.write(bytes(index.get(cc, UNKNOWN) for _, _, cc in rows))

@@ -12,8 +12,8 @@
 //! | G3 | every `client-gui/src/**/*.rs` is budgeted at its measured line count | budgets only lower; a new file needs deliberate registration |
 //! | G4 | `client/src/app/**` is UI-free (no `egui`/`eframe`/`Color32`/`Painter`/`Platform`) | absolute |
 //! | G5 | `client/src/app/**` is portable (no `cfg(windows)`/`cfg(target_os)`) | absolute |
-//! | G6 | the location ladder feeds no ranking | absolute |
-//! | G7 | the provider seam has exactly one installer call site | absolute after S5a |
+//! | G6 | the location ladder feeds no ranking (module-wide, and its display-only test travels) | absolute |
+//! | G7 | the core owns the provider seam; the GUI installs it before engine creation | absolute after S5a |
 //!
 //! The tables below are *measurements of this revision*, not aspirations: G1's
 //! allowlist is the exact set of direct `lightspeed_client::` paths found in
@@ -52,7 +52,6 @@ const ALLOWED_CLIENT_PATHS: &[&str] = &[
     "interceptor::ProcessTarget",
     "interceptor::build_config_for_game_with_port_range",
     "interceptor::build_config_for_process_target",
-    "interceptor::install_server_provider_lookup",
     "interceptor::resolve_process_target",
     "interceptor::traits::ProcessInfo",
     "latency",
@@ -187,6 +186,43 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "RELAY_HEALTH_WINDOW",
     "RELAY_HEALTH_MAX_UNSENT_SHARE",
     "RELAY_SWITCH_MARGIN_MS",
+    // W2-3b (S5a) — the location ladder, its offline indexes and the
+    // hosting-network classifier. The GUI keeps only a re-export shell for the
+    // one pure formatting helper the frozen route surface asks it for.
+    "Place",
+    "CloudRegion",
+    "HostingProvider",
+    "CLOUD_REGIONS",
+    "HOSTING_PROVIDERS",
+    "GeofeedPlace",
+    "GeofeedSource",
+    "SERVER_GEOFEED_PLACES",
+    "SERVER_GEOFEED_SOURCES",
+    "record_at",
+    "geofeed_at",
+    "place",
+    "display_point",
+    "chooser_point",
+    "geofeed_place_text",
+    "country_rung",
+    "CLOUD",
+    "HOSTING",
+    "GEOFEED",
+    "RECORD",
+    "provider_class",
+    "install_provider_classifier",
+    "class_of",
+    "name_hash",
+    "fnv1a64",
+    "CLOUD_CLASS_TAG",
+    "GEOFED_CLASS_TAG",
+    "HASH_MASK",
+    "COUNTRIES",
+    "locate",
+    "ranges",
+    "start",
+    "code_index",
+    "geo_countries",
 ];
 
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
@@ -217,16 +253,13 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/config.rs", 18),
     ("client-gui/src/crash.rs", 210),
     ("client-gui/src/design.rs", 362),
-    ("client-gui/src/detection_provider.rs", 184),
     // W2-1 S2: the discovery/probe/measurement rules and 20 of their tests
     // moved to `lightspeed_client::app::discovery`; only the one-shot `mpsc`
     // worker wrappers and the wrapper-answers test stay. 816 -> 78.
     ("client-gui/src/discovery.rs", 78),
-    ("client-gui/src/geo.rs", 108),
-    ("client-gui/src/geo_countries.rs", 243),
     ("client-gui/src/globe.rs", 198),
     ("client-gui/src/i18n.rs", 506),
-    ("client-gui/src/main.rs", 257),
+    ("client-gui/src/main.rs", 250),
     ("client-gui/src/paths.rs", 81),
     ("client-gui/src/platform/linux.rs", 99),
     ("client-gui/src/platform/macos.rs", 90),
@@ -235,9 +268,10 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/processes.rs", 282),
     ("client-gui/src/relay_history.rs", 15),
     ("client-gui/src/self_update.rs", 213),
-    ("client-gui/src/server_geofeed_tables.rs", 327),
-    ("client-gui/src/server_place.rs", 595),
-    ("client-gui/src/server_tables.rs", 139),
+    // W2-3b S5a: the location ladder, its three indexes and its classifier moved
+    // to `lightspeed_client::app::location`; the GUI keeps this re-export shell
+    // for the one helper the frozen route surface renders. 595 -> 11.
+    ("client-gui/src/server_place.rs", 11),
     ("client-gui/src/single_instance.rs", 331),
     ("client-gui/src/update.rs", 322),
 ];
@@ -264,6 +298,15 @@ const RANKING_CALLS: &[&str] = &["rank_relays_", "rank_without_destination("];
 /// The non-ranking location identifiers: passing any of these into a ranking
 /// call would let display-only data steer the chooser.
 const DISPLAY_ONLY_LOCATION: &[&str] = &["display_point", "place(", "Geofeed", "geofeed"];
+
+/// The display-only proof that travels with the location data (W2-3b S5a).
+const DISPLAY_ONLY_TEST: &str = "fn a_geofeed_place_never_steers_the_ranking";
+
+/// The moved location module (`client/src/app/location.rs` + its submodules).
+/// It is display-only by contract: no ranking call may appear there.
+fn is_location_module(rel: &str) -> bool {
+    rel.starts_with("client/src/app/location")
+}
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -602,6 +645,13 @@ fn g5_core_app_has_no_platform_conditional_behaviour() {
 /// **G6** — the location ladder feeds no ranking. Only the cloud-exact
 /// `chooser_point` may reach the chooser; geofeed/hosting/country/unknown
 /// points are display-only (spec A8, owner decision 2026-11-20).
+///
+/// W2-3b S5a moved the ladder, its data and its tests into
+/// `client/src/app/location*`, so the rule now also asserts that (a) no ranking
+/// call appears anywhere in the location module — the data cannot be wired into
+/// the chooser from its new home — and (b) the display-only proof
+/// (`a_geofeed_place_never_steers_the_ranking`, `server_place.rs:456-466` before
+/// the move) travelled with the data instead of being left behind.
 #[test]
 fn g6_location_never_steers_the_ranking() {
     let mut violations = Vec::new();
@@ -610,6 +660,14 @@ fn g6_location_never_steers_the_ranking() {
         let text = read(&file);
         for (index, line) in text.lines().enumerate() {
             if !RANKING_CALLS.iter().any(|call| line.contains(call)) {
+                continue;
+            }
+            if is_location_module(&rel) {
+                violations.push(format!(
+                    "{rel}:{}: the display-only location module may not rank relays: {}",
+                    index + 1,
+                    line.trim()
+                ));
                 continue;
             }
             for token in DISPLAY_ONLY_LOCATION {
@@ -628,37 +686,90 @@ fn g6_location_never_steers_the_ranking() {
         "G6: only the cloud-exact chooser_point may be a ranking input:\n{}",
         violations.join("\n")
     );
+
+    let travelled = core_app_files()
+        .into_iter()
+        .any(|file| read(&file).contains(DISPLAY_ONLY_TEST));
+    assert!(
+        travelled,
+        "G6: the display-only proof `{}` must travel with the location data \
+         (it lived in client-gui/src/server_place.rs:456-466 before S5a)",
+        DISPLAY_ONLY_TEST.trim()
+    );
 }
 
-/// **G7** — exactly one provider-classifier installer call site, and it is the
-/// documented owner. During S0–S5a the composition root (`client-gui/src/main.rs`)
-/// installs it before engine creation; after S5a `AppCore` owns it and this test
-/// is updated by W2-3b (the guard's write scope).
+/// **G7** — the provider-classifier seam is owned by the core.
+///
+/// W2-3b S5a moved the hosting-network classifier and the location indexes it
+/// reads into `client/src/app/location`, so the raw installer call exists
+/// exactly once there and **zero** times in `client-gui/src` (the GUI only asks
+/// the core to install it, before the engine is created). A front end owning the
+/// seam again, or the install being dropped from the creation path, fails here.
 #[test]
-fn g7_provider_seam_has_exactly_one_installer() {
-    let mut call_sites = Vec::new();
-    for root in [gui_src(), core_app_src()] {
-        for file in rust_files(&root) {
-            let text = read(&file);
-            for (index, line) in text.lines().enumerate() {
-                if line.contains("install_server_provider_lookup(")
-                    && !line.trim_start().starts_with("//")
-                {
-                    call_sites.push(format!("{}:{}", repo_relative(&file), index + 1));
-                }
+fn g7_provider_seam_is_core_owned_and_installed_before_engine_creation() {
+    let mut seam_sites = Vec::new();
+    let mut installer_definitions = Vec::new();
+    for file in core_app_files() {
+        let rel = repo_relative(&file);
+        let text = read(&file);
+        for (index, line) in text.lines().enumerate() {
+            if line.contains("install_server_provider_lookup(")
+                && !line.trim_start().starts_with("//")
+            {
+                seam_sites.push(format!("{rel}:{}", index + 1));
+            }
+            if line.contains("pub fn install_provider_classifier(") {
+                installer_definitions.push(rel.clone());
             }
         }
     }
     assert_eq!(
-        call_sites.len(),
+        seam_sites.len(),
         1,
-        "G7: exactly one component installs the classifier seam (found {call_sites:?})"
+        "G7: exactly one component installs the classifier seam (found {seam_sites:?})"
     );
     assert_eq!(
-        call_sites[0].split(':').next().unwrap_or_default(),
-        "client-gui/src/main.rs",
-        "G7: during S0–S5a the composition root installs the seam before engine creation; \
-         after S5a AppCore owns it and this guard is updated with the move"
+        seam_sites[0].split(':').next().unwrap_or_default(),
+        "client/src/app/location/provider.rs",
+        "G7: after S5a the core owns the classifier seam, not a front end"
+    );
+    assert_eq!(
+        installer_definitions,
+        vec!["client/src/app/location/provider.rs".to_string()],
+        "G7: the core exposes exactly one classifier installer"
+    );
+
+    // No front end may install the seam directly again.
+    let mut gui_sites = Vec::new();
+    for file in rust_files(&gui_src()) {
+        for (index, line) in read(&file).lines().enumerate() {
+            if line.contains("install_server_provider_lookup(") {
+                gui_sites.push(format!("{}:{}", repo_relative(&file), index + 1));
+            }
+        }
+    }
+    assert!(
+        gui_sites.is_empty(),
+        "G7: the GUI must not install the provider seam directly; call the core \
+         installer instead (found {gui_sites:?})"
+    );
+
+    // ... and the GUI's composition root installs it before creating the engine.
+    let main = read(&gui_src().join("main.rs"));
+    assert_eq!(
+        main.matches("install_provider_classifier();").count(),
+        1,
+        "G7: the GUI installs the classifier exactly once (lost install and duplicate both fail)"
+    );
+    let install_at = main.find("install_provider_classifier();").expect(
+        "G7: the GUI composition root must install the classifier (the seam must not be lost)",
+    );
+    let engine_at = main.find("LightSpeedEngine::new(").expect(
+        "G7: the GUI composition root is expected to create the engine after installing the seam",
+    );
+    assert!(
+        install_at < engine_at,
+        "G7: the classifier must be installed before engine creation"
     );
 }
 

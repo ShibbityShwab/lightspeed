@@ -52,8 +52,18 @@ ml = ["dep:linfa", "dep:linfa-linear", "dep:ndarray", "dep:bincode"]
 # any target — the `windivert` dependency is `cfg(windows)`-gated, so non-Windows
 # builds skip it (verified: `cargo check --features windivert-redirect` on Linux).
 windivert-redirect = ["dep:windivert-sys"]
+# Offline server-location ladder: the three server indexes (cloud, operator
+# geofeed, hosting) with their generated tables, source manifests and the
+# `app::location` module. Off, the module does not exist, so a front end that
+# does not need the data (the shipped CLI's default build) ships none of it.
+server-location = []
+# The country blob/table behind the ladder's last rung. One meaning: it gates
+# only `geo-ipv4.bin` + `geo_countries.rs` (DB-IP Lite), not the server indexes.
+# With it off the ladder ends at `Place::Unknown`. Meaningful with
+# `server-location`; the GUI enables both, covered by `full`.
+geo-ip = []
 # Enable all features
-full = ["quic", "pcap-capture", "ml"]  # windivert-redirect excluded (Windows-only)
+full = ["quic", "pcap-capture", "ml", "server-location", "geo-ip"]  # windivert-redirect excluded (Windows-only)
 
 [dependencies]
 lightspeed-protocol = { workspace = true, features = ["tokio"] }

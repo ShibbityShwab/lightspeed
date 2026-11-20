@@ -12,7 +12,7 @@
       "A sample address per source is re-resolved through the committed blob after the build (see wat/evidence for the run log)."
     ],
     "rfc9632_note": "RFC 9632 'Finding and Using Geofeed Data' defines discovery through the RPSL inetnum/inet6num geofeed attribute and the RDAP link relation rel=geofeed (plus an optional RPKI signed geofeed object). It defines no DNS geofeed record; its only DNS mention is that other geographic hints (DNS geoloc RRsets, country:, geoloc:) are to be ignored when geofeed data exist. There is therefore no 'RFC 9632 DNS record' to query; the RIR attribute / RDAP link is the authoritative declaration used here.",
-    "as_of_rule": "A source's as-of is the feed's own generation or last-update statement when it has one (G-Core header, Vultr/Linode headers, HTTP Last-Modified preserved on the local copy); otherwise it is the local copy's UTC fetch date. The build records the exact local hash and timestamps in client-gui/data/server-geofeed.sources.json."
+    "as_of_rule": "A source's as-of is the feed's own generation or last-update statement when it has one (G-Core header, Vultr/Linode headers, HTTP Last-Modified preserved on the local copy); otherwise it is the local copy's UTC fetch date. The build records the exact local hash and timestamps in client/data/server-geofeed.sources.json."
   },
   "sources": [
     {
