@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (S6b2 finding) - WF-081: live-mode adoption blocked on engine API; owner gate opened; S6c started
+
+**Agent:** lead + `rust-dev-2` (task-56 checkpoint).
+
+- **S6b2 closed as a docs-only, gated checkpoint (`e4f40ae`)** after a code-cited finding: none of the three CLI live modes (`--game-server` redirect, `--start-interceptor`, `--watch`) can move onto `AppCore` without engine-side API outside the task's scope. The CLI's session model is engine-less by construction (own 23-module tree, own process-wide session/registration, 30 s continuous rerouting): the engine redirect has **no `--tcp`**, no adaptive-FEC, no output/UX (bind/TCP lines, Ctrl+C/shutdown/final-stats all live in `UdpRedirect::run`); the interceptor path lacks discovery-fact exposure, hardcodes adaptive=fec, and has **no reroute command**, so the caller's continuous rerouting would silently stop; `--watch` shares those blockers (and the snapshot field is `interceptor_active`). No half-migration was made — all three still run their shipped paths.
+- **What the checkpoint records:** named front-end adapters in `client/src/app/mod.rs` (keepalive UDP echo, CLI-specific `--live-test`, the three live modes as pending adapters with reasons/call sites) and **spec errata** in `docs/design/gui-refresh-spec.md` §5 W2-3b (goldens as the CLI gate, `--status`/`--check` adoption, G1(b) item-level table, deferrals, closed dedup question) — 2 files, +54 docs lines. **Final S6 mutation proof** (4 rounds): G1-only, G2-only, G3-only, and a deliberate CLI text drift caught by the frozen goldens (exit 101); restored guard **8/8** + goldens **4/4**.
+- **State correction recorded:** the committed G1 table has **42** item-level rows (the S6b report's 41 was an arithmetic slip) and **G2 = 170**; the guard-enforced table is authoritative. The S6b report's chained prose counts are superseded by this entry.
+- **Owner gate opened (pending answer):** finishing the live modes requires either (a) additive engine API (`client/src/engine.rs`: discovery facts, adaptive policy, redirect `adaptive`/`tcp` + counters, relay-switch/reroute command) with parity fixtures and no UX change, (b) accepting the engine's canonical session behaviour in the CLI (a user-facing change), or (c) keeping the live modes as documented CLI-specific adapters and closing the refresh with named exceptions + a post-W2 follow-up. Interim decision: **S6c (task-55) starts now** — config unification is independent of the live modes, and no live-mode/`engine.rs` work proceeds while the owner decides.
+- **Gate on the checkpoint:** fmt/clippy clean, workspace **1963/0/7**, GUI **155/0/0**, goldens **4/4** hash-identical, guard **8/8**. Commits `e4f40ae`; branch 38 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts; docs-only diff; G1 42/G2 170 correction; mutation log; goldens hash-identical. **Not verified:** live-mode migration (blocked, deliberately none); S6c (in progress); Linux CI.
+**Open:** owner live-mode decision → S6c → full S6 QA → W2-4a → W2-4 parity.
+
 ### 2026-11-20 (S6b checkpoint) - WF-081: SessionCore shared, first modes adopted; keepalive/live-test deferred; S6b2 next
 
 **Agent:** lead + `rust-dev-2` (task-54).
