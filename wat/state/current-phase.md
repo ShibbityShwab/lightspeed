@@ -12,6 +12,17 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-1 QA) - WF-081: independent QA returns REVISE on route_surface/guard; W2-1c fixing
+
+**Agent:** lead + `qa-engineer-2` (task-36), `rust-dev` (task-37 fix).
+
+- **QA verdict:** **REVISE — 5 Major / 10 Minor / 3 named open** (`wat/evidence/2026-11-20/team/qa-w2-1/review.md`). The slice is substantially real: (a) guard **PASS** (reproduced both mutation rounds, extra grouped-import injection fails G1; 56 allowlist rows / 50 G2 ids / 39 budgets re-derived), (c) four fact paths **PASS**, (e) one `RelayedPair` **PASS**, (f) config keys **PASS** (11 fields, retired key parsed-ignored/never written), (g) **PASS** after independent re-derivation (0 px outside mask; mask = 2 live-metric rects + 1 OS-caption band, all 584 app-content changed px inside the metric rects; UIA 30/25 identical), (h) **PASS** with QA's own gate: fmt 0, workspace clippy 0, workspace **1884/0/7**, GUI clippy 0, GUI **243/0/0**. Purity: no `ui()`/drawing hunk; no forbidden paths.
+- **Majors to fix (task-37, W2-1c):** R1 elevation invite not gated on boost-can-otherwise-start (+ missing unelevated disconnected/no-relay fixture); R2 `Expected path` label uses the value template instead of `route.expected_path_label`; R3 server-leg fallback keyed on trace absence instead of report absence; R4 G1 allowlist not ratcheted (6 stale rows incl. the moved `server_leg_*` readers); R5 default ledger omits `Relay RTT` when measured. Minors R6–R15 (Holding copy, Error subline taxonomy, cannot-beat-direct arithmetic, geofeed caption, trace provider suffix, location `AS0`/blank, fixture-per-row over-claim, G3 budget slack, report inaccuracies, Details-hidden intent). R16 `WatchdogStatus.streak` None in assembly — wire from the GUI watchdog getter if reachable, else named deferral, never a fabricated zero. R17 CONNECTING end-condition not live-tested; R18 no live GUI / 200 % / Linux CI / wgpu.
+- **State:** W2-1 committed at `4458c30` (+ state `8666113`); W2-1c running; **W2-2 remains blocked** until QA accepts the fix. No fleet/release/public change; $0.00.
+
+**Verified:** QA's independent gate counts and pixel/UIA re-derivation above; Lead gate of the same tree (1884/0/7, 243/0/0); commit `4458c30`. **Not verified:** any live GUI run (captures re-derived, not re-captured), Linux/macOS runtime, 200 % scaling, wgpu path.
+**Open:** W2-1c → QA re-review → W2-2; R16 streak source; Q13 trace disclosure with W2-3b; ES/PT copy in W2-2.
+
 ### 2026-11-20 (W2-1 complete) - WF-081: Spine implemented, Lead-gated, committed; independent QA running
 
 **Agent:** lead + `rust-dev` (task-29 checkpoint, task-35 S3a), on the owner's go-ahead.
