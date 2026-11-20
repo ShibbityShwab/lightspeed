@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (delta close + W2 start) - WF-081: delta set ACCEPTED, errata closed, W2-1 Spine in progress
+
+**Agent:** lead + `architect`, `ux-lead`, `design-system`, `desktop-platform`, `interface-designer`, `qa-engineer-2` (tasks 17–28), and `rust-dev` (task-29).
+
+- **Delta wave accepted.** The independent re-review (`wat/evidence/2026-11-20/team/qa-design/review-r5.md`) returned **ACCEPT with residuals**: the spec matches the shipped warn-only starvation model, the location ladder/trace/relay-measured/update surfaces, the mobile-only geometry and the 239/181 chrome budget; the state-word gate (≤276 px at STATE 30) is defined and achievable. F1–F3/F5–F9 closed; F4 reduced to one citation.
+- **Erraria closed.** R1 (DE `OPTIMIZING` 275.1 is **inside** the ≤276 cap by 0.9 px; HEAD/current sets separated), R2 (§5.4 equation 108/128), R3 (A14 + `interface.md:53-55,:71-74,:232-237`), R4 (audit HEAD/current drift), R5 (revision refs), R6 (boundary A1–A14, 6 rail-word variants), R7 (state-word gate mechanism), R8 (**Q20**: `ux-lead` owns ES/PT + W2 word-set translations, landing in W2-2), R9 (brief mobile-only wording), R10 (glyph-test citation). All 19 design docs pass an encoding sweep (no BOM, strict UTF-8, **0 mojibake**, em dashes present).
+- **Commits.** `e950b36` delta re-baseline (mobile-only, warn-only states) and `66ade4c` r5 errata, on top of `0df57ce` (W1) and `76aba5d` (master).
+- **W2-1 started.** `rust-dev` (task-29) is implementing the Spine: guard S0, config S1, discovery S2, status DTO v2 S3a, the four fact paths and the pure `route_surface` adapter; one-writer rule (no `ui()` edits), no visual change (pre-slice baseline capture + ≤0.1 % pixel diff + identical UIA), legacy config keys preserved. Baseline evidence is being written to `wat/evidence/2026-11-20/w2-1/`; no code has been committed yet.
+- **Not done.** W2-1 implementation/gate; W2-2 shell (waits for W2-1 verification); W2-3a/3b; W2-4 parity; `interface.md` edits (W2-2); Q13 trace disclosure (must land with W2-3b). $0.00.
+
+**Verified:** QA review-r5 ACCEPT; encoding sweep `wat/evidence/2026-11-20/integration/errata-encoding-check.txt`; spec refs 90/90 (r20); commits `e950b36`/`66ade4c` clean. **Not verified:** any W2-1 code (in progress); runtime parity (owner hardware); ES/PT copy (lands in W2-2).
+**Open:** W2-1 gate + baseline/after proof; then W2-2; Q13 privacy disclosure; owner hardware for Linux/macOS runtime.
+
 ### 2026-11-20 (rebase + delta wave) - WF-081: rebased onto master 76aba5d; mobile-only viewport; W1 deltas in flight
 
 **Agent:** lead + the existing W1 persona instances (`architect`, `ux-lead`, `design-system`, `desktop-platform`; `interface-designer`/`qa-engineer` queued), on the owner's two instructions: they preferred the mobile-only viewport, and asked to rebase off new master before continuing.
