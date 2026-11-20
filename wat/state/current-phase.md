@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-20 (WF-081 CLOSE-OUT) - program complete; all W2 slices independently accepted
+
+**Agent:** lead, on QA's W2-4b ACCEPT (the last verification).
+
+- **WF-081 is complete.** Every slice — W1 design set, W2-1 spine, W2-2 shell, W2-3a runtime, W2-3b S5a/S5b/S6 (incl. S6b/6c/6d), W2-4 platform+CI, W2-4a and W2-4b — has an independent QA **ACCEPT** on the final tree. No slice was self-graded.
+- **Close-out written:** [`docs/design/gui-refresh-closeout.md`](../../docs/design/gui-refresh-closeout.md) — what shipped per unit, the acceptance matrix with QA evidence paths, the final gate table (**workspace 1981/0/7**, GUI **191/0/0**, cli_compat 11/11, guard 8/8, localization in step, fmt/clippy clean incl. GUI `-D warnings`), the named-U register (Linux/macOS runtime and first CI run, interactive UAC, live tray captures, autostart login cycle, real reduced-motion Off, non-Windows updater/trace, W2-2 host-limited captures, live starvation episode, Q5/Q19 debt), the post-W2 debt register (tasks 57/65/67), the decision index, and the evidence/commit index (55 commits ahead of `origin/master 76aba5d`).
+- **Single remaining allowance records:** `elevation.rs` `cfg_attr(not(windows))`, `platform/mod.rs` `TrayAction` (Windows-tray), the pre-existing `client-gui/src/design.rs:18` token-scale exception (predates the refresh, outside the W2-2/W2-4 family — QA R1), and the `autostart.rs` module-wide allowance as named debt in task-67. The W2-2 `allow(dead_code)` condition is resolved.
+- **Owner action:** name Linux/macOS hardware for runtime tier U→R and the first CI pass; schedule post-W2 tasks 57/65/67 and Q5/Q19; approve any release separately. Nothing was published, spent or deployed ($0.00).
+- **Final state:** branch `dsh-b74d064d-6fe5` at HEAD after this entry, 56 commits ahead / 0 behind `origin/master 76aba5d`; all QA memos under `wat/evidence/2026-11-20/team/`; no commit/push by any teammate (Lead owns git); no agent co-author trailers.
+
+**Verified:** every slice has a named independent QA ACCEPT on the final tree; final gate counts; close-out matrix cross-checked against the QA memos; debt/named-U registers cross-checked against the task board. **Not verified:** the named-U register (unchanged, by definition); runtime tier U requires owner hardware.
+**Open:** post-W2 tasks 57/65/67 and Q5/Q19 are scheduled only if the owner chooses; program closed.
+
 ### 2026-11-20 (W2-4b landed) - WF-081: last dead code retired; W2-2 condition resolved; close-out next
 
 **Agent:** lead + `interface-designer-2` (task-63), `qa-engineer-2` (task-66).
