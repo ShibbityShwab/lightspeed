@@ -1,5 +1,10 @@
 use super::*;
 
+#[allow(unused_imports)] // re-exported for the in-crate tests and the W2-2 shell
+pub(super) use lightspeed_client::app::dto::{MeasuredServerLeg, ServerLegState, ServerPing};
+#[allow(unused_imports)] // re-exported for the in-crate tests and the W2-2 shell
+pub(super) use lightspeed_client::app::status::RelayLegs;
+
 /// How long a run must have been relaying before the relay verdict starts
 /// sampling. A match takes several seconds to open its flow, and judging it
 /// before then would call a healthy relay broken.
@@ -15,10 +20,6 @@ pub(super) const RELAY_HEALTH_WINDOW: Duration = Duration::from_secs(1);
 /// traffic not leaving the machine for the whole window is a fault, not jitter.
 pub(super) const RELAY_HEALTH_MAX_UNSENT_SHARE: f64 = 0.2;
 
-/// Every discovered relay's measured client leg, as the destination-aware
-/// chooser consumes it (a relay that did not answer carries `None`).
-pub(super) type RelayLegs = Vec<(SocketAddrV4, Option<discovery::RelaySample>)>;
-
 /// One destination-aware ranking, kept as the single record of what the chooser
 /// knew when it ranked relays for `server`.
 ///
@@ -32,61 +33,6 @@ pub(super) struct RouteRanking {
     pub(super) server: Ipv4Addr,
     /// Every candidate, best first in the engine's whole-path order.
     pub(super) scored: Vec<lightspeed_client::ScoredRelay>,
-}
-
-/// A published quiet-flow server-leg measurement: the value, the samples behind
-/// it, and the age of the newest one when the estimator reports an age.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct MeasuredServerLeg {
-    /// Relay-to-server round trip, microseconds.
-    pub(super) dest_leg_us: u64,
-    /// Samples behind the published estimate.
-    pub(super) samples: usize,
-    /// Age of the newest contributing sample; `None` only if the estimator
-    /// publishes an estimate without an age, which the surface must not invent.
-    pub(super) age: Option<Duration>,
-}
-
-/// The measured direct (ICMP) ping, and the game server it was measured for.
-///
-/// A ping is evidence about exactly one server's path. Storing the value without
-/// its server let a relay choice for a new game server consume the previous
-/// server's fresh ping as this server's triangle floor: `follow_game_server`
-/// runs before `poll_relay_health` refreshes this record, so a choice for the new
-/// server could read the old server's sample (observed live, task-24: a choice
-/// for `91.199.82.221` carried `direct 281` from `91.199.82.162`). Every
-/// consumer - the ranking floor, the choice trace comparison, the `Server leg`
-/// bound, the header metric - must ask for the ping **of the server it is
-/// describing** and treat a foreign record as "not measured".
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ServerPing {
-    /// The game server this sample was measured against.
-    pub(super) server: Ipv4Addr,
-    /// Median ICMP round trip, milliseconds.
-    pub(super) ms: f32,
-    /// Age of the newest burst sample, seconds.
-    pub(super) age_secs: u64,
-}
-
-/// What the route surface can honestly say about the relay-to-server leg for the
-/// relay in use.
-///
-/// Exactly one value drives the `Server leg` row; the window never derives the
-/// same fact from two sources. Precedence: a published estimator measurement
-/// first (it is the only thing that can be called measured), then the ranking's
-/// own row for that relay - the geometric prior, or the triangle-inequality floor
-/// that proves the leg is at least a value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ServerLegState {
-    /// The v1 quiet-flow estimator published an estimate for this exact pair.
-    Measured(MeasuredServerLeg),
-    /// The prior was below the triangle bound, so the leg is known to be at
-    /// least this: a proof, not a measurement.
-    Bounded { floor_us: u64 },
-    /// No measurement existed, so the ranking used the geometric region prior.
-    Prior { prior_us: u64 },
-    /// No measurement and no usable region prior.
-    Unknown,
 }
 
 /// The tunnel counters as of the last relay-verdict sample.

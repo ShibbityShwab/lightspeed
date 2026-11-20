@@ -18,3 +18,5 @@
 
 pub mod config;
 pub mod discovery;
+pub mod dto;
+pub mod status;

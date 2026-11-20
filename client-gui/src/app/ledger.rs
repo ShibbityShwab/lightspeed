@@ -1,5 +1,13 @@
 use super::*;
 
+// The counter/state rules moved to the shared crate at W2-1 S3a. Re-exported so
+// existing call sites and tests address the same names; the widgets and copy
+// below are presentation and stay.
+#[allow(unused_imports)] // re-exported for the in-crate tests and the W2-2 shell
+pub(super) use lightspeed_client::app::status::{
+    history_delta, mode_counter, returned_count, routed_count, session_delta,
+};
+
 /// Parse a user-supplied port range string.
 ///
 /// Accepted formats:
@@ -27,12 +35,10 @@ pub(super) fn parse_custom_port_range(s: &str) -> Option<(u16, u16)> {
 
 /// The one action slot, as a pure function of the gates.
 ///
-/// The returned flag is "enabled": whether the slot can act right now. The
-/// three labels plus the disabled case are the whole state machine:
-/// - `Stop optimizing` when boosting.
-/// - `Restart as Administrator to optimize` when unelevated (and not boosting).
-/// - `Optimize my route` when elevated, connected, and a relay is selected.
-/// - `Optimize my route`, disabled, otherwise (elevated but not ready).
+/// The *decision* is [`lightspeed_client::app::status::action_slot`] (shared
+/// with the CLI); this is only its copy: the three labels plus the disabled
+/// case. Copy stays a front-end concern by the boundary rules, so the wording
+/// can change without touching the gate arithmetic.
 ///
 /// Returned upper-case because the action slot draws in caps; `to_uppercase`
 /// leaves a locale without letter case (ja, ko, zh-Hans) untouched.
@@ -42,17 +48,15 @@ pub(super) fn primary_action(
     connected: bool,
     has_relay: bool,
 ) -> (String, bool) {
-    if boosting {
-        (i18n::t("action.stop_optimizing").to_uppercase(), true)
-    } else if !is_admin {
-        (
+    use lightspeed_client::app::status::{action_slot, ActionSlot};
+    match action_slot(is_admin, boosting, connected, has_relay) {
+        ActionSlot::StopOptimizing => (i18n::t("action.stop_optimizing").to_uppercase(), true),
+        ActionSlot::RestartElevated => (
             i18n::t("action.restart_admin_optimize").to_uppercase(),
             true,
-        )
-    } else if connected && has_relay {
-        (i18n::t("action.optimize_route").to_uppercase(), true)
-    } else {
-        (i18n::t("action.optimize_route").to_uppercase(), false)
+        ),
+        ActionSlot::StartReady => (i18n::t("action.optimize_route").to_uppercase(), true),
+        ActionSlot::StartBlocked => (i18n::t("action.optimize_route").to_uppercase(), false),
     }
 }
 
@@ -146,70 +150,6 @@ pub(super) enum LedgerValue {
     Warn(Cow<'static, str>),
 }
 
-/// Which counter the "Relayed" row is showing, if any.
-///
-/// The row used to read only the redirect mode's counter, so a session using the
-/// process-first interceptor showed "start optimizing to count" while it was
-/// actively relaying: the screenshot in issue #154. Redirect wins when both are
-/// set because the redirect counter is the older, narrower mode.
-pub(super) fn routed_count(
-    redirect_active: bool,
-    redirect_pkts: u64,
-    interceptor_active: bool,
-    interceptor_sent: u64,
-) -> Option<u64> {
-    mode_counter(
-        redirect_active,
-        redirect_pkts,
-        interceptor_active,
-        interceptor_sent,
-    )
-}
-
-/// What this session has received back from the relay, in the same mode the
-/// sent count came from.
-/// This poll's counter deltas, or `None` when the interval forwarded nothing.
-///
-/// The skip is the point: while traffic is held on the direct path the reply
-/// counter still ticks from packets already in flight, and a "0 forwards, N
-/// replies" interval says nothing about whether the relay carries the server.
-pub(super) fn history_delta(last: (u64, u64), now: (u64, u64)) -> Option<(u64, u64)> {
-    let forwards = now.0.saturating_sub(last.0);
-    let replies = now.1.saturating_sub(last.1);
-    (forwards > 0).then_some((forwards, replies))
-}
-
-pub(super) fn returned_count(
-    redirect_active: bool,
-    redirect_pkts_in: u64,
-    interceptor_active: bool,
-    interceptor_from_proxy: u64,
-) -> Option<u64> {
-    mode_counter(
-        redirect_active,
-        redirect_pkts_in,
-        interceptor_active,
-        interceptor_from_proxy,
-    )
-}
-
-/// The counter pair for whichever interception mode is running. Redirect wins
-/// when both are set because it is the older, narrower mode.
-pub(super) fn mode_counter(
-    redirect_active: bool,
-    redirect_value: u64,
-    interceptor_active: bool,
-    interceptor_value: u64,
-) -> Option<u64> {
-    if redirect_active {
-        Some(redirect_value)
-    } else if interceptor_active {
-        Some(interceptor_value)
-    } else {
-        None
-    }
-}
-
 /// Whether the Game row should explain that nothing is selected yet, and which
 /// key to say it with.
 ///
@@ -231,23 +171,8 @@ pub(super) fn game_caption(
 
 /// The `Relayed` row: what left this host, and what the relay sent back.
 ///
-/// The row used to count only outbound packets, so a starving relay - the live
-/// ROB RUN run, 54 sent with nothing returned - read as a healthy session. The
-/// second element is true when the session is known to be starving.
-/// Counters shown relative to where this session started.
-///
-/// Saturating, because the engine's counters can restart below the baseline when
-/// the interceptor is rebuilt; a plain subtraction would wrap to billions.
-pub(super) fn session_delta(sent: u64, returned: u64, base: Option<(u64, u64)>) -> (u64, u64) {
-    match base {
-        Some((base_sent, base_returned)) => (
-            sent.saturating_sub(base_sent),
-            returned.saturating_sub(base_returned),
-        ),
-        None => (sent, returned),
-    }
-}
-
+/// The starving flag is decided by the shared [`RelayedPair`] rule (one source
+/// pair, one decision), never by this formatter.
 pub(super) fn relayed_row_text(sent: u64, returned: u64) -> (String, bool) {
     let text = i18n::t_with(
         "route.sent_returned",
@@ -256,7 +181,10 @@ pub(super) fn relayed_row_text(sent: u64, returned: u64) -> (String, bool) {
             ("returned", group_digits(returned).as_str()),
         ],
     );
-    (text, sent > 0 && returned == 0)
+    (
+        text,
+        lightspeed_client::app::dto::RelayedPair { sent, returned }.starving(),
+    )
 }
 
 /// The ledger's label cell: caption ink, fixed width, left-aligned.

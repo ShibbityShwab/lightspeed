@@ -33,6 +33,7 @@ const ALLOWED_CLIENT_PATHS: &[&str] = &[
     "DestinationLegSource",
     "DestinationLegSource::GeometricFloor",
     "DestinationLegSource::Unknown",
+    "EngineStatus",
     "LightSpeedEngine",
     "LightSpeedEngine::new",
     "PRIOR_UNCERTAINTY_US",
@@ -92,10 +93,13 @@ const ALLOWED_CLIENT_PATHS: &[&str] = &[
 /// never comes back. `is_holding` (the deleted fallback-hold variant) is
 /// already gone and pins the detector; `GuiConfig` is the pre-boundary config
 /// model, moved to `lightspeed_client::app::config` as `AppConfig` at S1; the
-/// discovery rows moved to `lightspeed_client::app::discovery` at S2.
+/// discovery rows moved to `lightspeed_client::app::discovery` at S2; the
+/// status/tray/action/leg rules and their types moved to
+/// `lightspeed_client::app::{dto,status}` at S3a (W2-1b).
 const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "is_holding",
     "GuiConfig",
+    // S2 — discovery/probe/identity.
     "discover_blocking",
     "parse_nodes",
     "friendly_label",
@@ -109,24 +113,64 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "connect_latency",
     "http_get",
     "parse_health",
+    // S3a — tray, action slot, counters, leg readers, starvation filter.
+    "TrayState",
+    "tray_state_for",
+    "action_slot",
+    "mode_counter",
+    "routed_count",
+    "returned_count",
+    "session_delta",
+    "session_pair",
+    "history_delta",
+    "pair_relay_legs",
+    "proxy_index_for",
+    "same_relay_endpoint",
+    "fresh_direct_us",
+    "ping_for_server",
+    "direct_us_for",
+    "refreshed_server_ping",
+    "compare_to_direct",
+    "early_triangle_floor",
+    "relay_cannot_beat_direct",
+    "measured_server_leg",
+    "relay_measured_server_leg",
+    "relay_measured_app_server_leg",
+    "relay_measured_trace",
+    "scored_for_relay",
+    "server_leg_state",
+    "without_starved",
+    "prefer_proven",
+    "rank_without_destination",
+    "ServerPing",
+    "ServerLegState",
+    "MeasuredServerLeg",
+    "RelayLegs",
+    "FallbackRanking",
+    "SERVER_PING_FRESH_SECS",
+    "MAX_RELAYS_TRIED",
 ];
 
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
 /// S0. A new source file must be added deliberately, with a measured budget.
 const MODULE_BUDGET: &[(&str, usize)] = &[
-    ("client-gui/src/app/choice.rs", 540),
+    ("client-gui/src/app/choice.rs", 147),
     ("client-gui/src/app/editor.rs", 243),
     ("client-gui/src/app/games.rs", 105),
-    ("client-gui/src/app/ledger.rs", 284),
+    ("client-gui/src/app/ledger.rs", 212),
     ("client-gui/src/app/picker.rs", 98),
     ("client-gui/src/app/presence.rs", 482),
-    ("client-gui/src/app/relay_choice.rs", 198),
+    ("client-gui/src/app/relay_choice.rs", 144),
+    // W2-1b (S3a): the new pure presentation seam + its contract fixtures.
+    ("client-gui/src/app/route_surface.rs", 1450),
     ("client-gui/src/app/tests.rs", 3090),
     ("client-gui/src/app/theme.rs", 233),
     ("client-gui/src/app/watchdog.rs", 718),
     ("client-gui/src/app/widgets.rs", 484),
-    ("client-gui/src/app/window.rs", 198),
-    ("client-gui/src/app.rs", 4335),
+    ("client-gui/src/app/window.rs", 174),
+    // W2-1b: +315 lines of DTO assembly/getters. It is the one file scheduled to
+    // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
+    ("client-gui/src/app.rs", 4650),
     ("client-gui/src/client_trace.rs", 1326),
     // W2-1 S1: the config model + I/O + its tests moved to
     // `lightspeed_client::app::config`; the GUI keeps this re-export shell and
@@ -240,6 +284,16 @@ fn client_paths(text: &str) -> Vec<String> {
     while let Some(rel) = text[from..].find(needle) {
         let mut i = from + rel + needle.len();
         let mut segments: Vec<String> = Vec::new();
+        if text[i..].starts_with('{') {
+            // A root-level grouped import: `use lightspeed_client::{A, B};`.
+            let (items, end) = expand_group(text, i + 1);
+            for item in expand_items(items, "") {
+                found.push(item.trim_start_matches("::").to_string());
+            }
+            i = end;
+            from = i.max(from + rel + needle.len());
+            continue;
+        }
         while let Some((seg, next)) = ident_at(text, i) {
             i = next;
             if text[i..].starts_with("::{") {
@@ -386,18 +440,24 @@ fn g2_moved_identifiers_are_not_reimplemented_in_the_gui() {
     for file in rust_files(&gui_src()) {
         let text = read(&file);
         for ident in FORBIDDEN_DEFINITIONS {
-            let patterns = [
-                format!("fn {ident}"),
-                format!("struct {ident}"),
-                format!("enum {ident}"),
-                format!("trait {ident}"),
-                format!("type {ident}"),
-                format!("const {ident}"),
-                format!("static {ident}"),
-                format!("mod {ident}"),
+            let keywords = [
+                "fn", "struct", "enum", "trait", "type", "const", "static", "mod",
             ];
-            for pattern in patterns {
-                if text.contains(&pattern) {
+            for keyword in keywords {
+                let pattern = format!("{keyword} {ident}");
+                let mut search_from = 0;
+                while let Some(found) = text[search_from..].find(&pattern) {
+                    let end = search_from + found + pattern.len();
+                    search_from = end;
+                    // Whole-identifier boundary: `relay_measured_trace` is not
+                    // implemented by `relay_measured_trace_text`.
+                    let next = text[end..].chars().next();
+                    let continues_identifier = next
+                        .map(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+                        .unwrap_or(false);
+                    if continues_identifier {
+                        continue;
+                    }
                     violations.push(format!("{}: defines `{ident}`", repo_relative(&file)));
                 }
             }

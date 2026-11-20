@@ -27,6 +27,7 @@ use crate::processes::{self, ProcessEntry};
 use crate::race_watch::decide_switch;
 use crate::update::UpdateStatus;
 use eframe::egui;
+use lightspeed_client::app::dto as app_dto;
 use lightspeed_client::interceptor::ProcessTarget;
 use lightspeed_client::profiles::schema::{is_valid_key, parse_port_range, slugify, PortRange};
 use lightspeed_client::profiles::{ProfileStore, UserGameProfile, UserServer};
@@ -40,6 +41,8 @@ mod ledger;
 mod picker;
 mod presence;
 mod relay_choice;
+/// The pure `AppStatus` → word/rows adapter; W2-2's shell is its consumer.
+pub(crate) mod route_surface;
 #[cfg(test)]
 mod tests;
 mod theme;
@@ -65,20 +68,15 @@ use window::*;
 pub(crate) use theme::install_fonts;
 pub(crate) use window::{MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT};
 
-// ── Tray state enum ──────────────────────────────────────────────────────────
+// ── Tray state ───────────────────────────────────────────────────────────────
 
 /// The five states the tray icon can reflect in its color and tooltip.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TrayState {
-    Disconnected,
-    Connected,
-    Optimizing,
-    /// A relay is carrying the session but has been judged not to be returning
-    /// the game's traffic. It outranks [`Self::Optimizing`]: the tray must never
-    /// claim optimization while the return path is failing.
-    RelayStarved,
-    Error,
-}
+///
+/// The type and its ordering rule moved to the shared crate at W2-1 S3a
+/// (`lightspeed_client::app::dto::TrayState` / `status::tray_state_for`) so the
+/// CLI can project the same honesty order. The platform backends still address
+/// it through this re-export, so `platform/*` is unchanged.
+pub use lightspeed_client::app::dto::TrayState;
 
 /// While auto-select is on and the tunnel is up, how often to re-run the relay
 /// race so a better - or newly faster - relay can take over.
@@ -102,24 +100,22 @@ const HOLD_FALLBACK: Duration = Duration::from_secs(120);
 /// lobby and stages the match.
 const LOCK_SETTLE: Duration = Duration::from_secs(3);
 
-/// How many distinct relays may be on record as starving one server before the
-/// chooser stops choosing automatically.
-///
-/// Three is the point where the records agree with each other and another
-/// automatic pick is just motion; the player can still stop optimizing or pick a
-/// relay by hand. The no-reply detection itself lives in `app::watchdog`.
-const MAX_RELAYS_TRIED: usize = 3;
-
-/// How old a direct-ping sample may be before the window stops showing it and
-/// the ranking stops using it as a triangle bound. One rule for both, because a
-/// stale ping displayed as current and a stale ping shaping the choice are the
-/// same defect.
-const SERVER_PING_FRESH_SECS: u64 = 60;
+// `MAX_RELAYS_TRIED` / `SERVER_PING_FRESH_SECS` moved to
+// `lightspeed_client::app::status` at W2-1 S3a; `choice::*` re-exports them so
+// this module and its tests keep their names.
 
 /// How old a direct-ping sample may be before the window asks for a fresh one.
 const PING_REFRESH_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
 // ── App struct ───────────────────────────────────────────────────────────────
+
+/// One relay connect attempt this window started, until the engine's own facts
+/// end it (`connected`, `control_registered` or `registration_error`).
+///
+/// The DTO's `RelayStatus.connecting` fact is derived from this plus the engine
+/// snapshot; the snapshot is refreshed every frame, and the attempt is resolved
+/// in `poll_health` (an orchestration poll, not the drawing code).
+type ConnectAttempt = SocketAddrV4;
 
 /// The in-progress or completed state of a self-update availability check.
 enum UpdateCheckState {
@@ -310,9 +306,17 @@ pub struct LightSpeedApp<P: Platform> {
     config_error: Option<String>,
     /// The tolerant loader's diagnostic when an existing `config.toml` could
     /// not be used (the window is running on defaults). `None` on a clean load
-    /// and on a first run. Read by the W2-1 status DTO for `error.config`.
-    #[allow(dead_code)] // read by the status DTO assembly (W2-1 S3a)
+    /// and on a first run. Feeds the DTO's `AppStatus.error` (`error.config`).
     config_recovery: Option<ConfigRecovery>,
+    /// The relay connect attempt the window started, until the engine's own
+    /// facts end it. Feeds `RelayStatus.connecting` (the §2.1 DTO gap).
+    connect_attempt: Option<ConnectAttempt>,
+    /// The command slot's in-flight/last-error state (the §2.1 DTO gap behind
+    /// the action loading state and the Error row).
+    session_command: lightspeed_client::app::dto::SessionCommandState,
+    /// The no-position fallback ranking the chooser produced for this route,
+    /// when it used one. Feeds `RelayStatus.fallback`.
+    fallback_ranking: Option<lightspeed_client::app::dto::FallbackRanking>,
 
     // ── Game routing ──────────────────────────────────────────────────────
     selected_game_idx: usize,
@@ -629,6 +633,9 @@ impl<P: Platform> LightSpeedApp<P> {
             manager_addr_input: String::new(),
             config_error: None,
             config_recovery,
+            connect_attempt: None,
+            session_command: lightspeed_client::app::dto::SessionCommandState::default(),
+            fallback_ranking: None,
             selected_game_idx,
             game_auto,
             game_manual,
@@ -738,6 +745,13 @@ impl<P: Platform> LightSpeedApp<P> {
             engine.set_node_id(node_id);
             running
         };
+        // The DTO's `connecting` fact: this window asked for the link, and the
+        // engine's own facts end the attempt (see `poll_health`).
+        self.connect_attempt = Some(addr);
+        self.session_command
+            .begin(lightspeed_client::app::dto::SessionCommand::SelectRelay);
+        self.session_command
+            .finish(lightspeed_client::app::dto::SessionCommand::SelectRelay);
         // Any relay change moves the data plane with it: a switch that only
         // reconnects the control plane leaves the interceptor sending to the
         // old relay while the token belongs to the new one.
@@ -953,6 +967,7 @@ impl<P: Platform> LightSpeedApp<P> {
         let direct_us = direct_us_for(self.server_ping, server);
         let (ranked, skipped, proven) = match server_location {
             Some(loc) => {
+                self.fallback_ranking = None;
                 let (candidates, skipped) =
                     without_starved(server, &candidates, &self.relay_history);
                 (
@@ -973,11 +988,16 @@ impl<P: Platform> LightSpeedApp<P> {
             // carry record for this exact server first, then the measured client
             // leg, jitter, and only last the numerical relay address.
             None => {
+                let fallback =
+                    rank_without_destination(server, &candidates, direct_us, &self.relay_history);
                 let FallbackRanking {
                     ranked,
                     skipped_starved,
                     proven,
-                } = rank_without_destination(server, &candidates, direct_us, &self.relay_history);
+                } = fallback.clone();
+                // The DTO carries the exact ranking the fallback used, so the
+                // surface can never re-derive a different provenance.
+                self.fallback_ranking = Some(fallback);
                 (ranked, skipped_starved, proven)
             }
         };
@@ -1501,6 +1521,17 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     fn poll_health(&mut self) {
+        // Resolve the window's connect attempt from the engine's own facts: the
+        // keepalive coming up, registration completing or a registration error
+        // all end the attempt (spec §2.1/§2.2 row 2). This poll runs every frame
+        // from the frame loop, so the fact is settled before the DTO is read.
+        if self.connect_attempt.is_some()
+            && (self.status.connected
+                || self.status.control_registered
+                || self.status.registration_error.is_some())
+        {
+            self.connect_attempt = None;
+        }
         if let Some(probe) = &mut self.health {
             if probe.result.is_none() {
                 if let Ok(result) = probe.rx.try_recv() {
@@ -1573,6 +1604,8 @@ impl<P: Platform> LightSpeedApp<P> {
         // thread and never silently drops a good range.
         let port_range_override = parse_custom_port_range(&self.custom_port_input);
         let process_target = self.target_process.clone();
+        let command = lightspeed_client::app::dto::SessionCommand::StartBoost;
+        self.session_command.begin(command);
 
         if let Some(proxy) = self.selected_proxy_addr() {
             let game_key = self.selected_game().key;
@@ -1587,6 +1620,12 @@ impl<P: Platform> LightSpeedApp<P> {
                 process_target,
             );
             if let Err(e) = result {
+                // The Error row's source (spec §2.1/§2.8): the engine message is
+                // kept verbatim behind Details, the taxonomy picks the sentence.
+                self.session_command.fail(
+                    command,
+                    lightspeed_client::app::dto::AppError::tunnel(e.clone()),
+                );
                 tracing::error!("start_interceptor failed: {}", e);
             } else {
                 self.boost_start = Some(std::time::Instant::now());
@@ -1633,11 +1672,16 @@ impl<P: Platform> LightSpeedApp<P> {
                     tracing::debug!("This backend has no tunnelling gate; starting unheld");
                 }
             }
+            self.session_command.finish(command);
+        } else {
+            self.session_command.finish(command);
         }
     }
 
     /// Stop every active boost backend and clear the start timestamp.
     fn stop_boost(&mut self) {
+        let command = lightspeed_client::app::dto::SessionCommand::StopBoost;
+        self.session_command.begin(command);
         let mut engine = lock_or_recover(&self.engine);
         engine.stop_interceptor();
         engine.stop_windivert();
@@ -1647,6 +1691,7 @@ impl<P: Platform> LightSpeedApp<P> {
         self.relayed_base = None;
         self.health_base = None;
         self.relay_health = None;
+        self.session_command.finish(command);
     }
 
     /// Record what each path is doing, every ten seconds.
@@ -2072,6 +2117,9 @@ impl<P: Platform> LightSpeedApp<P> {
                 self.stop_boost();
             }
             lock_or_recover(&self.engine).disconnect();
+            // A user disconnect ends any connect attempt this window started; a
+            // disconnected idle window must not report CONNECTING.
+            self.connect_attempt = None;
         } else if self.selected_entry().is_some() {
             self.connect_selected();
         }
@@ -2659,6 +2707,273 @@ impl<P: Platform> LightSpeedApp<P> {
             || self.status.windivert_active
             || self.status.capture_active
             || self.status.redirect_active
+    }
+
+    // ── Status DTO v2 assembly (W2-1 S3a) ──────────────────────────────────
+
+    /// The one status snapshot the presentation layer will render.
+    ///
+    /// Assembled from the engine snapshot, the facts the app already derives for
+    /// its own readouts and the watchdog's published warning; nothing here is a
+    /// second derivation of a displayed value. The W2-2 shell consumes this via
+    /// `route_surface::route_surface` and derives no state itself. Until then the
+    /// legacy readouts above stay authoritative for the pixels, which is why the
+    /// slice is visually unchanged.
+    #[allow(dead_code)] // consumed by the W2-2 shell (route_surface is its seam)
+    fn app_status(&self) -> app_dto::AppStatus {
+        let boosting = self.run_boosting();
+        let server = self.game_server_addr();
+        let relay = self.selected_entry().map(|entry| entry.addr);
+        let warning = self.starvation_warning;
+        let has_error = self.engine_error().is_some();
+        let relayed = if boosting {
+            let flow = server.and_then(|server| {
+                app_dto::RelayedPair::for_flow(server, &self.status.interceptor_flows)
+            });
+            flow.or_else(|| {
+                let base = self
+                    .relayed_base
+                    .as_ref()
+                    .filter(|(key, _, _)| *key == self.session_key())
+                    .map(|(_, sent, returned)| (*sent, *returned));
+                session_pair(
+                    self.status.redirect_active,
+                    self.status.redirect_pkts_out,
+                    self.status.redirect_pkts_in,
+                    self.status.interceptor_active,
+                    self.status.interceptor_tunnel_sent,
+                    self.status.interceptor_from_proxy,
+                    base,
+                )
+            })
+        } else {
+            None
+        };
+        let ranked = self
+            .route_ranking
+            .as_ref()
+            .filter(|ranking| Some(ranking.server) == server)
+            .map(|ranking| ranking.scored.clone())
+            .unwrap_or_default();
+        let server_leg_state = match (server, relay) {
+            (Some(server), Some(relay)) if boosting && !self.holding => {
+                let scored = self
+                    .route_ranking
+                    .as_ref()
+                    .filter(|ranking| ranking.server == server)
+                    .and_then(|ranking| scored_for_relay(&ranking.scored, relay));
+                let measured = measured_server_leg(relay, server);
+                let early = early_triangle_floor(
+                    self.server_ping,
+                    server,
+                    self.ranked_client_leg_us(relay),
+                );
+                server_leg_state(scored, measured, early)
+            }
+            _ => app_dto::ServerLegState::Unknown,
+        };
+        let connect_attempt = self.connect_attempt;
+        app_dto::AppStatus {
+            engine: self.status.clone(),
+            interceptor: lock_or_recover(&self.engine)
+                .interceptor_health()
+                .map(|health| app_dto::InterceptorFacts {
+                    detected_server: health.detected_server,
+                    packets_intercepted: health.packets_intercepted,
+                    packets_injected: health.packets_injected,
+                    packets_reply_data: health.packets_reply_data,
+                    errors: health.errors,
+                    last_error: health.last_error,
+                }),
+            relay: app_dto::RelayStatus {
+                relay,
+                ranked: ranked.clone(),
+                server,
+                server_ping: server.and_then(|server| self.server_ping_for(server)),
+                server_leg: server_leg_state,
+                connecting: app_dto::connecting_fact(
+                    self.status.connected,
+                    self.status.control_registered,
+                    self.status.registration_error.as_deref(),
+                    connect_attempt.is_some(),
+                ),
+                choosing: app_dto::choosing_fact(
+                    self.holding,
+                    self.locked_addr.is_some(),
+                    self.server_chosen.load(Ordering::Relaxed),
+                ),
+                cannot_beat_direct: self.cannot_beat_direct(),
+                carry: match (relay, server) {
+                    (Some(relay), Some(server)) => Some(self.carry_of(relay, server)),
+                    _ => None,
+                },
+                fallback: self.fallback_ranking.clone(),
+            },
+            watchdog: app_dto::WatchdogStatus {
+                warning: warning.map(|warning| app_dto::StarvationWarning {
+                    server: warning.server,
+                    relay: warning.relay,
+                    fault: match warning.fault {
+                        RelayReplyFault::NoReplyFromRelay => {
+                            app_dto::ReturnPathFault::NoReplyFromRelay
+                        }
+                        RelayReplyFault::InjectionFailed => {
+                            app_dto::ReturnPathFault::InjectionFailed
+                        }
+                        RelayReplyFault::TooFewReplies => app_dto::ReturnPathFault::TooFewReplies,
+                    },
+                }),
+                // The watchdog thread keeps its streak counter internally until
+                // the S4 move publishes it with the rest of the watchdog; `None`
+                // is the honest "not observed by this client yet", never a zero.
+                streak: None,
+            },
+            location: server
+                .map(|server| self.location_status(server))
+                .unwrap_or_default(),
+            server_leg: self.relay_measured_status(),
+            route_trace: self.client_route.map(|route| app_dto::ClientRoute {
+                hops: route.hops,
+                last_hop: route.last_hop,
+                last_hop_rtt_ms: route.last_hop_rtt_ms,
+                complete: route.complete,
+            }),
+            boosting,
+            relayed,
+            error: self.engine_error(),
+            session: self.session_command.clone(),
+            capabilities: app_dto::Capabilities {
+                elevated: self.is_admin,
+            },
+            tray: tray_state_for(
+                has_error,
+                warning.is_some() && boosting,
+                boosting,
+                self.status.connected,
+            ),
+        }
+    }
+
+    /// The route's carry memory as the shared filter sees it.
+    fn carry_of(
+        &self,
+        relay: SocketAddrV4,
+        server: Ipv4Addr,
+    ) -> lightspeed_client::app::dto::CarryVerdict {
+        use lightspeed_client::app::dto::CarryVerdict;
+        match crate::relay_history::RelayHistory::carry_verdict(&self.relay_history, relay, server)
+        {
+            crate::relay_history::CarryVerdict::Proven => CarryVerdict::Proven,
+            crate::relay_history::CarryVerdict::Starved => CarryVerdict::Starved,
+            crate::relay_history::CarryVerdict::Unproven => CarryVerdict::Unproven,
+        }
+    }
+
+    /// The current error fact (spec §2.8): the last failed command, else the
+    /// tolerant loader's recovery, else a live engine/registration failure.
+    fn engine_error(&self) -> Option<app_dto::AppError> {
+        if let Some(error) = &self.session_command.last_error {
+            return Some(error.clone());
+        }
+        if let Some(recovery) = &self.config_recovery {
+            return Some(app_dto::AppError::config(recovery));
+        }
+        if let Some(error) = &self.status.registration_error {
+            return Some(app_dto::AppError::registration(error.clone()));
+        }
+        for (kind, detail) in [
+            (app_dto::AppErrorKind::Capture, &self.status.windivert_error),
+            (app_dto::AppErrorKind::Capture, &self.status.capture_error),
+            (app_dto::AppErrorKind::Tunnel, &self.status.redirect_error),
+            (
+                app_dto::AppErrorKind::Tunnel,
+                &self.status.interceptor_error,
+            ),
+        ] {
+            if let Some(detail) = detail {
+                return Some(app_dto::AppError::for_kind(kind, detail.clone()));
+            }
+        }
+        None
+    }
+
+    /// The honest location ladder for `server` (amendment A8).
+    fn location_status(&self, server: Ipv4Addr) -> app_dto::LocationStatus {
+        use crate::server_place::Place;
+        use app_dto::{GeofeedProvenance, LocationRung, LocationStatus};
+        let mut status = LocationStatus {
+            display_point: crate::server_place::display_point(server),
+            chooser_point: crate::server_place::chooser_point(server),
+            ..LocationStatus::default()
+        };
+        match crate::server_place::place(server) {
+            Place::Cloud {
+                provider, region, ..
+            } => {
+                status.rung = LocationRung::Cloud;
+                status.provider = Some(provider);
+                status.region = Some(region);
+            }
+            Place::Geofeed {
+                provider,
+                country,
+                region,
+                city,
+                source,
+                as_of,
+            } => {
+                status.rung = LocationRung::Geofeed;
+                status.geofeed = Some(GeofeedProvenance {
+                    provider,
+                    country,
+                    region,
+                    city,
+                    source,
+                    as_of,
+                });
+                // The feed has no coordinate: no dot, ever.
+                status.display_point = None;
+            }
+            Place::Hosting { asn, name } => {
+                status.rung = LocationRung::Hosting;
+                status.asn = Some(asn);
+                status.hosting = Some(name);
+                // The country beside a hosting range is exactly what the free
+                // databases get wrong; the ladder draws no dot for it.
+                status.display_point = None;
+            }
+            Place::Country { code, .. } => {
+                status.rung = LocationRung::Country;
+                status.country = Some(code);
+            }
+            Place::Unknown => {
+                status.rung = LocationRung::Unknown;
+                status.display_point = None;
+            }
+        }
+        status
+    }
+
+    /// The relay-measured leg rows for the pair on screen.
+    fn relay_measured_status(&self) -> app_dto::ServerLegStatus {
+        if !self.run_boosting() || self.holding {
+            return app_dto::ServerLegStatus::default();
+        }
+        let Some(server) = self.game_server_addr() else {
+            return app_dto::ServerLegStatus::default();
+        };
+        let Some(relay) = self.selected_entry().map(|entry| entry.addr) else {
+            return app_dto::ServerLegStatus::default();
+        };
+        let icmp = relay_measured_server_leg(relay, server);
+        app_dto::ServerLegStatus {
+            icmp,
+            app: relay_measured_app_server_leg(relay, server),
+            trace: relay_measured_trace(relay, server),
+            expected_path_ms: icmp.and_then(|report| {
+                app_dto::expected_path_ms(self.status.latest_rtt_ms, report.median_us)
+            }),
+        }
     }
 
     fn ledger_row(&self, ui: &mut egui::Ui, narrow: bool, label: &str, value: &LedgerValue) {
