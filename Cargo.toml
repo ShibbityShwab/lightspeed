@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.11.3"
+version = "1.11.4"
 edition = "2021"
 authors = ["ShibbityShwab"]
 license = "LicenseRef-LightSpeed-NC-1.1"
