@@ -12,6 +12,20 @@
 
 ## Recent entries
 
+### 2026-11-20 (W2-4 landed) - WF-081: platform parity committed; final W2-4 QA queued; W2-4b next
+
+**Agent:** lead + `desktop-platform-2` (task-61), `qa-engineer-2` (task-64).
+
+- **W2-4 platform parity committed (`4971fcb`, 25 files +2742/−206).** New pure platform modules: **`tray_menu.rs`** (fifth `RelayStarved` state amber-orange with `tray.starved` tooltip, never the green optimizing square; Connect/Disconnect mutual exclusion; rebuild on state/language; catalogued labels; `Ctrl+Q` accelerator), **`shortcuts.rs`** (canonical per-OS table incl. tray-gated hide and sheet Esc/Enter, no global hotkey), **`elevation.rs`** (state machine exits only on Confirmed; decline returns to the overlay; interactive UAC = **U**), **`autostart.rs`** (Windows Run / Linux `.desktop` / macOS LaunchAgent + `--autostart`, temp-dir writers with surfaced failures), **`updater.rs`** (five-channel decision; install only for WindowsInPlace, every other channel gets catalogued instructions — no dead button), **`animations.rs`** + reduced-motion `SPI_GETCLIENTAREAANIMATION` (only explicit On animates; Off/Unknown static; macOS/Linux Unknown gaps; probe observed `reduced-motion=On`). Plus `main.rs` `LIGHTSPEED_GUI_SMOKE=1` hook (real 320 px window, markers `GUI_SMOKE window_created`/`exit=0`, self-closes, exit 0 — local Windows run), 12 new copy keys in all 9 catalogs, and `cross-platform-2026.md` r24 §3.5 three-tier statement + `client_trace` runtime-dependency note (refs ALL RESOLVE, localization in step).
+- **CI parity already committed** (`43f07b3`): linux-gui/macos-gui/gui-headless-smoke, additions-only, per-OS counts and non-Windows singleton enforcement.
+- **Lead gate: PASS.** fmt clean; workspace clippy 0; workspace **1981 / 0 / 7**; GUI clippy 0 (also with `RUSTFLAGS=-D warnings`); GUI **198 / 0 / 0** (+45); cli_compat 11/11; guard **8/8** with G3 re-ratcheted for touched/new files and three mutation rounds (G3/G2/G1) failing only their intended rule with SHA-256-identical restores. No `route_surface`/core/engine/modes/workflows edits in the platform commit.
+- **Deviations to rule (documented):** `client-gui/src/{main,app,widgets,update}.rs` are outside the illustrative platform write list but were minimal necessary wiring for the smoke hook, tray/shortcut consumption, reduced-motion signal and updater channel; QA task-64 rules on them.
+- **Final W2-4 QA queued** (task-64): acceptance (a)-(j), guard/mutation, CI structure, smoke contract, deviations, named unverified (interactive UAC, live tray/menu capture, autostart login cycle, real reduced-motion Off, Linux/macOS runtime/CI/traceroute, app-level shortcut handlers, unshipped `update.disclosure`). **On ACCEPT: W2-4b (task-63)** then the close-out report.
+- Commits `43f07b3`/`4971fcb`; branch 51 ahead / 0 behind `origin/master 76aba5d`; $0.00.
+
+**Verified:** Lead gate counts on the combined tree; new modules read; smoke-hook markers; guard mutation; docs refs/localization claims from the agent. **Not verified:** W2-4 by QA (task-64); any Linux/macOS runner; interactive UAC; live tray captures.
+**Open:** W2-4 QA → W2-4b (task-63) → program close-out; Q5/Q19 post-W2 debt; post-W2 task-57 unscheduled.
+
 ### 2026-11-20 (W2-4 CI parity landed) - WF-081: linux/macOS GUI jobs + headless smoke committed; platform slice still running
 
 **Agent:** lead + `dev-ops` (task-62), `desktop-platform-2` (task-61, still running).
