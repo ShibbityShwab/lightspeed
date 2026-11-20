@@ -170,7 +170,7 @@ pub(super) fn routed_count(
 /// sent count came from.
 /// This poll's counter deltas, or `None` when the interval forwarded nothing.
 ///
-/// The skip is the point: while the tunnel is held off after a fallback the reply
+/// The skip is the point: while traffic is held on the direct path the reply
 /// counter still ticks from packets already in flight, and a "0 forwards, N
 /// replies" interval says nothing about whether the relay carries the server.
 pub(super) fn history_delta(last: (u64, u64), now: (u64, u64)) -> Option<(u64, u64)> {
@@ -208,12 +208,6 @@ pub(super) fn mode_counter(
     } else {
         None
     }
-}
-
-/// The engine is holding traffic direct, and nothing has been sent yet: it is
-/// waiting on a relay choice, not recovering from one that failed.
-pub(super) fn is_holding(direct_fallback: bool, sent: Option<u64>) -> bool {
-    direct_fallback && sent.unwrap_or(0) == 0
 }
 
 /// Whether the Game row should explain that nothing is selected yet, and which

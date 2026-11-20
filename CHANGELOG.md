@@ -5,6 +5,31 @@ All notable changes to LightSpeed will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Relay starvation is now warn-only: no automatic path switch.** When a relay
+  stops returning the game server's traffic, LightSpeed keeps relaying and warns
+  instead of silently moving the session to direct: the tray turns amber with a
+  "relay is not returning your game traffic" tooltip, the state rail reads
+  `NO RETURN PATH`, the route card shows a danger banner, and the log carries the
+  window counters and reason. The relay is demoted for future ranking and the
+  warning clears on a healthy window. The automatic fallback/retry machine and
+  its inaccurate "re-test after 20 s / 45 s / 90 s" settings copy are removed;
+  the retired `retry_after_fallback` config key is ignored (old config files
+  still load) and STOP OPTIMIZING remains the manual route change.
+
+### Added
+
+- **Relay-side per-session starvation counters.** Each relay session now counts
+  forwarded packets, replies and unattributed responses, logs
+  `RELAY_SESSION_STATS server=<ip:port> forwarded=<n> replies=<n> unmatched=<n> age_ms=<n>`
+  every 30 s, and exports
+  `lightspeed_server_leg_{forwarded,replies,unmatched}_total` Prometheus
+  counters. This separates "the relay is not returning the server's traffic"
+  from server-side silence without adding packets.
+
 ## [1.11.4] - 2026-11-20
 
 ### Added

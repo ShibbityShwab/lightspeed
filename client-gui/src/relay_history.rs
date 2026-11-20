@@ -22,11 +22,12 @@
 //!   fact, though - that is the starvation signature, and it demotes the relay
 //!   without being a condemnable verdict.
 //! - **A verdict**, written when the no-reply watchdog confirms the return path
-//!   is gone. The first finding is written as a starvation signature the moment
-//!   the watchdog fires ([`RelayHistory::record_starvation`]); only a chain that
-//!   spent its re-tests and still returned nothing is remembered as `failed`
-//!   ([`RelayHistory::record_failure`]), and only that may be counted as a
-//!   condemnation.
+//!   is gone. The finding is written as a starvation signature the moment the
+//!   watchdog fires ([`RelayHistory::record_starvation`]); the warn-only mode of
+//!   2026-11-20 keeps the session relaying, so no further verdict is produced.
+//!   The `failed` flag ([`RelayHistory::record_failure`]) is the retired
+//!   exhausted-chain verdict: it is no longer written, but a file written before
+//!   that change still loads it and honours it for its six-hour TTL.
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -74,8 +75,10 @@ pub struct Record {
     pub replies: u64,
     /// Unix seconds when the counters were last observed.
     pub observed_at: u64,
-    /// Set only by [`RelayHistory::record_failure`]: a confirmed zero-return
-    /// chain. A measured ratio never sets it - a low share is evidence about a
+    /// Set only by [`RelayHistory::record_failure`], the retired exhausted-chain
+    /// verdict. The warn-only mode never writes it; a record loaded from a file
+    /// written by an older build may still carry it and is honoured until it
+    /// expires. A measured ratio never sets it - a low share is evidence about a
     /// window, not a verdict about the relay.
     pub failed: bool,
 }
@@ -119,10 +122,12 @@ impl Record {
     /// the verdict is still recent.
     ///
     /// No share is compared here on purpose. The share already decided the
-    /// watchdog's window; what is remembered is its verdict, and only a chain
+    /// watchdog's window; what is remembered is its verdict, and only a window
     /// that returned nothing at all produces one. Deriving a second verdict from
     /// the raw ratio is how one low-share window excluded a healthy relay for
-    /// six hours on a live run.
+    /// six hours on a live run. Since the warn-only mode removed the
+    /// exhausted-chain verdict this only answers for records carried over from
+    /// older files.
     pub fn is_starved(&self, now: u64) -> bool {
         self.failed && now.saturating_sub(self.observed_at) <= VERDICT_TTL.as_secs()
     }
@@ -190,12 +195,17 @@ impl RelayHistory {
         self.trim();
     }
 
-    /// Record the watchdog's verdict for the pair: a confirmed zero-return chain.
+    /// Record the retired exhausted-chain verdict for the pair.
     ///
-    /// This is the only way a relay is remembered as not carrying a server. The
-    /// caller writes it once the watchdog has spent its re-tests and only when
-    /// every window of that chain saw `from_relay == 0` and `injected == 0`; a
-    /// low ratio, or a window with any injection, is not a verdict.
+    /// This was the only way a relay was remembered as not carrying a server:
+    /// the caller wrote it once the watchdog had spent its re-tests and every
+    /// window of the chain saw `from_relay == 0` and `injected == 0`. The
+    /// warn-only mode of 2026-11-20 removed that path - there is no chain and no
+    /// retry budget any more - so nothing in the GUI calls this. It is kept so
+    /// the persisted `failed` verdict still has a constructor for the loader's
+    /// format and the tests that pin how such a record is read; a record loaded
+    /// from an older file keeps its meaning until it expires.
+    #[allow(dead_code)]
     pub fn record_failure(&mut self, relay: SocketAddrV4, server: Ipv4Addr) {
         let entry = self.entries.entry(key(relay, server)).or_default();
         entry.forwards = entry.forwards.max(MIN_FORWARDS);
@@ -205,17 +215,16 @@ impl RelayHistory {
         self.trim();
     }
 
-    /// Record the watchdog's starvation finding for the pair, without the
-    /// watchdog's exhausted-chain verdict.
+    /// Record the watchdog's starvation finding for the pair.
     ///
     /// Called the moment the watchdog confirms `NoReplyFromRelay` for the pair,
     /// so the very next ranking already excludes the relay instead of
     /// re-selecting the path that is starving the session. `failed` is
-    /// deliberately left false: only a chain that returned nothing across every
-    /// re-test is a failure verdict, and this finding has not spent its re-tests
-    /// yet. The record takes the starved shape anyway (enough forwards, no
-    /// replies), which is the signature [`Record::starvation_signature`] reads,
-    /// and a later session that really carries the server is free to redeem it.
+    /// deliberately left false: a finding from one warning episode is not the
+    /// retired exhausted-chain verdict, and a later session that really carries
+    /// the server is free to redeem it. The record takes the starved shape
+    /// anyway (enough forwards, no replies), which is the signature
+    /// [`Record::starvation_signature`] reads.
     ///
     /// The counters restart from [`MIN_FORWARDS`] rather than keeping the
     /// accumulated ones: a measurement added later must be able to lift the
@@ -249,15 +258,22 @@ impl RelayHistory {
 
     /// How many distinct relays are on record as not carrying this server.
     ///
-    /// The chooser uses this to stop cycling: with eight candidates and two minutes
-    /// of retries each, a server no relay carries costs the better part of a match
-    /// in switching. Three condemnations is the point where the measurements agree
-    /// with each other and further attempts are just motion.
+    /// The chooser uses this to stop trying: with eight candidates, a server no
+    /// relay carries would otherwise keep choosing paths already measured as
+    /// starving it, and every attempt is another match spent proving what the
+    /// earlier ones showed. The count is the same evidence the ranking demotes
+    /// on - the starvation signature, or a legacy `failed` verdict loaded from a
+    /// file written before the warn-only mode - because both come from the same
+    /// counters. A relay that later carries the server stops counting.
     pub fn condemned_count(&self, server: Ipv4Addr) -> usize {
         let suffix = format!("|{server}");
+        let now = now_secs();
         self.entries
             .iter()
-            .filter(|(key, record)| key.ends_with(&suffix) && record.is_starved(now_secs()))
+            .filter(|(key, record)| {
+                key.ends_with(&suffix)
+                    && (record.is_starved(now) || record.starvation_signature(now))
+            })
             .count()
     }
 
@@ -273,18 +289,18 @@ impl RelayHistory {
     /// One entry point for both questions the chooser asks, so "has it proven
     /// it carries this server" and "has it proven it does not" can never be read
     /// from different rules of the same record. Starvation is checked first and
-    /// covers both the watchdog's verdict (`failed`, unchanged) and the
-    /// starvation signature a live record can show without one; a record that
-    /// is neither condemned nor above the carry bar is [`CarryVerdict::Unproven`],
-    /// which is not a demotion - a relay with no history is a fair candidate.
+    /// covers both a legacy `failed` verdict loaded from an older file and the
+    /// starvation signature a live record can show; a record that is neither
+    /// condemned nor above the carry bar is [`CarryVerdict::Unproven`], which is
+    /// not a demotion - a relay with no history is a fair candidate.
     pub fn carry_verdict(&self, relay: SocketAddrV4, server: Ipv4Addr) -> CarryVerdict {
         let Some(record) = self.entries.get(&key(relay, server)) else {
             return CarryVerdict::Unproven;
         };
         let now = now_secs();
-        // The watchdog-verdict rule is read through its own method so the two
+        // The legacy-verdict rule is read through its own method so the two
         // callers of `failed` can never drift: `is_starved` stays exactly the
-        // exhausted-chain verdict it has always been.
+        // persisted verdict it has always been.
         if self.is_starved(relay, server) || record.starvation_signature(now) {
             return CarryVerdict::Starved;
         }
@@ -558,6 +574,16 @@ mod tests {
             history.condemned_count(server()),
             1,
             "a relay that later carries the server stops counting"
+        );
+        // The warn-only mode no longer writes `failed`; its live finding is the
+        // starvation signature, and the chooser's cap must count that evidence
+        // too or the cap would stop firing once the legacy verdicts expired.
+        let signature_relay = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 11), 4434);
+        history.record(signature_relay, server(), 200, 0);
+        assert_eq!(
+            history.condemned_count(server()),
+            2,
+            "a starvation signature is a condemnation for the cap"
         );
     }
 

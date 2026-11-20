@@ -406,12 +406,14 @@ pub(super) fn relay_cannot_beat_direct(
 /// dropped.
 ///
 /// A relay is dropped when its record for this exact server says
-/// [`CarryVerdict::Starved`](crate::relay_history::CarryVerdict::Starved): the
-/// watchdog's exhausted-chain verdict, or the starvation signature (enough
-/// forwards, no reply at all) that a live record can show without one. The
-/// signature is the case the live 2026-11-19 session exposed - 4,522 forwards for
-/// a G-Core server with zero replies, `failed` never set, so the old filter kept
-/// re-selecting the relay that had already proven it did not carry that server.
+/// [`CarryVerdict::Starved`](crate::relay_history::CarryVerdict::Starved): a
+/// legacy `failed` verdict loaded from an older file, or the starvation
+/// signature (enough forwards, no reply at all) that a live record can show.
+/// The signature is the case the live 2026-11-19 session exposed - 4,522 forwards
+/// for a G-Core server with zero replies, `failed` never set, so the old filter
+/// kept re-selecting the relay that had already proven it did not carry that
+/// server. The warn-only watchdog keeps writing that signature, so a relay that
+/// starves the session is still demoted for the next ranking.
 ///
 /// If every candidate is on record as starved they are still the only relays
 /// available, so the unfiltered list stands and nothing is reported as skipped:

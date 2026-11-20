@@ -63,79 +63,38 @@ pub(super) struct RelayReplyWatch {
     pub(super) streak: ReplyFaultStreak,
 }
 
-/// A server this watchdog took direct, and when it may try the relay again.
+/// The active starvation warning: the relay is judged not to be returning this
+/// server's traffic, and the window and tray must say so.
 ///
-/// Without this, one transient fault - a relay restart, a stall during a
-/// control-plane reconnect - kept a session on the direct path for the rest of
-/// the match, even when the relay was demonstrably carrying replies again: a
-/// live match showed 157 sent and 162 back while the header still read DIRECT.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ReplyFallback {
-    pub(super) server: std::net::SocketAddrV4,
-    /// The relay this chain abandoned. A re-test releases the tunnel for the
-    /// interceptor that is already running, so it measures whatever relay that
-    /// interceptor carries; once the session is on another relay the chain is
-    /// dropped rather than re-pointed, because re-pointing restarts interception
-    /// under the player.
-    pub(super) relay: Option<std::net::SocketAddrV4>,
-    /// Whether every window in the chain so far returned zero datagrams from the
-    /// relay. A low return share never sets this, and only a confirmed
-    /// zero-return chain may be remembered as a relay failure.
-    pub(super) zero_return: bool,
-    /// Retries already made for this server.
-    pub(super) retries: u32,
-    /// Earliest moment for the next one.
-    pub(super) due: std::time::Instant,
-}
-
-/// A server the watchdog gave up on for a relay, as the window reads it.
+/// The owner-approved 2026-11-20 behaviour is **warn-only**: this finding never
+/// moves the session. The earlier automatic direct fallback (and its re-test
+/// budget) is gone because it silently took the route from the player and
+/// flapped a live session between relay and direct; the user keeps the choice
+/// through STOP OPTIMIZING or the relay picker. The finding is still published
+/// to the relay history, so the bad relay is demoted for future ranking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct RelayRejection {
-    /// The game server whose traffic the relay did not return.
+pub(super) struct RelayStarvationWarning {
+    /// The game server whose traffic the relay is not returning.
     pub(super) server: std::net::SocketAddrV4,
-    /// The relay the chain abandoned, when it was known at the time.
+    /// The relay that was carrying it, when the relay was known at that moment.
     pub(super) relay: Option<std::net::SocketAddrV4>,
-    /// Whether every window of the chain returned zero datagrams from the relay.
-    /// Only a confirmed zero-return chain is remembered as a failure; a chain
-    /// that did see replies is a low share, which is normal for game UDP.
-    pub(super) zero_return: bool,
+    /// The confirmed fault that raised the warning, so the banner can say
+    /// whether the relay or the local injection path is the one failing.
+    pub(super) fault: RelayReplyFault,
 }
 
-/// The relay the watchdog is re-testing for a server, or waiting to re-test.
+/// A (server, relay) pair the watchdog has just found starving, and the relay it
+/// saw (`None` when the relay was not known at that moment).
 ///
-/// Published so the window can refuse to move the live session onto another
-/// relay while the re-test runs: a background re-rank under a fallback is how a
-/// relay re-test turned into LAX -> EWR -> FRA hopping on a live run. `None`
-/// means no chain is open for any server, and background switches are allowed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct RetestTarget {
-    pub(super) server: std::net::SocketAddrV4,
-    /// The relay being re-tested, when it was known.
-    pub(super) relay: Option<std::net::SocketAddrV4>,
-}
+/// The GUI owns the relay history (the watchdog thread cannot borrow `self`), so
+/// the finding is published here for the GUI's next poll: the verdict is written
+/// and the relay is demoted for the next ranking. The session keeps relaying;
+/// the warning has already told the player what is happening. `server` is
+/// `SocketAddrV4` so the GUI keys the record on the full address the watchdog
+/// judged.
+pub(super) type StarvationVerdict = (std::net::SocketAddrV4, Option<std::net::SocketAddrV4>);
 
-/// How long the watchdog waits before re-testing a relay it abandoned, in the
-/// order the attempts are made. After the last one the session stays direct
-/// until the server changes or the run restarts: a relay that failed three
-/// spaced tests is not going to carry this server.
-pub(super) const RELAY_RETRY_BACKOFF: [Duration; 2] =
-    [Duration::from_secs(30), Duration::from_secs(120)];
-
-/// Whole seconds until a pending re-test, for the route line. Floors at one so
-/// the text never reads "retry in 0s" just before the relay is promoted.
-pub(super) fn retry_seconds_left(
-    due: Option<std::time::Instant>,
-    now: std::time::Instant,
-) -> Option<u64> {
-    Some(due?.saturating_duration_since(now).as_secs().max(1))
-}
-
-/// The wait before retry number `retries + 1`, or `None` once they are spent.
-pub(super) fn retry_delay(retries: u32) -> Option<Duration> {
-    RELAY_RETRY_BACKOFF.get(retries as usize).copied()
-}
-
-/// Why the relay path was abandoned, for the trace.
+/// Why the relay path was judged faulty, for the trace and the banner.
 ///
 /// The three causes need different answers from the reader, so the log must not
 /// collapse them into one sentence: the first is the relay's or the game
@@ -154,10 +113,10 @@ pub(super) enum RelayReplyFault {
 
 /// Consecutive judged windows that said the return path is not working.
 ///
-/// The live false positive that dropped a relay 150 ms faster than direct was a
-/// single 8 s window at a 24.1% return share. A relay is only condemned once the
-/// same fault holds for [`RELAY_REPLY_STREAK`] windows in a row; any healthy or
-/// inconclusive window clears the streak.
+/// The live false positive that condemned a relay 150 ms faster than direct was a
+/// single 8 s window at a 24.1% return share. A relay is only warned about once
+/// the same fault holds for [`RELAY_REPLY_STREAK`] windows in a row; any healthy
+/// or inconclusive window clears the streak.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct ReplyFaultStreak {
     pub(super) count: u32,
@@ -187,76 +146,131 @@ impl ReplyFaultStreak {
     }
 }
 
-/// Whether a judged window closes an open fallback chain.
+/// Whether a judged window proves the return path works again.
 ///
-/// Only a window with a working return path closes the chain: the relay is
+/// Only a window with no fault at all closes an active warning: the relay is
 /// carrying the game server again. A window that saw a fault but has not yet
 /// reached [`RELAY_REPLY_STREAK`] is **not** evidence that the relay recovered -
-/// it is the first half of the evidence that opens the next fallback. Closing
-/// the chain there reset the retry budget before a re-test could spend it: the
-/// live 2026-11-20 trace showed a fallback every 46.5 s with `attempt=1` on 213
-/// of 236 re-tests, because each re-test's first fault window "closed" the
-/// chain and the 30 s retry started over instead of backing off to 120 s and
-/// then parking direct.
-pub(super) fn chain_closes_after_window(window: Option<RelayReplyFault>) -> bool {
+/// it is the first half of the evidence for the next warning, so the warning
+/// stays up.
+pub(super) fn return_path_recovered(window: Option<RelayReplyFault>) -> bool {
     window.is_none()
 }
 
-/// Whether a pending re-test still points at the relay the chain abandoned.
+/// What one judged window does to the warning, as a pure decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WindowEvent {
+    /// Nothing to report: a healthy session, or the first fault window of a
+    /// streak that has not reached the threshold yet.
+    None,
+    /// The confirmed fault is active: the warning is raised or extended.
+    Warned,
+    /// A window with a working return path cleared an active warning.
+    Recovered,
+}
+
+/// The full effect of one judged window on the starvation state.
 ///
-/// The re-test releases the tunnel of the interceptor that is already running,
-/// so it measures whatever relay that interceptor carries. If the session was
-/// moved - the user picked a relay, the app reconnected - the chain no longer
-/// describes a re-test of the abandoned relay: re-enabling it would either test
-/// a relay that was never condemned or move the session back (restarting
-/// interception mid-session). An unknown relay on either side keeps the chain:
-/// the release at worst proves a working relay, and dropping it would leave a
-/// session direct with no way back.
-pub(super) fn retest_is_about(
-    abandoned: Option<std::net::SocketAddrV4>,
-    current: Option<std::net::SocketAddrV4>,
-) -> bool {
-    match (abandoned, current) {
-        (Some(abandoned), Some(current)) => abandoned == current,
-        _ => true,
+/// The watchdog thread applies this plan; the tests pin it. Keeping the decision
+/// pure is what makes "a confirmed starvation window warns and never switches
+/// the route" testable without an engine: the plan carries every effect a window
+/// can have, and [`Self::switch_to_direct`] exists only so that contract is
+/// explicit and a future change cannot reintroduce the automatic fallback
+/// silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WatchdogPlan {
+    /// The warning active after this window (`None` once the return path works
+    /// again).
+    pub(super) warning: Option<RelayStarvationWarning>,
+    /// Whether the GUI must be told to demote the (server, relay) pair. Once per
+    /// starvation episode, not once per window.
+    pub(super) publish_verdict: bool,
+    /// Whether this window wants the session moved to the direct path. Always
+    /// `false` in the warn-only mode the owner approved on 2026-11-20: the
+    /// watchdog never takes the route from the player.
+    pub(super) switch_to_direct: bool,
+    /// What the trace should say about this window.
+    pub(super) event: WindowEvent,
+}
+
+impl WatchdogPlan {
+    /// A plan that changes nothing but keeps (or clears) the current warning.
+    fn unchanged(warning: Option<RelayStarvationWarning>, event: WindowEvent) -> Self {
+        Self {
+            warning,
+            publish_verdict: false,
+            switch_to_direct: false,
+            event,
+        }
     }
 }
 
-/// What asked for a background relay change; the no-reply re-test chain treats
-/// the two sources differently.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RelayChangeSource {
-    /// The destination-aware ranking. It knows the client legs, the carry history
-    /// and whether the server position is known, and its starvation demotion is
-    /// what ends a starvation loop, so a re-test chain must never veto it.
-    DestinationRanking,
-    /// The client-leg re-race. It ranks on the half of the path that says nothing
-    /// about the server, so a chain still vetoes a move it would make.
-    ClientLegRace,
+/// Whether a confirmed fault is the starvation finding the relay history must
+/// remember for this (relay, server) pair.
+///
+/// Only `NoReplyFromRelay` qualifies. `InjectionFailed` is the local path's
+/// fault, and `TooFewReplies` is a low share, which asymmetric game UDP
+/// produces normally - neither says anything about the relay's path to the
+/// server. The finding is published once per episode (`previous`): the following
+/// windows of the same episode repeat it, and the demotion is already written.
+/// A different confirmed fault after an earlier one is a new finding.
+pub(super) fn starvation_verdict(
+    fault: RelayReplyFault,
+    previous: Option<RelayReplyFault>,
+) -> bool {
+    fault == RelayReplyFault::NoReplyFromRelay
+        && previous != Some(RelayReplyFault::NoReplyFromRelay)
 }
 
-/// Whether a background relay change may move the live session onto `target`.
+/// Decide what one judged window means for the warning and the relay history.
 ///
-/// A watchdog fallback opens a re-test of one relay. The destination ranking may
-/// always move the session: leaving the relay that is starving it is exactly the
-/// move a starvation loop needs, and the chain is dropped as stale on the
-/// watchdog's next tick once the session is elsewhere. The client-leg re-race has
-/// no server evidence, so while the chain is open for the locked server only the
-/// relay being re-tested is legal for it - that is what keeps one relay's
-/// re-test from becoming LAX -> EWR -> FRA hopping.
-pub(super) fn relay_switch_allowed(
-    source: RelayChangeSource,
-    chain: Option<RetestTarget>,
-    locked_server: Option<std::net::Ipv4Addr>,
-    target: std::net::SocketAddrV4,
-) -> bool {
-    match source {
-        RelayChangeSource::DestinationRanking => true,
-        RelayChangeSource::ClientLegRace => match chain {
-            Some(chain) if Some(*chain.server.ip()) == locked_server => chain.relay == Some(target),
-            _ => true,
-        },
+/// `confirmed` is the fault [`ReplyFaultStreak::observe`] returned (the streak
+/// threshold was reached), `window` is this window's own verdict. A confirmed
+/// fault raises (or refreshes) the warning and may publish the demotion finding;
+/// a healthy window clears the warning; a lone fault window changes nothing.
+/// The plan never asks for a direct switch - see [`WatchdogPlan::switch_to_direct`].
+pub(super) fn plan_return_path_window(
+    current: Option<&RelayStarvationWarning>,
+    confirmed: Option<RelayReplyFault>,
+    window: Option<RelayReplyFault>,
+    server: std::net::SocketAddrV4,
+    relay: Option<std::net::SocketAddrV4>,
+) -> WatchdogPlan {
+    if let Some(fault) = confirmed {
+        let warning = RelayStarvationWarning {
+            server,
+            relay,
+            fault,
+        };
+        let publish_verdict = starvation_verdict(fault, current.map(|warning| warning.fault));
+        return WatchdogPlan {
+            warning: Some(warning),
+            publish_verdict,
+            // Warn-only: the session keeps the route the player chose. The
+            // traffic still flows (or fails) through the relay; the window, the
+            // tray and the log are the surfaces that explain it.
+            switch_to_direct: false,
+            event: WindowEvent::Warned,
+        };
     }
+    if return_path_recovered(window) && current.is_some() {
+        return WatchdogPlan::unchanged(None, WindowEvent::Recovered);
+    }
+    WatchdogPlan::unchanged(current.copied(), WindowEvent::None)
+}
+
+/// Write the watchdog's starvation finding into the relay history.
+///
+/// This is the load-bearing half of the warn-only mode: the route never changes,
+/// but the next ranking must already know that this relay did not carry this
+/// server. It lives here, beside the detection, so the demotion path is
+/// exercised by a test without an engine.
+pub(super) fn apply_starvation_verdict(
+    history: &mut crate::relay_history::RelayHistory,
+    server: std::net::SocketAddrV4,
+    relay: std::net::SocketAddrV4,
+) {
+    history.record_starvation(relay, *server.ip());
 }
 
 /// What one judged window says about the return path, if anything.
@@ -266,15 +280,14 @@ pub(super) fn relay_switch_allowed(
 /// live healthy relay returned 13 for 54 intercepted (24.1%) while 150 ms faster
 /// than the direct path - so a share above the floor is normal and not a fault.
 /// A window below it only contributes to [`ReplyFaultStreak`]; one window never
-/// condemns a relay. `None` also covers a window that carried too little traffic
+/// raises a warning. `None` also covers a window that carried too little traffic
 /// to judge (the caller does not observe those at all).
 ///
 /// `from_proxy_since` separates a silent relay from a broken local injection
-/// path. Both are reported as a fallback, but only the first is the relay's
-/// fault, and a user asking which side failed needs the log to say so. It
-/// counts decoded, non-keepalive data replies: keepalive echoes and undecodable
-/// frames never reach the injector, so counting them would blame the local path
-/// for a relay that only echoed our own probes.
+/// path. The log names which side failed, because a user asking for the reason
+/// needs the answer. It counts decoded, non-keepalive data replies: keepalive
+/// echoes and undecodable frames never reach the injector, so counting them
+/// would blame the local path for a relay that only echoed our own probes.
 pub(super) fn relay_reply_fault(
     elapsed: Duration,
     intercepted_since: u64,
@@ -292,8 +305,8 @@ pub(super) fn relay_reply_fault(
     }
     // The window counts every destination the interceptor carries; the flow pair
     // counts this server alone. When the server's own share is healthy, the
-    // window is seeing other traffic (or a mid-session relay switch) and dropping
-    // to direct would abandon a relay that is working. Live evidence: a window
+    // window is seeing other traffic (or a mid-session relay switch) and warning
+    // about it would accuse a relay that is working. Live evidence: a window
     // read 152 intercepted / 16 returned while the server's own counters were
     // 528 sent / 520 replied - 98.5%.
     if let Some((sent, replied)) = flow {
@@ -316,47 +329,13 @@ pub(super) fn relay_reply_fault(
     }
 }
 
-/// Whether one window belongs to a confirmed zero-return chain.
+/// The trace line for a confirmed fault. Kept beside the decision so the wording
+/// cannot drift from the counters it quotes.
 ///
-/// Such a chain is the only evidence that may be remembered as a relay failure.
-/// It requires the relay to have returned nothing at all AND the client to have
-/// injected nothing: a `TooFewReplies` window (normal asymmetric game traffic),
-/// or any window that injected even one datagram, can never make a relay look
-/// dead.
-pub(super) fn zero_return_window(
-    fault: RelayReplyFault,
-    from_proxy_since: u64,
-    injected_since: u64,
-) -> bool {
-    fault == RelayReplyFault::NoReplyFromRelay && from_proxy_since == 0 && injected_since == 0
-}
-
-/// Whether a confirmed fault is the starvation finding the relay history must
-/// remember for this (relay, server) pair.
-///
-/// Only `NoReplyFromRelay` qualifies. `InjectionFailed` is the local path's
-/// fault, and `TooFewReplies` is a low share, which asymmetric game UDP
-/// produces normally - neither says anything about the relay's path to the
-/// server. The finding is published once per chain (`starting_chain`): the
-/// following windows of the same chain repeat it, and the chain already owns
-/// the re-test cadence.
-pub(super) fn starvation_verdict(fault: RelayReplyFault, starting_chain: bool) -> bool {
-    starting_chain && fault == RelayReplyFault::NoReplyFromRelay
-}
-
-/// A (server, relay) pair the watchdog has just found starving, and the relay it
-/// saw (`None` when the relay was not known at that moment).
-///
-/// The GUI owns the relay history (the watchdog thread cannot borrow `self`), so
-/// the finding is published here for the GUI's next poll: the verdict is written,
-/// the relay is demoted for the next ranking, and the session leaves it while the
-/// watchdog's hold still makes the move free. `server` is `SocketAddrV4` so the
-/// GUI keys the record on the full address the watchdog judged, exactly like
-/// [`RelayRejection`].
-pub(super) type StarvationVerdict = (std::net::SocketAddrV4, Option<std::net::SocketAddrV4>);
-
-/// The trace line for a fault. Kept beside the decision so the wording cannot
-/// drift from the counters it quotes.
+/// Every arm ends with the same statement of the mode: the relay is kept and the
+/// player is warned, because the automatic direct fallback was removed on
+/// 2026-11-20. The log is the evidence that the decision was a warning and not a
+/// route change.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn relay_reply_fault_message(
     fault: RelayReplyFault,
@@ -368,6 +347,7 @@ pub(super) fn relay_reply_fault_message(
     send_errors: u64,
     last_send_error: Option<&str>,
 ) -> String {
+    const KEEP: &str = "keeping the relay and warning the player (no automatic path switch)";
     match fault {
         RelayReplyFault::NoReplyFromRelay => {
             // A local send failure explains the silence without the relay being
@@ -377,14 +357,14 @@ pub(super) fn relay_reply_fault_message(
                 return format!(
                     "The relay cannot be the cause: {send_errors} outbound datagram(s) never \
                      left this machine (last: {}); this is a local path-MTU or socket failure. \
-                     Switching direct (intercepted={intercepted_since} injected={injected_since} \
+                     {KEEP} (intercepted={intercepted_since} injected={injected_since} \
                      errors={errors} last_error={})",
                     last_send_error.unwrap_or("unknown"),
                     last_error.unwrap_or("none")
                 );
             }
             format!(
-                "Relay return path is starving the session; switching it direct \
+                "Relay return path is starving the session; {KEEP} \
                  (intercepted={intercepted_since} injected={injected_since} from_relay=0 \
                  errors={errors} send_errors={send_errors} last_error={})",
                 last_error.unwrap_or("none")
@@ -392,13 +372,13 @@ pub(super) fn relay_reply_fault_message(
         }
         RelayReplyFault::InjectionFailed => format!(
             "The relay returned {from_proxy_since} datagram(s) and none could be injected, \
-             so this is the local injection path, not the relay; switching direct \
+             so this is the local injection path, not the relay; {KEEP} \
              (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since} \
              errors={errors} send_errors={send_errors} last_error={})",
             last_error.unwrap_or("none")
         ),
         RelayReplyFault::TooFewReplies => format!(
-            "Relay return path is starving the session; switching it direct \
+            "Relay return path is returning too little of the traffic it carries; {KEEP} \
              (intercepted={intercepted_since} injected={injected_since} from_relay={from_proxy_since} \
              errors={errors} send_errors={send_errors} last_error={})",
             last_error.unwrap_or("none")
@@ -506,109 +486,109 @@ pub(super) fn relay_reply_window_message(
     )
 }
 
-/// Spawn the no-reply fallback on a background thread.
+/// Whether a warning belongs to the session it was raised for.
+///
+/// A warning is per (server, relay) pair. A new game server is a new session, and
+/// a relay the session was moved off cannot be judged by the old warning; either
+/// one clears it. An unknown relay on either side keeps the warning: the pair is
+/// unchanged as far as this process can tell, and dropping it would hide a fault
+/// the player may still be feeling.
+pub(super) fn warning_is_about(
+    warning: &RelayStarvationWarning,
+    server: std::net::SocketAddrV4,
+    relay: Option<std::net::SocketAddrV4>,
+) -> bool {
+    warning.server == server
+        && match (warning.relay, relay) {
+            (Some(abandoned), Some(current)) => abandoned == current,
+            _ => true,
+        }
+}
+
+/// The banner text key for a confirmed fault.
+///
+/// The relay faults keep the same sentence; an injection failure is the local
+/// path's fault, so it must not blame the relay.
+pub(super) fn warning_message_key(fault: RelayReplyFault) -> &'static str {
+    match fault {
+        RelayReplyFault::InjectionFailed => "route.injection_failed_warning",
+        RelayReplyFault::NoReplyFromRelay | RelayReplyFault::TooFewReplies => {
+            "route.relay_not_returning"
+        }
+    }
+}
+
+/// Spawn the no-reply return-path watchdog on a background thread.
 ///
 /// It must not run in the UI loop: a relay or interceptor restart can block
-/// that thread for seconds, which is exactly when the fallback is needed. This
-/// thread only reads the interceptor counters and flips the tunnelling switch,
-/// both cheap, so it keeps working while the UI thread is busy.
+/// that thread for seconds, which is exactly when the watchdog is needed. This
+/// thread only reads the interceptor counters, so it keeps working while the UI
+/// thread is busy.
 ///
-/// It is also the only owner of the fallback chain. `retest` publishes which
-/// relay it is re-testing, so the window does not move the session out from
-/// under the re-test; `rejected` carries the chain's verdict, including whether
-/// it was a confirmed zero-return chain, so the history is written from proof
-/// rather than from one low window; `starved` publishes the first confirmed
-/// `NoReplyFromRelay` of a chain, so the GUI can demote the pair and leave the
-/// relay while the hold still makes that switch free.
+/// It is the only owner of the starvation state. `starved` publishes the first
+/// confirmed `NoReplyFromRelay` of an episode, so the GUI can demote the pair for
+/// future ranking; `warning` publishes the warning the window and the tray show
+/// while the relay is not returning the session's traffic. It never calls
+/// `hold_tunnelling`: the session keeps relaying, and the player decides whether
+/// to stop or switch relays.
 pub(super) fn spawn_relay_reply_watchdog(
     engine: Arc<Mutex<LightSpeedEngine>>,
     quit: QuitFlag,
-    rejected: Arc<Mutex<Option<RelayRejection>>>,
-    retry_enabled: Arc<std::sync::atomic::AtomicBool>,
-    retry_at: Arc<Mutex<Option<std::time::Instant>>>,
-    retest: Arc<Mutex<Option<RetestTarget>>>,
     starved: Arc<Mutex<Option<StarvationVerdict>>>,
+    warning: Arc<Mutex<Option<RelayStarvationWarning>>>,
 ) {
     std::thread::spawn(move || {
         let mut watch: Option<RelayReplyWatch> = None;
-        let mut fallback: Option<ReplyFallback> = None;
+        let mut active: Option<RelayStarvationWarning> = None;
         while !quit.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(500));
             let health = {
                 let engine = lock_or_recover(&engine);
                 engine.interceptor_health()
             };
-            let Some(health) = health else {
+            let Some((health, server)) =
+                health.and_then(|health| health.detected_server.map(|server| (health, server)))
+            else {
+                // No interceptor, or nothing locked yet: neither a window nor a
+                // warning can describe anything.
                 watch = None;
-                fallback = None;
-                *lock_or_recover(&retest) = None;
-                continue;
-            };
-            let Some(server) = health.detected_server else {
-                watch = None;
-                fallback = None;
-                *lock_or_recover(&retest) = None;
-                continue;
-            };
-            let now = std::time::Instant::now();
-            // A different server is a different session; the old fallback's
-            // history says nothing about it.
-            if fallback.as_ref().is_some_and(|f| f.server != server) {
-                fallback = None;
-                // A countdown from the previous server says nothing about this one.
-                *lock_or_recover(&retry_at) = None;
-                *lock_or_recover(&retest) = None;
-                *lock_or_recover(&starved) = None;
-            }
-            // A chain is about one relay. If the session has been moved off it
-            // (a user pick, a reconnect), the chain is stale: re-enabling the
-            // tunnel would test a relay that was never condemned, and moving the
-            // session back would restart interception mid-session.
-            if let Some(chain) = fallback {
-                if chain.server == server
-                    && !retest_is_about(chain.relay, lightspeed_client::current_relay())
-                {
-                    tracing::info!(
-                        server = %server,
-                        relay = ?chain.relay,
-                        "Dropped a stale relay re-test: the session is no longer on the relay it abandoned"
-                    );
-                    watch = None;
-                    fallback = None;
-                    *lock_or_recover(&retry_at) = None;
-                    *lock_or_recover(&retest) = None;
-                    *lock_or_recover(&rejected) = None;
+                if active.take().is_some() {
+                    *lock_or_recover(&warning) = None;
                 }
+                continue;
+            };
+            // A different server is a different session; the old warning's
+            // history says nothing about it. Moving the session off the relay
+            // invalidates the pair just the same.
+            let relay_now = lightspeed_client::current_relay();
+            if active
+                .as_ref()
+                .is_some_and(|warning| !warning_is_about(warning, server, relay_now))
+            {
+                tracing::info!(
+                    server = %server,
+                    relay = ?relay_now,
+                    "The starvation warning belongs to a different session; clearing it"
+                );
+                active = None;
+                *lock_or_recover(&warning) = None;
             }
             if health.tunnelling_enabled != Some(true) {
+                // The session is held direct while a relay is chosen (a normal
+                // few seconds at match start), or not relaying at all. Nothing
+                // is flowing through a relay, so there is no return path to
+                // judge and no warning to keep.
                 watch = None;
-                // No recorded fallback means this is the GUI's hold, which is
-                // not ours to lift.
-                let Some(abandoned) = fallback else {
-                    continue;
-                };
-                if now < abandoned.due {
-                    fallback = Some(abandoned);
-                    continue;
-                }
-                if lock_or_recover(&engine).release_tunnelling() {
-                    *lock_or_recover(&rejected) = None;
-                    *lock_or_recover(&retry_at) = None;
+                if active.take().is_some() {
+                    *lock_or_recover(&warning) = None;
                     tracing::info!(
-                        server = %abandoned.server,
-                        attempt = abandoned.retries + 1,
-                        "Re-testing the relay for this server after a direct fallback"
+                        server = %server,
+                        "The relay is not carrying traffic; pausing the return-path watchdog"
                     );
-                    fallback = Some(ReplyFallback {
-                        retries: abandoned.retries + 1,
-                        due: now,
-                        ..abandoned
-                    });
-                } else {
-                    fallback = Some(abandoned);
                 }
                 continue;
             }
+            let now = std::time::Instant::now();
             let mut current = match watch.take() {
                 Some(watch) if watch.server == server => watch,
                 _ => RelayReplyWatch {
@@ -655,7 +635,7 @@ pub(super) fn spawn_relay_reply_watchdog(
                 from_proxy_since,
                 Some((flow_sent, flow_replied)),
             );
-            let fault = current.streak.observe(window);
+            let confirmed = current.streak.observe(window);
             // One line per judgement, healthy or not: direct evidence that the
             // watchdog looked at this window and what it saw, instead of an
             // absence of WARN lines standing in for a verdict. The quiet-flow
@@ -686,102 +666,53 @@ pub(super) fn spawn_relay_reply_watchdog(
             current.baseline_reply_data = health.packets_reply_data;
             current.baseline_flow_sent = health.flow.map(|(sent, _)| sent).unwrap_or(0);
             current.baseline_flow_replied = health.flow.map(|(_, replied)| replied).unwrap_or(0);
-            let Some(fault) = fault else {
-                // Only a window that showed the return path working proves the
-                // relay carries this server again. A first fault window (the
-                // streak threshold not reached yet) keeps the chain: closing it
-                // there spent no retry and re-armed the same 30 s re-test
-                // forever (the live 2026-11-20 flap).
-                if chain_closes_after_window(window) && fallback.is_some() {
-                    fallback = None;
-                    *lock_or_recover(&retry_at) = None;
-                    *lock_or_recover(&retest) = None;
-                    *lock_or_recover(&starved) = None;
-                    tracing::info!(
+
+            let plan =
+                plan_return_path_window(active.as_ref(), confirmed, window, server, relay_now);
+            match plan.event {
+                WindowEvent::Warned => {
+                    tracing::warn!(
                         server = %server,
-                        "The relay is returning this server's traffic again; the fallback chain is closed"
+                        fault = ?confirmed,
+                        "{}",
+                        relay_reply_fault_message(
+                            confirmed.unwrap_or(RelayReplyFault::NoReplyFromRelay),
+                            intercepted_since,
+                            injected_since,
+                            from_proxy_since,
+                            health.errors,
+                            health.last_error.as_deref(),
+                            health.send_errors,
+                            health.last_send_error.as_deref(),
+                        )
                     );
                 }
-                watch = Some(current);
-                continue;
-            };
-            let retries = fallback
-                .as_ref()
-                .filter(|f| f.server == server)
-                .map(|f| f.retries)
-                .unwrap_or(0);
-            // A finding is published for the first window of a chain only; the
-            // following windows of the same chain repeat it and the chain already
-            // owns the re-test cadence.
-            let starting_chain = fallback.as_ref().is_none_or(|f| f.server != server);
-            // Only a chain in which every window returned nothing at all is a
-            // confirmed zero-return chain, and only that may become a history
-            // verdict. A low share (TooFewReplies), or any window with an
-            // injection, never qualifies.
-            let zero_return = fallback
-                .as_ref()
-                .filter(|f| f.server == server)
-                .map(|f| f.zero_return)
-                .unwrap_or(true)
-                && zero_return_window(fault, from_proxy_since, injected_since);
-            if lock_or_recover(&engine).hold_tunnelling() {
-                // A day out is "never" for a match; it keeps the retry branch
-                // armed without another field to carry it.
-                let wait = if retry_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-                    retry_delay(retries).unwrap_or(Duration::from_secs(60 * 60 * 24))
-                } else {
-                    // Retries switched off: this is the last word, so the server
-                    // is recorded as rejecting the relay straight away.
-                    Duration::from_secs(60 * 60 * 24)
-                };
-                let abandoned_relay = lightspeed_client::current_relay();
-                // Publish the finding before the hold, so the GUI's next poll can
-                // write the verdict and leave this relay while the hold makes the
-                // move free. Only a NoReplyFromRelay chain is a starvation
-                // finding; the other faults are not evidence about the relay.
-                if starvation_verdict(fault, starting_chain) {
-                    *lock_or_recover(&starved) = Some((server, abandoned_relay));
+                WindowEvent::Recovered => {
+                    tracing::info!(
+                        server = %server,
+                        "The relay is returning this server's traffic again; clearing the \
+                         starvation warning"
+                    );
                 }
-                *lock_or_recover(&rejected) =
-                    retry_delay(retries).is_none().then_some(RelayRejection {
-                        server,
-                        relay: abandoned_relay,
-                        zero_return,
-                    });
-                // Publish the pending retry so the status can say when the
-                // route flips back instead of flipping wordlessly.
-                *lock_or_recover(&retry_at) = retry_delay(retries)
-                    .filter(|_| retry_enabled.load(std::sync::atomic::Ordering::Relaxed))
-                    .map(|w| now + w);
-                // Publish the chain so the window keeps the session on the relay
-                // being re-tested instead of re-ranking the route underneath it.
-                *lock_or_recover(&retest) = Some(RetestTarget {
-                    server,
-                    relay: abandoned_relay,
-                });
-                fallback = Some(ReplyFallback {
-                    server,
-                    relay: abandoned_relay,
-                    zero_return,
-                    retries,
-                    due: now + wait,
-                });
-                tracing::warn!(
-                    server = %current.server,
-                    fault = ?fault,
-                    "{}",
-                    relay_reply_fault_message(
-                        fault,
-                        intercepted_since,
-                        injected_since,
-                        from_proxy_since,
-                        health.errors,
-                        health.last_error.as_deref(),
-                        health.send_errors,
-                        health.last_send_error.as_deref(),
-                    )
+                WindowEvent::None => {}
+            }
+            if plan.publish_verdict {
+                // Publish before the GUI's next poll; the poll writes the
+                // starvation signature into the relay history, demoting the pair
+                // for the next ranking.
+                *lock_or_recover(&starved) = Some((server, relay_now));
+            }
+            if plan.switch_to_direct {
+                // Warn-only mode. A plan that asks for a route change is a bug:
+                // the session belongs to the player.
+                tracing::error!(
+                    server = %server,
+                    "Refusing an automatic direct switch: the return-path watchdog is warn-only"
                 );
             }
+            active = plan.warning;
+            *lock_or_recover(&warning) = active;
+            watch = Some(current);
         }
     });
 }

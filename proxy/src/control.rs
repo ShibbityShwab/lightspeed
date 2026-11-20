@@ -2000,8 +2000,13 @@ mod inner {
             );
             assert_eq!(
                 trace.probe_due().traces,
-                2,
-                "both active servers are due one trace"
+                1,
+                "a tick starts at most one trace (the sorted due list is watched first)"
+            );
+            assert_eq!(
+                trace.probe_due().traces,
+                1,
+                "the other server is due on the next tick, inside the minute budget"
             );
 
             let accepted = tokio::time::timeout(Duration::from_secs(5), watched.accept_uni())
@@ -2027,7 +2032,12 @@ mod inner {
                     assert_eq!(last_hop, Ipv4Addr::new(8, 8, 8, 8));
                     assert_eq!(last_hop_rtt_us, 14_250);
                     assert_eq!(flags, 0, "the destination did not answer");
-                    assert_eq!(age_ms, 0);
+                    // `age_ms` is the age at send time, not at measurement time:
+                    // the pusher runs on a 1 s tick, so the first push can arrive
+                    // up to one interval after the probe, and a delayed tick adds
+                    // scheduling slack. Anything inside this test's 5 s stream
+                    // deadline is fresh; the bound only rejects a bogus clock.
+                    assert!(age_ms < 5_000, "a pushed trace is fresh, age_ms={age_ms}");
                 }
                 other => panic!("expected a server-trace message, got {other:?}"),
             }

@@ -137,6 +137,10 @@ impl TrayHandle for WindowsTray {
             TrayState::Disconnected => (160, 160, 160),
             TrayState::Connected => (255, 200, 60),
             TrayState::Optimizing => (80, 210, 120),
+            // Amber-orange, deliberately distinct from the red error icon: the
+            // client is running, but the relay is not returning the game's
+            // traffic and the player must not read it as a healthy session.
+            TrayState::RelayStarved => (255, 150, 50),
             TrayState::Error => (220, 80, 80),
         };
         let tooltip: String = match state {
@@ -148,6 +152,9 @@ impl TrayHandle for WindowsTray {
                 )
             }
             TrayState::Optimizing => "\u{26a1} LightSpeed \u{2014} optimizing".into(),
+            TrayState::RelayStarved => {
+                "\u{26a1} LightSpeed \u{2014} relay is not returning your game traffic".into()
+            }
             TrayState::Error => "\u{26a1} LightSpeed \u{2014} error".into(),
         };
 

@@ -544,6 +544,30 @@ pub struct ProxyMetrics {
     /// socket. Rejected (implausible) gaps and samples for a server a session
     /// has not forwarded to are not counted.
     pub server_leg_passive_samples: AtomicU64,
+    /// Client packets successfully forwarded to a game server by a relay
+    /// session's UDP server leg (one per successful upstream send;
+    /// FEC-recovered packets injected upstream are included).
+    ///
+    /// The `forwarded` half of the per-session starvation triage: paired with
+    /// [`Self::server_leg_replies`], a growing `forwarded` with a flat
+    /// `replies` means the relay is sending game traffic but nothing is coming
+    /// back for it.
+    pub server_leg_forwarded: AtomicU64,
+    /// Game-server responses read on a relay session's UDP server-leg socket
+    /// and returned to the client.
+    ///
+    /// Includes responses that could not be attributed to a forward, so the
+    /// series answers "is the return path delivering anything at all?", not
+    /// "is every reply matched?". Not counted for datagrams dropped by the
+    /// off-path source-IP guard.
+    pub server_leg_replies: AtomicU64,
+    /// Of [`Self::server_leg_replies`], the responses with no pending forward
+    /// marker to attribute them to (unsolicited server traffic, or a second
+    /// datagram after the first response consumed the marker).
+    ///
+    /// These responses are still relayed to the client - this is an
+    /// attribution count, not a drop count.
+    pub server_leg_unmatched: AtomicU64,
 
     // ── Relay-side TTL traceroute (placement anchor) ────────────
     /// TTL-limited traceroutes started towards a game server a live session
@@ -667,6 +691,9 @@ impl ProxyMetrics {
             server_leg_unavailable: AtomicU64::new(0),
             server_leg_skips: AtomicU64::new(0),
             server_leg_passive_samples: AtomicU64::new(0),
+            server_leg_forwarded: AtomicU64::new(0),
+            server_leg_replies: AtomicU64::new(0),
+            server_leg_unmatched: AtomicU64::new(0),
             server_trace_traces: AtomicU64::new(0),
             server_trace_probes: AtomicU64::new(0),
             server_trace_unavailable: AtomicU64::new(0),
@@ -1180,6 +1207,32 @@ impl ProxyMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Count one client payload a relay session forwarded to its game server.
+    ///
+    /// Called after the upstream `send_to` succeeds, so this counts traffic
+    /// that really left the relay. Relaxed and allocation-free: it runs on the
+    /// per-packet hot path.
+    pub fn record_server_leg_forward(&self) {
+        self.server_leg_forwarded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Count one game-server response read on a relay session's server-leg
+    /// socket.
+    ///
+    /// Counts responses that could not be attributed to a forward too, so the
+    /// series reflects delivered return traffic. Relaxed and allocation-free.
+    pub fn record_server_leg_reply(&self) {
+        self.server_leg_replies.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Count one response that could not be attributed to a pending forward.
+    ///
+    /// A subset of [`Self::server_leg_replies`]; the response is still relayed
+    /// to the client, so this is not a drop counter.
+    pub fn record_server_leg_unmatched(&self) {
+        self.server_leg_unmatched.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Format metrics in Prometheus exposition format.
     pub fn to_prometheus(&self, region: &str, node_id: &str) -> String {
         let labels = format!("region=\"{}\",node_id=\"{}\"", region, node_id);
@@ -1285,6 +1338,42 @@ impl ProxyMetrics {
             "lightspeed_server_leg_passive_samples_total{{{}}} {}\n",
             labels,
             self.server_leg_passive_samples.load(Ordering::Relaxed)
+        ));
+
+        // Per-session server-leg attribution: forwarded client traffic versus
+        // game-server responses. These are the relay-side triage series: a
+        // rising `forwarded` with a flat `replies` is the starvation signature,
+        // and `unmatched` bounds how much of the reply stream the relay could
+        // not tie to a forward. All three are cumulative per process and reset
+        // at an in-place handoff, like every relay metric.
+        out.push_str(
+            "# HELP lightspeed_server_leg_forwarded_total Client packets successfully forwarded to a game server by a relay session's UDP server leg (one per successful upstream send; FEC-recovered packets included)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_forwarded_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_forwarded_total{{{}}} {}\n",
+            labels,
+            self.server_leg_forwarded.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_leg_replies_total Game-server responses read on a relay session's UDP server-leg socket and returned to the client\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_replies_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_replies_total{{{}}} {}\n",
+            labels,
+            self.server_leg_replies.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP lightspeed_server_leg_unmatched_total Game-server responses that could not be attributed to a pending client forward (a subset of server_leg_replies_total; they are still relayed, not dropped)\n",
+        );
+        out.push_str("# TYPE lightspeed_server_leg_unmatched_total counter\n");
+        out.push_str(&format!(
+            "lightspeed_server_leg_unmatched_total{{{}}} {}\n",
+            labels,
+            self.server_leg_unmatched.load(Ordering::Relaxed)
         ));
 
         // ── Relay-side TTL traceroute (placement anchor) ────────
@@ -2320,6 +2409,37 @@ mod tests {
             "the passive sample counter must be exported, got:\\n{output}"
         );
         // It is a sample counter, not a probe counter: ICMP series stay at zero.
+        assert!(output.contains(
+            "lightspeed_server_leg_probes_total{region=\"test\",node_id=\"test-node\"} 0"
+        ));
+    }
+
+    #[test]
+    fn test_server_leg_forwarded_replies_unmatched_counters_emitted() {
+        let m = ProxyMetrics::new();
+        for _ in 0..3 {
+            m.record_server_leg_forward();
+        }
+        for _ in 0..2 {
+            m.record_server_leg_reply();
+        }
+        m.record_server_leg_unmatched();
+
+        let output = m.to_prometheus("test", "test-node");
+        for (series, value) in [
+            ("lightspeed_server_leg_forwarded_total", 3),
+            ("lightspeed_server_leg_replies_total", 2),
+            ("lightspeed_server_leg_unmatched_total", 1),
+        ] {
+            assert!(
+                output.contains(&format!(
+                    "# TYPE {series} counter\n{series}{{region=\"test\",node_id=\"test-node\"}} {value}\n"
+                )),
+                "the per-session attribution series must be exported as a counter, got:\n{output}"
+            );
+        }
+        // These are session attribution counters, not ICMP probe counters: the
+        // probe family must not move because a session forwarded or replied.
         assert!(output.contains(
             "lightspeed_server_leg_probes_total{region=\"test\",node_id=\"test-node\"} 0"
         ));

@@ -57,6 +57,22 @@ const MAX_RELAY_PKT: usize = HEADER_SIZE + FEC_HEADER_SIZE + 2048;
 /// slow but active session without a lock on every packet.
 const SERVER_LEG_REFRESH_PACKETS: u64 = 32;
 
+/// Log one `RELAY_SESSION_STATS` line per live session every this many ticks of
+/// the session manager.
+///
+/// The manager ticks every 5 s, so this is once per 30 s: frequent enough to
+/// watch a starving session appear and recover, rare enough that a relay with
+/// many idle sessions does not flood its log.
+const SESSION_STATS_LOG_TICKS: u64 = 6;
+
+/// Stable log prefix for the per-session server-leg attribution line.
+///
+/// The full line is
+/// `RELAY_SESSION_STATS server=<ip:port> forwarded=<u64> replies=<u64> unmatched=<u64> age_ms=<u64>`.
+/// It is deliberately one flat line so an operator can `grep RELAY_SESSION_STATS`
+/// and a log parser can split on `key=value` without a tracing formatter.
+const RELAY_SESSION_STATS_PREFIX: &str = "RELAY_SESSION_STATS";
+
 /// Slots in one TCP connection's client→server command channel.
 ///
 /// The channel is small on purpose: the inbound path must never wait on a game
@@ -489,6 +505,74 @@ pub struct ClientSession {
     /// re-registers on change and periodically thereafter so the interest stays
     /// live without a lock on every packet.
     server_leg_token: AtomicU32,
+    /// Client packets this session successfully forwarded to its game server.
+    ///
+    /// Counted after `send_to` returns `Ok`, so it measures traffic that really
+    /// left the relay; FEC-recovered packets injected upstream are included.
+    /// Kept separate from [`Self::forwarded_packets`] (the server-leg probe
+    /// gate, only touched when a registry is attached and reset at handoff)
+    /// because this one feeds the `RELAY_SESSION_STATS` starvation triage line.
+    /// `Relaxed` is enough: a periodic log read may be one packet stale, and a
+    /// lost increment can only shift the printed total by one.
+    stats_forwarded: AtomicU64,
+    /// Game-server responses read on this session's outbound socket.
+    ///
+    /// Every datagram from the session's game-server IP counts, whether or not
+    /// it could be attributed to a forward: the triage question is whether the
+    /// return path delivers anything at all. Still relaxed and lock-free.
+    stats_replies: AtomicU64,
+    /// Of [`Self::stats_replies`], the responses that could not be attributed
+    /// to a pending forward.
+    ///
+    /// A response is unmatched when the session's `pending_forward_us` marker
+    /// was already zero: unsolicited server traffic, or a second datagram after
+    /// the first response consumed the marker. Unmatched responses are still
+    /// wrapped and relayed to the client - they are never dropped - so this is
+    /// an attribution count, not a drop count.
+    stats_unmatched: AtomicU64,
+}
+
+/// One live session's server-leg attribution totals.
+///
+/// The three counts partition what the relay can observe on a session's server
+/// leg: packets it forwarded, responses the game server sent back, and the
+/// subset of those responses with no forward left to attribute them to. The
+/// starvation shape is `forwarded > 0` with `replies == 0`: traffic left the
+/// relay and nothing came back, which separates a starved relay return path
+/// from server-side silence (the server is not answering) or a broken client
+/// tunnel (nothing reaches the relay at all).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionStats {
+    /// Game server the session forwards to, printed as `ip:port`.
+    server: SocketAddrV4,
+    /// Successful forwards to that server.
+    forwarded: u64,
+    /// Responses read from that server's IP.
+    replies: u64,
+    /// Responses with no pending forward marker to attribute them to.
+    unmatched: u64,
+    /// Session age in milliseconds (monotonic session clock).
+    age_ms: u64,
+}
+
+impl SessionStats {
+    /// Render the stable one-line `RELAY_SESSION_STATS` format:
+    ///
+    /// `RELAY_SESSION_STATS server=<ip:port> forwarded=<u64> replies=<u64> unmatched=<u64> age_ms=<u64>`
+    ///
+    /// Pure over the snapshot, so the format is testable without a session, a
+    /// socket, or a tracing subscriber.
+    fn format_line(&self) -> String {
+        format!(
+            "{} server={} forwarded={} replies={} unmatched={} age_ms={}",
+            RELAY_SESSION_STATS_PREFIX,
+            self.server,
+            self.forwarded,
+            self.replies,
+            self.unmatched,
+            self.age_ms
+        )
+    }
 }
 
 impl ClientSession {
@@ -540,6 +624,48 @@ impl ClientSession {
     pub fn idle_micros(&self) -> u64 {
         (self.started_at.elapsed().as_micros() as u64)
             .saturating_sub(self.last_activity_us.load(Ordering::Relaxed))
+    }
+
+    /// Count one client payload this session forwarded to its game server.
+    ///
+    /// Called from the two upstream send sites (the normal path and the FEC
+    /// recovery path) right after `send_to` succeeds. Two relaxed atomics, no
+    /// allocation, no lock: the per-packet cost is one `lock xadd` on the
+    /// session counter and one on the process-wide Prometheus counter.
+    fn note_forwarded_to_server(&self, metrics: &ProxyMetrics) {
+        self.stats_forwarded.fetch_add(1, Ordering::Relaxed);
+        metrics.record_server_leg_forward();
+    }
+
+    /// Count one response read from the game server.
+    ///
+    /// `attributed` is whether the session's pending-forward marker was claimed
+    /// by this response. `false` also counts the response as unmatched; a
+    /// response is still relayed to the client either way, so this changes no
+    /// forwarding behaviour - it only records whether the relay could tie the
+    /// response to a forward it had made.
+    fn note_game_server_reply(&self, metrics: &ProxyMetrics, attributed: bool) {
+        self.stats_replies.fetch_add(1, Ordering::Relaxed);
+        metrics.record_server_leg_reply();
+        if !attributed {
+            self.stats_unmatched.fetch_add(1, Ordering::Relaxed);
+            metrics.record_server_leg_unmatched();
+        }
+    }
+
+    /// Snapshot this session's server-leg attribution totals.
+    ///
+    /// Relaxed loads: this runs once per session per stats tick (30 s), and a
+    /// read that races a packet may be one increment stale, which is harmless
+    /// for a triage log line.
+    fn stats(&self) -> SessionStats {
+        SessionStats {
+            server: self.game_server,
+            forwarded: self.stats_forwarded.load(Ordering::Relaxed),
+            replies: self.stats_replies.load(Ordering::Relaxed),
+            unmatched: self.stats_unmatched.load(Ordering::Relaxed),
+            age_ms: self.started_at.elapsed().as_millis() as u64,
+        }
     }
 }
 
@@ -1072,6 +1198,9 @@ impl RelayEngine {
             listeners_spawned: AtomicU64::new(0),
             forwarded_packets: AtomicU64::new(0),
             server_leg_token: AtomicU32::new(0),
+            stats_forwarded: AtomicU64::new(0),
+            stats_replies: AtomicU64::new(0),
+            stats_unmatched: AtomicU64::new(0),
         });
 
         let mut sessions = self.sessions.write().await;
@@ -1412,6 +1541,13 @@ impl RelayEngine {
                 listeners_spawned: AtomicU64::new(0),
                 forwarded_packets: AtomicU64::new(0),
                 server_leg_token: AtomicU32::new(0),
+                // Attribution counters restart at adoption, exactly like
+                // `forwarded_packets`: the handoff snapshot does not carry them,
+                // and the session's next stats line will show the new process's
+                // totals from the adoption moment on.
+                stats_forwarded: AtomicU64::new(0),
+                stats_replies: AtomicU64::new(0),
+                stats_unmatched: AtomicU64::new(0),
             });
 
             {
@@ -1837,6 +1973,7 @@ async fn process_inbound_packet(
                 {
                     Ok(sent) => {
                         metrics.record_relay(sent as u64);
+                        session.note_forwarded_to_server(metrics.as_ref());
                     }
                     Err(e) => {
                         session.pending_forward_us.store(0, Ordering::Relaxed);
@@ -1871,6 +2008,9 @@ async fn process_inbound_packet(
     {
         Ok(sent) => {
             metrics.record_relay(sent as u64);
+            // Server-leg attribution: this payload really left the relay, so it
+            // counts as a forward even if the game server never answers.
+            session.note_forwarded_to_server(metrics.as_ref());
             trace!(
                 client = %client_addr,
                 game_server = %game_server,
@@ -2619,6 +2759,12 @@ pub async fn run_session_response_listener(
                         // unprompted server ticks cannot produce samples.
                         let now = session.started_at.elapsed().as_micros() as u64;
                         let marker = session.pending_forward_us.swap(0, Ordering::Relaxed);
+                        // Server-leg attribution: a non-zero marker is a forward
+                        // this response can be tied to; zero means the response
+                        // is unmatched (an unsolicited server datagram, or a
+                        // second reply after the marker was consumed). It is
+                        // relayed to the client below either way.
+                        session.note_game_server_reply(metrics.as_ref(), marker != 0);
                         if marker != 0 {
                             match upstream_lag(now, marker) {
                                 Some(lag) => metrics.record_latency(lag),
@@ -2798,6 +2944,10 @@ pub async fn run_session_response_listener(
 
 /// Periodically clean up expired sessions, stale abuse data, and start
 /// response listeners for new sessions.
+///
+/// Every [`SESSION_STATS_LOG_TICKS`] ticks (30 s) it also logs one
+/// `RELAY_SESSION_STATS` line per live UDP session, so a starved server leg can
+/// be told apart from server-side silence or a broken client tunnel.
 pub async fn run_session_manager(
     engine: Arc<RelayEngine>,
     abuse_detector: Arc<tokio::sync::Mutex<AbuseDetector>>,
@@ -2807,9 +2957,11 @@ pub async fn run_session_manager(
 ) {
     let mut known_sessions: HashMap<SocketAddrV4, tokio::task::JoinHandle<()>> = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
+    let mut stats_ticks: u64 = 0;
 
     loop {
         interval.tick().await;
+        stats_ticks = stats_ticks.wrapping_add(1);
 
         // Clean up expired sessions
         let removed = engine.cleanup_expired().await;
@@ -2874,8 +3026,29 @@ pub async fn run_session_manager(
             }
         }
 
+        // Per-session server-leg attribution, once per 30 s. A session with
+        // `forwarded > 0` and `replies == 0` is the relay-side starvation
+        // signature; a session with `replies > 0` is receiving game traffic, so
+        // a client-side report of "the relay is not returning traffic" is not
+        // explained by this server leg. Collect the lines under the read guard,
+        // then log after releasing it: formatting and log I/O must not hold the
+        // session map against a new session or a cleanup. Only every sixth tick
+        // allocates at all.
+        let stats_lines: Vec<String> = if stats_ticks.is_multiple_of(SESSION_STATS_LOG_TICKS) {
+            active
+                .values()
+                .map(|session| session.stats().format_line())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let session_count = active.len();
         drop(active);
+
+        for line in &stats_lines {
+            info!("{}", line);
+        }
 
         if session_count > 0 {
             debug!(
@@ -3060,6 +3233,101 @@ mod tests {
         assert!(!is_new2);
         assert_eq!(engine.active_sessions().await, 1);
         assert_eq!(session.client_addr, session2.client_addr);
+    }
+
+    /// Build a live UDP session plus a fresh metrics collector for the
+    /// server-leg attribution counter tests.
+    ///
+    /// The session comes from the real engine path (so its counters start where
+    /// production starts them); the counter methods are then driven directly,
+    /// which keeps these tests deterministic and off the network.
+    async fn stats_session() -> (Arc<RelayEngine>, Arc<ClientSession>, Arc<ProxyMetrics>) {
+        let engine = Arc::new(RelayEngine::new(10));
+        let metrics = Arc::new(ProxyMetrics::new());
+        let client = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 100), 12345);
+        let server = SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777);
+        let (session, is_new) = engine
+            .get_or_create_session(client, server, false, 4, test_udp_sender().await)
+            .await
+            .unwrap();
+        assert!(is_new);
+        (engine, session, metrics)
+    }
+
+    /// The line format must not drift: log parsers and operator greps depend on
+    /// this exact flat `key=value` shape.
+    #[test]
+    fn relay_session_stats_line_has_the_stable_format() {
+        let stats = SessionStats {
+            server: SocketAddrV4::new(Ipv4Addr::new(104, 26, 1, 50), 7777),
+            forwarded: 12,
+            replies: 3,
+            unmatched: 2,
+            age_ms: 1234,
+        };
+        assert_eq!(
+            stats.format_line(),
+            "RELAY_SESSION_STATS server=104.26.1.50:7777 forwarded=12 replies=3 unmatched=2 age_ms=1234"
+        );
+        assert!(stats.format_line().starts_with(RELAY_SESSION_STATS_PREFIX));
+    }
+
+    /// Forwards, replies, and the unmatched subset increment both the session
+    /// counters and the process-wide Prometheus mirrors.
+    #[tokio::test]
+    async fn session_stats_count_forwards_replies_and_unmatched() {
+        let (_engine, session, metrics) = stats_session().await;
+
+        session.note_forwarded_to_server(metrics.as_ref());
+        session.note_forwarded_to_server(metrics.as_ref());
+        session.note_forwarded_to_server(metrics.as_ref());
+        session.note_game_server_reply(metrics.as_ref(), true);
+        session.note_game_server_reply(metrics.as_ref(), false);
+
+        let stats = session.stats();
+        assert_eq!(stats.forwarded, 3, "every successful forward counts");
+        assert_eq!(stats.replies, 2, "both matched and unmatched replies count");
+        assert_eq!(
+            stats.unmatched, 1,
+            "only the unattributable reply is unmatched"
+        );
+        assert_eq!(stats.server, session.game_server);
+
+        assert_eq!(metrics.server_leg_forwarded.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.server_leg_replies.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.server_leg_unmatched.load(Ordering::Relaxed), 1);
+    }
+
+    /// The starvation signature: forwards happened and nothing came back. The
+    /// line must show it directly (`forwarded>0`, `replies=0`, `unmatched=0`)
+    /// so an operator can separate a starved relay return path from server-side
+    /// silence or a tunnel that never reaches the relay.
+    #[tokio::test]
+    async fn a_session_with_forwards_but_no_replies_reports_the_starvation_shape() {
+        let (_engine, session, metrics) = stats_session().await;
+
+        for _ in 0..5 {
+            session.note_forwarded_to_server(metrics.as_ref());
+        }
+
+        let stats = session.stats();
+        let line = stats.format_line();
+        assert_eq!(stats.forwarded, 5, "the session forwarded game traffic");
+        assert_eq!(stats.replies, 0, "the game server answered nothing");
+        assert_eq!(stats.unmatched, 0);
+        assert!(
+            line.contains("forwarded=5 "),
+            "starvation line must show the forwards, got: {line}"
+        );
+        assert!(
+            line.contains("replies=0 "),
+            "starvation line must show zero replies, got: {line}"
+        );
+        assert!(
+            line.contains("unmatched=0 "),
+            "starvation line must show zero unmatched, got: {line}"
+        );
+        assert_eq!(metrics.server_leg_replies.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

@@ -67,12 +67,16 @@ pub(crate) use window::{MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT};
 
 // ── Tray state enum ──────────────────────────────────────────────────────────
 
-/// The four states the tray icon can reflect in its color and tooltip.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// The five states the tray icon can reflect in its color and tooltip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayState {
     Disconnected,
     Connected,
     Optimizing,
+    /// A relay is carrying the session but has been judged not to be returning
+    /// the game's traffic. It outranks [`Self::Optimizing`]: the tray must never
+    /// claim optimization while the return path is failing.
+    RelayStarved,
     Error,
 }
 
@@ -98,17 +102,12 @@ const HOLD_FALLBACK: Duration = Duration::from_secs(120);
 /// lobby and stages the match.
 const LOCK_SETTLE: Duration = Duration::from_secs(3);
 
-/// How long a relay may carry outbound traffic with no data reply before the
-/// session falls back to direct. A healthy join's first reply arrives in
-/// milliseconds; a join that returns nothing sits on a loading screen, so this
-/// is long enough to be sure and short enough to save the connection.
+/// How many distinct relays may be on record as starving one server before the
+/// chooser stops choosing automatically.
 ///
-/// Eight seconds, not three: a live match judged on three-second windows fell
-/// back three times on samples of 2, 7 and 3 packets while the session as a
-/// whole returned 187 replies for 309 sends.
-/// How many distinct relays may fail for one server before the chooser stops
-/// trying. Two minutes of retries each, so three is already several minutes of a
-/// match spent proving what the first two already showed.
+/// Three is the point where the records agree with each other and another
+/// automatic pick is just motion; the player can still stop optimizing or pick a
+/// relay by hand. The no-reply detection itself lives in `app::watchdog`.
 const MAX_RELAYS_TRIED: usize = 3;
 
 /// How old a direct-ping sample may be before the window stops showing it and
@@ -186,22 +185,14 @@ pub struct LightSpeedApp<P: Platform> {
     status: EngineStatus,
     tray: Option<P::Tray>,
     quit: QuitFlag,
-    /// The server the no-reply watchdog gave up on. Three spaced re-tests all
-    /// failed, so the window can say the server rejects the relay instead of
-    /// implying the app itself broke.
-    relay_rejected: Arc<Mutex<Option<RelayRejection>>>,
-    /// When the abandoned relay is next re-tested, so the status can name the
-    /// wait instead of flipping between DIRECT and OPTIMIZING with no cue.
-    relay_retry_at: Arc<Mutex<Option<std::time::Instant>>>,
-    /// The relay the watchdog is re-testing for a server, published so a
-    /// background re-rank does not move the session to another relay under the
-    /// re-test. `None` while no chain is open.
-    relay_retest: Arc<Mutex<Option<RetestTarget>>>,
-    /// The (server, relay) pair whose return path the watchdog has just found
-    /// starving. The watchdog thread cannot write the relay history (the GUI owns
-    /// it), so it publishes the finding here; the GUI writes the verdict and
-    /// leaves the relay while the watchdog's hold still makes the move free.
+    /// The server the no-reply watchdog found starving. The GUI writes it into
+    /// the relay history, which demotes the relay for the next ranking; the
+    /// session keeps relaying and the warning is the only visible action.
     relay_starved: Arc<Mutex<Option<StarvationVerdict>>>,
+    /// The active starvation warning, published by the watchdog thread for the
+    /// window and the tray. `None` while the relay returns the session's traffic
+    /// (or nothing is being relayed).
+    relay_warning: Arc<Mutex<Option<RelayStarvationWarning>>>,
 
     // ── Proxy connection ─────────────────────────────────────────────────
     selected_proxy_idx: usize,
@@ -249,10 +240,15 @@ pub struct LightSpeedApp<P: Platform> {
     /// cannot strand the run silently.
     held_since: Option<std::time::Instant>,
 
-    /// True when the relay path was abandoned for this session because it
-    /// carried packets but returned nothing. Surfaced in the ledger so the
-    /// displayed relay is not mistaken for the path in use.
-    direct_fallback: bool,
+    /// True while the engine is deliberately holding game traffic on the direct
+    /// path until a relay is chosen for the locked server. This is the normal
+    /// start-of-match wait, not a failed route: the watchdog no longer takes
+    /// sessions direct, so this is the only hold the window can show.
+    holding: bool,
+    /// The watchdog's active warning, polled each frame from the thread that
+    /// owns the detection. Shown in the rail, the route card and the tray; it
+    /// never causes a route change.
+    starvation_warning: Option<RelayStarvationWarning>,
     /// Estimated whole-loop RTT to the game server through the relay, in ms;
     /// 0.0 until the sampler has enough paired round trips for this pair.
     /// How long ago the probe behind `path_rtt_ms` was taken.
@@ -276,8 +272,6 @@ pub struct LightSpeedApp<P: Platform> {
     /// When the memory was last written, so a chatty session does not rewrite it
     /// every second.
     history_saved_at: Option<std::time::Instant>,
-    /// The (relay, server) whose watchdog verdict was already written this session.
-    verdict_recorded: Option<String>,
 
     /// Baseline for the relay verdict: the two tunnel counters as of the last
     /// sample, so each window is judged on its own movement rather than on a
@@ -330,11 +324,6 @@ pub struct LightSpeedApp<P: Platform> {
     /// The Game field's "Manual / Custom…" mode: relay an explicit server.
     game_manual: bool,
     share_latency_stats: bool,
-    /// Persisted: whether a relay the watchdog took the session direct from may
-    /// be re-tested. Off means one fault keeps the session direct.
-    retry_after_fallback: bool,
-    /// The same flag, readable by the watchdog thread.
-    retry_enabled: Arc<std::sync::atomic::AtomicBool>,
     auto_detected_game: Option<String>,
 
     // ── System state ──────────────────────────────────────────────────────
@@ -574,13 +563,8 @@ impl<P: Platform> LightSpeedApp<P> {
         let language = saved.language.clone();
         i18n::set_language(language.as_deref());
 
-        let relay_rejected: Arc<Mutex<Option<RelayRejection>>> = Arc::new(Mutex::new(None));
-        let relay_retry_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
-        let relay_retest: Arc<Mutex<Option<RetestTarget>>> = Arc::new(Mutex::new(None));
         let relay_starved: Arc<Mutex<Option<StarvationVerdict>>> = Arc::new(Mutex::new(None));
-        let retry_enabled = Arc::new(std::sync::atomic::AtomicBool::new(
-            saved.retry_after_fallback,
-        ));
+        let relay_warning: Arc<Mutex<Option<RelayStarvationWarning>>> = Arc::new(Mutex::new(None));
 
         // The sampler that pairs tunnelled round trips drops every sample while
         // no estimator is installed, and the only installer was the CLI's probe
@@ -590,21 +574,16 @@ impl<P: Platform> LightSpeedApp<P> {
         spawn_relay_reply_watchdog(
             Arc::clone(&engine),
             Arc::clone(&quit),
-            Arc::clone(&relay_rejected),
-            Arc::clone(&retry_enabled),
-            Arc::clone(&relay_retry_at),
-            Arc::clone(&relay_retest),
             Arc::clone(&relay_starved),
+            Arc::clone(&relay_warning),
         );
         let mut app = Self {
             engine,
             status,
             tray,
             quit,
-            relay_rejected,
-            relay_retry_at,
-            relay_retest,
             relay_starved,
+            relay_warning,
             selected_proxy_idx,
             auto_select,
             relay_race: None,
@@ -619,7 +598,8 @@ impl<P: Platform> LightSpeedApp<P> {
             locked_since: None,
             server_chosen: Arc::new(AtomicBool::new(false)),
             held_since: None,
-            direct_fallback: false,
+            holding: false,
+            starvation_warning: None,
             relayed_base: None,
             server_ping: None,
             ping_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -629,7 +609,6 @@ impl<P: Platform> LightSpeedApp<P> {
             ),
             history_counters: None,
             history_saved_at: None,
-            verdict_recorded: None,
             presence: GamePresence::spawn(),
             auto_game_present: false,
             auto_started_for_presence: false,
@@ -645,8 +624,6 @@ impl<P: Platform> LightSpeedApp<P> {
             fec_enabled: false,
             capture_available: P::is_capture_available(),
             share_latency_stats,
-            retry_after_fallback: saved.retry_after_fallback,
-            retry_enabled,
             auto_detected_game,
             is_admin,
             fonts_setup: false,
@@ -835,7 +812,6 @@ impl<P: Platform> LightSpeedApp<P> {
             proxies: self.proxies.clone(),
             auto_select: self.auto_select,
             share_latency_stats: self.share_latency_stats,
-            retry_after_fallback: self.retry_after_fallback,
             game_auto: self.game_auto,
             manual_mode: self.game_manual,
             language: self.language.clone(),
@@ -1089,36 +1065,13 @@ impl<P: Platform> LightSpeedApp<P> {
             self.destination_winner = Some(addr);
             if let Some(idx) = self.proxies.iter().position(|entry| entry.addr == addr) {
                 if idx != self.selected_proxy_idx {
-                    // The destination ranking may move the session even while the
-                    // watchdog's re-test chain is open: leaving a relay that just
-                    // starved the session is the move that ends the starvation
-                    // loop, and the chain is dropped as stale on the watchdog's
-                    // next tick once the session is elsewhere. The source is
-                    // passed so the policy stays in one place - the client-leg
-                    // race keeps its veto.
-                    if !relay_switch_allowed(
-                        RelayChangeSource::DestinationRanking,
-                        self.watchdog_chain(),
-                        self.game_server_addr(),
-                        addr,
-                    ) {
-                        let current = self
-                            .proxies
-                            .get(self.selected_proxy_idx)
-                            .map(|entry| entry.addr)
-                            .unwrap_or(addr);
-                        tracing::info!(
-                            "Keeping the live session on {current}; the no-reply watchdog is \
-                             re-testing it for this server ({addr} is the destination choice \
-                             for the next session)"
-                        );
-                        return;
-                    }
                     // The same rule as `follow_game_server`: a relay change moves
                     // the data plane, so it is only safe while tunnelling is
                     // withheld. A re-measurement during a live match records the
                     // better server-side relay for the next session instead of
-                    // restarting the interceptor under the player.
+                    // restarting the interceptor under the player. The no-reply
+                    // watchdog no longer owns the route, so there is no chain to
+                    // veto this switch.
                     let gate = lock_or_recover(&self.engine)
                         .interceptor_health()
                         .and_then(|health| health.tunnelling_enabled);
@@ -1167,8 +1120,8 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         if !self.auto_select {
             // A pinned relay has no choice to make, but every new server gets a
-            // fresh chance at the relay: a no-reply fallback on the lobby
-            // backend must not pin the whole session direct.
+            // fresh chance at the relay: a hold left over from the lobby backend
+            // must not pin the whole session direct.
             self.chosen_for_server = Some(server);
             self.server_chosen.store(true, Ordering::Relaxed);
             self.held_since = None;
@@ -1450,23 +1403,6 @@ impl<P: Platform> LightSpeedApp<P> {
             tracing::info!(
                 "Keeping the current relay: re-race winner {addr} at {winner_rtt_ms} ms does \
                  not beat {current_rtt_ms} ms by {RELAY_SWITCH_MARGIN_MS} ms"
-            );
-            return;
-        }
-        // A re-test owns the route for the client-leg re-race while it runs:
-        // switching to the re-race winner would restart interception under the
-        // watchdog's re-test and turn it into a mid-session hop. The destination
-        // ranking is not vetoed by it (see `relay_switch_allowed`); this winner
-        // is the client-leg race's.
-        if !relay_switch_allowed(
-            RelayChangeSource::ClientLegRace,
-            self.watchdog_chain(),
-            self.game_server_addr(),
-            addr,
-        ) {
-            tracing::info!(
-                "Keeping the current relay: the no-reply watchdog is re-testing it for this \
-                 server; re-race winner {addr} applies next session"
             );
             return;
         }
@@ -1763,14 +1699,13 @@ impl<P: Platform> LightSpeedApp<P> {
     ///
     /// The watchdog thread cannot touch the history (the GUI owns it), so it
     /// publishes the finding and this poll writes it. The record is the
-    /// starvation signature, not the exhausted-chain `failed` verdict: the chain
-    /// still has its re-tests to spend, and `record_watchdog_verdict` upgrades the
-    /// record if it spends them and still returns nothing. Returns whether a
-    /// finding was written this poll, so the caller only tries to leave the relay
-    /// when there is something new to leave.
-    fn record_starvation_verdict(&mut self) -> bool {
+    /// starvation signature, not an exhausted-chain `failed` verdict: the
+    /// warn-only mode has no chain to exhaust, because it never retries and
+    /// never switches paths. The session keeps relaying while the finding is
+    /// written; only a future ranking changes.
+    fn record_starvation_verdict(&mut self) {
         let Some((server, published_relay)) = lock_or_recover(&self.relay_starved).take() else {
-            return false;
+            return;
         };
         let Some(relay) = published_relay.or_else(|| {
             lightspeed_client::current_relay().or_else(|| {
@@ -1780,146 +1715,15 @@ impl<P: Platform> LightSpeedApp<P> {
                     .ok()
             })
         }) else {
-            return false;
+            return;
         };
-        let server_ip = *server.ip();
-        self.relay_history.record_starvation(relay, server_ip);
+        apply_starvation_verdict(&mut self.relay_history, server, relay);
         let _ = self.relay_history.save(&crate::paths::relay_history_file());
         tracing::info!(
             relay = %relay,
             server = %server,
-            "Recorded the starvation verdict: the watchdog saw no return path for this server; \
-             the relay is demoted for the next ranking"
-        );
-        true
-    }
-
-    /// Move the session off a relay the watchdog just found starving, when the
-    /// ranking prefers another one.
-    ///
-    /// Only safe while the watchdog holds tunnelling: game traffic is not
-    /// flowing, so restarting interception on another relay cannot drop the
-    /// player's connection. The starvation verdict has already been recorded, so
-    /// the ranking demotes the relay that just failed; this is what turns "the
-    /// watchdog falls back and re-tests the same relay forever" into "the session
-    /// leaves for the next candidate". The watchdog drops its now-stale re-test
-    /// chain on its next tick because the session is no longer on that relay.
-    fn leave_starved_relay(&mut self) {
-        if !self.auto_select {
-            return;
-        }
-        let Some(server) = self.game_server_addr() else {
-            return;
-        };
-        if self.relay_legs.is_none() {
-            // No measured client legs yet: start a pass so the ranking can run on
-            // its next poll instead of waiting for the 600 s re-check.
-            self.start_relay_measurement();
-            return;
-        }
-        let held = lock_or_recover(&self.engine)
-            .interceptor_health()
-            .and_then(|health| health.tunnelling_enabled)
-            == Some(false);
-        if !held {
-            // Traffic is flowing (or the interceptor is not up): a relay change
-            // now would restart interception under the player.
-            return;
-        }
-        let Some(chosen) = self.choose_relay_for_destination() else {
-            return;
-        };
-        let Some(idx) = self.proxies.iter().position(|entry| entry.addr == chosen) else {
-            return;
-        };
-        if idx == self.selected_proxy_idx {
-            tracing::info!(
-                server = %server,
-                relay = %chosen,
-                "The starving relay is still the best candidate for this server; keeping the re-test"
-            );
-            return;
-        }
-        let previous = self
-            .selected_proxy_addr()
-            .map(|addr| addr.to_string())
-            .unwrap_or_else(|| "none".to_string());
-        tracing::info!(
-            server = %server,
-            from = %previous,
-            to = %chosen,
-            "Leaving the starving relay for a better candidate for this server"
-        );
-        self.destination_winner = Some(chosen);
-        self.selected_proxy_idx = idx;
-        self.connect_selected();
-        self.persist_config();
-    }
-
-    /// Remember the watchdog's exhaustion verdict for this relay and server.
-    ///
-    /// Once the re-tests are spent the relay has failed this server on more
-    /// evidence than one window: a chain of consecutive windows with no working
-    /// return path. Even then only a *confirmed zero-return chain* is written.
-    /// A chain that saw replies is a low share, which is normal for asymmetric
-    /// game UDP and must not exclude a working relay for the verdict's six-hour
-    /// lifetime. Recorded once per session per pair so a long hold does not
-    /// rewrite the file every second.
-    fn record_watchdog_verdict(&mut self) {
-        let Some(rejection) = self.relay_rejection_now() else {
-            return;
-        };
-        let server = *rejection.server.ip();
-        let Some(relay) = rejection.relay.or_else(|| {
-            lightspeed_client::current_relay().or_else(|| {
-                self.status
-                    .proxy_addr
-                    .parse::<std::net::SocketAddrV4>()
-                    .ok()
-            })
-        }) else {
-            return;
-        };
-        let key = format!("{relay}|{server}");
-        if self.verdict_recorded.as_deref() == Some(key.as_str()) {
-            return;
-        }
-        // A chain that returned any datagram at all was not an absent return
-        // path: it is a low share, and a low share is not a relay verdict. This
-        // is the guard that stops one 24.1% window excluding a working relay.
-        if !rejection.zero_return {
-            self.verdict_recorded = Some(key);
-            tracing::info!(
-                relay = %relay,
-                server = %server,
-                "Watchdog gave up on this relay, but the chain saw replies; it is a \
-                 low return share, not a relay failure - no verdict recorded"
-            );
-            return;
-        }
-        // A window that starved while the session as a whole was returning
-        // normally is noise, not a verdict. MAD was condemned on such a window for
-        // a server it was answering 112% of the traffic for.
-        if self
-            .relay_history
-            .carries(relay, server, crate::relay_history::now_secs())
-        {
-            self.verdict_recorded = Some(key);
-            tracing::info!(
-                relay = %relay,
-                server = %server,
-                "Watchdog fired but the measured ratio says this relay carries the \
-                 server; no verdict recorded"
-            );
-            return;
-        }
-        self.verdict_recorded = Some(key);
-        self.relay_history.record_failure(relay, server);
-        let _ = self.relay_history.save(&crate::paths::relay_history_file());
-        tracing::info!(
-            relay = %relay,
-            server = %server,
-            "Recorded the watchdog verdict: this relay does not carry this server"
+            "The return-path watchdog found no reply for this server; the relay is demoted \
+             for the next ranking. The session keeps relaying and the player has been warned"
         );
     }
 
@@ -2035,26 +1839,28 @@ impl<P: Platform> LightSpeedApp<P> {
 
     fn poll_relay_health(&mut self) {
         let health = lock_or_recover(&self.engine).interceptor_health();
-        self.direct_fallback = health
+        // The only hold left is the start-of-match wait for a relay choice. The
+        // watchdog no longer takes the session direct, so a held tunnel with a
+        // locked server is "choosing a relay", never a failed route.
+        self.holding = health
             .as_ref()
             .map(|health| {
                 health.tunnelling_enabled == Some(false) && health.detected_server.is_some()
             })
             .unwrap_or(false);
+        // The watchdog publishes its warning from its own thread; the window is
+        // the consumer that shows it. Reading the slot is what keeps the tray and
+        // the card in step with the detection that produced it.
+        self.starvation_warning = *lock_or_recover(&self.relay_warning);
         if let Some(server) = health.as_ref().and_then(|health| health.detected_server) {
             self.refresh_server_ping(*server.ip());
         }
         self.log_latency_comparison();
         self.record_relay_history();
-        // The starvation finding is written before the exhaustion verdict so that
-        // verdict's "the measured ratio says this relay carries the server" guard
-        // reads the finding rather than a stale healthy record. A new finding is
-        // also the moment to leave the relay while the watchdog still holds
-        // tunnelling, which makes that move free.
-        if self.record_starvation_verdict() {
-            self.leave_starved_relay();
-        }
-        self.record_watchdog_verdict();
+        // The finding is written into the relay history, which demotes the relay
+        // for the next ranking. The session keeps relaying: the warning, not a
+        // route change, is how the user hears about it.
+        self.record_starvation_verdict();
         if self.status.interceptor_active || self.status.redirect_active {
             let key = self.session_key();
             let stale = self
@@ -2264,18 +2070,17 @@ impl<P: Platform> LightSpeedApp<P> {
     /// The full-bleed state rail: the state word, the live round trip, and the
     /// one-line description of what is happening.
     fn state_rail(&self, ui: &mut egui::Ui, boosting: bool, narrow: bool) {
-        // A direct fallback is not optimisation. The live ROB RUN run read
-        // "OPTIMIZING" in green while the ledger underneath said "Direct
-        // fallback" and the relay had returned nothing: the state word must
-        // describe the route, not the intent. A hold is the third case: the
-        // engine is deliberately keeping traffic direct until a relay is chosen
-        // for this server, which is a normal few seconds at match start and must
-        // not read as a fallback that already failed.
-        let holding = is_holding(self.direct_fallback, self.session_sent());
-        let (word, word_color) = if boosting && holding {
+        // The state word describes the route, not the intent. The live ROB RUN
+        // run read "OPTIMIZING" in green while the ledger underneath said the
+        // relay had returned nothing; the tray must not repeat that lie. The
+        // warning outranks OPTIMIZING while the return path is failing, and a
+        // hold is the normal start-of-match wait for a relay choice, never a
+        // route that failed.
+        let warning = self.starvation_warning.filter(|_| boosting);
+        let (word, word_color) = if boosting && warning.is_some() {
+            (i18n::t("state.not_returning").to_uppercase(), danger)
+        } else if boosting && self.holding {
             (i18n::t("state.holding").to_uppercase(), warn)
-        } else if boosting && self.direct_fallback {
-            (i18n::t("state.direct").to_uppercase(), warn)
         } else if boosting {
             (i18n::t("state.optimizing").to_uppercase(), signal)
         } else if self.status.connected {
@@ -2284,19 +2089,17 @@ impl<P: Platform> LightSpeedApp<P> {
             (i18n::t("state.idle").to_uppercase(), text_1)
         };
 
-        let sub_line = if boosting && holding {
+        let sub_line = if boosting && self.holding {
             i18n::t("route.choosing").into_owned()
         } else if boosting {
-            // Naming a relay beside DIRECT would repeat the old lie in a smaller
-            // font, so the fallback replaces the relay here.
-            let relay = if self.direct_fallback {
-                self.direct_fallback_text()
-            } else {
-                self.selected_entry()
-                    .and_then(|e| e.node_id.as_deref())
-                    .map(discovery::friendly_label)
-                    .unwrap_or_else(|| self.status.proxy_addr.clone())
-            };
+            // The route stays named while the warning is up: the player is still
+            // relayed through this relay, and the route card carries the warning
+            // and the remedy.
+            let relay = self
+                .selected_entry()
+                .and_then(|e| e.node_id.as_deref())
+                .map(discovery::friendly_label)
+                .unwrap_or_else(|| self.status.proxy_addr.clone());
             format!("{}  \u{2192}  {}", self.selected_game().display, relay)
         } else if self.status.connected {
             match &self.auto_detected_game {
@@ -2449,6 +2252,29 @@ impl<P: Platform> LightSpeedApp<P> {
             .inner_margin(egui::Margin::same(S3 as i8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                // The unmissable warning: the relay is carrying the session but
+                // has been judged not to be returning the game's traffic. It is
+                // drawn above the map, in the danger tint, because the old
+                // surface showed a green OPTIMIZING rail while the ledger said
+                // the relay returned nothing. The banner names the remedy - the
+                // player's own decision - and never claims a route change.
+                if let Some(warning) = self.starvation_warning.filter(|_| self.run_boosting()) {
+                    egui::Frame::new()
+                        .fill(danger_soft)
+                        .stroke(egui::Stroke::new(1.0, danger))
+                        .corner_radius(egui::CornerRadius::same(R_INLINE))
+                        .inner_margin(egui::Margin::same(S2 as i8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(
+                                egui::RichText::new(i18n::t(warning_message_key(warning.fault)))
+                                    .size(BODY)
+                                    .family(semibold())
+                                    .color(danger),
+                            );
+                        });
+                    ui.add_space(S2);
+                }
                 ui.vertical_centered(|ui| {
                     // A flat map instead of the globe: legible at a glance and it
                     // spends the card's width rather than its height.
@@ -2624,15 +2450,15 @@ impl<P: Platform> LightSpeedApp<P> {
             let value = LedgerValue::Data(format!("{:.0} ms", self.status.latest_rtt_ms));
             self.ledger_row(ui, narrow, &i18n::t("route.relay_rtt"), &value);
         }
-        if self.direct_fallback {
-            let path = if is_holding(self.direct_fallback, self.session_sent()) {
-                LedgerValue::Warn(i18n::t("state.holding"))
-            } else if self.relay_rejected_now() {
-                LedgerValue::Warn(i18n::t("route.server_rejects_relay"))
-            } else {
-                LedgerValue::Warn(i18n::t("route.direct_fallback"))
-            };
-            self.ledger_row(ui, narrow, &i18n::t("route.path"), &path);
+        // The path row exists only for the start-of-match hold now: the watchdog
+        // never takes the session direct, so there is no fallback state to name.
+        if self.holding {
+            self.ledger_row(
+                ui,
+                narrow,
+                &i18n::t("route.path"),
+                &LedgerValue::Warn(i18n::t("state.holding")),
+            );
         }
         if let Some(target) = &self.target_process {
             let target = LedgerValue::Data(target.describe());
@@ -2656,13 +2482,13 @@ impl<P: Platform> LightSpeedApp<P> {
     /// `L + S` is the first whole-path figure whose both terms are measured. It
     /// is a floor, not the real path, and the locale string says so with `~`.
     ///
-    /// Present only while this client is tunnelling through the relay (a direct
-    /// fallback's own row already says the relay is not in use) and only for the
+    /// Present only while this client is tunnelling through the relay (a held
+    /// session's own row already says the relay is not in use) and only for the
     /// pair the card is describing: the report is keyed by `(relay, server)` in
     /// the client crate, so another relay's or another server's measurement can
     /// never be rendered here.
     fn relay_measured_server_leg_rows(&self) -> Option<(LedgerValue, Option<LedgerValue>)> {
-        if !self.run_boosting() || self.direct_fallback {
+        if !self.run_boosting() || self.holding {
             return None;
         }
         let server = self.game_server_addr()?;
@@ -2684,7 +2510,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// until the experiment passes) and disappears when the passive window goes
     /// quiet rather than showing an old number.
     fn relay_measured_app_server_leg_row(&self) -> Option<LedgerValue> {
-        if !self.run_boosting() || self.direct_fallback {
+        if !self.run_boosting() || self.holding {
             return None;
         }
         let server = self.game_server_addr()?;
@@ -2703,7 +2529,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// `Some` here is always a fresh, well-formed relay trace. It feeds no
     /// ranking decision and claims no city.
     fn relay_measured_trace_row(&self) -> Option<LedgerValue> {
-        if !self.run_boosting() || self.direct_fallback {
+        if !self.run_boosting() || self.holding {
             return None;
         }
         let server = self.game_server_addr()?;
@@ -2716,7 +2542,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// relay in use, and how the relay choice obtained it.
     ///
     /// Present only while this client is tunnelling and the route is the relay (a
-    /// direct fallback's own row already says the relay is not in use), and only
+    /// held session's own row already says the relay is not in use), and only
     /// for a game server the chooser ranked with a relay it ranked. A row with no
     /// fact behind it would be exactly the invented state this surface exists to
     /// stop.
@@ -2724,7 +2550,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// Units: microseconds in the model, milliseconds on screen. One metric, one
     /// label (`route.server_leg`); the hover carries no separate number.
     fn server_leg_value(&self) -> Option<LedgerValue> {
-        if !self.run_boosting() || self.direct_fallback {
+        if !self.run_boosting() || self.holding {
             return None;
         }
         let server = self.game_server_addr()?;
@@ -2793,7 +2619,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// the triangle inequality needs; the old two-RTT HTTP wall time would have
     /// made this verdict wrong in the other direction.
     fn cannot_beat_direct(&self) -> Option<(u64, u64)> {
-        if !self.run_boosting() || self.direct_fallback {
+        if !self.run_boosting() || self.holding {
             return None;
         }
         let client_leg_us = self.current_client_leg_us()?;
@@ -2892,52 +2718,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// Packets THIS session has pushed through the relay. The relay's own
     /// `/health` counters are lifetime totals for the whole fleet node, not our
     /// session, so they must never be shown as if they were ours.
-    /// The route line while the session is on the direct path: why it is there,
-    /// and - while a re-test is still pending - when it changes. The status used
-    /// to flip between DIRECT and OPTIMIZING every retry with nothing saying why.
-    fn direct_fallback_text(&self) -> String {
-        if self.relay_rejected_now() {
-            return i18n::t("route.server_rejects_relay").into_owned();
-        }
-        let base = i18n::t("route.direct_fallback").into_owned();
-        let Some(due) = *lock_or_recover(&self.relay_retry_at) else {
-            return base;
-        };
-        let Some(secs) = retry_seconds_left(Some(due), std::time::Instant::now()) else {
-            return base;
-        };
-        let secs = secs.to_string();
-        format!(
-            "{base} \u{00b7} {}",
-            i18n::t_with("route.retry_in", &[("secs", secs.as_str())])
-        )
-    }
-
-    /// True when the watchdog exhausted its re-tests for the server that is
-    /// locked right now: the relay carried the flow, the server did not answer.
-    fn relay_rejected_now(&self) -> bool {
-        self.relay_rejection_now().is_some()
-    }
-
-    /// The watchdog's exhaustion verdict, when it belongs to the locked server.
-    fn relay_rejection_now(&self) -> Option<RelayRejection> {
-        let rejected = *lock_or_recover(&self.relay_rejected);
-        match (
-            rejected,
-            self.status
-                .interceptor_server
-                .parse::<std::net::SocketAddrV4>(),
-        ) {
-            (Some(rejection), Ok(locked)) if rejection.server == locked => Some(rejection),
-            _ => None,
-        }
-    }
-
-    /// The relay the no-reply watchdog is re-testing for a server, if any.
-    fn watchdog_chain(&self) -> Option<RetestTarget> {
-        *lock_or_recover(&self.relay_retest)
-    }
-
+    ///
     /// Outbound datagrams this session handed to the relay, in whichever mode
     /// is running.
     fn session_sent(&self) -> Option<u64> {
@@ -2958,7 +2739,7 @@ impl<P: Platform> LightSpeedApp<P> {
             self.status.interceptor_from_proxy,
         );
         // The engine's counters are cumulative for the interceptor, so a relay
-        // switch or a fallback carried the old traffic into the new session's
+        // switch or a held session carried the old traffic into the new session's
         // numbers. The row is about this session, so the delta from where it
         // started is what it shows.
         let base = self
@@ -3620,34 +3401,24 @@ impl<P: Platform> LightSpeedApp<P> {
                 .set_telemetry_enabled(self.share_latency_stats);
         }
 
-        // Routing behaviour: whether a relay the watchdog abandoned gets a
-        // second look. It is its own section rather than a third checkbox under
-        // Privacy, and it sits before Maintenance because it changes what the
-        // client does, not how it is maintained.
+        // Routing behaviour: what happens when a relay stops returning the
+        // game's traffic. There is no control here any more - the automatic
+        // direct fallback and its re-test budget were removed on 2026-11-20 in
+        // the owner-approved warn-only mode - so this states the behaviour
+        // instead of promising a setting. It is a caption rather than a hover
+        // because the old checkbox's tooltip promised re-tests "after 20 s, then
+        // 45 s, then 90 s" while the code actually did 30 s/120 s/park, and the
+        // text was never localized. The decision belongs to the player: STOP
+        // OPTIMIZING, or pick another relay.
         ui.add_space(S2);
         hairline(ui);
         ui.add_space(S1);
         section_label(ui, "Routing");
-        let retry = ui
-            .checkbox(
-                &mut self.retry_after_fallback,
-                egui::RichText::new("Re-test a relay after falling back")
-                    .size(LABEL)
-                    .family(semibold()),
-            )
-            .on_hover_text(
-                "When on, a relay the watchdog took the session direct from is \
-                 re-tested after 20 s, then 45 s, then 90 s. Off leaves the \
-                 session on the direct path until the next match.",
-            )
-            .changed();
-        if retry {
-            self.retry_enabled.store(
-                self.retry_after_fallback,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            self.persist_config();
-        }
+        ui.label(
+            egui::RichText::new(i18n::t("settings.starvation_policy"))
+                .size(CAPTION)
+                .color(text_3),
+        );
         ui.add_space(S2);
 
         // Relays: the list itself, inlined from the old Proxy Manager modal.
@@ -4322,19 +4093,10 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 || self.status.capture_error.is_some()
                 || self.status.redirect_error.is_some()
                 || self.status.interceptor_error.is_some();
-            let new_tray_state = if has_error {
-                TrayState::Error
-            } else if self.status.windivert_active
-                || self.status.capture_active
-                || self.status.redirect_active
-                || self.status.interceptor_active
-            {
-                TrayState::Optimizing
-            } else if self.status.connected {
-                TrayState::Connected
-            } else {
-                TrayState::Disconnected
-            };
+            let boosting = self.run_boosting();
+            let warning_active = self.starvation_warning.is_some() && boosting;
+            let new_tray_state =
+                tray_state_for(has_error, warning_active, boosting, self.status.connected);
 
             if let Some(tray) = &self.tray {
                 tray.set_state(new_tray_state, self.status.latest_rtt_ms);
@@ -4349,7 +4111,13 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         let boosting = self.run_boosting();
 
         let rail_edge = if boosting {
-            signal
+            // The rail's left edge carries the same honesty as the state word:
+            // a failing return path paints it in the danger colour, not green.
+            if self.starvation_warning.is_some() {
+                danger
+            } else {
+                signal
+            }
         } else if self.status.connected {
             accent_soft
         } else {

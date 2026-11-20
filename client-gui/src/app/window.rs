@@ -130,6 +130,34 @@ pub fn should_apply_race(auto_select: bool, connected: bool, server_known: bool)
     auto_select && !connected && !server_known
 }
 
+/// The tray state for the current frame.
+///
+/// The order is the honesty rule the tray carries: an error is an error, a
+/// session whose relay is not returning the game's traffic is
+/// [`TrayState::RelayStarved`] and never [`TrayState::Optimizing`], and only a
+/// session with no active warning and traffic flowing may claim optimization.
+/// `warning_active` is expected to be false when not boosting; it is still
+/// checked against `boosting` so a stale warning can never paint a green icon
+/// over a stopped tunnel.
+pub fn tray_state_for(
+    has_error: bool,
+    warning_active: bool,
+    boosting: bool,
+    connected: bool,
+) -> TrayState {
+    if has_error {
+        TrayState::Error
+    } else if warning_active && boosting {
+        TrayState::RelayStarved
+    } else if boosting {
+        TrayState::Optimizing
+    } else if connected {
+        TrayState::Connected
+    } else {
+        TrayState::Disconnected
+    }
+}
+
 pub fn close_decision(
     has_system_tray: bool,
     quit_requested: bool,

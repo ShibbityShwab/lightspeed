@@ -14,6 +14,18 @@
 
 ## Recent entries
 
+### 2026-11-20 (post-1.11.4) - Warn-only relay starvation (no automatic path switch) + relay-side starvation counters; committed
+
+**Agent:** `rust-dev-14` (relay counters) + `rust-dev-15` (GUI behaviour) + lead (integration/gates/commit). Committed after v1.11.4.
+
+- **Behaviour change (owner-approved):** the automatic hold/retry-to-direct fallback machine is removed. A confirmed starvation (unchanged 2x8 s no-return-path condition) now keeps relaying and raises an unmissable warning: tray `RelayStarved` (amber, "relay is not returning your game traffic"), state rail `NO RETURN PATH` red, route-card danger banner, log counters/reason ending "keeping the relay and warning the player (no automatic path switch)"; the starvation verdict still calls `RelayHistory::record_starvation` so the (relay, server) pair is demoted for future ranking; warning clears on a healthy window; STOP OPTIMIZING is the manual escape. The settings copy was replaced with truthful localized text (the old "20/45/90 s" re-test promise is gone), `retry_after_fallback` and dead strings/state removed (old config files still load).
+- **Relay counters:** per-session atomics for forwarded/replies/unmatched; one
+  `RELAY_SESSION_STATS server=<ip:port> forwarded=<n> replies=<n> unmatched=<n> age_ms=<n>` line per live session every 30 s; Prometheus `lightspeed_server_leg_{forwarded,replies,unmatched}_total`; no per-packet lock/alloc, no new packets, no forwarding change. TCP-tunnelled game connections are not counted (follow-up).
+- **Verification:** 5 new GUI regression tests (warning without switch; verdict demotion; tray never Optimizing while warning; settings copy; all-locale coverage) + counter tests; mutations (re-enable switch, drop verdict call, tray order, old copy) each fail then restore. Lead's integrated gates: fmt clean; workspace clippy 0 warnings; workspace **1,815 / 0 / 6**; GUI clippy 0; GUI **261 / 0 / 1**; proxy quic lib **234 / 0 / 0**. Linux compile of the proxy counters verified by a check-only CI dispatch (run 44697534317, `LINUX_CHECK_OK`).
+- **GUI:** release rebuilt and relaunched (pid 6652); UIA confirms the new Routing copy and no re-test checkbox. The starved banner/tray state was not observed live (no game running) - covered headless + binary markers.
+- **Not committed:** stale `docs/publishing-channels.md`; stray untracked root `app.rs` backup (left out of the index).
+- **Next:** deploy a post-1.11.4 proxy to the relays to activate the counters/live line; `docs/design/interface.md` still describes the old re-test pending line; option E (auto-move to a measured relay) stays gated on the counter evidence.
+
 ### 2026-11-20 (1.11.4 published) - Release verified across channels; CI rerun pending; next round scoped
 
 **Agent:** `geofeed-diligence` (release) + lead (independent verification/state). Verified by lead after the report.
