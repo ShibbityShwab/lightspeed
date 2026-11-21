@@ -1,0 +1,9 @@
+<ts>  INFO lightspeed: ⚡ LightSpeed v<version> starting
+<ts>  WARN lightspeed: Config not found (Config file not found: absent.toml), using defaults
+📊 Anonymous telemetry on: aggregate latency stats only, no IPs. Disable with --no-telemetry or telemetry = false in lightspeed.toml. Policy: https://github.com/ShibbityShwab/lightspeed/blob/master/docs/privacy.md
+<ts>  INFO lightspeed: 🛡️  Bypass gate: dry_run (measuring and logging only; tunneling unchanged)
+<ts>  INFO lightspeed: 📊 LightSpeed System Status
+<ts>  INFO lightspeed:    Version:    v<version>
+<ts>  INFO lightspeed:    OS:         <os>
+<ts>  INFO lightspeed:    Arch:       <arch>
+<ts>  INFO lightspeed:    Features:   <features>

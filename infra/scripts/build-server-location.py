@@ -3,16 +3,20 @@
 
 Two artifacts are generated from free, key-less public sources:
 
-* ``client-gui/data/server-cloud.bin`` - cloud-provider IPv4 prefixes mapped to
+* ``client/data/server-cloud.bin`` - cloud-provider IPv4 prefixes mapped to
   an exact provider region (AWS ``ip-ranges.json`` and GCP ``cloud.json``).
-* ``client-gui/data/server-hosting.bin`` - IPv4 prefixes announced by a curated
+* ``client/data/server-hosting.bin`` - IPv4 prefixes announced by a curated
   list of game-hosting/CDN ASNs, from the free RIPE Stat API at build time.
 
 Both are ``start u32 | end u32 | index u16`` little-endian records sorted by
 start, with the index pointing into the generated tables in
-``client-gui/src/server_tables.rs``. They are committed, so the shipped client
-never calls a network service to place a server; this script is the only thing
-that needs the network, and only when regenerating.
+``client/src/app/location/server_tables.rs``. They are committed, so the
+shipped client never calls a network service to place a server; this script is
+the only thing that needs the network, and only when regenerating.
+
+The committed artifacts live in the shared core (``client/data/`` +
+``client/src/app/location/``) so the CLI and the GUI consume one copy behind the
+``server-location`` feature; the generator writes there, not into the GUI crate.
 
 The hosting index exists because free geoIP databases are wrong for hosting
 ranges: DB-IP Lite and City both put a G-Core US-Virginia server in JP, and even
@@ -41,9 +45,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / "client-gui" / "data"
+DATA = ROOT / "client" / "data"
 CACHE = ROOT / "target" / "server-location-cache"
-RUST_TABLES = ROOT / "client-gui" / "src" / "server_tables.rs"
+RUST_TABLES = ROOT / "client" / "src" / "app" / "location" / "server_tables.rs"
 MANIFEST = DATA / "server-location.sources.json"
 USER_AGENT = "lightspeed-build/1.0 (+https://github.com/ShibbityShwab/lightspeed)"
 
@@ -297,6 +301,7 @@ def write_tables(
 def main() -> int:
     check = "--check" in sys.argv[1:]
     DATA.mkdir(parents=True, exist_ok=True)
+    RUST_TABLES.parent.mkdir(parents=True, exist_ok=True)
 
     sources = {}
     cloud_raw = {}

@@ -63,9 +63,13 @@ OUTPUTS
       counts, attribution strings, licence/status notes, `redistributed` marker
       per source, deny/takedown list and the dropped counts.
   --ship also writes the committed client copy:
-    * client-gui/data/server-geofeed.bin
-    * client-gui/src/server_geofeed_tables.rs
-    * client-gui/data/server-geofeed.sources.json
+    * client/data/server-geofeed.bin
+    * client/src/app/location/server_geofeed_tables.rs
+    * client/data/server-geofeed.sources.json
+  The committed copy lives in the shared core (``client/data/`` +
+  ``client/src/app/location/``) so the CLI and the GUI read one copy behind the
+  ``server-location`` feature; the generator writes there, not into the GUI
+  crate.
   --out DIR overrides the build-evidence directory. Shipping is refused for any
   used source marked `"redistributed": false`.
 
@@ -101,8 +105,8 @@ GEOFEED_DIR = ROOT / "infra" / "geo" / "geofeeds"
 SOURCES_JSON = GEOFEED_DIR / "sources.json"
 DENY_FILE = GEOFEED_DIR / "deny.txt"
 DEFAULT_OUT = ROOT / "target" / "server-location-city"
-SHIP_DATA = ROOT / "client-gui" / "data"
-SHIP_TABLE = ROOT / "client-gui" / "src" / "server_geofeed_tables.rs"
+SHIP_DATA = ROOT / "client" / "data"
+SHIP_TABLE = ROOT / "client" / "src" / "app" / "location" / "server_geofeed_tables.rs"
 SHIP_MANIFEST = SHIP_DATA / "server-geofeed.sources.json"
 
 # 10 bytes per range record: start u32 LE, end u32 LE, place-index u16 LE.
@@ -759,7 +763,7 @@ def render_rust(
 ) -> str:
     """The generated Rust table, with the per-source attribution header."""
     destination = (
-        "client-gui/src/server_geofeed_tables.rs (committed, display-only)"
+        "client/src/app/location/server_geofeed_tables.rs (committed, display-only)"
         if shipped
         else "target/server-location-city/server_geofeed_tables.rs (build evidence)"
     )
@@ -1927,8 +1931,9 @@ def main(argv: list[str] | None = None) -> int:
         "--ship",
         action="store_true",
         help=(
-            "also write the committed client copy under client-gui/ "
-            "(requires every used source to be redistributable)"
+            "also write the committed client copies under client/data/ and "
+            "client/src/app/location/ (requires every used source to be "
+            "redistributable)"
         ),
     )
     parser.add_argument(

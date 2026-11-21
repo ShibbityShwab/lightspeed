@@ -93,10 +93,16 @@ reporting is on:
   unchanged, so the client can compare like-for-like direct and relayed RTT.
   No synthetic packet is generated. It is rate-limited to at most one packet
   per game server per 30 seconds and runs only while the interceptor is active.
+- **Traces the network route to the locked game server** with your operating
+  system's built-in traceroute tool, so the app can show an expected path and
+  diagnose routing. This runs while a game server is locked, whether or not
+  reporting is on; the summary stays on your machine.
 
 These probes go to the game server, never to the relay. The numbers stay on
 your machine unless anonymous reporting is enabled. With `--no-telemetry`, no
 report is built or sent, and the relay receives nothing.
+
+**Client route trace.** When a game server is locked, LightSpeed may trace the network route to it using your operating system's built-in traceroute tool so it can show an expected path and diagnose routing. These are ordinary traceroute packets to routers along that path; nothing about the trace is sent to LightSpeed's relays or any third party, and only the summarized hop count and last-hop round trip appear in the app and your local log.
 
 Turning telemetry **on** is what sends the aggregate report described below.
 
@@ -215,7 +221,7 @@ small **operator geofeed** table built into the application:
   DigitalOcean, LLC, The Constant Company (Vultr), Akamai Connected Cloud
   (Linode), Contabo GmbH and Equinix Metal; the exact list with each feed URL
   and as-of date is the source manifest
-  (`client-gui/data/server-geofeed.sources.json`).
+  (`client/data/server-geofeed.sources.json`).
 - It is downloaded **at build time on the maintainer's machine**, not by your
   client. The GUI only reads the table embedded in the binary; it makes no
   request for it and sends nothing anywhere.

@@ -631,9 +631,8 @@ fn list_udp_macos_lsof() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
         if !name_field.contains("->") {
             continue; // Listening socket, skip
         }
-        let mut halves = name_field.splitn(2, "->");
-        let local_str = halves.next()?;
-        let remote_str = halves.next()?;
+        // First-occurrence split, same as the old `splitn(2, "->")` pair.
+        let (local_str, remote_str) = name_field.split_once("->")?;
 
         let local_port = local_str.rsplit(':').next()?.parse::<u16>().ok()?;
         let colon = remote_str.rfind(':')?;
@@ -776,9 +775,8 @@ fn list_tcp_macos_lsof() -> Option<Vec<(Ipv4Addr, u16, u16, u32)>> {
         if !name_field.contains("->") {
             continue; // Listening socket, skip
         }
-        let mut halves = name_field.splitn(2, "->");
-        let local_str = halves.next()?;
-        let remote_str = halves.next()?;
+        // Same first-occurrence split as the UDP reader above (`manual_split_once`).
+        let (local_str, remote_str) = name_field.split_once("->")?;
 
         let local_port = local_str.rsplit(':').next()?.parse::<u16>().ok()?;
         let colon = remote_str.rfind(':')?;

@@ -12,7 +12,10 @@ name = "lightspeed-gui"
 path = "src/main.rs"
 
 [dependencies]
-lightspeed-client = { path = "../client", features = ["quic", "windivert-redirect"] }
+# `server-location` + `geo-ip`: the GUI is the surface that shows the location
+# ladder, so it enables both (one meaning each; the CLI's default build enables
+# neither). WF-081 W2-3b S5a.
+lightspeed-client = { path = "../client", features = ["quic", "windivert-redirect", "server-location", "geo-ip"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -69,7 +72,7 @@ windivert = { version = "0.7.0-beta.4", optional = true, features = ["vendored"]
 # Override lightspeed-client features on Windows
 [target.'cfg(windows)'.dependencies.lightspeed-client]
 path = "../client"
-features = ["quic", "windivert-redirect"]
+features = ["quic", "windivert-redirect", "server-location", "geo-ip"]
 
 # cargo-dist: the GUI has no macOS platform module, so restrict its release
 # targets to Linux and Windows (the client + proxy still ship for macOS).

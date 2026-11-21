@@ -41,6 +41,10 @@ use std::sync::Arc;
 use clap::Parser;
 use tracing::{error, info, warn};
 
+// The shared application DTOs (WF-081 core boundary). The CLI fills the same
+// fact shapes the GUI renders; it does not define its own.
+use lightspeed_client::app::dto as app_dto;
+
 use telemetry::TelemetryCollector;
 
 use cli::{parse_proxy_addr, Cli};
@@ -308,6 +312,76 @@ fn cli_mtu_cap(cli: &Cli, config: &config::Config) -> usize {
     )
 }
 
+/// The build/host capability facts, in the shared W2-4 shape (`CapabilityFacts`).
+///
+/// One fact set for `--status` (and the future parity report); the GUI fills the
+/// same DTO from its own platform layer. The features are the compile-time feature
+/// list in the order this binary has always printed them (the golden pins the
+/// rendered value; the DTO keeps a stable order rather than a sorted one so the
+/// shipped text does not change).
+fn capability_facts() -> app_dto::CapabilityFacts {
+    let mut features = Vec::new();
+    if cfg!(feature = "ml") {
+        features.push("ml");
+    }
+    if cfg!(feature = "quic") {
+        features.push("quic");
+    }
+    if cfg!(feature = "pcap-capture") {
+        features.push("pcap-capture");
+    }
+    if cfg!(feature = "windivert-redirect") {
+        features.push("windivert-redirect");
+    }
+    app_dto::CapabilityFacts {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        features,
+        interceptor_platform: None,
+        interceptor_available: None,
+        elevated: cli_is_elevated(),
+    }
+}
+
+/// The shared per-user config both front ends read (WF-081 W2-3b S6c, Q10).
+///
+/// Canonical `lightspeed.toml` wins, the legacy GUI `config.toml` fills keys it
+/// does not set (read-only import), and a missing pair is the defaults. `None`
+/// only when the host has no per-user config directory at all.
+fn shared_app_config() -> Option<lightspeed_client::app::config::AppConfig> {
+    let dir = lightspeed_client::paths::config_dir()?;
+    Some(lightspeed_client::app::config::load_unified_in_dir(&dir).config)
+}
+
+/// Whether this process holds the authority the interceptor needs.
+///
+/// The CLI has no elevation API of its own: on Linux/macOS it is uid 0, and the
+/// Windows CLI is started elevated by the user for interceptor modes (there is no
+/// medium-integrity token probe here, so it reports `false` and `--check` prints
+/// the actionable line).
+fn cli_is_elevated() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("id")
+            .args(["-u"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+            })
+            .map(|uid| uid == 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 /// Spawn the continuous re-routing loop when multiple relays are configured.
 fn start_continuous_rerouting(candidates: &[ProbeCandidate], config: &config::Config, cli: &Cli) {
     if candidates.len() <= 1 {
@@ -398,10 +472,26 @@ async fn main() -> anyhow::Result<()> {
     info!("⚡ LightSpeed v{} starting", env!("CARGO_PKG_VERSION"));
 
     // ── Configuration ─────────────────────────────────────────────
-    let config = config::Config::load(&cli.config).unwrap_or_else(|e| {
-        warn!("Config not found ({}), using defaults", e);
-        config::Config::default()
-    });
+    //
+    // S6c (owner Q10): when `--config` does not point at a readable CLI config,
+    // the shared per-user `AppConfig` supplies the settings both front ends own —
+    // telemetry consent and the effective path-MTU cap. That shared config is the
+    // canonical `lightspeed.toml` in the per-OS config directory, with the
+    // legacy GUI `config.toml` imported read-only to fill unset keys. The CLI's
+    // own config file always wins when it exists, so `--config` semantics are
+    // unchanged; the legacy file is never written or deleted here.
+    let config = match config::Config::load(&cli.config) {
+        Ok(config) => config,
+        Err(e) => {
+            warn!("Config not found ({}), using defaults", e);
+            let mut defaults = config::Config::default();
+            if let Some(shared) = shared_app_config() {
+                defaults.general.telemetry = shared.share_latency_stats;
+                defaults.tunnel.mtu = shared.tunnel_mtu;
+            }
+            defaults
+        }
+    };
 
     // ── User profiles (custom games + saved servers) ────────────
     //
@@ -730,41 +820,34 @@ async fn main() -> anyhow::Result<()> {
 
     // ── --status ─────────────────────────────────────────────────
     if cli.status {
+        // S6b: the header facts come from the shared `CapabilityFacts` DTO (one
+        // shape with the GUI's Components view for W2-4 parity), not from a
+        // second hand-assembled list. The rendered text is unchanged.
+        let mut capabilities = capability_facts();
         info!("📊 LightSpeed System Status");
-        info!("   Version:    v{}", env!("CARGO_PKG_VERSION"));
-        info!("   OS:         {}", std::env::consts::OS);
-        info!("   Arch:       {}", std::env::consts::ARCH);
-        {
-            let mut feats = Vec::new();
-            if cfg!(feature = "ml") {
-                feats.push("ml");
-            }
-            if cfg!(feature = "quic") {
-                feats.push("quic");
-            }
-            if cfg!(feature = "pcap-capture") {
-                feats.push("pcap-capture");
-            }
-            if cfg!(feature = "windivert-redirect") {
-                feats.push("windivert-redirect");
-            }
-            let fstr = if feats.is_empty() {
-                String::from("none")
+        info!("   Version:    v{}", capabilities.version);
+        info!("   OS:         {}", capabilities.os);
+        info!("   Arch:       {}", capabilities.arch);
+        info!(
+            "   Features:   {}",
+            if capabilities.features.is_empty() {
+                "none".to_string()
             } else {
-                feats.join(" ")
-            };
-            info!("   Features:   {}", fstr);
-        }
+                capabilities.features.join(" ")
+            }
+        );
         info!("");
 
         // Interceptor
         let interceptor = lightspeed_client::interceptor::create_interceptor();
         let platform = interceptor.platform_name();
         let avail = interceptor.check_availability();
+        capabilities.interceptor_platform = Some(platform);
+        capabilities.interceptor_available = Some(avail.is_ok());
         info!(
             "   Interceptor: {} ({})",
-            platform,
-            if avail.is_ok() {
+            capabilities.interceptor_platform.unwrap_or("unknown"),
+            if capabilities.interceptor_available == Some(true) {
                 "✅ available"
             } else {
                 "❌ unavailable"
@@ -776,23 +859,10 @@ async fn main() -> anyhow::Result<()> {
         info!("");
 
         // Root
-        #[cfg(target_os = "linux")]
-        {
-            let is_root = std::process::Command::new("id")
-                .args(["-u"])
-                .output()
-                .ok()
-                .and_then(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .trim()
-                        .parse::<u32>()
-                        .ok()
-                })
-                .map(|uid| uid == 0)
-                .unwrap_or(false);
+        if cfg!(target_os = "linux") {
             info!(
                 "   Root:        {}",
-                if is_root {
+                if cli_is_elevated() {
                     "✅ yes"
                 } else {
                     "⚠️  no (needed for nftables)"
@@ -882,21 +952,8 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // 2. Root / admin check
-        #[cfg(target_os = "linux")]
-        {
-            let is_root = std::process::Command::new("id")
-                .args(["-u"])
-                .output()
-                .ok()
-                .and_then(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .trim()
-                        .parse::<u32>()
-                        .ok()
-                })
-                .map(|uid| uid == 0)
-                .unwrap_or(false);
-            if is_root {
+        if cfg!(target_os = "linux") {
+            if cli_is_elevated() {
                 info!("   ✅ Running as root");
             } else {
                 warn!("   ⚠️  Not running as root - interceptor needs sudo");
@@ -972,6 +1029,21 @@ async fn main() -> anyhow::Result<()> {
             }
         } else {
             info!("   ℹ️  No --proxy specified - skipping proxy check");
+        }
+
+        // 5. Engine-backed session root (S6b): every session mode starts from
+        // this root, so `--check` proves it can be constructed on this host and
+        // that it starts in the clean disconnected state. Silent on success so
+        // the shipped `--check` output is unchanged; a regression fails the check.
+        {
+            let root = lightspeed_client::app::runtime::SessionCore::build(
+                tokio::runtime::Handle::current(),
+                cli_mtu_cap(&cli, &config),
+            );
+            if !root.is_clean_start() {
+                warn!("   ❌ Session engine: constructed in a non-clean state");
+                all_ok = false;
+            }
         }
 
         if all_ok {

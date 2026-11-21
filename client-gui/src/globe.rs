@@ -13,6 +13,8 @@
 
 use eframe::egui::{self, Color32, Pos2, Stroke};
 
+use crate::design::{accent, bg_0, grid, map_land, on_accent, R_CONTROL};
+
 /// Latitude/longitude in degrees.
 pub type LatLon = (f32, f32);
 
@@ -68,10 +70,10 @@ pub fn draw_map(
     let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(width, height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
-    let bg = Color32::from_rgb(0x11, 0x11, 0x18);
-    let grid = Color32::from_rgb(0x22, 0x22, 0x30);
-    let land = Color32::from_rgb(0x4A, 0x4A, 0x72);
-    painter.rect_filled(rect, egui::CornerRadius::same(6), bg);
+    // Every map colour is a design token (`design-system` §1.4): the surface is
+    // the deepest plane, the graticule `grid`, the silhouette `map_land`, and
+    // the route arc `accent`. The five inline literals are gone.
+    painter.rect_filled(rect, egui::CornerRadius::same(R_CONTROL), bg_0);
 
     // Equirectangular: lon -180..180 across, lat 90..-90 down.
     let at = |(lat, lon): LatLon| -> Pos2 {
@@ -98,7 +100,7 @@ pub fn draw_map(
 
     // The same coastline blob the globe walks, bounds-checked the same way.
     if let Some(polys) = u16_at(LAND, 0) {
-        let stroke = Stroke::new(1.0, land);
+        let stroke = Stroke::new(1.0, map_land);
         let mut o = 2usize;
         for _ in 0..polys {
             let Some(count) = u16_at(LAND, o) else {
@@ -120,21 +122,20 @@ pub fn draw_map(
     }
 
     if let Some((from, to)) = route {
-        painter.line_segment(
-            [at(from), at(to)],
-            Stroke::new(1.5, Color32::from_rgb(0x6C, 0x5C, 0xE7)),
-        );
+        painter.line_segment([at(from), at(to)], Stroke::new(1.5, accent));
     }
 
     for (i, marker) in markers.iter().enumerate() {
         let p = at(marker.at);
         // A white core with a coloured ring reads against the dark land and the
         // graticule; a flat coloured dot did not at this size.
-        painter.circle_filled(p, 3.5, Color32::WHITE);
+        painter.circle_filled(p, 3.5, on_accent);
         painter.circle_stroke(p, 5.5, Stroke::new(1.5, marker.colour));
         // No permanent label at 320 px - they overlapped into noise - but the
         // name is one hover away, and the ledger under the map spells it out.
-        let hit = egui::Rect::from_center_size(p, egui::Vec2::splat(14.0));
+        // The hit area is a 24×24 pointer target (WCAG 2.5.8), not the 14 px
+        // dot: a marker is the only map affordance a motor-impaired user has.
+        let hit = egui::Rect::from_center_size(p, egui::Vec2::splat(crate::design::HIT_MIN));
         ui.interact(
             hit,
             egui::Id::unique(("map-marker", i)),

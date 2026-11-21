@@ -39,7 +39,7 @@
 //
 // Precedence: longest prefix wins; at equal length the earlier source in
 // infra/geo/geofeeds/sources.json wins. Ranges never overlap.
-// Destination: client-gui/src/server_geofeed_tables.rs (committed, display-only).
+// Destination: client/src/app/location/server_geofeed_tables.rs (committed, display-only).
 // Generated: 2026-11-20T06:22:37Z
 // Blob: server-geofeed.bin (119480 bytes, sha256 c3ee6b8c911515dfe04487f623db025edca6a2ef378f3d38d0ab5a553bae89db)
 // Record format: start u32 LE | end u32 LE | place-index u16 LE (10 bytes)

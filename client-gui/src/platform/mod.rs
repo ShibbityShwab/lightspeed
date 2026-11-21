@@ -11,6 +11,47 @@ use eframe::egui;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+mod animations;
+mod autostart;
+mod elevation;
+mod shortcuts;
+mod updater;
+// The tray menu is Windows-only until the macOS/Linux tray backends stop being
+// stubs; the mapping itself is pure, and compiles out cleanly elsewhere.
+#[cfg(windows)]
+mod tray_menu;
+
+pub use animations::Animations;
+pub use autostart::AutostartPlan;
+pub use elevation::{ElevationAttempt, ElevationPhase};
+pub use shortcuts::{Shortcut, ShortcutAction};
+pub use updater::InstallChannel;
+
+/// The canonical binding for `action` on this OS (spec W2-4 (d)).
+///
+/// The one lookup the tray menu and the startup trace share, so a binding can
+/// never be re-spelled at a call site.
+pub fn shortcut_binding(action: ShortcutAction) -> Option<&'static Shortcut> {
+    shortcuts::binding(shortcuts::current_os(), action)
+}
+
+/// The updater channel for this process (spec W2-4 (g)).
+///
+/// `receipt_present` is whether cargo-dist's install receipt was found;
+/// `install_asset` whether the Windows zip + checksum pair resolved. A channel
+/// that cannot act names the copy that says what to do instead, so the update
+/// sheet can never draw a dead install button.
+pub fn update_channel(receipt_present: bool, install_asset: bool) -> InstallChannel {
+    updater::channel(shortcuts::current_os(), receipt_present, install_asset)
+}
+
+/// The result line for an available update on `channel` (no dead button: the
+/// install channel returns the plain result, every other channel appends its
+/// instruction). Catalogued copy.
+pub fn update_available_line(channel: InstallChannel) -> String {
+    updater::available_line(channel)
+}
+
 /// Shared flag the tray sets when the user picks "Quit"; the frame loop turns
 /// it into a clean process exit.
 pub type QuitFlag = Arc<AtomicBool>;
@@ -39,7 +80,14 @@ pub(crate) fn silent_command(program: &str) -> std::process::Command {
 ///
 /// Show-window and Quit actions are handled inside the tray (they only need
 /// the `egui::Context` and the shared [`QuitFlag`) and never appear here.
-#[allow(dead_code)] // Connect/Disconnect only constructed on Windows (real tray)
+///
+/// **Platform exemption (documented in W2-4b):** the two variants are
+/// constructed only by the Windows tray backend; the Linux and macOS stub trays
+/// never return them, so a non-Windows build would warn that the variants are
+/// never constructed. The enum itself is used on every target (it is the
+/// `poll_events` return type and `app.rs` matches both arms), so this is one
+/// named platform exemption, not a blanket allowance.
+#[allow(dead_code)] // Windows tray constructs Connect/Disconnect; the stub trays never do
 #[derive(Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Connect,
@@ -106,7 +154,48 @@ pub trait Platform {
     }
 
     /// Relaunch elevated, or do nothing when already elevated.
+    ///
+    /// The low-level primitive: it spawns the platform's elevation request and,
+    /// on the legacy backends, exits this process. `begin_elevation` wraps it
+    /// with the handshake that fixes the C8 "exits before UAC resolves" defect.
     fn relaunch_as_admin();
+
+    /// What the OS says about motion (WCAG 2.2.2; spec W2-4 (i)).
+    ///
+    /// Every backend answers explicitly: Windows probes
+    /// `SPI_GETCLIENTAREAANIMATION`, macOS and Linux return `Unknown` because
+    /// no source is wired (named gaps). Only an explicit `On` may animate.
+    fn animations() -> Animations;
+
+    /// The canonical shortcut keymap for this OS (spec W2-4 (d)).
+    fn shortcuts() -> &'static [Shortcut] {
+        shortcuts::keymap(shortcuts::current_os())
+    }
+
+    /// The opt-in autostart writer plan for this install, when the executable
+    /// path is knowable (spec W2-4 (f)).
+    ///
+    /// This returns data; writing it is the Settings toggle's job (shell work,
+    /// outside this wave). The startup trace prints it, so a broken plan shows
+    /// up in the log instead of only at login.
+    fn autostart_plan() -> Option<AutostartPlan> {
+        autostart::plan_for_current()
+    }
+
+    /// Begin the elevation handshake (spec §2.2 row 7 / C8; W2-4 (e)).
+    ///
+    /// The returned attempt is polled by the frame loop. The current process
+    /// may exit only once the phase is [`ElevationPhase::Confirmed`]: a declined
+    /// or failed prompt returns to ready with the window still open. The legacy
+    /// backends relaunch and exit inside [`Self::relaunch_as_admin`], so their
+    /// attempt is already resolved.
+    fn begin_elevation() -> ElevationAttempt {
+        if Self::is_admin() {
+            return ElevationAttempt::resolved(ElevationPhase::Ready);
+        }
+        Self::relaunch_as_admin();
+        ElevationAttempt::resolved(ElevationPhase::Confirmed)
+    }
 }
 
 // ── Platform selection ──────────────────────────────────────────────────

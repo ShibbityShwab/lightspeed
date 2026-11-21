@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::platform::Animations;
+
 /// What the custom-game editor asked for this frame.
 ///
 /// The sheet cannot mutate the app while the body holds a `&mut` on the draft,
@@ -350,37 +352,26 @@ pub(super) fn invalid_text_field(
     response
 }
 
-/// A config row: label left at the wide breakpoint, label above at narrow, so
-/// the control always keeps a full-width tap target when the window is snapped
-/// beside a game.
+/// A config row: the label always sits above its control (mobile-only 320 px;
+/// the retired wide breakpoint's side-by-side label column is gone), so the
+/// control always keeps the full 288 px tap width.
 pub(super) fn field_row(
     ui: &mut egui::Ui,
-    narrow: bool,
+    _narrow: bool,
     label: &str,
     add_field: impl FnOnce(&mut egui::Ui),
 ) {
-    if narrow {
-        ui.label(
-            egui::RichText::new(label)
-                .size(LABEL)
-                .family(semibold())
-                .color(text_1),
-        );
-        ui.add_space(S1);
-        add_field(ui);
-    } else {
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), CONTROL_H),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                field_label(ui, LEDGER_LABEL_W, label);
-                add_field(ui);
-            },
-        );
-    }
+    ui.label(
+        egui::RichText::new(label)
+            .size(LABEL)
+            .family(semibold())
+            .color(text_1),
+    );
+    ui.add_space(S1);
+    add_field(ui);
 }
 
-/// A section heading in the config region or a sheet body.
+/// Section heading in the config region or a sheet body.
 /// A 1px `border-1` hairline: the design's only divider between sections.
 pub(super) fn hairline(ui: &mut egui::Ui) {
     let width = ui.available_width();
@@ -431,54 +422,100 @@ pub(super) fn sheet_bounds(ctx: &egui::Context) -> (f32, f32) {
     (max_w, max_h)
 }
 
-/// A hand-painted RTT sparkline: the stroke is `text-3` and only the latest
-/// point carries the quality ramp, so latency colour never shares a channel
-/// with the state colour.
-pub(super) fn sparkline(ui: &mut egui::Ui, history: &[f64]) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), PLOT_H),
-        egui::Sense::hover(),
-    );
-    if history.len() < 2 {
+/// The 2 px keyboard-focus ring, painted **outside** the control rect with a
+/// radius 2 px larger (`design-system` §6.1 rule 2). `accent_text` reads
+/// 7.51–8.11:1 on every plane it can sit on; focus never changes the fill.
+pub(super) fn focus_ring(ui: &egui::Ui, response: &egui::Response, radius: u8) {
+    if !response.has_focus() {
         return;
     }
-    let painter = ui.painter_at(rect);
-    let n = history.len();
-    let (min, max) = history
-        .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
-            (lo.min(v), hi.max(v))
-        });
-    let span = (max - min).max(1.0);
-    let pad = rect.shrink2(egui::vec2(1.0, 4.0));
-    let points: Vec<egui::Pos2> = history
-        .iter()
-        .enumerate()
-        .map(|(i, &v)| {
-            let x = pad.left() + (i as f32 / (n - 1) as f32) * pad.width();
-            let y = pad.bottom() - ((v - min) / span) as f32 * pad.height();
-            egui::pos2(x, y)
-        })
-        .collect();
-    painter.add(egui::Shape::line(
-        points.clone(),
-        egui::Stroke::new(1.5, text_3),
-    ));
-    if let (Some(&last), Some(&point)) = (history.last(), points.last()) {
-        painter.circle_filled(point, 2.5, rtt_colour(last));
-    }
+    let rect = response.rect.expand(FOCUS_RING_W);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(radius.saturating_add(2)),
+        egui::Stroke::new(FOCUS_RING_W, accent_text),
+        egui::StrokeKind::Outside,
+    );
 }
 
-/// Group a counter's thousands with commas, so `12412` reads `12,412`.
-pub(super) fn group_digits(n: u64) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(*b as char);
+/// One waiting indicator for every wait in the shell.
+///
+/// Motion policy: a spinner is shown **only** when the caller's
+/// [`Animations`] is explicitly `On`; `Off` and `Unknown` render the static
+/// text (the WCAG 2.2.2 pause/stop alternative). The signal is the platform's
+/// one OS read (W2-4 (i): Windows `SPI_GETCLIENTAREAANIMATION`, macOS/Linux
+/// `Unknown` gaps), held on the app for the process lifetime.
+pub(super) fn progress_indicator(ui: &mut egui::Ui, text: &str, animations: Animations) -> bool {
+    if animations.allows_motion() {
+        ui.add(egui::Spinner::new().size(16.0));
     }
-    out
+    ui.label(egui::RichText::new(text).size(BODY).color(text_2));
+    true
+}
+
+/// The notice / warning frame (`design-system` §6.10): a display-only line in
+/// the scrolling region, danger or warn tone, `R_INLINE` radius, S2 inner
+/// margin, up to the measured four lines. It is never a control.
+pub(super) fn notice_frame(
+    ui: &mut egui::Ui,
+    danger_toned: bool,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    let (fill, ink) = if danger_toned {
+        (danger_soft, danger)
+    } else {
+        // The warn-tone notice fill is the same 12 % tint pattern; the design
+        // system keeps `warn` as ink and the card plane under the tint.
+        (accent_soft, warn)
+    };
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, ink))
+        .corner_radius(egui::CornerRadius::same(R_INLINE))
+        .inner_margin(egui::Margin::same(S2 as i8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.scope(|ui| {
+                ui.visuals_mut().override_text_color = Some(ink);
+                add_contents(ui);
+            });
+        });
+}
+
+/// A focusable disclosure row: a painted marker (never a typed glyph — the
+/// bundled chains carry no `▸`) plus a label. Returns the new open state.
+///
+/// The row is a real interactive control: a 24 px target, a focus ring, and
+/// Space/Enter activation through egui's button semantics.
+pub(super) fn disclosure_row(ui: &mut egui::Ui, label: &str, open: &mut bool) -> bool {
+    let rect = ui.available_rect_before_wrap();
+    let row_h = HIT_MIN;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(rect.width(), row_h), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, *open, label));
+    if response.clicked() || response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        *open = !*open;
+    }
+    let ink = if response.hovered() { text_1 } else { text_2 };
+    let painter = ui.painter();
+    // Painted chevron: 6 px line + 4 px head, mirrored when open.
+    let cx = rect.left() + S2;
+    let cy = rect.center().y;
+    let dir = if *open { 1.0 } else { -1.0 };
+    painter.add(egui::Shape::line(
+        vec![
+            egui::pos2(cx - 3.0, cy - 2.0 * dir),
+            egui::pos2(cx + 3.0, cy + 2.0 * dir),
+        ],
+        egui::Stroke::new(1.5, ink),
+    ));
+    painter.text(
+        egui::pos2(rect.left() + S2 + S3, cy),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::new(BODY, semibold()),
+        ink,
+    );
+    focus_ring(ui, &response, R_INLINE);
+    response.clicked()
 }

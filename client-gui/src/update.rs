@@ -11,6 +11,13 @@
 
 use axoupdater::{AxoUpdater, Version};
 
+// The pure update rules moved to the shared core at WF-081 W2-3b S6; this
+// module keeps the network check and the GUI-facing status type. Re-exported so
+// `self_update` keeps naming the same type.
+pub use lightspeed_client::app::update::{compare_versions, ReleaseAsset};
+
+use crate::platform::InstallChannel;
+
 /// The outcome of an update availability check.
 pub struct UpdateStatus {
     /// The version this binary was compiled with (`CARGO_PKG_VERSION`).
@@ -24,66 +31,10 @@ pub struct UpdateStatus {
     /// `None` on the shell-installer path, on non-Windows, or when the release
     /// has no matching assets.
     pub installer: Option<ReleaseAsset>,
-}
-
-/// Download coordinates for the in-place (receipt-less) installer.
-#[derive(Clone)]
-pub struct ReleaseAsset {
-    /// The release tag, e.g. `v1.6.14`.
-    pub tag: String,
-    /// Browser download URL of the GUI zip.
-    pub zip_url: String,
-    /// Browser download URL of the zip's `.sha256` file.
-    pub sha256_url: String,
-}
-
-/// Returns whether `latest` is newer than `current`.
-///
-/// Semver-aware and tolerant of a leading `v`/`V` prefix. Numeric segments are
-/// compared as unsigned integers; non-numeric or empty segments are treated as
-/// `0`, so malformed input never panics and never compares greater than a
-/// well-formed version sharing the same numeric prefix.
-pub fn compare_versions(current: &str, latest: &str) -> bool {
-    let current_segments = numeric_segments(strip_v_prefix(current));
-    let latest_segments = numeric_segments(strip_v_prefix(latest));
-
-    let count = current_segments.len().max(latest_segments.len());
-    for index in 0..count {
-        let current_segment = current_segments.get(index).copied().unwrap_or(0);
-        let latest_segment = latest_segments.get(index).copied().unwrap_or(0);
-        match current_segment.cmp(&latest_segment) {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-    false
-}
-
-fn strip_v_prefix(version: &str) -> &str {
-    let version = version.trim();
-    if let Some(stripped) = version.strip_prefix('v') {
-        stripped
-    } else if let Some(stripped) = version.strip_prefix('V') {
-        stripped
-    } else {
-        version
-    }
-}
-
-fn numeric_segments(version: &str) -> Vec<u64> {
-    version.split('.').map(leading_number).collect()
-}
-
-fn leading_number(segment: &str) -> u64 {
-    let mut value: u64 = 0;
-    for ch in segment.chars() {
-        match ch.to_digit(10) {
-            Some(digit) => value = value.saturating_mul(10).saturating_add(u64::from(digit)),
-            None => break,
-        }
-    }
-    value
+    /// The install channel this check ran through (W2-4 (g)). It drives the
+    /// sheet's result line and its no-dead-button rule: only
+    /// `WindowsInPlace` offers the in-place Install action.
+    pub channel: InstallChannel,
 }
 
 /// Runs the asynchronous axoupdater check to completion on a throwaway
@@ -137,6 +88,9 @@ async fn check_for_update(current: String) -> Result<UpdateStatus, String> {
         latest,
         update_available,
         installer: None,
+        // The receipt path is the cargo-dist shell installer (any OS): the
+        // installer/updater owns the update, not this sheet.
+        channel: InstallChannel::ShellInstaller,
     })
 }
 
@@ -173,11 +127,17 @@ async fn github_check(current: String) -> Result<UpdateStatus, String> {
         None
     };
 
+    // The receipt-less fallback: Windows can offer the in-place installer when
+    // the release carries the zip + checksum; every other OS names the channel
+    // it must update through (W2-4 (g): never a dead install button).
+    let channel = crate::platform::update_channel(false, installer.is_some());
+
     Ok(UpdateStatus {
         current,
         latest: Some(tag),
         update_available,
         installer,
+        channel,
     })
 }
 
@@ -226,14 +186,19 @@ pub(crate) fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Maps the outcome of an update check to a single user-facing status line.
+/// Maps the outcome of an update check to the sheet's result line.
 ///
-/// Translated, so the caller sees the active language; `Err` surfaces the
-/// underlying failure (e.g. a missing install receipt on non-shell installs)
+/// Translated, so the caller sees the active language. On an update, the
+/// channel decides the copy: the Windows in-place install shows the plain
+/// "Update available" (the button below acts), while a channel with no install
+/// action appends its instruction, so the sheet never ends on an update the
+/// user cannot act on (W2-4 (g)). `Err` surfaces the underlying failure
 /// verbatim, since it is diagnostic text rather than copy.
 pub fn update_status_line(result: &Result<UpdateStatus, String>) -> String {
     match result {
-        Ok(status) if status.update_available => crate::i18n::t("update.available").into_owned(),
+        Ok(status) if status.update_available => {
+            crate::platform::update_available_line(status.channel)
+        }
         Ok(_) => crate::i18n::t("update.up_to_date").into_owned(),
         Err(err) => err.clone(),
     }
@@ -241,32 +206,57 @@ pub fn update_status_line(result: &Result<UpdateStatus, String>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_versions, update_status_line, UpdateStatus};
+    use super::{update_status_line, ReleaseAsset, UpdateStatus};
+    use crate::platform::InstallChannel;
+
+    fn status(
+        update_available: bool,
+        installer: Option<ReleaseAsset>,
+        channel: InstallChannel,
+    ) -> UpdateStatus {
+        UpdateStatus {
+            current: "1.0.0".into(),
+            latest: update_available.then(|| "1.1.0".to_string()),
+            update_available,
+            installer,
+            channel,
+        }
+    }
+
+    fn asset() -> ReleaseAsset {
+        ReleaseAsset {
+            tag: "v1.1.0".into(),
+            zip_url: "https://example.invalid/gui.zip".into(),
+            sha256_url: "https://example.invalid/gui.zip.sha256".into(),
+        }
+    }
 
     #[test]
-    fn update_status_line_reports_available() {
+    fn update_status_line_reports_available_on_the_install_channel() {
         let _guard = crate::i18n::test_lock();
         crate::i18n::set_language(None);
-        let status = UpdateStatus {
-            current: "1.0.0".into(),
-            latest: Some("1.1.0".into()),
-            update_available: true,
-            installer: None,
-        };
-        assert_eq!(update_status_line(&Ok(status)), "Update available");
+        let result = Ok(status(true, Some(asset()), InstallChannel::WindowsInPlace));
+        assert_eq!(update_status_line(&result), "Update available");
+    }
+
+    #[test]
+    fn an_instruction_channel_says_what_to_do() {
+        let _guard = crate::i18n::test_lock();
+        crate::i18n::set_language(None);
+        // The no-dead-button rule: a channel that cannot install must never
+        // leave the sheet on a bare "Update available" with no action.
+        let result = Ok(status(true, None, InstallChannel::BareTarball));
+        let line = update_status_line(&result);
+        assert!(line.starts_with("Update available — "), "{line}");
+        assert!(!line.contains("Install"), "{line}");
     }
 
     #[test]
     fn update_status_line_reports_up_to_date() {
         let _guard = crate::i18n::test_lock();
         crate::i18n::set_language(None);
-        let status = UpdateStatus {
-            current: "1.0.0".into(),
-            latest: None,
-            update_available: false,
-            installer: None,
-        };
-        assert_eq!(update_status_line(&Ok(status)), "You're up to date");
+        let result = Ok(status(false, None, InstallChannel::ShellInstaller));
+        assert_eq!(update_status_line(&result), "You're up to date");
     }
 
     #[test]
@@ -275,48 +265,5 @@ mod tests {
             update_status_line(&Err("no install receipt found".to_string())),
             "no install receipt found"
         );
-    }
-
-    #[test]
-    fn latest_patch_bump_is_newer() {
-        assert!(compare_versions("1.3.2", "v1.3.3"));
-    }
-
-    #[test]
-    fn equal_versions_are_not_newer() {
-        assert!(!compare_versions("1.3.2", "1.3.2"));
-    }
-
-    #[test]
-    fn older_latest_is_not_newer() {
-        assert!(!compare_versions("1.4.0", "1.3.9"));
-    }
-
-    #[test]
-    fn multi_digit_segment_compared_numerically() {
-        assert!(compare_versions("1.3.9", "1.3.10"));
-    }
-
-    #[test]
-    fn leading_v_prefix_is_tolerated() {
-        assert!(compare_versions("v1.3.2", "v1.3.3"));
-        assert!(compare_versions("1.3.2", "V1.3.3"));
-        assert!(!compare_versions("1.3.3", "V1.3.3"));
-    }
-
-    #[test]
-    fn missing_segments_compare_as_zero() {
-        assert!(compare_versions("1.3", "1.3.1"));
-        assert!(!compare_versions("1.3.1", "1.3"));
-    }
-
-    #[test]
-    fn malformed_and_empty_segments_do_not_panic() {
-        assert!(!compare_versions("", ""));
-        assert!(compare_versions("", "1.0.0"));
-        assert!(!compare_versions("abc", "abc"));
-        assert!(compare_versions("abc", "1.0.0"));
-        assert!(!compare_versions("1.3.2", "1.3.2-beta"));
-        assert!(!compare_versions("1..2", "1..2"));
     }
 }

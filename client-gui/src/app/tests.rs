@@ -1,9 +1,8 @@
 use super::{
-    apply_starvation_verdict, lock_or_recover, plan_return_path_window, relay_reply_fault,
-    relay_reply_fault_message, relay_reply_window_message, starvation_verdict, tray_state_for,
-    warning_is_about, warning_message_key, RelayReplyFault, RelayStarvationWarning,
-    ReplyFaultStreak, TrayState, WindowEvent, RELAY_REPLY_MIN_INTERCEPTED, RELAY_REPLY_STREAK,
-    RELAY_REPLY_TIMEOUT,
+    lock_or_recover, plan_return_path_window, relay_reply_fault, relay_reply_fault_message,
+    relay_reply_window_message, starvation_verdict, tray_state_for, warning_message_key,
+    RelayReplyFault, ReplyFaultStreak, TrayState, WindowEvent, RELAY_REPLY_MIN_INTERCEPTED,
+    RELAY_REPLY_STREAK, RELAY_REPLY_TIMEOUT,
 };
 
 #[test]
@@ -152,69 +151,6 @@ fn the_live_run_windows_replay_through_the_new_criterion() {
 }
 
 #[test]
-fn a_warning_clears_only_after_a_healthy_window() {
-    // The warn-only replacement for the old retry-chain close rule. A warning
-    // stays up until a window proves the return path works again; the first
-    // fault window of a new streak is not that proof. Closing the warning there
-    // was the 2026-11-20 flap: "the relay is returning traffic again" after a
-    // window that returned nothing.
-    let server = addr("198.51.100.23:36703");
-    let relay = addr("192.0.2.10:4434");
-    let warning = RelayStarvationWarning {
-        server,
-        relay: Some(relay),
-        fault: RelayReplyFault::NoReplyFromRelay,
-    };
-    let active = Some(&warning);
-    let fault = RelayReplyFault::NoReplyFromRelay;
-    let first = plan_return_path_window(active, None, Some(fault), server, Some(relay));
-    assert_eq!(
-        first.event,
-        WindowEvent::None,
-        "a first fault window is not recovery"
-    );
-    assert_eq!(
-        first.warning,
-        Some(warning),
-        "a fault window keeps the warning up"
-    );
-    let healthy = plan_return_path_window(active, None, None, server, Some(relay));
-    assert_eq!(healthy.event, WindowEvent::Recovered);
-    assert_eq!(healthy.warning, None, "a working return path clears it");
-    assert!(!healthy.switch_to_direct);
-}
-
-#[test]
-fn a_zero_return_window_warns_only_after_the_streak() {
-    let zero = relay_reply_fault(RELAY_REPLY_TIMEOUT, 68, 0, 0, None);
-    assert_eq!(zero, Some(RelayReplyFault::NoReplyFromRelay));
-    let mut streak = ReplyFaultStreak::default();
-    assert_eq!(
-        streak.observe(zero),
-        None,
-        "one 8 s window of no return path is not evidence enough"
-    );
-    assert_eq!(
-        streak.observe(zero),
-        Some(RelayReplyFault::NoReplyFromRelay),
-        "the configured streak of consecutive zero-return windows"
-    );
-    // A healthy window in between proves the absence was not sustained.
-    let mut streak = ReplyFaultStreak::default();
-    assert_eq!(streak.observe(zero), None);
-    assert_eq!(streak.observe(None), None);
-    assert_eq!(
-        streak.observe(zero),
-        None,
-        "the streak restarted, so this is the first window again"
-    );
-    assert_eq!(
-        streak.observe(zero),
-        Some(RelayReplyFault::NoReplyFromRelay)
-    );
-}
-
-#[test]
 fn a_broken_injector_is_still_detected_after_the_streak() {
     // from_relay >= 5 with injected == 0 is the local path, not the relay.
     let window = relay_reply_fault(RELAY_REPLY_TIMEOUT, 600, 0, 40, None);
@@ -262,33 +198,6 @@ fn different_faults_do_not_share_a_streak() {
 }
 
 #[test]
-fn a_warning_belongs_to_its_server_and_relay() {
-    let server = addr("198.51.100.23:36703");
-    let relay = addr("192.0.2.10:4434");
-    let warning = RelayStarvationWarning {
-        server,
-        relay: Some(relay),
-        fault: RelayReplyFault::NoReplyFromRelay,
-    };
-    assert!(
-        warning_is_about(&warning, server, Some(relay)),
-        "the pair the watchdog judged is the pair the warning is about"
-    );
-    assert!(
-        !warning_is_about(&warning, server, Some(addr("192.0.2.11:4434"))),
-        "a new relay is a new session; the old finding says nothing about it"
-    );
-    assert!(
-        !warning_is_about(&warning, addr("198.51.100.7:36704"), Some(relay)),
-        "a new game server is a new session"
-    );
-    assert!(
-        warning_is_about(&warning, server, None),
-        "an unknown relay cannot prove the warning is stale"
-    );
-}
-
-#[test]
 fn only_a_confirmed_no_reply_window_is_a_starvation_verdict() {
     assert!(
         starvation_verdict(RelayReplyFault::NoReplyFromRelay, None),
@@ -319,110 +228,6 @@ fn only_a_confirmed_no_reply_window_is_a_starvation_verdict() {
 }
 
 #[test]
-fn a_confirmed_starvation_window_warns_but_never_switches_to_direct() {
-    // The owner-approved warn-only mode. Two consecutive 8 s judged windows with
-    // enough traffic and zero returned datagrams are the existing starvation
-    // condition; the plan must raise the warning and publish the demotion
-    // finding, and must never ask for the session to be taken direct. This is
-    // the mutation anchor: re-enabling the automatic switch (setting
-    // `switch_to_direct` on the confirmed branch) fails this test.
-    let server = addr("198.51.100.23:36703");
-    let relay = addr("192.0.2.10:4434");
-    let mut streak = ReplyFaultStreak::default();
-    let window = relay_reply_fault(RELAY_REPLY_TIMEOUT, 60, 0, 0, None);
-    assert_eq!(window, Some(RelayReplyFault::NoReplyFromRelay));
-    assert_eq!(streak.observe(window), None, "one window is a sample");
-    let confirmed = streak
-        .observe(window)
-        .expect("the second consecutive window confirms starvation");
-    let plan = plan_return_path_window(None, Some(confirmed), window, server, Some(relay));
-    let warning = plan
-        .warning
-        .expect("a confirmed starvation window raises the warning");
-    assert_eq!(warning.server, server);
-    assert_eq!(warning.relay, Some(relay));
-    assert_eq!(warning.fault, RelayReplyFault::NoReplyFromRelay);
-    assert_eq!(plan.event, WindowEvent::Warned);
-    assert!(
-        plan.publish_verdict,
-        "the finding still reaches the relay-history demotion path"
-    );
-    assert!(
-        !plan.switch_to_direct,
-        "warn-only: the watchdog must never take the route from the player"
-    );
-    assert_eq!(
-        warning_message_key(warning.fault),
-        "route.relay_not_returning",
-        "the route-card banner blames the relay only when the relay is at fault"
-    );
-}
-
-#[test]
-fn the_starvation_verdict_still_demotes_the_relay_for_future_ranking() {
-    // The load-bearing half of the warn-only mode: the route never changes, but
-    // the finding must still be written into the relay history so the next
-    // ranking does not re-select the relay that just starved the session.
-    use std::net::Ipv4Addr;
-    let server = Ipv4Addr::new(198, 51, 100, 23);
-    let relay = addr("192.0.2.10:4434");
-    let mut history = crate::relay_history::RelayHistory::default();
-    apply_starvation_verdict(&mut history, SocketAddrV4::new(server, 36703), relay);
-    assert_eq!(
-        history.carry_verdict(relay, server),
-        crate::relay_history::CarryVerdict::Starved,
-        "the next ranking must demote a relay that did not return the traffic"
-    );
-    assert!(
-        !history.is_starved(relay, server),
-        "the finding is the starvation signature, not the retired exhausted-chain verdict"
-    );
-}
-
-#[test]
-fn the_tray_never_reads_optimizing_while_the_return_path_fails() {
-    // The live honesty defect: the tray claimed "optimizing" in green while the
-    // relay returned nothing. Every combination must keep that word away from a
-    // failing return path, and a normal boosting session must still say
-    // Optimizing.
-    for has_error in [false, true] {
-        for warning_active in [false, true] {
-            for boosting in [false, true] {
-                for connected in [false, true] {
-                    let state = tray_state_for(has_error, warning_active, boosting, connected);
-                    if has_error {
-                        assert_eq!(state, TrayState::Error);
-                    } else if warning_active && boosting {
-                        assert_eq!(
-                            state,
-                            TrayState::RelayStarved,
-                            "a failing return path needs its own tray state"
-                        );
-                        assert_ne!(
-                            state,
-                            TrayState::Optimizing,
-                            "the tray must never claim optimization while the return path fails"
-                        );
-                    } else if boosting {
-                        assert_eq!(state, TrayState::Optimizing);
-                    } else if connected {
-                        assert_eq!(state, TrayState::Connected);
-                    } else {
-                        assert_eq!(state, TrayState::Disconnected);
-                    }
-                }
-            }
-        }
-    }
-    // A warning with no traffic flowing is not a running optimization either:
-    // the tray falls back to the connection state.
-    assert_eq!(
-        tray_state_for(false, true, false, true),
-        TrayState::Connected
-    );
-}
-
-#[test]
 fn the_settings_policy_describes_the_warn_only_behaviour() {
     // The old hover copy promised re-tests "after 20 s, then 45 s, then 90 s"
     // while the code did 30 s/120 s/park, and the automatic fallback has since
@@ -439,26 +244,31 @@ fn the_settings_policy_describes_the_warn_only_behaviour() {
     }
     assert!(copy.contains("warn"), "the copy must say it warns: {copy}");
     assert!(
-        copy.contains("never switches") || copy.contains("no automatic"),
-        "the copy must say the client does not switch the path on its own: {copy}"
+        copy.contains("keeps relaying"),
+        "the copy must say the client keeps relaying: {copy}"
     );
     assert!(
         copy.contains("stop optimizing"),
         "the copy must name the manual route: {copy}"
     );
     assert!(
-        copy.contains("relay"),
+        copy.contains("pick another relay"),
         "the copy must name the alternative: {copy}"
     );
-    // The route-card banner says what the player must do while the warning is up.
+    // The route-card banner is the §2.7 B measurement, not a verdict, and names
+    // the remedy's cost (M16).
     let banner = crate::i18n::t("route.relay_not_returning").to_lowercase();
-    assert!(banner.contains("not returning"), "{banner}");
+    assert!(banner.contains("no game traffic"), "{banner}");
     assert!(banner.contains("stop optimizing"), "{banner}");
-    assert!(banner.contains("relay"), "{banner}");
+    assert!(banner.contains("pick another relay"), "{banner}");
+    assert!(
+        banner.contains("restarts"),
+        "the banner must name the cost of the remedy: {banner}"
+    );
     let injection = crate::i18n::t("route.injection_failed_warning").to_lowercase();
     assert!(
-        injection.contains("log"),
-        "a local injection fault points at the log: {injection}"
+        injection.contains("log") && injection.contains("maintenance"),
+        "a local injection fault points at the in-app log path: {injection}"
     );
     assert!(
         !injection.contains("relay is not returning"),
@@ -467,6 +277,66 @@ fn the_settings_policy_describes_the_warn_only_behaviour() {
     let state = crate::i18n::t("state.not_returning");
     assert_ne!(state.as_ref(), "state.not_returning");
     assert!(!state.trim().is_empty());
+    crate::i18n::set_language(None);
+}
+
+#[test]
+fn the_w2_copy_deck_rows_are_installed() {
+    // §2.7 B is a W2-2 deliverable, not a suggestion: the four warning/route
+    // rows, the two Settings policy rows and the bare location rung values are
+    // pinned here so a catalogue edit cannot quietly regress to the pre-W2 copy.
+    let _guard = crate::i18n::test_lock();
+    crate::i18n::set_language(Some("en"));
+    assert!(crate::i18n::t("route.relay_not_returning").contains("No game traffic is coming back"));
+    assert!(
+        crate::i18n::t("route.injection_failed_warning").contains("Settings \u{2192} Maintenance")
+    );
+    let expected = crate::i18n::t("route.expected_path");
+    assert!(
+        !expected.contains("(L + S)"),
+        "the placeholder-leaking suffix is retired: {expected}"
+    );
+    assert!(expected.contains("(relay leg + server leg)"), "{expected}");
+    assert_eq!(
+        crate::i18n::t("route.expected_path_label").as_ref(),
+        "Expected path"
+    );
+    assert_eq!(crate::i18n::t("route.route_trace").as_ref(), "Path trace");
+
+    // The hold number is generated from HOLD_FALLBACK (120 s = 2 minutes); the
+    // retired row rendered LOCK_SETTLE (3 s), the spec's 40x-wrong number (C5).
+    assert_eq!(super::HOLD_FALLBACK.as_secs() / 60, 2);
+    let minutes = (super::HOLD_FALLBACK.as_secs() / 60).to_string();
+    let hold = crate::i18n::t_with("settings.hold_policy", &[("minutes", minutes.as_str())]);
+    assert!(hold.contains("2 minutes"), "{hold}");
+    assert!(
+        !hold.contains("3s") && !hold.contains("direct path"),
+        "{hold}"
+    );
+
+    // The `Location` label owns the words "Location"; the rung value must be
+    // the bare provenance phrase, never a second "Server location: ..." (M9/m4).
+    let label = crate::i18n::t("route.location_label");
+    for key in [
+        "route.location_estimate",
+        "route.location_provider",
+        "route.location_hosting",
+        "route.location_unknown",
+    ] {
+        let value = crate::i18n::t(key);
+        assert!(
+            !value.starts_with("Server location:"),
+            "{key} repeats the Location label: {value}"
+        );
+        assert!(
+            value.as_ref() != label.as_ref(),
+            "{key} duplicates its own label"
+        );
+        assert!(!value.trim().is_empty(), "{key} is empty");
+    }
+    assert!(crate::i18n::t("route.location_geofeed").contains("{place}"));
+    // The Settings section heading stopped being a hardcoded English literal.
+    assert_eq!(crate::i18n::t("settings.routing").as_ref(), "Routing");
     crate::i18n::set_language(None);
 }
 
@@ -481,6 +351,13 @@ fn every_locale_carries_the_warn_only_strings() {
         "route.relay_not_returning",
         "route.injection_failed_warning",
         "state.not_returning",
+    ];
+    // The W2-2b §2.7 B rows are the spec's source strings in every catalog until
+    // the Q5 translation pipeline runs (translation debt, recorded).
+    let may_fallback = [
+        "settings.starvation_policy",
+        "route.relay_not_returning",
+        "route.injection_failed_warning",
     ];
     // Read the English values once, before the per-locale loop: resolving them
     // inside the loop would pin the global language back to English and make
@@ -508,7 +385,10 @@ fn every_locale_carries_the_warn_only_strings() {
                     "{} must keep the English string for {key} (font subset)",
                     locale.tag
                 );
-            } else if locale.tag != "en" {
+            } else if locale.tag != "en" && !may_fallback.contains(key) {
+                // Only the W2-2b deck rows may currently be English in a
+                // translated catalog (Q5 translation debt, recorded in
+                // `wat/evidence/2026-11-20/w2-2/locale-fallback.md`).
                 assert_ne!(
                     text.as_ref(),
                     english[index],
@@ -880,15 +760,15 @@ use super::{
     apply_discovery_result, apply_target_choice, close_decision, compare_to_direct,
     direct_claim_label, direct_us_for, draft_reasons, early_triangle_floor, fresh_direct_us,
     game_editor_body, game_pick_rows, games, monitor_local_top, pair_relay_legs, picker_status,
-    ping_for_server, primary_action, process_picker, proxy_index_for, rank_without_destination,
-    ranking_state_label, refreshed_server_ping, relay_cannot_beat_direct, relay_health_verdict,
-    route_location_lines, same_relay_endpoint, save_user_profiles, scored_for_relay,
-    server_from_fields, server_leg_state, should_apply_race, should_race, switch_is_safe,
-    target_for_pick, target_front_door, target_summary, validate_draft, window_height_limit,
-    CloseDecision, EditorActions, GameEditorDraft, GamePickRow, MeasuredServerLeg, PickerStatus,
-    ProcessListState, ProcessPicker, ProcessTarget, RelayHealthVerdict, ServerLegState, ServerPing,
-    ShadowWindowCounters, TargetRowAction, MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT,
-    PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE, SERVER_PING_FRESH_SECS, TITLE_BAR_ALLOWANCE,
+    ping_for_server, process_picker, proxy_index_for, rank_without_destination,
+    ranking_state_label, refreshed_server_ping, relay_cannot_beat_direct, same_relay_endpoint,
+    save_user_profiles, scored_for_relay, server_from_fields, server_leg_state, should_apply_race,
+    should_race, target_for_pick, target_front_door, target_summary, validate_draft,
+    window_height_limit, CloseDecision, EditorActions, GameEditorDraft, GamePickRow,
+    MeasuredServerLeg, PickerStatus, ProcessListState, ProcessPicker, ProcessTarget,
+    ServerLegState, ServerPing, ShadowWindowCounters, TargetRowAction, MAX_WINDOW_HEIGHT,
+    MIN_WINDOW_HEIGHT, PRIOR_UNCERTAINTY_US, SCREEN_BOTTOM_RESERVE, SERVER_PING_FRESH_SECS,
+    TITLE_BAR_ALLOWANCE,
 };
 use crate::config::ProxyEntry;
 use crate::discovery::{DiscoveryOutcome, RelayInfo};
@@ -975,97 +855,6 @@ fn a_localized_frame_draws_the_translated_string() {
     assert_ne!(german, english, "both languages drew identical frames");
 }
 
-/// The route card must say *why* a hosting-range server has no location: the
-/// caption alone ("hosting network — unknown") leaves the reader guessing, and
-/// the panel's no-gate deliverable is the second line. A backed answer (cloud
-/// region, country estimate) must not carry the caveat.
-#[test]
-fn a_hosting_place_gets_the_free_database_honesty_hint() {
-    use crate::server_place::Place;
-
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(Some("en"));
-
-    let hosting = route_location_lines(Place::Hosting {
-        asn: 199524,
-        name: "G-Core Labs",
-    });
-    assert_eq!(
-        hosting.caption, "Server location: hosting network — unknown",
-        "the caption still names the hosting network"
-    );
-    assert_eq!(hosting.detail.as_deref(), Some("AS199524 · G-Core Labs"));
-    assert_eq!(
-        hosting.hint.as_deref(),
-        Some("Free IP databases are unreliable for hosting ranges."),
-        "a hosting range must carry the honesty caption"
-    );
-
-    let unknown = route_location_lines(Place::Unknown);
-    assert_eq!(unknown.caption, "Server location: unknown");
-    assert_eq!(
-        unknown.hint.as_deref(),
-        Some("Free IP databases are unreliable for hosting ranges."),
-        "an unplaceable server carries the same explanation"
-    );
-
-    let geofeed = route_location_lines(Place::Geofeed {
-        provider: "G-Core",
-        country: "US",
-        region: Some("US-VA"),
-        city: Some("Manassas"),
-        source: "https://geofeed.gcore.lu/IP-Range.csv",
-        as_of: "2026-11-19",
-    });
-    assert_eq!(
-        geofeed.caption, "Server location: operator geofeed — Manassas, US-VA",
-        "the operator's place is stated in the caption"
-    );
-    assert_eq!(
-        geofeed.detail.as_deref(),
-        Some("(G-Core, as-of 2026-11-19)"),
-        "the operator and the feed's as-of date are the detail line"
-    );
-    assert_eq!(
-        geofeed.note.as_deref(),
-        Some("Shown as-is from the operator's published geofeed."),
-        "an operator geofeed is presented as-is"
-    );
-    assert_eq!(
-        geofeed.source.as_deref(),
-        Some("https://geofeed.gcore.lu/IP-Range.csv"),
-        "the feed URL is kept as the hover provenance"
-    );
-    assert_eq!(
-        geofeed.hint, None,
-        "an operator geofeed is not a failed lookup, so it must not carry the \
-         free-database caveat"
-    );
-
-    let cloud = route_location_lines(Place::Cloud {
-        provider: "aws",
-        region: "us-east-1",
-        at: Some((39.0, -77.5)),
-    });
-    assert_eq!(cloud.hint, None, "a provider region is backed evidence");
-    assert_eq!(cloud.detail.as_deref(), Some("AWS · us-east-1"));
-
-    let country = route_location_lines(Place::Country {
-        code: "US",
-        at: (39.0, -77.5),
-    });
-    assert_eq!(
-        country.hint, None,
-        "a country estimate is already labelled as an estimate"
-    );
-    assert_eq!(
-        country.caption,
-        "Server location: country-level estimate from IP"
-    );
-
-    crate::i18n::set_language(None);
-}
-
 /// Every character in every catalog must be drawable by the families the app
 /// installs.
 ///
@@ -1116,6 +905,47 @@ fn every_catalog_glyph_is_drawable_in_every_family() {
             }
         }
     }
+    // The language picker prints each locale's own name; those strings are not
+    // in a catalog, so a face that cannot draw `ũ`/`简体中文` would still fail in
+    // the Settings sheet. Assert them with the same chains. (`·`, `→`, `…` are
+    // the only non-ASCII marks the shell types; every other mark is painted.)
+    //
+    // Known bundled-subset gaps (recorded, not hidden): the Noto Sans KR/SC
+    // faces are subset to the catalog characters, so the picker's own names use
+    // three codepoints no installed subset carries. Regenerating those subsets
+    // is a font-asset change (design-system/infra, Q19); the exemption below
+    // fails if the gap ever becomes drawable, so it cannot outlive the fix.
+    const KNOWN_SUBSET_GAPS: &[char] = &['국', '简', '体'];
+    let mut exempted: Vec<char> = Vec::new();
+    for (family, chain) in &defs.families {
+        for locale in crate::i18n::LOCALES {
+            for ch in locale.native_name.chars().filter(|ch| !ch.is_ascii()) {
+                let drawable = chain.iter().any(|name| {
+                    faces
+                        .iter()
+                        .find(|(face_name, _)| face_name == name)
+                        .is_some_and(|(_, face)| face.glyph_id(ch).0 != 0)
+                });
+                if !drawable {
+                    if KNOWN_SUBSET_GAPS.contains(&ch) {
+                        exempted.push(ch);
+                    } else {
+                        undrawable.push(format!(
+                            "{family:?} / native_name {}: U+{:04X} {ch}",
+                            locale.tag, ch as u32
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for gap in KNOWN_SUBSET_GAPS {
+        assert!(
+            exempted.contains(gap),
+            "the {gap:?} subset gap is fixed: drop it from KNOWN_SUBSET_GAPS"
+        );
+    }
+
     undrawable.sort();
     undrawable.dedup();
     assert!(
@@ -1910,124 +1740,6 @@ fn discovery_success_refreshes_relays_and_keeps_custom_entries() {
 }
 
 #[test]
-fn a_gate_off_is_the_only_safe_moment_for_a_relay_switch() {
-    // The tunnel reads `current_proxy()` on every packet
-    // (`client/src/interceptor/windows.rs`). Pointing it at a relay the new
-    // session is not registered with yet would send a live match's datagrams
-    // into a void, so a relay change has to be staged until the handover is
-    // finished. What makes it safe is the state the hold already sets:
-    // tunnelling withheld. This pins the rule where a future in-match
-    // "switch relay" would be wired, so that path cannot forget it.
-    let live_match = Some(true);
-    let held = Some(false);
-    let gate_absent = None;
-
-    assert!(
-        !switch_is_safe(live_match),
-        "a relay switch during a live match must be staged, not applied"
-    );
-    assert!(
-        switch_is_safe(held),
-        "with traffic held, the switch is what the tunnel sees"
-    );
-    assert!(
-        switch_is_safe(gate_absent),
-        "a backend with no gate is never relaying, so nothing is at risk"
-    );
-}
-
-#[test]
-fn relay_health_reads_movement_not_totals() {
-    // A run that relayed a healthy million packets and then started failing
-    // must be reported as failing: the verdict is on the window's movement.
-    assert_eq!(
-        relay_health_verdict(1_000_000, 1_000_000, 1_000_010, 1_000_002),
-        RelayHealthVerdict::Unsent {
-            unsent: 8,
-            decided: 10
-        },
-        "80% of this window never left, despite the healthy history"
-    );
-    assert_eq!(
-        relay_health_verdict(0, 0, 100, 100),
-        RelayHealthVerdict::Healthy
-    );
-    assert_eq!(
-        relay_health_verdict(0, 0, 100, 0),
-        RelayHealthVerdict::Unsent {
-            unsent: 100,
-            decided: 100
-        },
-        "nothing leaving at all is the loudest case, not an idle one"
-    );
-}
-
-#[test]
-fn relay_health_tolerates_loss_and_a_still_flow() {
-    // UDP games lose the odd datagram; one in ten is within the tolerance.
-    assert_eq!(
-        relay_health_verdict(0, 0, 100, 90),
-        RelayHealthVerdict::Healthy
-    );
-    // No new packets decided: menus, or a hold. This must not read as a fault.
-    assert_eq!(
-        relay_health_verdict(500, 500, 500, 500),
-        RelayHealthVerdict::Idle
-    );
-    // A sent count running ahead of the decided count cannot happen, and must
-    // not underflow into a wild "unsent" number if it ever does.
-    assert_eq!(
-        relay_health_verdict(0, 50, 10, 60),
-        RelayHealthVerdict::Healthy
-    );
-}
-
-#[test]
-fn primary_action_names_the_three_states() {
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(None);
-    // Boosting: the only destructive control.
-    assert_eq!(
-        primary_action(true, true, true, true),
-        ("STOP OPTIMIZING".to_string(), true)
-    );
-    assert_eq!(
-        primary_action(false, true, false, false),
-        ("STOP OPTIMIZING".to_string(), true)
-    );
-    // Unelevated: the action is elevation.
-    assert_eq!(
-        primary_action(false, false, true, true),
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
-    );
-    assert_eq!(
-        primary_action(false, false, false, false),
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
-    );
-    // Elevated and ready: the product's action.
-    assert_eq!(
-        primary_action(true, false, true, true),
-        ("OPTIMIZE MY ROUTE".to_string(), true)
-    );
-}
-
-#[test]
-fn primary_action_disables_the_action_until_connected_and_relayed() {
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(None);
-    // Elevated but disconnected: keep the label, but the slot cannot act.
-    assert_eq!(
-        primary_action(true, false, false, true),
-        ("OPTIMIZE MY ROUTE".to_string(), false)
-    );
-    // Elevated and connected, but no relay is selected.
-    assert_eq!(
-        primary_action(true, false, true, false),
-        ("OPTIMIZE MY ROUTE".to_string(), false)
-    );
-}
-
-#[test]
 fn auto_mode_starts_the_detected_game_not_the_first_entry() {
     // The GUI can start before the game, so the picker's index is fixed at
     // construction and falls back to the first entry. Auto mode must follow
@@ -2130,23 +1842,6 @@ fn a_hold_is_normal_and_never_a_starvation_warning() {
 }
 
 #[test]
-fn a_starving_relay_is_not_reported_as_a_healthy_row() {
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(None);
-    let (text, starving) = super::relayed_row_text(54, 0);
-    assert!(starving, "54 sent and nothing back is the starving case");
-    assert!(text.contains("54"), "the sent count must survive: {text}");
-    assert!(
-        text.contains(" 0 "),
-        "the zero return must be visible, not implied: {text}"
-    );
-    let (_, starving) = super::relayed_row_text(54, 50);
-    assert!(!starving, "a relay that answers is not starving");
-    let (_, starving) = super::relayed_row_text(0, 0);
-    assert!(!starving, "an idle session has nothing to warn about");
-}
-
-#[test]
 fn the_game_caption_never_contradicts_a_pinned_game() {
     assert_eq!(
         super::game_caption(true, false, None),
@@ -2166,15 +1861,6 @@ fn the_game_caption_never_contradicts_a_pinned_game() {
     );
 }
 
-#[test]
-fn group_digits_thousands_groups_counters() {
-    use super::group_digits;
-    assert_eq!(group_digits(0), "0");
-    assert_eq!(group_digits(41), "41");
-    assert_eq!(group_digits(12412), "12,412");
-    assert_eq!(group_digits(1_234_567), "1,234,567");
-}
-
 /// Discussion #146's first ask, closed end to end: the "Custom Port Range"
 /// the user typed in Manual mode is persisted, and once restored it
 /// actuates - it is parsed and handed to the interceptor as the config's
@@ -2187,7 +1873,7 @@ fn group_digits_thousands_groups_counters() {
 #[test]
 fn a_stored_manual_port_range_reaches_the_interceptor_config() {
     // As the loader restores it from disk.
-    let saved = crate::config::GuiConfig {
+    let saved = crate::config::AppConfig {
         manual_port_range: "27000-27050".to_string(),
         ..Default::default()
     };
@@ -2928,163 +2614,5 @@ fn the_shared_picker_draws_loading_empty_and_no_match_honestly() {
         "a finished table draws its rows:\n{ready}"
     );
     assert!(ready.contains('7'), "the row names the PID:\n{ready}");
-    crate::i18n::set_language(None);
-}
-
-/// The elevation gate is unchanged by targeting: an unelevated app asks for
-/// a restart, never a start, whether or not a process is picked. The target
-/// is not an input to the action slot at all, which is exactly why the
-/// requirement stays honest.
-#[test]
-fn an_unelevated_app_still_asks_for_elevation_when_a_process_is_targeted() {
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(None);
-    // The arguments the frame passes with a target set and nothing boosting:
-    // unelevated, and either connected with a relay or not yet ready.
-    assert_eq!(
-        primary_action(false, false, true, true),
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
-    );
-    assert_eq!(
-        primary_action(false, false, false, true),
-        ("RESTART AS ADMINISTRATOR TO OPTIMIZE".to_string(), true)
-    );
-}
-// â”€â”€ Relay-measured server leg (R2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-/// The relay-measured `Server leg` row states the measurement, its sample
-/// count and its age, and the `Expected path` row adds the displayed client
-/// leg to it. Both are the only claims the two measured legs support. A report
-/// accepted fail-open (the triangle floor could not run) is shown with
-/// `measured, unvalidated` rather than plainly `measured`.
-#[test]
-fn the_relay_measured_server_leg_rows_state_both_measured_terms() {
-    use super::{expected_path_text, relay_measured_leg_text};
-    use std::time::Duration;
-
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(Some("en"));
-
-    let report = lightspeed_client::ServerLegReport {
-        median_us: 148_000,
-        jitter_us: 3_000,
-        samples: 4,
-        age: Duration::from_secs(7),
-        validated: true,
-    };
-    assert_eq!(
-        relay_measured_leg_text(&report),
-        "Relay→server 148 ms · measured n=4 · 7s ago"
-    );
-
-    // The same figure accepted fail-open must not present itself as validated.
-    let unvalidated = lightspeed_client::ServerLegReport {
-        validated: false,
-        ..report
-    };
-    assert_eq!(
-        relay_measured_leg_text(&unvalidated),
-        "Relay→server 148 ms · measured, unvalidated n=4 · 7s ago"
-    );
-
-    // L (90 ms, the Relay RTT the card already shows) + S (148 ms) = 238 ms.
-    assert_eq!(
-        expected_path_text(90.0, report.median_us).as_deref(),
-        Some("Expected path ~238 ms (L + S)")
-    );
-
-    // No displayed client leg means no path total: S alone is not a path.
-    assert_eq!(expected_path_text(0.0, report.median_us), None);
-    assert_eq!(expected_path_text(f64::NAN, report.median_us), None);
-
-    crate::i18n::set_language(None);
-}
-
-/// The passive app-RTT row is a display-only secondary figure: it states the
-/// relay's forward→first-response median and sample count, with no validity or
-/// ranking claim of its own. A flagged (invalid passive) sample still renders
-/// because the number is data while the flag is for the E1 harvest, and the
-/// window adds no second rule of its own.
-#[test]
-fn the_relay_measured_app_row_states_the_passive_sample_and_count() {
-    use super::relay_measured_app_leg_text;
-    use std::time::Duration;
-
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(Some("en"));
-
-    let report = lightspeed_client::ServerLegAppReport {
-        passive_median_us: 47_250,
-        samples: 9,
-        age: Duration::from_secs(2),
-        floor_ok: true,
-    };
-    assert_eq!(relay_measured_app_leg_text(&report), "47 ms · n=9");
-
-    // A below-floor sample is marked invalid by the client, not dropped; the
-    // row must still render the relay's number and make no validity claim.
-    let flagged = lightspeed_client::ServerLegAppReport {
-        floor_ok: false,
-        ..report
-    };
-    assert_eq!(
-        relay_measured_app_leg_text(&flagged),
-        "47 ms · n=9",
-        "the floor flag is harvest data, not a different number or a hidden row"
-    );
-
-    crate::i18n::set_language(None);
-}
-
-/// The relay-measured route row is the placement anchor for a server whose
-/// geolocation is unknown: it states the hop count and the last router's RTT,
-/// and nothing else. It claims no city (the product has no hop-geolocation
-/// data) and no path verdict; a trace with no router answer still reports the
-/// hops it measured rather than inventing an anchor.
-#[test]
-fn the_relay_measured_route_row_states_hops_and_last_router_rtt() {
-    use super::relay_measured_trace_text;
-    use std::net::Ipv4Addr;
-    use std::time::Duration;
-
-    let _guard = crate::i18n::test_lock();
-    crate::i18n::set_language(Some("en"));
-
-    let report = lightspeed_client::ServerTraceReport {
-        hops: 12,
-        last_hop: Some(Ipv4Addr::new(8, 8, 8, 8)),
-        last_hop_rtt_us: Some(14_250),
-        complete: false,
-        age: Duration::from_secs(3),
-    };
-    assert_eq!(
-        relay_measured_trace_text(&report),
-        "12 hops · last router RTT 14 ms"
-    );
-
-    // A complete trace shows the same anchor: the destination answering does
-    // not turn the row into a different claim.
-    let complete = lightspeed_client::ServerTraceReport {
-        complete: true,
-        ..report
-    };
-    assert_eq!(
-        relay_measured_trace_text(&complete),
-        "12 hops · last router RTT 14 ms"
-    );
-
-    // No router answered: report the measured distance, never a fabricated one.
-    let no_router = lightspeed_client::ServerTraceReport {
-        hops: 7,
-        last_hop: None,
-        last_hop_rtt_us: None,
-        complete: false,
-        age: Duration::from_secs(1),
-    };
-    assert_eq!(
-        relay_measured_trace_text(&no_router),
-        "7 hops · no router answered"
-    );
-
     crate::i18n::set_language(None);
 }

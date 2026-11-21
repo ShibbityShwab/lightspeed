@@ -1,12 +1,16 @@
 //! The hosting-network classifier the client's server detector consults.
 //!
-//! Server detection runs inside `lightspeed-client` (the WinDivert data plane),
-//! which has no copy of this repository's shipped location indexes. Those live
-//! here, in the GUI. So rather than duplicating R1 data into the client, the app
-//! installs one function pointer at startup
-//! ([`lightspeed_client::interceptor::install_server_provider_lookup`]) and the
-//! detector calls it when it needs to know whether a candidate game server is on
-//! the *same hosting network* as the server it already pinned.
+//! Server detection runs inside `lightspeed-client` (the WinDivert data plane).
+//! The shipped location indexes now live in this crate too, behind the
+//! `server-location` feature (WF-081 W2-3b S5a moved them here from the GUI).
+//! The detector still takes the classifier through one process-wide seam
+//! ([`crate::interceptor::install_server_provider_lookup`]) rather than calling
+//! the ladder directly: detection stays usable in builds that do not compile the
+//! location data (the CLI's default build), where the seam simply stays empty.
+//!
+//! [`install_provider_classifier`] is the one place that installs the shipped
+//! classifier (guard G7). A front end calls it before it creates the engine, so
+//! a candidate endpoint is never classified by an uninstalled lookup.
 //!
 //! Why that matters: the 2026-11-20 field mis-lock re-locked a live session from
 //! a G-Core match server onto an unrelated AWS endpoint. Even when process
@@ -23,7 +27,9 @@
 
 use std::net::Ipv4Addr;
 
-use crate::server_place::Place;
+use crate::interceptor::order::{install_server_provider_lookup, ProviderClass};
+
+use super::Place;
 
 /// Marks a hashed cloud-provider class; real ASNs are far below this bit.
 const CLOUD_CLASS_TAG: u64 = 1 << 63;
@@ -33,14 +39,24 @@ const GEOFED_CLASS_TAG: u64 = 1 << 62;
 /// the tags themselves say unambiguously which namespace a class is in.
 const HASH_MASK: u64 = GEOFED_CLASS_TAG - 1;
 
+/// Install the shipped classifier into the client's server-detection seam.
+///
+/// This is the one installer call site (guard G7): the classifier lives with the
+/// location data in the core, so no front end can own the seam again. Safe to
+/// call more than once (the seam keeps the last classifier); call it before
+/// creating the engine so detection never runs without it.
+pub fn install_provider_classifier() {
+    install_server_provider_lookup(provider_class);
+}
+
 /// The hosting-network class of `ip`, or `None` when the shipped indexes cannot
 /// name one.
 ///
 /// Two addresses on the same cloud provider, the same operator geofeed network
 /// or the same hosting ASN return the same value; anything else returns a
 /// different value or `None`. This is the whole contract the detector relies on.
-pub fn provider_class(ip: Ipv4Addr) -> Option<u64> {
-    class_of(crate::server_place::place(ip))
+pub fn provider_class(ip: Ipv4Addr) -> Option<ProviderClass> {
+    class_of(super::place(ip))
 }
 
 /// The class of one place, split out so the namespace rules are testable without
@@ -74,6 +90,7 @@ fn fnv1a64(text: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Place;
     use super::*;
     use std::str::FromStr;
 
@@ -179,6 +196,24 @@ mod tests {
         assert_ne!(
             gcore, aws,
             "the pinned G-Core server and an AWS endpoint are different networks"
+        );
+    }
+
+    #[test]
+    fn installing_the_classifier_wires_the_seam_the_detector_consults() {
+        // The seam-ownership proof for G7: the installer exists in the core and
+        // installing it makes the detector's classifier answer, so the CLI/GUI
+        // path that calls it before engine creation actually gets the behaviour.
+        install_provider_classifier();
+        let gcore = crate::interceptor::order::server_provider_class(addr("178.107.14.201"));
+        assert!(
+            gcore.is_some(),
+            "the installed classifier must answer for the live G-Core server"
+        );
+        assert_eq!(
+            crate::interceptor::order::server_provider_class(addr("192.168.1.1")),
+            None,
+            "a private address still gets no opinion"
         );
     }
 }

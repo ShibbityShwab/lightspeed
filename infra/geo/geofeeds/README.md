@@ -46,7 +46,7 @@ The committed table currently contains **7 sources / 237 places / 11,948
 ranges** (119,480-byte blob, up from 603 ranges / 92 places / 6,030 bytes with
 G-Core alone). Every source is also named with its attribution line in the
 generated Rust header and in the committed
-`client-gui/data/server-geofeed.sources.json` manifest.
+`client/data/server-geofeed.sources.json` manifest.
 
 ### G-Core: snapshot versus live feed
 
@@ -144,9 +144,9 @@ Outputs:
 
 | Path | Committed? | What |
 |---|---|---|
-| `client-gui/data/server-geofeed.bin` | yes | range blob: `start u32 LE \| end u32 LE \| place-index u16 LE` (10 bytes/record), sorted, non-overlapping |
-| `client-gui/src/server_geofeed_tables.rs` | yes | generated place/source table with the per-source attribution header |
-| `client-gui/data/server-geofeed.sources.json` | yes | manifest: source URLs, local hashes, as-of/fetch dates, counts, attribution, licence/status, `redistributed` marker, deny list |
+| `client/data/server-geofeed.bin` | yes | range blob: `start u32 LE \| end u32 LE \| place-index u16 LE` (10 bytes/record), sorted, non-overlapping |
+| `client/src/app/location/server_geofeed_tables.rs` | yes | generated place/source table with the per-source attribution header |
+| `client/data/server-geofeed.sources.json` | yes | manifest: source URLs, local hashes, as-of/fetch dates, counts, attribution, licence/status, `redistributed` marker, deny list |
 | `target/server-location-city/` | no (gitignored) | the same three artifacts as build evidence (`--out` overrides) |
 
 `--ship` refuses any source marked `"redistributed": false`; a build without

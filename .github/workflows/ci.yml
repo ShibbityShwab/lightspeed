@@ -323,6 +323,221 @@ jobs:
       - name: Test GUI
         run: cargo test -p lightspeed-gui
 
+  # ── WF-081 W2-4 GUI parity: Linux + macOS ─────────────────────────────────
+  # Mirror the `windows-gui` gate above. The GUI crate is excluded from every
+  # Linux clippy/build invocation (`--exclude lightspeed-gui`), so before these
+  # jobs its Linux/macOS builds were only exercised by the release matrix.
+  # Design ask: docs/design/cross-platform-2026.md §6.1; acceptance:
+  # docs/design/gui-refresh-spec.md §5 W2-4 (a). The Linux system packages are
+  # the set `dist-workspace.toml` already proves sufficient for the release
+  # build, plus `libssl-dev` (reqwest's native-tls -> OpenSSL on Linux).
+  #
+  # Per-OS counts are part of the evidence, and the two `cfg(not(windows))`
+  # single-instance tests (client-gui/src/single_instance.rs) are hard-asserted:
+  # a Linux/macOS run that silently tests a shorter list must fail the job.
+  linux-gui:
+    name: Linux GUI Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install GUI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dev libgtk-3-dev libssl-dev
+
+      - name: Build GUI
+        run: cargo build -p lightspeed-gui
+
+      - name: Clippy GUI
+        run: cargo clippy -p lightspeed-gui --all-targets
+
+      - name: Test GUI (per-OS counts)
+        run: |
+          set -o pipefail
+          set +e
+          cargo test -p lightspeed-gui 2>&1 | tee gui-test-linux.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          echo "### Linux GUI test counts" >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^test result:' gui-test-linux.log | sed 's/^/  /' >> "$GITHUB_STEP_SUMMARY" || true
+          echo "  - non-Windows single-instance tests (must appear below):" >> "$GITHUB_STEP_SUMMARY"
+
+          for test_name in lock_file_guard_excludes_second_instance lock_file_guard_creates_parent_directory; do
+            if grep -qE "^test single_instance::tests::${test_name} \.\.\. ok" gui-test-linux.log; then
+              echo "[linux-gui] ${test_name}: ok"
+              echo "  - \`${test_name}\`: ok" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::[linux-gui] non-Windows single-instance test ${test_name} did not run"
+              exit 1
+            fi
+          done
+
+          if ! grep -qE '^test result: ok\.' gui-test-linux.log; then
+            echo "::error::[linux-gui] cargo test printed no 'test result: ok.' line"
+            exit 1
+          fi
+
+          echo "[linux-gui] cargo test exit=${status}"
+          exit "$status"
+
+  macos-gui:
+    name: macOS GUI Build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Build GUI
+        run: cargo build -p lightspeed-gui
+
+      - name: Clippy GUI
+        run: cargo clippy -p lightspeed-gui --all-targets
+
+      - name: Test GUI (per-OS counts)
+        run: |
+          set -o pipefail
+          set +e
+          cargo test -p lightspeed-gui 2>&1 | tee gui-test-macos.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          echo "### macOS GUI test counts" >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^test result:' gui-test-macos.log | sed 's/^/  /' >> "$GITHUB_STEP_SUMMARY" || true
+          echo "  - non-Windows single-instance tests (must appear below):" >> "$GITHUB_STEP_SUMMARY"
+
+          for test_name in lock_file_guard_excludes_second_instance lock_file_guard_creates_parent_directory; do
+            if grep -qE "^test single_instance::tests::${test_name} \.\.\. ok" gui-test-macos.log; then
+              echo "[macos-gui] ${test_name}: ok"
+              echo "  - \`${test_name}\`: ok" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::[macos-gui] non-Windows single-instance test ${test_name} did not run"
+              exit 1
+            fi
+          done
+
+          if ! grep -qE '^test result: ok\.' gui-test-macos.log; then
+            echo "::error::[macos-gui] cargo test printed no 'test result: ok.' line"
+            exit 1
+          fi
+
+          echo "[macos-gui] cargo test exit=${status}"
+          exit "$status"
+
+      # Advisory only: hosted macOS runners are headless but normally carry an
+      # Aqua session, and there is no xvfb/xdotool equivalent - the probe is the
+      # app's own trace log. With the G0.2 hook (`LIGHTSPEED_GUI_SMOKE=1`) both
+      # markers must appear (`GUI_SMOKE window_created title="LightSpeed"` +
+      # `GUI_SMOKE exit=0`) and the process must exit 0; before the hook lands
+      # the pre-hook fallback is the `app created` startup line. Unproven until a
+      # run proves it (docs/design/cross-platform-2026.md §6.2); keep it
+      # advisory, never make it a blocking gate, never delete it silently.
+      - name: Headless smoke (advisory; unproven on hosted macOS)
+        continue-on-error: true
+        env:
+          LIGHTSPEED_GUI_SMOKE: "1"
+        run: |
+          log="$HOME/Library/Application Support/Lightspeed/gui-trace.log"
+          rm -f "$log"
+          ./target/debug/lightspeed-gui &
+          app=$!
+          created=0
+          i=0
+          while [ "$i" -lt 30 ]; do
+            i=$((i + 1))
+            sleep 1
+            if grep -q 'GUI_SMOKE window_created title="LightSpeed"' "$log" 2>/dev/null; then
+              created=1
+              break
+            fi
+            if grep -q 'app created' "$log" 2>/dev/null; then
+              created=1
+              break
+            fi
+            kill -0 "$app" 2>/dev/null || break
+          done
+          if kill -0 "$app" 2>/dev/null; then
+            kill "$app" 2>/dev/null || true
+          fi
+          status=0
+          wait "$app" 2>/dev/null || status=$?
+          # Re-read after the exit: the hook can win the race against the 1 s poll.
+          if [ "$created" -ne 1 ]; then
+            if grep -q 'GUI_SMOKE window_created' "$log" 2>/dev/null || grep -q 'app created' "$log" 2>/dev/null; then
+              created=1
+            fi
+          fi
+          if [ "$created" -ne 1 ]; then
+            echo "::error::macOS headless smoke: no window-creation line in ${log}"
+            exit 1
+          fi
+          if grep -q 'GUI_SMOKE window_created' "$log" 2>/dev/null; then
+            if ! grep -q 'GUI_SMOKE exit=0' "$log" 2>/dev/null || [ "$status" -ne 0 ]; then
+              echo "::error::macOS headless smoke: G0.2 hook did not exit cleanly (exit=${status})"
+              exit 1
+            fi
+            echo "macOS headless smoke: G0.2 window + clean exit observed in ${log}"
+          else
+            echo "macOS headless smoke: pre-hook window creation observed in ${log} (advisory)"
+          fi
+
+  # ── Headless GUI smoke (advisory until proven) ────────────────────────────
+  # W2-4 (b): prove a real window is created on a display-less runner. Invocation
+  # is the documented one (docs/design/cross-platform-2026.md §6.1): xvfb-run
+  # with software GL (`glow` renderer + llvmpipe), a bounded run, and the
+  # probe in `scripts/headless-gui-smoke.sh`:
+  #   * G0.2 hook path (`LIGHTSPEED_GUI_SMOKE=1`, `desktop-platform` task-61):
+  #     require BOTH log markers `GUI_SMOKE window_created title="LightSpeed"`
+  #     and `GUI_SMOKE exit=0 frames=<n>` plus the process's exit 0 - no xdotool
+  #     needed, the window closes itself after ~2 frames.
+  #   * pre-hook fallback: the documented xdotool `^LightSpeed$` title probe
+  #     (§6.2) plus the existing `app created` trace line.
+  #
+  # ADVISORY: the step is `continue-on-error` until it has passed on ~10
+  # consecutive runs - GL/EGL under Xvfb can regress with a runner-image update.
+  # Promote it by deleting the flag once stable; never delete the step silently.
+  # Cost: a standard GitHub-hosted runner, no paid service ($0.00).
+  gui-headless-smoke:
+    name: Headless GUI Smoke (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install GUI + headless system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dev libgl1-mesa-dri libgtk-3-dev libssl-dev xvfb xdotool
+
+      - name: Build GUI (debug)
+        run: cargo build -p lightspeed-gui
+
+      - name: Headless window smoke (advisory until proven)
+        continue-on-error: true
+        run: |
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x1024x24" \
+            bash scripts/headless-gui-smoke.sh ./target/debug/lightspeed-gui
+
   feature-matrix:
     name: Feature Matrix (${{ matrix.features }})
     runs-on: ubuntu-latest

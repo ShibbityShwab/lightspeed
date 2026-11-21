@@ -10,25 +10,20 @@ mod client_trace;
 mod config;
 mod crash;
 mod design;
-mod detection_provider;
 mod discovery;
-mod geo;
-mod geo_countries;
 mod globe;
 mod i18n;
 mod paths;
 mod platform;
 mod processes;
-mod race_watch;
 mod relay_history;
 mod self_update;
-mod server_geofeed_tables;
 mod server_place;
-mod server_tables;
 mod single_instance;
 mod update;
 
 use eframe::egui;
+use platform::Platform;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
@@ -50,6 +45,11 @@ fn run() -> anyhow::Result<()> {
     tracing::info!("LightSpeed GUI starting");
     tracing::info!("panic hook installed");
     tracing::info!("logging ready ({log_target})");
+    // The platform half of the parity matrix, in the log: which reduced-motion
+    // source is wired, the canonical shortcut table, and the autostart writer
+    // plan (W2-4 (d)/(f)/(i)). No behaviour; this is what the parity report and
+    // a support log cite instead of a guess.
+    log_platform_facts();
 
     // A second launch must not start a second engine, tray, or discovery
     // poller. `--force` / `LIGHTSPEED_GUI_FORCE=1` deliberately bypasses it.
@@ -65,6 +65,14 @@ fn run() -> anyhow::Result<()> {
         }
     };
 
+    // G0.2 headless smoke: the real window, no engine/discovery/tray, three
+    // frames, a deterministic log marker and a clean exit 0. Used by the
+    // Linux/macOS GUI jobs; it must never change shipped behaviour and is
+    // reachable only through the env var.
+    if smoke_mode() {
+        return run_smoke();
+    }
+
     // The GUI links both rustls providers (ring through the client's QUIC
     // stack, aws-lc-rs through reqwest/axoupdater), so rustls cannot pick one
     // automatically and panics on the first QUIC control-plane call. Pin one
@@ -77,14 +85,12 @@ fn run() -> anyhow::Result<()> {
     }
     tracing::info!("rustls provider ready");
 
-    // Server detection runs in the client's WinDivert data plane, which cannot
-    // see the shipped location indexes this crate embeds. Hand it the one fact
-    // it needs from them - which hosting network an address belongs to - so a
-    // stale server lock is never moved onto a different network by an unrelated
-    // flow (the 2026-11-20 mis-lock). Installed before any engine task exists.
-    lightspeed_client::interceptor::install_server_provider_lookup(
-        detection_provider::provider_class,
-    );
+    // Server detection runs in the client's WinDivert data plane. The core owns
+    // the shipped location indexes and the one classifier seam (guard G7); the
+    // GUI only asks the core to install it, before the engine - or any engine
+    // task - exists, so a candidate endpoint is never classified without it
+    // (the 2026-11-20 mis-lock).
+    lightspeed_client::app::location::install_provider_classifier();
     tracing::info!("detection provider classifier installed");
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -100,28 +106,9 @@ fn run() -> anyhow::Result<()> {
 
     let quit: platform::QuitFlag = Arc::new(AtomicBool::new(false));
 
-    // The status window is intentionally small: it shows connection state, the
-    // current ping and one action, so a tall window would just be empty. The
-    // settings live in their own window (see app.rs `settings_window`).
-    // Fixed mobile width. The client is a phone-shaped status window: 320 px is
-    // the contract, so the width is pinned rather than clamped, and only the
-    // height is free to follow the content.
-    let viewport = egui::ViewportBuilder::default()
-        .with_inner_size([320.0, 760.0])
-        // The same bounds the auto-size in `app.rs` clamps to, from one place.
-        .with_min_inner_size([320.0, app::MIN_WINDOW_HEIGHT])
-        .with_max_inner_size([320.0, app::MAX_WINDOW_HEIGHT])
-        .with_resizable(true)
-        .with_title("LightSpeed");
-    // A failed icon decode must not abort startup.
-    let viewport = match window_icon() {
-        Some(icon) => viewport.with_icon(icon),
-        None => viewport,
-    };
-
     let native_options = eframe::NativeOptions {
         renderer: renderer_from_env(),
-        viewport,
+        viewport: build_viewport(),
         ..Default::default()
     };
 
@@ -134,7 +121,7 @@ fn run() -> anyhow::Result<()> {
         Box::new(move |cc: &eframe::CreationContext<'_>| {
             // The language is resolved here, not in the app, so the CJK faces are
             // ordered correctly on the very first painted frame.
-            let language = config::load(&paths::config_file()).language;
+            let language = config::load_unified(&paths::config_paths()).config.language;
             i18n::set_language(language.as_deref());
             app::install_fonts(&cc.egui_ctx, Some(&i18n::current()));
             let app = app::LightSpeedApp::<platform::CurrentPlatform>::new(
@@ -151,6 +138,138 @@ fn run() -> anyhow::Result<()> {
     engine.lock().unwrap().disconnect();
     rt.shutdown_timeout(std::time::Duration::from_secs(2));
     Ok(())
+}
+
+/// The status window is intentionally small: it shows connection state, the
+/// current ping and one action, so a tall window would just be empty. The
+/// settings live in their own window (see app.rs `settings_window`).
+/// Fixed mobile width. The client is a phone-shaped status window: 320 px is
+/// the contract, so the width is pinned rather than clamped, and only the
+/// height is free to follow the content.
+fn build_viewport() -> egui::ViewportBuilder {
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size([320.0, 760.0])
+        // The same bounds the auto-size in `app.rs` clamps to, from one place.
+        .with_min_inner_size([320.0, app::MIN_WINDOW_HEIGHT])
+        .with_max_inner_size([320.0, app::MAX_WINDOW_HEIGHT])
+        .with_resizable(true)
+        .with_title("LightSpeed");
+    // A failed icon decode must not abort startup.
+    match window_icon() {
+        Some(icon) => viewport.with_icon(icon),
+        None => viewport,
+    }
+}
+
+/// The one platform-parity log line set (W2-4): reduced-motion source, the
+/// canonical shortcut table and the autostart writer plan.
+///
+/// Support and the parity report cite these lines instead of re-deriving what
+/// the platform claims. No behaviour is triggered here.
+fn log_platform_facts() {
+    let animations = platform::CurrentPlatform::animations();
+    tracing::info!(
+        "platform={} reduced-motion={:?} source={}",
+        std::env::consts::OS,
+        animations,
+        animations.source()
+    );
+    for row in platform::CurrentPlatform::shortcuts() {
+        tracing::info!(
+            "shortcut {} -> {:?} ({:?}, tray={}, modifiers={:?}, key={:?}, menu_label={:?})",
+            row.display,
+            row.action,
+            row.scope,
+            row.requires_tray,
+            row.chord.modifiers,
+            row.chord.key,
+            row.action.label_key()
+        );
+    }
+    for action in [
+        platform::ShortcutAction::Quit,
+        platform::ShortcutAction::Settings,
+        platform::ShortcutAction::HideToTray,
+    ] {
+        match platform::shortcut_binding(action) {
+            Some(row) => tracing::info!("menu accelerator {:?} = {}", action, row.display),
+            None => tracing::warn!("no canonical binding for {action:?}"),
+        }
+    }
+    match platform::CurrentPlatform::autostart_plan() {
+        Some(plan) => tracing::info!("autostart writer {} ({})", plan.kind(), plan.describe()),
+        None => tracing::warn!("autostart writer plan unavailable (unknown executable path)"),
+    }
+}
+
+/// Whether this process is the G0.2 headless smoke run.
+fn smoke_mode() -> bool {
+    std::env::var("LIGHTSPEED_GUI_SMOKE")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+}
+
+/// G0.2 headless smoke: open the real window, prove it exists, close cleanly.
+///
+/// Deliberately does no engine, tokio, classifier, discovery, tray or
+/// single-instance *engine* work: the probe is the window itself plus the log
+/// markers, and the process exits 0. The single-instance guard above is kept so
+/// a smoke run on a busy desktop is a real "second instance" exit 2, not a
+/// false positive.
+fn run_smoke() -> anyhow::Result<()> {
+    tracing::info!("GUI_SMOKE mode: engine, discovery and tray are skipped");
+    let native_options = eframe::NativeOptions {
+        renderer: renderer_from_env(),
+        viewport: build_viewport(),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "LightSpeed",
+        native_options,
+        Box::new(|_cc: &eframe::CreationContext<'_>| {
+            Ok(Box::new(SmokeApp {
+                frames: 0,
+                closed: false,
+            }))
+        }),
+    )
+    .map_err(|e| anyhow::anyhow!("eframe smoke error: {e}"))?;
+    Ok(())
+}
+
+/// The smoke run's frame loop: prove the window on frame 1, close on frame 3.
+///
+/// The markers are the CI contract (`GUI_SMOKE window_created …` then
+/// `GUI_SMOKE exit=0 …`); keep them stable when touching this file.
+struct SmokeApp {
+    frames: u32,
+    /// The close was already requested; the marker is emitted once so the CI
+    /// probe sees exactly one `GUI_SMOKE exit=0` line.
+    closed: bool,
+}
+
+impl eframe::App for SmokeApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.frames = self.frames.saturating_add(1);
+        if self.frames == 1 {
+            let ctx = ui.ctx();
+            let title = ctx.input(|input| input.viewport().title.clone());
+            let pixels_per_point = ctx.pixels_per_point();
+            tracing::info!(
+                "GUI_SMOKE window_created title={:?} pixels_per_point={pixels_per_point:.3} backend={} renderer={:?}",
+                title.unwrap_or_default(),
+                std::env::consts::OS,
+                renderer_from_env()
+            );
+        }
+        if self.frames >= 3 && !self.closed {
+            self.closed = true;
+            tracing::info!("GUI_SMOKE exit=0 frames={}", self.frames);
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        // Keep painting without busy-blocking: eframe drives the loop.
+        ui.ctx().request_repaint();
+    }
 }
 
 /// Decode the embedded brand PNG into the window and taskbar icon.

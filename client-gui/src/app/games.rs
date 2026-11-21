@@ -11,7 +11,7 @@ pub struct GameEntry {
     pub default_port: u16,
 }
 
-/// Every supported game, built once from `lightspeed_client::games`.
+/// Every supported game, built once from the shared client game registry.
 pub fn games() -> &'static [GameEntry] {
     static GAMES: std::sync::OnceLock<Vec<GameEntry>> = std::sync::OnceLock::new();
     GAMES.get_or_init(|| {

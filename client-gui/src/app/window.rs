@@ -112,6 +112,45 @@ pub(super) fn window_height_limit(monitor_height: Option<f32>, window_top: Optio
     (monitor_height - SCREEN_BOTTOM_RESERVE - top).clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT)
 }
 
+/// The GUI-owned window geometry state (presentation state, not settings).
+///
+/// The height belongs to the player, not to the status snapshot: W2-2 removed
+/// the content-driven auto-resize and remembers the last height across
+/// launches. It is kept beside — not inside — the shared `config.toml` because
+/// the core schema has no UI-geometry fields and W2-2's write scope excludes
+/// the core crate.
+const WINDOW_STATE_FILE: &str = "ui-window-state.toml";
+
+/// The remembered window height, clamped to the launched window's bounds.
+pub(super) fn load_window_height(monitor_height: Option<f32>, window_top: Option<f32>) -> f32 {
+    let limit = window_height_limit(monitor_height, window_top);
+    let saved = std::fs::read_to_string(crate::paths::config_dir().join(WINDOW_STATE_FILE))
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.trim().strip_prefix("height =").map(str::trim))
+                .and_then(|value| value.parse::<f32>().ok())
+        });
+    saved
+        .filter(|height| height.is_finite())
+        .unwrap_or(MIN_WINDOW_HEIGHT)
+        .clamp(MIN_WINDOW_HEIGHT, limit)
+}
+
+/// Persist the window height for the next launch. Failures are ignored: a
+/// read-only config directory must not break the window.
+pub(super) fn save_window_height(height: f32) {
+    if !height.is_finite() {
+        return;
+    }
+    let dir = crate::paths::config_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(
+        dir.join(WINDOW_STATE_FILE),
+        format!("height = {height:.0}\n"),
+    );
+}
+
 /// Whether discovery should start a latency race instead of connecting to the
 /// first relay: only when auto-select is on, disconnected, and relays exist.
 pub fn should_race(auto_select: bool, connected: bool, proxy_count: usize) -> bool {
@@ -130,33 +169,9 @@ pub fn should_apply_race(auto_select: bool, connected: bool, server_known: bool)
     auto_select && !connected && !server_known
 }
 
-/// The tray state for the current frame.
-///
-/// The order is the honesty rule the tray carries: an error is an error, a
-/// session whose relay is not returning the game's traffic is
-/// [`TrayState::RelayStarved`] and never [`TrayState::Optimizing`], and only a
-/// session with no active warning and traffic flowing may claim optimization.
-/// `warning_active` is expected to be false when not boosting; it is still
-/// checked against `boosting` so a stale warning can never paint a green icon
-/// over a stopped tunnel.
-pub fn tray_state_for(
-    has_error: bool,
-    warning_active: bool,
-    boosting: bool,
-    connected: bool,
-) -> TrayState {
-    if has_error {
-        TrayState::Error
-    } else if warning_active && boosting {
-        TrayState::RelayStarved
-    } else if boosting {
-        TrayState::Optimizing
-    } else if connected {
-        TrayState::Connected
-    } else {
-        TrayState::Disconnected
-    }
-}
+/// The tray state for the current frame. The rule moved to the shared crate at
+/// W2-1 S3a; this is the re-export the window and its tests address.
+pub use lightspeed_client::app::status::tray_state_for;
 
 pub fn close_decision(
     has_system_tray: bool,
