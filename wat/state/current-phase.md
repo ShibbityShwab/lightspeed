@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-21 (CI verification on GitHub runners) - new GUI jobs green; pre-existing master red isolated
+
+**Agent:** lead + `rust-dev-2` (goldens, lints) + `desktop-platform-2` (non-Windows cfg), on the owner's explicit authorization to push a branch and run GitHub Actions.
+
+- **CI was actually run** on the public repo (`$0` standard runners) via draft **PR #180** (`wf-081-gui-refresh`): the owner authorized the push and draft PR; no merge/release/post. First runs exposed real cross-platform defects that Windows-local gates could not see.
+- **Run 1 failures and fixes:** (a) five non-Windows dead-code errors in the GUI (`Digest`/`Sha256`/`parse_sha256_file` imports, `Animations::Off`/`from_windows_flag`, `swap_script`) — fixed in `9e1e28e` with documented platform-conditional exemptions, G3 re-measured + mutation; (b) all four CLI goldens failed only on Linux because tracing emitted ANSI escapes — fixed in `1d23b3d` (`strip_ansi_csi` before timestamp masking, no-colour spawn env, 3 new tests, **goldens hash-identical**, `cli_compat` 14/14 on Linux); (c) two non-Windows clippy lints (`self_update.rs` needless `return`, `process_scanner.rs` manual `split_once`) — fixed in `a632126` with a cfg-flip `cargo check` proxy before CI.
+- **Run 3 (final):** **Linux GUI Build pass (3m53s)**, **macOS GUI Build pass (5m16s)**, **Headless GUI Smoke pass (1m30s)**; Windows GUI/Build & Test/Feature Matrix/Localization and all other jobs pass. Only **Check & Test**, **Code Coverage** and **QUIC Integration Tests** remain red, and solely at the **pre-existing master failure** `control_reconnect::supervisor_stopped_on_disconnect` (`client/tests/control_reconnect.rs:331`, `the engine must register on its configured control port`) — reproduced on master run 44699213325, tracked as post-W2 **task-70** (`net-eng`), not caused by WF-081.
+- **Gate after each fix:** fmt/clippy clean (GUI also `-D warnings`), workspace **1984/0/7**, GUI **191/0/0**, `cli_compat` **14/14**, guard **8/8**. Evidence: `wat/evidence/2026-11-21/ci-run/` (run logs, triage summary) and `ci-fix-*` dirs.
+- **State:** local branch now 59 commits ahead of `origin/master` (3 CI-fix commits on top of the close-out); PR #180 remains **draft** (no merge/release); close-out doc updated with the CI verification and the pre-existing baseline. Owner options: merge the PR when ready (after deciding on control_reconnect/task-70), or keep it draft; the pre-existing master red can be fixed separately via task-70. $0.00.
+
+**Verified:** CI run 3 job results and logs; new GUI jobs green on real Linux/macOS runners; `cli_compat` 14/14 on Linux; pre-existing failure reproduced on master. **Not verified:** Linux/macOS **runtime behaviour** (still U — needs hardware); the pre-existing master failure's fix (task-70).
+**Open:** owner decision on merging PR #180; task-70 pre-existing CI fix; post-W2 tasks 57/65/67; Q5/Q19.
+
 ### 2026-11-20 (WF-081 CLOSE-OUT) - program complete; all W2 slices independently accepted
 
 **Agent:** lead, on QA's W2-4b ACCEPT (the last verification).
