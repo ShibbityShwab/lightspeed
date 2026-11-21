@@ -508,7 +508,7 @@ jobs:
           fi
           echo "macOS headless smoke: G0.2 window + clean self-exit observed in ${log}"
 
-  # ── Headless GUI smoke (advisory until proven) ────────────────────────────
+  # ── Headless GUI smoke (required) ─────────────────────────────────────────
   # W2-4 (b): prove a real window is created on a display-less runner. Invocation
   # is the documented one (docs/design/cross-platform-2026.md §6.1): xvfb-run
   # with software GL (`glow` renderer + llvmpipe), a bounded run, and the
@@ -520,12 +520,13 @@ jobs:
   #   * pre-hook fallback: the documented xdotool `^LightSpeed$` title probe
   #     (§6.2) plus the existing `app created` trace line.
   #
-  # ADVISORY: the step is `continue-on-error` until it has passed on ~10
-  # consecutive runs - GL/EGL under Xvfb can regress with a runner-image update.
-  # Promote it by deleting the flag once stable; never delete the step silently.
+  # PROMOTED 2026-11-21: the probe passed 10 consecutive genuine master runs
+  # (all six decision controls in --self-check, real window proved by PID +
+  # geometry; the pre-fix runs that were job-green while failing are excluded).
+  # Both steps below are blocking; never make them advisory again silently.
   # Cost: a standard GitHub-hosted runner, no paid service ($0.00).
   gui-headless-smoke:
-    name: Headless GUI Smoke (advisory)
+    name: Headless GUI Smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -546,12 +547,10 @@ jobs:
       - name: Build GUI (debug)
         run: cargo build -p lightspeed-gui
 
-      - name: Headless smoke probe self-check (advisory; decision controls)
-        continue-on-error: true
+      - name: Headless smoke probe self-check (decision controls)
         run: bash scripts/headless-gui-smoke.sh --self-check
 
-      - name: Headless window smoke (advisory until proven)
-        continue-on-error: true
+      - name: Headless window smoke
         run: |
           timeout 120 xvfb-run -a --server-args="-screen 0 1280x1024x24" \
             bash scripts/headless-gui-smoke.sh ./target/debug/lightspeed-gui
