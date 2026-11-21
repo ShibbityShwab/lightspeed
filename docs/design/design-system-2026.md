@@ -533,7 +533,7 @@ figures came from a broken cmap parser**):
 |---|---|---|---|---|
 | `action.stop_optimizing` | all 9 | — | — | **220.1 px** (ru) |
 | `action.optimize_route` | all 9 | — | — | **215.1 px** (ru) |
-| `action.restart_admin_optimize` | ja, zh-Hans | en, de, es, ko, pt-BR, ru | **fr** | **424.0 px** (de); RU landed copy **340.2 px** / 2 lines; **FR 396.9 px / 3 lines — needs shortened copy or a chrome decision** |
+| `action.restart_admin_optimize` | ja, zh-Hans | en, de, es, ko, pt-BR, ru | **fr** | **424.0 px** (de); RU landed copy **340.2 px** / 2 lines; **FR 361.6 px / 2 lines (landed Q5 copy)** |
 
 **Q15 is unchanged in outcome** (RU 340.2 px is still 2 lines; no 73 px slot),
 but **FR is a new finding**: its restart label wraps to three lines at 264 px
@@ -616,7 +616,7 @@ Consequences, stated as rules rather than tweaks:
 | # | shipped | measured effect | W2 |
 |---|---|---|---|
 | 1 | `STATE * 0.82` (`app.rs:2161`) always taken (`narrow` is always true at 320 px) | state word renders at 24.6 px, not 30; 2.0 px baseline drift vs the metric; at the mandated `STATE` 30 px **two current-tree words fail** — DE `OPTIMIERUNG LÄUFT` **317.4 px** (cap + rail) and RU `НЕ ОПТИМИЗИРУЕТСЯ` **315.7 px** (idle, retires with A2). The landed/proposed short copy measures RU 211.7 / ES 204.2 / PT-BR 218.9 (§4.6 erratum; the old 342.8/309.0/328.4 figures were broken-parser reads of HEAD strings), and the metric must move to its own row | drop the multiplier; put the metric on its own row; **land the DE `OPTIMIERUNG` copy and keep every word ≤276 px at 30 px** (§4.4 item 4) — fallback 24/25 px effective size or a two-line hero priced against the floor |
-| 2 | action label shrink to a 9 px floor (`ledger.rs:81-88`) | **6/27 locale/label pairs exceed the 296 px single-line budget** (all `action.restart_admin_optimize`; corrected §4.6 — the recorded 4/15 was a broken-parser count); the FR label also wraps to 3 lines at 264 px | §4.4 |
+| 2 | action label shrink to a 9 px floor (`ledger.rs:81-88`) | **6/27 locale/label pairs exceed the 296 px single-line budget** (all `action.restart_admin_optimize`; corrected §4.6 — the recorded 4/15 was a broken-parser count); the FR label now fits 2 lines at 264 px (Q5 copy landed) | §4.4 |
 | 3 | `hero_h = 34.0` inline (`app.rs:2153`) | 40 px content row in a 34 px allocation | `HERO_H = 40.0` |
 | 4 | `VALUE` (17 px) has no call site (`theme.rs:199` only) | the mono role in use is whatever `TextStyle::Monospace` yields plus the 30 px metric; 17 px mono is dead as a named role | either wire it for ledger data values or collapse `VALUE` into a named use; do not leave a role with no call site |
 
@@ -680,7 +680,7 @@ pass. Thin passes: `NO RETURN PATH` 266.3 (EN/ja/ko/zh), ja idle 270.0, DE
 | `action.restart_admin_optimize` (landed RU copy) | ru | **340.2** | 2 | 356.9 |
 
 `restart_admin_optimize` line counts: ja/ko/zh-Hans 1 line; en/de/es/pt-BR/ru 2
-lines; **fr `REDEMARRER EN ADMINISTRATEUR POUR OPTIMISER` 396.9 px → 3 lines**
+lines; **fr `Redémarrer en mode admin pour optimiser` 361.6 px → 2 lines**
 (adding `OPTIMISER` to line 2 needs 268.7 px > 264), where the recorded table
 claimed no 3-line locale. 6 of 27 locale/label pairs exceed both the old 296 px
 and the corrected 264 px single-line budget (all restart labels). Q15's outcome
@@ -958,10 +958,9 @@ square is painted (no bundled face draws `■`, §8.3) and appears only while
 exception is now resolved by the landed RU copy: the RU restart label was
 3 lines at HEAD and is 2 lines (**340.2 px** corrected, §4.6) with
 `ux-lead`'s landed `ru.toml` string. **The slot does not cover every locale
-yet: FR's `REDEMARRER EN ADMINISTRATEUR POUR OPTIMISER` wraps to 3 lines at
-264 px (396.9 px, §4.6)** — shorten the FR copy or get an owner decision for a
-chrome change; the 73 px three-line option is priced out (§4.4) — the type is
-never shrunk.
+yet: FR's `Redémarrer en mode admin pour optimiser` fits 2 lines at
+264 px (361.6 px, Q5 copy landed)** — no owner chrome decision is needed; the
+73 px three-line option stays priced out (§4.4) — the type is never shrunk.
 
 ### 6.3 Combo (`egui::ComboBox`; three sites: relay `app.rs:2921`, game
 `app.rs:3007`, language `app.rs:3354`)
@@ -1638,10 +1637,10 @@ are `file:line`.
    `ru.toml` string (`Перезапустить от имени администратора`) measures
    **340.2 px** (corrected, §4.6) = 2 lines at 264 px (HEAD was 518.6 px = 3
    lines), so the action band stays 72 px and the 239/181 compact worst is
-   unchanged; the 73 px three-line slot is priced out. **FR is now the only
-   restart label that wraps to 3 lines (396.9 px, §4.6) — it needs shortened
-   copy or a chrome decision.** The dropped "to optimize" purpose must be
-   carried elsewhere by the spec/copy owner (flagged); the type is never shrunk.
+   unchanged; the 73 px three-line slot is priced out. **FR now fits 2 lines
+   with the landed Q5 copy (361.6 px, §4.6); no chrome change is needed.** The
+   dropped "to optimize" purpose must be carried elsewhere by the spec/copy
+   owner (flagged); the type is never shrunk.
 8. **Rail collision + 30 px state word (F1)** — the metric moves to its own row
    (mandatory), and the **remedy is the DE copy fix plus the ≤276 px acceptance
    cap at `STATE` 30 px**: corrected measurement (§4.6) shows **DE
