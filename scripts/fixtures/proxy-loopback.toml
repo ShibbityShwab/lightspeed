@@ -1,0 +1,26 @@
+# Loopback-only evidence relay for the synthetic starvation fixture.
+#
+# This is the SHIPPED proxy binary with a fixture config. Binds are forced to
+# 127.0.0.1 and non-default data/health ports on the command line (see
+# starvation-fixture.ps1), so port 8080 is never taken (the GUI's probe port
+# constant expects 8080; it is deliberately left free).
+#
+# The synthetic game targets 192.0.2.10 or 8.8.4.4 - a PUBLIC literal, which is
+# what the client's WinDivert filter requires (non-public destinations are
+# never intercepted by design). The allowlist below deliberately blocks that
+# destination: the relay receives the tunnel packets and returns nothing, and
+# nothing can leave the host because forwarding is refused (plus the fixture
+# installs a loopback blackhole route for the fake server during the run).
+[server]
+node_id = "evidence-loopback-relay"
+region = "loopback"
+
+[network]
+data_port = 24434
+control_port = 4433
+health_port = 18080
+tcp_enabled = false
+
+[security]
+require_auth = true
+destination_allowlist = ["203.0.113.0/24"]
