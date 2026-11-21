@@ -1145,8 +1145,14 @@ impl TrafficInterceptor for WinDivertInterceptor {
             }
             Err(e) => {
                 log_open_failure("intercept", &e);
+                let hint = if is_fwp_in_use(&e) {
+                    " A previous LightSpeed/WinDivert filter is still registered; close any \
+                     stale LightSpeed process or restart Windows to clear it."
+                } else {
+                    ""
+                };
                 return Err(anyhow::anyhow!(
-                    "WinDivert open failed (need Admin + WinDivert64.sys loaded): {e}"
+                    "WinDivert open failed (need Admin + WinDivert64.sys loaded): {e}.{hint}"
                 ));
             }
         };
@@ -1163,7 +1169,15 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     log_open_failure("inject", &e);
                     // Close the already-open intercept handle before returning.
                     let _ = wd_intercept.close();
-                    return Err(anyhow::anyhow!("WinDivert inject handle failed: {e}"));
+                    let hint = if is_fwp_in_use(&e) {
+                        " A previous LightSpeed/WinDivert filter is still registered; close \
+                         any stale LightSpeed process or restart Windows to clear it."
+                    } else {
+                        ""
+                    };
+                    return Err(anyhow::anyhow!(
+                        "WinDivert inject handle failed: {e}.{hint}"
+                    ));
                 }
             };
 

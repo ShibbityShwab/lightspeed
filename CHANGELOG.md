@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **WinDivert open failures are reported truthfully.** `WinDivertOpen` signals
+  failure with `INVALID_HANDLE_VALUE`, but the client only checked for a NULL
+  handle. A stale WinDivert WFP filter (`FWP_E_IN_USE`, `0x8032000A`) was
+  therefore treated as a live handle and surfaced later as the misleading
+  `WinDivert receive handle is invalid (os error 6); interception stopped`. Both
+  failure sentinels are now rejected, and the interception start error names the
+  stale-filter remedy (close a stale LightSpeed process or restart Windows).
+
 ## [1.12.0] - 2026-11-21
 
 ### Changed

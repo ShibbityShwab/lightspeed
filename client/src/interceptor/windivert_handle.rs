@@ -72,6 +72,18 @@ unsafe impl Send for OwnedHandle {}
 unsafe impl Sync for OwnedHandle {}
 
 impl OwnedHandle {
+    /// `WinDivertOpen` returns this sentinel on failure, not a NULL handle.
+    ///
+    /// The API documents `INVALID_HANDLE_VALUE` (`-1`) as its failure return.
+    /// Checking only NULL treats a failed open as live, discarding the real
+    /// error and turning it into a later, unrelated invalid-handle receive.
+    const INVALID_HANDLE_VALUE: isize = -1;
+
+    /// Whether a raw handle from `WinDivertOpen` is a failure sentinel.
+    fn is_open_failure(raw: WinDivertHandle) -> bool {
+        raw.is_null() || raw as isize == Self::INVALID_HANDLE_VALUE
+    }
+
     /// Open a WinDivert handle.
     ///
     /// # Errors
@@ -79,7 +91,8 @@ impl OwnedHandle {
     /// Returns [`io::ErrorKind::InvalidInput`] when `filter` contains an
     /// interior NUL byte, and the OS error from `GetLastError` when
     /// `WinDivertOpen` fails (for example `FWP_E_IN_USE`; see
-    /// [`is_fwp_in_use`]).
+    /// [`is_fwp_in_use`]). Both failure sentinels (`NULL` and
+    /// `INVALID_HANDLE_VALUE`) are rejected before the handle is stored.
     pub fn open(
         filter: &str,
         layer: WinDivertLayer,
@@ -95,15 +108,15 @@ impl OwnedHandle {
 
         // SAFETY: [Category 8 - FFI] `filter` is a live NUL-terminated C string
         // owned by the local binding, so the pointer is valid for the whole
-        // call; the returned handle is checked for validity below before it
-        // is stored.
+        // call; the returned handle is checked for both failure sentinels
+        // below before it is stored.
         //
         // `WinDivertOpen` returns the raw OS handle as an `isize`, while the
         // remaining calls take a `*mut c_void`; the cast is a pure
         // representation change, not a dereference.
         let raw =
             unsafe { WinDivertOpen(filter.as_ptr(), layer, priority, flags) } as WinDivertHandle;
-        if raw.is_null() {
+        if Self::is_open_failure(raw) {
             return Err(io::Error::last_os_error());
         }
 
@@ -315,5 +328,16 @@ mod tests {
             io::ErrorKind::InvalidInput,
             "not a WFP error"
         )));
+    }
+
+    #[test]
+    fn open_failure_detects_both_sentinels() {
+        // `WinDivertOpen` documents INVALID_HANDLE_VALUE, not NULL, as failure.
+        assert!(OwnedHandle::is_open_failure(std::ptr::null_mut()));
+        assert!(OwnedHandle::is_open_failure(
+            OwnedHandle::INVALID_HANDLE_VALUE as WinDivertHandle
+        ));
+        // A real handle value must never be mistaken for a failure sentinel.
+        assert!(!OwnedHandle::is_open_failure(4 as WinDivertHandle));
     }
 }
