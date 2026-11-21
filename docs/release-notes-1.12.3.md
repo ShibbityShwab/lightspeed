@@ -1,0 +1,60 @@
+# LightSpeed 1.12.3 — WinDivert hardening
+
+**Status: release candidate, 2026-11-21.** Reliability hardening for the Windows
+interception path. No protocol, wire, config or CLI-surface change.
+
+## Why
+
+1.12.2 removed the relay-switch restart that was the main source of stale
+WinDivert WFP state. The remaining risk was the other teardown and start paths:
+an error after the handles were opened could leave them to be closed
+asynchronously, while a retry opened the next filter; and a failed teardown was
+not latched, so the next start could still proceed.
+
+## Fixed
+
+- **Fail-closed session ownership.**
+  - `InterceptorHandle::stop_and_wait` latches a teardown timeout and refuses to
+    report success or close handles on a second call.
+  - `LightSpeedEngine` records an incomplete teardown and refuses every later
+    start with "restart LightSpeed"; `start_interceptor_plan` also stops any
+    existing handle first because the live CLI modes call it directly.
+- **Start error paths release handles synchronously.** The tunnel UDP socket is
+  bound before `spawn_blocking`/owner tasks are created; the only remaining
+  fallible setup steps now unwind while no thread can touch a handle.
+- **Driver preflight.** `check_availability` opens and closes a send-only
+  WinDivert handle (no filter registration) and maps the actionable failures:
+  not administrator, stale WFP filter, invalid signature, driver blocked. The
+  preflight does not block starts on unclassified probe errors.
+- **Smaller WFP surface.** The inject handle is opened with `send_only`, so it
+  no longer registers a capture filter.
+- **Live relay exclusion.** The tunnel task can switch relays through
+  `session::current_proxy()` without reopening WinDivert. Packets to a relay
+  selected after start are now checked against the live proxy per packet and
+  re-injected rather than tunnelled back to a relay.
+- **Verification.**
+  - Windows CI now executes `cargo test -p lightspeed-client --features
+    quic,windivert-redirect --lib`, not only clippy.
+  - `windivert_open_close_stress_50_cycles` is an `#[ignore]` real-driver churn
+    harness for an elevated Windows shell.
+  - GUI Settings reports "Driver: WinDivert ready/missing" instead of probing a
+    dependency the shipped build does not use.
+
+## Deliberately not in this patch
+
+The following are still valid hardening items, not regressions:
+
+- consolidating intercept/inject into a single handle (requires real-driver
+  verification);
+- retiring the unused legacy `capture/windivert_redirect.rs` backend;
+- Authenticode verification / protected install path for portable installs;
+- machine-wide (`Global\`) single-instance enforcement and removing `--force`
+  from the normal elevation path;
+- MSI stop-before-upgrade / driver cleanup actions.
+
+## Upgrade notes
+
+- Existing 1.12.2 installs can upgrade in place.
+- A machine that already carries stale WinDivert WFP objects still needs one
+  Windows restart; 1.12.3 detects that state at preflight and names it, and
+  prevents the normal start/stop paths from creating it again.

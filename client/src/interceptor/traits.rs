@@ -637,6 +637,10 @@ pub struct InterceptorHandle {
     /// handles to their `Arc` fallback because it cannot prove the threads are
     /// no longer touching them.
     close_handles: Option<Box<dyn FnOnce() + Send>>,
+    /// Latched after a teardown acknowledgement timeout. A timed-out run must
+    /// never be treated as closed later: a second `stop_and_wait` cannot prove
+    /// the owner threads are gone, so it must keep failing closed.
+    teardown_failed: bool,
     /// Completes once every platform owner thread acknowledged that it stopped
     /// touching its handle.
     teardown_ack: Option<TeardownAck>,
@@ -667,6 +671,7 @@ impl InterceptorHandle {
             platform,
             unblock,
             close_handles,
+            teardown_failed: false,
             teardown_ack,
             tunnelling: None,
         }
@@ -746,21 +751,26 @@ impl InterceptorHandle {
     /// platform thread may still be touching its handle, so the caller must
     /// not assume the kernel filter was released.
     pub fn stop_and_wait(&mut self, timeout: Duration) -> bool {
+        if self.teardown_failed {
+            return false;
+        }
         self.stop();
         let acknowledged = match self.teardown_ack.take() {
             Some(ack) => ack.wait(timeout),
             None => true,
         };
+        if !acknowledged {
+            self.teardown_failed = true;
+            return false;
+        }
         // Only close after every owner thread promised it no longer touches
         // the handle. Doing this here (instead of leaving it to the last Arc
         // drop) is what lets the caller start a new session on the same filter
         // immediately: the old WFP filter is gone before `stop_and_wait` returns.
-        if acknowledged {
-            if let Some(close) = self.close_handles.take() {
-                close();
-            }
+        if let Some(close) = self.close_handles.take() {
+            close();
         }
-        acknowledged
+        true
     }
 
     /// Whether this run is still intercepting.
@@ -1011,6 +1021,14 @@ mod tests {
             !closed.load(Ordering::Relaxed),
             "a thread may still touch the handle on timeout, so close must not run"
         );
+        assert!(
+            !handle.stop_and_wait(Duration::from_millis(30)),
+            "a second wait must not turn an unacknowledged teardown into success"
+        );
+        assert!(
+            !closed.load(Ordering::Relaxed),
+            "the close hook must stay blocked after the timeout is latched"
+        );
         drop(ack_tx);
     }
 
@@ -1050,6 +1068,10 @@ mod tests {
         let mut handle = handle_with(Some(teardown));
 
         assert!(!handle.stop_and_wait(Duration::from_millis(30)));
+        assert!(
+            !handle.stop_and_wait(Duration::from_millis(30)),
+            "the timeout must stay latched"
+        );
 
         // The sender stayed alive for the whole wait, so the failure is the
         // timeout, not an early channel disconnect.

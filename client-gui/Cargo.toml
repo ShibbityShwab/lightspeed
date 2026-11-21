@@ -61,13 +61,10 @@ ab_glyph = "0.2"
 [build-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }
 
-# Windows-only: the real system tray (tray-icon) plus WinDivert support.
-# tray-icon is Windows-only because the Linux/macOS tray backends are stubs
-# that never use it; keeping it global pulled gtk -> glib 0.18 into the
-# Linux build, triggering GHSA-wrw7-89jp-8q8g.
+# Windows-only: the real system tray (tray-icon). WinDivert is reached through
+# `lightspeed-client`; the GUI does not link the high-level wrapper directly.
 [target.'cfg(windows)'.dependencies]
 tray-icon = "0.26.1"
-windivert = { version = "0.7.0-beta.4", optional = true, features = ["vendored"] }
 
 # Override lightspeed-client features on Windows
 [target.'cfg(windows)'.dependencies.lightspeed-client]

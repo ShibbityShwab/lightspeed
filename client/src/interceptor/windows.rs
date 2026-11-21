@@ -172,6 +172,25 @@ pub fn destination_is_excluded(dst: SocketAddrV4, relay_addrs: &[Ipv4Addr]) -> b
         || !super::process_scanner::is_public_ipv4(*dst.ip())
 }
 
+/// Whether `dst` is a relay the session is currently allowed to use.
+///
+/// The capture filter is built once, from the relay chosen at start time. Relay
+/// switches publish a new proxy through [`crate::session::current_proxy`] while
+/// the static filter cannot change without reopening WinDivert. This gate reads
+/// the live proxy (and the configured multipath destinations) per packet, so
+/// the client's own tunnel traffic to a relay selected after start is re-injected
+/// instead of being relaid into the tunnel again. No allocation: the packet
+/// path only reads atomics.
+fn destination_is_live_relay(dst: SocketAddrV4, config_proxy: SocketAddrV4) -> bool {
+    if let Some(proxy) = crate::session::current_proxy() {
+        if dst.ip() == proxy.ip() {
+            return true;
+        }
+    }
+    let (dests, n) = crate::session::send_destinations(config_proxy);
+    dests.iter().take(n).any(|d| d.ip() == dst.ip())
+}
+
 /// What the data plane should do with one captured outbound packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutboundRoute {
@@ -1029,7 +1048,34 @@ impl TrafficInterceptor for WinDivertInterceptor {
         if !dll.exists() {
             return Err(format!("WinDivert.dll not found at {}", dll.display()));
         }
-        Ok(())
+        // Files existing is not enough: the driver may be missing, blocked, or
+        // carrying a stale provider from a previous run. Probe with a
+        // send-only handle (no filter registration) so the failure appears at
+        // capability/start-preflight time with a specific remedy, not halfway
+        // through a boost.
+        match OwnedHandle::open(
+            "false",
+            WinDivertLayer::Network,
+            0,
+            WinDivertFlags::new().set_send_only(),
+        ) {
+            Ok(handle) => {
+                // A probe failure here would be a new way to block every start;
+                // only the failures this preflight exists to explain are fatal.
+                if let Err(e) = handle.close() {
+                    tracing::warn!("WinDivert preflight close failed: {e}");
+                }
+                Ok(())
+            }
+            Err(e) if is_actionable_driver_failure(&e) => Err(driver_open_remedy(&e)),
+            Err(e) => {
+                tracing::warn!(
+                    "WinDivert preflight probe failed with an unclassified error: {e}; \
+                     leaving the start path to report it"
+                );
+                Ok(())
+            }
+        }
     }
 
     fn start(&self, config: InterceptorConfig) -> anyhow::Result<InterceptorHandle> {
@@ -1157,29 +1203,35 @@ impl TrafficInterceptor for WinDivertInterceptor {
             }
         };
 
-        // Open inject handle (no filter - write-only for injecting inbound spoofs).
+        // Open inject handle (send-only; no capture filter, no block/recv).
+        // `send_only` avoids registering a filter for a handle that only writes
+        // spoofed inbound replies, shrinking the WFP state surface per session.
         tracing::info!("⚡ Opening WinDivert inject handle...");
-        let wd_inject =
-            match OwnedHandle::open("false", WinDivertLayer::Network, 0, WinDivertFlags::new()) {
-                Ok(h) => {
-                    tracing::info!("✅ WinDivert inject handle opened successfully");
-                    Arc::new(h)
-                }
-                Err(e) => {
-                    log_open_failure("inject", &e);
-                    // Close the already-open intercept handle before returning.
-                    let _ = wd_intercept.close();
-                    let hint = if is_fwp_in_use(&e) {
-                        " A previous LightSpeed/WinDivert filter is still registered; close \
+        let wd_inject = match OwnedHandle::open(
+            "false",
+            WinDivertLayer::Network,
+            0,
+            WinDivertFlags::new().set_send_only(),
+        ) {
+            Ok(h) => {
+                tracing::info!("✅ WinDivert inject handle opened successfully");
+                Arc::new(h)
+            }
+            Err(e) => {
+                log_open_failure("inject", &e);
+                // Close the already-open intercept handle before returning.
+                let _ = wd_intercept.close();
+                let hint = if is_fwp_in_use(&e) {
+                    " A previous LightSpeed/WinDivert filter is still registered; close \
                          any stale LightSpeed process or restart Windows to clear it."
-                    } else {
-                        ""
-                    };
-                    return Err(anyhow::anyhow!(
-                        "WinDivert inject handle failed: {e}.{hint}"
-                    ));
-                }
-            };
+                } else {
+                    ""
+                };
+                return Err(anyhow::anyhow!(
+                    "WinDivert inject handle failed: {e}.{hint}"
+                ));
+            }
+        };
 
         // Open a shadow-direct inbound handle. It is a sniff handle (copy, never
         // divert), so it observes replies from a tracked game server to a
@@ -1244,6 +1296,23 @@ impl TrafficInterceptor for WinDivertInterceptor {
         let (intercept_tx, mut intercept_rx) = tokio::sync::mpsc::channel::<CapturedPacket>(512);
         let (inject_tx, inject_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(512);
         tracing::info!("✅ Channels created");
+
+        // Bind the tunnel socket BEFORE any owner thread exists. This is the
+        // last fallible setup step; keeping it ahead of `spawn_blocking` means
+        // an error here unwinds with no threads touching the handles, so the
+        // OwnedHandle drops release the WFP state synchronously instead of
+        // leaving a filter to be closed asynchronously under a retry.
+        tracing::info!("🚀 Creating tunnel UDP socket...");
+        let tunnel_std = std::net::UdpSocket::bind("0.0.0.0:0")
+            .map_err(|e| anyhow::anyhow!("Tunnel socket bind failed: {e}"))?;
+        tunnel_std.set_nonblocking(true)?;
+        let tunnel_socket = Arc::new(UdpSocket::from_std(tunnel_std)?);
+        tracing::info!("✅ Tunnel UDP socket created");
+        let tunnel_port = tunnel_socket
+            .local_addr()
+            .map_err(|e| anyhow::anyhow!("Cannot get tunnel port: {e}"))?
+            .port();
+        tracing::info!("🔌 Tunnel socket bound to port {}", tunnel_port);
 
         // Each owner thread sends one ack when it can no longer touch its
         // WinDivert handle, so `stop_and_wait` can close deterministically.
@@ -1403,6 +1472,19 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
                             match parsed {
                                 Some((game_src, game_dst, payload)) => {
+                                    // The static filter excluded the relay known
+                                    // at start; a relay selected later is only
+                                    // visible through the live proxy. Never feed
+                                    // our own tunnel traffic back into the tunnel.
+                                    if destination_is_live_relay(game_dst, config_proxy) {
+                                        if let Err(e) = wd_ic.send(data, &addr) {
+                                            counters_ic.errors.fetch_add(1, Ordering::Relaxed);
+                                            tracing::warn!(
+                                                "WinDivert relay-path re-inject failed: {e}"
+                                            );
+                                        }
+                                        continue;
+                                    }
                                     // Userspace attribution: the one decision
                                     // point. Process mode looks the flow up in
                                     // the bounded FlowMap (exclusions first, so
@@ -1657,21 +1739,9 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
         // ── Async tunnel task ─────────────────────────────────────────────
         {
-            tracing::info!("🚀 Creating tunnel UDP socket...");
             let counters_t = Arc::clone(&counters);
             let counters_ka = Arc::clone(&counters);
             let _running_t = Arc::clone(&running);
-
-            let tunnel_std = std::net::UdpSocket::bind("0.0.0.0:0")
-                .map_err(|e| anyhow::anyhow!("Tunnel socket bind failed: {e}"))?;
-            tunnel_std.set_nonblocking(true)?;
-            let tunnel_socket = Arc::new(UdpSocket::from_std(tunnel_std)?);
-            tracing::info!("✅ Tunnel UDP socket created");
-            let tunnel_port = tunnel_socket
-                .local_addr()
-                .map_err(|e| anyhow::anyhow!("Cannot get tunnel port: {e}"))?
-                .port();
-            tracing::info!("🔌 Tunnel socket bound to port {}", tunnel_port);
 
             // Add Windows Firewall rule so proxy responses reach our tunnel socket.
             tracing::info!("🔓 Adding firewall rule for port {}...", tunnel_port);
@@ -2350,6 +2420,42 @@ fn log_open_failure(handle_role: &str, err: &std::io::Error) {
         );
     } else {
         tracing::error!("❌ WinDivert {handle_role} open failed: {err}");
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn is_actionable_driver_failure(err: &std::io::Error) -> bool {
+    is_fwp_in_use(err) || matches!(err.raw_os_error(), Some(5) | Some(577) | Some(1275))
+}
+
+/// A user-facing remedy for a driver open failure.
+///
+/// These are the failures where "try again" is not advice: each one names the
+/// actual next action. The raw error is kept at the end so support logs remain
+/// searchable.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+fn driver_open_remedy(err: &std::io::Error) -> String {
+    if is_fwp_in_use(err) {
+        return format!(
+            "WinDivert has a stale WFP filter from a previous run. Close any stale \
+             LightSpeed process and restart Windows to clear it before retrying. ({err})"
+        );
+    }
+    match err.raw_os_error() {
+        Some(5) => format!(
+            "WinDivert requires Administrator privileges. Restart LightSpeed as \
+             administrator. ({err})"
+        ),
+        Some(577) => format!(
+            "The WinDivert driver signature is not valid on this machine. Reinstall \
+             LightSpeed from the official release or check security software. ({err})"
+        ),
+        Some(1275) => format!(
+            "The WinDivert driver is blocked on this machine (driver blocklist, \
+             security software, or virtualization). Allow WinDivert or use a supported \
+             host. ({err})"
+        ),
+        _ => format!("WinDivert driver open failed: {err}"),
     }
 }
 
@@ -3037,5 +3143,46 @@ mod tests {
             message.contains("interception stopped"),
             "the message says interception stopped: {message}"
         );
+    }
+
+    #[test]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn driver_open_remedies_name_the_next_action() {
+        let admin = driver_open_remedy(&std::io::Error::from_raw_os_error(5));
+        assert!(admin.contains("Administrator"), "{admin}");
+        let signature = driver_open_remedy(&std::io::Error::from_raw_os_error(577));
+        assert!(signature.contains("signature"), "{signature}");
+        let blocked = driver_open_remedy(&std::io::Error::from_raw_os_error(1275));
+        assert!(blocked.contains("blocked"), "{blocked}");
+        let stale = driver_open_remedy(&std::io::Error::from_raw_os_error(0x8032_000A_u32 as i32));
+        assert!(stale.contains("stale WFP filter"), "{stale}");
+    }
+
+    #[test]
+    #[ignore = "requires an elevated Windows shell and the bundled WinDivert driver"]
+    #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+    fn windivert_open_close_stress_50_cycles() {
+        // Run elevated, from a directory containing WinDivert.dll and
+        // WinDivert64.sys:
+        //   cargo test -p lightspeed-client --features quic,windivert-redirect \
+        //     --lib windivert_open_close_stress_50_cycles -- --ignored --nocapture
+        //
+        // This is the real-driver churn harness. A WFP filter left behind by
+        // any cycle makes the next `WinDivertOpen` fail, so this catches the
+        // class of bug a unit test with no driver cannot.
+        for cycle in 0..50 {
+            let handle = OwnedHandle::open(
+                "udp and outbound and udp.DstPort == 9",
+                WinDivertLayer::Network,
+                0,
+                WinDivertFlags::new(),
+            )
+            .unwrap_or_else(|e| {
+                panic!("WinDivert open failed on churn cycle {cycle}: {e}");
+            });
+            handle.close().unwrap_or_else(|e| {
+                panic!("WinDivert close failed on churn cycle {cycle}: {e}");
+            });
+        }
     }
 }

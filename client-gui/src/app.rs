@@ -3861,17 +3861,17 @@ impl<P: Platform> LightSpeedApp<P> {
         } else {
             "idle"
         };
-        let npcap = if self.capture_available {
-            "installed"
+        let driver = if self.capture_available {
+            "WinDivert ready"
         } else {
-            "not installed (pcap fallback only)"
+            "WinDivert missing"
         };
         let relays = format!("{} configured", self.proxies.len());
         for (label, value) in [
             ("Version", env!("CARGO_PKG_VERSION")),
             ("Elevation", admin),
             ("Capture", capture),
-            ("Npcap", npcap),
+            ("Driver", driver),
             ("Relays", relays.as_str()),
         ] {
             console_mini_row(ui, label, value);

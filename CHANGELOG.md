@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.3] - 2026-11-21
+
+### Fixed
+
+- **Interception now fails closed instead of opening a second WinDivert filter.**
+  A teardown that cannot be acknowledged is latched, a second `stop_and_wait`
+  can no longer turn it into success, and the public plan-start path stops any
+  existing run before opening a new one. A failed start now reports "restart
+  LightSpeed" instead of retrying into `FWP_E_IN_USE`.
+- **Start-error paths no longer leave handles to be closed asynchronously.**
+  The tunnel socket is bound before any owner thread exists; the only fallible
+  setup steps now unwind with no thread touching a WinDivert handle, so the
+  handle drops release the WFP state synchronously.
+- **A driver preflight replaces the halfway-through-boost failure.** Before a
+  plan/start, a send-only probe checks that the driver can actually be opened.
+  Administrator, stale-filter (`FWP_E_IN_USE`), invalid-signature and
+  driver-blocked failures now each name their real remedy. The probe only
+  blocks on those actionable classes.
+- **The inject handle is opened send-only.** It no longer registers a capture
+  filter, reducing the WFP objects a session creates.
+- **Relay switches re-check the live proxy per packet.** The static capture
+  filter cannot change without reopening WinDivert, so packets to a relay
+  selected after start are now re-injected instead of being fed back into the
+  tunnel.
+- **CI runs the WinDivert feature tests** on the Windows job instead of only
+  linting them, and the tree carries an `#[ignore]` 50-cycle real-driver
+  open/close harness.
+- **The GUI reports the driver it uses.** The Settings row now says WinDivert
+  instead of probing Npcap, and the unused high-level `windivert` dependency
+  was removed from the GUI manifest.
+
 ## [1.12.2] - 2026-11-21
 
 ### Fixed

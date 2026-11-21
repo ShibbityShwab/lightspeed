@@ -439,7 +439,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // toggle makes (`autostart_installed`/`set_autostart`), with the observable
     // truth and surfaced-error contracts documented. 227 -> 246.
     ("client-gui/src/platform/mod.rs", 246),
-    ("client-gui/src/platform/windows.rs", 481),
+    ("client-gui/src/platform/windows.rs", 484),
     ("client-gui/src/processes.rs", 282),
     ("client-gui/src/relay_history.rs", 15),
     // W2-3b S6: the default-features update check moved to

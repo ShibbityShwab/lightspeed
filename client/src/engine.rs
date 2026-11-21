@@ -538,6 +538,12 @@ pub struct LightSpeedEngine {
     windivert_stat_slot: Option<WinDivertStatSlot>,
     /// Live handle for the OOP TrafficInterceptor (multiplatform MITM).
     interceptor_handle: Option<crate::interceptor::InterceptorHandle>,
+    /// Latched when an interceptor teardown could not be acknowledged. The old
+    /// filter may still be registered, so a new start must fail closed until the
+    /// process is restarted (or a backend-specific reset proves the driver is
+    /// clear). This is what keeps a timed-out teardown from becoming the next
+    /// `FWP_E_IN_USE`.
+    interceptor_teardown_incomplete: bool,
     /// Effective path-MTU cap for the tunnel (`[tunnel] mtu` / `--mtu`),
     /// applied to every interceptor start. Defaults to the conservative clamp.
     path_mtu_cap: usize,
@@ -576,6 +582,7 @@ impl LightSpeedEngine {
             windivert_done_rx: None,
             windivert_stat_slot: None,
             interceptor_handle: None,
+            interceptor_teardown_incomplete: false,
             path_mtu_cap: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             hold_watch: None,
             telemetry_flush: None,
@@ -1384,7 +1391,9 @@ impl LightSpeedEngine {
     /// A relay change has to restart the data plane only when there is one;
     /// at startup the interceptor is started later, against the selected relay.
     pub fn is_intercepting(&self) -> bool {
-        self.interceptor_handle.is_some()
+        self.interceptor_handle
+            .as_ref()
+            .is_some_and(crate::interceptor::InterceptorHandle::is_active)
     }
 
     /// Liveness counters for the GUI's no-reply watchdog.
@@ -1491,8 +1500,15 @@ impl LightSpeedEngine {
     /// above is exactly this request with the old derivation.
     pub fn start_interceptor_request(&mut self, request: InterceptorRequest) -> Result<(), String> {
         // The shipped one-shot API stops any running interceptor before it
-        // validates the new request; keep that exact order.
-        self.stop_interceptor();
+        // validates the new request; keep that exact order. A teardown that
+        // could not be acknowledged fails closed instead of opening a second
+        // WinDivert filter beside the old one.
+        if !self.stop_interceptor() {
+            return Err(
+                "previous interception did not shut down cleanly; restart LightSpeed before starting again"
+                    .to_string(),
+            );
+        }
         let plan = self.plan_interceptor(request)?;
         self.start_interceptor_plan(plan)
     }
@@ -1660,6 +1676,20 @@ impl LightSpeedEngine {
     /// here with the backend's own reason and nothing is started, which is where
     /// the shipped path refused too.
     pub fn start_interceptor_plan(&mut self, plan: InterceptorPlan) -> Result<(), String> {
+        // The plan path is public and is called directly by the live modes. It
+        // must not assume the caller stopped the previous run first.
+        if self.interceptor_teardown_incomplete {
+            return Err(
+                "previous interception did not shut down cleanly; restart LightSpeed before starting again"
+                    .to_string(),
+            );
+        }
+        if self.interceptor_handle.is_some() && !self.stop_interceptor() {
+            return Err(
+                "previous interception did not shut down cleanly; restart LightSpeed before starting again"
+                    .to_string(),
+            );
+        }
         if let Err(reason) = &plan.facts.available {
             return Err(reason.clone());
         }
@@ -1833,10 +1863,16 @@ impl LightSpeedEngine {
 
     /// Stop the OOP interceptor (if running), waiting a bounded time for the
     /// platform owner threads to release their handles.
-    pub fn stop_interceptor(&mut self) {
+    ///
+    /// Returns `false` when the teardown could not be acknowledged. That result
+    /// is latched: a later start must fail closed rather than open a second
+    /// filter next to a filter that may still be registered.
+    pub fn stop_interceptor(&mut self) -> bool {
         self.stop_supervised();
+        let had_handle = self.interceptor_handle.is_some();
+        let mut stopped = true;
         if let Some(mut h) = self.interceptor_handle.take() {
-            let stopped = h.stop_and_wait(Duration::from_millis(1500));
+            stopped = h.stop_and_wait(Duration::from_millis(1500));
             if !stopped {
                 tracing::warn!(
                     "Interceptor teardown did not complete within 1500ms; \
@@ -1844,9 +1880,24 @@ impl LightSpeedEngine {
                 );
             }
         }
+        if had_handle && stopped {
+            self.interceptor_teardown_incomplete = false;
+        }
+        if !stopped {
+            self.interceptor_teardown_incomplete = true;
+        }
         if let Ok(mut s) = self.status.write() {
             s.interceptor_active = false;
+            if !stopped {
+                s.interceptor_error = Some(
+                    "Previous interception did not shut down cleanly. Restart \
+                     LightSpeed before starting again so its WinDivert filter \
+                     can be released."
+                        .to_string(),
+                );
+            }
         }
+        stopped && !self.interceptor_teardown_incomplete
     }
 
     /// Stop the interceptor while the session keeps running, reporting whether
@@ -1858,6 +1909,9 @@ impl LightSpeedEngine {
     /// [`Self::stop_interceptor`] (the GUI/shared path) ends the registration
     /// with the data plane. No log line is emitted here; the caller owns it.
     pub fn stop_interceptor_keep_registration(&mut self, timeout: Duration) -> bool {
+        if self.interceptor_teardown_incomplete {
+            return false;
+        }
         let Some(mut handle) = self.interceptor_handle.take() else {
             if let Ok(mut s) = self.status.write() {
                 s.interceptor_active = false;
@@ -1865,8 +1919,19 @@ impl LightSpeedEngine {
             return true;
         };
         let stopped = handle.stop_and_wait(timeout);
+        if !stopped {
+            self.interceptor_teardown_incomplete = true;
+        }
         if let Ok(mut s) = self.status.write() {
             s.interceptor_active = false;
+            if !stopped {
+                s.interceptor_error = Some(
+                    "Previous interception did not shut down cleanly. Restart \
+                     LightSpeed before starting again so its WinDivert filter \
+                     can be released."
+                        .to_string(),
+                );
+            }
         }
         stopped
     }
@@ -2536,6 +2601,34 @@ mod tests {
             !InterceptorRequest::new("cs2", relay, false, 4)
                 .adaptive
                 .enabled
+        );
+    }
+
+    #[test]
+    fn a_plan_refuses_to_start_after_incomplete_teardown() {
+        let mut engine = test_engine();
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 7), 28015);
+        let request =
+            InterceptorRequest::new("cs2", relay, false, 4).with_server_override(Some(server));
+        let plan = engine
+            .plan_interceptor(request)
+            .expect("a known server must plan without a running game");
+
+        // Simulate a stop whose owner threads never acknowledged. The public
+        // plan path is reachable from the live modes, so it must refuse rather
+        // than open a filter next to the one that may still be registered.
+        engine.interceptor_teardown_incomplete = true;
+        let err = engine
+            .start_interceptor_plan(plan)
+            .expect_err("an incomplete teardown must fail closed");
+        assert!(
+            err.contains("did not shut down cleanly"),
+            "the refusal names the teardown state: {err}"
+        );
+        assert!(
+            !engine.snapshot().interceptor_active,
+            "a refused start must not report an active interceptor"
         );
     }
 

@@ -298,6 +298,11 @@ jobs:
       - name: Test
         run: cargo test --workspace --lib --exclude lightspeed-gui
 
+      # The Windows WinDivert tests are `#[cfg(windows, feature = "windivert-redirect")]`.
+      # Without this step they are only linted, never executed.
+      - name: Test (WinDivert feature)
+        run: cargo test -p lightspeed-client --features quic,windivert-redirect --lib
+
   windows-gui:
     name: Windows GUI Build
     runs-on: windows-latest

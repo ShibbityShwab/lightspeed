@@ -316,11 +316,14 @@ impl Platform for WindowsPlatform {
     }
 
     fn is_capture_available() -> bool {
-        crate::platform::silent_command("sc")
-            .args(["query", "npcap"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        // The shipped Windows build uses WinDivert, not Npcap (plan S9). Probe
+        // the binaries the engine actually loads; the driver being installed is
+        // intentionally not required here because WinDivert loads on first use.
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_default();
+        exe_dir.join("WinDivert.dll").exists() && exe_dir.join("WinDivert64.sys").exists()
     }
 
     fn setup_fonts(_ctx: &egui::Context) {
