@@ -2,15 +2,21 @@
 
 > **Status:** W1 design deliverable for WF-081 — documentation only. This document
 > changes no workflow, packaging, platform code or engine code.
-> **Revision:** r25 (2026-11-21, task-78 WF-081b U→R evidence promotion) — records
-> the **live** evidence this Windows host can now produce with a loopback-only
-> synthetic starvation fixture (§3.6): the real `NO RETURN PATH`/warning state and
-> the fifth `RelayStarved` tray state text (R), the live Location/trace rows (R),
-> Esc handling (R), and the measured 320×420 chrome (236 px; the compact tier did
-> not engage — a measured discrepancy handed to the design owner). The 200 % capture
-> and the live tray context menu stay **U** with named blockers, as do the unwired
-> Ctrl+Q/Ctrl+,/Ctrl+H app handlers (measured no-effect). This revision promotes
-> only what a real window proved; Linux/macOS rows are unchanged. r24 (2026-11-20, task-61 W2-4 platform parity landing) — records the
+> **Revision:** r25 (2026-11-21, task-78 WF-081b U→R evidence promotion; corrected
+> after the PR #186 evidence review) — records the **live** evidence this Windows
+> host can now produce with a loopback-only synthetic starvation fixture (§3.6): the
+> real `NO RETURN PATH`/warning state (**R**) with 320×420 and 320×760 captures in
+> EN/DE/RU, the live Location/trace rows (**R**), Esc handling (**R**), and the
+> measured 320×420 chrome (236 px; the compact tier did not engage — a measured
+> discrepancy handed to the design owner). Two honest limits: at 320×420 the DE
+> footer labels wrap to two rows, so the top-of-scroll view clips the warning
+> banner's last line (real layout finding, still scrollable — for task-86), and the
+> fifth `RelayStarved` tray state stays **U**: its live UIA tooltip text was observed
+> during a real starvation run but **no artifact was archived**, so the review
+> returned it to U. The 200 % capture and the live tray context menu stay **U** with
+> named blockers, as do the unwired Ctrl+Q/Ctrl+,/Ctrl+H app handlers (measured
+> no-effect). This revision promotes only what a real window proved **and** an
+> archived artifact supports; Linux/macOS rows are unchanged. r24 (2026-11-20, task-61 W2-4 platform parity landing) — records the
 > **code half** of the W2-4 slice on the clean accepted tree (`2b3fd04`): the tray
 > fifth state and state-aware menu, the canonical shortcut keymap, the elevation
 > handshake (decline path included; interactive UAC decline stays **U**), the
@@ -244,7 +250,7 @@ smoke log, guard mutation log).
 
 | Surface | Code now (files) | Tier reached today | Named unverified / gap |
 |---|---|---|---|
-| **Tray/menu incl. the fifth state** (c) | Windows tray keeps its four reachable states and now builds its icon colour, tooltip and menu enablement from one pure mapping (`client-gui/src/platform/tray_menu.rs`): `RelayStarved` is amber-orange with the short `tray.starved` sentence, **never** the green optimizing square, and Connect/Disconnect are never both offered. Labels/tooltips are catalogued (`tray.*`, `state.*`) and built after the language is pinned; the Quit item carries the canonical `Ctrl+Q` accelerator. | **R** for the four pre-existing states (earlier waves); fifth-state **mapping** unit-tested | Live fifth-state icon/tooltip **U** (needs a starving relay fixture); no fresh tray capture this wave. macOS/Linux tray backends remain stubs → fifth state unobservable there (**U**, Q14). |
+| **Tray/menu incl. the fifth state** (c) | Windows tray keeps its four reachable states and now builds its icon colour, tooltip and menu enablement from one pure mapping (`client-gui/src/platform/tray_menu.rs`): `RelayStarved` is amber-orange with the short `tray.starved` sentence, **never** the green optimizing square, and Connect/Disconnect are never both offered. Labels/tooltips are catalogued (`tray.*`, `state.*`) and built after the language is pinned; the Quit item carries the canonical `Ctrl+Q` accelerator. | **R** for the four pre-existing states (earlier waves); fifth-state **mapping** unit-tested | Live fifth-state icon/tooltip **U**: the tooltip text was observed once during a real starvation run (`⚡ LightSpeed — relay is not returning your game traffic`) but **no artifact was archived**; the PR #186 evidence review returned the row to U pending a saved UIA dump/capture (§3.6). macOS/Linux tray backends remain stubs → fifth state unobservable there (**U**, Q14). |
 | **Shortcut keymaps** (d) | One canonical table per OS (`platform/shortcuts.rs`, unit-tested on every host): `Ctrl+Q`/`⌘Q`, `Ctrl+,`/`⌘,`, `Ctrl+H`/`⌘H` (hide-to-tray only when a real tray exists), `Esc` closes the top sheet, `Enter` confirms its primary action; no OS-global hotkey. The startup trace logs the table and the tray menu consumes the Quit chord. | **H** (pure table + Windows menu accelerator; tests run in the GUI job) | App-level handlers for Settings/Hide-to-tray are shell wiring outside W2-4; a runtime keyboard pass on any OS is **U** this wave. |
 | **Elevation handshake** (e) | `platform/elevation.rs`: a pure state machine (`Ready → Restarting → Confirmed / Declined / Failed`), with the C8 rule enforced — the current process may exit **only** on `Confirmed`. Windows now launches the hidden elevation helper, keeps the window open while the prompt resolves, and returns to the Needs-elevation overlay on decline instead of exiting; a declined prompt names `notice.elevation_declined`. | **H** (state machine + exit-code classification unit-tested; 43-test platform suite) | **Interactive UAC accept/decline is U** — this agent shell is elevated and the prompt is on the secure desktop. Fixture: an interactive verifier on a non-elevated standard-user session presses the boost action and clicks **No**, then confirms the window stays open. The decline copy's rendering is shell wiring (named residual). |
 | **Autostart writers** (f) | `platform/autostart.rs`: opt-in entry builders for all three OSes (`HKCU\…\Run`, `~/.config/autostart/lightspeed-gui.desktop` with `X-GNOME-Autostart-enabled=true`, `~/Library/LaunchAgents/dev.lightspeed.gui.plist`), plus temp-dir `write_file`/`remove_file`/`is_installed` with surfaced I/O failures and idempotent disable; the `--autostart` launch mode is the contract. Registry writer is `reg.exe` argument data (never executed in tests). | **H** (temp-dir create/read/remove/failure tests; registry command builders) | No Settings toggle ships (needs a config field + control outside W2-4's frozen shell), so the user-visible enable flow and the log-out/in check are **U**. |
@@ -278,14 +284,25 @@ UIA text rows, watchdog log excerpts, `chrome-measurement.json`).
 
 | Surface | Promoted to | What was observed live | Still U / named blocker |
 |---|---|---|---|
-| **Starving return path — `NO RETURN PATH` + warning line** (C1) | **R (Windows)** | Real watchdog line `Relay return path is starving the session … (intercepted≈71 injected=0 from_relay=0) fault=Some(NoReplyFromRelay)`; exact window text and 320×420/760 captures in EN, DE, RU (`Kein Rückweg`/`Нет возврата` state words); warning copy stays English in DE/RU (Q5 debt, recorded) | Linux/macOS runtime — unchanged |
-| **Fifth tray state (RelayStarved)** | **R for the state text** | UIA name of the notification-area icon while starving: `⚡ LightSpeed — relay is not returning your game traffic` (not the optimizing text), icon in the Win11 overflow flyout | Tray icon pixel colour in-flight (unit-tested only); **live tray context menu U** — right-click and Apps-key automation did not surface the muda popup |
+| **Starving return path — `NO RETURN PATH` + warning line** (C1) | **R (Windows)** | Real watchdog line `Relay return path is starving the session … (intercepted≈70-71 injected=0 from_relay=0) fault=Some(NoReplyFromRelay)`; archived 320×420 and 320×760 captures in EN, DE, RU with the localized state words (`NO RETURN PATH`/`Kein Rückweg`/`Нет возврата`); per-run provenance `run/gui-<lang>-420-run.log`, UIA rows `run/ui-text-<lang>-<size>.txt`. 320×760: banner complete in all three. 320×420 (fresh render, no resize/wheel): EN and RU show the banner; **DE clips the banner's last line at the scroll viewport** because the long DE footer labels wrap the footer to two rows (real layout finding, still scrollable; handed to task-86). Warning copy stays English in DE/RU (Q5 debt, recorded) | Linux/macOS runtime — unchanged |
+| **Fifth tray state (RelayStarved)** | **U (returned to U on review)** | The tooltip text was observed during a real starvation run (`⚡ LightSpeed — relay is not returning your game traffic`), but **no saved UIA dump/capture artifact exists**: the pack's `tray-uia-dump.json` attempts came back empty and the flyout enumeration is not reproducible enough to archive. A saved accessibility dump or cropped flyout capture is required to promote this row | Tray icon pixel colour in-flight (unit-tested only); **live tray context menu U** — right-click and Apps-key automation did not surface the muda popup |
 | **Location ladder / client trace (live rows)** | **R (Windows, first probe run)** | `Location — Country-level estimate from IP`, and `Route to server: 15 hops · nearest responding hop 18 ms` rendered from the real engine while relaying | Guarded runs blackhole the fake server, so the trace row is only captured on the unguarded probe; Linux/macOS remain B/U |
 | **Esc closes the top sheet** | **R** | Settings opened by click, `Language` row present; Esc → row gone (`run/probe-evidence.json`) | other sheet behaviours unchanged |
 | **Ctrl+Q / Ctrl+, / Ctrl+H app-level handlers** | **U — measured absent** | Canonical keymap exists (H, unit-tested) but live window shows **no effect** for all three: no app dispatch/menu-loop path is wired in the shipped shell | shell-wiring debt; the keymap table stays H only |
 | **320 pt @ 200 %** | **U (blocker named)** | Host = one 2560×1440 display at 100 %, no per-monitor DPI override; W2-4 smoke logged `pixels_per_point=1.000`. Scaling is a session-wide user setting on a shared agent desktop; a per-monitor-DPI-aware winit app has no per-app override on Windows (the only env override is X11-only). A 2× upscale is not a re-layout and is not used as evidence | 200 %-scaled monitor / dedicated session |
-| **Chrome at 320×420 (measured)** | measured, **no tier claim** | `run/chrome-measurement.json` (method `scripts/fixtures/measure-chrome.py`): **rail 116 · action 64 · footer 56 · scroll 183 · chrome 236** in the warning state; 320×760 rail = 144. The design table expects compact at 420 (rail 108, footer 41 → chrome 213 best / 239 worst, scroll 207/181): **compact tier did not engage at 420 in this build** (footer used the 40 px normal tier). 180 px scroll floor still met (183) | **239/181 worst case U** — needs the two-line action + disabled reason (Needs-elevation, U); discrepancy handed to `interface-designer`/`design-system` without a UI change here |
+| **Chrome at 320×420 (measured)** | measured, **no tier claim** | Archived pair: `run/window-320x420-en-starved.png` (fresh 420 render, warning state) + `run/chrome-geometry-en-420.json` (UIA rects from the same window) → `run/chrome-measurement.json` (method `scripts/fixtures/measure-chrome.py`): **rail 116 · action 64 · footer 56 · scroll 183 · chrome 236**; 320×760 rail = 144. The design table expects compact at 420 (rail 108, footer 41 → chrome 213 best / 239 worst, scroll 207/181): **compact tier did not engage at 420 in this build** (footer used the 40 px normal tier; DE additionally wraps the footer to two rows). 180 px scroll floor still met (183) | **239/181 worst case U** — needs the two-line action + disabled reason (Needs-elevation, U); compact-tier/wrap finding handed to `interface-designer`/`design-system` for task-86, no UI change here |
 | **Headless smoke as parity proof** | **U** | `dev-ops` audit: the advisory job has never genuinely passed (`GUI_SMOKE window_created title=""` on X11, macOS probe race) and is masked by `continue-on-error`; treat it as advisory-only until proven | real Linux/macOS GUI jobs' deterministic runs |
+
+**PR #186 evidence-review corrections (r25).** (1) The first 420 capture set was
+taken after a live resize + wheel scroll and is not used: all 420 captures were
+re-taken from a fresh 420 render (no resize, no wheel). EN's earlier "empty banner"
+was exactly that capture artifact; DE's mid-word clip reproduces on a fresh render
+and is the real wrapped-footer/scroll-viewport finding above. (2) The fifth tray
+state row was returned to **U** because the observed tooltip text has no archived
+artifact. (3) The chrome measurement now points at the fresh capture plus same-run
+UIA geometry pair (`run/chrome-geometry-en-420.json`). (4) The evidence pack no
+longer contains the fixture TLS private key, the renamed PowerShell host copy, or
+full-desktop screenshots.
 
 These promotions change **only** Windows runtime rows where a real window was
 captured; no Linux/macOS tier moved, and no "parity" claim is made.

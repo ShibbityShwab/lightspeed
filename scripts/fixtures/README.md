@@ -61,7 +61,7 @@ powershell ... -Action stop
 | Window captures 320×420 and 320×760, EN/DE/RU | `run/window-320x{420,760}-{en,de,ru}-starved.png`, exact client sizes, warning line + localized state word (`NO RETURN PATH` / `Kein Rückweg` / `Нет возврата`) |
 | UIA text rows per language/size | `run/ui-text-<lang>-<size>.txt` |
 | Live relay/watchdog counters | `run/gui-*-starved.log` (`intercepted≈70/window`, `from_relay=0`, `streak≥2`, `fault=NoReplyFromRelay`) |
-| Tray fifth state | UIA name of the notification-area icon during the state: `⚡ LightSpeed — relay is not returning your game traffic`; `run/tray-*` captures |
+| Tray fifth state | **U** after the PR #186 review: the tooltip text was observed once during a real starvation run (`⚡ LightSpeed — relay is not returning your game traffic`) but the pack has no reproducible saved UIA dump/capture for it; the row was returned to U rather than claimed |
 | Chrome measurement | `run/chrome-measurement.json`; method `scripts/fixtures/measure-chrome.py` |
 | Shortcut probes | `run/probe-evidence.json`, `run/shortcut-probes-*.json` |
 
@@ -70,9 +70,17 @@ desktop/log; captures are attributed to the fixture's own PID via UIA/window
 handles and the log excerpts are filtered by the loopback relay/server tuple.
 The tray context menu did not surface in either the right-click or Apps-key
 automation attempt (the menu is a tray-thread HMENU popup); the live menu capture
-therefore remains U. The `NO RETURN PATH` background uses the warning frame with
+therefore remains U, and the fifth-state tooltip has no archived artifact either
+(the pack stores no full-desktop screenshots and no TLS private key / renamed
+host binary - see the evidence `report.md`). The `NO RETURN PATH` background uses the warning frame with
 honest English fallback copy in DE/RU (Q5 translation debt).
 
 **Cleanup contract:** `-Action stop` removes the listeners, route, firewall rule,
 WinDivert copies, and restores the user's config/log state. Never leave the
 fixture running: the relay's control port is a shared-host resource.
+
+**TLS pin note:** the relay generates a self-signed cert in `$EvidenceDir/tls` and
+the client pins it (TOFU). Keep that directory between runs of one evidence pack;
+if you delete it, also clear the client's pinned loopback certificate
+(`.lightspeed-proxy-fingerprints` in the client data dir) or registration fails
+with "proxy certificate changed".

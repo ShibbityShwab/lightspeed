@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Chrome/band measurement for a real LightSpeed window capture (WF-081b).
 
-Input: a PNG captured from the live client area at 320 x 420 (or 320 x 760),
-and (optionally) a JSON file of UIA bounding rects recorded with the same
-capture (`probe-evidence.json` from the fixture run).
+Inputs:
+  * a PNG captured from the live client area at 320 x 420 (or 320 x 760);
+  * a UIA geometry JSON recorded with that same capture. Two shapes are
+    accepted: `{"elements": [{name, type, x, y, w, h}, ...]}` (the
+    `chrome-geometry-<lang>-420.json` dump this fixture writes), or the legacy
+    `{"rects420": {"<name>": {x,y,w,h}}}` probe evidence.
 
 Measurement method (documented so it is re-runnable):
   * rail band  - the top full-bleed plane. Found by scanning the left edge
@@ -16,7 +19,7 @@ Measurement method (documented so it is re-runnable):
     rail + action band + hairline + footer (scroll region = the remainder).
 
 Usage:
-  python measure-chrome.py window-320x420-en-starved.png [probe-evidence.json]
+  python measure-chrome.py window-320x420-en-starved.png chrome-geometry-en-420.json
 """
 import json
 import sys
@@ -40,22 +43,35 @@ def rail_bottom(path: str) -> int:
     raise SystemExit(f"{path}: rail boundary not found")
 
 
-def uia_geometry(probe_path: str, height: int) -> dict:
-    with open(probe_path, "r", encoding="utf-8") as handle:
-        evidence = json.load(handle)
-    key = "rects420" if height == 420 else "rects"
-    return evidence.get(key, {})
+def rects_by_name(geometry_path: str) -> dict:
+    with open(geometry_path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    rects = {}
+    if isinstance(data.get("elements"), list):
+        for element in data["elements"]:
+            name = element.get("name")
+            if name and name not in rects:
+                rects[name] = element
+    for key in ("rects420", "rects"):
+        for name, rect in (data.get(key) or {}).items():
+            rects.setdefault(name, rect)
+    return rects
 
 
-def measure(capture: str, probe: str | None) -> dict:
+def measure(capture: str, geometry: str | None) -> dict:
     image = Image.open(capture)
     height = image.size[1]
     border = rail_bottom(capture)
-    result = {"capture": capture, "client": [image.size[0], height], "rail_band_px": border}
+    result = {
+        "capture": capture,
+        "geometry": geometry,
+        "client": [image.size[0], height],
+        "rail_band_px": border,
+    }
     if border >= height:
         return result
-    if probe:
-        rects = uia_geometry(probe, height)
+    if geometry:
+        rects = rects_by_name(geometry)
         action = rects.get("STOP OPTIMIZING") or rects.get("OPTIMIZE MY ROUTE")
         footer = rects.get("Hide to tray") or rects.get("Settings")
         if action and footer:
@@ -72,9 +88,9 @@ def measure(capture: str, probe: str | None) -> dict:
                     "chrome_px": border + (action_bottom - action_top) + (client_bottom - footer_top),
                     "action_label_height_px": int(action["h"]),
                     "footer_button_height_px": int(footer["h"]),
+                    "uia_offset": f"action_top_abs={action_top} client_top_abs={client_top}",
                 }
             )
-            result["_uia_offset"] = f"action_top_abs={action_top} client_top_abs={client_top}"
     return result
 
 
@@ -82,8 +98,8 @@ def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
     capture = sys.argv[1]
-    probe = sys.argv[2] if len(sys.argv) > 2 else None
-    print(json.dumps(measure(capture, probe), indent=2))
+    geometry = sys.argv[2] if len(sys.argv) > 2 else None
+    print(json.dumps(measure(capture, geometry), indent=2))
 
 
 if __name__ == "__main__":
