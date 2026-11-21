@@ -19,12 +19,12 @@ licence file is byte-identical to upstream `notofonts/noto-cjk@Sans2.004`
 | `Inter-SemiBold.ttf` | Inter SemiBold 4.001 | `semibold` head | 230 | 67,144 |
 | `Inter-Bold.ttf` | Inter Bold 4.001 | bundled, no family | 230 | 67,128 |
 | `JetBrainsMono-Regular.ttf` | JetBrains Mono 2.211 | monospace head | 229 | 57,800 |
-| `NotoSansJP-Regular.otf` | Noto Sans JP 2.004 | ja CJK regular | 405 | 47,776 |
-| `NotoSansJP-Bold.otf` | Noto Sans JP Bold 2.004 | ja CJK bold | 405 | 47,952 |
-| `NotoSansKR-Regular.otf` | Noto Sans KR 2.004 | ko CJK regular | 395 | 34,168 |
-| `NotoSansKR-Bold.otf` | Noto Sans KR Bold 2.004 | ko CJK bold | 395 | 34,532 |
-| `NotoSansSC-Regular.otf` | Noto Sans SC 2.004 | zh-Hans CJK regular | 415 | 52,912 |
-| `NotoSansSC-Bold.otf` | Noto Sans SC Bold 2.004 | zh-Hans CJK bold | 415 | 53,304 |
+| `NotoSansJP-Regular.otf` | Noto Sans JP 2.004 | ja CJK regular | 489 | 61,824 |
+| `NotoSansJP-Bold.otf` | Noto Sans JP Bold 2.004 | ja CJK bold | 489 | 62,040 |
+| `NotoSansKR-Regular.otf` | Noto Sans KR 2.004 | ko CJK regular | 471 | 41,824 |
+| `NotoSansKR-Bold.otf` | Noto Sans KR Bold 2.004 | ko CJK bold | 471 | 42,212 |
+| `NotoSansSC-Regular.otf` | Noto Sans SC 2.004 | zh-Hans CJK regular | 530 | 73,780 |
+| `NotoSansSC-Bold.otf` | Noto Sans SC Bold 2.004 | zh-Hans CJK bold | 530 | 74,764 |
 
 The Inter and JetBrains Mono cuts are Latin-only. Inter carries all printable
 ASCII and Latin-1 (soft hyphen U+00AD is the one exception; no catalog uses it),
@@ -37,12 +37,13 @@ command was not.
 ## The CJK subsets are generated, never hand-edited
 
 The three Noto faces ship as small subsets rather than the ~28 MB full fonts:
-the nine catalogs ∪ the language picker need **620 distinct non-ASCII
-characters** (617 catalog characters; the picker contributes only the three new
-ones, `국`/`简`/`体`). The ten faces in this directory draw **570** of them; the
-remaining **50 Cyrillic codepoints** of `ru` resolve to epaint's built-in
-Ubuntu-Light, which is not in this directory. **Do not edit an `.otf` by hand** —
-it has no reproducible provenance and the coverage/hash gate will reject it.
+after the Q5 translations the nine catalogs ∪ the language picker need **864
+distinct non-ASCII characters** (862 catalog characters; the picker contributes
+only `体`/`简`, which no catalog uses). The ten faces in this directory draw
+**810** of them; the remaining **54 Cyrillic codepoints** of `ru` resolve to
+epaint's built-in Ubuntu-Light, which is not in this directory. **Do not edit an
+`.otf` by hand** — it has no reproducible provenance and the coverage/hash gate
+will reject it.
 
 Regenerate them with the pinned pipeline:
 
@@ -98,3 +99,12 @@ before committing an asset change). The durable runtime gate is the Rust test
   catalogs (`分`, `前` and `要`, `語`), so those strings were partly drawn with
   another region's glyph forms. Coverage 399/388/411 → 405/395/415 codepoints,
   266,216 → 270,644 bytes (+4,428 B, +1.66%).
+- **2026-11-21 (WF-081b, Q5 re-cut)**: the full nine-locale translations added
+  84 / 76 / 115 characters to the `ja` / `ko` / `zh-Hans` catalogs (255 distinct
+  across the three after 20 shared Han), and the pre-Q5 faces could not draw
+  them (the font gate failed with the characters named). The same pinned
+  pipeline re-cut all six faces; each addition matches the published
+  `new-codepoints-per-face.json` exactly, no codepoint was dropped, and every
+  shared glyph keeps its outline. Coverage 405/395/415 → 489/471/530 codepoints;
+  270,644 → 356,444 bytes (+85,800 B, +31.70%). The locale files are the
+  translations slice's; this cut adds no copy.
