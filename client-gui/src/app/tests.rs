@@ -2616,3 +2616,266 @@ fn the_shared_picker_draws_loading_empty_and_no_match_honestly() {
     assert!(ready.contains('7'), "the row names the PID:\n{ready}");
     crate::i18n::set_language(None);
 }
+
+// ── WF-081b (task-74): declined notice, A11 disclosure, autostart ──────────
+
+/// Spec §2.2 row 7: a declined elevation prompt returns to ready with the
+/// catalogued notice. Only `Declined` names copy (the other resolved phases keep
+/// the window and log only), and the declined notice outranks the standing
+/// Needs-elevation line until the user retries.
+#[test]
+fn a_declined_elevation_prompt_renders_its_notice_over_the_needs_admin_line() {
+    use super::ElevationPhase;
+
+    assert_eq!(
+        super::elevation_declined_notice(ElevationPhase::Declined),
+        Some("notice.elevation_declined")
+    );
+    for phase in [
+        ElevationPhase::Ready,
+        ElevationPhase::Restarting,
+        ElevationPhase::Confirmed,
+        ElevationPhase::Failed,
+    ] {
+        assert_eq!(
+            super::elevation_declined_notice(phase),
+            None,
+            "{phase:?} must not leave a declined notice"
+        );
+    }
+
+    let needs_admin = super::Line::new("notice.needs_admin");
+    assert_eq!(
+        super::shell_notice(Some("notice.elevation_declined"), Some(&needs_admin)),
+        Some(super::Line::new("notice.elevation_declined")),
+        "what just happened outranks the standing requirement"
+    );
+    assert_eq!(
+        super::shell_notice(None, Some(&needs_admin)),
+        Some(super::Line::new("notice.needs_admin")),
+        "with no live outcome the route surface's notice stands"
+    );
+    assert_eq!(super::shell_notice(None, None), None);
+
+    // The copy the state machine names is shipped in every catalog, and it says
+    // what happened rather than repeating the requirement.
+    let _guard = crate::i18n::test_lock();
+    for locale in crate::i18n::LOCALES {
+        crate::i18n::set_language(Some(locale.tag));
+        let text = crate::i18n::t("notice.elevation_declined");
+        assert_ne!(
+            text.as_ref(),
+            "notice.elevation_declined",
+            "{} is missing the declined notice",
+            locale.tag
+        );
+        assert!(
+            text.to_lowercase().contains("declined"),
+            "{} does not say the prompt was declined: {text}",
+            locale.tag
+        );
+    }
+    crate::i18n::set_language(None);
+}
+
+/// The declined notice is drawn inside the notice frame at the 320 px floor
+/// (the capture companion in `wat/evidence/2026-11-21/wf081b-ui-debt/` proves
+/// the same in a real window). Nothing may be painted past the column.
+#[test]
+fn the_declined_notice_fits_the_320_px_floor() {
+    use eframe::egui;
+
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((
+                text.galley.text().to_string(),
+                text.pos.x + text.galley.size().x,
+            )),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let _guard = crate::i18n::test_lock();
+    crate::i18n::set_language(Some("en"));
+    let text = crate::i18n::t("notice.elevation_declined").into_owned();
+
+    let ctx = egui::Context::default();
+    super::install_fonts(&ctx, Some("en"));
+    super::apply_theme(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(320.0, 420.0),
+        )),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(raw, |ui| {
+        ui.set_width(ui.available_width());
+        super::notice_frame(ui, false, |ui| {
+            ui.label(
+                egui::RichText::new(text.as_str())
+                    .size(crate::design::BODY)
+                    .family(super::semibold())
+                    .color(crate::design::warn),
+            );
+        });
+    });
+    out.textures_delta.clear();
+    let mut drawn = Vec::new();
+    for clipped in &out.shapes {
+        collect(&clipped.shape, &mut drawn);
+    }
+    let frame = drawn
+        .iter()
+        .map(|(line, _)| line.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let widest = drawn
+        .iter()
+        .map(|(_, right)| *right)
+        .fold(0.0_f32, f32::max);
+    crate::i18n::set_language(None);
+
+    assert!(
+        frame.contains(text.as_str()),
+        "the declined notice did not draw:\n{frame}"
+    );
+    assert!(
+        widest <= 320.0,
+        "the notice was painted past the 320 px floor ({widest} px):\n{frame}"
+    );
+}
+
+/// A11 (Q18): the update sheet states the disclosure on the surface that acts.
+/// The sentence is catalogued in every locale, carries no placeholder, and draws
+/// inside a 320 px window in the three binding capture locales (EN/DE/RU).
+#[test]
+fn the_update_sheet_states_the_a11_disclosure_at_320_px() {
+    use eframe::egui;
+
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((
+                text.galley.text().to_string(),
+                text.pos.x + text.galley.size().x,
+            )),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let _guard = crate::i18n::test_lock();
+    // Every shipped catalog carries the sentence (English fallback until Q5).
+    for locale in crate::i18n::LOCALES {
+        crate::i18n::set_language(Some(locale.tag));
+        let text = crate::i18n::t("update.disclosure");
+        assert_ne!(
+            text.as_ref(),
+            "update.disclosure",
+            "{} is missing the A11 disclosure",
+            locale.tag
+        );
+        assert!(
+            !text.contains('{'),
+            "{} leaks a placeholder into the disclosure: {text}",
+            locale.tag
+        );
+    }
+
+    for locale in ["en", "de", "ru"] {
+        crate::i18n::set_language(Some(locale));
+        let text = crate::i18n::t("update.disclosure").into_owned();
+        let ctx = egui::Context::default();
+        super::install_fonts(&ctx, Some(locale));
+        super::apply_theme(&ctx);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(320.0, 420.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            ui.set_width(ui.available_width());
+            super::update_disclosure(ui);
+        });
+        out.textures_delta.clear();
+        let mut drawn = Vec::new();
+        for clipped in &out.shapes {
+            collect(&clipped.shape, &mut drawn);
+        }
+        let frame = drawn
+            .iter()
+            .map(|(line, _)| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let widest = drawn
+            .iter()
+            .map(|(_, right)| *right)
+            .fold(0.0_f32, f32::max);
+        assert!(
+            frame.contains(text.as_str()),
+            "{locale}: the disclosure did not draw:\n{frame}"
+        );
+        assert!(
+            widest <= 320.0,
+            "{locale}: the disclosure was painted past 320 px ({widest} px):\n{frame}"
+        );
+    }
+    crate::i18n::set_language(None);
+}
+
+/// WF-081b autostart: the Settings copy is catalogued in all nine locales, and
+/// the recorded preference round-trips through the GUI's config layer. The
+/// platform entry round-trip (write -> installed -> remove) is covered in
+/// `platform/autostart.rs` against a temp dir, never the real registry.
+#[test]
+fn the_autostart_preference_and_copy_round_trip() {
+    let _guard = crate::i18n::test_lock();
+    for locale in crate::i18n::LOCALES {
+        crate::i18n::set_language(Some(locale.tag));
+        for key in [
+            "settings.startup",
+            "settings.autostart",
+            "settings.autostart_hint",
+        ] {
+            let text = crate::i18n::t(key);
+            assert_ne!(text.as_ref(), key, "{} is missing {key}", locale.tag);
+        }
+    }
+    crate::i18n::set_language(None);
+
+    // Config plumbing: the opt-in field round-trips through the canonical file
+    // the GUI writes (the platform entry is reconciled to it at Settings open).
+    let dir = std::env::temp_dir().join(format!(
+        "lightspeed-autostart-config-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = lightspeed_client::app::config::ConfigPaths::in_dir(&dir);
+    let enabled = crate::config::AppConfig {
+        autostart: true,
+        ..Default::default()
+    };
+    crate::config::save_canonical(&paths, &enabled).expect("the opt-in saves");
+    assert!(
+        crate::config::load_unified(&paths).config.autostart,
+        "enable round-trips"
+    );
+    let disabled = crate::config::AppConfig::default();
+    crate::config::save_canonical(&paths, &disabled).expect("the opt-out saves");
+    assert!(
+        !crate::config::load_unified(&paths).config.autostart,
+        "disable round-trips"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

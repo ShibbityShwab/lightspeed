@@ -102,24 +102,38 @@ These are **not claims**; each has a named fixture or path:
 8. **Live starvation-warning episode** and **Linux CI for moved tests**.
 9. **Translation/font debt:** Q5 (C7 English-identical keys, last measured
    ja/ko/zh 70, DE 51, ES/FR/PT 47, RU 45) and Q19 (subset gap `국`/`简`/`体`).
+   WF-081b (task-74) adds 4 English-fallback keys per catalog (`update.disclosure`,
+   `settings.startup`, `settings.autostart`, `settings.autostart_hint`), so the
+   running C7 count moves to **ja/ko/zh 74, DE 55, ES/FR/PT 51, RU 49** until Q5
+   lands; the captures in `wat/evidence/2026-11-21/wf081b-ui-debt/` show the
+   English sentences in the DE/RU frames, as recorded.
 
 ## 5. Debt register (post-W2, on the board)
 
 | Task | What | Owner |
 |---|---|---|
 | task-57 | engine surface + migration for the CLI live modes (`watch` → `--start-interceptor` → `--game-server`), behavior-preserving | rust-dev + net-eng |
-| task-65 | elevation-declined notice rendering; A11 `update.disclosure` copy; C7 record update | interface-designer |
-| task-67 | autostart Settings toggle; narrow the `autostart.rs` module-wide allowance | interface-designer + desktop-platform |
-| Q5 | translation pipeline for the remaining English-identical keys | ux-lead |
+| task-65 | elevation-declined notice rendering; A11 `update.disclosure` copy; C7 record update | interface-designer — **closed by WF-081b (task-74)**, see §5 note |
+| task-67 | autostart Settings toggle; narrow the `autostart.rs` module-wide allowance | interface-designer + desktop-platform — **closed by WF-081b (task-74)**, see §5 note |
+| Q5 | translation pipeline for the remaining English-identical keys | ux-lead — WF-081b added 4 more English-fallback keys per catalog |
 | Q19 | font-subset regeneration for the CJK gaps | design-system |
+
+**WF-081b (task-74) closes tasks 65 and 67:** the declined-prompt notice is wired
+in the accepted shell (`notice.elevation_declined`, fixture + 320×420 captures),
+the A11 `update.disclosure` sentence is on the updater sheet in all 9 catalogs
+(320 px fit fixture + EN/DE/RU captures), and Settings → Startup has the
+autostart toggle (`config.autostart` + `platform/autostart.rs`
+`installed_current`/`apply_current`, round-trip tested) whose module-wide
+`allow(dead_code)` is **removed**. The added locale keys are English fallback
+until Q5 lands.
 
 Documented exceptions (not debt to hide): `elevation.rs` `cfg_attr(not(windows))`,
 `platform/mod.rs` `TrayAction` (Windows-tray only), and the pre-existing
 `client-gui/src/design.rs:18` token-scale `allow(dead_code, non_upper_case_globals)`
 that predates the refresh (outside the W2-2/W2-4 family). The `autostart.rs`
-module-wide allowance is named debt in task-67. A pre-existing `e2e-test` CI job
-that starts servers with no client test step was observed and deliberately not
-touched (outside W2-4).
+module-wide allowance named in task-67 is **gone** (WF-081b). A pre-existing
+`e2e-test` CI job that starts servers with no client test step was observed and
+deliberately not touched (outside W2-4).
 
 ## 6. Decisions of record
 

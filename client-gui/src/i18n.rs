@@ -171,12 +171,31 @@ pub const LOCALES: &[LocaleInfo] = &[
     },
 ];
 
-/// Requested locale for this process: the pinned language, else the OS locale.
+/// The capture/fixture locale override environment variable.
+///
+/// Same family as the app's `LIGHTSPEED_OPEN_*` switches: a real-window
+/// evidence capture cannot switch languages on a machine whose
+/// `lightspeed.toml` pins one, and WF-081b needs EN/DE/RU frames. The override
+/// applies to that process only and is never set in normal operation.
+const LOCALE_OVERRIDE_ENV: &str = "LIGHTSPEED_LOCALE";
+
+/// A raw override value, where blank means "no override".
+fn locale_override(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string)
+}
+
+/// Requested locale for this process: a capture override, else the pinned
+/// language, else the OS locale.
 fn configured_language() -> Option<String> {
-    pinned()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
+    locale_override(std::env::var(LOCALE_OVERRIDE_ENV).ok().as_deref())
+        .or_else(|| {
+            pinned()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        })
         .or_else(system_locale)
 }
 
@@ -469,6 +488,15 @@ mod tests {
         );
         assert_eq!(merged.get("state.error").map(String::as_str), Some("Error"));
         assert_eq!(merged.get("no.such.key"), None);
+    }
+
+    #[test]
+    fn the_capture_locale_override_ignores_blanks() {
+        assert_eq!(locale_override(Some("de")), Some("de".to_string()));
+        assert_eq!(locale_override(Some("  ru  ")), Some("ru".to_string()));
+        assert_eq!(locale_override(Some("")), None);
+        assert_eq!(locale_override(Some("   ")), None);
+        assert_eq!(locale_override(None), None);
     }
 
     #[test]

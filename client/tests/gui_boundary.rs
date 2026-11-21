@@ -112,6 +112,11 @@ const ALLOWED_CLIENT_PATHS: &[&str] = &[
 const FORBIDDEN_DEFINITIONS: &[&str] = &[
     "is_holding",
     "GuiConfig",
+    // WF-081b (task-74): the shared config model gained the opt-in `autostart`
+    // field, so the schema is core-owned more than ever; a GUI-side `struct
+    // AppConfig` (a second schema) must never come back. The GUI keeps only the
+    // `crate::config` re-export.
+    "AppConfig",
     // S2 — discovery/probe/identity.
     "discover_blocking",
     "parse_nodes",
@@ -354,7 +359,10 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // W2-4b: the eight retired helper tests left (six moved into the route-surface
     // fixtures, one dead formatter and one duplicate targeting test retired), and
     // one rendered-copy fixture arrived with them. 2853 -> 2618.
-    ("client-gui/src/app/tests.rs", 2618),
+    // WF-081b (task-74): four fixtures arrive - declined-notice mapping/copy,
+    // declined-notice 320 px render, A11 disclosure 320 px render, autostart
+    // copy + config round-trip. 2618 -> 2881.
+    ("client-gui/src/app/tests.rs", 2881),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
@@ -365,7 +373,12 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
     // W2-4b: the stale `app_status` dead_code allowance is gone (the frame's
     // one-snapshot seam calls it); one line net removed. 4424 -> 4423.
-    ("client-gui/src/app.rs", 4423),
+    // WF-081b (task-74): the declined-notice wiring (`elevation_declined_notice`
+    // + `shell_notice`), the Settings → Startup autostart toggle with its
+    // once-per-open platform reconcile, and the A11 `update_disclosure` render
+    // (now a free fn so its 320 px fit is testable). No width/layout change
+    // beyond the one Settings row and the notices. 4423 -> 4573.
+    ("client-gui/src/app.rs", 4573),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -385,7 +398,11 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // worker wrappers and the wrapper-answers test stay. 816 -> 78.
     ("client-gui/src/discovery.rs", 78),
     ("client-gui/src/globe.rs", 198),
-    ("client-gui/src/i18n.rs", 506),
+    // WF-081b (task-74): the capture/fixture locale override
+    // (`LIGHTSPEED_LOCALE`, the same family as the app's `LIGHTSPEED_OPEN_*`
+    // switches) plus its blank-tolerance test, so the 320x420 evidence captures
+    // can be taken in EN/DE/RU on a host whose config pins a language. 506 -> 534.
+    ("client-gui/src/i18n.rs", 534),
     ("client-gui/src/main.rs", 377),
     // W2-3b S6c: `config_file` becomes the canonical/legacy path pair. 81 -> 91.
     ("client-gui/src/paths.rs", 91),
@@ -393,7 +410,10 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/platform/macos.rs", 98),
     // W2-4b: the `TrayAction` platform exemption is documented in place, so the
     // module grows by the explanation, not by code. 220 -> 227.
-    ("client-gui/src/platform/mod.rs", 227),
+    // WF-081b (task-74): the `Platform` trait gains the two calls the Settings
+    // toggle makes (`autostart_installed`/`set_autostart`), with the observable
+    // truth and surfaced-error contracts documented. 227 -> 246.
+    ("client-gui/src/platform/mod.rs", 246),
     ("client-gui/src/platform/windows.rs", 481),
     ("client-gui/src/processes.rs", 282),
     ("client-gui/src/relay_history.rs", 15),
@@ -421,7 +441,12 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // `from_windows_flag` carry documented `cfg_attr(not(windows))` exemptions
     // (local to each item); 104 -> 121.
     ("client-gui/src/platform/animations.rs", 121),
-    ("client-gui/src/platform/autostart.rs", 433),
+    // WF-081b (task-74): the Settings toggle path lands here - `installed_current`
+    // (registry query / file existence), `apply_current` + `apply_entry` (write,
+    // remove, or `reg.exe` through an injectable runner so tests never write the
+    // real HKCU value), and the enable/disable round-trip fixtures - and the
+    // module-wide `#![cfg_attr(not(test), allow(dead_code))]` is removed. 433 -> 590.
+    ("client-gui/src/platform/autostart.rs", 590),
     ("client-gui/src/platform/elevation.rs", 421),
     ("client-gui/src/platform/shortcuts.rs", 413),
     ("client-gui/src/platform/tray_menu.rs", 280),
