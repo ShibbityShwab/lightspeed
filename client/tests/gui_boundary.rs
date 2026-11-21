@@ -386,7 +386,9 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/discovery.rs", 78),
     ("client-gui/src/globe.rs", 198),
     ("client-gui/src/i18n.rs", 506),
-    ("client-gui/src/main.rs", 377),
+    // WF-081b task-81: the smoke hook now logs the `APP_TITLE` constant and holds
+    // a bounded visible window, with a unit test pinning title + viewport; 377 -> 432.
+    ("client-gui/src/main.rs", 432),
     // W2-3b S6c: `config_file` becomes the canonical/legacy path pair. 81 -> 91.
     ("client-gui/src/paths.rs", 91),
     ("client-gui/src/platform/linux.rs", 106),

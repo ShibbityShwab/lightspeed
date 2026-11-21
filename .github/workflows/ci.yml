@@ -446,54 +446,67 @@ jobs:
       # the pre-hook fallback is the `app created` startup line. Unproven until a
       # run proves it (docs/design/cross-platform-2026.md §6.2); keep it
       # advisory, never make it a blocking gate, never delete it silently.
+      # WF-081b task-81 (QA C2/C5/C6): the hook markers, `frames>=1`, exit 0 and
+      # "the probe did not kill the app" are all required; a killed run (143)
+      # FAILS and there is no log-only pre-hook pass in smoke mode.
       - name: Headless smoke (advisory; unproven on hosted macOS)
         continue-on-error: true
         env:
           LIGHTSPEED_GUI_SMOKE: "1"
         run: |
           log="$HOME/Library/Application Support/Lightspeed/gui-trace.log"
+          window_marker='GUI_SMOKE window_created title="LightSpeed"'
           rm -f "$log"
           ./target/debug/lightspeed-gui &
           app=$!
-          created=0
+          window_seen=0
+          exit_seen=0
           i=0
-          while [ "$i" -lt 30 ]; do
+          while [ "$i" -lt 150 ]; do
             i=$((i + 1))
-            sleep 1
-            if grep -q 'GUI_SMOKE window_created title="LightSpeed"' "$log" 2>/dev/null; then
-              created=1
-              break
+            sleep 0.2
+            if grep -qF "$window_marker" "$log" 2>/dev/null; then
+              window_seen=1
             fi
-            if grep -q 'app created' "$log" 2>/dev/null; then
-              created=1
-              break
+            if grep -qF 'GUI_SMOKE exit=0' "$log" 2>/dev/null; then
+              exit_seen=1
             fi
             kill -0 "$app" 2>/dev/null || break
+            if [ "$window_seen" -eq 1 ] && [ "$exit_seen" -eq 1 ]; then
+              break
+            fi
           done
+          i=0
+          while [ "$i" -lt 75 ] && kill -0 "$app" 2>/dev/null; do
+            i=$((i + 1))
+            sleep 0.2
+          done
+          terminated=0
           if kill -0 "$app" 2>/dev/null; then
+            terminated=1
             kill "$app" 2>/dev/null || true
           fi
           status=0
           wait "$app" 2>/dev/null || status=$?
-          # Re-read after the exit: the hook can win the race against the 1 s poll.
-          if [ "$created" -ne 1 ]; then
-            if grep -q 'GUI_SMOKE window_created' "$log" 2>/dev/null || grep -q 'app created' "$log" 2>/dev/null; then
-              created=1
-            fi
+          # Re-read after the exit: the hook can win the race against the poll.
+          if grep -qF "$window_marker" "$log" 2>/dev/null; then
+            window_seen=1
           fi
-          if [ "$created" -ne 1 ]; then
-            echo "::error::macOS headless smoke: no window-creation line in ${log}"
+          if grep -qF 'GUI_SMOKE exit=0' "$log" 2>/dev/null; then
+            exit_seen=1
+          fi
+          frames=$(sed -n 's/.*GUI_SMOKE exit=0 frames=\([0-9][0-9]*\).*/\1/p' "$log" 2>/dev/null | tail -n 1)
+          frames=${frames:-0}
+          echo "macOS headless smoke: window=${window_seen} exit_marker=${exit_seen} frames=${frames} terminated=${terminated} app_exit=${status}"
+          if [ "$terminated" -ne 0 ] || [ "$status" -eq 143 ]; then
+            echo "::error::macOS headless smoke: the run was killed (exit=${status}); the G0.2 hook must exit 0 by itself"
             exit 1
           fi
-          if grep -q 'GUI_SMOKE window_created' "$log" 2>/dev/null; then
-            if ! grep -q 'GUI_SMOKE exit=0' "$log" 2>/dev/null || [ "$status" -ne 0 ]; then
-              echo "::error::macOS headless smoke: G0.2 hook did not exit cleanly (exit=${status})"
-              exit 1
-            fi
-            echo "macOS headless smoke: G0.2 window + clean exit observed in ${log}"
-          else
-            echo "macOS headless smoke: pre-hook window creation observed in ${log} (advisory)"
+          if [ "$window_seen" -ne 1 ] || [ "$exit_seen" -ne 1 ] || [ "$frames" -lt 1 ] || [ "$status" -ne 0 ]; then
+            echo "::error::macOS headless smoke: G0.2 markers/clean exit not observed (window=${window_seen} exit_marker=${exit_seen} frames=${frames} app_exit=${status})"
+            exit 1
           fi
+          echo "macOS headless smoke: G0.2 window + clean self-exit observed in ${log}"
 
   # ── Headless GUI smoke (advisory until proven) ────────────────────────────
   # W2-4 (b): prove a real window is created on a display-less runner. Invocation
@@ -529,8 +542,13 @@ jobs:
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libgl1-mesa-dri libgtk-3-dev libssl-dev xvfb xdotool
 
+
       - name: Build GUI (debug)
         run: cargo build -p lightspeed-gui
+
+      - name: Headless smoke probe self-check (advisory; decision controls)
+        continue-on-error: true
+        run: bash scripts/headless-gui-smoke.sh --self-check
 
       - name: Headless window smoke (advisory until proven)
         continue-on-error: true
