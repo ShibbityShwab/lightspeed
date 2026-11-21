@@ -2235,7 +2235,23 @@ impl TrafficInterceptor for WinDivertInterceptor {
         // is parked in a full `WinDivertSend` queue. Both owner threads then
         // ack, so the session can be waited on and the handles closed
         // deterministically.
-        let teardown = PlatformTeardown::new(
+        // Close the handles synchronously after every owner thread ack, so a
+        // relay switch cannot open a new filter while the old one is still
+        // registered (FWP_E_IN_USE) or let a late Arc drop close a recycled
+        // handle value used by the next session.
+        let close_handles = {
+            let wd_ic = Arc::clone(&wd_intercept);
+            let wd_inj = Arc::clone(&wd_inject);
+            let wd_sh = wd_shadow.clone();
+            move || {
+                let _ = wd_ic.close();
+                let _ = wd_inj.close();
+                if let Some(sh) = &wd_sh {
+                    let _ = sh.close();
+                }
+            }
+        };
+        let teardown = PlatformTeardown::with_close(
             {
                 let wd_ic = Arc::clone(&wd_intercept);
                 let wd_inj = Arc::clone(&wd_inject);
@@ -2257,6 +2273,7 @@ impl TrafficInterceptor for WinDivertInterceptor {
                     }
                 }
             },
+            close_handles,
             teardown_ack,
         );
 
