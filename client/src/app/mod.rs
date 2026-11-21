@@ -44,14 +44,18 @@
 //!   it drives raw QUIC/tunnel/FEC diagnostic phases and needs an engine
 //!   diagnostic-phase surface that does not exist. Lead-decided deferral (S6b).
 //! * **live session modes `--game-server`, `--start-interceptor`, `--watch`** —
-//!   still on their front-end paths (`client/src/main.rs` redirect branch;
-//!   `client/src/modes/intercept_mode.rs`; `client/src/modes/watch_mode.rs`).
-//!   Re-pointing them at [`commands::AppCore`] needs engine exposure that S6b2's
-//!   write scope does not contain: discovery facts for the printed path, an
-//!   adaptive-FEC policy parameter (the engine derives it from `fec`), redirect
-//!   transport/counters (`--tcp`, the stats the CLI prints), and a relay-reroute
-//!   command to preserve the CLI's continuous rerouting —
-//!   `wat/evidence/2026-11-20/w2-3b/s6b2/report.md` carries the exact matrix.
+//!   the CLI front-end paths are still the shipped ones (`client/src/main.rs`
+//!   redirect branch; `client/src/modes/intercept_mode.rs`;
+//!   `client/src/modes/watch_mode.rs`). The engine gaps S6b2 named
+//!   (`wat/evidence/2026-11-20/w2-3b/s6b2/report.md`) are now closed by the
+//!   additive surface in [`crate::engine`]: `InterceptorRequest` +
+//!   `plan_interceptor`/`start_interceptor_plan` expose the discovery/print facts
+//!   and apply the caller's adaptive-FEC policy verbatim, `RedirectOptions` +
+//!   `redirect_counters` add the redirect `adaptive`/`tcp` options and the final
+//!   stats counters, and `switch_relay` is the awaitable in-session relay switch
+//!   the continuous rerouting loop needs. Re-pointing the three modes at
+//!   [`commands::AppCore`] on top of that surface (with parity fixtures) is the
+//!   remaining stage of post-W2 task-57.
 //! * **CLI module dedup is closed for this program**: no CLI module is
 //!   unreferenced, and the library counterparts are `pub(crate)`, so deleting or
 //!   reusing them needs a public core API decision; the item-level G1 adapter
