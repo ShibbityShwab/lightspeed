@@ -66,6 +66,15 @@ pub mod config;
 pub mod discovery;
 pub mod dto;
 pub mod history;
+/// The adopted live session modes (post-W2 task-57).
+///
+/// `--watch` (and, as it migrates, `--start-interceptor` and the `--game-server`
+/// redirect) run here, on [`commands::AppCore`] / [`runtime::SessionCore`],
+/// instead of the binary's engine-less session model. Library-side by design:
+/// the binary compiles its own `modes/*`/`quic`/`session` copies with separate
+/// process-global statics, so a mode on the library engine must run its whole
+/// session against the library modules (see `client/src/app/live/mod.rs`).
+pub mod live;
 /// The honest server-location ladder and its offline indexes (S5a).
 ///
 /// Feature-gated, one meaning per feature (`Cargo.toml`): `server-location`

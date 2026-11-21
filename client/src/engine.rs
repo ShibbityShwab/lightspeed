@@ -136,6 +136,10 @@ pub struct InterceptorRequest {
     pub process_target: Option<crate::interceptor::ProcessTarget>,
     /// Fallback route when the game process has no discovered server yet.
     pub server_override: Option<SocketAddrV4>,
+    /// Whether the start emits the engine's canonical `🚀 Interceptor started …`
+    /// line. `true` for the shipped/shared paths; a live mode that prints its own
+    /// activation line sets `false` so the CLI output stays byte-identical.
+    pub announce_start: bool,
 }
 
 impl InterceptorRequest {
@@ -151,6 +155,7 @@ impl InterceptorRequest {
             port_range_override: None,
             process_target: None,
             server_override: None,
+            announce_start: true,
         }
     }
 
@@ -180,6 +185,13 @@ impl InterceptorRequest {
         self.server_override = server;
         self
     }
+
+    /// Keep the engine's canonical start line out of the output (a live mode
+    /// prints its own activation line and must not gain a second one).
+    pub fn with_announce_start(mut self, announce: bool) -> Self {
+        self.announce_start = announce;
+        self
+    }
 }
 
 /// What a front end prints around an interceptor start, and what the engine
@@ -194,6 +206,8 @@ pub struct InterceptorPlan {
     facts: InterceptorFacts,
     /// Data-plane relay the plan was built for.
     relay: SocketAddrV4,
+    /// Whether starting the plan emits the engine's canonical start line.
+    announce_start: bool,
 }
 
 impl InterceptorPlan {
@@ -1624,6 +1638,7 @@ impl LightSpeedEngine {
             config,
             facts,
             relay: request.relay,
+            announce_start: request.announce_start,
         })
     }
 
@@ -1643,6 +1658,7 @@ impl LightSpeedEngine {
             config,
             facts,
             relay,
+            announce_start,
         } = plan;
 
         let initial_server = match config.process_target.as_ref() {
@@ -1705,12 +1721,14 @@ impl LightSpeedEngine {
             s.registration_error = None;
         }
 
-        tracing::info!(
-            "🚀 Interceptor started for {} via {} (proxy {})",
-            target_label,
-            platform,
-            relay,
-        );
+        if announce_start {
+            tracing::info!(
+                "🚀 Interceptor started for {} via {} (proxy {})",
+                target_label,
+                platform,
+                relay,
+            );
+        }
 
         self.interceptor_handle = Some(handle);
         Ok(())
@@ -1819,6 +1837,28 @@ impl LightSpeedEngine {
         if let Ok(mut s) = self.status.write() {
             s.interceptor_active = false;
         }
+    }
+
+    /// Stop the interceptor while the session keeps running, reporting whether
+    /// the platform teardown completed in `timeout`.
+    ///
+    /// The adopted live modes own their teardown UX (they print their own
+    /// warning when the platform handles linger) and keep watching for the game
+    /// to return, so the control-plane supervisor must NOT be stopped - only
+    /// [`Self::stop_interceptor`] (the GUI/shared path) ends the registration
+    /// with the data plane. No log line is emitted here; the caller owns it.
+    pub fn stop_interceptor_keep_registration(&mut self, timeout: Duration) -> bool {
+        let Some(mut handle) = self.interceptor_handle.take() else {
+            if let Ok(mut s) = self.status.write() {
+                s.interceptor_active = false;
+            }
+            return true;
+        };
+        let stopped = handle.stop_and_wait(timeout);
+        if let Ok(mut s) = self.status.write() {
+            s.interceptor_active = false;
+        }
+        stopped
     }
 
     // ─────────────────────────────────────────────────────────────────────

@@ -214,6 +214,22 @@ impl AppCore {
         })
     }
 
+    /// Stop the interceptor but keep the session's control-plane registration.
+    ///
+    /// The adopted live modes own their teardown UX (they print their own warning)
+    /// and keep watching for the game to return, so the data plane stops while the
+    /// relay session lives. Returns whether the platform teardown completed within
+    /// `timeout`; `false` means the caller prints the shipped warning. No backend
+    /// other than the interceptor is touched.
+    pub fn stop_boost_keep_registration(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<bool, AppError> {
+        self.run(SessionCommand::StopBoost, move |engine| {
+            Ok(engine.stop_interceptor_keep_registration(timeout))
+        })
+    }
+
     /// Start the manual/custom redirect for an explicit server.
     pub fn start_redirect(
         &mut self,
