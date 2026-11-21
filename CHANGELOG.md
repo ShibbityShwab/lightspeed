@@ -31,6 +31,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A rebuilt desktop interface ("Instrument 2.0") and one shared core**
+  (`client-gui`, `client`). The status window is now a mobile-shaped single
+  column pinned at 320 px (resizable height 420–1400, initial 760) with a state
+  rail whose state word always fits, an honest route card, a `NO RETURN PATH`
+  danger banner for the warn-only starvation policy, a Details ledger, the
+  update disclosure, and a refreshed token/copy/contrast system across the nine
+  shipped locale catalogs. The presentation-independent rules (status, config,
+  discovery, route surface, watchdog, history, trace) now live in one place —
+  the shared `lightspeed_client::app` core behind the drift guard in
+  `client/tests/gui_boundary.rs` — with the GUI as a thin shell; the CLI
+  composes the same session core for `--check`/`--status`, while its live
+  capture modes stay documented adapters and its flags, output text and exit
+  codes are unchanged (frozen CLI goldens).
+- **Platform-adaptive desktop behaviour** (`client-gui`). The app now has a
+  real per-OS tray/menu including the fifth `RelayStarved` state (never shown as
+  "optimizing"), canonical shortcut keymaps and menu accelerators, an explicit
+  elevation handshake that gates only the boost action ("restart as
+  administrator" copy per OS), autostart writers (Windows Run key, Linux
+  `.desktop` entry, macOS LaunchAgent), updater copy that tells the truth per
+  install channel (no install button that cannot act), and the Windows
+  reduced-motion signal (`SPI_GETCLIENTAREAANIMATION`: animations only when the
+  OS explicitly enables them, static otherwise). The GUI now also builds, lints
+  and tests on Linux and macOS in PR CI (`linux-gui`, `macos-gui`) with per-OS
+  test counts, and a headless Xvfb smoke job (`gui-headless-smoke`) exercises
+  real window creation on a display-less runner (advisory while its probe is
+  hardened). **Build and headless coverage run in CI, but runtime behaviour on
+  Linux and macOS remains unverified until hardware is available**, and the
+  headless smoke has not yet been promoted to a blocking check — the three-tier
+  statement and the full named-U register are in
+  `docs/design/gui-refresh-closeout.md`.
+- **The route trace caption names the last responding hop's network**
+  (`client-gui`, `client`). When the shipped location indexes know the trace's
+  last responding hop, the caption appends its cloud-provider, operator geofeed
+  or hosting-network name — never a city and never a country guess — and a
+  trace with no responding hop renders no row. The location ladder, its data
+  indexes and the trace runner now live in the shared core behind the
+  `server-location`/`geo-ip` features (the CLI's defaults are unchanged). All of
+  it stays display-only: it never feeds relay ranking and the client makes no
+  network calls to place a server.
 - **Relay-side per-session starvation counters.** Each relay session now counts
   forwarded packets, replies and unattributed responses, logs
   `RELAY_SESSION_STATS server=<ip:port> forwarded=<n> replies=<n> unmatched=<n> age_ms=<n>`
@@ -38,6 +77,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `lightspeed_server_leg_{forwarded,replies,unmatched}_total` Prometheus
   counters. This separates "the relay is not returning the server's traffic"
   from server-side silence without adding packets.
+
+### Fixed
+
+- **Portable CLI compatibility output and non-Windows builds.** The frozen CLI
+  goldens now normalize ANSI colour and host-state differences instead of
+  depending on the terminal, the desktop app compiles and lints cleanly outside
+  Windows (Windows-only install/animation code is `cfg`-gated), and the
+  control-plane reconnect integration test no longer races on small CI runners
+  (test-only; no production behaviour change).
+
+### Security
+
+- **The client route trace is local-only and now disclosed.** While a game
+  server is locked the OS traceroute runs locally; the summary (hop count,
+  last-hop RTT, and the provider/hosting network when known) stays in the app
+  and the local trace log, and nothing is sent to LightSpeed or any third party.
+  The probe and its `CLIENT_TRACE` log line are documented in `docs/privacy.md`
+  and `docs/data-dictionary.md`. No telemetry was added and no new data is
+  collected.
+
+### Notes
+
+- **Known unverified items (not claims).** Linux/macOS GUI runtime behaviour
+  (needs hardware), the interactive Windows UAC accept/decline path (the dev
+  harness is elevated), live tray/menu captures including the starving-relay
+  state, the Linux/macOS runtime updater and traceroute paths, and the
+  translation (Q5) / CJK font-subset (Q19) debt. The full register is
+  `docs/design/gui-refresh-closeout.md` §4.
 
 ## [1.11.4] - 2026-11-20
 
