@@ -33,13 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A rebuilt desktop interface ("Instrument 2.0") and one shared core**
-  (`client-gui`, `client`). The status window is now a mobile-shaped single
-  column pinned at 320 px (resizable height 420–1400, initial 760) with a state
-  rail whose state word always fits, an honest route card, a `NO RETURN PATH`
-  danger banner for the warn-only starvation policy, a Details ledger, the
-  update disclosure, and a refreshed token/copy/contrast system across the nine
-  shipped locale catalogs. The presentation-independent rules (status, config,
+- **A redesigned desktop interface — "Broadcast console" (owner-selected
+  Direction C) — and one shared core** (`client-gui`, `client`). The status
+  window is now a dark telemetry console: a mobile-shaped single column pinned
+  at 320 px (resizable height 420–1400, initial 760), a mono data rail with
+  numbered sections, a dot-matrix fleet globe, one lime action control, and a
+  30 px state word that always fits. Route data, the warn-only `NO RETURN PATH`
+  danger banner, the Details ledger, all eight Settings sections (including
+  autostart, privacy and the update/A11 disclosures), and the update, game-editor
+  and target-process sheets are restyled for the console across the nine shipped
+  locales; all copy, states, mobile geometry and behaviour contracts are
+  unchanged. The presentation-independent rules (status, config,
   discovery, route surface, watchdog, history, trace) now live in one place —
   the shared `lightspeed_client::app` core behind the drift guard in
   `client/tests/gui_boundary.rs` — with the GUI as a thin shell; the CLI
