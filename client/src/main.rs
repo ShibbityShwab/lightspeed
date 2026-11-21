@@ -1565,48 +1565,60 @@ async fn main() -> anyhow::Result<()> {
                 game_server_addr.port()
             }
         });
-
-        info!("🚀 Starting redirect mode");
-        if let Some(ref game) = game {
-            info!(
-                "   Game:        {} (anti-cheat: {})",
-                game.name(),
-                game.anti_cheat()
-            );
-            info!("   Typical PPS: ~{} packets/sec", game.typical_pps());
-        }
-        info!("   Game server: {}", game_server_addr);
-        info!("   Local port:  127.0.0.1:{}", local_port);
-        info!("   Proxy:       {}", proxy_addr);
-
-        let mut redirect_proxy =
-            redirect::UdpRedirect::new(local_port, game_server_addr, proxy_addr);
-        if adaptive_cfg.enabled {
-            info!(
-                "   FEC:         adaptive (K={}, ceiling {}%)",
-                adaptive_cfg.effective_k(),
-                adaptive_cfg.overhead_pct()
-            );
-            redirect_proxy = redirect_proxy.with_adaptive_fec(adaptive_cfg);
-        } else if cli.fec {
-            info!(
-                "   FEC:         enabled (K={}, ~{}% overhead)",
-                cli.fec_k,
-                100 / cli.fec_k as u32
-            );
-            redirect_proxy = redirect_proxy.with_fec(cli.fec_k);
-        }
-        if use_tcp {
-            redirect_proxy = redirect_proxy.with_tcp();
-        }
-        crate::quic::register_session_with_destination(
-            proxy_addr,
-            config.proxy.quic_port,
-            Some(*game_server_addr.ip()),
+        // Adopted live mode (WF-081b task-57): library-side session + redirect
+        // runtime. The mode banner/FEC lines and the shipped shutdown wording
+        // live in `lightspeed_client::app::live::redirect`, pinned by fixtures.
+        let mut core = lightspeed_client::app::runtime::SessionCore::build(
+            tokio::runtime::Handle::current(),
             cli_mtu_cap(&cli, &config),
-        )
-        .await;
-        return redirect_proxy.run().await;
+        );
+        let adaptive = lightspeed_client::AdaptivePolicy {
+            enabled: adaptive_cfg.enabled,
+            k_size: adaptive_cfg.k_size,
+            max_overhead_pct: adaptive_cfg.max_overhead_pct,
+        };
+        let game_banner = game.as_ref().map(|game| {
+            (
+                game.name().to_string(),
+                game.anti_cheat().to_string(),
+                game.typical_pps(),
+            )
+        });
+        let session = lightspeed_client::app::live::LiveSession {
+            game_key: game
+                .as_ref()
+                .map(|game| game.name().to_string())
+                .unwrap_or_else(|| "redirect".to_string()),
+            relay: proxy_addr,
+            candidates: resolved.candidates,
+            destination: Some(*game_server_addr.ip()),
+            server_override: None,
+            fec: cli.fec,
+            fec_k: cli.fec_k,
+            adaptive,
+            telemetry_enabled: telemetry_enabled(&cli, &config),
+            data_port: config.proxy.data_port,
+            control_port: config.proxy.quic_port,
+            route_strategy: cli
+                .route_strategy
+                .clone()
+                .unwrap_or_else(|| config.route.strategy.clone()),
+            multipath_max_paths: if config.route.multipath {
+                config.route.multipath_max_paths
+            } else {
+                1
+            },
+            path_mtu_cap: cli_mtu_cap(&cli, &config),
+            game_server: game_server_addr,
+        };
+        let spec = lightspeed_client::app::live::redirect::RedirectRun {
+            session,
+            game_server: game_server_addr,
+            local_port,
+            tcp: use_tcp,
+            game_banner,
+        };
+        return lightspeed_client::app::live::redirect::run(&mut core, spec).await;
     }
 
     // ── --capture: pcap mode ──────────────────────────────────────

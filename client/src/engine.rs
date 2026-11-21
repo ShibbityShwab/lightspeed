@@ -270,6 +270,10 @@ pub struct RedirectOptions {
     pub adaptive: AdaptivePolicy,
     /// Use TCP for the client↔proxy leg.
     pub tcp: bool,
+    /// The shutdown line the redirect prints when stopped. `None` keeps the
+    /// shipped `⚡ Redirect shutdown requested`; an adopted CLI mode passes its
+    /// own shipped text so the migration stays byte-identical.
+    pub shutdown_notice: Option<&'static str>,
 }
 
 /// A point-in-time copy of the active redirect's counters.
@@ -831,6 +835,7 @@ impl LightSpeedEngine {
                 fec_k,
                 adaptive: AdaptivePolicy::from_fixed_fec(false),
                 tcp: false,
+                shutdown_notice: None,
             },
         );
     }
@@ -889,10 +894,15 @@ impl LightSpeedEngine {
         let status = Arc::clone(&self.status);
         self.spawn_registration(proxy_addr);
         self.note_telemetry_proxy(proxy_addr);
+        let shutdown_notice = options.shutdown_notice;
         self.rt.spawn(async move {
             // run_with_shutdown takes &self and is Send, but UdpRedirect isn't
             // Arc'd - we move it into the task.
-            match redirect.run_with_shutdown(rx).await {
+            let outcome = match shutdown_notice {
+                Some(notice) => redirect.run_with_shutdown_notice(rx, notice).await,
+                None => redirect.run_with_shutdown(rx).await,
+            };
+            match outcome {
                 Ok(()) => {
                     tracing::info!("Redirect stopped cleanly");
                 }
@@ -2595,6 +2605,7 @@ mod tests {
                     max_overhead_pct: 10,
                 },
                 tcp: false,
+                shutdown_notice: None,
             },
         );
         let snapshot = engine.snapshot();

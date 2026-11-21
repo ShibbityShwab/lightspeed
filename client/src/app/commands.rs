@@ -436,6 +436,7 @@ mod tests {
                         max_overhead_pct: 10,
                     },
                     tcp: false,
+                    shutdown_notice: None,
                 },
             )
             .expect("the redirect command must be accepted");

@@ -24,6 +24,7 @@
 //! this module's submodules and pinned byte-for-byte in their tests, so the
 //! migration cannot drift the CLI text.
 pub mod interceptor;
+pub mod redirect;
 pub mod reroute;
 pub mod watch;
 
