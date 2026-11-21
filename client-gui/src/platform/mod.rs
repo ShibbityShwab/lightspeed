@@ -175,11 +175,30 @@ pub trait Platform {
     /// The opt-in autostart writer plan for this install, when the executable
     /// path is knowable (spec W2-4 (f)).
     ///
-    /// This returns data; writing it is the Settings toggle's job (shell work,
-    /// outside this wave). The startup trace prints it, so a broken plan shows
-    /// up in the log instead of only at login.
+    /// This returns data; writing it is the Settings toggle's job (WF-081b,
+    /// task-74). The startup trace prints it, so a broken plan shows up in the
+    /// log instead of only at login.
     fn autostart_plan() -> Option<AutostartPlan> {
         autostart::plan_for_current()
+    }
+
+    /// Whether this install's opt-in login entry currently exists.
+    ///
+    /// The Settings toggle reconciles its checkbox against this observable
+    /// truth once per sheet open, rather than trusting a config value that an
+    /// outside change (a cleaned registry, a deleted `.desktop`) could make
+    /// stale.
+    fn autostart_installed() -> bool {
+        autostart::installed_current()
+    }
+
+    /// Write or remove this install's login entry.
+    ///
+    /// The error is surfaced verbatim so the Settings toggle can put its
+    /// checkbox back and say what failed instead of reporting a success the
+    /// platform did not perform. The `--autostart` entry contract is unchanged.
+    fn set_autostart(enabled: bool) -> Result<(), String> {
+        autostart::apply_current(enabled)
     }
 
     /// Begin the elevation handshake (spec §2.2 row 7 / C8; W2-4 (e)).

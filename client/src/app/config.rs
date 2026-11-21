@@ -83,6 +83,10 @@ impl ProxyEntry {
 /// `config.toml`; the `RoutePrefs`/`GamePrefs`/`UiPrefs` grouping in the
 /// boundary's DTO sketch arrives with the code-only unification at S5, where a
 /// reader/writer both change at once.
+///
+/// WF-081b (task-74) adds the opt-in `autostart` preference — the field is the
+/// user's recorded choice; the platform login entry (`platform/autostart.rs`)
+/// is the observable truth the GUI reconciles against at startup.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppConfig {
     /// Selected relay address (`"ip:port"`), if any.
@@ -117,6 +121,12 @@ pub struct AppConfig {
     /// fails with `WSAEMSGSIZE` (Windows 10040). The data plane also lowers it
     /// automatically when the OS rejects a send.
     pub tunnel_mtu: usize,
+    /// When true, the GUI keeps an opt-in login entry for this install (Windows
+    /// `Run` value, Linux `.desktop` entry, macOS LaunchAgent), so LightSpeed
+    /// starts with the user. Off by default; the boost never starts by itself.
+    /// The platform entry is the observable truth: the GUI reconciles this
+    /// recorded preference to it at startup (WF-081b, task-74).
+    pub autostart: bool,
 }
 
 impl Default for AppConfig {
@@ -133,6 +143,7 @@ impl Default for AppConfig {
             manual_server: String::new(),
             manual_port_range: String::new(),
             tunnel_mtu: 1492,
+            autostart: false,
         }
     }
 }
@@ -506,6 +517,12 @@ fn parse_table(table: Table) -> AppConfig {
         .get("selected_game")
         .and_then(Value::as_str)
         .map(str::to_string);
+    // Opt-in: an absent key means the login entry is not installed (the default
+    // the product ships with), so a missing field is never treated as consent.
+    let autostart = table
+        .get("autostart")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let mut proxies = Vec::new();
     if let Some(items) = table.get("proxies").and_then(Value::as_array) {
@@ -548,6 +565,7 @@ fn parse_table(table: Table) -> AppConfig {
         manual_server,
         manual_port_range,
         tunnel_mtu,
+        autostart,
     }
 }
 
@@ -586,6 +604,11 @@ pub fn render(config: &AppConfig) -> String {
         "tunnel_mtu".into(),
         Value::Integer(config.tunnel_mtu as i64),
     );
+    // Opt-in only: absent means off, so an existing canonical file that never
+    // enabled autostart stays byte-identical after a save.
+    if config.autostart {
+        table.insert("autostart".into(), Value::Boolean(true));
+    }
     let entries: Vec<Value> = config
         .proxies
         .iter()
@@ -677,6 +700,7 @@ mod tests {
             manual_server: "203.0.113.7:28015".into(),
             manual_port_range: "27000-27050".into(),
             tunnel_mtu: 1400,
+            autostart: true,
         }
     }
 
@@ -741,6 +765,34 @@ mod tests {
         let parsed = parse("selected = \"1.2.3.4:4434\"\nunknown = 7\n").expect("parse");
         assert_eq!(parsed.selected.as_deref(), Some("1.2.3.4:4434"));
         assert!(parsed.proxies.is_empty());
+    }
+
+    /// WF-081b (task-74): autostart is opt-in. A config that never enabled it
+    /// writes no key (so an existing canonical file stays byte-identical after a
+    /// save), and an absent key is never read as consent.
+    #[test]
+    fn autostart_is_opt_in_and_round_trips_when_enabled() {
+        let absent = parse("").expect("parse");
+        assert!(!absent.autostart, "an absent key means off, not consent");
+        assert!(
+            !render(&absent).contains("autostart"),
+            "the default must write no key: {}",
+            render(&absent)
+        );
+
+        let explicit_off = parse("autostart = false\n").expect("parse");
+        assert!(!explicit_off.autostart);
+
+        let enabled = AppConfig {
+            autostart: true,
+            ..AppConfig::default()
+        };
+        let written = render(&enabled);
+        assert!(
+            written.contains("autostart = true"),
+            "the opt-in must be recorded: {written}"
+        );
+        assert_eq!(parse(&written).expect("parse"), enabled);
     }
 
     /// The automatic direct fallback and its re-test setting were removed on
