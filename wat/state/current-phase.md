@@ -12,6 +12,17 @@
 
 ## Recent entries
 
+### 2026-11-21 (CI) - Headless GUI smoke promoted to a required check
+
+**Agent:** lead, after the owner asked for the remaining follow-ups to be handled.
+
+- **10/10 genuine master passes confirmed** from probe output, not job colour: 9 runs from `4c042b4` through `6005768` plus the docs merge `98c45d6`; each logged `smoke self-check: PASS (6/6 decision rows)` and `smoke: ... verdict=PASS` (real window by PID + geometry). The pre-fix `4ace0d7` job-green-but-probe-failing run is excluded.
+- **PR #201 merged `ab3b405`:** job renamed `Headless GUI Smoke (advisory)` -> **`Headless GUI Smoke`**, both Linux steps lose `continue-on-error` (self-check matrix + real-window probe now blocking), comments record the promotion. The PR's new blocking job passed (`Headless GUI Smoke` 1m21s).
+- **Branch protection updated** via API: strict required checks now `Check & Test`, `Windows GUI Build`, `Linux GUI Build`, `macOS GUI Build`, `Localization Checks`, **`Headless GUI Smoke`**; force-push/deletion still disabled.
+- **Remaining external:** winget bootstrap PR #481953 still awaits a Microsoft moderator (author cannot merge); Chocolatey 1.12.0 is in community moderation; winget/Choco cannot be advanced by the owner's browser session. Post-W2 task 88 (telemetry endpoint) is the remaining code debt; task 73's flake was already fixed by #188 and can be marked done.
+
+**Verified:** 10 genuine passes; PR #201 merged; required-check API includes `Headless GUI Smoke`; master CI for the merge. **Not verified:** macOS smoke (deliberately still advisory inside the required macOS GUI job); winget/Choco moderation; runtime hardware.
+
 ### 2026-11-21 (Release 1.12.0) - v1.12.0 tagged and published; Broadcast console shipped
 
 **Agent:** lead, after explicit owner approval to tag/publish 1.12.0.
