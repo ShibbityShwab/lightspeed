@@ -45,12 +45,12 @@ jobs:
   # proxy/tests/integration_control.rs, proxy/tests/phase0_integration.rs,
   # client/tests/control_reconnect.rs, client/tests/phase0_reconnect.rs,
   # client/tests/quic_telemetry_capability.rs, client/tests/register_destination.rs.
-  # Both crates default to no features, so the `Test` step in Check & Test
-  # compiles those whole bodies to zero tests, and the Feature Matrix passes
-  # `--lib`, which excludes every `tests/` target - so before this job no CI run
-  # executed any of them (a cross-crate control-plane test placed in
-  # `proxy/tests/` would have run nowhere). The job is kept separate from
-  # Check & Test so it can't hide behind, or be hidden by, that job's status.
+  # `proxy`'s dev-dependency on `lightspeed-client` turns the client's `quic`
+  # feature on in workspace test builds (feature unification), so the `Test`
+  # step in Check & Test and Code Coverage build these suites too; the Feature
+  # Matrix still passes `--lib`, which excludes every `tests/` target. The job
+  # keeps their explicit `--tests` pass separate from the large jobs so it
+  # can't hide behind, or be hidden by, their status.
   quic-integration-tests:
     name: QUIC Integration Tests
     runs-on: ubuntu-latest

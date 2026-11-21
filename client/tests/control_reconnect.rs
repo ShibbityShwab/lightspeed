@@ -324,18 +324,44 @@ async fn supervisor_stopped_on_disconnect() {
     engine.set_control_port(server.control_port);
     engine.connect(data_addr);
 
+    // Wait on this engine's own registration result, not on `path_token`:
+    // the token store falls back to the process-wide single-path default,
+    // which any other test in this binary publishes when it registers, so
+    // polling it here can observe a foreign token and return before this
+    // engine has registered on its configured port at all (see
+    // `TokenStore::path` in session.rs). The test server's counter is local to
+    // this test, and `EngineStatus` records what this engine actually got.
     let deadline = Instant::now() + Duration::from_secs(10);
-    while path_token(data_addr) == 0 && Instant::now() < deadline {
+    let mut status = engine.snapshot();
+    while !status.control_registered
+        && status.registration_error.is_none()
+        && Instant::now() < deadline
+    {
         tokio::time::sleep(Duration::from_millis(20)).await;
+        status = engine.snapshot();
     }
+    assert!(
+        status.control_registered,
+        "the engine must register on its configured control port (registration error: {:?})",
+        status.registration_error
+    );
     assert_eq!(
         server.registration_count(),
         1,
         "the engine must register on its configured control port"
     );
-    let issued = path_token(data_addr);
-    assert!(
-        issued > 0,
+    let issued = status
+        .session_token
+        .expect("a registered engine records the relay's issued token");
+    assert!(issued > 0, "the relay's issued token must be non-zero");
+    assert_eq!(
+        server.last_token(),
+        issued,
+        "the engine must record the token this test server issued"
+    );
+    assert_eq!(
+        path_token(data_addr),
+        issued,
         "engine registration must publish the relay's per-path token"
     );
     assert!(
