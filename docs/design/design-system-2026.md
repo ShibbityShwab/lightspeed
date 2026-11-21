@@ -1213,38 +1213,58 @@ family. eframe also installs a **system-font discovery provider**
 (`system_fonts`), which can render a missing glyph from an OS font — device
 dependent, so it is never a design dependency.
 
-Face sizes: Inter 212 mapped codepoints (the docstring's "230-codepoint subset"
-is approximate, −18), JetBrains Mono 210, CJK subsets 388–411, Ubuntu-Light
-1194, egui-icons 5.
+Face sizes (measured from the shipped tables, 2026-11-21): Inter 230 mapped
+codepoints (the `theme.rs` docstring's "230-codepoint subset" is exact —
+printable ASCII, the Latin-1 supplement except soft hyphen U+00AD, typographic
+marks and combining accents), JetBrains Mono 229 (all printable ASCII, all of
+Latin-1, plus marks), CJK subsets 405 (JP) / 395 (KR) / 415 (SC), Ubuntu-Light
+1194, egui-icons 5; NotoEmoji 887 and emoji-icon-font 652 are installed as data
+but chained nowhere. Neither Inter nor JetBrains Mono has Cyrillic, Greek or
+CJK.
 
 ### 8.2 Catalog coverage (measured)
 
-619 unique non-ASCII characters across the nine catalogs (the delta's new copy
-added two); the chains cover **all 619 with zero tofu**. But Inter is the
-*primary* face for only 23 of them. The rest come, as expected, from the Noto
-CJK faces (Japanese/Korean/Chinese) and **Ubuntu-Light for Russian** (Inter has no
-Cyrillic) — and, unexpectedly, from a few Latin characters: **de `ß`; es `í`;
-fr `É ê î`; pt-BR `ê í` are not in the bundled Inter subset** and render in a
-fallback face. Measured per-locale gaps are in `fonts-and-glyphs.md` §4.
+**617 unique non-ASCII characters** across the nine catalogs plus **19 unique
+non-ASCII characters** in the picker's nine `native_name` strings — 620 total —
+and the chains draw **all 620 with zero bundled tofu**. The distribution:
 
-**A measured asset defect found by the delta's chain measurement:** the bundled
-**Inter subset has no lowercase `y` and no `{`**, so every English word containing
-a `y` (`your`, `relay`, `play`, `copy`) draws that glyph from a fallback face
-(Noto Sans JP / Ubuntu-Light) inside otherwise-Inter words — including the new
-starvation banner. **JetBrains Mono lacks `o`, `q`, `!`, `"`, `#`, `}` and `~`**,
-so mono values such as `~{prior} ms` mix faces too. This is a type-consistency
-defect in the bundled assets, not a rendering failure, and the fix is a
-re-subset (font asset change, OFL, W2/W3 decision in §11.5). The delta's width
-measurements already account for the substituted faces (`delta-copy.md` §8).
+- **Inter is the primary face for every Latin character.** It carries all
+  printable ASCII and Latin-1 (soft hyphen U+00AD is the one exception, and no
+  catalog uses it), so `de` `ß`, `es` `í`, `fr` `É ê î` and `pt-BR` `ê` draw in
+  Inter, not a fallback. The earlier revision of this section recorded the
+  opposite, and also claimed Inter lacked `y`/`{` and JetBrains Mono lacked
+  `o`/`q`/`!`/`"`/`#`/`}`/`~`; re-read from the shipped tables on 2026-11-21,
+  the faces carry all printable ASCII and the earlier numbers were a
+  measurement-script error. (`fonts-and-glyphs.md` §4 carries the old read and
+  is superseded here.)
+- **Cyrillic (`ru`) has no bundled Latin face.** Inter's subset is Latin-only,
+  so Russian resolves to epaint's builtin **Ubuntu-Light** (1194 codepoints).
+  That is a type-consistency fallback, not tofu, and is accepted — unchanged by
+  Q19.
+- **CJK (`ja`/`ko`/`zh-Hans`)** comes from the three Noto faces, ordered by
+  locale. **`→` U+2192 is the one typed mark Inter lacks**; it resolves to the
+  CJK face, so the paint-it rule in §8.3 stands.
 
-**The language picker's own names are outside the catalog gate.** The nine
-`native_name` strings (`i18n.rs:135-172`) are drawn in the picker
-(`app.rs:3368`) but never pass through a catalog, so the repo's
-`every_catalog_glyph_is_drawable_in_every_family` test cannot see them. Measured:
-**ko `한국어` (국), zh-Hans `简体中文` (简 体) have no bundled face at all** —
-they render only through system-font discovery; pt-BR `ê` falls back to a CJK
-face. W2 fixes the gate by extending that test to the `native_name` strings (and
-the subset itself is a font-asset change requiring a decision).
+**Q19 (closed 2026-11-21): the picker's own names.** The `native_name` strings
+are not in a catalog, so the catalog gate cannot see them. They had three
+characters no bundled face carried — ko `한국어` (`국` U+AD6D) and zh-Hans
+`简体中文` (`简` U+7B80, `体` U+4F53) — drawn only through device-dependent
+system-font discovery, i.e. tofu on a machine without a CJK system font. The six
+CJK subsets were regenerated from a pinned OFL source
+(`client-gui/assets/fonts/README.md`, `scripts/fonts/subset_gui_fonts.py`);
+`국` is in both KR faces and `简`/`体` in both SC faces, so each locale's picker
+names now draw from its own regional face (measured: ko → NotoSansKR, zh-Hans →
+NotoSansSC, for all three families).
+
+The regeneration also **closed latent per-face catalog gaps**: the old `ja`
+subset lacked `分`/`前` (characters from its own catalog) and the old `zh-Hans`
+subset lacked `要`/`語`, so the chain drew those strings from another region's
+face — the regional-form mixing §8.1's locale ordering exists to prevent. Each
+CJK face now covers 100% of its regional catalog. Sizes: 399/388/411 →
+405/395/415 codepoints; 266,216 → 270,644 bytes (+4,428 B, +1.66%). Advance
+widths and outlines of every previously-bundled codepoint are unchanged
+(verified per glyph against the previous cut), so the text metrics and
+row-height measurements above are unaffected.
 
 ### 8.3 Symbol policy
 
@@ -1291,12 +1311,21 @@ swapped, subsetted or a locale picks a different CJK order.
 
 ### 8.5 Enforcement
 
-- Extend `every_catalog_glyph_is_drawable_in_every_family`
-  (`client-gui/src/app/tests.rs:1076-1125`)
-  to include the `native_name` strings and a fixed symbol allowlist (the type-it
-  rows above); the gate then fails on any new typed symbol that no chain draws.
-- The gate must test the **installed** chains (it already asserts against the
-  real `FontDefinitions`); keep it that way and do not add a scene-font exclusion.
+- `every_catalog_glyph_is_drawable_in_every_family`
+  (`client-gui/src/app/tests.rs:866`) covers both the catalogs and the picker's
+  `native_name` strings, and has **no exemption left** after Q19: a codepoint no
+  installed face draws fails the gate with the character and family named.
+- `the_language_picker_names_draw_ink_in_every_family` (`:955`) rasterises every
+  non-ASCII picker character through the real chains and requires non-empty ink,
+  so a face that maps a codepoint to a blank glyph fails too; it is calibrated
+  against a blank glyph (U+00A0) so the ink check cannot pass vacuously.
+- The gates must test the **installed** chains (they do, against the real
+  `FontDefinitions`); keep it that way and do not add a scene-font exclusion.
+- The assets are never hand-edited: `scripts/fonts/subset_gui_fonts.py --write`
+  regenerates them from a pinned OFL source (byte-reproducible) and `--check`
+  verifies hashes and coverage against `client-gui/assets/fonts/subset.json`;
+  sources, tooling, licence and the full character policy are documented in
+  `client-gui/assets/fonts/README.md`.
 - No new font family without a licence, a role and the cmap gate (owner
   decision). The bundled faces are Inter (OFL), JetBrains Mono (OFL) and Noto CJK
   (OFL) — zero-cost and redistributable.
@@ -1400,7 +1429,9 @@ are `file:line`.
 - [ ] `spacing.scroll = ScrollStyle::solid()` (no fade, permanent affordance).
 - [ ] `animation_time`: leave the framework default until reduced motion exists;
       nothing in the app calls `animate_*`.
-- [ ] Fonts unchanged; `install_fonts` still before the first frame.
+- [ ] Fonts unchanged by the W2 refactor; `install_fonts` still before the first
+      frame. (Q19 later re-cut the CJK subsets; the chains and the call site are
+      unchanged.)
 
 ### 11.3 Components
 
@@ -1417,8 +1448,10 @@ are `file:line`.
       notice at a time; the location ladder and route-trace rows per §6.11.
 - [ ] New copy review: `ux-lead` shortens the starvation banner toward 2 lines
       and the RU restart label to 2 lines (§4.4); no type size changes.
-- [ ] Bundled-font decision (§8.2, §11.5): re-subset Inter to add `y`/`{` (and
-      JetBrains Mono its missing ASCII) or record the fallback mixing as accepted.
+- [x] Bundled-font decision (§8.2, §11.5): **closed 2026-11-21 as Q19** — Inter
+      and JetBrains Mono already carry their full ASCII/Latin sets, and the CJK
+      subsets were regenerated to cover the picker's native names and each
+      face's own catalog. No fallback-mixing acceptance needed.
 - [ ] Text fields: `border_control`; `selection.stroke` fix; invalid treatment
       unchanged (already passes).
 - [ ] Sheets: per-sheet close policy (editor/update guard), computed body height,
@@ -1491,10 +1524,13 @@ are `file:line`.
    shipped geometry (320 px pinned width, one `narrow` column, height resizable
    420–1400, initial 760); the W1 360×420 / 440×880 / 1120×1400 plan and every
    two-column layout are superseded. No width change is in scope.
-6. **Inter subset gap (`y`, `{`; JBMono `o`, `q`, `!`, ...)** — re-subset the
-   bundled fonts or accept the measured fallback mixing (§8.2). A font-asset
-   change is cheap and OFL-clean; the alternative is documented type-mixing in
-   every English string containing `y`.
+6. **Resolved 2026-11-21 (Q19): there is no Inter/JetBrains Mono gap to fix.**
+   Re-read from the shipped tables: Inter carries all printable ASCII and
+   Latin-1, JetBrains Mono all printable ASCII, so the recorded `y`/`{`/`o`
+   mixing did not exist (the earlier read was a measurement error, §8.2). What
+   did need fixing was the picker's CJK names and per-face catalog drift; both
+   are closed by the regenerated, pinned subsets (§8.2,
+   `client-gui/assets/fonts/README.md`).
 7. **RU restart action copy — resolved by landed copy.** `ux-lead`'s
    `ru.toml` string (`Перезапустить от имени администратора`) measures 356.9 px
    = 2 lines at 264 px (HEAD was 518.6 px = 3 lines), so the action band stays

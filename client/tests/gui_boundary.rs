@@ -354,7 +354,9 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // W2-4b: the eight retired helper tests left (six moved into the route-surface
     // fixtures, one dead formatter and one duplicate targeting test retired), and
     // one rendered-copy fixture arrived with them. 2853 -> 2618.
-    ("client-gui/src/app/tests.rs", 2618),
+    // WF-081b Q19 (font debt): the CJK-subset exemption was deleted and a
+    // rasterised no-tofu gate for the picker's own names arrived. 2618 -> 2694.
+    ("client-gui/src/app/tests.rs", 2694),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
