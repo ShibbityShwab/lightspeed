@@ -844,12 +844,14 @@ fn a_localized_frame_draws_the_translated_string() {
     crate::i18n::set_language(None);
     let english = format!("{:?}", drawn("settings.privacy"));
 
+    // Section labels are uppercased at render time (Direction C), so compare
+    // case-insensitively against the catalog copy.
     assert!(
-        german.contains("Datenschutz"),
+        german.to_lowercase().contains("datenschutz"),
         "the German frame did not draw the German string: {german}"
     );
     assert!(
-        english.contains("Privacy"),
+        english.to_lowercase().contains("privacy"),
         "the English frame did not draw the English string: {english}"
     );
     assert_ne!(german, english, "both languages drew identical frames");
@@ -2381,8 +2383,10 @@ fn the_game_editor_sheet_draws_every_field_and_the_key() {
         "Key: my-game - start the CLI with --game my-game",
         "Save game",
     ] {
+        // Console labels are uppercased at render time; compare case-insensitively.
         let at = frame
-            .find(expected)
+            .to_lowercase()
+            .find(&expected.to_lowercase())
             .unwrap_or_else(|| panic!("the sheet did not draw {expected:?}:\n{frame}"));
         assert!(at >= last, "{expected:?} is drawn out of order:\n{frame}");
         last = at;
@@ -3150,4 +3154,63 @@ fn shortcut_effects_follow_the_canonical_table_and_gate_on_the_tray() {
         ShortcutEffect::Idle
     );
     assert_eq!(super::shortcut_effect(None, true), ShortcutEffect::Idle);
+}
+// ── Direction C (task-101): variable data rows + fit floor ─────────────────
+
+/// The console data rail is a variable/stacked row model: a pair that fits the
+/// 288 px column shares a row; a pair that does not must stack, never clip
+/// (token sheet §4.3). This is the pure decision `shell_row` uses.
+#[test]
+fn the_console_row_model_stacks_instead_of_clipping() {
+    // A short localized label + a real value fit the 288 px content column.
+    assert!(super::row_fits(84.0, 108.0, 288.0));
+    // The longest localized labels (DE/RU) plus a full IP:port do not fit and
+    // must take the stacked path.
+    assert!(!super::row_fits(160.0, 120.0, 288.0));
+    // The boundary is inclusive at exactly the S4 (16 px) gutter.
+    assert!(super::row_fits(100.0, 172.0, 288.0));
+    assert!(!super::row_fits(100.0, 172.5, 288.0));
+}
+// ── Direction C (task-101): Components row fit (review Major 1) ─────────────
+
+/// The review found `NPCAPnot installed (pcap fallback only)` because a shorter
+/// width was measured than painted. Both strings are measured with the same
+/// font/tracking that paints them; at the Settings sheet's body width the pair
+/// must take the stacked branch rather than collide.
+#[test]
+fn the_components_npcap_row_stacks_instead_of_colliding() {
+    use eframe::egui;
+    let ctx = egui::Context::default();
+    super::install_fonts(&ctx, Some("en"));
+    super::apply_theme(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(320.0, 760.0),
+        )),
+        ..Default::default()
+    };
+    let mut measured = None;
+    let mut out = ctx.run_ui(raw, |ui| {
+        let font = egui::FontId::new(crate::design::CAPTION, super::console());
+        let label = super::tracked_width(ui.painter(), "NPCAP", &font, crate::design::TRACK_LABEL);
+        let value = super::tracked_width(
+            ui.painter(),
+            "not installed (pcap fallback only)",
+            &font,
+            0.0,
+        );
+        measured = Some((label, value));
+    });
+    out.textures_delta.clear();
+    let (label_w, value_w) = measured.expect("measured the Components row");
+    // The Settings sheet body is ~232 px wide at 320 px (264 px sheet − margins).
+    assert!(
+        !super::row_fits(label_w, value_w, 232.0),
+        "NPCAP + fallback value must stack (label {label_w:.1}, value {value_w:.1})"
+    );
+    assert!(
+        label_w + crate::design::S4 + value_w > 232.0,
+        "the inline branch would collide (label {label_w:.1}, value {value_w:.1})"
+    );
 }

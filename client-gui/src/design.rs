@@ -1,229 +1,320 @@
-//! The window's design tokens: the site's full `:root` scale, in one module.
+//! The window's design tokens — Direction C "Broadcast console".
 //!
-//! `web/styles.css` is the product's canonical visual language, so this module
-//! adopts the site's token names verbatim (`bg-0` becomes `bg_0`) and its values
-//! exactly, so the two files diff cleanly. `client-gui/src/app.rs` (`mod theme`)
-//! still carries the older, partial palette; the layout migration moves onto
-//! these names in a later change, which is why every item here is (for now)
-//! unreferenced - hence the module-scoped allowances.
+//! This is the owner-selected `task-101` visual direction. The authority is
+//! `docs/design/gui-c-token-sheet.md` (design-system-2, task-102): its palette,
+//! type, geometry and component values are implemented verbatim here, and the
+//! sheet wins over the static mockups where they differ (§9 of the sheet).
 //!
 //! Rules the scale carries:
-//! - Alpha tints stay `rgba`, never a hex with the alpha baked in. They are built
-//!   with `Color32::from_rgba_unmultiplied_const`, the `const`-context form of
-//!   `Color32::from_rgba_unmultiplied` (both delegate to the same rounding), so a
-//!   tint can live in a `const`.
-//! - `accent` is a fill, never ink; accent-as-ink is always `accent_text`.
-//! - Semantics are fixed: signal = good, warn = attention, danger = bad,
-//!   accent = action and identity, info = neutral fact.
+//! - Dark only. Direction C does not implement light mode.
+//! - Monospace is the UI voice (`console()` in `app/theme.rs`); Inter carries
+//!   prose sentences only (`prose()`). One weight — no faux bold.
+//! - Flat: plane separation and 1 px rules only. No shadow, no gradient.
+//! - `accent` is the one neon surface (the primary action) and is never ink;
+//!   `accent_text` (ice) is the link/focus/data ink.
+//! - 11 px is the minimum rendered text size (accessibility floor).
+//! - The state word is capped at `STATE` 30 px and must measure ≤276 px in
+//!   every locale (the accepted D6 one-line rule; the token sheet §2).
+//!
+//! Colour names keep the shipped `design.rs` identifiers (`bg_0`…`bg_4`,
+//! `text_1`…`text_3`, `accent*`, `signal`, `warn`, `danger`) so the rest of the
+//! shell moves onto the console palette without a parallel token system; the
+//! sheet's `c.*` names are mapped in this module's doc comments.
 #![allow(dead_code, non_upper_case_globals)]
 
 use eframe::egui::Color32;
 
-// ── Planes ───────────────────────────────────────────────────────────────────
+// ── Planes (§1: canvas → panel → panel_2 → plate) ──────────────────────────
 
-/// Deepest plane: sunken fields, plots, and the backdrop behind sheets.
-pub const bg_0: Color32 = Color32::from_rgb(0x0B, 0x0B, 0x0D);
-/// The window fill - the app's default background.
-pub const bg_1: Color32 = Color32::from_rgb(0x0F, 0x0F, 0x11);
-/// Raised surface: cards, the state rail, sheets.
-pub const bg_2: Color32 = Color32::from_rgb(0x15, 0x15, 0x18);
-/// Hovered / active rows and quiet filled controls.
-pub const bg_3: Color32 = Color32::from_rgb(0x1B, 0x1B, 0x1F);
-/// Pressed rows, the globe's graticule band, the highest surface.
-pub const bg_4: Color32 = Color32::from_rgb(0x22, 0x22, 0x27);
+/// `c.bg` — window canvas, the deepest plane.
+pub const bg_0: Color32 = Color32::from_rgb(0x05, 0x06, 0x07);
+/// `c.panel` — data rail, sheet panel, window fill.
+pub const bg_1: Color32 = Color32::from_rgb(0x0A, 0x0C, 0x0E);
+/// `c.panel_2` — inset, hover plane, disabled surface.
+pub const bg_2: Color32 = Color32::from_rgb(0x0D, 0x11, 0x13);
+/// `c.plate` — pressed plane / raised inset (rare).
+pub const bg_3: Color32 = Color32::from_rgb(0x11, 0x15, 0x18);
+/// Alias of the pressed plane: Direction C has four planes, not five, and the
+/// theme's widget state ladder needs a fourth step that stays inside §1.
+pub const bg_4: Color32 = bg_3;
 
-// ── Hairlines ────────────────────────────────────────────────────────────────
+// ── Rules and boundaries (§1) ───────────────────────────────────────────────
 
-/// Every hairline: card edges, dividers, plot axes.
-pub const border_1: Color32 = Color32::from_rgb(0x25, 0x25, 0x2A);
-/// Hover / focus hairline and the scrollbar thumb.
-pub const border_2: Color32 = Color32::from_rgb(0x33, 0x33, 0x39);
-/// The boundary that identifies an interactive control at rest (field,
-/// checkbox box, combo). 3.14:1 on `bg_2`, 3.30:1 on `bg_1`, 3.39:1 on `bg_0`
-/// (`design-system-2026.md` §1.4/§3.2: the shipped 1.19:1 boundary failed
-/// WCAG 1.4.11). Decorative hairlines stay `border_1`; hover keeps `border_2`.
-pub const border_control: Color32 = Color32::from_rgb(0x65, 0x65, 0x6A);
+/// `c.rule` — hairline rule: row separators and panel borders (decorative).
+pub const border_1: Color32 = Color32::from_rgb(0x1D, 0x23, 0x29);
+/// `c.rule_strong` — section-header rule / hover panel border (decorative).
+pub const border_2: Color32 = Color32::from_rgb(0x2B, 0x33, 0x3B);
+/// `c.control_line` — the boundary that identifies a control (3.27:1 on panel,
+/// WCAG 1.4.11 AA).
+pub const border_control: Color32 = Color32::from_rgb(0x58, 0x65, 0x6E);
 
-// ── Ink ──────────────────────────────────────────────────────────────────────
+// ── Ink (§1) ────────────────────────────────────────────────────────────────
 
-/// Primary text: labels and values.
-pub const text_1: Color32 = Color32::from_rgb(0xF2, 0xF2, 0xFA);
-/// Prose: help text, the rail's second line.
-pub const text_2: Color32 = Color32::from_rgb(0xB4, 0xB4, 0xCC);
-/// Tertiary ink: units, captions, footnotes, disabled text.
-pub const text_3: Color32 = Color32::from_rgb(0x8A, 0x8A, 0xA8);
+/// `c.ink` — primary text and the state word (17.84:1 on panel).
+pub const text_1: Color32 = Color32::from_rgb(0xF0, 0xF5, 0xF8);
+/// `c.ink_2` — secondary text, row values, prose (9.28:1 on panel).
+pub const text_2: Color32 = Color32::from_rgb(0xA9, 0xB4, 0xBD);
+/// `c.dim` — muted text, labels, micro-captions at 11 px (5.08:1 on panel).
+pub const text_3: Color32 = Color32::from_rgb(0x79, 0x83, 0x8E);
+/// `c.disabled_ink` — disabled labels (exempt from AA; kept ≥3:1 UI).
+pub const text_disabled: Color32 = Color32::from_rgb(0x6B, 0x75, 0x80);
 
-// ── Accent ───────────────────────────────────────────────────────────────────
+// ── Data highlight (§1) ─────────────────────────────────────────────────────
 
-/// Action fill (the single bright control) and the globe's route arc.
-pub const accent: Color32 = Color32::from_rgb(0x6C, 0x5C, 0xE7);
-/// Pressed fill of the action.
-pub const accent_deep: Color32 = Color32::from_rgb(0x5A, 0x4B, 0xD4);
-/// Accent used as ink: links, selected labels, focus ring, selected-row ink.
-/// Wire via `selection.stroke` and the focus helper (`design-system` §3.4).
-pub const accent_text: Color32 = Color32::from_rgb(0xA2, 0x9B, 0xFE);
-/// Selected-row tint, and the rail edge on CONNECTED (`rgba(108, 92, 231, 0.12)`).
-pub const accent_soft: Color32 = Color32::from_rgba_unmultiplied_const(108, 92, 231, 31);
-/// Accent hairline: a focused field, an active tab (`rgba(108, 92, 231, 0.28)`).
-pub const accent_line: Color32 = Color32::from_rgba_unmultiplied_const(108, 92, 231, 71);
+/// `c.ice` — data highlight, the LIVE indicator, links, the focus ring.
+pub const ice: Color32 = Color32::from_rgb(0x9F, 0xE8, 0xFF);
+/// `c.ice_dim` — section index, secondary ice, caret (5.77:1 on panel).
+pub const ice_dim: Color32 = Color32::from_rgb(0x5F, 0x93, 0xA2);
 
-// ── Semantic states ──────────────────────────────────────────────────────────
+// ── Accent — the one neon surface (§1, D-C2: lime is the owner's pick) ──────
 
-/// Good / healthy: the BOOSTING state, a good quality RTT, live counters.
-pub const signal: Color32 = Color32::from_rgb(0x00, 0xD6, 0x8F);
-/// Attention: degraded RTT, relay-refresh failure, the game-server marker.
-pub const warn: Color32 = Color32::from_rgb(0xFD, 0xCB, 0x6E);
-/// Bad / destructive: errors and the STOP BOOST ink.
-pub const danger: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x6B);
-/// Error tint, and the danger-tone notice fill (`rgba(255, 107, 107, 0.12)`).
-pub const danger_soft: Color32 = Color32::from_rgba_unmultiplied_const(255, 107, 107, 31);
+/// `c.accent` — the primary CTA fill. Never ink; never a second surface.
+pub const accent: Color32 = Color32::from_rgb(0xCD, 0xFF, 0x45);
+/// `c.accent_hover` — CTA hover fill.
+pub const accent_hover: Color32 = Color32::from_rgb(0xD9, 0xFF, 0x7A);
+/// `c.accent_pressed` — CTA pressed fill.
+pub const accent_deep: Color32 = Color32::from_rgb(0xB9, 0xEA, 0x2F);
+/// `c.accent_ink` — accent as ink if ever needed (kept for the pair table).
+pub const accent_ink: Color32 = accent;
+/// `c.on_accent` — CTA label ink (16.71:1 on accent).
+pub const on_accent: Color32 = Color32::from_rgb(0x0A, 0x0E, 0x02);
+/// Accent used as ink: links, focus ring, selected labels (`c.ice`).
+pub const accent_text: Color32 = ice;
+/// Selected-row fill tint. A UI fill, never text; the only translucent accent
+/// use left after the direction's "one neon surface" rule.
+pub const accent_soft: Color32 = Color32::from_rgba_unmultiplied_const(159, 232, 255, 28);
+/// Accent hairline: focused field / active tab (`rgba(159,232,255,.28)`).
+pub const accent_line: Color32 = Color32::from_rgba_unmultiplied_const(159, 232, 255, 71);
 
-// ── Utility ──────────────────────────────────────────────────────────────────
+// ── Semantic states (§1) ────────────────────────────────────────────────────
 
-/// Ink placed on `accent`; replaces the raw `Color32::WHITE`, and the map
-/// marker core.
-pub const on_accent: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
-/// Backdrop behind in-window sheets (`rgba(11, 11, 13, 0.72)`).
-pub const scrim: Color32 = Color32::from_rgba_unmultiplied_const(11, 11, 13, 184);
-/// The route map's graticule (`rgba(242, 242, 250, 0.06)`) and land silhouette.
-pub const grid: Color32 = Color32::from_rgba_unmultiplied_const(242, 242, 250, 15);
-/// Land silhouette on the route map. Decorative (not a 1.4.11 claim); the only
-/// map colour that cannot be reused from an existing role (`design-system` §1.4).
-pub const map_land: Color32 = Color32::from_rgb(0x4A, 0x4A, 0x72);
+/// Connected / optimizing data and the LIVE LED (`c.ice`): Direction C has no
+/// green signal token — live data *is* the ice highlight.
+pub const signal: Color32 = ice;
+/// `c.warn` — transient warning tag.
+pub const warn: Color32 = Color32::from_rgb(0xFF, 0xB1, 0x3D);
+/// `c.danger` — fault, danger label, the stop action.
+pub const danger: Color32 = Color32::from_rgb(0xFF, 0x5C, 0x5C);
+/// `c.danger_tint` — banner / error wash (`#160C0D`, the sheet's composited
+/// rgba(255,92,92,.07) over `c.bg`). Opaque by design.
+pub const danger_soft: Color32 = Color32::from_rgb(0x16, 0x0C, 0x0D);
+/// Banner body ink on `danger_soft` (`#FFD8D8`, 14.71:1).
+pub const danger_text: Color32 = Color32::from_rgb(0xFF, 0xD8, 0xD8);
+/// The one focus-ring colour (`c.focus` = ice).
+pub const focus: Color32 = ice;
+/// Error-line ink on the danger wash (`c.danger`, 6.35:1 there).
+pub const danger_ink: Color32 = danger;
 
-// ── Spacing ──────────────────────────────────────────────────────────────────
+// ── Disabled ────────────────────────────────────────────────────────────────
 
-/// 4 px - the tightest gap (icon to label).
+/// `c.disabled_plane` — disabled fill (`panel_2`).
+pub const disabled_plane: Color32 = bg_2;
+/// `c.disabled_ink` — disabled label (≥3:1 UI, exempt from text AA).
+pub const disabled_ink: Color32 = text_disabled;
+
+// ── Telemetry map (§1/§3) ───────────────────────────────────────────────────
+
+/// `c.map_bg` — telemetry map panel background.
+pub const map_bg: Color32 = Color32::from_rgb(0x08, 0x0A, 0x0C);
+/// `c.grid` — telemetry graticule (decorative).
+pub const grid: Color32 = Color32::from_rgb(0x12, 0x17, 0x1B);
+/// `c.grid_land` — telemetry land dots (decorative).
+pub const map_land: Color32 = Color32::from_rgb(0x2A, 0x34, 0x3A);
+/// `c.grid_fleet` — fleet crosses on the map (3.01:1 vs `map_bg`, UI mark).
+pub const map_fleet: Color32 = Color32::from_rgb(0x5E, 0x7C, 0x86);
+/// The active relay's halo stroke (`rgba(159,232,255,.45)`).
+pub const map_halo: Color32 = Color32::from_rgba_unmultiplied_const(159, 232, 255, 115);
+/// The active relay's halo fill (`rgba(159,232,255,.09)`).
+pub const map_halo_fill: Color32 = Color32::from_rgba_unmultiplied_const(159, 232, 255, 23);
+
+// ── Utility ─────────────────────────────────────────────────────────────────
+
+/// Backdrop behind in-window sheets (`rgba(2,3,4,.68)`).
+pub const scrim: Color32 = Color32::from_rgba_unmultiplied_const(2, 3, 4, 214);
+
+// ── Spacing (§3: canonical S1–S5, D-C3) ─────────────────────────────────────
+
+/// 4 px — label→value gap, tick gap.
 pub const S1: f32 = 4.0;
-/// 8 px - default gap between related controls.
+/// 8 px — row padding, map inner pad, bracket pad.
 pub const S2: f32 = 8.0;
-/// 12 px - card gutter, button padding.
+/// 12 px — section gap, sheet group gap, banner padding.
 pub const S3: f32 = 12.0;
-/// 16 px - gap between content groups.
+/// 16 px — page gutter, sheet inset, panel padding (content width 320−2×S4).
 pub const S4: f32 = 16.0;
-/// 24 px - separation between major regions.
+/// 24 px — sheet bottom pad / large separation only.
 pub const S5: f32 = 24.0;
 
-// ── Radii ────────────────────────────────────────────────────────────────────
-//
-// The retired `mod theme` values were 6 (inline) and 10 (card); the site's
-// `--r-*` scale replaces them so radius and surface stop being one-per-widget.
+// ── Radii (§3: 2 px tags, 3 px panels; nothing rounder) ─────────────────────
 
-/// 4 px (`--r-xs`): inline marks, chip corners, the disclosure marker.
-pub const R_INLINE: u8 = 4;
-/// 8 px (`--r-sm`): text fields, combos, tiles, the globe frame.
-pub const R_CONTROL: u8 = 8;
-/// 8 px: the one card style.
-pub const R_CARD: u8 = 8;
-/// 12 px (`--r-md`): the action button.
-pub const R_BUTTON: u8 = 12;
-/// 16 px (`--r-lg`): in-window sheets.
-pub const R_SHEET: u8 = 16;
+/// `R_TAG` 2 px — brackets, tags, inline marks.
+pub const R_TAG: u8 = 2;
+/// `R_PANEL` 3 px — panels, CTA, sheet.
+pub const R_PANEL: u8 = 3;
+/// 2 px — inline marks (alias of `R_TAG`).
+pub const R_INLINE: u8 = R_TAG;
+/// 2 px — controls (`c.control_line` boxes, combos, fields).
+pub const R_CONTROL: u8 = R_TAG;
+/// 3 px — the one panel/card style.
+pub const R_CARD: u8 = R_PANEL;
+/// 3 px — the action button.
+pub const R_BUTTON: u8 = R_PANEL;
+/// 3 px — in-window sheets.
+pub const R_SHEET: u8 = R_PANEL;
 
-// ── Sizes ────────────────────────────────────────────────────────────────────
+// ── Sizes (§3) ──────────────────────────────────────────────────────────────
 
-/// 40 px: the height of a config control (combo, field).
-pub const CONTROL_H: f32 = 40.0;
-/// 48 px: the height of the one action button with a single-line label.
+/// 32 px — the height of a config control (combo, field, toggle row).
+pub const CONTROL_H: f32 = 32.0;
+/// 48 px — the CTA height (normal).
 pub const ACTION_H: f32 = 48.0;
-/// 56 px: the action slot's height when its label wraps to two `EMPHASIS`
-/// lines (two 19 px rows = 38 + 2×S2 = 54, rounded up to the 8-px step). The
-/// old 9 px shrink floor is gone: long labels wrap, they are never shrunk.
+/// 46 px — the CTA height in the compact 420 tier.
+pub const ACTION_H_COMPACT: f32 = 46.0;
+/// 56 px — the CTA's height when its label wraps to two lines.
 pub const ACTION_H_WRAPPED: f32 = 56.0;
-/// 64 px: the RTT sparkline's height. The sparkline is removed in W2 v1; the
-/// token is kept for a future labelled, fixed-scale chart (`design-system` §1.4).
-pub const PLOT_H: f32 = 64.0;
-/// 132 px: the route map's height (replaces the dead `GLOBE_*` trio).
-pub const MAP_H: f32 = 132.0;
-/// 430 px: the route map's maximum width.
+/// 30 px — the top brand/status bar (normal).
+pub const TOP_H: f32 = 30.0;
+/// 28 px — the top brand/status bar (compact).
+pub const TOP_H_COMPACT: f32 = 28.0;
+/// 38 px — the footer (normal).
+pub const FOOTER_H: f32 = 38.0;
+/// 34 px — the footer (compact).
+pub const FOOTER_H_COMPACT: f32 = 34.0;
+/// 146 px — the telemetry map (normal).
+pub const MAP_H: f32 = 146.0;
+/// 96 px — the telemetry map (compact).
+pub const MAP_H_COMPACT: f32 = 96.0;
+/// 430 px — the map's maximum width.
 pub const MAP_W_MAX: f32 = 430.0;
-/// 40 px: the state rail's hero band (a `STATE` 30 row).
-pub const HERO_H: f32 = 40.0;
-/// 3 px: the painted state edge on the rail.
+/// 32 px — the state word's one-line band.
+pub const HERO_H: f32 = 32.0;
+/// 20 px — a section-header rule row.
+pub const SECTION_H: f32 = 20.0;
+/// 30 px — minimum data-row height.
+pub const ROW_H: f32 = 30.0;
+/// 36 px — a stacked sentence row (label + prose value + gap).
+pub const ROW_H_SENTENCE: f32 = 36.0;
+/// 7 px — the tick ruler under the hero.
+pub const RULER_H: f32 = 7.0;
+/// 3 px — the painted state edge on the rail (kept; C paints rules instead).
 pub const RAIL_EDGE: f32 = 3.0;
-/// 24 px: the minimum pointer target for any control (WCAG 2.5.8).
+/// 24 px — minimum pointer target for any control (WCAG 2.5.8).
 pub const HIT_MIN: f32 = 24.0;
-/// 2 px: the keyboard-focus ring, painted outside the control.
+/// 2 px — the keyboard-focus ring.
 pub const FOCUS_RING_W: f32 = 2.0;
-/// 24 px: one ledger row's allocation.
-pub const ROW_H: f32 = 24.0;
+/// 1 px — the focus ring's offset outside the control.
+pub const FOCUS_OFFSET: f32 = 1.0;
 
-// ── Type scale ───────────────────────────────────────────────────────────────
-//
-// px, matching the site's rem scale at a 16px root, so a token has the same
-// size on the landing page and in the window. Inter Regular / SemiBold for
-// text, JetBrains Mono Regular for data; weight is binary inside Inter, so
-// emphasis is carried by size, colour and alignment rather than a fake weight.
+// ── Type (§2; 11 px floor, state word capped at 30) ────────────────────────
 
-/// 11/16 - units (`ms`), footnotes, tooltips, disabled ink.
+/// 11/16 — the floor: labels, micro-captions, brand, footer, section names.
 pub const CAPTION: f32 = 11.0;
-/// 12/16 - field and section labels, sentence case.
-pub const LABEL: f32 = 12.0;
-/// 13/19 - prose: help text, the rail's second line.
-pub const BODY: f32 = 13.0;
-/// 15/19 - the action button and other emphasis (the site's `--fs-base`).
-pub const EMPHASIS: f32 = 15.0;
-/// 17/24 - JetBrains Mono: addresses, ports, node ids, counters.
-pub const VALUE: f32 = 17.0;
-/// 20/26 - sheet titles ("Proxy Manager", "Update").
-pub const TITLE: f32 = 20.0;
-/// 30/34 - the state word in the rail.
+/// 11/16 — field and row labels (uppercase at render time).
+pub const LABEL: f32 = 11.0;
+/// 12/16 — prose sentences (Inter) and the sheet title's body.
+pub const BODY: f32 = 12.0;
+/// 12.5/18 — the CTA label.
+pub const EMPHASIS: f32 = 12.5;
+/// 12.5/18 — data values, sheet title.
+pub const VALUE: f32 = 12.5;
+/// 12/16 — sheet titles.
+pub const TITLE: f32 = 12.0;
+/// 30/32 — the state word, hard cap (D6 one-line rule).
 pub const STATE: f32 = 30.0;
-/// 30/34 - the live round trip in the rail (JetBrains Mono).
-pub const METRIC: f32 = 30.0;
+/// 28/32 — the live relay-leg readout (mono, ice).
+pub const METRIC: f32 = 28.0;
+/// 11/16 — the brand wordmark.
+pub const BRAND: f32 = 11.0;
+/// 11/16 — section labels and their indices.
+pub const SECTION: f32 = 11.0;
+/// 12/16 — prose sentences (Inter), the same size as `BODY` for clarity.
+pub const PROSE: f32 = 12.0;
+
+// ── Tracking (em, painted by the tracked-text helper) ──────────────────────
+
+/// Brand wordmark tracking (§2: 0.34em).
+pub const TRACK_BRAND: f32 = 0.34;
+/// Top meta / footer tracking (§2: 0.16em).
+pub const TRACK_META: f32 = 0.16;
+/// Section label tracking (§2: 0.24em).
+pub const TRACK_SECTION: f32 = 0.24;
+/// Micro-caption / data-label tracking (§2: 0.19em).
+pub const TRACK_LABEL: f32 = 0.19;
+/// State word tracking (§2: −0.02em).
+pub const TRACK_STATE: f32 = -0.02;
+/// Data-value tracking (§2: 0.01em).
+pub const TRACK_VALUE: f32 = 0.01;
+/// CTA label tracking (§2: 0.2em).
+pub const TRACK_CTA: f32 = 0.2;
+/// Banner tag tracking (§4.8: 0.24em).
+pub const TRACK_TAG: f32 = 0.24;
+/// Active fleet code label tracking (§3: 0.14em).
+pub const TRACK_FLEET: f32 = 0.14;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// `to_array` is premultiplied, so an opaque token compares channel-for-
-    /// channel against the site's hex.
+    /// channel against the sheet's hex (`gui-c-token-sheet.md` §1).
     #[test]
-    fn opaque_tokens_match_the_site_hexes() {
+    fn opaque_tokens_match_the_token_sheet_hexes() {
         for (token, hex) in [
-            (bg_0, [0x0B, 0x0B, 0x0D, 0xFF]),
-            (bg_1, [0x0F, 0x0F, 0x11, 0xFF]),
-            (bg_2, [0x15, 0x15, 0x18, 0xFF]),
-            (bg_3, [0x1B, 0x1B, 0x1F, 0xFF]),
-            (bg_4, [0x22, 0x22, 0x27, 0xFF]),
-            (border_1, [0x25, 0x25, 0x2A, 0xFF]),
-            (border_2, [0x33, 0x33, 0x39, 0xFF]),
-            (border_control, [0x65, 0x65, 0x6A, 0xFF]),
-            (text_1, [0xF2, 0xF2, 0xFA, 0xFF]),
-            (text_2, [0xB4, 0xB4, 0xCC, 0xFF]),
-            (text_3, [0x8A, 0x8A, 0xA8, 0xFF]),
-            (accent, [0x6C, 0x5C, 0xE7, 0xFF]),
-            (accent_deep, [0x5A, 0x4B, 0xD4, 0xFF]),
-            (accent_text, [0xA2, 0x9B, 0xFE, 0xFF]),
-            (signal, [0x00, 0xD6, 0x8F, 0xFF]),
-            (warn, [0xFD, 0xCB, 0x6E, 0xFF]),
-            (danger, [0xFF, 0x6B, 0x6B, 0xFF]),
-            (on_accent, [0xFF, 0xFF, 0xFF, 0xFF]),
-            (map_land, [0x4A, 0x4A, 0x72, 0xFF]),
+            (bg_0, [0x05, 0x06, 0x07, 0xFF]),
+            (bg_1, [0x0A, 0x0C, 0x0E, 0xFF]),
+            (bg_2, [0x0D, 0x11, 0x13, 0xFF]),
+            (bg_3, [0x11, 0x15, 0x18, 0xFF]),
+            (bg_4, [0x11, 0x15, 0x18, 0xFF]),
+            (border_1, [0x1D, 0x23, 0x29, 0xFF]),
+            (border_2, [0x2B, 0x33, 0x3B, 0xFF]),
+            (border_control, [0x58, 0x65, 0x6E, 0xFF]),
+            (text_1, [0xF0, 0xF5, 0xF8, 0xFF]),
+            (text_2, [0xA9, 0xB4, 0xBD, 0xFF]),
+            (text_3, [0x79, 0x83, 0x8E, 0xFF]),
+            (text_disabled, [0x6B, 0x75, 0x80, 0xFF]),
+            (ice, [0x9F, 0xE8, 0xFF, 0xFF]),
+            (ice_dim, [0x5F, 0x93, 0xA2, 0xFF]),
+            (accent, [0xCD, 0xFF, 0x45, 0xFF]),
+            (accent_hover, [0xD9, 0xFF, 0x7A, 0xFF]),
+            (accent_deep, [0xB9, 0xEA, 0x2F, 0xFF]),
+            (on_accent, [0x0A, 0x0E, 0x02, 0xFF]),
+            (signal, [0x9F, 0xE8, 0xFF, 0xFF]),
+            (warn, [0xFF, 0xB1, 0x3D, 0xFF]),
+            (danger, [0xFF, 0x5C, 0x5C, 0xFF]),
+            (danger_soft, [0x16, 0x0C, 0x0D, 0xFF]),
+            (danger_text, [0xFF, 0xD8, 0xD8, 0xFF]),
+            (map_bg, [0x08, 0x0A, 0x0C, 0xFF]),
+            (grid, [0x12, 0x17, 0x1B, 0xFF]),
+            (map_land, [0x2A, 0x34, 0x3A, 0xFF]),
+            (map_fleet, [0x5E, 0x7C, 0x86, 0xFF]),
         ] {
-            assert_eq!(token.to_array(), hex, "token drifted from the site hex");
+            assert_eq!(token.to_array(), hex, "token drifted from the C sheet hex");
         }
     }
 
     #[test]
-    fn tints_stay_translucent() {
-        for tint in [accent_soft, accent_line, danger_soft, scrim, grid] {
+    fn tints_stay_translucent_and_the_danger_wash_is_the_composited_token() {
+        for (tint, alpha) in [
+            (accent_soft, 28),
+            (accent_line, 71),
+            (scrim, 214),
+            (map_halo, 115),
+            (map_halo_fill, 23),
+        ] {
+            assert_eq!(tint.a(), alpha, "tint alpha drifted");
             assert!(tint.a() < 255, "a tint must not be opaque: {tint:?}");
         }
+        // The banner wash is the sheet's *composited* opaque token, not a tint.
+        assert_eq!(danger_soft, Color32::from_rgb(0x16, 0x0C, 0x0D));
     }
 
     #[test]
     fn tints_unmultiply_back_to_their_source() {
-        // A tint must be the exact 8-bit premultiplication of its documented
-        // source at its documented alpha. Comparing the unmultiplied round
-        // trip is lossy (an 8-bit alpha can drift the channels by more than
-        // one step), so assert the authored premultiplied value directly.
         for (tint, base, alpha) in [
-            (accent_soft, accent, 31),
-            (accent_line, accent, 71),
-            (danger_soft, danger, 31),
-            (scrim, bg_0, 184),
-            (grid, text_1, 15),
+            (accent_soft, ice, 28),
+            (accent_line, ice, 71),
+            (map_halo, ice, 115),
+            (map_halo_fill, ice, 23),
         ] {
             assert_eq!(tint.a(), alpha);
             let [r, g, b, _] = base.to_array();
@@ -233,36 +324,60 @@ mod tests {
                 "a tint must be authored from its source rgb at its documented alpha"
             );
         }
+        // The sheet scrim is `rgba(2,3,4,.68)` — its own authored ink, not bg_0.
+        assert_eq!(
+            scrim,
+            Color32::from_rgba_unmultiplied(2, 3, 4, 214),
+            "the scrim must be authored as rgba(2,3,4,.84) for the m1 sheet dim"
+        );
     }
 
     #[test]
     fn geometry_scale_is_stable() {
         assert_eq!((S1, S2, S3, S4, S5), (4.0, 8.0, 12.0, 16.0, 24.0));
+        assert_eq!((R_TAG, R_PANEL), (2, 3));
         assert_eq!(
             (R_INLINE, R_CONTROL, R_CARD, R_BUTTON, R_SHEET),
-            (4, 8, 8, 12, 16)
-        );
-        // W2 mobile-only adoption: the wrapped action slot and the measured
-        // hero band replace the retired globe trio / 96 px label column.
-        assert_eq!(
-            (CONTROL_H, ACTION_H, ACTION_H_WRAPPED, HERO_H, ROW_H),
-            (40.0, 48.0, 56.0, 40.0, 24.0)
+            (R_TAG, R_TAG, R_PANEL, R_PANEL, R_PANEL)
         );
         assert_eq!(
-            (MAP_H, MAP_W_MAX, RAIL_EDGE, HIT_MIN),
-            (132.0, 430.0, 3.0, 24.0)
+            (TOP_H, TOP_H_COMPACT, FOOTER_H, FOOTER_H_COMPACT),
+            (30.0, 28.0, 38.0, 34.0)
         );
-        assert_eq!(FOCUS_RING_W, 2.0);
+        assert_eq!(
+            (CONTROL_H, ACTION_H, ACTION_H_COMPACT, ACTION_H_WRAPPED),
+            (32.0, 48.0, 46.0, 56.0)
+        );
+        assert_eq!((MAP_H, MAP_H_COMPACT, MAP_W_MAX), (146.0, 96.0, 430.0));
+        assert_eq!(
+            (HERO_H, SECTION_H, ROW_H, ROW_H_SENTENCE, RULER_H),
+            (32.0, 20.0, 30.0, 36.0, 7.0)
+        );
+        assert_eq!((HIT_MIN, FOCUS_RING_W, FOCUS_OFFSET), (24.0, 2.0, 1.0));
     }
 
     #[test]
-    fn type_scale_is_stable() {
+    fn type_scale_is_stable_with_the_11px_floor_and_30px_state_cap() {
         assert_eq!(
             (CAPTION, LABEL, BODY, EMPHASIS, VALUE, TITLE, STATE, METRIC),
-            (11.0, 12.0, 13.0, 15.0, 17.0, 20.0, 30.0, 30.0)
+            (11.0, 11.0, 12.0, 12.5, 12.5, 12.0, 30.0, 28.0)
         );
-        // Mono is never smaller than the value size; captions are Inter-only.
-        assert_eq!(STATE, METRIC);
+        // The token sheet's floor: nothing renders below 11 px.
+        for role in [
+            CAPTION, LABEL, BODY, EMPHASIS, VALUE, TITLE, BRAND, SECTION, PROSE,
+        ] {
+            assert!(
+                role >= 11.0,
+                "a type role fell below the 11 px floor: {role}"
+            );
+        }
+        // The state word is hard-capped at 30 px (D6 one-line rule).
+        assert_eq!(STATE, 30.0);
+        let metric: f32 = METRIC;
+        assert!(
+            metric <= STATE,
+            "the metric must not outgrow the capped state word"
+        );
     }
 
     /// WCAG relative luminance of an opaque authored colour.
@@ -288,75 +403,54 @@ mod tests {
         }
     }
 
-    /// Straight-alpha composite of `top` over `bottom`, returning an opaque colour.
-    fn over(top: Color32, bottom: Color32) -> Color32 {
-        let a = f64::from(top.a()) / 255.0;
-        let mix =
-            |t: u8, b: u8| -> u8 { (f64::from(t) * a + f64::from(b) * (1.0 - a)).round() as u8 };
-        Color32::from_rgb(
-            mix(top.r(), bottom.r()),
-            mix(top.g(), bottom.g()),
-            mix(top.b(), bottom.b()),
-        )
-    }
-
-    /// The measured floors from `design-system-2026.md` §3, asserted in the
-    /// crate so a value edit cannot silently regress AA. The selected-row
-    /// before-state is asserted as a **failure**: a test that cannot fail is a
-    /// defect (QA F7/F1).
+    /// The C pair set from `contrast-checks.md` / the token sheet §1, asserted
+    /// in the crate so a value edit cannot silently regress AA (the same
+    /// discipline the shipped dark canon used).
     #[test]
     fn measured_contrast_meets_the_aa_floors() {
-        // Selected list row: ink over the accent_soft selection fill (the real
-        // paint plane; QA R6). Post-fix accent_text ink reaches 6.70:1.
-        let selection_fill = over(accent_soft, bg_2);
-        let selected = ratio(accent_text, selection_fill);
-        assert!(
-            selected >= 6.70,
-            "selected-row ink must reach 6.70:1, got {selected:.2}"
-        );
-        // If the ink reverts to the accent fill (the shipped 1.35:1 defect),
-        // the same assertion fails: the test can detect the regression.
-        let reverted = ratio(accent, selection_fill);
-        assert!(
-            reverted < 4.5,
-            "the accent-ink before-state must fail AA, got {reverted:.2}"
-        );
-
-        // Text floors (measured pairings, `design-system` §3.2).
-        for (ink_name, ink, plane, floor) in [
-            ("text_1/bg_1", text_1, bg_1, 7.0),
-            ("text_1/bg_2", text_1, bg_2, 7.0),
-            ("text_2/bg_2", text_2, bg_2, 4.5),
-            ("text_3/bg_0", text_3, bg_0, 4.5),
-            ("text_3/bg_2", text_3, bg_2, 4.5),
-            ("warn/bg_2", warn, bg_2, 4.5),
-            ("accent_text/bg_0", accent_text, bg_0, 4.5),
-            ("signal/bg_2", signal, bg_2, 3.0),
+        for (name, ink, plane, floor) in [
+            ("ink/panel", text_1, bg_1, 7.0),
+            ("ink/canvas", text_1, bg_0, 7.0),
+            ("ink_2/panel", text_2, bg_1, 4.5),
+            ("ink_2/canvas", text_2, bg_0, 4.5),
+            ("dim/panel", text_3, bg_1, 4.5),
+            ("dim/canvas", text_3, bg_0, 4.5),
+            ("ice/panel", ice, bg_1, 7.0),
+            ("ice/canvas", ice, bg_0, 7.0),
+            ("ice_dim/panel", ice_dim, bg_1, 4.5),
+            ("danger/panel", danger, bg_1, 4.5),
+            ("danger/canvas", danger, bg_0, 4.5),
+            ("warn/canvas", warn, bg_0, 4.5),
+            ("on_accent/accent", on_accent, accent, 4.5),
+            ("danger_text/danger_tint", danger_text, danger_soft, 4.5),
+            ("danger/danger_tint", danger, danger_soft, 4.5),
         ] {
             let r = ratio(ink, plane);
-            assert!(r >= floor, "{ink_name} = {r:.2} < {floor}");
+            assert!(r >= floor, "{name} = {r:.2} < {floor}");
         }
 
-        // The starvation notice: danger ink on its own danger_soft frame over
-        // the card (measured 5.61:1), and the connectable notice on the card.
-        let notice_fill = over(danger_soft, bg_2);
-        let notice = ratio(danger, notice_fill);
-        assert!(notice >= 4.5, "notice ink = {notice:.2} < 4.5");
-        let row_plane = bg_2;
-        let _ = row_plane;
-
-        // Every interactive control's identifying boundary is ≥3:1 on the
-        // plane the control sits on (1.4.11: bg_0/bg_1/bg_2; a `bg_3` field
-        // sits on `bg_2`, so the boundary is measured against `bg_2`).
-        for (name, plane) in [("bg_0", bg_0), ("bg_1", bg_1), ("bg_2", bg_2)] {
-            let r = ratio(border_control, plane);
-            assert!(r >= 3.0, "border_control on {name} = {r:.2} < 3.0");
+        // Control boundaries and the focus ring (WCAG 1.4.11 / 2.4.13, 3:1).
+        for (name, ink, plane) in [
+            ("control_line/panel", border_control, bg_1),
+            ("control_line/canvas", border_control, bg_0),
+            ("focus/panel", focus, bg_1),
+            ("focus/canvas", focus, bg_0),
+            ("map_fleet/map_bg", map_fleet, map_bg),
+        ] {
+            let r = ratio(ink, plane);
+            assert!(r >= 3.0, "{name} = {r:.2} < 3.0");
         }
 
-        // The focus ring reads outside the control on every plane it can sit on.
-        for (name, plane) in [("bg_0", bg_0), ("bg_1", bg_1), ("bg_2", bg_2)] {
-            let r = ratio(accent_text, plane);
-            assert!(r >= 3.0, "focus ring on {name} = {r:.2} < 3.0");
-        }
+        // Disabled ink is exempt from text AA but must stay perceivable (3:1 UI).
+        let disabled = ratio(disabled_ink, disabled_plane);
+        assert!(disabled >= 3.0, "disabled ink = {disabled:.2} < 3.0");
+
+        // A test that cannot fail is a defect: the retired violet accent fails
+        // as ink on the C canvas, proving the pair table is load-bearing.
+        let retired_violet = Color32::from_rgb(0x6C, 0x5C, 0xE7);
+        assert!(
+            ratio(retired_violet, bg_0) < 4.5,
+            "the retired accent should not pass as text ink on the C canvas"
+        );
     }
 }
