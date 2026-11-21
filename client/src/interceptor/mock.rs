@@ -72,6 +72,38 @@ impl Default for MockInterceptor {
     }
 }
 
+/// Test-only observation helpers for the mock's asynchronous shutdown.
+///
+/// `stop()` only signals the mock's dedicated shutdown thread, which flips
+/// `active` and increments `stop_count` after it wakes. Tests used to
+/// `sleep(50ms)` and hope; a loaded CI worker could deschedule that thread past
+/// the sleep and fail the assertion (WF-081b task-73/76). Waiting on the
+/// observable counter with a bounded deadline is deterministic under any thread
+/// count and still fails (with the observed value) if the thread never runs.
+#[cfg(test)]
+impl MockInterceptor {
+    /// Upper bound for a shutdown observation in tests: generous against a
+    /// loaded CI worker, small enough that a real hang still fails fast.
+    pub const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Poll interval while waiting: short enough to be instant when the
+    /// shutdown thread is already done, cheap enough for a bounded wait.
+    const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(2);
+
+    /// Block until at least `expected` stops have been observed, or the bounded
+    /// deadline elapses; returns the last observed count either way.
+    pub fn wait_for_stop_count(&self, expected: u64) -> u64 {
+        let started = std::time::Instant::now();
+        loop {
+            let seen = self.stop_count();
+            if seen >= expected || started.elapsed() >= Self::STOP_DEADLINE {
+                return seen;
+            }
+            std::thread::sleep(Self::STOP_POLL);
+        }
+    }
+}
+
 impl TrafficInterceptor for MockInterceptor {
     fn platform_name(&self) -> &'static str {
         "mock"
@@ -173,8 +205,10 @@ mod tests {
         let m = MockInterceptor::new();
         let mut handle = m.start(test_config()).unwrap();
         handle.stop();
-        // The stop increments asynchronously, give it a moment
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Observe the asynchronous stop with a bounded wait instead of a fixed
+        // sleep (task-73/76): the shutdown thread is the observation point.
+        let seen = m.wait_for_stop_count(1);
+        assert_eq!(seen, 1, "the mock shutdown thread must observe the stop");
         assert_eq!(m.stop_count(), 1);
     }
 

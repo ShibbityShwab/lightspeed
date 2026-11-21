@@ -19,4 +19,3 @@ pub mod benchmark_mode;
 pub mod demo_mode;
 pub mod intercept_mode;
 pub mod smoke_test;
-pub mod watch_mode;

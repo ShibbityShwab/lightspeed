@@ -113,6 +113,10 @@ routing = "Routing"
 refresh_hint = "Fetch the latest community relay list from the registry."
 remeasure_hint = "Probe every relay again and refresh the numbers the relay picker shows."
 
+startup = "Startup"
+autostart = "Start LightSpeed when I sign in"
+autostart_hint = "Off by default. Starts LightSpeed when you sign in; the boost still starts only when you ask."
+
 [proxies]
 title = "中继管理"
 manage_hint = "添加、删除或刷新中继列表。"
@@ -212,6 +216,7 @@ up_to_date = "已是最新版本"
 channel_release = "Download the newest release from the LightSpeed releases page."
 channel_shell = "Update with the LightSpeed installer or its updater."
 channel_package = "Update through your package manager (AUR lightspeed-bin) or install the newest release."
+disclosure = "The only update check is the one you ask for: LightSpeed contacts api.github.com for the latest release, sends nothing else, and never checks at startup or in the background."
 
 [window]
 hide_to_tray = "隐藏到托盘"

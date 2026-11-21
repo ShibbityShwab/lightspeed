@@ -140,6 +140,69 @@ impl AppCore {
         })
     }
 
+    /// Build the interceptor plan for a front end that owns its policy (the
+    /// read half of [`Self::start_boost`]).
+    ///
+    /// Planning changes no state, so a live mode can print the discovered routes,
+    /// backend and availability before starting; a failure is the same Tunnel
+    /// taxonomy [`Self::start_boost`] reports, recorded in the command state.
+    pub fn plan_boost(
+        &mut self,
+        request: crate::engine::InterceptorRequest,
+    ) -> Result<crate::engine::InterceptorPlan, AppError> {
+        self.run(SessionCommand::StartBoost, move |engine| {
+            engine.plan_interceptor(request)
+        })
+    }
+
+    /// Start a plan returned by [`Self::plan_boost`].
+    ///
+    /// The write half of the adopted boost path: the engine applies the plan's
+    /// policy verbatim and records the same status fields as the shipped
+    /// one-shot path. A backend that turns out to be unavailable fails here with
+    /// the backend's own reason (Tunnel taxonomy).
+    pub fn start_planned_boost(
+        &mut self,
+        plan: crate::engine::InterceptorPlan,
+    ) -> Result<(), AppError> {
+        self.run(SessionCommand::StartBoost, move |engine| {
+            engine.start_interceptor_plan(plan)
+        })
+    }
+
+    /// Redirect an explicit server for a front end that owns its options
+    /// (adaptive policy and TCP leg), keeping the shipped start semantics.
+    pub fn start_redirect_with_options(
+        &mut self,
+        server: SocketAddrV4,
+        local_port: u16,
+        game_name: &str,
+        relay: SocketAddrV4,
+        options: crate::engine::RedirectOptions,
+    ) -> Result<(), AppError> {
+        let game_name = game_name.to_string();
+        self.run(SessionCommand::StartBoost, move |engine| {
+            engine.start_redirect_with_options(server, local_port, game_name, relay, options);
+            Ok(())
+        })
+    }
+
+    /// Move the data plane onto `relay` while the session keeps running
+    /// (the relay-switch command the CLI's continuous rerouting loop uses).
+    ///
+    /// The returned [`RelaySwitch`](crate::engine::RelaySwitch) is the awaited
+    /// registration result; the current relay is published only when it succeeds,
+    /// so a caller can keep its session state when a candidate fails.
+    pub fn switch_relay(
+        &mut self,
+        relay: SocketAddrV4,
+        destination: Option<std::net::Ipv4Addr>,
+    ) -> Result<crate::engine::RelaySwitch, AppError> {
+        self.run(SessionCommand::SelectRelay, move |engine| {
+            Ok(engine.switch_relay(relay, destination))
+        })
+    }
+
     /// Stop every tunnel backend (interceptor, WinDivert, capture, redirect).
     pub fn stop_boost(&mut self) -> Result<(), AppError> {
         self.run(SessionCommand::StopBoost, |engine| {
@@ -148,6 +211,22 @@ impl AppCore {
             engine.stop_capture();
             engine.stop_redirect();
             Ok(())
+        })
+    }
+
+    /// Stop the interceptor but keep the session's control-plane registration.
+    ///
+    /// The adopted live modes own their teardown UX (they print their own warning)
+    /// and keep watching for the game to return, so the data plane stops while the
+    /// relay session lives. Returns whether the platform teardown completed within
+    /// `timeout`; `false` means the caller prints the shipped warning. No backend
+    /// other than the interceptor is touched.
+    pub fn stop_boost_keep_registration(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<bool, AppError> {
+        self.run(SessionCommand::StopBoost, move |engine| {
+            Ok(engine.stop_interceptor_keep_registration(timeout))
         })
     }
 
@@ -304,5 +383,83 @@ mod tests {
                 "the Error row and the caller read the same kind"
             );
         }
+    }
+
+    // ── Adopted live-mode commands (post-W2 task-57) ─────────────────────
+
+    fn session_core() -> (tokio::runtime::Runtime, crate::app::runtime::SessionCore) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let core = crate::app::runtime::SessionCore::build(runtime.handle().clone(), 1492);
+        (runtime, core)
+    }
+
+    #[test]
+    fn a_plan_boost_failure_is_a_typed_command_error() {
+        let (_runtime, mut core) = session_core();
+        let relay = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 4434);
+        let request = crate::engine::InterceptorRequest::new("not-a-game", relay, false, 4);
+        let error = core
+            .commands_mut()
+            .plan_boost(request)
+            .expect_err("an unknown game must fail the plan");
+        assert_eq!(
+            error.kind,
+            crate::app::dto::AppErrorKind::Tunnel,
+            "a refused boost is the Tunnel taxonomy, like the shipped start command"
+        );
+        assert!(
+            core.commands_mut().session().last_error.is_some(),
+            "the Error row must record the refusal"
+        );
+    }
+
+    #[test]
+    fn adopted_redirect_and_relay_switch_commands_reach_the_shared_engine() {
+        let (_runtime, mut core) = session_core();
+        let relay = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 4434);
+        let server = SocketAddrV4::new(std::net::Ipv4Addr::new(198, 51, 100, 9), 28015);
+        core.commands_mut()
+            .start_redirect_with_options(
+                server,
+                0,
+                "sample",
+                relay,
+                crate::engine::RedirectOptions {
+                    fec: false,
+                    fec_k: 4,
+                    adaptive: crate::engine::AdaptivePolicy {
+                        enabled: true,
+                        k_size: 8,
+                        max_overhead_pct: 10,
+                    },
+                    tcp: false,
+                    shutdown_notice: None,
+                },
+            )
+            .expect("the redirect command must be accepted");
+        assert!(
+            core.status().redirect_active,
+            "the redirect command must reach the shared engine"
+        );
+        assert_eq!(
+            core.status().redirect_server,
+            server.to_string(),
+            "the command must carry the explicit server"
+        );
+        // The switch command returns the awaitable handle and leaves the shared
+        // command state settled; the registration itself runs on the engine's
+        // runtime (this test's runtime is not driven, so nothing is published).
+        let switch = core
+            .commands_mut()
+            .switch_relay(relay, None)
+            .expect("the switch command must be accepted");
+        drop(switch);
+        assert!(
+            core.commands_mut().session().in_flight.is_none(),
+            "returning the switch handle must settle the in-flight command marker"
+        );
     }
 }

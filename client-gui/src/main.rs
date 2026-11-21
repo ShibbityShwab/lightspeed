@@ -27,6 +27,25 @@ use platform::Platform;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+/// The product title: one source for the window builder, the eframe app name and
+/// the G0.2 smoke marker the CI probe greps (`title="LightSpeed"`).
+///
+/// The smoke hook used to log the *runtime* viewport title, which eframe has not
+/// populated on the first painted frame on X11, so the marker read `title=""` and
+/// the Linux probe could never pass (WF-081b task-81). The hook now logs the title
+/// the app itself sets — this constant — and the probe keeps the exact
+/// `title="LightSpeed"` marker. A test pins the constant and the viewport builder
+/// to the same value.
+pub const APP_TITLE: &str = "LightSpeed";
+
+/// How long the smoke window stays visible before it self-closes.
+///
+/// The CI probe on X11 proves the window through the OS (`xdotool`: title, the
+/// run's PID, a plausible geometry) *before* it reads the markers. A three-frame
+/// window can vanish before xdotool's next poll, so the smoke run holds the
+/// window for a bounded moment; it is still deterministic and self-closing.
+const SMOKE_VISIBLE: std::time::Duration = std::time::Duration::from_millis(1500);
+
 fn main() {
     // Absolutely first: a panic before the hook is installed is invisible in
     // the console-less Windows build. `run` returns errors instead of
@@ -116,7 +135,7 @@ fn run() -> anyhow::Result<()> {
     let quit_for_closure = Arc::clone(&quit);
     tracing::info!("entering eframe::run_native");
     eframe::run_native(
-        "LightSpeed",
+        APP_TITLE,
         native_options,
         Box::new(move |cc: &eframe::CreationContext<'_>| {
             // The language is resolved here, not in the app, so the CJK faces are
@@ -153,7 +172,7 @@ fn build_viewport() -> egui::ViewportBuilder {
         .with_min_inner_size([320.0, app::MIN_WINDOW_HEIGHT])
         .with_max_inner_size([320.0, app::MAX_WINDOW_HEIGHT])
         .with_resizable(true)
-        .with_title("LightSpeed");
+        .with_title(APP_TITLE);
     // A failed icon decode must not abort startup.
     match window_icon() {
         Some(icon) => viewport.with_icon(icon),
@@ -224,12 +243,13 @@ fn run_smoke() -> anyhow::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "LightSpeed",
+        APP_TITLE,
         native_options,
         Box::new(|_cc: &eframe::CreationContext<'_>| {
             Ok(Box::new(SmokeApp {
                 frames: 0,
                 closed: false,
+                started: None,
             }))
         }),
     )
@@ -237,32 +257,45 @@ fn run_smoke() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The smoke run's frame loop: prove the window on frame 1, close on frame 3.
+/// The smoke run's frame loop: prove the window on frame 1, close after a bounded
+/// visible moment.
 ///
 /// The markers are the CI contract (`GUI_SMOKE window_created …` then
-/// `GUI_SMOKE exit=0 …`); keep them stable when touching this file.
+/// `GUI_SMOKE exit=0 …`); keep them stable when touching this file. The window is
+/// held open for [`SMOKE_VISIBLE`] so the X11 probe can prove it through the OS
+/// (title + PID + geometry) before the markers are read.
 struct SmokeApp {
     frames: u32,
     /// The close was already requested; the marker is emitted once so the CI
     /// probe sees exactly one `GUI_SMOKE exit=0` line.
     closed: bool,
+    /// When the first frame was painted (starts the bounded visible window).
+    started: Option<std::time::Instant>,
 }
 
 impl eframe::App for SmokeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.frames = self.frames.saturating_add(1);
         if self.frames == 1 {
+            self.started = Some(std::time::Instant::now());
             let ctx = ui.ctx();
-            let title = ctx.input(|input| input.viewport().title.clone());
             let pixels_per_point = ctx.pixels_per_point();
+            // Log the title the app sets (`APP_TITLE`), not the runtime viewport
+            // copy: eframe populates that after the first frame on X11, which is
+            // why the marker used to read `title=""` and the Linux probe never
+            // matched (WF-081b task-81).
             tracing::info!(
                 "GUI_SMOKE window_created title={:?} pixels_per_point={pixels_per_point:.3} backend={} renderer={:?}",
-                title.unwrap_or_default(),
+                APP_TITLE,
                 std::env::consts::OS,
                 renderer_from_env()
             );
         }
-        if self.frames >= 3 && !self.closed {
+        let visible_for = self
+            .started
+            .map(|started| started.elapsed())
+            .unwrap_or_default();
+        if self.frames >= 3 && visible_for >= SMOKE_VISIBLE && !self.closed {
             self.closed = true;
             tracing::info!("GUI_SMOKE exit=0 frames={}", self.frames);
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -373,5 +406,27 @@ fn renderer_from_env() -> eframe::Renderer {
             eframe::Renderer::default()
         }
         Err(_) => eframe::Renderer::default(),
+    }
+}
+
+#[cfg(test)]
+mod app_title_tests {
+    use super::{build_viewport, APP_TITLE};
+
+    /// The CI probe greps the exact marker `title="LightSpeed"`. One constant is
+    /// the window builder's title, the eframe app name and the smoke marker, so
+    /// the three cannot drift apart (WF-081b task-81, QA C1/C2).
+    #[test]
+    fn the_smoke_marker_names_the_title_the_app_sets() {
+        assert_eq!(
+            APP_TITLE, "LightSpeed",
+            "the CI probe's marker is title=\"LightSpeed\""
+        );
+        assert_eq!(format!("title={:?}", APP_TITLE), "title=\"LightSpeed\"");
+        assert_eq!(
+            build_viewport().title.as_deref(),
+            Some(APP_TITLE),
+            "the window builder must use the same constant the smoke hook logs"
+        );
     }
 }

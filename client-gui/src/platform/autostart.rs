@@ -13,17 +13,15 @@
 //! | Linux | `$XDG_CONFIG_HOME/autostart/lightspeed-gui.desktop` | `Exec="<exe>" --autostart` |
 //! | macOS | `~/Library/LaunchAgents/dev.lightspeed.gui.plist` | `ProgramArguments = [<exe>, --autostart]` |
 //!
-//! The Settings toggle that turns this on is shell work (it needs a config
-//! field and a control, both outside the frozen W2-4 shell); this slice makes
-//! the platform half real and honest. `--autostart` is the launch mode the
-//! pipeline will consume: start hidden when a tray exists, otherwise show.
+//! The Settings toggle is shell work (WF-081b, task-74); this module provides
+//! the two calls it makes: [`installed_current`] (the observable truth, read
+//! once per Settings open) and [`apply_current`] (write or remove the entry,
+//! surfacing a failure instead of claiming success). Nothing here is a
+//! behavioural stub: every function is a complete implementation, so the module
+//! carries **no** `dead_code` allowance, blanket or local.
 //!
-//! Deliberate allowance: the write/remove/registry functions land **before** the
-//! Settings control that calls them, so they are unused in a shipping build
-//! today. They are exercised end-to-end by the temp-dir tests; the allowance
-//! disappears with the toggle. No behavioural stubs are hidden here — every
-//! function is a complete implementation.
-#![cfg_attr(not(test), allow(dead_code))]
+//! `--autostart` is the launch mode the entry passes; its contract (argument
+//! name, quoting per OS, one entry per install) is unchanged by this wiring.
 
 use std::path::{Path, PathBuf};
 
@@ -32,6 +30,9 @@ pub const AUTOSTART_ARG: &str = "--autostart";
 
 /// The registry value name (Windows) and the identity used in logs.
 pub const APP_ID: &str = "LightSpeed";
+
+/// The Windows `Run` key both the writer and the existence check address.
+const REGISTRY_RUN_KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
 /// The three autostart mechanisms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,13 +136,109 @@ pub fn plan(os: Os, exe: &Path, config_dir: &Path, home_dir: &Path) -> Autostart
 
 /// Plan for this process, when its own path is knowable.
 ///
-/// Used by the startup trace so the writer half is compiled and observable on
-/// every OS; the Settings toggle that calls the write path is shell work.
+/// Used by the startup trace and by the Settings toggle, so the writer half is
+/// compiled and observable on every OS.
 pub fn plan_for_current() -> Option<AutostartPlan> {
     let exe = std::env::current_exe().ok()?;
     let config_dir = crate::paths::config_dir();
     let home_dir = dirs::home_dir()?;
     Some(plan(current_os(), &exe, &config_dir, &home_dir))
+}
+
+/// Whether this install's login entry currently exists.
+///
+/// This is the observable truth the Settings toggle reconciles against: the
+/// Windows `Run` value is queried through `reg.exe`, a Linux/macOS entry is a
+/// file under its plan's directory. A plan that cannot be resolved (unknown
+/// executable path) cannot be installed, so it reports `false`.
+pub fn installed_current() -> bool {
+    match plan_for_current() {
+        Some(AutostartPlan::File { dir, .. }) => is_installed(&dir, current_os()),
+        Some(AutostartPlan::Registry { .. }) => registry_is_installed(),
+        None => false,
+    }
+}
+
+/// Write (`enabled`) or remove the login entry for this install.
+///
+/// The one path the Settings toggle calls. A failure is surfaced verbatim, so
+/// the toggle can report it and put its checkbox back instead of showing a
+/// checkmark for an entry that does not exist.
+pub fn apply_current(enabled: bool) -> Result<(), String> {
+    let plan = plan_for_current().ok_or_else(|| "the executable path is unknown".to_string())?;
+    apply_entry(&plan, current_os(), enabled)
+}
+
+/// Apply `enabled` to one concrete plan.
+///
+/// `os` selects the file-entry naming for removal (`exit_file_names`); it is
+/// passed explicitly so the temp-dir tests can exercise the Linux/macOS shape
+/// on this Windows host. The registry branch is dispatched through
+/// [`apply_entry_with`] with the real `reg.exe` runner; tests inject a recorder
+/// instead, so a test run never writes the real `HKCU` value.
+fn apply_entry(plan: &AutostartPlan, os: Os, enabled: bool) -> Result<(), String> {
+    apply_entry_with(plan, os, enabled, &mut run_registry)
+}
+
+/// [`apply_entry`] with the registry command runner injected.
+///
+/// The injection point exists so the enable/disable dispatch can be tested for
+/// the Windows shape without touching the real user's login entry.
+fn apply_entry_with(
+    plan: &AutostartPlan,
+    os: Os,
+    enabled: bool,
+    run_registry_cmd: &mut dyn FnMut(&[String]) -> Result<(), String>,
+) -> Result<(), String> {
+    match plan {
+        AutostartPlan::File { dir, .. } => {
+            if enabled {
+                write_file(dir, plan)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            } else {
+                remove_file(dir, os)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+        }
+        AutostartPlan::Registry { command, .. } => {
+            let args = if enabled {
+                registry_add_args(command)
+            } else {
+                registry_remove_args()
+            };
+            run_registry_cmd(&args)
+        }
+    }
+}
+
+/// Whether the Windows `Run` value exists.
+///
+/// `reg.exe` exits non-zero for "not found" and for real errors alike; both mean
+/// the entry is not installed, and an execution error is logged rather than
+/// hidden.
+fn registry_is_installed() -> bool {
+    match super::silent_command("reg.exe")
+        .args(["query", REGISTRY_RUN_KEY, "/v", APP_ID])
+        .status()
+    {
+        Ok(status) => status.success(),
+        Err(error) => {
+            tracing::warn!("could not query the autostart registry value: {error}");
+            false
+        }
+    }
+}
+
+/// Run the `reg.exe` write/remove command, mapping a failed exit to a message
+/// the Settings toggle can show.
+fn run_registry(args: &[String]) -> Result<(), String> {
+    match super::silent_command("reg.exe").args(args).status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("reg.exe {status}")),
+        Err(error) => Err(format!("could not run reg.exe: {error}")),
+    }
 }
 
 /// The Linux `.desktop` entry.
@@ -201,11 +298,11 @@ fn xml_escape(text: &str) -> String {
 }
 
 /// The `reg.exe` arguments that create the Windows Run value. Pure strings; the
-/// caller decides whether to execute them (no UI toggle ships in this wave).
+/// Settings toggle's `apply_current` executes them through `silent_command`.
 pub fn registry_add_args(command: &str) -> Vec<String> {
     vec![
         "add".to_string(),
-        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run".to_string(),
+        REGISTRY_RUN_KEY.to_string(),
         "/v".to_string(),
         APP_ID.to_string(),
         "/t".to_string(),
@@ -220,7 +317,7 @@ pub fn registry_add_args(command: &str) -> Vec<String> {
 pub fn registry_remove_args() -> Vec<String> {
     vec![
         "delete".to_string(),
-        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run".to_string(),
+        REGISTRY_RUN_KEY.to_string(),
         "/v".to_string(),
         APP_ID.to_string(),
         "/f".to_string(),
@@ -231,8 +328,8 @@ pub fn registry_remove_args() -> Vec<String> {
 /// dir in production), creating the directory chain as needed.
 ///
 /// A registry plan is not a file: this returns an error rather than pretending
-/// it wrote one. The real registry writer is `reg.exe` with
-/// [`registry_add_args`]; there is no UI path to it in this wave.
+/// it wrote one. The Windows entry is the `reg.exe` value built by
+/// [`registry_add_args`] and applied by [`apply_current`].
 pub fn write_file(root: &Path, plan: &AutostartPlan) -> std::io::Result<PathBuf> {
     match plan {
         AutostartPlan::File {
@@ -369,6 +466,66 @@ mod tests {
         assert!(plist.contains(&format!("<string>{AUTOSTART_ARG}</string>")));
         // Both array elements: the exe then the flag, never one quoted string.
         assert!(!plist.contains("&quot; --autostart"));
+    }
+
+    #[test]
+    fn the_toggle_path_enables_and_disables_the_entry() {
+        // The Settings toggle's apply path, on a file plan under a temp root.
+        // The Windows registry branch is exercised through its argument
+        // builders only: a test must never write the real HKCU.
+        let root = temp_root("toggle");
+        let plan = AutostartPlan::File {
+            dir: root.clone(),
+            file_name: "lightspeed-gui.desktop",
+            contents: desktop_entry(&exe()),
+        };
+
+        assert!(!is_installed(&root, Os::Linux), "off by default");
+        apply_entry(&plan, Os::Linux, true).expect("enable writes the entry");
+        assert!(is_installed(&root, Os::Linux), "enable installs the entry");
+        assert_eq!(
+            std::fs::read_to_string(plan.path().expect("file plan has a path"))
+                .expect("entry text"),
+            desktop_entry(&exe())
+        );
+
+        apply_entry(&plan, Os::Linux, false).expect("disable removes the entry");
+        assert!(!is_installed(&root, Os::Linux), "disable removes the entry");
+        // Disable is idempotent: a missing entry is not an error, so the toggle
+        // can be clicked twice without a spurious failure line.
+        apply_entry(&plan, Os::Linux, false).expect("disable is idempotent");
+        assert!(!is_installed(&root, Os::Linux));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_registry_branch_dispatches_the_argument_builders_without_running_them() {
+        // A test must never write the real HKCU login entry: the registry
+        // branch is dispatched through the injectable runner and its arguments
+        // are asserted here. The real `reg.exe` call is shipped in
+        // `apply_current` and is only reachable from the Settings toggle.
+        let root = temp_root("registry-dispatch");
+        let plan = plan(Os::Windows, &exe(), &root, &root);
+        let mut dispatched: Vec<Vec<String>> = Vec::new();
+        {
+            let mut recorder = |args: &[String]| {
+                dispatched.push(args.to_vec());
+                Ok(())
+            };
+            apply_entry_with(&plan, Os::Windows, true, &mut recorder).expect("enable dispatches");
+            apply_entry_with(&plan, Os::Windows, false, &mut recorder).expect("disable dispatches");
+        }
+        assert_eq!(dispatched.len(), 2, "both directions dispatch one command");
+        assert_eq!(dispatched[0][0], "add", "enable runs `reg add`");
+        assert_eq!(dispatched[1][0], "delete", "disable runs `reg delete`");
+        assert!(dispatched[0].contains(&APP_ID.to_string()));
+        assert!(
+            dispatched[0].contains(&launch_command(&exe())),
+            "the add command carries the quoted exe + --autostart"
+        );
+        assert!(!root.exists(), "a registry plan never creates a file");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

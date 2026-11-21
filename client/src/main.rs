@@ -61,7 +61,6 @@ use modes::{
     proxy_probe::{probe_labeled, select_best_proxy, ProbeCandidate},
     smoke_test::run_smoke_test,
     tunnel_test::run_tunnel_test,
-    watch_mode::run_watch_mode,
 };
 use route::ProxyHealth;
 use tunnel::adaptive::AdaptiveConfig;
@@ -773,25 +772,48 @@ async fn main() -> anyhow::Result<()> {
             .as_deref()
             .map(parse_proxy_addr)
             .transpose()?;
-        crate::quic::register_session_with_destination(
-            proxy_addr,
-            config.proxy.quic_port,
-            known_game_server(&cli),
+        // Adopted live mode (WF-081b task-57): the whole session runs on the
+        // shared core, library-side, so the data plane, the control-plane
+        // registration and the telemetry flush all read/write the same process
+        // state. The loop and every printed line live in
+        // `lightspeed_client::app::live::watch`, pinned by parity fixtures.
+        let mut core = lightspeed_client::app::runtime::SessionCore::build(
+            tokio::runtime::Handle::current(),
             cli_mtu_cap(&cli, &config),
-        )
-        .await;
-        crate::session::set_current_proxy(proxy_addr);
-        start_continuous_rerouting(&resolved.candidates, &config, &cli);
-        spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
-        return run_watch_mode(
-            game_key,
-            proxy_addr,
-            cli.fec,
-            cli.fec_k,
-            adaptive_cfg,
+        );
+        let options = lightspeed_client::app::live::watch::WatchOptions {
+            game_key: game_key.to_string(),
+            relay: proxy_addr,
+            candidates: resolved.candidates,
+            destination: known_game_server(&cli),
             server_override,
-        )
-        .await;
+            fec: cli.fec,
+            fec_k: cli.fec_k,
+            adaptive: lightspeed_client::AdaptivePolicy {
+                enabled: adaptive_cfg.enabled,
+                k_size: adaptive_cfg.k_size,
+                max_overhead_pct: adaptive_cfg.max_overhead_pct,
+            },
+            telemetry_enabled: telemetry_enabled(&cli, &config),
+            data_port: config.proxy.data_port,
+            control_port: config.proxy.quic_port,
+            route_strategy: cli
+                .route_strategy
+                .clone()
+                .unwrap_or_else(|| config.route.strategy.clone()),
+            multipath_max_paths: if config.route.multipath {
+                config.route.multipath_max_paths
+            } else {
+                1
+            },
+            path_mtu_cap: cli_mtu_cap(&cli, &config),
+            game_server: cli
+                .game_server
+                .as_ref()
+                .and_then(|s| parse_proxy_addr(s).ok())
+                .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0)),
+        };
+        return lightspeed_client::app::live::watch::run(&mut core, options).await;
     }
 
     // ── --smoke-test ───────────────────────────────────────────
@@ -1194,26 +1216,48 @@ async fn main() -> anyhow::Result<()> {
             Some(s) => Some(parse_proxy_addr(s)?),
             None => None,
         };
-        crate::quic::register_session_with_destination(
-            proxy_addr,
-            config.proxy.quic_port,
-            known_game_server(&cli),
+        // Adopted live mode (WF-081b task-57): the whole session runs on the
+        // shared core, library-side, so the data plane, registration and
+        // telemetry use the same process state. The loop and every printed line
+        // live in `lightspeed_client::app::live::interceptor`, pinned by parity
+        // fixtures.
+        let mut core = lightspeed_client::app::runtime::SessionCore::build(
+            tokio::runtime::Handle::current(),
             cli_mtu_cap(&cli, &config),
-        )
-        .await;
-        crate::session::set_current_proxy(proxy_addr);
-        start_continuous_rerouting(&resolved.candidates, &config, &cli);
-        spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
-        return run_intercept_mode(
-            game_key,
-            proxy_addr,
-            cli.fec,
-            cli.fec_k,
-            adaptive_cfg,
+        );
+        let session = lightspeed_client::app::live::LiveSession {
+            game_key: game_key.to_string(),
+            relay: proxy_addr,
+            candidates: resolved.candidates,
+            destination: known_game_server(&cli),
             server_override,
-            cli_mtu_cap(&cli, &config),
-        )
-        .await;
+            fec: cli.fec,
+            fec_k: cli.fec_k,
+            adaptive: lightspeed_client::AdaptivePolicy {
+                enabled: adaptive_cfg.enabled,
+                k_size: adaptive_cfg.k_size,
+                max_overhead_pct: adaptive_cfg.max_overhead_pct,
+            },
+            telemetry_enabled: telemetry_enabled(&cli, &config),
+            data_port: config.proxy.data_port,
+            control_port: config.proxy.quic_port,
+            route_strategy: cli
+                .route_strategy
+                .clone()
+                .unwrap_or_else(|| config.route.strategy.clone()),
+            multipath_max_paths: if config.route.multipath {
+                config.route.multipath_max_paths
+            } else {
+                1
+            },
+            path_mtu_cap: cli_mtu_cap(&cli, &config),
+            game_server: cli
+                .game_server
+                .as_ref()
+                .and_then(|s| parse_proxy_addr(s).ok())
+                .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0)),
+        };
+        return lightspeed_client::app::live::interceptor::run(&mut core, session).await;
     }
 
     // ── Game detection ────────────────────────────────────────────
@@ -1521,48 +1565,60 @@ async fn main() -> anyhow::Result<()> {
                 game_server_addr.port()
             }
         });
-
-        info!("🚀 Starting redirect mode");
-        if let Some(ref game) = game {
-            info!(
-                "   Game:        {} (anti-cheat: {})",
-                game.name(),
-                game.anti_cheat()
-            );
-            info!("   Typical PPS: ~{} packets/sec", game.typical_pps());
-        }
-        info!("   Game server: {}", game_server_addr);
-        info!("   Local port:  127.0.0.1:{}", local_port);
-        info!("   Proxy:       {}", proxy_addr);
-
-        let mut redirect_proxy =
-            redirect::UdpRedirect::new(local_port, game_server_addr, proxy_addr);
-        if adaptive_cfg.enabled {
-            info!(
-                "   FEC:         adaptive (K={}, ceiling {}%)",
-                adaptive_cfg.effective_k(),
-                adaptive_cfg.overhead_pct()
-            );
-            redirect_proxy = redirect_proxy.with_adaptive_fec(adaptive_cfg);
-        } else if cli.fec {
-            info!(
-                "   FEC:         enabled (K={}, ~{}% overhead)",
-                cli.fec_k,
-                100 / cli.fec_k as u32
-            );
-            redirect_proxy = redirect_proxy.with_fec(cli.fec_k);
-        }
-        if use_tcp {
-            redirect_proxy = redirect_proxy.with_tcp();
-        }
-        crate::quic::register_session_with_destination(
-            proxy_addr,
-            config.proxy.quic_port,
-            Some(*game_server_addr.ip()),
+        // Adopted live mode (WF-081b task-57): library-side session + redirect
+        // runtime. The mode banner/FEC lines and the shipped shutdown wording
+        // live in `lightspeed_client::app::live::redirect`, pinned by fixtures.
+        let mut core = lightspeed_client::app::runtime::SessionCore::build(
+            tokio::runtime::Handle::current(),
             cli_mtu_cap(&cli, &config),
-        )
-        .await;
-        return redirect_proxy.run().await;
+        );
+        let adaptive = lightspeed_client::AdaptivePolicy {
+            enabled: adaptive_cfg.enabled,
+            k_size: adaptive_cfg.k_size,
+            max_overhead_pct: adaptive_cfg.max_overhead_pct,
+        };
+        let game_banner = game.as_ref().map(|game| {
+            (
+                game.name().to_string(),
+                game.anti_cheat().to_string(),
+                game.typical_pps(),
+            )
+        });
+        let session = lightspeed_client::app::live::LiveSession {
+            game_key: game
+                .as_ref()
+                .map(|game| game.name().to_string())
+                .unwrap_or_else(|| "redirect".to_string()),
+            relay: proxy_addr,
+            candidates: resolved.candidates,
+            destination: Some(*game_server_addr.ip()),
+            server_override: None,
+            fec: cli.fec,
+            fec_k: cli.fec_k,
+            adaptive,
+            telemetry_enabled: telemetry_enabled(&cli, &config),
+            data_port: config.proxy.data_port,
+            control_port: config.proxy.quic_port,
+            route_strategy: cli
+                .route_strategy
+                .clone()
+                .unwrap_or_else(|| config.route.strategy.clone()),
+            multipath_max_paths: if config.route.multipath {
+                config.route.multipath_max_paths
+            } else {
+                1
+            },
+            path_mtu_cap: cli_mtu_cap(&cli, &config),
+            game_server: game_server_addr,
+        };
+        let spec = lightspeed_client::app::live::redirect::RedirectRun {
+            session,
+            game_server: game_server_addr,
+            local_port,
+            tcp: use_tcp,
+            game_banner,
+        };
+        return lightspeed_client::app::live::redirect::run(&mut core, spec).await;
     }
 
     // ── --capture: pcap mode ──────────────────────────────────────
