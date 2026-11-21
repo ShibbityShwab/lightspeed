@@ -1,20 +1,22 @@
 # LightSpeed release notes — November 2026 (DRAFT)
 
-> **Status: draft, not a release.** Prepared 2026-11-21 for the owner's release
-> decision. The GitHub release body is the `CHANGELOG.md` version section
-> extracted verbatim by `infra/scripts/release-notes.sh` — this page is the
-> announcement bullet list plus the honest verification statement, not the
-> release body itself. The version is **not chosen here**: `1.11.5` (patch
-> cadence) or `1.12.0` (SemVer minor for the new desktop interface) is an owner
-> decision at the release gate. Nothing was published, tagged, bumped or
-> dispatched to prepare this draft.
+> **Status: draft, not a release.** Prepared 2026-11-21; updated after the
+> owner-selected **Direction C "Broadcast console"** redesign was implemented and
+> merged (PR #196). The version **1.12.0** was selected by the owner on
+> 2026-11-21 (SemVer minor for the new desktop interface), but **no tag, publish,
+> package bump or dispatch has happened** — the release remains an owner gate.
+> The GitHub release body is the `CHANGELOG.md` version section extracted verbatim
+> by `infra/scripts/release-notes.sh`; this page is the announcement bullet list
+> plus the honest verification statement, not the release body itself.
 
 ## Highlights
 
-- **A new desktop app.** LightSpeed's status window is rebuilt as a mobile-shaped
-  instrument: a 320 px column whose state word always fits, an honest route card,
-  a clear `NO RETURN PATH` warning, a Details ledger, and refreshed copy/contrast
-  across the nine shipped locales.
+- **A new desktop app — "Broadcast console".** LightSpeed's status window is now
+  a dark telemetry console: a 320 px column whose state word always fits, a mono
+  data rail, a dot-matrix fleet globe, one lime action control, a clear
+  `NO RETURN PATH` warning, a Details ledger, and a restyled Settings/update/
+  editor set across the nine shipped locales — with the same honest route data,
+  warn-only behavior and settings as before.
 - **Honest information, never invented.** Server location is a labelled ladder —
   cloud-provider region, operator geofeed, hosting network, country estimate,
   otherwise unknown — and the route trace names the last responding hop's
