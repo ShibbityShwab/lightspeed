@@ -2213,6 +2213,11 @@ impl<P: Platform> LightSpeedApp<P> {
             .fill(bg_2)
             .inner_margin(egui::Margin::symmetric(S3 as i8, S3 as i8));
         let response = frame.show(ui, |ui| {
+            // The rail's rows are separated by explicit `S1` gaps only. The
+            // theme's `item_spacing.y` would add a second 8 px gap between the
+            // word and metric rows and put the short rail at 116 px instead of
+            // the §1.3 table's 108 (the 420 compact chrome depends on it).
+            ui.spacing_mut().item_spacing.y = 0.0;
             ui.set_width(ui.available_width());
             // Painted 3 px state edge: redundant with the word, never the only
             // state cue (`design-system` §3.4). Painted, not laid out, so it
@@ -4261,9 +4266,8 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // The full window rect, read before any panel claims space, drives the
-        // narrow (width) and short (height) breakpoints.
+        // tier breakpoints (spec §1.4: normal ≥560, short <560, compact <480).
         let viewport = ui.available_rect_before_wrap();
-        let short = viewport.height() < 560.0;
         // Where the window sits on its monitor, for the auto-size cap below.
         let (monitor_height, window_top) = monitor_geometry(frame, &ctx);
 
@@ -4320,6 +4324,31 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                     lock_or_recover(&self.engine).disconnect();
                 }
             }
+        }
+
+        // ── App-scope shortcuts (canonical `platform::shortcuts` table) ─────
+        // Esc/Enter are sheet semantics and stay with the sheets; the three
+        // app-wide chords are consumed here, before any widget sees them.
+        // Hide-to-tray is inert without a real tray (it would strand the
+        // window) and under automation's `LIGHTSPEED_KEEP_VISIBLE` pin.
+        let can_hide =
+            self.tray_available() && std::env::var_os("LIGHTSPEED_KEEP_VISIBLE").is_none();
+        match shortcut_effect(take_app_shortcut(&ctx), can_hide) {
+            ShortcutEffect::Quit => {
+                tracing::info!("Ctrl+Q: quitting from the canonical shortcut table");
+                save_window_height(viewport.height());
+                self.quit.store(true, Ordering::SeqCst);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ShortcutEffect::OpenSettings => self.show_settings = true,
+            ShortcutEffect::HideToTray => {
+                tracing::info!("Ctrl+H: hiding to the system tray");
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+            ShortcutEffect::IgnoredNoTray => {
+                tracing::info!("hide-to-tray shortcut ignored: no real system tray");
+            }
+            ShortcutEffect::Idle => {}
         }
 
         // Refresh engine snapshot and background relay state.
@@ -4382,7 +4411,12 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             save_window_height(clamped);
             self.persisted_height = clamped;
         }
-        let compact = viewport.height() < 480.0;
+        // ── The one tier decision for this frame (spec §1.4) ────────────────
+        // The 420 px minimum is compact: the same height value drives both the
+        // rail/card fold (`short`) and the footer target tier (`compact`).
+        let tier = shell_tier(viewport.height());
+        let short = tier.is_short();
+        let compact = tier.is_compact();
 
         // ── Status window shell ─────────────────────────────────────────────
         // Instrument 2.0: one 320 px column, no width breakpoints. R1 rail
@@ -4429,6 +4463,19 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                 );
                 ui.add_space(S2);
                 let button_h = if compact { HIT_MIN } else { CONTROL_H };
+                if compact {
+                    // Compact tier (spec §1.3): the footer is a `HIT_MIN` 24 px
+                    // target row. egui's Button min height is
+                    // `spacing.interact_size.y` - the theme's 40 px CONTROL_H -
+                    // and the normal text + button padding overshoots 24, so
+                    // both are re-cut locally; wrapping rows get no extra gap
+                    // so a localized (DE) two-row footer still leaves the
+                    // ≥180 px scroll floor at 420.
+                    ui.spacing_mut().interact_size.y = HIT_MIN;
+                    let text_h = ui.text_style_height(&egui::TextStyle::Body);
+                    ui.spacing_mut().button_padding.y = compact_button_padding(text_h);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                }
                 ui.horizontal_wrapped(|ui| {
                     if self.tray_available()
                         && std::env::var_os("LIGHTSPEED_KEEP_VISIBLE").is_none()
