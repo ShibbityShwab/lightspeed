@@ -203,6 +203,18 @@ impl InterceptorPlan {
     }
 }
 
+impl std::fmt::Debug for InterceptorPlan {
+    /// The backend handle is not `Debug`, so a plan prints its resolved facts
+    /// (the part a front end or a failure message can describe).
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InterceptorPlan")
+            .field("facts", &self.facts)
+            .field("relay", &self.relay)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The interceptor facts a live mode prints.
 #[derive(Clone, Debug)]
 pub struct InterceptorFacts {
