@@ -183,7 +183,22 @@ impl UdpRedirect {
         &self,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> anyhow::Result<()> {
-        self.run_inner(Some(shutdown)).await
+        self.run_inner(Some(shutdown), "⚡ Redirect shutdown requested")
+            .await
+    }
+
+    /// [`run_with_shutdown`](Self::run_with_shutdown) with the shutdown line a
+    /// caller wants printed.
+    ///
+    /// The adopted CLI redirect mode keeps its shipped
+    /// `⚡ Shutdown signal received` text while still being driven by an engine
+    /// shutdown channel; the GUI/engine path keeps `run_with_shutdown` unchanged.
+    pub async fn run_with_shutdown_notice(
+        &self,
+        shutdown: tokio::sync::oneshot::Receiver<()>,
+        notice: &'static str,
+    ) -> anyhow::Result<()> {
+        self.run_inner(Some(shutdown), notice).await
     }
 
     /// Run the redirect proxy. This is the main event loop.
@@ -192,12 +207,13 @@ impl UdpRedirect {
     /// - **Outbound**: Game → Local Socket → Tunnel → Proxy → Game Server
     /// - **Inbound**: Game Server → Proxy → Tunnel → Local Socket → Game
     pub async fn run(&self) -> anyhow::Result<()> {
-        self.run_inner(None).await
+        self.run_inner(None, "⚡ Shutdown signal received").await
     }
 
     async fn run_inner(
         &self,
         shutdown: Option<tokio::sync::oneshot::Receiver<()>>,
+        shutdown_notice: &'static str,
     ) -> anyhow::Result<()> {
         // Bind the local socket where the game will send traffic
         let local_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, self.local_port);
@@ -619,11 +635,11 @@ impl UdpRedirect {
         match shutdown {
             Some(rx) => {
                 let _ = rx.await;
-                info!("⚡ Redirect shutdown requested");
+                info!("{}", shutdown_notice);
             }
             None => {
                 tokio::signal::ctrl_c().await?;
-                info!("⚡ Shutdown signal received");
+                info!("{}", shutdown_notice);
             }
         }
 

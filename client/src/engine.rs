@@ -55,6 +55,265 @@ pub struct InterceptorHealth {
     pub flow: Option<(u64, u64)>,
 }
 
+// ── Additive live-mode surface (post-W2 task-57) ─────────────────────────────
+//
+// The CLI's three live session modes (`--watch`, `--start-interceptor`, the
+// `--game-server` redirect) are still front-end adapters because the engine
+// could not express the facts they print, the adaptive-FEC policy they carry,
+// the redirect options/counters they expose, or a relay switch that keeps a
+// caller's continuous rerouting working. The types and methods below are the
+// additive surface that closes that gap. They change no existing engine
+// entry point: every shipped caller keeps its exact behaviour, and only a
+// front end that opts in uses the new calls. Nothing here is GUI-specific.
+
+/// Adaptive-FEC opt-in as a front end resolved it (`--adaptive-fec`, `[tunnel]
+/// adaptive_fec`).
+///
+/// A mirror of the knobs the client exposes, so the engine's public surface
+/// does not depend on the crate-private adaptive module. The loss thresholds the
+/// adaptive controller also carries are not exposed by any front end, so a
+/// caller that opts in keeps their defaults.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AdaptivePolicy {
+    /// Master switch: the controller has an opinion and FEC is on.
+    pub enabled: bool,
+    /// Preferred block size K when parity is active.
+    pub k_size: u8,
+    /// Hard ceiling on parity overhead, in percent.
+    pub max_overhead_pct: u32,
+}
+
+impl AdaptivePolicy {
+    /// The policy a fixed-FEC caller implies (`enabled = fec`, default knobs).
+    pub fn from_fixed_fec(fec: bool) -> Self {
+        Self {
+            enabled: fec,
+            ..Default::default()
+        }
+    }
+
+    /// The crate-internal policy this mirror stands for.
+    fn to_adaptive_config(self) -> crate::tunnel::adaptive::AdaptiveConfig {
+        crate::tunnel::adaptive::AdaptiveConfig {
+            enabled: self.enabled,
+            k_size: self.k_size,
+            max_overhead_pct: self.max_overhead_pct,
+            ..Default::default()
+        }
+    }
+
+    /// The mirror for a crate-internal policy (the shipped default derivation).
+    fn from_adaptive_config(cfg: &crate::tunnel::adaptive::AdaptiveConfig) -> Self {
+        Self {
+            enabled: cfg.enabled,
+            k_size: cfg.k_size,
+            max_overhead_pct: cfg.max_overhead_pct,
+        }
+    }
+}
+
+/// An interceptor start request for a front end that owns its own policy.
+///
+/// `LightSpeedEngine::start_interceptor_with_target` is the shipped GUI/shared
+/// path: it derives the adaptive policy from `fec`. A live mode that resolves a
+/// distinct policy (`--adaptive-fec` independent of `--fec`) and prints what it
+/// is about to intercept builds this request instead, then plans and starts it.
+#[derive(Clone, Debug)]
+pub struct InterceptorRequest {
+    /// Game profile key (`rust`, `cs2`, …).
+    pub game_key: String,
+    /// Data-plane relay the tunnel points at.
+    pub relay: SocketAddrV4,
+    /// Fixed-FEC opt-in.
+    pub fec: bool,
+    /// Fixed FEC block size when `fec` is set.
+    pub fec_k: u8,
+    /// Adaptive-FEC policy as the front end resolved it (applied verbatim).
+    pub adaptive: AdaptivePolicy,
+    /// Manual/custom port-range override; beats the profile's own range.
+    pub port_range_override: Option<(u16, u16)>,
+    /// Picked process; wins over every port-range derivation.
+    pub process_target: Option<crate::interceptor::ProcessTarget>,
+    /// Fallback route when the game process has no discovered server yet.
+    pub server_override: Option<SocketAddrV4>,
+    /// Whether the start emits the engine's canonical `🚀 Interceptor started …`
+    /// line. `true` for the shipped/shared paths; a live mode that prints its own
+    /// activation line sets `false` so the CLI output stays byte-identical.
+    pub announce_start: bool,
+}
+
+impl InterceptorRequest {
+    /// A request for a game on `relay` with the profile's own ports and no
+    /// policy override (the fixed-FEC derivation the shipped path uses).
+    pub fn new(game_key: &str, relay: SocketAddrV4, fec: bool, fec_k: u8) -> Self {
+        Self {
+            game_key: game_key.to_string(),
+            relay,
+            fec,
+            fec_k,
+            adaptive: AdaptivePolicy::from_fixed_fec(fec),
+            port_range_override: None,
+            process_target: None,
+            server_override: None,
+            announce_start: true,
+        }
+    }
+
+    /// Apply the front end's resolved adaptive-FEC policy verbatim.
+    pub fn with_adaptive(mut self, adaptive: AdaptivePolicy) -> Self {
+        self.adaptive = adaptive;
+        self
+    }
+
+    /// Apply a manual/custom port-range override.
+    pub fn with_port_range(mut self, range: Option<(u16, u16)>) -> Self {
+        self.port_range_override = range;
+        self
+    }
+
+    /// Scope interception to a picked process.
+    pub fn with_process_target(
+        mut self,
+        target: Option<crate::interceptor::ProcessTarget>,
+    ) -> Self {
+        self.process_target = target;
+        self
+    }
+
+    /// Add a fallback route for a known game server.
+    pub fn with_server_override(mut self, server: Option<SocketAddrV4>) -> Self {
+        self.server_override = server;
+        self
+    }
+
+    /// Keep the engine's canonical start line out of the output (a live mode
+    /// prints its own activation line and must not gain a second one).
+    pub fn with_announce_start(mut self, announce: bool) -> Self {
+        self.announce_start = announce;
+        self
+    }
+}
+
+/// What a front end prints around an interceptor start, and what the engine
+/// actually resolved.
+///
+/// The plan owns the built [`InterceptorConfig`], so a front end can print the
+/// discovered routes, backend and (in)availability *before* the interceptor is
+/// started, exactly as the shipped CLI modes do.
+pub struct InterceptorPlan {
+    interceptor: Box<dyn crate::interceptor::TrafficInterceptor>,
+    config: InterceptorConfig,
+    facts: InterceptorFacts,
+    /// Data-plane relay the plan was built for.
+    relay: SocketAddrV4,
+    /// Whether starting the plan emits the engine's canonical start line.
+    announce_start: bool,
+}
+
+impl InterceptorPlan {
+    /// The resolved facts (read-only).
+    pub fn facts(&self) -> &InterceptorFacts {
+        &self.facts
+    }
+}
+
+impl std::fmt::Debug for InterceptorPlan {
+    /// The backend handle is not `Debug`, so a plan prints its resolved facts
+    /// (the part a front end or a failure message can describe).
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InterceptorPlan")
+            .field("facts", &self.facts)
+            .field("relay", &self.relay)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The interceptor facts a live mode prints.
+#[derive(Clone, Debug)]
+pub struct InterceptorFacts {
+    /// Profile key the plan was built for.
+    pub game_key: String,
+    /// Profile display name.
+    pub game_name: String,
+    /// The profile's own UDP port range.
+    pub ports: (u16, u16),
+    /// Image names the profile owns.
+    pub process_names: Vec<String>,
+    /// Effective client-to-relay path-MTU cap the interceptor will carry.
+    pub path_mtu_cap: usize,
+    /// Backend name (`WinDivert`, `nftables/iptables`, `pfctl`, …).
+    pub platform: &'static str,
+    /// Seed routes discovered from the live process table.
+    pub routes: Vec<crate::interceptor::Route>,
+    /// Effective port-range filter (profile default or manual override).
+    pub port_range: (u16, u16),
+    /// Fallback route added from a known server, when the caller supplied one.
+    pub server_override: Option<SocketAddrV4>,
+    /// Adaptive-FEC policy the interceptor will carry.
+    pub adaptive: AdaptivePolicy,
+    /// Whether this host can run the backend (the `check_availability` result).
+    pub available: Result<(), String>,
+}
+
+/// The redirect options a live mode owns (`--game-server` on the UDP/TCP path).
+///
+/// `start_redirect` keeps deriving them from `(fec, fec_k)`; a caller that has a
+/// resolved adaptive policy and/or `--tcp` passes this instead.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RedirectOptions {
+    /// Fixed FEC opt-in.
+    pub fec: bool,
+    /// Fixed FEC block size when `fec` is set.
+    pub fec_k: u8,
+    /// Adaptive-FEC policy as the front end resolved it.
+    pub adaptive: AdaptivePolicy,
+    /// Use TCP for the client↔proxy leg.
+    pub tcp: bool,
+    /// The shutdown line the redirect prints when stopped. `None` keeps the
+    /// shipped `⚡ Redirect shutdown requested`; an adopted CLI mode passes its
+    /// own shipped text so the migration stays byte-identical.
+    pub shutdown_notice: Option<&'static str>,
+}
+
+/// A point-in-time copy of the active redirect's counters.
+///
+/// The shipped `start_redirect` already publishes the packet/error/FEC counters
+/// in [`EngineStatus`]; this is the same snapshot for a front end that prints the
+/// CLI's final-stats block (bytes in/out and the adaptive parity ratio are not
+/// in the status DTO).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RedirectCounters {
+    pub packets_to_proxy: u64,
+    pub packets_from_proxy: u64,
+    pub bytes_to_proxy: u64,
+    pub bytes_from_proxy: u64,
+    pub packets_to_game: u64,
+    pub packets_from_game: u64,
+    pub errors: u64,
+    pub fec_parity_sent: u64,
+    pub fec_recovered: u64,
+    /// Current adaptive parity-to-data ratio in basis points (2500 = 1/4).
+    pub adaptive_parity_ratio_bp: u64,
+    pub payloads_over_budget: u64,
+}
+
+/// Awaitable completion of one [`LightSpeedEngine::switch_relay`] call.
+///
+/// A front end's continuous rerouting loop registers on a candidate relay and
+/// only switches when registration succeeded; this handle is that completion.
+pub struct RelaySwitch {
+    rx: oneshot::Receiver<Option<u32>>,
+}
+
+impl RelaySwitch {
+    /// Await the registration result: `Some(token)` on success (the relay was
+    /// published as the current relay), `None` on failure (nothing changed).
+    pub async fn registered(self) -> Option<u32> {
+        self.rx.await.ok().flatten()
+    }
+}
+
 /// Snapshot of tunnel state - cheap to clone, safe to share.
 #[derive(Clone, Debug, Default)]
 pub struct EngineStatus {
@@ -388,6 +647,56 @@ impl LightSpeedEngine {
         self.note_telemetry_proxy(proxy_addr);
     }
 
+    /// Switch the data plane onto `relay` while a session keeps running.
+    ///
+    /// The CLI's continuous rerouting loop probes candidates every 30 s and only
+    /// switches when the candidate registers successfully. [`Self::connect`]
+    /// restarts the whole control plane (and resets status); this is the additive
+    /// in-session switch: it registers on `relay` - with the game-server
+    /// `destination` when one is known, so the relay can price its own leg - and
+    /// only on success publishes `relay` as the current proxy and records the
+    /// token. Nothing changes when registration fails, and the caller awaits
+    /// [`RelaySwitch::registered`] to tell the two apart.
+    pub fn switch_relay(
+        &mut self,
+        relay: SocketAddrV4,
+        destination: Option<Ipv4Addr>,
+    ) -> RelaySwitch {
+        if !self.supervised_paths.contains(&relay) {
+            self.supervised_paths.push(relay);
+        }
+        self.note_telemetry_proxy(relay);
+        let control_port = self.control_port;
+        let path_mtu_cap = self.path_mtu_cap;
+        let status = Arc::clone(&self.status);
+        let (tx, rx) = oneshot::channel();
+        self.rt.spawn(async move {
+            let registered = match destination {
+                Some(destination) => {
+                    crate::quic::register_session_with_destination(
+                        relay,
+                        control_port,
+                        Some(destination),
+                        path_mtu_cap,
+                    )
+                    .await
+                }
+                None => crate::quic::register_session(relay, control_port, path_mtu_cap).await,
+            };
+            if let Some(token) = registered {
+                crate::session::set_current_proxy(relay);
+                if let Ok(mut s) = status.write() {
+                    s.proxy_addr = relay.to_string();
+                    s.control_registered = true;
+                    s.session_token = Some(token);
+                    s.registration_error = None;
+                }
+            }
+            let _ = tx.send(registered);
+        });
+        RelaySwitch { rx }
+    }
+
     /// Record the registry node id of the relay currently selected by the GUI.
     pub fn set_node_id(&mut self, node_id: Option<String>) {
         if let Ok(mut s) = self.status.write() {
@@ -505,7 +814,8 @@ impl LightSpeedEngine {
     /// Start a game redirect: forwards game UDP through the proxy.
     ///
     /// The game should connect to `127.0.0.1:<local_port>`. Stops any
-    /// previously running redirect first.
+    /// previously running redirect first. This is the shipped derivation: fixed
+    /// FEC from `(fec, fec_k)`, no adaptive policy, UDP client↔relay leg.
     pub fn start_redirect(
         &mut self,
         game_server: SocketAddrV4,
@@ -515,15 +825,50 @@ impl LightSpeedEngine {
         game_name: String,
         proxy_addr: SocketAddrV4,
     ) {
+        self.start_redirect_with_options(
+            game_server,
+            local_port,
+            game_name,
+            proxy_addr,
+            RedirectOptions {
+                fec,
+                fec_k,
+                adaptive: AdaptivePolicy::from_fixed_fec(false),
+                tcp: false,
+                shutdown_notice: None,
+            },
+        );
+    }
+
+    /// Start a game redirect for a front end that owns its options.
+    ///
+    /// Identical to [`Self::start_redirect`] for the shipped callers; the
+    /// difference is that the adaptive-FEC policy is applied verbatim and `tcp`
+    /// selects the TCP client↔relay leg. Returns nothing for the same reason the
+    /// shipped method does not: start errors surface asynchronously through
+    /// `snapshot().redirect_error`.
+    pub fn start_redirect_with_options(
+        &mut self,
+        game_server: SocketAddrV4,
+        local_port: u16,
+        game_name: String,
+        proxy_addr: SocketAddrV4,
+        options: RedirectOptions,
+    ) {
         // Tear down any previous redirect first.
         self.stop_redirect();
 
         let mut redirect = UdpRedirect::new(local_port, game_server, proxy_addr);
-        if fec {
-            redirect = redirect.with_fec(fec_k);
+        let adaptive = options.adaptive.to_adaptive_config();
+        if adaptive.enabled {
+            redirect = redirect.with_adaptive_fec(adaptive);
+        } else if options.fec {
+            redirect = redirect.with_fec(options.fec_k);
         }
-        let stats = Arc::clone(&redirect.stats);
-        self.redirect_stats = Some(Arc::clone(&stats));
+        if options.tcp {
+            redirect = redirect.with_tcp();
+        }
+        self.redirect_stats = Some(Arc::clone(&redirect.stats));
 
         let (tx, rx) = oneshot::channel();
         self.redirect_shutdown_tx = Some(tx);
@@ -534,7 +879,7 @@ impl LightSpeedEngine {
             s.redirect_game = game_name;
             s.redirect_server = game_server.to_string();
             s.redirect_local_port = local_port;
-            s.redirect_fec = fec;
+            s.redirect_fec = options.fec || options.adaptive.enabled;
             s.redirect_pkts_out = 0;
             s.redirect_pkts_in = 0;
             s.redirect_errors = 0;
@@ -549,10 +894,15 @@ impl LightSpeedEngine {
         let status = Arc::clone(&self.status);
         self.spawn_registration(proxy_addr);
         self.note_telemetry_proxy(proxy_addr);
+        let shutdown_notice = options.shutdown_notice;
         self.rt.spawn(async move {
             // run_with_shutdown takes &self and is Send, but UdpRedirect isn't
             // Arc'd - we move it into the task.
-            match redirect.run_with_shutdown(rx).await {
+            let outcome = match shutdown_notice {
+                Some(notice) => redirect.run_with_shutdown_notice(rx, notice).await,
+                None => redirect.run_with_shutdown(rx).await,
+            };
+            match outcome {
                 Ok(()) => {
                     tracing::info!("Redirect stopped cleanly");
                 }
@@ -567,6 +917,28 @@ impl LightSpeedEngine {
                 s.redirect_active = false;
             }
         });
+    }
+
+    /// The active redirect's counters, when one is running.
+    ///
+    /// The same atomics [`Self::snapshot`] publishes as packet/error/FEC fields,
+    /// plus the byte and adaptive-parity values the CLI's final-stats block
+    /// prints. `None` when no redirect is active (or it has been stopped).
+    pub fn redirect_counters(&self) -> Option<RedirectCounters> {
+        let stats = self.redirect_stats.as_ref()?;
+        Some(RedirectCounters {
+            packets_to_proxy: stats.packets_to_proxy.load(Ordering::Relaxed),
+            packets_from_proxy: stats.packets_from_proxy.load(Ordering::Relaxed),
+            bytes_to_proxy: stats.bytes_to_proxy.load(Ordering::Relaxed),
+            bytes_from_proxy: stats.bytes_from_proxy.load(Ordering::Relaxed),
+            packets_to_game: stats.packets_to_game.load(Ordering::Relaxed),
+            packets_from_game: stats.packets_from_game.load(Ordering::Relaxed),
+            errors: stats.errors.load(Ordering::Relaxed),
+            fec_parity_sent: stats.fec_parity_sent.load(Ordering::Relaxed),
+            fec_recovered: stats.fec_recovered.load(Ordering::Relaxed),
+            adaptive_parity_ratio_bp: stats.adaptive_parity_ratio_bp.load(Ordering::Relaxed),
+            payloads_over_budget: stats.payloads_over_budget.load(Ordering::Relaxed),
+        })
     }
 
     /// Stop the game redirect (if running).
@@ -1103,22 +1475,50 @@ impl LightSpeedEngine {
         port_range_override: Option<(u16, u16)>,
         process_target: Option<crate::interceptor::ProcessTarget>,
     ) -> Result<(), String> {
+        let request = InterceptorRequest::new(game_key, proxy_addr, fec, fec_k)
+            .with_port_range(port_range_override)
+            .with_process_target(process_target);
+        self.start_interceptor_request(request)
+    }
+
+    /// Start an interceptor for a request whose policy and routes a front end
+    /// resolved itself.
+    ///
+    /// Behaviour is identical to [`Self::start_interceptor_with_target`] for the
+    /// fields both carry; the difference is that the adaptive-FEC policy is
+    /// applied verbatim instead of derived from `fec`, and `server_override`
+    /// adds the fallback route the CLI's `--server-addr` names. The shipped path
+    /// above is exactly this request with the old derivation.
+    pub fn start_interceptor_request(&mut self, request: InterceptorRequest) -> Result<(), String> {
+        // The shipped one-shot API stops any running interceptor before it
+        // validates the new request; keep that exact order.
         self.stop_interceptor();
+        let plan = self.plan_interceptor(request)?;
+        self.start_interceptor_plan(plan)
+    }
 
-        let game_box = crate::games::resolve(game_key).map_err(|e| e.to_string())?;
+    /// Build the interceptor config and report the facts a front end prints,
+    /// without starting interception or changing engine status.
+    ///
+    /// This is the read half of the interceptor start: it resolves the game,
+    /// applies the caller's adaptive policy, builds the config (a picked process
+    /// beats a manual port range beats the profile's own), binds the path-MTU
+    /// cap, creates the backend and asks it whether this host can run it. The
+    /// returned plan owns the built config, so a caller prints the discovered
+    /// routes, backend and availability before calling
+    /// [`Self::start_interceptor_plan`] - the order the shipped CLI modes print.
+    pub fn plan_interceptor(&self, request: InterceptorRequest) -> Result<InterceptorPlan, String> {
+        let game_box = crate::games::resolve(&request.game_key).map_err(|e| e.to_string())?;
 
-        // The GUI follows the client default: FEC on means the adaptive policy,
-        // and an explicit opt-out keeps the fixed codec, matching the CLI paths.
-        let adaptive_fec = crate::tunnel::adaptive::AdaptiveConfig {
-            enabled: fec,
-            ..Default::default()
-        };
+        // The caller's resolved policy, applied verbatim. The shipped derivation
+        // (`enabled = fec`) arrives here as [`AdaptivePolicy::from_fixed_fec`].
+        let adaptive_fec = request.adaptive.to_adaptive_config();
 
         // Precedence, authoritative: a picked process beats the ports path. It
         // is bound against the live process table at start time, so the image
         // name (not a stale PID) is what binds, and a target whose process is
         // not running fails honestly instead of degrading to a port range.
-        let config = match process_target {
+        let config = match request.process_target.clone() {
             Some(target) => {
                 // Runs the ProcessScanner synchronously on the calling thread.
                 let live = target
@@ -1140,9 +1540,9 @@ impl LightSpeedEngine {
                     game_box.as_ref(),
                     resolved,
                     live_routes,
-                    proxy_addr,
-                    fec,
-                    fec_k,
+                    request.relay,
+                    request.fec,
+                    request.fec_k,
                     adaptive_fec,
                 )
             }
@@ -1150,13 +1550,18 @@ impl LightSpeedEngine {
             None => {
                 let config = crate::interceptor::build_config_for_game_with_port_range(
                     game_box.as_ref(),
-                    proxy_addr,
-                    fec,
-                    fec_k,
+                    request.relay,
+                    request.fec,
+                    request.fec_k,
                     adaptive_fec,
-                    port_range_override,
+                    request.port_range_override,
                 )
-                .ok_or_else(|| format!("Failed to build interceptor config for '{}'", game_key))?;
+                .ok_or_else(|| {
+                    format!(
+                        "Failed to build interceptor config for '{}'",
+                        request.game_key
+                    )
+                })?;
 
                 // The config builder is pure and always returns a config, so the
                 // "is it actually running" check belongs here, at the one place
@@ -1164,8 +1569,11 @@ impl LightSpeedEngine {
                 // on a machine that did not have it installed: the old code
                 // started anyway, produced a near-total `1024-65535` UDP capture,
                 // and showed the user a success state while capturing nothing.
-                // Refusing with the real remedy is the honest outcome.
-                if config.initial_routes.is_empty() {
+                // Refusing with the real remedy is the honest outcome. A caller
+                // that supplied the game server explicitly (`--server-addr`) does
+                // not depend on the process being up, so it skips this refusal -
+                // the shipping CLI semantics this additive option preserves.
+                if config.initial_routes.is_empty() && request.server_override.is_none() {
                     let names = game_box.process_names().join(", ");
                     let found = find_pid_by_name(
                         game_box
@@ -1190,6 +1598,17 @@ impl LightSpeedEngine {
         let mut config = config;
         config.path_mtu = self.path_mtu_cap;
 
+        // A known game server the caller supplied (the CLI's `--server-addr`)
+        // seeds the same fallback route the CLI builds for itself: no local
+        // address, UDP, the remote the flag named.
+        if let Some(server) = request.server_override {
+            config.initial_routes.push(crate::interceptor::Route {
+                local: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+                remote: server,
+                proto: crate::interceptor::TransportProtocol::Udp,
+            });
+        }
+
         // TCP-in-TCP ban at the production start path. Every interceptor
         // backend (WinDivert, nftables, pf) sends on its own **UDP** tunnel
         // socket; none uses `TunnelTransport::Tcp`, so a TCP-primary profile
@@ -1204,10 +1623,54 @@ impl LightSpeedEngine {
         .map_err(|error| error.to_string())?;
 
         let interceptor = crate::interceptor::create_interceptor();
-
-        interceptor.check_availability()?;
-
+        let platform = interceptor.platform_name();
+        let available = interceptor.check_availability();
         let game_name = game_box.name().to_string();
+        let facts = InterceptorFacts {
+            game_key: request.game_key.clone(),
+            game_name,
+            ports: game_box.ports(),
+            process_names: game_box
+                .process_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            path_mtu_cap: self.path_mtu_cap,
+            platform,
+            routes: config.initial_routes.clone(),
+            port_range: config.port_range,
+            server_override: request.server_override,
+            adaptive: AdaptivePolicy::from_adaptive_config(&adaptive_fec),
+            available,
+        };
+        Ok(InterceptorPlan {
+            interceptor,
+            config,
+            facts,
+            relay: request.relay,
+            announce_start: request.announce_start,
+        })
+    }
+
+    /// Start a plan produced by [`Self::plan_interceptor`].
+    ///
+    /// This is the write half: it publishes the relay registration, starts the
+    /// backend and records the same [`EngineStatus`] fields, start line and
+    /// handle as the shipped one-shot path. An unavailable backend is reported
+    /// here with the backend's own reason and nothing is started, which is where
+    /// the shipped path refused too.
+    pub fn start_interceptor_plan(&mut self, plan: InterceptorPlan) -> Result<(), String> {
+        if let Err(reason) = &plan.facts.available {
+            return Err(reason.clone());
+        }
+        let InterceptorPlan {
+            interceptor,
+            config,
+            facts,
+            relay,
+            announce_start,
+        } = plan;
+
         let initial_server = match config.process_target.as_ref() {
             Some(target) => format!("Process {}", target.describe()),
             None => config
@@ -1221,15 +1684,16 @@ impl LightSpeedEngine {
                     )
                 }),
         };
-        let platform = interceptor.platform_name();
+        let platform = facts.platform;
         let bypass_mode = config.bypass.mode.as_str();
 
-        self.spawn_registration(proxy_addr);
-        self.note_telemetry_proxy(proxy_addr);
+        self.spawn_registration(relay);
+        self.note_telemetry_proxy(relay);
+        self.set_telemetry_game(&facts.game_key);
         // The start line's label is computed BEFORE the config is moved into
         // `start()`: it names whatever is actually intercepted, which depends on
         // the target set on that config.
-        let target_label = Self::interceptor_target_label(&config, &game_name);
+        let target_label = Self::interceptor_target_label(&config, &facts.game_name);
 
         // `start()` must run inside a Tokio runtime context: the WinDivert
         // backend calls `tokio::spawn`/`spawn_blocking`/`Handle::current()`,
@@ -1267,12 +1731,14 @@ impl LightSpeedEngine {
             s.registration_error = None;
         }
 
-        tracing::info!(
-            "🚀 Interceptor started for {} via {} (proxy {})",
-            target_label,
-            platform,
-            proxy_addr,
-        );
+        if announce_start {
+            tracing::info!(
+                "🚀 Interceptor started for {} via {} (proxy {})",
+                target_label,
+                platform,
+                relay,
+            );
+        }
 
         self.interceptor_handle = Some(handle);
         Ok(())
@@ -1381,6 +1847,28 @@ impl LightSpeedEngine {
         if let Ok(mut s) = self.status.write() {
             s.interceptor_active = false;
         }
+    }
+
+    /// Stop the interceptor while the session keeps running, reporting whether
+    /// the platform teardown completed in `timeout`.
+    ///
+    /// The adopted live modes own their teardown UX (they print their own
+    /// warning when the platform handles linger) and keep watching for the game
+    /// to return, so the control-plane supervisor must NOT be stopped - only
+    /// [`Self::stop_interceptor`] (the GUI/shared path) ends the registration
+    /// with the data plane. No log line is emitted here; the caller owns it.
+    pub fn stop_interceptor_keep_registration(&mut self, timeout: Duration) -> bool {
+        let Some(mut handle) = self.interceptor_handle.take() else {
+            if let Ok(mut s) = self.status.write() {
+                s.interceptor_active = false;
+            }
+            return true;
+        };
+        let stopped = handle.stop_and_wait(timeout);
+        if let Ok(mut s) = self.status.write() {
+            s.interceptor_active = false;
+        }
+        stopped
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1642,12 +2130,13 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        apply_registration_result, wait_for_redirect_ack, EngineStatus, LightSpeedEngine,
-        DEFAULT_CONTROL_PORT,
+        apply_registration_result, wait_for_redirect_ack, AdaptivePolicy, EngineStatus,
+        InterceptorRequest, LightSpeedEngine, RedirectOptions, DEFAULT_CONTROL_PORT,
     };
     use crate::interceptor::{
         mock::MockInterceptor, InterceptorConfig, ProcessTarget, TrafficInterceptor, TransportProto,
     };
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
     fn test_engine() -> LightSpeedEngine {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -2026,5 +2515,149 @@ mod tests {
             !engine.snapshot().interceptor_active,
             "a refused start must not report an active interceptor"
         );
+    }
+
+    // ── Additive live-mode surface (post-W2 task-57) ─────────────────────
+
+    #[test]
+    fn a_fixed_fec_request_keeps_the_shipped_derivation() {
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
+        let request = InterceptorRequest::new("cs2", relay, true, 6);
+        assert_eq!(
+            request.adaptive,
+            AdaptivePolicy {
+                enabled: true,
+                k_size: 0,
+                max_overhead_pct: 0,
+            },
+            "the shipped path keeps enabled = fec and the default policy knobs"
+        );
+        assert!(
+            !InterceptorRequest::new("cs2", relay, false, 4)
+                .adaptive
+                .enabled
+        );
+    }
+
+    #[test]
+    fn an_interceptor_plan_reports_the_callers_policy_and_never_starts() {
+        let engine = test_engine();
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
+        // A known server lets the plan be built without a running game (the CLI's
+        // `--server-addr` case); a TEST-NET address keeps the fixture inert.
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 7), 28015);
+        let policy = AdaptivePolicy {
+            enabled: true,
+            k_size: 6,
+            max_overhead_pct: 12,
+        };
+        let request = InterceptorRequest::new("cs2", relay, false, 4)
+            .with_adaptive(policy)
+            .with_server_override(Some(server));
+        let plan = engine
+            .plan_interceptor(request)
+            .expect("a known server must plan without a running game");
+        let facts = plan.facts();
+        assert_eq!(facts.game_key, "cs2");
+        assert_eq!(
+            facts.adaptive, policy,
+            "the caller's adaptive policy must be applied verbatim, not derived from fec"
+        );
+        assert!(!facts.game_name.is_empty());
+        assert_eq!(facts.path_mtu_cap, engine.path_mtu_cap());
+        assert!(!facts.platform.is_empty());
+        assert_eq!(facts.server_override, Some(server));
+        assert!(
+            facts.routes.iter().any(|route| route.remote == server),
+            "the known server must be a seed route in the plan: {:?}",
+            facts.routes
+        );
+        assert!(
+            !engine.snapshot().interceptor_active,
+            "planning must not start interception"
+        );
+        assert!(engine.snapshot().interceptor_platform.is_empty());
+    }
+
+    #[test]
+    fn redirect_options_reach_the_status_and_the_counters() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime for redirect test");
+        let mut engine = LightSpeedEngine::new(rt.handle().clone());
+        // No reachable control plane: this test is about the synchronous status
+        // and counter surface, and the spawned registration task never runs.
+        engine.set_control_port(1);
+        let game = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 9), 28015);
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
+        engine.start_redirect_with_options(
+            game,
+            0,
+            "sample".to_string(),
+            relay,
+            RedirectOptions {
+                fec: false,
+                fec_k: 4,
+                adaptive: AdaptivePolicy {
+                    enabled: true,
+                    k_size: 8,
+                    max_overhead_pct: 10,
+                },
+                tcp: false,
+                shutdown_notice: None,
+            },
+        );
+        let snapshot = engine.snapshot();
+        assert!(
+            snapshot.redirect_active,
+            "the redirect must be active right after start"
+        );
+        assert!(
+            snapshot.redirect_fec,
+            "an adaptive policy turns FEC on in the status"
+        );
+        assert_eq!(snapshot.redirect_server, game.to_string());
+        assert_eq!(
+            engine.redirect_counters(),
+            Some(super::RedirectCounters::default()),
+            "a fresh redirect reports zeroed counters"
+        );
+        engine.stop_redirect();
+        assert!(!engine.snapshot().redirect_active);
+        assert!(
+            engine.redirect_counters().is_none(),
+            "no redirect, no counters"
+        );
+    }
+
+    #[test]
+    fn a_failed_relay_switch_publishes_nothing() {
+        let _guard = crate::session::token_test_guard();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime for switch test");
+        let mut engine = LightSpeedEngine::new(rt.handle().clone());
+        // 127.0.0.1:1 can never hold a control-plane listener, so registration
+        // fails and the switch must leave the current relay untouched.
+        engine.set_control_port(1);
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4444);
+        let before = crate::session::current_proxy();
+        let switch = engine.switch_relay(relay, None);
+        let outcome = rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(3), switch.registered()).await
+        });
+        let switched = outcome.unwrap_or_default();
+        assert!(
+            switched.is_none(),
+            "a closed control port must not report a successful switch"
+        );
+        assert_eq!(
+            crate::session::current_proxy(),
+            before,
+            "a failed switch must not publish the candidate relay"
+        );
+        assert!(!engine.snapshot().control_registered);
     }
 }
