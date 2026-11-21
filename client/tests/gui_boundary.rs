@@ -377,7 +377,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
     // helper) is deleted; the rendered counters come from the one `RelayedPair`.
-    ("client-gui/src/app/widgets.rs", 1052),
+    ("client-gui/src/app/widgets.rs", 1066),
     // WF-081b (task-86): the one tier decision (ShellTier/shell_tier), the compact
     // footer padding arithmetic, and the canonical-table dispatch
     // (	ake_app_shortcut/shortcut_effect). 213 -> 341.
@@ -398,7 +398,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // theme item_spacing between its rows (116 -> 108), the compact footer gets a
     // real HIT_MIN row, and the app-scope shortcuts are dispatched before any
     // widget sees them. 4581 -> 4628.
-    ("client-gui/src/app.rs", 4677),
+    ("client-gui/src/app.rs", 4738),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.

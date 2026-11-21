@@ -50,8 +50,7 @@ pub(super) fn game_editor_body(
                     .size(CAPTION)
                     .color(text_3),
             );
-            let edit = console_link(ui, i18n::t("game.editor_edit").as_ref());
-            if activated(ui, &edit) {
+            if ui.button(i18n::t("game.editor_edit")).clicked() {
                 actions.edit = Some(i);
             }
         });
@@ -60,26 +59,20 @@ pub(super) fn game_editor_body(
     hairline(ui);
     ui.add_space(S2);
 
-    ui.horizontal(|ui| {
-        ui.label(i18n::t("game.editor_name"));
-        invalid_text_field(
-            ui,
-            &mut draft.name,
-            i18n::t("game.editor_name_hint"),
-            220.0,
-            !verdict.name_ok,
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label(i18n::t("game.editor_process_names"));
-        invalid_text_field(
-            ui,
-            &mut draft.process_names,
-            i18n::t("game.editor_process_hint"),
-            260.0,
-            !verdict.processes_ok,
-        );
-    });
+    editor_field(
+        ui,
+        &i18n::t("game.editor_name"),
+        &mut draft.name,
+        i18n::t("game.editor_name_hint"),
+        !verdict.name_ok,
+    );
+    editor_field(
+        ui,
+        &i18n::t("game.editor_process_names"),
+        &mut draft.process_names,
+        i18n::t("game.editor_process_hint"),
+        !verdict.processes_ok,
+    );
     // The picker sits directly under the field it fills: choosing a row appends
     // its image name there, and the field stays a plain typed field.
     let already = split_process_names(&draft.process_names);
@@ -96,30 +89,26 @@ pub(super) fn game_editor_body(
     if let Some(entry) = chosen {
         draft.process_names = processes::append_name(&draft.process_names, &entry.name);
     }
-    ui.horizontal(|ui| {
-        ui.label(i18n::t("game.editor_udp_range"));
-        invalid_text_field(
-            ui,
-            &mut draft.udp_range,
-            i18n::t("game.editor_udp_hint"),
-            200.0,
-            !verdict.udp_ok,
-        );
-    });
+    editor_field(
+        ui,
+        &i18n::t("game.editor_udp_range"),
+        &mut draft.udp_range,
+        i18n::t("game.editor_udp_hint"),
+        !verdict.udp_ok,
+    );
     // No TCP field: the interception path is UDP-only, so the schema refuses a
     // `tcp_ports` entry and the editor must not offer what a save would refuse.
     ui.checkbox(
         &mut draft.dynamic_server,
         egui::RichText::new(i18n::t("game.editor_dynamic_server")).size(LABEL),
     );
-    ui.horizontal(|ui| {
-        ui.label(i18n::t("game.editor_notes"));
-        ui.add(
-            egui::TextEdit::singleline(&mut draft.notes)
-                .hint_text(i18n::t("game.editor_notes_hint"))
-                .desired_width(260.0),
-        );
-    });
+    editor_field(
+        ui,
+        &i18n::t("game.editor_notes"),
+        &mut draft.notes,
+        i18n::t("game.editor_notes_hint"),
+        false,
+    );
 
     // Live validation, named on the field that carries it.
     for reason in draft_reasons(verdict, draft.key().as_deref()) {
@@ -182,16 +171,14 @@ pub(super) fn process_picker<'a>(
     refresh: &mut bool,
 ) -> Option<&'a ProcessEntry> {
     ui.add_space(S2);
-    ui.horizontal(|ui| {
-        section_label(ui, &i18n::t("game.editor_process_picker"));
-        let refresh_link = console_link(ui, i18n::t("game.editor_process_refresh").as_ref());
-        if activated(ui, &refresh_link) {
-            *refresh = true;
-        }
-    });
+    section_label(ui, &i18n::t("game.editor_process_picker"));
+    if ui.button(i18n::t("game.editor_process_refresh")).clicked() {
+        *refresh = true;
+    }
 
     let width = ui.available_width();
-    ui.add(
+    ui.add_sized(
+        [width, CONTROL_H],
         egui::TextEdit::singleline(&mut *picker.search)
             .hint_text(i18n::t("game.editor_process_search_hint"))
             .desired_width(width),
@@ -335,6 +322,40 @@ pub(super) fn process_row(
 /// The one implementation of the invalid-input treatment: the Manual flow's
 /// port range and every field of the profile editor share it, so "invalid"
 /// never looks like two different things.
+/// A stacked console editor field: the 11 px label on its own line, then the
+/// full sheet width. At 320 px there is no room for inline label+input, so the
+/// C editor stacks instead of clipping (UX review C-1 defect 2).
+fn editor_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    text: &mut String,
+    hint: impl Into<egui::WidgetText>,
+    invalid: bool,
+) {
+    tracked_label(
+        ui,
+        &label.to_uppercase(),
+        CAPTION,
+        if invalid { danger } else { text_3 },
+        TRACK_LABEL,
+    );
+    let width = ui.available_width();
+    ui.add_sized(
+        [width, CONTROL_H],
+        egui::TextEdit::singleline(text)
+            .hint_text(hint)
+            .text_color(if invalid { danger } else { text_1 }),
+    );
+    if invalid {
+        ui.label(
+            egui::RichText::new(i18n::t("proxies.invalid"))
+                .size(CAPTION)
+                .color(danger),
+        );
+    }
+    ui.add_space(S1);
+}
+
 pub(super) fn invalid_text_field(
     ui: &mut egui::Ui,
     text: &mut String,

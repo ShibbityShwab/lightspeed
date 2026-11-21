@@ -4275,15 +4275,23 @@ impl<P: Platform> LightSpeedApp<P> {
                                         .unwrap_or_else(|| "unknown".to_string()),
                                     Err(_) => "unknown".to_string(),
                                 };
-                                console_mini_row(
+                                prose_label(
                                     ui,
-                                    &i18n::t("update.current"),
-                                    current.as_str(),
+                                    &i18n::t_with(
+                                        "update.current",
+                                        &[("version", current.as_str())],
+                                    ),
+                                    PROSE,
+                                    text_2,
                                 );
-                                console_mini_row(
+                                prose_label(
                                     ui,
-                                    &i18n::t("update.latest"),
-                                    latest.as_str(),
+                                    &i18n::t_with(
+                                        "update.latest",
+                                        &[("version", latest.as_str())],
+                                    ),
+                                    PROSE,
+                                    text_2,
                                 );
                                 prose_label(
                                     ui,
