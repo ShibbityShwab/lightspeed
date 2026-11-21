@@ -23,6 +23,12 @@
 //! Regenerating (only when a deliberate CLI text change is reviewed):
 //! `LIGHTSPEED_CLI_GOLDEN_UPDATE=1 cargo test -p lightspeed-client --test cli_compat`
 //! — then READ the golden diff; never regenerate to make a failing test pass.
+//!
+//! **Portability (2026-11-21).** `tracing` can emit ANSI SGR colour codes (the
+//! first Linux CI run did, even to a pipe). The harness therefore strips CSI
+//! sequences **before** timestamp masking and spawns the CLI with colour-off
+//! hints, so the same four goldens hold on Windows and Linux; a unit test pins
+//! the real CI sample and the four simulated-Linux normalizations.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -54,6 +60,13 @@ fn scratch_dir(tag: &str) -> PathBuf {
 /// shared config (S6c reads that file for the two settings both front ends own).
 /// Fixture tests write their shared config under the same isolated base — see
 /// [`write_shared_config`].
+///
+/// The colour hints below are belt-and-braces: `tracing-subscriber`'s ANSI
+/// decision is a build/feature fact, not an environment one (the Linux CI job
+/// proved it can emit SGR codes even to a pipe), so the **normalizer stripping
+/// CSI sequences** is what makes the goldens portable. The hints are still set
+/// so a future logging backend that honours NO_COLOR/CLICOLOR/TERM starts
+/// colour-free too — the product's logging config is not touched.
 fn run_cli(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_lightspeed"))
         .args(args)
@@ -62,6 +75,11 @@ fn run_cli(dir: &Path, args: &[&str]) -> Output {
         .env("USERPROFILE", dir.join("iso-home"))
         .env("HOME", dir.join("iso-home"))
         .env("XDG_CONFIG_HOME", dir.join("iso-xdg"))
+        // No-colour hints for any layer that honours them (the golden harness
+        // also strips SGR itself, because tracing's ANSI choice is compile-time).
+        .env("NO_COLOR", "1")
+        .env("CLICOLOR", "0")
+        .env("TERM", "dumb")
         // The zero-spend/telemetry notice must be identical; do not inherit a
         // caller's LIGHTSPEED_* overrides into a golden run.
         .env_remove("LIGHTSPEED_GUI_FORCE")
@@ -108,16 +126,56 @@ fn stdout_of(out: &Output) -> String {
     String::from_utf8(out.stdout.clone()).expect("CLI stdout is UTF-8")
 }
 
+/// Strip ANSI CSI sequences (the SGR colour codes `tracing-subscriber` can emit).
+///
+/// A CSI sequence is `ESC [` + parameter bytes (0x30–0x3F) + intermediate bytes
+/// (0x20–0x2F) + one final byte (0x40–0x7E); SGR (`ESC[…m`) is the shape the
+/// Linux CI run emitted around the timestamp, level, target and `:`. An
+/// incomplete `ESC [` is kept literally (it is data, not a known sequence), so
+/// this never silently deletes text it did not recognise.
+fn strip_ansi_csi(input: &str) -> String {
+    const ESC: u8 = 0x1b;
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == ESC && index + 1 < bytes.len() && bytes[index + 1] == b'[' {
+            let mut end = index + 2;
+            while end < bytes.len() && (0x30..=0x3f).contains(&bytes[end]) {
+                end += 1;
+            }
+            while end < bytes.len() && (0x20..=0x2f).contains(&bytes[end]) {
+                end += 1;
+            }
+            if end < bytes.len() && (0x40..=0x7e).contains(&bytes[end]) {
+                index = end + 1;
+                continue;
+            }
+            out.push('\u{1b}');
+            index += 1;
+            continue;
+        }
+        let ch = input[index..].chars().next().expect("char boundary");
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
 /// Replace a leading tracing timestamp with `<ts>` and the package version with
 /// `v<version>`. Everything else is left byte-for-byte.
 ///
 /// The tracing format is `2026-11-20T14:34:33.760913Z  INFO target: message`;
-/// only the leading `...Z` is volatile.
+/// only the leading `...Z` is volatile. ANSI CSI sequences are stripped **before**
+/// masking, because a coloured trace line starts with `ESC[2m` and the timestamp
+/// matcher would no longer see the timestamp at the start of the line (that is
+/// exactly how the first Linux CI run failed all four goldens).
 fn normalize_common(raw: &str) -> String {
     let version = format!("v{VERSION}");
     let mut out = Vec::new();
     for line in raw.lines() {
-        let masked = mask_timestamp(line).replace(&version, "v<version>");
+        let plain = strip_ansi_csi(line);
+        let masked = mask_timestamp(&plain).replace(&version, "v<version>");
         out.push(masked);
     }
     out.join("\n")
@@ -170,8 +228,10 @@ fn normalize_status(raw: &str) -> String {
 }
 
 /// `--probe-proxies` normalization: drop the host-dependent game auto-detect
-/// result lines and mask the live probe latency. The rest of the report
-/// (candidate count, configured candidate, status word) is exact.
+/// result lines (none-detected, auto-detected, targeting) and mask the live
+/// probe latency. The rest of the report (candidate count, configured candidate,
+/// status word) is exact. Host process state must not leak into the golden: a
+/// machine with a matching game running and one without produce the same bytes.
 fn normalize_probe(raw: &str) -> String {
     let normalized = normalize_common(raw);
     let mut out = Vec::new();
@@ -179,6 +239,8 @@ fn normalize_probe(raw: &str) -> String {
         if line.contains("No supported game detected")
             || line.trim_start().starts_with("Supported: ")
             || line.contains("Detected game")
+            || line.contains("Auto-detected game")
+            || line.contains("Targeting game:")
         {
             continue;
         }
@@ -533,4 +595,90 @@ fn cli_honours_canonical_values_after_a_reset() {
         !telemetry_notice(&out),
         "the canonical consent=false must apply after a reset"
     );
+}
+
+// ── ANSI portability (Linux CI) ─────────────────────────────────────────────
+//
+// First PR CI run (2026-11-21): the four goldens failed only on Linux because
+// `tracing-subscriber` wrote SGR colour codes around the timestamp/level/target
+// on that job. Sample reproduced from
+// `wat/evidence/2026-11-21/ci-run/failed-check-test.log:1867`.
+
+/// The exact raw startup line the Linux CI job produced (ANSI SGR + RFC3339 Z).
+fn ci_ansi_startup_line() -> String {
+    format!(
+        "\u{1b}[2m2026-11-21T03:52:55.652263Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \
+         \u{1b}[2mlightspeed\u{1b}[0m\u{1b}[2m:\u{1b}[0m ⚡ LightSpeed v{VERSION} starting"
+    )
+}
+
+#[test]
+fn ansi_sequences_are_stripped_before_timestamp_masking() {
+    let normalized = normalize_common(&ci_ansi_startup_line());
+    assert_eq!(
+        normalized, "<ts>  INFO lightspeed: ⚡ LightSpeed v<version> starting",
+        "the Linux CI raw line must normalize to the frozen golden line"
+    );
+    // Stripping is not start-of-line only, and it is idempotent on plain text.
+    assert_eq!(
+        strip_ansi_csi("plain \u{1b}[1mbold\u{1b}[0m text"),
+        "plain bold text"
+    );
+    let plain = "<ts>  INFO lightspeed: ⚡ LightSpeed v<version> starting";
+    assert_eq!(strip_ansi_csi(plain), plain);
+    // An incomplete escape is data, not a sequence: keep it.
+    assert_eq!(strip_ansi_csi("a\u{1b}[12"), "a\u{1b}[12");
+}
+
+#[test]
+fn timestamp_masking_handles_rfc3339_and_platform_shapes() {
+    // RFC3339 `Z` (the real form on both platforms): masked to `<ts>`.
+    assert_eq!(
+        mask_timestamp("2026-11-21T03:52:55.652263Z  INFO lightspeed: x"),
+        "<ts>  INFO lightspeed: x"
+    );
+    // Windows raw output: the same RFC3339 `Z` line with a CRLF ending; `lines()`
+    // drops the CR before masking, so the golden form is produced.
+    let windows = format!(
+        "2026-11-20T14:34:33.760913Z  INFO lightspeed: ⚡ LightSpeed v{VERSION} starting\r\n"
+    );
+    assert_eq!(
+        normalize_common(&windows),
+        "<ts>  INFO lightspeed: ⚡ LightSpeed v<version> starting"
+    );
+    // A line without a leading timestamp is untouched (structural rows).
+    assert_eq!(
+        mask_timestamp("   Configured relays: 12"),
+        "   Configured relays: 12"
+    );
+}
+
+#[test]
+fn simulated_linux_raw_output_normalizes_to_the_frozen_goldens() {
+    type Normalizer = fn(&str) -> String;
+    // Each frozen golden, with its startup line replaced by the raw Linux CI
+    // shape, must normalize back to the committed bytes: the four goldens stay
+    // hash-identical without regeneration.
+    let cases: [(&str, Normalizer); 4] = [
+        ("list-games.normalized.txt", normalize_common),
+        ("malformed-config.normalized.txt", normalize_common),
+        ("status.normalized.txt", normalize_status),
+        ("probe-proxies.normalized.txt", normalize_probe),
+    ];
+    for (name, normalize) in cases {
+        let golden = std::fs::read_to_string(golden_path(name)).expect("read golden");
+        let golden = golden.strip_suffix('\n').unwrap_or(&golden).to_string();
+        let mut lines: Vec<String> = golden.lines().map(str::to_string).collect();
+        assert!(
+            lines[0].starts_with("<ts>  INFO lightspeed: "),
+            "{name}: the first line is the masked startup line"
+        );
+        lines[0] = ci_ansi_startup_line();
+        let raw = lines.join("\n");
+        assert_eq!(
+            normalize(&raw),
+            golden,
+            "simulated Linux raw output must normalize to frozen golden {name}"
+        );
+    }
 }
