@@ -821,9 +821,6 @@ pub trait TrafficInterceptor: Send + Sync {
     /// Human-readable platform identifier, e.g. `"WinDivert"`.
     fn platform_name(&self) -> &'static str;
 
-    /// Whether this interceptor can run on the current OS + feature set.
-    ///
-    /// Returns `Err` with a human-readable explanation if unavailable.
     /// Whether this backend can run on the current host.
     ///
     /// This is a **read-only capability answer**: it must not open a platform

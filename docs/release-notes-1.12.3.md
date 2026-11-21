@@ -56,6 +56,17 @@ The following are still valid hardening items, not regressions:
   from the normal elevation path;
 - MSI stop-before-upgrade / driver cleanup actions.
 
+## Residual risk
+
+The teardown latch is cleared by a successful start-only sniff+filter probe.
+That probe exercises the same per-handle callout/filter installation class as a
+real start, but it is not a proof that every old handle object has been
+released: if a previous teardown timed out because a handle-owning thread is
+genuinely stuck, the probe can succeed beside that zombie. The common timeout
+causes this patch addresses are the tunnel task's synchronous firewall cleanup
+and a panicked non-handle task; for those, the probe is a valid recovery gate.
+A future patch should retain the failed handle and prove its release directly.
+
 ## Upgrade notes
 
 - Existing 1.12.2 installs can upgrade in place.

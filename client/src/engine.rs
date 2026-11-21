@@ -2208,10 +2208,12 @@ mod tests {
 
     use super::{
         apply_registration_result, wait_for_redirect_ack, AdaptivePolicy, EngineStatus,
-        InterceptorRequest, LightSpeedEngine, RedirectOptions, DEFAULT_CONTROL_PORT,
+        InterceptorFacts, InterceptorPlan, InterceptorRequest, LightSpeedEngine, RedirectOptions,
+        DEFAULT_CONTROL_PORT,
     };
     use crate::interceptor::{
-        mock::MockInterceptor, InterceptorConfig, ProcessTarget, TrafficInterceptor, TransportProto,
+        mock::MockInterceptor, InterceptorConfig, InterceptorHandle, ProcessTarget,
+        TrafficInterceptor, TransportProto,
     };
     use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -2220,6 +2222,102 @@ mod tests {
             .build()
             .expect("tokio runtime for engine test");
         LightSpeedEngine::new(rt.handle().clone())
+    }
+
+    fn test_plan(
+        interceptor: Box<dyn TrafficInterceptor>,
+        available: Result<(), String>,
+    ) -> InterceptorPlan {
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
+        InterceptorPlan {
+            interceptor,
+            config: InterceptorConfig {
+                game_name: "Test".to_string(),
+                dynamic_server: false,
+                transport: TransportProto::Udp,
+                capture_tcp_ports: None,
+                process_names: Vec::new(),
+                process_target: None,
+                port_range: (1000, 2000),
+                path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+                initial_routes: Vec::new(),
+                proxy_addr: relay,
+                fec_enabled: false,
+                fec_k: 4,
+                adaptive_fec: Default::default(),
+                bypass: Default::default(),
+            },
+            facts: InterceptorFacts {
+                game_key: "test".to_string(),
+                game_name: "Test".to_string(),
+                ports: (1000, 2000),
+                process_names: Vec::new(),
+                path_mtu_cap: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+                platform: "mock",
+                routes: Vec::new(),
+                port_range: (1000, 2000),
+                server_override: None,
+                adaptive: AdaptivePolicy::default(),
+                available,
+            },
+            relay,
+            announce_start: false,
+        }
+    }
+
+    /// Preflight failure must keep the latch and never call `start`.
+    struct FailingPreflight;
+
+    impl TrafficInterceptor for FailingPreflight {
+        fn platform_name(&self) -> &'static str {
+            "mock"
+        }
+
+        fn check_availability(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn preflight(&self) -> Result<(), String> {
+            Err("driver probe says no".to_string())
+        }
+
+        fn start(&self, _config: InterceptorConfig) -> anyhow::Result<InterceptorHandle> {
+            anyhow::bail!("start must not run after a failed preflight")
+        }
+    }
+
+    #[test]
+    fn a_successful_preflight_clears_the_teardown_latch() {
+        let mut engine = test_engine();
+        engine.interceptor_teardown_incomplete = true;
+        let plan = test_plan(Box::new(MockInterceptor::new()), Ok(()));
+
+        engine
+            .start_interceptor_plan(plan)
+            .expect("a successful preflight must allow the start");
+        assert!(
+            !engine.interceptor_teardown_incomplete,
+            "a successful preflight proves the driver is usable and must clear the latch"
+        );
+        assert!(engine.snapshot().interceptor_active);
+        engine.stop_interceptor();
+    }
+
+    #[test]
+    fn a_failed_preflight_keeps_the_latch_and_does_not_start() {
+        let mut engine = test_engine();
+        engine.interceptor_teardown_incomplete = true;
+        let plan = test_plan(Box::new(FailingPreflight), Ok(()));
+
+        let err = engine
+            .start_interceptor_plan(plan)
+            .expect_err("a failed preflight must keep the start closed");
+        assert!(err.contains("driver probe says no"), "{err}");
+        assert!(
+            engine.interceptor_teardown_incomplete,
+            "a failed preflight must not clear the latch"
+        );
+        assert!(!engine.snapshot().interceptor_active);
     }
 
     #[test]
