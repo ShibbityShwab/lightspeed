@@ -12,6 +12,20 @@
 
 ## Recent entries
 
+### 2026-11-21 (team consultation → task-70 fix → #180 refresh) - pre-existing red fixed; #180 merge pending final CI
+
+**Agent:** lead + `qa-engineer-2` + `net-eng` + `dev-ops` + `architect` consultation; `net-eng` task-70 fix.
+
+- **Consultation:** the owner asked the team before acting on draft PR #180. **QA** said mergeable with a targeted pass on the four post-ACCEPT CI-fix commits (ACCEPT delivered: diffs/goldens/guard/gate all PASS). **dev-ops** said merge commit (preserve the 60 evidence SHAs), document known red, mark ready after the note, no protection before merge. **architect** preferred stacked PRs / preserved per-slice commits and flagged the pre-existing red as an attribution risk. **net-eng** diagnosed the red as a test-harness race (process-global `path_token` fallback + 4-worker ordering; `control_reconnect.rs:331`), files byte-identical to master, fix test-only ~15 lines — and warned it was the only configured-port E2E coverage, so red = blind.
+- **Owner chose: fix task-70 first, then merge #180 fully green.** Implemented in an isolated worktree (`fix/control-reconnect-race` off master) by `net-eng`: wait on the engine's own `snapshot().control_registered`/`registration_error`, assert the test-local server's count/token, keep a wrong-port check; falsifiable failing-before/passing-after at `--test-threads=1/4`, wrong-port mutation; no production code change. Lead gate in that worktree PASS (control_reconnect 5/5 at threads=4, workspace, GUI).
+- **PR #181** (`fix/control-reconnect-race`) opened, CI **fully green** (Check & Test, Code Coverage, QUIC Integration now pass on real runners), **merged to master** as `de26c3c` (merge commit). This fixes the pre-existing master red.
+- **PR #180 refreshed** from master (`7444f35` merge commit) and QA's two doc nits fixed (close-out counts 1981→1984/11→14 and commit count; test-comment line 1867→1866). Final CI run on the refreshed branch gates the merge; when green: mark ready, merge with a **merge commit** (no squash/rebase), then add branch protection (required: Check & Test, Windows GUI Build, Linux GUI Build, macOS GUI Build, Localization Checks) and watch the first master run.
+- **New debt registered:** task-73 (pre-existing `mock_create_interceptor_lifecycle` 50 ms-sleep flake observed once during QA; same race class, post-W2, not a merge blocker).
+- **Named unverified:** Linux/macOS GUI **runtime** remains U (needs hardware); the refreshed #180 CI run is the final gate. $0.00; no release or public post.
+
+**Verified:** team consult results; task-70 diagnosis/fix evidence; PR #181 all-checks-green + merged; QA ACCEPT on the four CI-fix commits; Lead gates. **Not verified:** #180 refreshed CI (running); Linux/macOS runtime; task-73 flake (registered only).
+**Open:** #180 final CI green → ready → merge → branch protection; post-W2 tasks 57/65/67/74; Q5/Q19.
+
 ### 2026-11-21 (CI verification on GitHub runners) - new GUI jobs green; pre-existing master red isolated
 
 **Agent:** lead + `rust-dev-2` (goldens, lints) + `desktop-platform-2` (non-Windows cfg), on the owner's explicit authorization to push a branch and run GitHub Actions.

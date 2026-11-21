@@ -69,10 +69,10 @@ cross-platform utility, with the logic in one place and the GUI as a wrapper"
 |---|---|
 | `cargo fmt --all --check` | 0 |
 | workspace clippy (excl. GUI) | **0 warnings** |
-| workspace tests | **1981 / 0 / 7** — client 1620 (lib 870, bin 712, integrations 37 incl. `cli_compat` 11/11 and `gui_boundary` 8/8, doc 1); protocol 104; proxy 257 |
+| workspace tests | **1984 / 0 / 7** — client 1623 (lib 870, bin 712, integrations 40 incl. `cli_compat` 14/14 and `gui_boundary` 8/8, doc 1); protocol 104; proxy 257 |
 | GUI clippy | **0 warnings** (also with `RUSTFLAGS=-D warnings`) |
 | GUI tests | **191 / 0 / 0** |
-| CLI goldens | 11/11, four goldens hash-identical to seed |
+| CLI goldens | 14/14, four goldens hash-identical to seed |
 | drift guard | **8/8** — G1 42 item-level rows, G2 190, G3 39 exact budgets, mutation-proven |
 | localization | `localization-sync --check` in step |
 
@@ -88,9 +88,9 @@ These are **not claims**; each has a named fixture or path:
    needless return, two manual `split_once` lints, ANSI-tainted goldens) — all
    fixed in `9e1e28e`, `1d23b3d`, `a632126`.
    Note: the pre-existing master failure `control_reconnect::supervisor_stopped_on_disconnect`
-   keeps `Check & Test`, `Code Coverage` and `QUIC Integration Tests` red on both
-   master and this PR; it is unrelated to the refresh and tracked as post-W2
-   task-70.
+   was a test-harness race (global token fallback), not an engine defect; it was fixed
+   test-only in task-70 and merged to `master` via PR #181 (`de26c3c`). #180 was
+   refreshed from master; its final CI run is the merge gate.
 2. **Interactive UAC** accept/decline (harness is elevated; state machine is unit-tested).
 3. **Live tray/menu capture**, including the fifth `RelayStarved` state (needs a starving relay).
 4. **Autostart login cycle** (writers and `--autostart` are temp-dir tested).
@@ -139,11 +139,12 @@ Reset; N1 per-command `AppErrorKind`; R16 real streak publication; and the W2-2
   `43f07b3` / `4971fcb` (CI, platform parity), `2b3fd04` (trace suffix/R10),
   `518dd3d` (dead-code retirement); CI fixes after the first real runner run:
   `9e1e28e` (non-Windows cfg), `1d23b3d` (ANSI/host-state-portable goldens),
-  `a632126` (non-Windows clippy lints); 59 commits total ahead of master.
-- **Draft PR #180** (`wf-081-gui-refresh`): CI run 3 (2026-11-21) has all three
-  new jobs green (Linux GUI Build, macOS GUI Build, Headless GUI Smoke); the only
-  red checks are the pre-existing master `control_reconnect` failure (task-70).
-  Evidence: `wat/evidence/2026-11-21/ci-run/`.
+  `a632126` (non-Windows clippy lints); 60 commits plus the `master` merge commit from #181.
+- **PR #180** (`wf-081-gui-refresh`, draft): refreshed from `master` after #181
+  (`de26c3c`); its final CI run gates the merge. Earlier runs: run 3 had all three
+  new jobs green (Linux GUI Build, macOS GUI Build, Headless GUI Smoke), with the
+  only red being the pre-existing `control_reconnect` — now fixed in #181.
+  Evidence: `wat/evidence/2026-11-21/ci-run/` and `task-70-control-reconnect/`.
 - Evidence roots: `wat/evidence/2026-11-19/` (W1), `wat/evidence/2026-11-20/w2-1`,
   `w2-2`, `w2-3a`, `w2-3b/{s5a,s5b,s6,s6b,s6b2,s6c,s6d}`, `w2-4/{platform,ci}`,
   `w2-4a`, `w2-4b`, and each independent `team/qa-*/review*.md` with its own

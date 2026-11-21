@@ -602,7 +602,7 @@ fn cli_honours_canonical_values_after_a_reset() {
 // First PR CI run (2026-11-21): the four goldens failed only on Linux because
 // `tracing-subscriber` wrote SGR colour codes around the timestamp/level/target
 // on that job. Sample reproduced from
-// `wat/evidence/2026-11-21/ci-run/failed-check-test.log:1867`.
+// `wat/evidence/2026-11-21/ci-run/failed-check-test.log:1866`.
 
 /// The exact raw startup line the Linux CI job produced (ANSI SGR + RFC3339 Z).
 fn ci_ansi_startup_line() -> String {
