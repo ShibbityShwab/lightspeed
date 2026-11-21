@@ -256,6 +256,49 @@ mod tests {
     #[cfg(windows)]
     use super::{acquire_named_mutex, InstanceOutcome};
 
+    /// How long the post-drop release poll may take before the lock test fails.
+    /// Generous for a loaded CI runner, short enough that a guard which genuinely
+    /// never releases still fails the test quickly. Only the non-Windows lock test
+    /// uses it, so it is gated to keep the Windows -D warnings build clean.
+    #[cfg(not(windows))]
+    const RELEASE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// One poll step for [`poll_until_released`].
+    #[derive(Debug, PartialEq, Eq)]
+    enum Polled<G> {
+        /// The lock is free and the guard is held again.
+        Ready(G),
+        /// The lock is still held (or its release is not visible yet).
+        Busy,
+    }
+
+    /// Poll `attempt` until it yields a guard, or `deadline` elapses.
+    ///
+    /// Why this exists: dropping the first guard closes the lock file, but the
+    /// macOS CI job saw the *immediate* re-acquire occasionally report
+    /// `WouldBlock` (the flake at `lock_file_guard_excludes_second_instance`).
+    /// Waiting for the observable release with a bounded deadline removes the
+    /// timing assumption **without weakening the assertion**: a guard that is
+    /// genuinely never released leaves the poll `Busy` until the deadline
+    /// expires and returns `None`, so the caller fails with its diagnostic.
+    fn poll_until_released<G>(
+        deadline: std::time::Duration,
+        mut attempt: impl FnMut() -> Polled<G>,
+    ) -> Option<G> {
+        let started = std::time::Instant::now();
+        loop {
+            match attempt() {
+                Polled::Ready(guard) => return Some(guard),
+                Polled::Busy => {
+                    if started.elapsed() >= deadline {
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
     #[test]
     fn force_requested_accepts_the_flag_or_the_environment() {
         let plain = vec!["lightspeed-gui".to_string()];
@@ -285,16 +328,72 @@ mod tests {
             InstanceOutcome::Acquired(guard) => guard,
             InstanceOutcome::AlreadyRunning => panic!("first acquire must succeed"),
         };
+        // The test's real assertion, unchanged: while the first guard is alive a
+        // second instance is excluded (and the failed attempt does not disturb the
+        // live lock).
         assert!(matches!(
             acquire_lock_file(&path),
             InstanceOutcome::AlreadyRunning
         ));
         drop(first);
-        assert!(matches!(
-            acquire_lock_file(&path),
-            InstanceOutcome::Acquired(_)
-        ));
+        // A dropped guard must free the lock, but on macOS the very next
+        // `try_lock` occasionally still reported `WouldBlock` (CI flake). Observe
+        // the release with a bounded poll instead of assuming the next call wins;
+        // a guard that never releases exhausts the deadline and fails the test.
+        let second = poll_until_released(RELEASE_DEADLINE, || match acquire_lock_file(&path) {
+            InstanceOutcome::Acquired(guard) => Polled::Ready(guard),
+            InstanceOutcome::AlreadyRunning => Polled::Busy,
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "the dropped guard did not release the lock within {RELEASE_DEADLINE:?} \
+                 (two live instances stay excluded, but a dropped guard must free it)"
+            )
+        });
+        drop(second);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The poll retries until the release is observed, and takes the common
+    /// immediate-release path without sleeping.
+    #[test]
+    fn the_release_poll_retries_until_the_guard_is_available() {
+        let mut calls = 0;
+        let guard = poll_until_released(std::time::Duration::from_secs(1), || {
+            calls += 1;
+            if calls < 4 {
+                Polled::Busy
+            } else {
+                Polled::Ready("released")
+            }
+        });
+        assert_eq!(guard, Some("released"));
+        assert_eq!(calls, 4, "the poll must retry until the release is visible");
+    }
+
+    /// The negative control for the hardening: a guard that is genuinely never
+    /// released must not be reported as acquired. This is the exact mechanism the
+    /// lock test relies on to still fail a broken release.
+    #[test]
+    fn the_release_poll_fails_when_the_guard_never_releases() {
+        let started = std::time::Instant::now();
+        let guard =
+            poll_until_released(std::time::Duration::from_millis(50), || Polled::<()>::Busy);
+        assert!(
+            guard.is_none(),
+            "a never-released guard must not be reported as acquired"
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(50),
+            "the poll must exhaust its bounded deadline"
+        );
+    }
+
+    /// The common case: the lock is already free on the first attempt.
+    #[test]
+    fn the_release_poll_takes_the_common_immediate_release() {
+        let guard = poll_until_released(std::time::Duration::from_secs(1), || Polled::Ready(7u8));
+        assert_eq!(guard, Some(7));
     }
 
     #[cfg(not(windows))]

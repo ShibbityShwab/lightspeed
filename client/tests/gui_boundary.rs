@@ -448,7 +448,9 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // to `lightspeed_client::app::location`; the GUI keeps this re-export shell
     // for the one helper the frozen route surface renders. 595 -> 11.
     ("client-gui/src/server_place.rs", 11),
-    ("client-gui/src/single_instance.rs", 331),
+    // WF-081b task-91: the lock/release poll helper and its three tests (macOS
+    // flake hardening); 331 -> 430 (plus the `not(windows)` gate on the deadline).
+    ("client-gui/src/single_instance.rs", 430),
     // W2-3b S6: `compare_versions` + `ReleaseAsset` moved; the GUI keeps the
     // network check, the `UpdateStatus` type and the asset resolution. 322 -> 224.
     ("client-gui/src/update.rs", 269),
