@@ -11,50 +11,16 @@
 //! silent) and suppresses the engine's canonical start line, because the shipped
 //! CLI prints its own activation line.
 
-use std::net::SocketAddrV4;
 use std::time::Duration;
 
 use tracing::{info, warn};
 
+use super::LiveSession;
 use crate::app::runtime::SessionCore;
-use crate::engine::{AdaptivePolicy, InterceptorRequest};
+use crate::engine::InterceptorRequest;
 
-use super::reroute;
-
-/// Everything the `--watch` loop needs from the CLI invocation.
-pub struct WatchOptions {
-    /// Game profile key (`rust`, `cs2`, …).
-    pub game_key: String,
-    /// Data-plane relay chosen for the session.
-    pub relay: SocketAddrV4,
-    /// Relay candidates for the (parity-preserved) continuous rerouting loop.
-    pub candidates: Vec<(String, String, String)>,
-    /// Game server reported to the relay during registration, when known
-    /// (`--game-server` / `--server-addr`).
-    pub destination: Option<std::net::Ipv4Addr>,
-    /// Known server seeded as an interceptor route (`--server-addr`).
-    pub server_override: Option<SocketAddrV4>,
-    /// Fixed-FEC opt-in.
-    pub fec: bool,
-    /// Fixed FEC block size.
-    pub fec_k: u8,
-    /// Adaptive-FEC policy as the CLI resolved it.
-    pub adaptive: AdaptivePolicy,
-    /// Whether the session reports anonymous telemetry.
-    pub telemetry_enabled: bool,
-    /// Relay data port (rerouting probe).
-    pub data_port: u16,
-    /// Relay control port (registration/rerouting).
-    pub control_port: u16,
-    /// Route strategy name (`nearest`, `destination-aware`, …).
-    pub route_strategy: String,
-    /// Multipath path count (1 = off).
-    pub multipath_max_paths: u8,
-    /// Effective client-to-relay path-MTU cap.
-    pub path_mtu_cap: usize,
-    /// Game server the rerouting loop ranks for (unspecified = none).
-    pub game_server: SocketAddrV4,
-}
+/// The `--watch` invocation options (one adopted live session).
+pub type WatchOptions = LiveSession;
 
 // ── The shipped lines, as pure builders (byte-for-byte parity) ──────────────
 
@@ -132,50 +98,9 @@ pub async fn run(core: &mut SessionCore, options: WatchOptions) -> anyhow::Resul
     let process_refs: Vec<&str> = process_names.iter().map(|s| s.as_str()).collect();
     let (lo, hi) = game.ports();
 
-    // Telemetry: the adopted session reports through the library collector, so
-    // the samples the library data plane records are the ones actually sent.
-    {
-        let engine = core.engine();
-        let mut engine = engine
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        engine.set_telemetry_enabled(options.telemetry_enabled);
-        engine.set_telemetry_game(&options.game_key);
-    }
-
-    // Initial registration: the shipped path registered with the known game
-    // server and published the relay unconditionally (even when registration
-    // failed), because the interceptor still needs a current relay for its data
-    // plane. The engine switch publishes only on success, so mirror the
-    // unconditional publish explicitly.
-    let switch = core
-        .commands_mut()
-        .switch_relay(options.relay, options.destination)
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "{}",
-                error
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| "relay registration failed".to_string())
-            )
-        })?;
-    if switch.registered().await.is_none() {
-        crate::session::set_current_proxy(options.relay);
-    }
-
-    // Continuous rerouting: same construction and first-tick behaviour as the
-    // shipped caller (see `app::live::reroute` module notes).
-    let _reroute = reroute::spawn(
-        std::sync::Arc::clone(&core.engine()),
-        options.candidates.clone(),
-        options.data_port,
-        options.control_port,
-        options.game_server,
-        options.route_strategy.clone(),
-        options.multipath_max_paths,
-        options.path_mtu_cap,
-    );
+    // Shared session bootstrap: telemetry, registration with the known server,
+    // unconditional relay publication and the parity-preserved rerouting loop.
+    super::start_session(core, &options).await?;
 
     for line in banner_lines(&game_name, &process_names, (lo, hi)) {
         info!("{}", line);
@@ -292,7 +217,8 @@ fn stop_interceptor(core: &mut SessionCore, active: &mut bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use crate::engine::AdaptivePolicy;
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
     fn options() -> WatchOptions {
         WatchOptions {

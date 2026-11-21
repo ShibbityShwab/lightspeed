@@ -1216,26 +1216,48 @@ async fn main() -> anyhow::Result<()> {
             Some(s) => Some(parse_proxy_addr(s)?),
             None => None,
         };
-        crate::quic::register_session_with_destination(
-            proxy_addr,
-            config.proxy.quic_port,
-            known_game_server(&cli),
+        // Adopted live mode (WF-081b task-57): the whole session runs on the
+        // shared core, library-side, so the data plane, registration and
+        // telemetry use the same process state. The loop and every printed line
+        // live in `lightspeed_client::app::live::interceptor`, pinned by parity
+        // fixtures.
+        let mut core = lightspeed_client::app::runtime::SessionCore::build(
+            tokio::runtime::Handle::current(),
             cli_mtu_cap(&cli, &config),
-        )
-        .await;
-        crate::session::set_current_proxy(proxy_addr);
-        start_continuous_rerouting(&resolved.candidates, &config, &cli);
-        spawn_session_telemetry_flush(&telemetry_collector, proxy_addr, game_key);
-        return run_intercept_mode(
-            game_key,
-            proxy_addr,
-            cli.fec,
-            cli.fec_k,
-            adaptive_cfg,
+        );
+        let session = lightspeed_client::app::live::LiveSession {
+            game_key: game_key.to_string(),
+            relay: proxy_addr,
+            candidates: resolved.candidates,
+            destination: known_game_server(&cli),
             server_override,
-            cli_mtu_cap(&cli, &config),
-        )
-        .await;
+            fec: cli.fec,
+            fec_k: cli.fec_k,
+            adaptive: lightspeed_client::AdaptivePolicy {
+                enabled: adaptive_cfg.enabled,
+                k_size: adaptive_cfg.k_size,
+                max_overhead_pct: adaptive_cfg.max_overhead_pct,
+            },
+            telemetry_enabled: telemetry_enabled(&cli, &config),
+            data_port: config.proxy.data_port,
+            control_port: config.proxy.quic_port,
+            route_strategy: cli
+                .route_strategy
+                .clone()
+                .unwrap_or_else(|| config.route.strategy.clone()),
+            multipath_max_paths: if config.route.multipath {
+                config.route.multipath_max_paths
+            } else {
+                1
+            },
+            path_mtu_cap: cli_mtu_cap(&cli, &config),
+            game_server: cli
+                .game_server
+                .as_ref()
+                .and_then(|s| parse_proxy_addr(s).ok())
+                .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 0)),
+        };
+        return lightspeed_client::app::live::interceptor::run(&mut core, session).await;
     }
 
     // ── Game detection ────────────────────────────────────────────
