@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-21 (WF-081b tranche) - follow-up backlog cleared; final integration PR pending
+
+**Agent:** lead + team (interface-designer-2, rust-dev-2, net-eng, dev-ops, desktop-platform-2, design-system-2, ux-lead-2, qa-engineer-2).
+
+- **User selected all five follow-up tranches** after the WF-081 close-out; they were run as isolated worktrees/branches off the merged master and independently verified, then integrated.
+- **Merged already:** PR #190 (flake fix, genuinely-verifying smoke probe, Q19 fonts, UI debt, CLI live-mode migration) via one integration branch; PR #186 (evidence promotion fixture + live `NO RETURN PATH` captures, tray row honestly returned to U). Master is at `56db8ee` before the final PR.
+- **Final integration branch (`wf081b/integration2`, PR pending)** carries: shell wiring (compact tier at 320×420 now spec-exact: EN rail 108/action 64/footer 40/chrome 213/scroll 207; DE two-row footer handled; Ctrl+Q/,/H dispatched from the canonical table with live proof), macOS `single_instance` lock-flake hardening (two consecutive green macOS jobs), the **Q5 translation pass** (559→40 English-identical values; 519 translated; FR restart shortened to 2 lines; DE `Optimierung` and RU `Не активно` state words landed), the **CJK font re-cut** (JP 489, KR 471, SC 530 codepoints; +85.8 KB; deterministic, gates green), and the **measurement erratum** (broken cmap parser; corrected fontTools widths; DE 317.4/OPTIMIERUNG 211.6, FR 396.9→361.6, RU state fix; Q15/Q20 decisions recorded).
+- **Final integration gate:** fmt/clippy clean (incl. GUI `-D warnings`), workspace **2001/0/7**, GUI **207/0/0**, cli_compat **14/14**, guard **8/8**, localization check and font `--check` pass. QA verified each slice (font/evidence/UI/shell/macOS/live-mode verdicts on file); the whole final branch is pending one last QA pass before merge.
+- **Still open/owner:** smoke **genuine streak 1/10** (promotion diff prepared; needs 9 more genuine master runs + owner approval to make the smoke required); release readiness (CHANGELOG Instrument 2.0 entry landed, version decision **1.11.5 vs 1.12.0** remains owner-gated; AUR/version bump not done); post-W2 tasks 88 (telemetry 8080), Q15/Q20 residuals; runtime Linux/macOS still **U** (owner hardware). $0.00; no release/publish.
+
+**Verified:** per-slice QA ACCEPTs and Lead gates; master CI green after #190/#186; final integration gate above. **Not verified:** final integration by QA (queued); smoke promotion (streak 1/10); release cut; Linux/macOS runtime.
+**Open:** merge final integration PR; release version decision; smoke promotion after 10 genuine greens; post-W2 88/Q15/Q20.
+
 ### 2026-11-21 (POST-MERGE) - PR #181 and #180 merged; master protected; first master CI green
 
 **Agent:** lead, executing the team-consultation path the owner chose.
