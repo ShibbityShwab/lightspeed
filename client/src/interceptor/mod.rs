@@ -1139,7 +1139,15 @@ mod tests {
         assert_eq!(saved.fec_k, 4);
 
         handle.stop();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // The mock's stop is observed by its shutdown thread, not by `stop()`
+        // itself. Wait on that observable counter with a bounded deadline; the
+        // former fixed 50 ms sleep raced a loaded worker (task-73/76) and could
+        // fail with stop_count()==0 on an unlucky schedule.
+        let seen = interceptor.wait_for_stop_count(1);
+        assert_eq!(
+            seen, 1,
+            "the mock's shutdown thread must observe stop() within the bounded wait"
+        );
         assert_eq!(interceptor.stop_count(), 1);
     }
 
