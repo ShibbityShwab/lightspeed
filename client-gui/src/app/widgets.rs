@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::platform::Animations;
+use eframe::egui::Color32;
 
 /// What the custom-game editor asked for this frame.
 ///
@@ -49,7 +50,8 @@ pub(super) fn game_editor_body(
                     .size(CAPTION)
                     .color(text_3),
             );
-            if ui.button(i18n::t("game.editor_edit")).clicked() {
+            let edit = console_link(ui, i18n::t("game.editor_edit").as_ref());
+            if activated(ui, &edit) {
                 actions.edit = Some(i);
             }
         });
@@ -182,7 +184,8 @@ pub(super) fn process_picker<'a>(
     ui.add_space(S2);
     ui.horizontal(|ui| {
         section_label(ui, &i18n::t("game.editor_process_picker"));
-        if ui.button(i18n::t("game.editor_process_refresh")).clicked() {
+        let refresh_link = console_link(ui, i18n::t("game.editor_process_refresh").as_ref());
+        if activated(ui, &refresh_link) {
             *refresh = true;
         }
     });
@@ -352,25 +355,6 @@ pub(super) fn invalid_text_field(
     response
 }
 
-/// A config row: the label always sits above its control (mobile-only 320 px;
-/// the retired wide breakpoint's side-by-side label column is gone), so the
-/// control always keeps the full 288 px tap width.
-pub(super) fn field_row(
-    ui: &mut egui::Ui,
-    _narrow: bool,
-    label: &str,
-    add_field: impl FnOnce(&mut egui::Ui),
-) {
-    ui.label(
-        egui::RichText::new(label)
-            .size(LABEL)
-            .family(semibold())
-            .color(text_1),
-    );
-    ui.add_space(S1);
-    add_field(ui);
-}
-
 /// Section heading in the config region or a sheet body.
 /// A 1px `border-1` hairline: the design's only divider between sections.
 pub(super) fn hairline(ui: &mut egui::Ui) {
@@ -379,23 +363,21 @@ pub(super) fn hairline(ui: &mut egui::Ui) {
     ui.painter().rect_filled(rect, 0.0, border_1);
 }
 
+/// A section label in the console voice: 11 px mono, uppercase, 0.24em
+/// tracking, `dim` ink (token sheet Â§2/Â§4.7); the catalogs stay sentence case.
 pub(super) fn section_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(
-        egui::RichText::new(text)
-            .size(LABEL)
-            .family(semibold())
-            .color(text_1),
-    );
+    tracked_label(ui, &text.to_uppercase(), CAPTION, text_3, TRACK_SECTION);
     ui.add_space(S1);
 }
 
-/// A sheet title (`title` type).
+/// A sheet title in the console voice: mono 12 px, uppercase, 0.24em tracking.
 pub(super) fn sheet_title(ui: &mut egui::Ui, text: &str) {
-    ui.label(
-        egui::RichText::new(text)
-            .size(TITLE)
-            .family(semibold())
-            .color(text_1),
+    tracked_label(
+        ui,
+        &format!("/// {}", text.to_uppercase()),
+        TITLE,
+        text_1,
+        TRACK_SECTION,
     );
     ui.add_space(S2);
 }
@@ -404,8 +386,8 @@ pub(super) fn sheet_title(ui: &mut egui::Ui, text: &str) {
 /// and the sheet radius.
 pub(super) fn sheet_frame() -> egui::Frame {
     egui::Frame::new()
-        .fill(bg_0)
-        .stroke(egui::Stroke::new(1.0, border_1))
+        .fill(bg_1)
+        .stroke(egui::Stroke::new(1.0, border_2))
         .corner_radius(egui::CornerRadius::same(R_SHEET))
         .inner_margin(egui::Margin::same(S4 as i8))
 }
@@ -456,23 +438,29 @@ pub(super) fn progress_indicator(ui: &mut egui::Ui, text: &str, animations: Anim
 /// The notice / warning frame (`design-system` §6.10): a display-only line in
 /// the scrolling region, danger or warn tone, `R_INLINE` radius, S2 inner
 /// margin, up to the measured four lines. It is never a control.
+/// The notice / warning frame (token sheet Â§4.8/Â§4.9): flat fill, 1 px border
+/// and a painted 3 px left edge. Danger uses the composited `danger_tint`; the
+/// warn tone keeps the inset plane and warn ink.
 pub(super) fn notice_frame(
     ui: &mut egui::Ui,
     danger_toned: bool,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
-    let (fill, ink) = if danger_toned {
-        (danger_soft, danger)
+    let (fill, edge, ink) = if danger_toned {
+        (danger_soft, danger, danger)
     } else {
-        // The warn-tone notice fill is the same 12 % tint pattern; the design
-        // system keeps `warn` as ink and the card plane under the tint.
-        (accent_soft, warn)
+        (bg_2, warn, warn)
     };
-    egui::Frame::new()
+    let response = egui::Frame::new()
         .fill(fill)
-        .stroke(egui::Stroke::new(1.0, ink))
-        .corner_radius(egui::CornerRadius::same(R_INLINE))
-        .inner_margin(egui::Margin::same(S2 as i8))
+        .stroke(egui::Stroke::new(1.0, edge))
+        .corner_radius(egui::CornerRadius::same(R_TAG))
+        .inner_margin(egui::Margin {
+            left: S3 as i8 + 3,
+            right: S3 as i8,
+            top: S3 as i8,
+            bottom: S3 as i8,
+        })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.scope(|ui| {
@@ -480,8 +468,16 @@ pub(super) fn notice_frame(
                 add_contents(ui);
             });
         });
+    let rect = response.response.rect;
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.top() + 1.0),
+            egui::vec2(3.0, (rect.height() - 2.0).max(0.0)),
+        ),
+        0.0,
+        edge,
+    );
 }
-
 /// A focusable disclosure row: a painted marker (never a typed glyph — the
 /// bundled chains carry no `▸`) plus a label. Returns the new open state.
 ///
@@ -518,4 +514,532 @@ pub(super) fn disclosure_row(ui: &mut egui::Ui, label: &str, open: &mut bool) ->
     );
     focus_ring(ui, &response, R_INLINE);
     response.clicked()
+}
+
+// â”€â”€ Direction C console components (text, sections, rows, footer) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/// Paint text with letter-spacing (egui has no tracking) and return its width.
+pub(super) fn paint_tracked(
+    painter: &egui::Painter,
+    at: egui::Pos2,
+    align: egui::Align2,
+    text: &str,
+    font: &egui::FontId,
+    color: Color32,
+    tracking_em: f32,
+) -> f32 {
+    let tracking = tracking_em * font.size;
+    let width = tracked_width(painter, text, font, tracking_em);
+    let height = painter
+        .layout_no_wrap(text.to_owned(), font.clone(), color)
+        .size()
+        .y;
+    let rect = align.anchor_size(at, egui::vec2(width, height));
+    let mut x = rect.left();
+    for ch in text.chars() {
+        let galley = painter.layout_no_wrap(ch.to_string(), font.clone(), color);
+        let advance = galley.size().x;
+        painter.galley(egui::pos2(x, rect.top()), galley, color);
+        x += advance + tracking;
+    }
+    width
+}
+
+/// The advance width of tracked text (measure only).
+pub(super) fn tracked_width(
+    painter: &egui::Painter,
+    text: &str,
+    font: &egui::FontId,
+    tracking_em: f32,
+) -> f32 {
+    let tracking = tracking_em * font.size;
+    let mut width = 0.0;
+    for (i, ch) in text.chars().enumerate() {
+        if i > 0 {
+            width += tracking;
+        }
+        width += painter
+            .layout_no_wrap(ch.to_string(), font.clone(), text_1)
+            .size()
+            .x;
+    }
+    width
+}
+
+/// One line of tracked console text as a laid-out label. Uses egui's own
+/// letter-spacing so the full string stays one text shape (screen readers,
+/// shape-level tests and copy review can read it).
+pub(super) fn tracked_label(
+    ui: &mut egui::Ui,
+    text: &str,
+    size: f32,
+    color: Color32,
+    tracking_em: f32,
+) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(size)
+            .family(console())
+            .color(color)
+            .extra_letter_spacing(tracking_em * size),
+    );
+}
+
+/// A section row: `NN NAME â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ META` (token sheet Â§4.7).
+pub(super) fn console_section(
+    ui: &mut egui::Ui,
+    index: Option<&str>,
+    name: Option<&str>,
+    meta: Option<&str>,
+) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), SECTION_H),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter();
+    let font = egui::FontId::new(SECTION, console());
+    let mut x = rect.left();
+    if let Some(index) = index {
+        let w = paint_tracked(
+            painter,
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            index,
+            &font,
+            ice_dim,
+            TRACK_SECTION,
+        );
+        x += w + S2;
+    }
+    let mut rule_from = x;
+    if let Some(name) = name {
+        let name = name.to_uppercase();
+        let w = paint_tracked(
+            painter,
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &name,
+            &font,
+            text_3,
+            TRACK_SECTION,
+        );
+        rule_from = x + w + S2;
+    }
+    let mut rule_to = rect.right();
+    if let Some(meta) = meta {
+        let meta = meta.to_uppercase();
+        let w = tracked_width(painter, &meta, &font, TRACK_META);
+        paint_tracked(
+            painter,
+            egui::pos2(rect.right(), rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            &meta,
+            &font,
+            text_3,
+            TRACK_META,
+        );
+        rule_to = rect.right() - w - S2;
+    }
+    if rule_to > rule_from + S1 {
+        painter.line_segment(
+            [
+                egui::pos2(rule_from, rect.center().y),
+                egui::pos2(rule_to, rect.center().y),
+            ],
+            egui::Stroke::new(1.0, border_2),
+        );
+    }
+}
+
+/// Whether a clickable response was activated by pointer or keyboard.
+pub(super) fn activated(ui: &egui::Ui, response: &egui::Response) -> bool {
+    response.clicked()
+        || (response.has_focus()
+            && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)))
+}
+
+/// A flat console text link: 11 px mono, uppercase, `ice` at rest, hover plane
+/// behind the row, 24 px target, focus ring.
+pub(super) fn console_link(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let label = text.to_uppercase();
+    let font = egui::FontId::new(CAPTION, console());
+    let width = tracked_width(ui.painter(), &label, &font, TRACK_LABEL);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width + 2.0 * S2, HIT_MIN), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(R_TAG), bg_2);
+    }
+    paint_tracked(
+        ui.painter(),
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        &label,
+        &font,
+        if response.hovered() {
+            text_1
+        } else {
+            accent_text
+        },
+        TRACK_LABEL,
+    );
+    focus_ring(ui, &response, R_TAG);
+    response
+}
+
+/// A two-state console toggle: label left, `[ â–  ]` bracket right. No English
+/// ON/OFF literal (D-C1): the checked state is painted and exposed through the
+/// checkbox role; the label wraps rather than clipping under the bracket.
+pub(super) fn console_toggle(ui: &mut egui::Ui, label: &str, checked: bool) -> egui::Response {
+    let width = ui.available_width();
+    let text_w = (width - 34.0 - 3.0 * S2).max(80.0);
+    let font = egui::FontId::new(CAPTION, console());
+    let galley = ui
+        .painter()
+        .layout(label.to_uppercase(), font.clone(), text_1, text_w);
+    let height = (galley.size().y + 2.0 * S1).max(CONTROL_H);
+    let (rect, mut response) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, checked, label));
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(R_TAG), bg_2);
+    }
+    let painter = ui.painter();
+    painter.galley(
+        egui::pos2(rect.left() + S2, rect.center().y - galley.size().y / 2.0),
+        galley,
+        text_1,
+    );
+    let bracket = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - S2 - 34.0, rect.center().y - 10.0),
+        egui::vec2(34.0, 20.0),
+    );
+    painter.rect(
+        bracket,
+        egui::CornerRadius::same(R_TAG),
+        bg_1,
+        egui::Stroke::new(1.0, border_control),
+        egui::StrokeKind::Inside,
+    );
+    let mark = egui::Rect::from_center_size(bracket.center(), egui::vec2(8.0, 8.0));
+    if checked {
+        painter.rect_filled(mark, 0.0, accent_text);
+    } else {
+        painter.rect_stroke(
+            mark,
+            0.0,
+            egui::Stroke::new(1.0, text_3),
+            egui::StrokeKind::Inside,
+        );
+    }
+    focus_ring(ui, &response, R_TAG);
+    if activated(ui, &response) {
+        response.mark_changed();
+    }
+    response
+}
+
+/// The console footer: evenly spaced flat links with painted ` / ` separators;
+/// labels are fitted into their slot by solving the tracking within the 11 px
+/// floor. Returns the activated index.
+pub(super) fn console_footer(ui: &mut egui::Ui, labels: &[&str], height: f32) -> Option<usize> {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let columns = labels.len().max(1) as f32;
+    let mut clicked = None;
+    let font = egui::FontId::new(CAPTION, console());
+    for (i, label) in labels.iter().enumerate() {
+        let left = rect.left() + rect.width() * i as f32 / columns;
+        let right = rect.left() + rect.width() * (i + 1) as f32 / columns;
+        let column = egui::Rect::from_min_max(
+            egui::pos2(left, rect.top()),
+            egui::pos2(right, rect.bottom()),
+        );
+        let target = column.shrink2(egui::vec2(S1, 0.0));
+        let response = ui.interact(
+            target,
+            ui.scope_id().with(("console_footer", *label, i)),
+            egui::Sense::click(),
+        );
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *label));
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(target, egui::CornerRadius::same(R_TAG), bg_2);
+        }
+        let upper = label.to_uppercase();
+        let column_avail = (column.width() - 2.0 * S2).max(1.0);
+        let base = tracked_width(ui.painter(), &upper, &font, 0.0);
+        let fit_tracking = if base >= column_avail {
+            0.0
+        } else {
+            ((column_avail - base) / (font.size * (upper.chars().count().max(1) - 1) as f32))
+                .clamp(0.0, TRACK_META)
+        };
+        paint_tracked(
+            ui.painter(),
+            column.center(),
+            egui::Align2::CENTER_CENTER,
+            &upper,
+            &font,
+            if response.hovered() { text_1 } else { text_3 },
+            fit_tracking,
+        );
+        focus_ring(ui, &response, R_TAG);
+        if activated(ui, &response) {
+            clicked = Some(i);
+        }
+        if i + 1 < labels.len() {
+            paint_tracked(
+                ui.painter(),
+                egui::pos2(right, rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                "/",
+                &font,
+                text_3,
+                0.0,
+            );
+        }
+    }
+    clicked
+}
+
+/// One console data row: 11 px tracked `dim` label left, right-aligned value in
+/// the shipped mono chain (or prose when asked), a 1 px `c.rule` separator.
+pub(super) fn console_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    value_ink: egui::Color32,
+    value_size: f32,
+    mono: bool,
+    draw_rule: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ROW_H),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter();
+    let label_font = egui::FontId::new(CAPTION, console());
+    paint_tracked(
+        painter,
+        egui::pos2(rect.left(), rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &label.to_uppercase(),
+        &label_font,
+        text_3,
+        TRACK_LABEL,
+    );
+    let value_font = egui::FontId::new(value_size, if mono { console() } else { prose() });
+    paint_tracked(
+        painter,
+        egui::pos2(rect.right(), rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        value,
+        &value_font,
+        value_ink,
+        TRACK_VALUE,
+    );
+    if draw_rule {
+        painter.line_segment(
+            [
+                egui::pos2(rect.left(), rect.bottom() - 0.5),
+                egui::pos2(rect.right(), rect.bottom() - 0.5),
+            ],
+            egui::Stroke::new(1.0, border_1),
+        );
+    }
+    response
+}
+
+/// A stacked sentence row: a full-sentence "label" (e.g.
+/// `route.cannot_beat_direct`) is prose above its detail instead of a label
+/// column (token sheet Â§4.3's variable/stacked model).
+pub(super) fn console_sentence_row(
+    ui: &mut egui::Ui,
+    sentence: &str,
+    detail: Option<&str>,
+    draw_rule: bool,
+) -> egui::Response {
+    let paper = ui.painter().clone();
+    let width = ui.available_width();
+    let font = egui::FontId::new(PROSE, prose());
+    let galley = paper.layout(sentence.to_owned(), font.clone(), text_2, width);
+    let mut height = galley.size().y + S1;
+    let detail_galley = detail.map(|detail| {
+        let galley = paper.layout(detail.to_owned(), font, text_3, width);
+        height += galley.size().y + S1;
+        galley
+    });
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(width, height.max(ROW_H_SENTENCE)),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter();
+    painter.galley(egui::pos2(rect.left(), rect.top() + S1), galley, text_2);
+    if let Some(detail_galley) = detail_galley {
+        painter.galley(
+            egui::pos2(rect.left(), rect.bottom() - S1 - detail_galley.size().y),
+            detail_galley,
+            text_3,
+        );
+    }
+    if draw_rule {
+        painter.line_segment(
+            [
+                egui::pos2(rect.left(), rect.bottom() - 0.5),
+                egui::pos2(rect.right(), rect.bottom() - 0.5),
+            ],
+            egui::Stroke::new(1.0, border_1),
+        );
+    }
+    response
+}
+
+/// A prose sentence in the Inter voice (banner body, notes, error detail).
+pub(super) fn prose_label(ui: &mut egui::Ui, text: &str, size: f32, color: egui::Color32) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(size)
+            .family(prose())
+            .color(color),
+    );
+}
+
+/// A Direction C editorial block: prose in a 2 px `ice_dim` left rule.
+pub(super) fn console_editorial(ui: &mut egui::Ui, text: &str) {
+    let width = ui.available_width();
+    let galley = ui.painter().layout(
+        text.to_owned(),
+        egui::FontId::new(PROSE, prose()),
+        text_2,
+        width - 10.0,
+    );
+    let height = galley.size().y + S2;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.top() + 2.0),
+            egui::vec2(2.0, height - 4.0),
+        ),
+        0.0,
+        ice_dim,
+    );
+    painter.galley(
+        egui::pos2(rect.left() + 10.0, rect.top() + S2 / 2.0),
+        galley,
+        text_2,
+    );
+}
+
+/// A two-column mini row for the Components table: 11 px label `dim`, 11 px
+/// value `ink_2`, 20 px inline rows. When the pair does not fit the sheet body
+/// the row **stacks** (label line, wrapped value below) instead of colliding â€”
+/// the review's Major 1 fixture is `("Npcap", "not installed (pcap fallback only)")`.
+pub(super) fn console_mini_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    let width = ui.available_width();
+    let font = egui::FontId::new(CAPTION, console());
+    let label_up = label.to_uppercase();
+    let label_w = tracked_width(ui.painter(), &label_up, &font, TRACK_LABEL);
+    let value_w = tracked_width(ui.painter(), value, &font, 0.0);
+    if row_fits(label_w, value_w, width) {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
+        let painter = ui.painter();
+        paint_tracked(
+            painter,
+            egui::pos2(rect.left(), rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &label_up,
+            &font,
+            text_3,
+            TRACK_LABEL,
+        );
+        paint_tracked(
+            painter,
+            egui::pos2(rect.right(), rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            value,
+            &font,
+            text_2,
+            0.0,
+        );
+        return;
+    }
+    let value_galley = ui
+        .painter()
+        .layout(value.to_owned(), font.clone(), text_2, width);
+    let height = 16.0 + S1 + value_galley.size().y + S1;
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(width, height.max(20.0)), egui::Sense::hover());
+    let painter = ui.painter();
+    paint_tracked(
+        painter,
+        egui::pos2(rect.left(), rect.top() + CAPTION),
+        egui::Align2::LEFT_CENTER,
+        &label_up,
+        &font,
+        text_3,
+        TRACK_LABEL,
+    );
+    painter.galley(
+        egui::pos2(rect.left(), rect.top() + 16.0 + S1),
+        value_galley,
+        text_2,
+    );
+}
+
+/// Whether a label/value pair fits one console row: the variable row model
+/// stacks instead of clipping when it does not (token sheet Â§4.3).
+pub(super) fn row_fits(label_w: f32, value_w: f32, width: f32) -> bool {
+    label_w + S4 + value_w <= width
+}
+
+/// A Direction C inline control row: 11 px uppercase label left, the field
+/// right-aligned in the remaining width, row height `CONTROL_H` (Â§4.7).
+pub(super) fn console_field_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    add_field: impl FnOnce(&mut egui::Ui),
+) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CONTROL_H),
+        egui::Sense::hover(),
+    );
+    let label_font = egui::FontId::new(CAPTION, console());
+    let label_w = tracked_width(
+        ui.painter(),
+        &label.to_uppercase(),
+        &label_font,
+        TRACK_LABEL,
+    );
+    paint_tracked(
+        ui.painter(),
+        egui::pos2(rect.left(), rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &label.to_uppercase(),
+        &label_font,
+        text_3,
+        TRACK_LABEL,
+    );
+    let field = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + label_w + S2, rect.top()),
+        rect.right_bottom(),
+    );
+    let field_w = field.width().max(60.0);
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                field.min,
+                egui::vec2(field_w, CONTROL_H),
+            ))
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        |ui| {
+            ui.set_width(field_w);
+            add_field(ui);
+        },
+    );
 }

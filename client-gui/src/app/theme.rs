@@ -4,10 +4,15 @@ use super::*;
 
 /// Build the font families the UI draws with, for `locale`.
 ///
-/// The bundled Inter is a 230-codepoint subset - no Cyrillic, no Greek, no CJK -
-/// so every family needs real fallbacks. `semibold` used to chain only
-/// as tofu while the regular text beside it rendered fine through epaint's
-/// built-in Ubuntu-Light.
+/// Direction C's voice is monospace (`FontFamily::Monospace`), with Inter
+/// (`FontFamily::Proportional`) only for prose sentences. The bundled
+/// JetBrains Mono is Latin-only (229 codepoints: no Cyrillic, no CJK), so the
+/// monospace chain ends with the locale-ordered CJK faces and epaint's built-in
+/// Ubuntu-Light — the documented fallback of `docs/design/gui-c-token-sheet.md`
+/// §2. RU therefore draws Cyrillic in Ubuntu-Light (proportional) and CJK text
+/// in Noto at the same size; ASCII digits/addresses always stay JetBrains Mono,
+/// so tabular numerals and data alignment hold in every locale. No tofu: every
+/// catalog codepoint resolves through one of these faces (the coverage gate).
 ///
 /// `locale` chooses only the ORDER of the three CJK faces. Noto's Japanese,
 /// Korean and Simplified-Chinese subsets each carry the shared Han repertoire in
@@ -62,25 +67,24 @@ pub(crate) fn font_definitions(locale: Option<&str>) -> egui::FontDefinitions {
         );
     }
 
-    let (cjk_regular, cjk_bold) = cjk_order(locale);
+    let (cjk_regular, _cjk_bold) = cjk_order(locale);
     let builtin = fonts
         .families
         .get(&egui::FontFamily::Proportional)
         .cloned()
         .unwrap_or_default();
 
+    // Prose: Inter first, then the CJK faces, then the built-in Latin/Cyrillic
+    // fallback (Ubuntu-Light). Inter is a Latin subset only.
     let mut proportional = vec!["inter".to_owned()];
     proportional.extend(cjk_regular.iter().map(|name| (*name).to_owned()));
     proportional.extend(builtin.iter().cloned());
 
+    // The console voice: JetBrains Mono (Latin + digits) → locale-ordered CJK
+    // → the built-in Ubuntu-Light for Cyrillic and any remaining marks.
     let mut monospace = vec!["jbmono".to_owned()];
     monospace.extend(cjk_regular.iter().map(|name| (*name).to_owned()));
-    monospace.extend(builtin.iter().cloned());
-
-    let mut emphasised = vec!["inter_semibold".to_owned(), "inter".to_owned()];
-    emphasised.extend(cjk_bold.iter().map(|name| (*name).to_owned()));
-    emphasised.extend(cjk_regular.iter().map(|name| (*name).to_owned()));
-    emphasised.extend(builtin);
+    monospace.extend(builtin);
 
     fonts
         .families
@@ -88,7 +92,6 @@ pub(crate) fn font_definitions(locale: Option<&str>) -> egui::FontDefinitions {
     fonts
         .families
         .insert(egui::FontFamily::Monospace, monospace);
-    fonts.families.insert(semibold(), emphasised);
     fonts
 }
 
@@ -120,113 +123,120 @@ pub(super) fn cjk_order(locale: Option<&str>) -> ([&'static str; 3], [&'static s
 pub(crate) fn install_fonts(ctx: &egui::Context, locale: Option<&str>) {
     ctx.set_fonts(font_definitions(locale));
 }
+
+/// Direction C's one weight: monospace carries emphasis too (the sheet forbids
+/// faux bold). Kept as a named helper so the shell's `.family(semibold())` call
+/// sites keep compiling and now draw in the console voice.
 pub(super) fn semibold() -> egui::FontFamily {
-    egui::FontFamily::Name("semibold".into())
+    egui::FontFamily::Monospace
+}
+
+/// The console/UI voice (JetBrains Mono + fallbacks). Alias of the monospace
+/// family so there is exactly one installed chain.
+pub(super) fn console() -> egui::FontFamily {
+    egui::FontFamily::Monospace
+}
+
+/// The prose voice: Inter Regular (+ CJK/Ubuntu fallbacks) for sentences.
+pub(super) fn prose() -> egui::FontFamily {
+    egui::FontFamily::Proportional
 }
 
 /// Install the application theme. Called once, on the first frame.
 ///
-/// Every colour comes from [`crate::design`]; shadows are off, and the two
-/// global hairlines use `border-1`/`border-2` rather than accent arithmetic.
+/// Direction C: near-black planes, flat elevation (1 px rules only, no shadow),
+/// 2–3 px radii, control boundaries at `border_control` (AA 1.4.11), ice for
+/// links/data/focus and the single lime accent reserved for the CTA.
 pub(super) fn apply_theme(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = bg_1;
-    v.window_fill = bg_2;
+    v.window_fill = bg_1;
     v.extreme_bg_color = bg_0;
     v.faint_bg_color = bg_2;
-    v.code_bg_color = bg_2;
+    v.code_bg_color = bg_0;
     v.text_edit_bg_color = Some(bg_0);
-    v.window_stroke = egui::Stroke::new(1.0, border_1);
-    v.window_corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.window_stroke = egui::Stroke::new(1.0, border_2);
+    v.window_corner_radius = egui::CornerRadius::same(R_PANEL);
+    // Flat: the only depth cue is the 1 px rule (token sheet §3).
     v.window_shadow = egui::Shadow::NONE;
     v.popup_shadow = egui::Shadow::NONE;
-    v.menu_corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.menu_corner_radius = egui::CornerRadius::same(R_TAG);
     v.override_text_color = Some(text_1);
     v.weak_text_color = Some(text_3);
     v.hyperlink_color = accent_text;
     v.warn_fg_color = warn;
     v.error_fg_color = danger;
-    v.selection.bg_fill = accent_soft;
-    // Opaque accent ink: the shipped translucent stroke measured 1.22:1 (AA
-    // fail); `accent_text` opaque reads 7.51:1 on `bg_2` (`design-system` §3.4).
+    // Selected rows use the inset plane + an ice hairline, not a tint; the
+    // sheet keeps translucent colour off text and chrome.
+    v.selection.bg_fill = bg_2;
     v.selection.stroke = egui::Stroke::new(1.0, accent_text);
-    v.hyperlink_color = accent_text;
-    v.warn_fg_color = warn;
-    v.error_fg_color = danger;
+    v.text_cursor.stroke = egui::Stroke::new(1.0, accent_text);
 
-    let line = egui::Stroke::new(1.0, border_1);
+    let rule = egui::Stroke::new(1.0, border_1);
     // A control's identifying boundary is `border_control` (3:1 on every plane,
     // WCAG 1.4.11); decorative hairlines stay `border_1`.
     let control_line = egui::Stroke::new(1.0, border_control);
-    v.widgets.noninteractive.bg_fill = bg_2;
-    v.widgets.noninteractive.weak_bg_fill = bg_2;
-    v.widgets.noninteractive.bg_stroke = line;
+    v.widgets.noninteractive.bg_fill = bg_1;
+    v.widgets.noninteractive.weak_bg_fill = bg_1;
+    v.widgets.noninteractive.bg_stroke = rule;
     v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_3);
-    v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(R_TAG);
 
-    v.widgets.inactive.bg_fill = bg_3;
-    v.widgets.inactive.weak_bg_fill = bg_3;
+    // Buttons and controls are flat plates: the fill matches the panel so a
+    // plain button reads as a text control, while the `control_line` boundary
+    // keeps a combo/field perceivable as a control (1.4.11).
+    v.widgets.inactive.bg_fill = bg_1;
+    v.widgets.inactive.weak_bg_fill = bg_1;
     v.widgets.inactive.bg_stroke = control_line;
-    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text_1);
-    v.widgets.inactive.corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text_2);
+    v.widgets.inactive.corner_radius = egui::CornerRadius::same(R_TAG);
 
-    v.widgets.hovered.bg_fill = bg_4;
-    v.widgets.hovered.weak_bg_fill = bg_4;
-    // Hover is a transient, non-identifying cue: the boundary does not have to
-    // make a 1.4.11 claim, but the control keeps its identifying `bg_4` step.
+    v.widgets.hovered.bg_fill = bg_2;
+    v.widgets.hovered.weak_bg_fill = bg_2;
     v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, border_2);
     v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text_1);
-    v.widgets.hovered.corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.widgets.hovered.corner_radius = egui::CornerRadius::same(R_TAG);
 
-    // Pressed must differ from hover by a cue that is *not* the action fill:
-    // egui's default maps focus to this state, so using `accent_deep` here made
-    // a focused control read as pressed and stole the one-bright-control canon
-    // (`design-system` §6.1 rule 1). Pressed = highest plane + hairline.
     v.widgets.active.bg_fill = bg_3;
     v.widgets.active.weak_bg_fill = bg_3;
-    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, text_3);
+    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, border_2);
     v.widgets.active.fg_stroke = egui::Stroke::new(1.0, text_1);
-    v.widgets.active.corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.widgets.active.corner_radius = egui::CornerRadius::same(R_TAG);
 
-    v.widgets.open.bg_fill = bg_3;
-    v.widgets.open.weak_bg_fill = bg_3;
+    v.widgets.open.bg_fill = bg_2;
+    v.widgets.open.weak_bg_fill = bg_2;
     v.widgets.open.bg_stroke = control_line;
     v.widgets.open.fg_stroke = egui::Stroke::new(1.0, text_1);
-    v.widgets.open.corner_radius = egui::CornerRadius::same(R_CONTROL);
+    v.widgets.open.corner_radius = egui::CornerRadius::same(R_TAG);
 
     let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
     style.visuals = v;
     style.spacing.item_spacing = egui::vec2(S2, S2);
-    style.spacing.button_padding = egui::vec2(S3, S2);
+    style.spacing.button_padding = egui::vec2(S2, S1);
     style.spacing.window_margin = egui::Margin::same(S4 as i8);
     style.spacing.menu_margin = egui::Margin::same(S2 as i8);
     style.spacing.interact_size.y = CONTROL_H;
-    style.spacing.icon_width = 14.0;
+    style.spacing.icon_width = 12.0;
+    style.spacing.scroll.bar_width = 6.0;
     style.text_styles = [
-        (egui::TextStyle::Heading, egui::FontId::proportional(TITLE)),
-        (egui::TextStyle::Body, egui::FontId::proportional(BODY)),
         (
-            egui::TextStyle::Button,
-            egui::FontId::new(LABEL, semibold()),
+            egui::TextStyle::Heading,
+            egui::FontId::new(TITLE, console()),
         ),
-        (egui::TextStyle::Small, egui::FontId::proportional(CAPTION)),
-        (egui::TextStyle::Monospace, egui::FontId::monospace(VALUE)),
+        (egui::TextStyle::Body, egui::FontId::new(BODY, console())),
+        (egui::TextStyle::Button, egui::FontId::new(LABEL, console())),
+        (
+            egui::TextStyle::Small,
+            egui::FontId::new(CAPTION, console()),
+        ),
+        (
+            egui::TextStyle::Monospace,
+            egui::FontId::new(VALUE, console()),
+        ),
     ]
     .into();
     ctx.set_style_of(egui::Theme::Dark, style);
     ctx.set_theme(egui::Theme::Dark);
-}
-
-/// The quality ramp for a round trip: good under 60 ms, attention under 120 ms,
-/// bad beyond that.
-pub(super) fn rtt_colour(rtt_ms: f64) -> egui::Color32 {
-    if rtt_ms < 60.0 {
-        signal
-    } else if rtt_ms < 120.0 {
-        warn
-    } else {
-        danger
-    }
 }
 
 pub(super) fn parse_server_addr(s: &str) -> Option<SocketAddrV4> {

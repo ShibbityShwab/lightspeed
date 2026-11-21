@@ -336,6 +336,10 @@ const FORBIDDEN_DEFINITIONS: &[&str] = &[
 
 /// **G3** per-file line budgets for `client-gui/src/**/*.rs`, measured at W2-1
 /// S0. A new source file must be added deliberately, with a measured budget.
+// Direction C "Broadcast console" (task-101): the console palette, mono voice,
+// section/ruler/telemetry components and the review-capture fixture grow the
+// presentation files; the new values are the measured line counts on the final
+// tree and the numbers above are the shipped Instrument 2.0 baselines.
 const MODULE_BUDGET: &[(&str, usize)] = &[
     // W2-4b (task-63): the four dead relay-measured/app/RTT copy helpers and the
     // `expected_path_text` builder were deleted (the rendered rows come from
@@ -345,7 +349,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/app/games.rs", 105),
     // W2-4b: `primary_action` and `relayed_row_text` were deleted (their rules
     // are pinned by the route-surface fixtures that render the slot and row).
-    ("client-gui/src/app/ledger.rs", 147),
+    ("client-gui/src/app/ledger.rs", 218),
     ("client-gui/src/app/picker.rs", 98),
     ("client-gui/src/app/presence.rs", 482),
     ("client-gui/src/app/relay_choice.rs", 60),
@@ -368,16 +372,16 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // compact footer row arithmetic, canonical-table dispatch, tray-gated effects);
     // 2957 -> 3137. WF-081b (Q5): the declined-notice assertion became
     // translation-aware; integrated count 3153.
-    ("client-gui/src/app/tests.rs", 3153),
-    ("client-gui/src/app/theme.rs", 247),
+    ("client-gui/src/app/tests.rs", 3216),
+    ("client-gui/src/app/theme.rs", 257),
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
     // helper) is deleted; the rendered counters come from the one `RelayedPair`.
-    ("client-gui/src/app/widgets.rs", 521),
+    ("client-gui/src/app/widgets.rs", 1052),
     // WF-081b (task-86): the one tier decision (ShellTier/shell_tier), the compact
     // footer padding arithmetic, and the canonical-table dispatch
     // (	ake_app_shortcut/shortcut_effect). 213 -> 341.
-    ("client-gui/src/app/window.rs", 341),
+    ("client-gui/src/app/window.rs", 342),
     // W2-1b: +315 lines of DTO assembly/getters. It is the one file scheduled to
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
     // W2-4b: the stale `app_status` dead_code allowance is gone (the frame's
@@ -394,7 +398,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // theme item_spacing between its rows (116 -> 108), the compact footer gets a
     // real HIT_MIN row, and the app-scope shortcuts are dispatched before any
     // widget sees them. 4581 -> 4628.
-    ("client-gui/src/app.rs", 4628),
+    ("client-gui/src/app.rs", 4677),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -408,12 +412,12 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // `reset_to_defaults` (same width). 18 -> 24.
     ("client-gui/src/config.rs", 24),
     ("client-gui/src/crash.rs", 210),
-    ("client-gui/src/design.rs", 362),
+    ("client-gui/src/design.rs", 456),
     // W2-1 S2: the discovery/probe/measurement rules and 20 of their tests
     // moved to `lightspeed_client::app::discovery`; only the one-shot `mpsc`
     // worker wrappers and the wrapper-answers test stay. 816 -> 78.
     ("client-gui/src/discovery.rs", 78),
-    ("client-gui/src/globe.rs", 198),
+    ("client-gui/src/globe.rs", 353),
     // WF-081b (task-74): the capture/fixture locale override
     // (`LIGHTSPEED_LOCALE`, the same family as the app's `LIGHTSPEED_OPEN_*`
     // switches) plus its blank-tolerance test, so the 320x420 evidence captures

@@ -41,33 +41,37 @@ pub(super) enum ActionKind {
     Danger,
 }
 
-/// The one bright control: a custom-painted button so it never reads as
-/// default egui chrome. Accent uses `accent_deep` at rest (white ink on it is
-/// AA-safe) and `accent` on hover; Danger uses `bg-3` with a danger hairline and
-/// ink, tinting with `danger-soft` on hover.
+/// The one bright control — Direction C's single neon surface (token sheet
+/// §4.5). Accent: lime fill (`c.accent`, hover `accent_hover`, pressed
+/// `accent_pressed`), dark `on_accent` label, uppercase tracked mono, a painted
+/// `▶` mark; Danger: transparent fill, 1 px danger outline, danger label and a
+/// painted 8×8 stop square. Disabled/loading use the disabled plane/ink and no
+/// accent. Focus paints the 2 px `c.focus` ring outside the rect and never
+/// changes the fill. The control registers an AccessKit role/name through
+/// `widget_info`.
 ///
-/// **Wrap, never shrink** (`design-system` §4.4): a label wider than the column
-/// wraps to two `EMPHASIS` lines in `ACTION_H_WRAPPED`; the old 9 px shrink
-/// floor is deleted. Focus paints a 2 px `accent_text` ring *outside* the rect
-/// and never changes the fill; a pressed cue is darker than hover. The control
-/// registers an AccessKit role/name through `widget_info` (the shipped action
-/// was a `Custom` element with an empty name — Blocker B1).
+/// **Wrap, never shrink**: a label whose tracked width exceeds the inner width
+/// falls back to a wrapped two-line layout in `ACTION_H_WRAPPED`; the label is
+/// never drawn below `EMPHASIS` and never ellipsised.
 pub(super) fn action_button(
     ui: &mut egui::Ui,
     text: &str,
     kind: ActionKind,
     ready: bool,
     in_flight: bool,
+    compact: bool,
 ) -> egui::Response {
-    let inner_w = (ui.available_width() - 2.0 * S3).max(80.0);
-    let font = egui::FontId::new(EMPHASIS, semibold());
-    let galley = ui
-        .painter()
-        .layout(text.to_owned(), font.clone(), text_1, inner_w);
-    let lines = galley.rows.len().max(1);
-    let two_line = lines > 1;
-    let height = if two_line {
-        ACTION_H_WRAPPED + (lines.saturating_sub(2) as f32) * 19.0
+    let font = egui::FontId::new(EMPHASIS, console());
+    let tracking = TRACK_CTA;
+    let mark_w = if kind == ActionKind::Danger { 8.0 } else { 5.0 };
+    let mark = egui::vec2(mark_w, if kind == ActionKind::Danger { 8.0 } else { 6.0 });
+    let label_w = tracked_width(ui.painter(), text, &font, tracking);
+    let single_w = label_w + S2 + mark.x;
+    let wrapped = single_w + 2.0 * S3 > ui.available_width();
+    let height = if wrapped {
+        ACTION_H_WRAPPED
+    } else if compact {
+        ACTION_H_COMPACT
     } else {
         ACTION_H
     };
@@ -80,29 +84,30 @@ pub(super) fn action_button(
     let hovered = response.hovered() && ready && !in_flight;
     let pressed = response.is_pointer_button_down_on() && ready && !in_flight;
 
-    let (fill, stroke, ink) = match kind {
+    let (fill, stroke, ink): (egui::Color32, egui::Color32, egui::Color32) = match kind {
         ActionKind::Accent => {
             if !ready || in_flight {
-                (bg_3, border_1, text_3)
+                (disabled_plane, disabled_plane, disabled_ink)
             } else if pressed {
                 (accent_deep, accent_deep, on_accent)
             } else if hovered {
-                (accent, accent, on_accent)
+                (accent_hover, accent_hover, on_accent)
             } else {
-                (accent_deep, accent_deep, on_accent)
+                (accent, accent, on_accent)
             }
         }
         ActionKind::Danger => {
             if !ready || in_flight {
-                (bg_3, border_1, text_3)
-            } else if pressed || hovered {
-                (danger_soft, danger, danger)
-            } else {
+                (disabled_plane, disabled_plane, disabled_ink)
+            } else if pressed {
                 (bg_3, danger, danger)
+            } else if hovered {
+                (bg_2, danger, danger)
+            } else {
+                (egui::Color32::TRANSPARENT, danger, danger)
             }
         }
     };
-
     let painter = ui.painter();
     painter.rect(
         rect,
@@ -111,22 +116,88 @@ pub(super) fn action_button(
         egui::Stroke::new(1.0, stroke),
         egui::StrokeKind::Inside,
     );
-    if kind == ActionKind::Danger && ready && !in_flight {
-        // A painted stop square: U+25A0 lives only in the icon font, so the
-        // mark is drawn rather than typed.
-        let square = egui::Rect::from_center_size(
-            egui::pos2(rect.left() + 22.0, rect.center().y),
-            egui::vec2(10.0, 10.0),
+
+    if wrapped {
+        // Wrap, never shrink: the group is vertically centred and the mark
+        // stays aligned with the first line.
+        let galley = painter.layout(
+            text.to_owned(),
+            font.clone(),
+            ink,
+            (ui.available_width() - 2.0 * S3 - mark.x - S2).max(60.0),
         );
-        painter.rect_filled(square, 0.0, danger);
+        let group = egui::vec2(galley.size().x + mark.x + S2, galley.size().y);
+        let top_left = rect.center() - group / 2.0;
+        paint_action_mark(
+            painter,
+            kind,
+            egui::pos2(
+                top_left.x,
+                top_left.y + galley.size().y / 2.0 - mark.y / 2.0,
+            ),
+            mark,
+            ink,
+            fill,
+        );
+        painter.galley(
+            egui::pos2(top_left.x + mark.x + S2, top_left.y),
+            galley,
+            ink,
+        );
+    } else {
+        let top_left = egui::pos2(
+            rect.center().x - single_w / 2.0,
+            rect.center().y - mark.y / 2.0,
+        );
+        paint_action_mark(painter, kind, top_left, mark, ink, fill);
+        paint_tracked(
+            painter,
+            egui::pos2(top_left.x + mark.x + S2, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            text,
+            &font,
+            ink,
+            tracking,
+        );
     }
-    let galley = painter.layout(text.to_owned(), font.clone(), ink, inner_w);
-    let pos = rect.center() - galley.size() / 2.0;
-    painter.galley(pos, galley, ink);
     focus_ring(ui, &response, R_BUTTON);
     response
 }
 
+/// The CTA's painted mark: a `▶` triangle for the accent action, a stop square
+/// for the danger action (no typed glyph — the bundled chains do not carry them).
+fn paint_action_mark(
+    painter: &egui::Painter,
+    kind: ActionKind,
+    top_left: egui::Pos2,
+    mark: egui::Vec2,
+    ink: egui::Color32,
+    fill: egui::Color32,
+) {
+    match kind {
+        ActionKind::Danger => {
+            painter.rect_filled(
+                egui::Rect::from_min_size(top_left, mark),
+                0.0,
+                if ink == disabled_ink { ink } else { danger },
+            );
+        }
+        ActionKind::Accent => {
+            // 55 % on-accent over the current lime fill (sheet 4.5).
+            let _ = fill;
+            let triangle_ink = egui::Color32::from_rgba_unmultiplied(0x0A, 0x0E, 0x02, 140);
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    top_left,
+                    egui::pos2(top_left.x, top_left.y + mark.y),
+                    egui::pos2(top_left.x + mark.x, top_left.y + mark.y / 2.0),
+                ],
+                triangle_ink,
+                egui::Stroke::NONE,
+            ));
+        }
+    }
+}
 /// Whether the Game row should explain that nothing is selected yet, and which
 /// key to say it with.
 ///

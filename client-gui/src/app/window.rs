@@ -93,6 +93,7 @@ pub fn shell_tier(height: f32) -> ShellTier {
 /// plus the theme's `button_padding.y` would overshoot `HIT_MIN` on its own.
 /// The compact footer re-cuts both locally so its row lands exactly on
 /// `HIT_MIN` instead of silently inheriting the 40 px control height.
+#[cfg(test)]
 pub fn compact_button_padding(text_height: f32) -> f32 {
     ((HIT_MIN - text_height) / 2.0).max(0.0)
 }

@@ -59,7 +59,7 @@ use ledger::*;
 use picker::*;
 use presence::*;
 use relay_choice::*;
-use route_surface::{Line, LocationBlock, RouteSurface, RouteWord, Row, RowValue, Tone};
+use route_surface::{Line, RouteSurface, RouteWord, Row, RowValue, Tone};
 use theme::*;
 use watchdog::*;
 use widgets::*;
@@ -432,6 +432,31 @@ fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// The capture-only forced route state (`LIGHTSPEED_CAPTURE_STATE=connected|optimizing|starved|error`).
+///
+/// Direction C's review captures need the CONNECTED / OPTIMIZING / STARVED /
+/// ERROR screens; a real judged starvation needs a live tunnel plus the watchdog
+/// window, so the debug build can substitute those documented facts for a
+/// screenshot. Release builds compile this to `None` (`cfg!(debug_assertions)`
+/// is false), so the shipped app can never show a state the engine did not
+/// produce.
+fn capture_forced_state() -> Option<&'static str> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    match std::env::var("LIGHTSPEED_CAPTURE_STATE").ok().as_deref() {
+        Some("connected") => Some("connected"),
+        Some("optimizing") => Some("optimizing"),
+        Some("starved") => Some("starved"),
+        Some("error") => Some("error"),
+        Some("disconnected") => Some("disconnected"),
+        Some("connecting") => Some("connecting"),
+        Some("holding") => Some("holding"),
+        Some("elevation_required") => Some("elevation_required"),
+        _ => None,
+    }
+}
+
 /// The capture-only declined notice (`LIGHTSPEED_SHOW_ELEVATION_DECLINED`).
 ///
 /// **Debug/evidence builds only**: the switch renders the declined state
@@ -659,11 +684,11 @@ impl<P: Platform> LightSpeedApp<P> {
             elevation_notice: capture_elevation_notice(),
             fonts_setup: false,
             header_icon: None,
-            details_open: false,
+            details_open: std::env::var_os("LIGHTSPEED_OPEN_DETAILS").is_some(),
             height_restored: false,
             persisted_height: 0.0,
             show_settings: std::env::var_os("LIGHTSPEED_OPEN_SETTINGS").is_some(),
-            show_game_editor: false,
+            show_game_editor: std::env::var_os("LIGHTSPEED_OPEN_EDITOR").is_some(),
             game_editor: GameEditorDraft::new_profile(),
             editor_saved: None,
             editor_error: None,
@@ -2188,218 +2213,246 @@ impl<P: Platform> LightSpeedApp<P> {
         i18n::t_with(line.key, &args)
     }
 
-    /// The full-bleed state rail: word row, then the metric on **its own row**
-    /// with its leg caption, then the one-line description (§1.2, A13). The
-    /// word is never occluded by the metric: at 320 px the two cannot share a
-    /// row (measured RU/DE collisions), so they do not try.
-    fn shell_rail(&self, ui: &mut egui::Ui, surface: &RouteSurface, short: bool) {
-        let (word, tone) = (
-            i18n::t(surface.word.key()).to_uppercase(),
-            surface.word.tone(),
-        );
-        let edge = match tone {
-            Tone::Signal => signal,
+    /// Direction C's hero (`gui-c-token-sheet.md` Â§4.1/Â§4.2): a strict two-slot
+    /// crown (brand left; tone dot + version right, no second status text), the
+    /// 30 px capped mono state word in `c.ink`, the readout (prose sub-line +
+    /// ice relay-leg metric) and the tick ruler.
+    fn shell_rail(&self, ui: &mut egui::Ui, surface: &RouteSurface, compact: bool) {
+        let word = i18n::t(surface.word.key()).to_uppercase();
+        let tone = surface.word.tone();
+        // The hero word is `c.ink` in every tone (token sheet Â§1/Â§2): the tone
+        // lives on the crown dot, the banner and the readout, never on the word.
+        let state_ink = text_1;
+        let status_ink = match tone {
+            Tone::Signal => ice,
             Tone::Warn => warn,
             Tone::Danger => danger,
-            Tone::Muted => {
-                if surface.word == RouteWord::Connected {
-                    accent_soft
-                } else {
-                    border_1
-                }
-            }
+            Tone::Muted => text_3,
         };
-        let frame = egui::Frame::new()
-            .fill(bg_2)
-            .inner_margin(egui::Margin::symmetric(S3 as i8, S3 as i8));
-        let response = frame.show(ui, |ui| {
-            // The rail's rows are separated by explicit `S1` gaps only. The
-            // theme's `item_spacing.y` would add a second 8 px gap between the
-            // word and metric rows and put the short rail at 116 px instead of
-            // the §1.3 table's 108 (the 420 compact chrome depends on it).
-            ui.spacing_mut().item_spacing.y = 0.0;
-            ui.set_width(ui.available_width());
-            // Painted 3 px state edge: redundant with the word, never the only
-            // state cue (`design-system` §3.4). Painted, not laid out, so it
-            // costs no horizontal space.
-            let rect = ui.available_rect_before_wrap();
-            ui.painter().rect_filled(
-                egui::Rect::from_min_size(
-                    egui::pos2(rect.left() - S3, rect.top() - S3),
-                    egui::vec2(RAIL_EDGE, rect.height() + 2.0 * S3),
-                ),
+        let top_h = if compact { TOP_H_COMPACT } else { TOP_H };
+        let (bar, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), top_h),
+            egui::Sense::hover(),
+        );
+        {
+            let painter = ui.painter();
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(bar.left(), bar.bottom() - 1.0), bar.max),
                 0.0,
-                edge,
+                border_1,
             );
-            // Row 1: the state word (`HERO_H` 40, `STATE` 30 — the retired 0.82
-            // shrink is gone).
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), HERO_H),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.set_min_height(HERO_H);
-                    ui.label(
-                        egui::RichText::new(word)
-                            .size(STATE)
-                            .family(semibold())
-                            .color(match tone {
-                                Tone::Signal => signal,
-                                Tone::Warn => warn,
-                                Tone::Danger => danger,
-                                Tone::Muted => text_1,
-                            }),
-                    );
-                },
+            let brand_font = egui::FontId::new(BRAND, console());
+            paint_tracked(
+                painter,
+                egui::pos2(bar.left() + S4, bar.center().y),
+                egui::Align2::LEFT_CENTER,
+                "LIGHTSPEED",
+                &brand_font,
+                text_2,
+                TRACK_BRAND,
             );
-            // Row 2: the metric, always labelled with the leg it measures.
-            ui.add_space(S1);
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), HERO_H),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    ui.set_min_height(HERO_H);
-                    ui.label(
-                        egui::RichText::new(i18n::t(surface.metric.caption_key))
-                            .size(CAPTION)
-                            .color(text_3),
-                    );
-                    let value = match surface.metric.value_ms {
-                        Some(ms) => format!("{ms:>3} ms"),
-                        None => "-- ms".to_string(),
-                    };
-                    let ink = match surface.metric.value_ms {
-                        Some(ms) => rtt_colour(f64::from(ms)),
-                        None => text_3,
-                    };
-                    ui.label(
-                        egui::RichText::new(value)
-                            .size(METRIC)
-                            .family(egui::FontFamily::Monospace)
-                            .color(ink),
-                    );
-                },
+            let meta_font = egui::FontId::new(CAPTION, console());
+            let version = env!("CARGO_PKG_VERSION");
+            let version_w = tracked_width(painter, version, &meta_font, 0.0);
+            paint_tracked(
+                painter,
+                egui::pos2(bar.right() - S4, bar.center().y),
+                egui::Align2::RIGHT_CENTER,
+                version,
+                &meta_font,
+                text_3,
+                0.0,
             );
-            // Row 3: the sub-line. In short mode it moves into the scrolling
-            // region so the fixed rail keeps the ≥180 px scrolling floor.
-            if !short {
-                if let Some(line) = &surface.subline {
-                    ui.add_space(S1);
-                    ui.label(
-                        egui::RichText::new(self.line_text(line))
-                            .size(BODY)
-                            .color(text_2),
-                    );
-                }
-            }
-        });
-        focus_ring(ui, &response.response, R_INLINE);
-    }
-
-    /// The one true card: warning line, map, location ladder, trace caption,
-    /// ledger + `Details`. Every fact comes from `route_surface`; the shell
-    /// derives nothing (`§5 W2-2 (c)`).
-    fn shell_route_card(&mut self, ui: &mut egui::Ui, surface: &RouteSurface, with_map: bool) {
+            let dot_x = bar.right() - S4 - version_w - S1 - 2.5;
+            painter.circle_filled(egui::pos2(dot_x, bar.center().y), 2.5, status_ink);
+        }
+        let pad_top = if compact { 0.0 } else { S2 };
         egui::Frame::new()
-            .fill(bg_2)
-            .stroke(egui::Stroke::new(1.0, border_1))
-            .corner_radius(egui::CornerRadius::same(R_CARD))
-            .inner_margin(egui::Margin::same(S3 as i8))
+            .inner_margin(egui::Margin {
+                left: S4 as i8,
+                right: S4 as i8,
+                top: pad_top as i8,
+                bottom: 0,
+            })
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                // The warning line: one at a time, danger tone, above the map
-                // (`design-system` §6.10). The tint is redundant with the words.
-                if let Some(warning) = &surface.warning {
-                    let text = self.line_text(warning);
-                    notice_frame(ui, true, |ui| {
-                        ui.label(
-                            egui::RichText::new(text)
-                                .size(BODY)
-                                .family(semibold())
-                                .color(danger),
-                        );
-                    });
-                    ui.add_space(S2);
-                }
-                if with_map {
-                    let (markers, route) = self.map_markers();
-                    globe::draw_map(
-                        ui,
-                        ui.available_width().min(MAP_W_MAX),
-                        MAP_H,
-                        &markers,
-                        route,
+                ui.spacing_mut().item_spacing.y = 0.0;
+                // Hero: the 30 px capped mono state word, one line, no shrink.
+                let (hero, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), HERO_H),
+                    egui::Sense::hover(),
+                );
+                {
+                    let font = egui::FontId::new(STATE, console());
+                    paint_tracked(
+                        ui.painter(),
+                        egui::pos2(hero.left(), hero.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &word,
+                        &font,
+                        state_ink,
+                        TRACK_STATE,
                     );
+                }
+                if compact {
+                    ui.add_space(S1);
+                } else {
                     ui.add_space(S2);
                 }
-                // The location ladder is display-only and left-aligned on the
-                // one gutter (M9); it claims no city a source cannot produce.
-                if let Some(location) = &surface.location {
-                    self.shell_location(ui, location);
-                    ui.add_space(S1);
-                }
-                if let Some(trace) = &surface.trace {
-                    let mut text = self.line_text(&trace.caption);
-                    if let Some(nearest) = &trace.nearest {
-                        text.push_str(" · ");
-                        text.push_str(&self.line_text(nearest));
+                // Readout: prose sub-line left, ice relay-leg metric right with
+                // its unit and leg caption (F1-safe; the metric is its own row).
+                let readout_h = if compact { 34.0 } else { 46.0 };
+                let (readout, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), readout_h),
+                    egui::Sense::hover(),
+                );
+                {
+                    let painter = ui.painter();
+                    if !compact {
+                        if let Some(line) = &surface.subline {
+                            let text = self.line_text(line);
+                            let font = egui::FontId::new(PROSE, prose());
+                            // Reserve the metric block so the DE sub-line never
+                            // reads as one run with "RELAISSTRECKE" (review m2).
+                            let metric_reserve = (readout.width() * 0.42).max(76.0);
+                            let wrap = (readout.width() - metric_reserve - S3).max(60.0);
+                            let galley = painter.layout(text, font, text_2, wrap);
+                            let at = egui::pos2(readout.left(), readout.bottom() - galley.size().y);
+                            painter.galley(at, galley, text_2);
+                        }
                     }
-                    if let Some(provider) = &trace.provider {
-                        text.push_str(" · ");
-                        text.push_str(provider);
-                    }
-                    ui.label(egui::RichText::new(text).size(CAPTION).color(text_3));
-                    ui.add_space(S1);
+                    let (num, ink_m) = match surface.metric.value_ms {
+                        Some(ms) => (format!("{ms:>3}"), ice),
+                        None => ("--".to_string(), text_3),
+                    };
+                    let metric_size = if compact { 23.0 } else { METRIC };
+                    let mfont = egui::FontId::new(metric_size, console());
+                    let ufont = egui::FontId::new(CAPTION, console());
+                    let capfont = egui::FontId::new(CAPTION, console());
+                    let caption = i18n::t(surface.metric.caption_key).to_uppercase();
+                    let num_w = tracked_width(painter, &num, &mfont, TRACK_VALUE);
+                    let unit = "MS";
+                    let unit_w = tracked_width(painter, unit, &ufont, 0.0);
+                    let num_x = readout.right() - num_w - S1 - unit_w;
+                    paint_tracked(
+                        painter,
+                        egui::pos2(num_x, readout.top()),
+                        egui::Align2::LEFT_TOP,
+                        &num,
+                        &mfont,
+                        ink_m,
+                        TRACK_VALUE,
+                    );
+                    paint_tracked(
+                        painter,
+                        egui::pos2(num_x + num_w + S1, readout.top() + (metric_size - CAPTION)),
+                        egui::Align2::LEFT_TOP,
+                        unit,
+                        &ufont,
+                        ice_dim,
+                        0.0,
+                    );
+                    paint_tracked(
+                        painter,
+                        egui::pos2(readout.right(), readout.bottom()),
+                        egui::Align2::RIGHT_BOTTOM,
+                        &caption,
+                        &capfont,
+                        text_3,
+                        TRACK_META,
+                    );
                 }
-                self.shell_ledger(ui, surface);
+                if !compact {
+                    ui.add_space(S2);
+                }
+                // Tick ruler: 1 px top rule + 1 px ticks every 8 px (Â§3).
+                let (ruler, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), RULER_H),
+                    egui::Sense::hover(),
+                );
+                {
+                    let painter = ui.painter();
+                    painter.line_segment(
+                        [ruler.left_top(), ruler.right_top()],
+                        egui::Stroke::new(1.0, border_2),
+                    );
+                    let mut x = ruler.left() + S2;
+                    while x < ruler.right() {
+                        painter.line_segment(
+                            [
+                                egui::pos2(x, ruler.top() + 1.0),
+                                egui::pos2(x, ruler.bottom()),
+                            ],
+                            egui::Stroke::new(1.0, border_2),
+                        );
+                        x += 8.0;
+                    }
+                }
             });
     }
 
-    /// The location ladder block: caption lines + detail + provenance. The
-    /// geofeed source is the only hover fact (M8); everything decision-changing
-    /// is visible text.
-    fn shell_location(&self, ui: &mut egui::Ui, location: &LocationBlock) {
-        ui.label(
-            egui::RichText::new(i18n::t(location.label_key))
-                .size(CAPTION)
-                .color(text_3),
-        );
-        ui.label(
-            egui::RichText::new(self.line_text(&location.rung))
-                .size(CAPTION)
-                .color(text_2),
-        );
-        for value in [&location.detail, &location.note].into_iter().flatten() {
-            self.shell_row_value(ui, value, false);
-        }
-        if let Some(as_is) = location.as_is {
-            ui.label(
-                egui::RichText::new(i18n::t(as_is))
-                    .size(CAPTION)
-                    .color(text_3),
-            );
-        }
-        if let Some(hint) = location.hint {
-            ui.label(
-                egui::RichText::new(i18n::t(hint))
-                    .size(CAPTION)
-                    .color(text_3),
-            );
-        }
-        if let Some(source) = &location.source {
-            let text = self.line_text(source);
-            ui.label(
-                egui::RichText::new(i18n::t("route.location_geofeed_note"))
-                    .size(CAPTION)
-                    .color(text_3),
-            )
-            .on_hover_text(text);
+    /// The route data rail: the telemetry map plus the variable/stacked rows
+    /// (`gui-c-token-sheet.md` Â§4.3/Â§4.4). No game-server point is drawn.
+    fn shell_route_card(&mut self, ui: &mut egui::Ui, surface: &RouteSurface, compact: bool) {
+        egui::Frame::new()
+            .fill(bg_1)
+            .stroke(egui::Stroke::new(1.0, border_1))
+            .corner_radius(egui::CornerRadius::same(R_PANEL))
+            .inner_margin(egui::Margin::same(S1 as i8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let markers = self.map_markers();
+                globe::draw_telemetry_map(
+                    ui,
+                    ui.available_width(),
+                    if compact { MAP_H_COMPACT } else { MAP_H },
+                    &markers,
+                );
+                ui.add_space(S1);
+                self.shell_ledger(ui, surface);
+                if let Some(location) = &surface.location {
+                    let label = i18n::t(location.label_key).to_uppercase();
+                    let value = self.line_text(&location.rung);
+                    let has_hint = location.hint.is_some()
+                        || location.detail.is_some()
+                        || location.note.is_some()
+                        || location.as_is.is_some();
+                    console_row(ui, &label, &value, text_2, VALUE, false, has_hint);
+                    for extra in [&location.detail, &location.note].into_iter().flatten() {
+                        let text = self.row_plain_text(extra);
+                        prose_label(ui, &text, PROSE, text_3);
+                    }
+                    if let Some(hint) = location.hint {
+                        prose_label(ui, &i18n::t(hint), PROSE, text_3);
+                    }
+                    if let Some(as_is) = location.as_is {
+                        prose_label(ui, &i18n::t(as_is), PROSE, text_3);
+                    }
+                }
+            });
+    }
+
+    /// The plain text of a row value (used for the location ladder's secondary
+    /// lines; the styling decision stays with the caller).
+    fn row_plain_text(&self, value: &RowValue) -> String {
+        match value {
+            RowValue::Data(text) => text.clone(),
+            RowValue::Copy(line) => self.line_text(line),
+            RowValue::Hint(key) => i18n::t(key).into_owned(),
+            RowValue::Warn(line) => self.line_text(line),
         }
     }
 
-    /// Build the map markers and route from the current session (the map is
-    /// decoration over the same facts the ledger states; it derives no state).
-    fn map_markers(&self) -> (Vec<globe::Marker>, Option<(globe::LatLon, globe::LatLon)>) {
-        let active_node = if self.status.connected {
+    /// Build the map markers from the current session: the relay fleet with the
+    /// active relay highlighted (ice) and the rest as fleet crosses. The client
+    /// knows no game-server location, so none is invented (token sheet Â§4.4).
+    fn map_markers(&self) -> Vec<globe::Marker> {
+        let active_node = if self.status.connected
+            || matches!(
+                capture_forced_state(),
+                Some("connected") | Some("optimizing") | Some("starved")
+            ) {
             self.selected_entry()
                 .and_then(|e| e.node_id.clone())
                 .or_else(|| self.status.node_id.clone())
@@ -2407,201 +2460,162 @@ impl<P: Platform> LightSpeedApp<P> {
             None
         };
         let mut markers: Vec<globe::Marker> = Vec::new();
-        if self.status.connected {
-            for entry in &self.proxies {
-                let Some(id) = entry.node_id.as_deref() else {
-                    continue;
-                };
-                let Some(at) = globe::relay_coords(id) else {
-                    continue;
-                };
-                let active = active_node.as_deref() == Some(id);
-                markers.push(globe::Marker {
-                    at,
-                    colour: if active { accent } else { border_1 },
-                    label: entry.label.clone(),
-                });
-            }
-        }
-        let centre = active_node
-            .as_deref()
-            .and_then(globe::relay_coords)
-            .unwrap_or((30.0, 0.0));
-        let server_ip = self.locked_server_ip();
-        let server_at = server_ip.and_then(lightspeed_client::app::location::display_point);
-        if let Some(at) = server_at {
+        for entry in &self.proxies {
+            let Some(id) = entry.node_id.as_deref() else {
+                continue;
+            };
+            let Some(at) = globe::relay_coords(id) else {
+                continue;
+            };
+            let active = active_node.as_deref() == Some(id);
             markers.push(globe::Marker {
                 at,
-                colour: warn,
-                label: String::new(),
+                colour: if active { accent_text } else { map_fleet },
+                label: entry.label.clone(),
             });
         }
-        (markers, server_at.map(|to| (centre, to)))
+        markers
     }
 
-    /// The ledger: the default rows the seam emits (≤6) plus one `Details`
-    /// disclosure holding the secondary leg/ping/trace rows (M5 density).
+    /// The data rail: the default rows plus one `Details` disclosure holding the
+    /// secondary rows (token sheet Â§4.3).
     fn shell_ledger(&mut self, ui: &mut egui::Ui, surface: &RouteSurface) {
-        for row in &surface.ledger {
-            self.shell_row(ui, row);
+        let total = surface.ledger.len();
+        for (i, row) in surface.ledger.iter().enumerate() {
+            let draw_rule = i + 1 < total || !surface.details.is_empty();
+            self.shell_row(ui, row, draw_rule);
         }
         if surface.details.is_empty() {
             return;
         }
-        let label = i18n::t("route.details");
-        let mut open = self.details_open;
-        let rect = ui.available_rect_before_wrap();
-        let response = ui.allocate_rect(
-            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), HIT_MIN)),
+        let label = i18n::t("route.details").to_uppercase();
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), HIT_MIN),
             egui::Sense::click(),
         );
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, open, label.as_ref()));
-        let ink = if response.hovered() { text_1 } else { text_2 };
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, self.details_open, &label)
+        });
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(R_TAG), bg_2);
+        }
         let painter = ui.painter();
-        let cx = rect.left() + S2;
-        let cy = response.rect.center().y;
-        let dir = if open { 1.0 } else { -1.0 };
+        let font = egui::FontId::new(CAPTION, console());
+        paint_tracked(
+            painter,
+            egui::pos2(rect.left() + S2, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &label,
+            &font,
+            if response.hovered() { text_1 } else { text_2 },
+            TRACK_LABEL,
+        );
+        let cx = rect.right() - S2;
+        let cy = rect.center().y;
+        let dir = if self.details_open { 1.0 } else { -1.0 };
         painter.add(egui::Shape::line(
             vec![
                 egui::pos2(cx - 3.0, cy - 2.0 * dir),
                 egui::pos2(cx + 3.0, cy + 2.0 * dir),
             ],
-            egui::Stroke::new(1.5, ink),
+            egui::Stroke::new(1.5, text_3),
         ));
-        painter.text(
-            egui::pos2(rect.left() + S2 + S3, cy),
-            egui::Align2::LEFT_CENTER,
-            label.as_ref(),
-            egui::FontId::new(BODY, semibold()),
-            ink,
-        );
-        focus_ring(ui, &response, R_INLINE);
-        if response.clicked()
-            || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-        {
-            open = !open;
-            self.details_open = open;
+        focus_ring(ui, &response, R_TAG);
+        if activated(ui, &response) {
+            self.details_open = !self.details_open;
         }
-        if open {
-            for row in &surface.details {
-                self.shell_row(ui, row);
+        if self.details_open {
+            let count = surface.details.len();
+            for (i, row) in surface.details.iter().enumerate() {
+                self.shell_row(ui, row, i + 1 < count);
             }
+        } else {
+            ui.add_space(S2);
         }
     }
 
-    /// One label/value row. Mobile-only: the label and value share the row when
-    /// the measured pair fits the 288/264 px column; otherwise the value moves
-    /// to its own line instead of painting over the label (the RU
-    /// `Ретранслятор` + `207.246.124.117:4434` capture caught that collision).
-    fn shell_row(&self, ui: &mut egui::Ui, row: &Row) {
-        let label = i18n::t(row.label_key).into_owned();
+    /// One data row in the console's **variable** language (token sheet Â§4.3):
+    /// a max-content label column, the value right-aligned; when the pair does
+    /// not fit the 288 px column â€” or the "label" is a full sentence â€” the row
+    /// stacks instead of clipping. No fixed label grid.
+    fn shell_row(&self, ui: &mut egui::Ui, row: &Row, draw_rule: bool) {
+        let label_raw = i18n::t(row.label_key).into_owned();
+        let label = label_raw.to_uppercase();
         let (value_text, mono, ink, size) = self.row_value_parts(&row.value);
-        let label_w = ui
-            .painter()
-            .layout_no_wrap(label.clone(), egui::FontId::proportional(CAPTION), text_3)
-            .size()
-            .x;
-        let value_font = if mono {
-            egui::FontId::monospace(size)
-        } else {
-            egui::FontId::proportional(size)
+        let label_font = egui::FontId::new(CAPTION, console());
+        let value_font = egui::FontId::new(size, if mono { console() } else { prose() });
+        let width = ui.available_width();
+        let label_w = {
+            let painter = ui.painter();
+            tracked_width(painter, &label, &label_font, TRACK_LABEL)
         };
         let value_w = ui
             .painter()
-            .layout_no_wrap(value_text.clone(), value_font, ink)
+            .layout_no_wrap(value_text.clone(), value_font.clone(), ink)
             .size()
             .x;
-        if label_w + value_w + S3 > ui.available_width() {
-            ui.label(egui::RichText::new(label).size(CAPTION).color(text_3));
-            self.paint_row_value(ui, value_text, mono, ink, size);
-        } else {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(label).size(CAPTION).color(text_3));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    self.paint_row_value(ui, value_text, mono, ink, size);
-                });
-            });
+        let word_count = label_raw.split_whitespace().count();
+        if word_count > 3 && label_w > width * 0.45 {
+            let detail = if matches!(row.value, RowValue::Hint(_)) {
+                None
+            } else {
+                Some(value_text.as_str())
+            };
+            console_sentence_row(ui, &label_raw, detail, draw_rule);
+            return;
         }
+        if !row_fits(label_w, value_w, width) {
+            let value_galley = ui
+                .painter()
+                .layout(value_text.clone(), value_font, ink, width);
+            let height = 16.0 + S1 + value_galley.size().y + S1;
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(width, height.max(ROW_H)), egui::Sense::hover());
+            let painter = ui.painter();
+            paint_tracked(
+                painter,
+                egui::pos2(rect.left(), rect.top() + CAPTION),
+                egui::Align2::LEFT_CENTER,
+                &label,
+                &label_font,
+                text_3,
+                TRACK_LABEL,
+            );
+            painter.galley(
+                egui::pos2(rect.left(), rect.top() + 16.0 + S1),
+                value_galley,
+                ink,
+            );
+            if draw_rule {
+                painter.line_segment(
+                    [
+                        egui::pos2(rect.left(), rect.bottom() - 0.5),
+                        egui::pos2(rect.right(), rect.bottom() - 0.5),
+                    ],
+                    egui::Stroke::new(1.0, border_1),
+                );
+            }
+            return;
+        }
+        console_row(ui, &label, &value_text, ink, size, mono, draw_rule);
     }
 
-    /// The rendered text, type and ink of a row value.
+    /// The rendered text, type and ink of a row value (Direction C: data is
+    /// 12.5 px mono `ink`; hints are 11 px dim; warnings are 12 px prose warn).
     fn row_value_parts(&self, value: &RowValue) -> (String, bool, egui::Color32, f32) {
         match value {
             RowValue::Data(text) => (text.clone(), true, text_1, VALUE),
             RowValue::Copy(line) => (self.line_text(line), true, text_1, VALUE),
-            RowValue::Hint(key) => (i18n::t(key).into_owned(), false, text_3, BODY),
-            RowValue::Warn(line) => (self.line_text(line), false, warn, BODY),
+            RowValue::Hint(key) => (i18n::t(key).into_owned(), false, text_3, CAPTION),
+            RowValue::Warn(line) => (self.line_text(line), false, warn, PROSE),
         }
     }
 
-    fn paint_row_value(
-        &self,
-        ui: &mut egui::Ui,
-        text: String,
-        mono: bool,
-        ink: egui::Color32,
-        size: f32,
-    ) {
-        let mut rich = egui::RichText::new(text).size(size).color(ink);
-        if mono {
-            rich = rich.family(egui::FontFamily::Monospace);
-        }
-        ui.label(rich);
-    }
-
-    fn shell_row_value(&self, ui: &mut egui::Ui, value: &RowValue, inline: bool) {
-        // `inline` = the value shares a 24 px label/value row; otherwise it is a
-        // full-width caption line (location details/notes).
-        match value {
-            RowValue::Data(text) => {
-                if inline {
-                    ui.label(
-                        egui::RichText::new(text.as_str())
-                            .size(VALUE)
-                            .family(egui::FontFamily::Monospace)
-                            .color(text_1),
-                    );
-                } else {
-                    ui.label(
-                        egui::RichText::new(text.as_str())
-                            .size(CAPTION)
-                            .color(text_2),
-                    );
-                }
-            }
-            RowValue::Copy(line) => {
-                let text = self.line_text(line);
-                if inline {
-                    ui.label(
-                        egui::RichText::new(text)
-                            .size(VALUE)
-                            .family(egui::FontFamily::Monospace)
-                            .color(text_1),
-                    );
-                } else {
-                    ui.label(egui::RichText::new(text).size(CAPTION).color(text_2));
-                }
-            }
-            RowValue::Hint(key) => {
-                ui.label(
-                    egui::RichText::new(i18n::t(key))
-                        .size(if inline { BODY } else { CAPTION })
-                        .color(text_3),
-                );
-            }
-            RowValue::Warn(line) => {
-                ui.label(
-                    egui::RichText::new(self.line_text(line))
-                        .size(if inline { BODY } else { CAPTION })
-                        .color(warn),
-                );
-            }
-        }
-    }
-
-    /// The command-error panel (`§2.2` row 8 / `§2.9`): the taxonomy sentence,
-    /// the verbatim engine detail behind `Details`, and an `Open log file` link.
+    /// The command-error panel (`Â§2.2` / `Â§2.9`): the taxonomy sentence, the
+    /// verbatim engine detail behind `Details`, and an `Open log file` link â€”
+    /// restyled to Direction C's danger panel (token sheet Â§4.9). The tag is the
+    /// localized error word (D-C1: no English `ERROR / TUNNEL` literal).
     fn shell_error_panel(&mut self, ui: &mut egui::Ui, surface: &RouteSurface) {
         if surface.word != RouteWord::Error {
             return;
@@ -2610,43 +2624,33 @@ impl<P: Platform> LightSpeedApp<P> {
             .engine_error()
             .and_then(|error| error.detail.clone())
             .unwrap_or_default();
+        let tag = i18n::t("state.error").to_uppercase();
         notice_frame(ui, true, |ui| {
+            tracked_label(ui, &tag, CAPTION, danger, TRACK_TAG);
             if let Some(subline) = &surface.subline {
-                ui.label(
-                    egui::RichText::new(self.line_text(subline))
-                        .size(BODY)
-                        .family(semibold())
-                        .color(danger),
-                );
+                ui.add_space(S1);
+                let text = self.line_text(subline);
+                prose_label(ui, &text, PROSE, danger_text);
             }
             let mut open = self.details_open;
-            disclosure_row(ui, i18n::t("route.details").as_ref(), &mut open);
-            self.details_open = open;
-            if open && !detail.is_empty() {
-                ui.label(
-                    egui::RichText::new(&detail)
-                        .size(CAPTION)
-                        .family(egui::FontFamily::Monospace)
-                        .color(text_2),
-                );
+            if disclosure_row(ui, i18n::t("route.details").as_ref(), &mut open) {
+                self.details_open = !self.details_open;
             }
-            if ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new(i18n::t("settings.open_log")).size(CAPTION),
-                    )
-                    .min_size(egui::vec2(0.0, HIT_MIN)),
-                )
-                .clicked()
-            {
+            if self.details_open && !detail.is_empty() {
+                prose_label(ui, &detail, PROSE, text_2);
+            }
+            ui.add_space(S1);
+            let open_log = console_link(ui, i18n::t("settings.open_log").as_ref());
+            if activated(ui, &open_log) {
                 self.reveal_log_file();
             }
         });
     }
 
     /// The one action slot + the disabled-reason line under it when the slot
-    /// cannot act (`§2.9`, M6). Returns the click, if any.
-    fn shell_action(&mut self, ui: &mut egui::Ui, surface: &RouteSurface) {
+    /// cannot act (`Â§2.9`, M6). Direction C: the single lime CTA (46 px in the
+    /// compact tier) or the quiet danger outline, via `action_button`.
+    fn shell_action(&mut self, ui: &mut egui::Ui, surface: &RouteSurface, compact: bool) {
         let action = &surface.action;
         let label = i18n::t(action.label_key).to_uppercase();
         let kind = if action.danger {
@@ -2654,8 +2658,7 @@ impl<P: Platform> LightSpeedApp<P> {
         } else {
             ActionKind::Accent
         };
-        let response = action_button(ui, &label, kind, action.enabled, action.in_flight);
-        focus_ring(ui, &response, R_BUTTON);
+        let response = action_button(ui, &label, kind, action.enabled, action.in_flight, compact);
         if response.clicked() && action.enabled && !action.in_flight {
             self.apply_action(surface);
         }
@@ -2668,7 +2671,6 @@ impl<P: Platform> LightSpeedApp<P> {
             );
         }
     }
-
     /// Map the one slot to the session command (the shell changes no route
     /// itself; each branch is the existing command).
     fn apply_action(&mut self, surface: &RouteSurface) {
@@ -2791,7 +2793,7 @@ impl<P: Platform> LightSpeedApp<P> {
             _ => app_dto::ServerLegState::Unknown,
         };
         let connect_attempt = self.connect_attempt;
-        app_dto::AppStatus {
+        let mut status = app_dto::AppStatus {
             engine: self.status.clone(),
             interceptor: lock_or_recover(&self.engine)
                 .interceptor_health()
@@ -2851,7 +2853,91 @@ impl<P: Platform> LightSpeedApp<P> {
                 boosting,
                 self.status.connected,
             ),
+        };
+        // Capture-only fixture (debug builds only, see `capture_forced_state`).
+        if let Some(forced) = capture_forced_state() {
+            let fixture_server = Ipv4Addr::new(203, 0, 113, 42);
+            let fixture_server_addr = SocketAddrV4::new(fixture_server, 27_015);
+            match forced {
+                "connected" | "optimizing" | "starved" => {
+                    status.engine.connected = true;
+                    status.engine.redirect_game = "robun".to_string();
+                    status.relay.relay = self.selected_entry().map(|entry| entry.addr);
+                    status.relay.server = Some(fixture_server);
+                    status.location = self.location_status(fixture_server);
+                    match forced {
+                        "connected" => {
+                            status.engine.latest_rtt_ms = 218.0;
+                            status.relayed = None;
+                        }
+                        "optimizing" => {
+                            status.boosting = true;
+                            status.engine.tunnelling_enabled = Some(true);
+                            status.engine.latest_rtt_ms = 42.0;
+                            status.relayed = Some(app_dto::RelayedPair {
+                                sent: 1_284,
+                                returned: 1_196,
+                            });
+                        }
+                        _ => {
+                            status.boosting = true;
+                            status.engine.tunnelling_enabled = Some(true);
+                            status.engine.latest_rtt_ms = 146.0;
+                            status.watchdog.warning = Some(app_dto::StarvationWarning {
+                                server: fixture_server_addr,
+                                relay: self.selected_entry().map(|entry| entry.addr),
+                                fault: app_dto::ReturnPathFault::NoReplyFromRelay,
+                            });
+                            status.watchdog.streak = Some(4);
+                            status.relayed = Some(app_dto::RelayedPair {
+                                sent: 1_284,
+                                returned: 0,
+                            });
+                        }
+                    }
+                }
+                "disconnected" => {
+                    status.engine.connected = false;
+                    status.relay.connecting = false;
+                    status.boosting = false;
+                    status.relayed = None;
+                    status.relay.server = None;
+                    status.engine.latest_rtt_ms = 0.0;
+                }
+                "connecting" => {
+                    status.engine.connected = false;
+                    status.relay.relay = self.selected_entry().map(|entry| entry.addr);
+                    status.relay.connecting = true;
+                    status.boosting = false;
+                    status.relayed = None;
+                }
+                "holding" => {
+                    status.engine.connected = true;
+                    status.boosting = true;
+                    status.engine.tunnelling_enabled = Some(false);
+                    status.relay.relay = self.selected_entry().map(|entry| entry.addr);
+                    status.relay.server = None;
+                    status.relayed = None;
+                    status.engine.latest_rtt_ms = 0.0;
+                }
+                "elevation_required" => {
+                    status.engine.connected = true;
+                    status.relay.relay = self.selected_entry().map(|entry| entry.addr);
+                    status.capabilities.elevated = false;
+                    status.boosting = false;
+                    status.engine.latest_rtt_ms = 0.0;
+                }
+                "error" => {
+                    status.boosting = false;
+                    status.error = Some(app_dto::AppError::for_kind(
+                        app_dto::AppErrorKind::Tunnel,
+                        "capture fixture: the tunnel could not be started",
+                    ));
+                }
+                _ => {}
+            }
         }
+        status
     }
 
     /// The route's carry memory as the shared filter sees it.
@@ -2976,29 +3062,18 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    fn config_body(&mut self, ui: &mut egui::Ui, narrow: bool, _short: bool) {
-        // Boost server: which relay carries the game traffic.
-        field_row(ui, narrow, &i18n::t("route.relay"), |ui| {
-            ui.horizontal(|ui| {
-                let disconnect_w = if self.status.connected { 78.0 } else { 0.0 };
-                let manage_w = 64.0;
-                let combo_w =
-                    (ui.available_width() - manage_w - disconnect_w - S2 * 2.0).max(100.0);
-                ui.scope(|ui| {
-                    ui.set_max_width(combo_w);
-                    self.boost_server_combo(ui);
-                });
-                if self.status.connected
-                    && ui
-                        .link(i18n::t("action.disconnect").as_ref())
-                        .on_hover_text(i18n::t("proxies.disconnect_hint"))
-                        .clicked()
-                {
-                    self.toggle_relay_connection();
-                }
-            });
+    fn config_body(&mut self, ui: &mut egui::Ui, _narrow: bool, _short: bool) {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        // Relay: one inline console row (label left, picker right, Â§4.7).
+        console_field_row(ui, &i18n::t("route.relay"), |ui| {
+            self.boost_server_combo(ui)
         });
-
+        if self.status.connected {
+            let disconnect = console_link(ui, i18n::t("action.disconnect").as_ref());
+            if activated(ui, &disconnect) {
+                self.toggle_relay_connection();
+            }
+        }
         if !self.proxies.is_empty() {
             if let Some(err) = self.discovery_error.clone() {
                 ui.horizontal_wrapped(|ui| {
@@ -3014,22 +3089,20 @@ impl<P: Platform> LightSpeedApp<P> {
                 });
             }
         }
-        ui.add_space(S3);
-
-        // Game: what is being boosted, plus the reliability shield.
-        field_row(ui, narrow, &i18n::t("route.game"), |ui| {
-            self.game_combo(ui);
-        });
+        ui.add_space(S1);
+        console_field_row(ui, &i18n::t("route.game"), |ui| self.game_combo(ui));
         if let Some(ref detected) = self.auto_detected_game {
             ui.horizontal_wrapped(|ui| {
+                let (dot, _) = ui.allocate_exact_size(egui::vec2(4.0, 16.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot.center(), 2.0, signal);
                 ui.label(
                     egui::RichText::new(i18n::t("game.found"))
-                        .size(BODY)
-                        .color(signal),
+                        .size(CAPTION)
+                        .color(accent_text),
                 );
                 ui.label(
                     egui::RichText::new(detected.clone())
-                        .size(BODY)
+                        .size(CAPTION)
                         .color(text_1),
                 );
             });
@@ -3038,11 +3111,12 @@ impl<P: Platform> LightSpeedApp<P> {
             self.game_manual,
             self.auto_detected_game.as_deref(),
         ) {
-            ui.label(egui::RichText::new(i18n::t(key)).size(BODY).color(text_2));
+            ui.label(
+                egui::RichText::new(i18n::t(key))
+                    .size(CAPTION)
+                    .color(text_3),
+            );
         }
-        // The process front door belongs to Manual mode, or stays while a target
-        // is set so it can be cleared. It used to be drawn on every game state,
-        // which read as an unexplained extra choice under a game already chosen.
         if self.game_manual || self.target_process.is_some() {
             self.target_control(ui);
         }
@@ -3050,7 +3124,6 @@ impl<P: Platform> LightSpeedApp<P> {
             self.manual_section(ui);
         }
     }
-
     /// The one-RTT client leg the ranking charges for `addr`, in microseconds,
     /// from the last full measurement pass.
     ///
@@ -3516,23 +3589,94 @@ impl<P: Platform> LightSpeedApp<P> {
             .frame(sheet_frame())
             .show(ctx, |ui| {
                 ui.set_width(max_w);
-                sheet_title(ui, &i18n::t("settings.title"));
-                egui::ScrollArea::vertical()
-                    // Size the body from the space that actually remains after
-                    // the frame padding, the title and Close; a fixed reserve left
-                    // the last button clipped behind Close once Settings grew.
-                    .max_height((max_h - 190.0).max(160.0))
-                    // The sheet scrolls by design; a scrollbar that only appears
-                    // on hover left About below the fold with no cue that it was
-                    // there.
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                    .show(ui, |ui| {
-                        self.settings_body(ui);
-                    });
-                ui.add_space(S2);
-                if ui.button(i18n::t("action.close").as_ref()).clicked() {
+                let (head, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 24.0),
+                    egui::Sense::hover(),
+                );
+                {
+                    let painter = ui.painter();
+                    let font = egui::FontId::new(TITLE, console());
+                    let slash_w = paint_tracked(
+                        painter,
+                        egui::pos2(head.left(), head.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        "///",
+                        &font,
+                        ice_dim,
+                        0.0,
+                    );
+                    paint_tracked(
+                        painter,
+                        egui::pos2(head.left() + slash_w + S2, head.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &i18n::t("settings.title").to_uppercase(),
+                        &font,
+                        text_1,
+                        TRACK_SECTION,
+                    );
+                }
+                let close_rect = egui::Rect::from_min_size(
+                    egui::pos2(head.right() - 22.0, head.top() + 1.0),
+                    egui::vec2(22.0, 22.0),
+                );
+                let close_response = ui.interact(
+                    close_rect,
+                    ui.scope_id().with("settings_close"),
+                    egui::Sense::click(),
+                );
+                close_response.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::Button,
+                        true,
+                        i18n::t("action.close").as_ref(),
+                    )
+                });
+                if close_response.hovered() {
+                    ui.painter()
+                        .rect_filled(close_rect, egui::CornerRadius::same(R_TAG), bg_2);
+                }
+                ui.painter().rect(
+                    close_rect,
+                    egui::CornerRadius::same(R_TAG),
+                    bg_1,
+                    egui::Stroke::new(1.0, border_control),
+                    egui::StrokeKind::Inside,
+                );
+                let xfont = egui::FontId::new(CAPTION, console());
+                paint_tracked(
+                    ui.painter(),
+                    close_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "X",
+                    &xfont,
+                    text_2,
+                    0.0,
+                );
+                focus_ring(ui, &close_response, R_TAG);
+                if activated(ui, &close_response) {
                     close = true;
                 }
+                let (rule, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 1.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(rule, 0.0, border_1);
+                ui.add_space(S2);
+                let body_h = (max_h - 150.0).max(240.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), body_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(body_h)
+                            .scroll_bar_visibility(
+                                egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                            )
+                            .show(ui, |ui| {
+                                self.settings_body(ui);
+                            });
+                    },
+                );
             });
         if response.should_close() || close {
             self.show_settings = false;
@@ -3540,46 +3684,59 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     fn settings_body(&mut self, ui: &mut egui::Ui) {
-        // Language first: it changes the labels of everything below it.
-        section_label(ui, &i18n::t("settings.language"));
+        ui.spacing_mut().item_spacing.y = S1;
+
+        // 01 Language.
+        console_section(
+            ui,
+            Some("01"),
+            Some(i18n::t("settings.language").as_ref()),
+            None,
+        );
         let selected = i18n::current();
         let label: String = i18n::LOCALES
             .iter()
             .find(|locale| locale.tag == selected)
             .map(|locale| locale.native_name.to_string())
             .unwrap_or_else(|| i18n::t("settings.follow_system").into_owned());
-        egui::ComboBox::from_id_salt("language_select")
-            .selected_text(egui::RichText::new(label).size(LABEL))
-            .show_ui(ui, |ui| {
-                if ui
-                    .selectable_label(self.language.is_none(), i18n::t("settings.follow_system"))
-                    .clicked()
-                {
-                    self.language = None;
-                    i18n::set_language(None);
-                    install_fonts(ui.ctx(), Some(&i18n::current()));
-                    self.persist_config();
-                }
-                for locale in i18n::LOCALES {
-                    let picked = self.language.as_deref() == Some(locale.tag);
-                    if ui.selectable_label(picked, locale.native_name).clicked() {
-                        self.language = Some(locale.tag.to_string());
-                        i18n::set_language(Some(locale.tag));
+        console_field_row(ui, &i18n::t("settings.language"), |ui| {
+            let combo = egui::ComboBox::from_id_salt("language_select")
+                .selected_text(egui::RichText::new(label.clone()).size(LABEL))
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(
+                            self.language.is_none(),
+                            i18n::t("settings.follow_system"),
+                        )
+                        .clicked()
+                    {
+                        self.language = None;
+                        i18n::set_language(None);
                         install_fonts(ui.ctx(), Some(&i18n::current()));
                         self.persist_config();
                     }
-                }
-            });
+                    for locale in i18n::LOCALES {
+                        let picked = self.language.as_deref() == Some(locale.tag);
+                        if ui.selectable_label(picked, locale.native_name).clicked() {
+                            self.language = Some(locale.tag.to_string());
+                            i18n::set_language(Some(locale.tag));
+                            install_fonts(ui.ctx(), Some(&i18n::current()));
+                            self.persist_config();
+                        }
+                    }
+                });
+            focus_ring(ui, &combo.response, R_TAG);
+        });
         ui.add_space(S2);
 
-        // Startup: the opt-in login entry (WF-081b, task-74). Off by default;
-        // the platform entry is the observable truth, so the checkbox is
-        // reconciled with it once per sheet open rather than trusting a config
-        // value an outside change could have made stale.
-        ui.add_space(S2);
-        hairline(ui);
-        ui.add_space(S1);
-        section_label(ui, &i18n::t("settings.startup"));
+        // 02 Startup.
+        console_section(
+            ui,
+            Some("02"),
+            Some(i18n::t("settings.startup").as_ref()),
+            None,
+        );
         if !self.autostart_synced {
             self.autostart_synced = true;
             let installed = P::autostart_installed();
@@ -3591,16 +3748,9 @@ impl<P: Platform> LightSpeedApp<P> {
                 self.persist_config();
             }
         }
-        let autostart_changed = ui
-            .checkbox(
-                &mut self.autostart,
-                egui::RichText::new(i18n::t("settings.autostart"))
-                    .size(LABEL)
-                    .family(semibold()),
-            )
-            .on_hover_text(i18n::t("settings.autostart_hint"))
-            .changed();
-        if autostart_changed {
+        let toggle = console_toggle(ui, &i18n::t("settings.autostart"), self.autostart);
+        if toggle.changed() {
+            self.autostart = !self.autostart;
             let enabled = self.autostart;
             match P::set_autostart(enabled) {
                 Ok(()) => {
@@ -3612,8 +3762,6 @@ impl<P: Platform> LightSpeedApp<P> {
                     );
                 }
                 Err(error) => {
-                    // The entry did not change: put the checkbox back rather
-                    // than showing a state the platform never reached.
                     tracing::warn!("autostart write failed: {error}");
                     self.autostart = !enabled;
                     self.autostart_error = Some(error);
@@ -3621,201 +3769,146 @@ impl<P: Platform> LightSpeedApp<P> {
             }
         }
         if let Some(error) = &self.autostart_error {
-            ui.label(
-                egui::RichText::new(format!("{}: {error}", i18n::t("error.io")))
-                    .size(CAPTION)
-                    .color(danger),
+            prose_label(
+                ui,
+                &format!("{}: {error}", i18n::t("error.io")),
+                PROSE,
+                danger,
             );
         }
+        prose_label(ui, &i18n::t("settings.autostart_hint"), PROSE, text_3);
         ui.add_space(S2);
 
-        // Privacy: anonymous latency telemetry.
-        ui.add_space(S2);
-        hairline(ui);
-        ui.add_space(S1);
-        section_label(ui, &i18n::t("settings.privacy"));
-        let changed = ui
-            .checkbox(
-                &mut self.share_latency_stats,
-                egui::RichText::new(i18n::t("settings.share_stats"))
-                    .size(LABEL)
-                    .family(semibold()),
-            )
-            .on_hover_text(
-                "Send anonymous aggregate RTT, jitter, and FEC stats to your \
-                 relay so the community can see real latency improvements. No \
-                 IP address, identifier, or packet content is ever sent.",
-            )
-            .changed();
-        if changed {
+        // 03 Privacy + Q13 disclosure.
+        console_section(
+            ui,
+            Some("03"),
+            Some(i18n::t("settings.privacy").as_ref()),
+            None,
+        );
+        let toggle = console_toggle(
+            ui,
+            &i18n::t("settings.share_stats"),
+            self.share_latency_stats,
+        );
+        if toggle.changed() {
+            self.share_latency_stats = !self.share_latency_stats;
             self.persist_config();
             self.engine
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .set_telemetry_enabled(self.share_latency_stats);
         }
-
-        // Routing behaviour: what happens when a relay stops returning the
-        // game's traffic. There is no control here any more - the automatic
-        // direct fallback and its re-test budget were removed on 2026-11-20 in
-        // the owner-approved warn-only mode - so this states the behaviour
-        // instead of promising a setting. It is a caption rather than a hover
-        // because the old checkbox's tooltip promised re-tests "after 20 s, then
-        // 45 s, then 90 s" while the code actually did 30 s/120 s/park, and the
-        // text was never localized. The decision belongs to the player: STOP
-        // OPTIMIZING, or pick another relay.
+        console_editorial(ui, &i18n::t("update.disclosure"));
         ui.add_space(S2);
-        hairline(ui);
-        ui.add_space(S1);
-        section_label(ui, &i18n::t("settings.routing"));
-        ui.label(
-            egui::RichText::new(i18n::t("settings.starvation_policy"))
-                .size(CAPTION)
-                .color(text_3),
+
+        // 04 Routing.
+        console_section(
+            ui,
+            Some("04"),
+            Some(i18n::t("settings.routing").as_ref()),
+            None,
         );
-        ui.add_space(S2);
-
-        // Relays: the list itself, inlined from the old Proxy Manager modal.
-        ui.add_space(S2);
-        hairline(ui);
-        ui.add_space(S1);
-        section_label(ui, &i18n::t("settings.relays"));
-        self.proxy_manager_body(ui);
-
-        // Maintenance: self-update, the trace log, and the relay link.
-        hairline(ui);
-        ui.add_space(S2);
-        section_label(ui, &i18n::t("settings.maintenance"));
-        // One wrapped row: three stacked buttons cost 120 px of a 853 px window
-        // and pushed Components and About off the bottom of the sheet.
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .button(i18n::t("update.sheet_title").as_ref())
-                .on_hover_text(i18n::t("settings.check_updates_hint"))
-                .clicked()
-            {
-                self.start_update_check();
-            }
-            if ui.button(i18n::t("settings.open_log")).clicked() {
-                self.reveal_log_file();
-            }
-            if ui
-                .button(i18n::t("proxies.refresh"))
-                .on_hover_text(i18n::t("settings.refresh_hint"))
-                .clicked()
-            {
-                self.start_discovery();
-            }
-            if ui
-                .button(i18n::t("settings.remeasure"))
-                .on_hover_text(i18n::t("settings.remeasure_hint"))
-                .clicked()
-            {
-                self.start_relay_measurement();
-            }
-        });
-        ui.add_space(S1);
-        // The capture backend and Npcap now live in the Components block below.
-        // Leaving a second, differently-worded line here is how "pcap mode: not
-        // detected" ended up reading as broken while WinDivert was relaying.
-        // The hold is a policy the client applies silently; saying it in the
-        // settings gives the wait a reason and a duration. The number is
-        // generated from `HOLD_FALLBACK` (120 s) - the old row rendered
-        // `LOCK_SETTLE` (3 s), a 40x-wrong number (spec C5).
+        console_editorial(ui, &i18n::t("settings.starvation_policy"));
         let hold_minutes = (HOLD_FALLBACK.as_secs() / 60).to_string();
-        ui.label(
-            egui::RichText::new(i18n::t_with(
+        prose_label(
+            ui,
+            &i18n::t_with(
                 "settings.hold_policy",
                 &[("minutes", hold_minutes.as_str())],
-            ))
-            .size(CAPTION)
-            .color(text_3),
+            ),
+            PROSE,
+            text_3,
         );
         ui.add_space(S2);
 
-        // Components: what the client depends on and what state each is in, so a
-        // bug report can answer "is WinDivert there, am I elevated, which build
-        // is this" without reading a log. Labels are literal here rather than in
-        // the catalogs: this block is diagnostic text and is worth translating
-        // only once its rows have settled.
-        hairline(ui);
-        ui.add_space(S2);
-        ui.label(
-            egui::RichText::new("Components")
-                .size(CAPTION)
-                .color(text_2),
+        // 05 Relays.
+        console_section(
+            ui,
+            Some("05"),
+            Some(i18n::t("settings.relays").as_ref()),
+            None,
         );
-        // A table, not a list of controls: tighten the rows here and put the
-        // spacing back before the next section.
-        ui.spacing_mut().item_spacing.y = 2.0;
-        ui.add_space(S1);
-        egui::Grid::new("components")
-            .num_columns(2)
-            .spacing([10.0, 0.0])
-            .min_row_height(14.0)
-            .show(ui, |ui| {
-                let admin = if self.is_admin {
-                    "administrator"
-                } else {
-                    "standard user"
-                };
-                let capture = if self.status.interceptor_active {
-                    self.status.interceptor_platform
-                } else {
-                    "idle"
-                };
-                let npcap = if self.capture_available {
-                    "installed"
-                } else {
-                    "not installed (pcap fallback only)"
-                };
-                let relays = format!("{} configured", self.proxies.len());
-                for (label, value) in [
-                    ("Version", env!("CARGO_PKG_VERSION")),
-                    ("Elevation", admin),
-                    ("Capture", capture),
-                    ("Npcap", npcap),
-                    ("Relays", relays.as_str()),
-                ] {
-                    ui.label(egui::RichText::new(label).size(CAPTION).color(text_3));
-                    ui.label(egui::RichText::new(value).size(CAPTION).color(text_2));
-                    ui.end_row();
-                }
-            });
-        ui.add_space(S2);
-
-        // About: the brand mark and the project links.
-        ui.spacing_mut().item_spacing.y = S2;
-        hairline(ui);
-        ui.add_space(S2);
-        section_label(ui, &i18n::t("settings.about"));
-        ui.horizontal(|ui| {
-            if let Some(mark) = self.header_icon.as_ref() {
-                ui.add(egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(28.0, 28.0)));
+        self.proxy_manager_body(ui);
+        ui.horizontal_wrapped(|ui| {
+            let remeasure = console_link(ui, i18n::t("settings.remeasure").as_ref());
+            if activated(ui, &remeasure) {
+                self.start_relay_measurement();
             }
-            ui.vertical(|ui| {
-                ui.label(
-                    egui::RichText::new("LightSpeed")
-                        .size(EMPHASIS)
-                        .family(semibold()),
-                );
-                ui.label(
-                    egui::RichText::new(i18n::t_with(
-                        "about.version",
-                        &[("version", env!("CARGO_PKG_VERSION"))],
-                    ))
-                    .size(CAPTION)
-                    .color(text_3),
-                );
-            });
+            let refresh = console_link(ui, i18n::t("proxies.refresh").as_ref());
+            if activated(ui, &refresh) {
+                self.start_discovery();
+            }
         });
         ui.add_space(S2);
-        ui.label(
-            egui::RichText::new(i18n::t("about.blurb"))
-                .size(LABEL)
-                .color(text_2),
+
+        // 06 Maintenance.
+        console_section(
+            ui,
+            Some("06"),
+            Some(i18n::t("settings.maintenance").as_ref()),
+            None,
         );
+        ui.horizontal_wrapped(|ui| {
+            let updates = console_link(ui, i18n::t("update.sheet_title").as_ref());
+            if activated(ui, &updates) {
+                self.start_update_check();
+            }
+            let open_log = console_link(ui, i18n::t("settings.open_log").as_ref());
+            if activated(ui, &open_log) {
+                self.reveal_log_file();
+            }
+        });
         ui.add_space(S2);
+
+        // 07 Components (literal diagnostic rows; stacked when long).
+        console_section(ui, Some("07"), Some("Components"), None);
+        let admin = if self.is_admin {
+            "administrator"
+        } else {
+            "standard user"
+        };
+        let capture = if self.status.interceptor_active {
+            self.status.interceptor_platform
+        } else {
+            "idle"
+        };
+        let npcap = if self.capture_available {
+            "installed"
+        } else {
+            "not installed (pcap fallback only)"
+        };
+        let relays = format!("{} configured", self.proxies.len());
+        for (label, value) in [
+            ("Version", env!("CARGO_PKG_VERSION")),
+            ("Elevation", admin),
+            ("Capture", capture),
+            ("Npcap", npcap),
+            ("Relays", relays.as_str()),
+        ] {
+            console_mini_row(ui, label, value);
+        }
+        ui.add_space(S2);
+
+        // 08 About.
+        console_section(
+            ui,
+            Some("08"),
+            Some(i18n::t("settings.about").as_ref()),
+            None,
+        );
+        ui.horizontal(|ui| {
+            if let Some(mark) = self.header_icon.as_ref() {
+                ui.add(egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(24.0, 24.0)));
+            }
+            ui.vertical(|ui| {
+                tracked_label(ui, "LIGHTSPEED", BRAND, text_2, TRACK_BRAND);
+                let version =
+                    i18n::t_with("about.version", &[("version", env!("CARGO_PKG_VERSION"))]);
+                tracked_label(ui, &version.to_uppercase(), CAPTION, text_3, TRACK_META);
+            });
+        });
+        prose_label(ui, &i18n::t("about.blurb"), PROSE, text_3);
         ui.horizontal_wrapped(|ui| {
             ui.hyperlink_to("GitHub", "https://github.com/ShibbityShwab/lightspeed")
                 .on_hover_text(i18n::t("about.source_hint"));
@@ -3826,27 +3919,16 @@ impl<P: Platform> LightSpeedApp<P> {
                 "https://github.com/ShibbityShwab/lightspeed/releases",
             );
         });
-        ui.add_space(S2);
         ui.horizontal_wrapped(|ui| {
-            ui.label(
-                egui::RichText::new(i18n::t("about.enjoying"))
-                    .size(LABEL)
-                    .color(text_2),
-            );
+            prose_label(ui, &i18n::t("about.enjoying"), PROSE, text_2);
             ui.hyperlink_to(
-                egui::RichText::new(i18n::t("about.star_github")).family(semibold()),
+                egui::RichText::new(i18n::t("about.star_github")).size(CAPTION),
                 "https://github.com/ShibbityShwab/lightspeed/stargazers",
             )
             .on_hover_text(i18n::t("about.star_hint"));
         });
+        ui.add_space(S3);
     }
-
-    /// `Custom game`: the profile editor, in the same sheet pattern as Settings.
-    ///
-    /// A new profile is composed here; the Game dropdown's "My games" group only
-    /// selects one that exists. Saving writes `profiles.toml` and reloads the
-    /// store, and the resulting key stays on screen so `--game <key>` is
-    /// discoverable without reading the file.
     fn game_editor_sheet(&mut self, ctx: &egui::Context) {
         let (max_w, max_h) = sheet_bounds(ctx);
         let mut close = false;
@@ -3975,11 +4057,13 @@ impl<P: Platform> LightSpeedApp<P> {
             .show(ctx, |ui| {
                 ui.set_width(max_w);
                 sheet_title(ui, &i18n::t("game.target_process"));
-                ui.label(
-                    egui::RichText::new(i18n::t("game.target_process_hint"))
-                        .size(BODY)
-                        .color(text_2),
+                prose_label(ui, &i18n::t("game.target_process_hint"), PROSE, text_3);
+                let (rule, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 1.0),
+                    egui::Sense::hover(),
                 );
+                ui.painter().rect_filled(rule, 0.0, border_1);
+                ui.add_space(S2);
                 egui::ScrollArea::vertical()
                     .max_height((max_h - 190.0).max(160.0))
                     .show(ui, |ui| {
@@ -4002,11 +4086,15 @@ impl<P: Platform> LightSpeedApp<P> {
                         .map(target_for_pick);
                     });
                 ui.add_space(S2);
-                ui.horizontal(|ui| {
-                    if current.is_some() && ui.button(i18n::t("game.target_clear")).clicked() {
-                        clear = true;
+                ui.horizontal_wrapped(|ui| {
+                    if current.is_some() {
+                        let clear_link = console_link(ui, i18n::t("game.target_clear").as_ref());
+                        if activated(ui, &clear_link) {
+                            clear = true;
+                        }
                     }
-                    if ui.button(i18n::t("action.close")).clicked() {
+                    let close_link = console_link(ui, i18n::t("action.close").as_ref());
+                    if activated(ui, &close_link) {
                         close = true;
                     }
                 });
@@ -4187,10 +4275,22 @@ impl<P: Platform> LightSpeedApp<P> {
                                         .unwrap_or_else(|| "unknown".to_string()),
                                     Err(_) => "unknown".to_string(),
                                 };
-                                ui.label(i18n::t_with("update.current", &[("version", current.as_str())]));
-                                ui.label(i18n::t_with("update.latest", &[("version", latest.as_str())]));
-                                ui.add_space(S1);
-                                ui.label(crate::update::update_status_line(result));
+                                console_mini_row(
+                                    ui,
+                                    &i18n::t("update.current"),
+                                    current.as_str(),
+                                );
+                                console_mini_row(
+                                    ui,
+                                    &i18n::t("update.latest"),
+                                    latest.as_str(),
+                                );
+                                prose_label(
+                                    ui,
+                                    &crate::update::update_status_line(result),
+                                    PROSE,
+                                    text_2,
+                                );
 
                                 let installable = matches!(result, Ok(status) if status.update_available && status.installer.is_some());
                                 if installable {
@@ -4218,8 +4318,11 @@ impl<P: Platform> LightSpeedApp<P> {
                             }
                             UpdateCheckState::Installing => {
                                 progress_indicator(ui, i18n::t("update.installing").as_ref(), self.animations);
-                                ui.label(
+                                prose_label(
+                                    ui,
                                     "Approve the UAC prompt if one appears; LightSpeed will restart.",
+                                    PROSE,
+                                    text_3,
                                 );
                             }
                             UpdateCheckState::Idle => {}
@@ -4232,7 +4335,8 @@ impl<P: Platform> LightSpeedApp<P> {
                         }
                     });
                 ui.add_space(S2);
-                if ui.button(i18n::t("action.close").as_ref()).clicked() {
+                let close = console_link(ui, i18n::t("action.close").as_ref());
+                if activated(ui, &close) {
                     self.show_update_dialog = false;
                     self.update_check = UpdateCheckState::Idle;
                 }
@@ -4253,11 +4357,7 @@ impl<P: Platform> LightSpeedApp<P> {
 /// exists. Catalogued copy so the promise is localized with the rest of the
 /// sheet (English fallback until Q5 lands in some locales).
 fn update_disclosure(ui: &mut egui::Ui) {
-    ui.label(
-        egui::RichText::new(i18n::t("update.disclosure"))
-            .size(CAPTION)
-            .color(text_3),
-    );
+    console_editorial(ui, &i18n::t("update.disclosure"));
 }
 
 // ── eframe::App impl ─────────────────────────────────────────────────────────
@@ -4418,177 +4518,179 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         let short = tier.is_short();
         let compact = tier.is_compact();
 
-        // ── Status window shell ─────────────────────────────────────────────
-        // Instrument 2.0: one 320 px column, no width breakpoints. R1 rail
-        // (word row + metric row) is fixed; the route card is fixed at normal
-        // height and folds into the single scrolling region in short mode
-        // (height < 560); the one action slot and the footer are always pinned.
+        // â”€â”€ Status window shell (Direction C) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // One 320 px column: the 30 px brand/status bar + hero + tick ruler are
+        // fixed; the route data rail, the control rail and every notice live in
+        // the one scrolling region; the single CTA and the three-target footer
+        // are always pinned (token sheet Â§4.10).
         egui::Panel::top("state_rail")
-            .frame(egui::Frame::new().fill(bg_2))
+            .frame(egui::Frame::new().fill(bg_0))
             .show(ui, |ui| {
-                self.shell_rail(ui, &surface, short);
+                self.shell_rail(ui, &surface, compact);
             });
 
-        if !short {
-            egui::Panel::top("route_card")
-                .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
-                    left: S4 as i8,
-                    right: S4 as i8,
-                    top: S2 as i8,
-                    bottom: S2 as i8,
-                }))
-                .show(ui, |ui| {
-                    self.shell_route_card(ui, &surface, true);
-                });
-        }
-
-        // Footer: pinned, one hairline above, a 40 px button row (24 px target
-        // tier in the compact mode below 480 px height).
+        // Footer: flat console links under a 1 px rule (Â§4.6). When the
+        // localized trio cannot share the 288 px row (DE), the footer wraps into
+        // intentional rows; the compact wrapped row is 30 px so the 420 tier's
+        // â‰¥180 px scroll floor still holds.
         egui::Panel::bottom("footer")
-            .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
-                left: S4 as i8,
-                right: S4 as i8,
-                top: 0,
-                bottom: S2 as i8,
-            }))
+            .frame(egui::Frame::new().fill(bg_0))
             .show(ui, |ui| {
-                let xr = ui.max_rect().x_range();
-                ui.painter().rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(xr.min, ui.max_rect().top()),
-                        egui::pos2(xr.max, ui.max_rect().top() + 1.0),
-                    ),
-                    0.0,
-                    border_1,
+                let (rule, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 1.0),
+                    egui::Sense::hover(),
                 );
-                ui.add_space(S2);
-                let button_h = if compact { HIT_MIN } else { CONTROL_H };
-                if compact {
-                    // Compact tier (spec §1.3): the footer is a `HIT_MIN` 24 px
-                    // target row. egui's Button min height is
-                    // `spacing.interact_size.y` - the theme's 40 px CONTROL_H -
-                    // and the normal text + button padding overshoots 24, so
-                    // both are re-cut locally; wrapping rows get no extra gap
-                    // so a localized (DE) two-row footer still leaves the
-                    // ≥180 px scroll floor at 420.
-                    ui.spacing_mut().interact_size.y = HIT_MIN;
-                    let text_h = ui.text_style_height(&egui::TextStyle::Body);
-                    ui.spacing_mut().button_padding.y = compact_button_padding(text_h);
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                }
-                ui.horizontal_wrapped(|ui| {
-                    if self.tray_available()
-                        && std::env::var_os("LIGHTSPEED_KEEP_VISIBLE").is_none()
-                        && ui
-                            .add(
-                                egui::Button::new(i18n::t("window.hide_to_tray"))
-                                    .min_size(egui::vec2(0.0, button_h)),
-                            )
-                            .clicked()
-                    {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(i18n::t("settings.title"))
-                                .min_size(egui::vec2(0.0, button_h)),
-                        )
-                        .clicked()
-                    {
-                        self.show_settings = true;
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(i18n::t("action.quit"))
-                                .min_size(egui::vec2(0.0, button_h)),
-                        )
-                        .clicked()
-                    {
-                        save_window_height(viewport.height());
-                        self.quit.store(true, Ordering::SeqCst);
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
+                ui.painter().rect_filled(rule, 0.0, border_1);
+                egui::Frame::new()
+                    .inner_margin(egui::Margin {
+                        left: S4 as i8,
+                        right: S4 as i8,
+                        top: 0,
+                        bottom: 0,
+                    })
+                    .show(ui, |ui| {
+                        let can_hide = self.tray_available()
+                            && std::env::var_os("LIGHTSPEED_KEEP_VISIBLE").is_none();
+                        let mut entries: Vec<(std::borrow::Cow<'static, str>, u8)> = Vec::new();
+                        if can_hide {
+                            entries.push((i18n::t("window.hide_to_tray"), 0));
+                        }
+                        entries.push((i18n::t("settings.title"), 1));
+                        entries.push((i18n::t("action.quit"), 2));
+                        let height = if compact { FOOTER_H_COMPACT } else { FOOTER_H };
+                        let font = egui::FontId::new(CAPTION, console());
+                        let base_width = |index: usize| {
+                            let label = entries[index].0.to_uppercase();
+                            tracked_width(ui.painter(), &label, &font, 0.0) + 4.0 * S2
+                        };
+                        let mut rows: Vec<Vec<usize>> =
+                            if (0..entries.len()).map(base_width).sum::<f32>()
+                                <= ui.available_width()
+                            {
+                                vec![(0..entries.len()).collect()]
+                            } else {
+                                vec![vec![0], (1..entries.len()).collect()]
+                            };
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        let wrapped = rows.len() > 1;
+                        let row_height = if wrapped && compact { 30.0 } else { height };
+                        for row in rows.drain(..) {
+                            let labels: Vec<&str> =
+                                row.iter().map(|index| entries[*index].0.as_ref()).collect();
+                            if let Some(local) = console_footer(ui, &labels, row_height) {
+                                match entries[row[local]].1 {
+                                    0 => {
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(
+                                            false,
+                                        ));
+                                    }
+                                    1 => {
+                                        self.show_settings = true;
+                                    }
+                                    _ => {
+                                        save_window_height(viewport.height());
+                                        self.quit.store(true, Ordering::SeqCst);
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                }
+                            }
+                        }
+                    });
             });
 
-        // Action bar: the one slot + its disabled-reason line, always above the
+        // Action bar: the one CTA + its disabled-reason line, always above the
         // footer and never off-screen.
         egui::Panel::bottom("action_bar")
-            .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
+            .frame(egui::Frame::new().fill(bg_0).inner_margin(egui::Margin {
+                left: S4 as i8,
+                right: S4 as i8,
+                top: (if compact { S1 } else { S2 }) as i8,
+                bottom: (if compact { S1 } else { S2 }) as i8,
+            }))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                self.shell_action(ui, &surface, compact);
+            });
+
+        // The only scrolling region: error panel, warning banner, notices, the
+        // route data rail (01) and the control rail (02).
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(bg_0).inner_margin(egui::Margin {
                 left: S4 as i8,
                 right: S4 as i8,
                 top: S2 as i8,
                 bottom: S2 as i8,
             }))
             .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                self.shell_action(ui, &surface);
-            });
-
-        // Config: the only scrolling region. At short height the route card
-        // folds in here (above the inputs) and the rail's sub-line moves in
-        // too, which is what keeps the fixed chrome at its measured height and
-        // the scrolling region at ≥181 px at the 420 minimum.
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(bg_1).inner_margin(egui::Margin {
-                left: S4 as i8,
-                right: S4 as i8,
-                top: S3 as i8,
-                bottom: S3 as i8,
-            }))
-            .show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        // Error state: the taxonomy sentence + verbatim detail +
-                        // Open log file, at the top of the scroll region.
                         if surface.word == RouteWord::Error {
                             self.shell_error_panel(ui, &surface);
                             ui.add_space(S2);
                         }
-                        // Elevation / precondition notice (warn tone), above the
-                        // inputs it explains. A declined elevation prompt's own
-                        // notice outranks the standing Needs-elevation line for
-                        // as long as it is the latest event.
+                        if let Some(warning) = &surface.warning {
+                            let body = self.line_text(warning);
+                            let tag = i18n::t(surface.word.key()).to_uppercase();
+                            notice_frame(ui, true, |ui| {
+                                tracked_label(ui, &tag, CAPTION, danger, TRACK_TAG);
+                                ui.add_space(S1);
+                                prose_label(ui, &body, PROSE, danger_text);
+                            });
+                            ui.add_space(S2);
+                        }
                         if let Some(notice) =
                             shell_notice(self.elevation_notice, surface.notice.as_ref())
                         {
                             let text = self.line_text(&notice);
                             notice_frame(ui, false, |ui| {
-                                ui.label(
-                                    egui::RichText::new(text)
-                                        .size(BODY)
-                                        .family(semibold())
-                                        .color(warn),
-                                );
+                                let tag = i18n::t("state.holding").to_uppercase();
+                                tracked_label(ui, &tag, CAPTION, warn, TRACK_TAG);
+                                ui.add_space(S1);
+                                prose_label(ui, &text, PROSE, warn);
                             });
                             ui.add_space(S2);
                         }
-                        if short {
-                            if let Some(subline) = &surface.subline {
-                                ui.label(
-                                    egui::RichText::new(self.line_text(subline))
-                                        .size(BODY)
-                                        .color(text_2),
-                                );
-                                ui.add_space(S1);
-                            }
-                            self.shell_route_card(ui, &surface, !compact);
-                            ui.add_space(S2);
-                        }
+                        let relay_meta = self
+                            .selected_entry()
+                            .map(|entry| entry.label.to_uppercase())
+                            .or_else(|| {
+                                self.status.node_id.clone().map(|node| node.to_uppercase())
+                            });
+                        console_section(
+                            ui,
+                            Some("01"),
+                            Some(i18n::t("route.title").as_ref()),
+                            relay_meta.as_deref(),
+                        );
+                        ui.add_space(S2);
+                        self.shell_route_card(ui, &surface, compact);
+                        ui.add_space(S3);
+                        let game_meta = self
+                            .auto_detected_game
+                            .clone()
+                            .map(|game| game.to_uppercase());
+                        console_section(
+                            ui,
+                            Some("02"),
+                            Some(i18n::t("action.manage").as_ref()),
+                            game_meta.as_deref(),
+                        );
+                        ui.add_space(S2);
                         egui::Frame::new()
-                            .fill(bg_2)
+                            .fill(bg_1)
                             .stroke(egui::Stroke::new(1.0, border_1))
-                            .corner_radius(egui::CornerRadius::same(R_CARD))
-                            .inner_margin(egui::Margin::same(S3 as i8))
+                            .corner_radius(egui::CornerRadius::same(R_PANEL))
+                            .inner_margin(egui::Margin::same(S2 as i8))
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 self.config_body(ui, true, short);
                             });
+                        ui.add_space(S3);
                     });
             });
-
         // ── In-window sheets ─────────────────────────────────────────────
         // Leaving Settings clears the once-per-open platform reconcile guard, so
         // the next open re-reads the real login entry instead of a stale value.
