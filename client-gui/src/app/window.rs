@@ -47,6 +47,134 @@ pub(super) const SCREEN_BOTTOM_RESERVE: f32 = 72.0;
 /// at the top.
 pub(super) const TITLE_BAR_ALLOWANCE: f32 = 40.0;
 
+/// The three shell height tiers (spec §1.4): **normal ≥560**, **short <560**,
+/// **compact <480**. The 420 px minimum is therefore compact, not an edge case.
+///
+/// Both thresholds live here so the rail/card fold (`short`) and the footer
+/// target tier (`compact`) can never disagree about which tier a height is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellTier {
+    /// Card fixed, config scrolls, 40 px footer targets.
+    Normal,
+    /// Card and sub-line fold into the scrolling region; footer still 40 px.
+    Short,
+    /// Short layout plus the `HIT_MIN` 24 px footer targets.
+    Compact,
+}
+
+impl ShellTier {
+    /// Whether the route card and rail sub-line fold into the scroll region.
+    pub fn is_short(self) -> bool {
+        self != Self::Normal
+    }
+
+    /// Whether the footer uses the `HIT_MIN` target tier.
+    pub fn is_compact(self) -> bool {
+        self == Self::Compact
+    }
+}
+
+/// The tier for a logical client height.
+pub fn shell_tier(height: f32) -> ShellTier {
+    if height < 480.0 {
+        ShellTier::Compact
+    } else if height < 560.0 {
+        ShellTier::Short
+    } else {
+        ShellTier::Normal
+    }
+}
+
+/// The vertical button padding that puts a compact-tier footer button on the
+/// `HIT_MIN` row.
+///
+/// egui derives `Button`'s min height from `spacing.interact_size.y`, which the
+/// theme sets to `CONTROL_H` (40 px) for the normal/short tiers, and the text
+/// plus the theme's `button_padding.y` would overshoot `HIT_MIN` on its own.
+/// The compact footer re-cuts both locally so its row lands exactly on
+/// `HIT_MIN` instead of silently inheriting the 40 px control height.
+pub fn compact_button_padding(text_height: f32) -> f32 {
+    ((HIT_MIN - text_height) / 2.0).max(0.0)
+}
+
+/// What a dispatched app-scope shortcut does.
+///
+/// The tray gate is explicit: `HideToTray` is inert (`IgnoredNoTray`) when the
+/// platform has no real tray, because hiding with no way back would strand the
+/// window (spec §1.2 R6 / shortcut table `requires_tray`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShortcutEffect {
+    /// No app-scope chord in this frame's input (or a sheet-only row).
+    Idle,
+    /// Save the geometry and terminate the process cleanly.
+    Quit,
+    /// Open the Settings sheet.
+    OpenSettings,
+    /// Hide the window to the real system tray.
+    HideToTray,
+    /// The user pressed hide-to-tray but there is no real tray to hide into.
+    IgnoredNoTray,
+}
+
+/// The effect of an app-scope shortcut, given whether hiding is currently
+/// possible (a real tray exists and automation has not pinned the window).
+pub fn shortcut_effect(
+    action: Option<crate::platform::ShortcutAction>,
+    tray_available: bool,
+) -> ShortcutEffect {
+    use crate::platform::ShortcutAction as Action;
+    match action {
+        None => ShortcutEffect::Idle,
+        Some(Action::Quit) => ShortcutEffect::Quit,
+        Some(Action::Settings) => ShortcutEffect::OpenSettings,
+        Some(Action::HideToTray) if tray_available => ShortcutEffect::HideToTray,
+        Some(Action::HideToTray) => ShortcutEffect::IgnoredNoTray,
+        // Esc/Enter are sheet semantics; the sheets themselves consume them.
+        Some(Action::CloseSheet) | Some(Action::Confirm) => ShortcutEffect::Idle,
+    }
+}
+
+/// The egui chord for one canonical `platform::shortcuts` row.
+///
+/// The table's single command modifier (Ctrl on Windows/Linux, ⌘ on macOS) maps
+/// to egui's platform-aware `Modifiers::COMMAND`, so the shell and the tray menu
+/// can never disagree about a binding.
+pub(super) fn egui_chord(
+    shortcut: &crate::platform::Shortcut,
+) -> Option<(egui::Modifiers, egui::Key)> {
+    use crate::platform::{Key, Modifier};
+    let key = match shortcut.chord.key {
+        Key::Q => egui::Key::Q,
+        Key::Comma => egui::Key::Comma,
+        Key::H => egui::Key::H,
+        Key::Escape => egui::Key::Escape,
+        Key::Enter => egui::Key::Enter,
+    };
+    let modifiers = match shortcut.chord.modifiers {
+        [] => egui::Modifiers::NONE,
+        [Modifier::Ctrl] | [Modifier::Meta] => egui::Modifiers::COMMAND,
+        _ => return None,
+    };
+    Some((modifiers, key))
+}
+
+/// Consume and return the app-scope shortcut pressed in this frame, per the
+/// canonical `platform::shortcuts` table.
+///
+/// Only the three app-scope rows are dispatched: `Esc`/`Enter` stay sheet
+/// semantics and are left for the sheet to consume. The key event is consumed
+/// here so a focused widget cannot also act on it.
+pub fn take_app_shortcut(ctx: &egui::Context) -> Option<crate::platform::ShortcutAction> {
+    use crate::platform::ShortcutAction as Action;
+    [Action::Quit, Action::Settings, Action::HideToTray]
+        .into_iter()
+        .find_map(|action| {
+            let (modifiers, key) = egui_chord(crate::platform::shortcut_binding(action)?)?;
+            ctx.input_mut(|input| input.consume_key(modifiers, key))
+                .then_some(action)
+        })
+}
+
 /// The current monitor's height and the client area's top edge measured from
 /// that monitor's top, both in points.
 ///

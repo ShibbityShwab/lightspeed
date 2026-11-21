@@ -2955,3 +2955,183 @@ fn the_autostart_preference_and_copy_round_trip() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ── WF-081b (task-86): shell tiers, compact footer, shortcut dispatch ──────
+
+/// Spec §1.4: normal ≥560, short <560, compact <480; the shipped 420 px minimum
+/// is compact, and compact always implies short so the rail/card fold and the
+/// footer target tier can never disagree.
+#[test]
+fn the_shell_tier_is_compact_at_the_420_minimum() {
+    use super::ShellTier;
+
+    assert_eq!(
+        super::shell_tier(super::MIN_WINDOW_HEIGHT),
+        ShellTier::Compact,
+        "the shipped 420 minimum is the compact tier"
+    );
+    assert_eq!(super::shell_tier(420.0), ShellTier::Compact);
+    assert_eq!(super::shell_tier(479.9), ShellTier::Compact);
+    assert_eq!(super::shell_tier(480.0), ShellTier::Short);
+    assert_eq!(super::shell_tier(559.9), ShellTier::Short);
+    assert_eq!(super::shell_tier(560.0), ShellTier::Normal);
+    assert_eq!(super::shell_tier(760.0), ShellTier::Normal);
+    for height in [420.0_f32, 459.0, 480.0, 500.0, 560.0, 760.0, 1400.0] {
+        let tier = super::shell_tier(height);
+        assert_eq!(
+            tier.is_short(),
+            tier != ShellTier::Normal,
+            "{height}: short is everything below the normal tier"
+        );
+        assert!(
+            !tier.is_compact() || tier.is_short(),
+            "{height}: compact is a short-tier sub-case, never a separate layout"
+        );
+    }
+    assert!(ShellTier::Compact.is_compact());
+    assert!(!ShellTier::Short.is_compact());
+    assert!(!ShellTier::Normal.is_compact());
+}
+
+/// The compact footer must be a real 24 px target row. egui floors a Button's
+/// height at `spacing.interact_size.y` (the theme's 40 px `CONTROL_H`) and the
+/// normal text + padding overshoots `HIT_MIN`; the measured task-78 footer was
+/// button 40 / band 56. The re-cut padding lands the row on `HIT_MIN` and the
+/// band on the §1.3 compact 40 px (+1 px hairline = 41).
+#[test]
+fn the_compact_footer_row_lands_on_the_hit_min_target() {
+    use super::compact_button_padding;
+
+    for text_h in [11.0_f32, 13.0, 14.0, 16.0] {
+        let pad = compact_button_padding(text_h);
+        let row = (text_h + 2.0 * pad).max(super::HIT_MIN);
+        assert_eq!(
+            row,
+            super::HIT_MIN,
+            "text {text_h} + 2 x {pad} must land on the HIT_MIN row"
+        );
+    }
+    // A too-tall text height never yields a negative padding.
+    assert_eq!(compact_button_padding(40.0), 0.0);
+    let band = 2.0 * super::S2 + super::HIT_MIN;
+    assert_eq!(band, 40.0, "compact footer band before the 1 px hairline");
+    assert_eq!(band + 1.0, 41.0, "spec §1.3 compact footer");
+}
+
+/// The three app-scope chords are dispatched from the canonical
+/// `platform::shortcuts` table: Ctrl+Q quits, Ctrl+, opens Settings, Ctrl+H
+/// hides to the tray. Plain keys and the sheet-only Esc/Enter are not app
+/// shortcuts, and neither is an unbound command chord.
+#[test]
+fn the_canonical_app_shortcuts_are_dispatched() {
+    use crate::platform::ShortcutAction as Action;
+    use eframe::egui;
+
+    fn press(key: egui::Key, modifiers: egui::Modifiers) -> Option<Action> {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(320.0, 420.0),
+            )),
+            ..Default::default()
+        };
+        let mut seen = None;
+        let mut out = ctx.run_ui(raw, |ui| {
+            seen = super::take_app_shortcut(ui.ctx());
+        });
+        out.textures_delta.clear();
+        seen
+    }
+
+    assert_eq!(
+        press(egui::Key::Q, egui::Modifiers::COMMAND),
+        Some(Action::Quit)
+    );
+    assert_eq!(
+        press(egui::Key::Comma, egui::Modifiers::COMMAND),
+        Some(Action::Settings)
+    );
+    assert_eq!(
+        press(egui::Key::H, egui::Modifiers::COMMAND),
+        Some(Action::HideToTray)
+    );
+    // No command modifier: a typed letter is text, not a shortcut.
+    assert_eq!(press(egui::Key::Q, egui::Modifiers::NONE), None);
+    // Esc/Enter are sheet semantics, not app accelerators.
+    assert_eq!(press(egui::Key::Escape, egui::Modifiers::NONE), None);
+    assert_eq!(press(egui::Key::Enter, egui::Modifiers::NONE), None);
+    // A command chord without a canonical row stays unbound.
+    assert_eq!(press(egui::Key::S, egui::Modifiers::COMMAND), None);
+}
+
+/// The dispatch is row-by-row the canonical table (so a keymap change reaches
+/// the shell without a second hard-coded list), and the tray gate is explicit:
+/// hide-to-tray is inert without a real tray and under the automation pin.
+#[test]
+fn shortcut_effects_follow_the_canonical_table_and_gate_on_the_tray() {
+    use super::ShortcutEffect;
+    use crate::platform::{self, ShortcutAction as Action};
+    use eframe::egui;
+
+    for (action, key) in [
+        (Action::Quit, egui::Key::Q),
+        (Action::Settings, egui::Key::Comma),
+        (Action::HideToTray, egui::Key::H),
+    ] {
+        let row = platform::shortcut_binding(action).expect("canonical app row");
+        let (modifiers, mapped_key) =
+            super::window::egui_chord(row).expect("every app row maps to egui");
+        assert_eq!(mapped_key, key, "{action:?}");
+        assert_eq!(modifiers, egui::Modifiers::COMMAND, "{action:?}");
+        assert!(
+            !row.display.trim().is_empty(),
+            "{action:?} has a hint label"
+        );
+        assert_eq!(
+            row.requires_tray,
+            action == Action::HideToTray,
+            "{action:?}: only hide-to-tray needs a tray"
+        );
+    }
+
+    assert_eq!(
+        super::shortcut_effect(Some(Action::Quit), true),
+        ShortcutEffect::Quit
+    );
+    assert_eq!(
+        super::shortcut_effect(Some(Action::Quit), false),
+        ShortcutEffect::Quit,
+        "quit never depends on the tray"
+    );
+    assert_eq!(
+        super::shortcut_effect(Some(Action::Settings), false),
+        ShortcutEffect::OpenSettings
+    );
+    assert_eq!(
+        super::shortcut_effect(Some(Action::HideToTray), true),
+        ShortcutEffect::HideToTray
+    );
+    assert_eq!(
+        super::shortcut_effect(Some(Action::HideToTray), false),
+        ShortcutEffect::IgnoredNoTray,
+        "hiding with no tray would strand the window"
+    );
+    // Sheet semantics are never app effects.
+    assert_eq!(
+        super::shortcut_effect(Some(Action::CloseSheet), true),
+        ShortcutEffect::Idle
+    );
+    assert_eq!(
+        super::shortcut_effect(Some(Action::Confirm), true),
+        ShortcutEffect::Idle
+    );
+    assert_eq!(super::shortcut_effect(None, true), ShortcutEffect::Idle);
+}

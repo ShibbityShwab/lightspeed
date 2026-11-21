@@ -24,7 +24,7 @@ mod tray_menu;
 pub use animations::Animations;
 pub use autostart::AutostartPlan;
 pub use elevation::{ElevationAttempt, ElevationPhase};
-pub use shortcuts::{Shortcut, ShortcutAction};
+pub use shortcuts::{Key, Modifier, Shortcut, ShortcutAction};
 pub use updater::InstallChannel;
 
 /// The canonical binding for `action` on this OS (spec W2-4 (d)).
